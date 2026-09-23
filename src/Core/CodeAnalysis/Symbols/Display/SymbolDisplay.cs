@@ -710,6 +710,18 @@ public static class SymbolDisplay
                     return $"[{new string(',', nullableRectangular.Rank - 1)}]?{FormatType(nullableRectangular.ElementType)}";
                 }
 
+                // Issue #4361 (review): an IMPORTED nullable array — an
+                // annotated/imported CLR `T[]` under the `?`, which the
+                // metadata reader produces for `string?[]`-shaped flags such
+                // as `[2, 0]` — is not a `SliceTypeSymbol`, so it fell through
+                // to the trailing-`?` form below and printed `[]string!?`
+                // (or `[]string?`), ADR-0132's spelling of a slice of nullable
+                // ELEMENTS. The positional form is `[]?string!`.
+                if (TryGetImportedArrayElement(nullable.UnderlyingType, out var nullableImportedElement))
+                {
+                    return $"[]?{FormatType(nullableImportedElement)}";
+                }
+
                 var underlying = FormatType(nullable.UnderlyingType);
                 return nullable.UnderlyingType is FunctionTypeSymbol
                     ? $"({underlying})?"

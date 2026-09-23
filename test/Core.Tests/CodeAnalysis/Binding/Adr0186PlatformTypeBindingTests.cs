@@ -1271,6 +1271,31 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
+    /// Issue #4361 (review): the same call with a type argument that needs
+    /// SYMBOLIC projection (a nullable argument) takes a different reader —
+    /// <c>MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs</c> — and
+    /// that reader must agree with the reflection one: the argument decides
+    /// the open slot, the declaration decides the concrete container, which
+    /// is oblivious and therefore <c>!</c>. It returned the bare projection
+    /// (<c>[]string?</c>, <c>Holder[string?]</c>), typing a possibly-nil
+    /// oblivious return as non-null.
+    /// </summary>
+    /// <param name="globals">The probe.</param>
+    [Theory]
+    [InlineData("let probe = Ob.EmptyArr[string?]()")]
+    [InlineData("let probe = Ob.Hold[string?](nil)")]
+    public void Section2_ASymbolicTypeArgument_KeepsTheConcreteContainersPlatformType(string globals)
+    {
+        using var world = new World();
+
+        // Checked structurally rather than by display: the probe's metadata
+        // context is disposed once `GlobalProbeType` returns.
+        var result = world.GlobalProbeType(globals, NullabilityMode.PlatformTypes);
+
+        Assert.IsType<PlatformTypeSymbol>(result);
+    }
+
+    /// <summary>
     /// Issue #4361: a platform <b>fallback</b> makes a platform coalesce
     /// result. The result is the fallback whenever the left side is nil, so
     /// <c>x ?? obliviousCall()</c> typed as non-null <c>T</c> dropped a

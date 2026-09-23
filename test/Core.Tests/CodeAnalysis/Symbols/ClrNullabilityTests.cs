@@ -518,14 +518,14 @@ public class ClrNullabilityTests
         using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
 
         var emptyArray = typeof(ObliviousContainer)
-            .GetMethod(nameof(ObliviousContainer.EmptyArray))!
+            .GetMethod(nameof(ObliviousContainer.EmptyArray))! // the fixture declares this method, so reflection finds it
             .MakeGenericMethod(typeof(string));
         var array = ClrNullability.GetReturnTypeSymbol(emptyArray);
         var platformArray = Assert.IsType<PlatformTypeSymbol>(array);
         Assert.Equal("[]!string", SymbolDisplay.ToTypeDisplayString(platformArray));
 
         var emptyList = typeof(ObliviousContainer)
-            .GetMethod(nameof(ObliviousContainer.EmptyList))!
+            .GetMethod(nameof(ObliviousContainer.EmptyList))! // the fixture declares this method, so reflection finds it
             .MakeGenericMethod(typeof(string));
         var list = ClrNullability.GetReturnTypeSymbol(emptyList);
         var platformList = Assert.IsType<PlatformTypeSymbol>(list);
@@ -533,8 +533,28 @@ public class ClrNullabilityTests
 
         // The concrete inner position is genuinely oblivious and keeps its `!`.
         var concrete = ClrNullability.GetReturnTypeSymbol(
-            typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetList))!);
+            typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetList))!); // declared on the fixture
         Assert.Contains("[string!]!", SymbolDisplay.ToTypeDisplayString(concrete), StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// Issue #4361 (review): an imported array's own nullability is displayed
+    /// in ADR-0132's positional spelling, whichever wrapper carries it. A
+    /// nullable array of platform elements — flags <c>[2, 0]</c>, which the
+    /// reader produces — printed as <c>[]string!?</c>, ADR-0132's spelling of
+    /// a slice of nullable elements; it is <c>[]?string!</c>.
+    /// </summary>
+    [Fact]
+    public void Adr0186_AnImportedArray_Displays_ItsOwnNullability_Positionally()
+    {
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
+
+        var annotated = new NullabilityAnnotatedTypeSymbol(
+            TypeSymbol.FromClrType(typeof(string[])),
+            ImmutableArray.Create((byte)2, (byte)0));
+
+        Assert.Equal("[]?string!", SymbolDisplay.ToTypeDisplayString(NullableTypeSymbol.Get(annotated)));
+        Assert.Equal("[]!string!", SymbolDisplay.ToTypeDisplayString(PlatformTypeSymbol.Get(annotated)));
     }
 
     /// <summary>
