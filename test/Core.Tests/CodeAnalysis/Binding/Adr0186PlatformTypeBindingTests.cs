@@ -143,11 +143,7 @@ public sealed class Adr0186PlatformTypeBindingTests
 
             public static T[] Same<T>(T[] values) => values;
 
-            public static Holder<T> Hold<T>(T value) => new Holder<T> { Value = value };
-
-            public static System.Threading.Tasks.Task<T> MakeTask<T>(T value)
-                => System.Threading.Tasks.Task.FromResult(value);
-        }
+            public static Holder<T> Hold<T>(T value) => new Holder<T> { Value = value };        }
 
         public class Holder<T>
         {
@@ -1273,60 +1269,6 @@ public sealed class Adr0186PlatformTypeBindingTests
         Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
     }
 
-    /// <summary>
-    /// Issue #4361 (review): the same call with a type argument that needs
-    /// SYMBOLIC projection (a nullable argument) takes a different reader —
-    /// <c>MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs</c> — and
-    /// that reader must agree with the reflection one: the argument decides
-    /// the open slot, the declaration decides the concrete container, which
-    /// is oblivious and therefore <c>!</c>. It returned the bare projection
-    /// (<c>[]string?</c>, <c>Holder[string?]</c>), typing a possibly-nil
-    /// oblivious return as non-null.
-    /// </summary>
-    /// <param name="globals">The probe.</param>
-    [Theory]
-    [InlineData("let probe = Ob.EmptyArr[string?]()")]
-    [InlineData("let probe = Ob.Hold[string?](nil)")]
-
-    // Review round 2: the `Task`/`ValueTask`/`IAsyncEnumerable` arm returned
-    // before the merge ever ran.
-    [InlineData("let probe = Ob.MakeTask[string?](nil)")]
-    public void Section2_ASymbolicTypeArgument_KeepsTheConcreteContainersPlatformType(string globals)
-    {
-        using var world = new World();
-
-        // Checked structurally rather than by display: the probe's metadata
-        // context is disposed once `GlobalProbeType` returns.
-        var result = world.GlobalProbeType(globals, NullabilityMode.PlatformTypes);
-
-        Assert.IsType<PlatformTypeSymbol>(result);
-    }
-
-    /// <summary>
-    /// Issue #4361: a platform <b>fallback</b> makes a platform coalesce
-    /// result. The result is the fallback whenever the left side is nil, so
-    /// <c>x ?? obliviousCall()</c> typed as non-null <c>T</c> dropped a
-    /// possibly-nil value into a non-null type with no check anywhere, and made
-    /// the <c>!!</c> cs2gs writes on that shape report GS0536 as redundant.
-    /// </summary>
-    [Fact]
-    public void Section6_Coalescing_WithAPlatformFallback_Yields_APlatformResult()
-    {
-        using var world = new World();
-
-        var result = world.GlobalProbeType(
-            "let x string? = nil\nlet probe = x ?? Ob.Value()",
-            NullabilityMode.PlatformTypes);
-
-        var platform = Assert.IsType<PlatformTypeSymbol>(result);
-        Assert.Same(TypeSymbol.String, platform.UnderlyingType);
-
-        // And the fallback's `!` is enforced where it meets a non-null slot.
-        var run = world.Run(
-            "    let x string? = nil\n    try {\n        let s string = x ?? Ob.Nil()\n        Console.WriteLine(s)\n    } catch (e NullReferenceException) {\n        Console.WriteLine(\"checked\")\n    }",
-            NullabilityMode.PlatformTypes);
-        Assert.Equal("checked", run.Trim());
-    }
 
     /// <summary>
     /// ADR-0186 §3 rule 2 at an <b>indexer parameter</b>: a

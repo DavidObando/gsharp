@@ -903,9 +903,30 @@ public static class SymbolDisplay
             return false;
         }
 
-        formatted = FormatImportedGenericTypeName(clr.GetGenericTypeDefinition(), arguments.MoveToImmutable());
+        // Only the platform-bearing arguments change spelling. A sibling with
+        // no platform wrapper keeps the rendering it always had — its own
+        // reference `?` stays unshown — so this path widens the display by
+        // exactly the `!` it exists for and no more (review round 3).
+        var displayArguments = arguments.MoveToImmutable()
+            .Select(argument => ContainsPlatformType(argument) ? argument : StripReferenceNullable(argument))
+            .ToImmutableArray();
+        formatted = FormatImportedGenericTypeName(clr.GetGenericTypeDefinition(), displayArguments);
         return true;
     }
+
+    /// <summary>
+    /// Removes a top-level reference-type <c>?</c> (a nullable VALUE type is a
+    /// distinct CLR type and keeps its <c>?</c>), which is how a nested
+    /// argument rendered before issue #4361's display change.
+    /// </summary>
+    /// <param name="type">The argument type.</param>
+    /// <returns>The argument without a reference-nullability wrapper.</returns>
+    private static TypeSymbol StripReferenceNullable(TypeSymbol type)
+        => type is NullableTypeSymbol { UnderlyingType: { } underlying }
+            && underlying.ClrType?.IsValueType != true
+            && underlying is not (StructSymbol { IsClass: false } or EnumSymbol)
+            ? underlying
+            : type;
 
     /// <summary>
     /// The element of an imported single-dimension CLR array, with the

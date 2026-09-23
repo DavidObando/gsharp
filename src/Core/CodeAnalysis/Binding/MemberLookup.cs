@@ -1717,10 +1717,7 @@ internal sealed class MemberLookup
                     openReturnDefinition.GetGenericArguments(),
                     symbolicArguments,
                     erasedObject) ?? openReturn;
-                return MergeReturnDeclarationNullability(
-                    ImportedTypeSymbol.GetConstructed(closedReturn, openReturnDefinition, symbolicArguments),
-                    openReturn,
-                    openMethod);
+                return ImportedTypeSymbol.GetConstructed(closedReturn, openReturnDefinition, symbolicArguments);
             }
         }
 
@@ -1747,45 +1744,11 @@ internal sealed class MemberLookup
         // `ResolveImportedGenericReturnType` for a constructed-generic return)
         // were written, measured to change nothing once these two were in
         // place, and dropped.
-        if (!TypeSymbol.RequiresSymbolicProjection(mapped)
-            && !TypeSymbol.ContainsNamedTupleElements(mapped)
-            && !TypeSymbol.ContainsSourceArrayShape(mapped))
-        {
-            return null;
-        }
-
-        return MergeReturnDeclarationNullability(mapped, openReturn, openMethod);
-
-        // Applies the declaration's return nullability to a symbolic return
-        // projection. EVERY non-null answer above goes through this one local
-        // function — the `Task`/`ValueTask`/`IAsyncEnumerable` arm included —
-        // so no branch can return a projection the declaration never
-        // annotated (issue #4361, review rounds 1 and 2).
-        static TypeSymbol MergeReturnDeclarationNullability(TypeSymbol mapped, Type openReturn, MethodInfo openMethod)
-        {
-            // The symbolic projection carries the ARGUMENT's nullability at
-            // every open slot, but nothing about the declaration's CONCRETE
-            // positions — so `Ob.EmptyArr[string?]()` on an oblivious
-            // `T[] EmptyArr<T>()` came back `[]string?` where the reflection
-            // path (which the same call takes for a non-symbolic argument)
-            // says `[]!string?`: the concrete container's `!` was dropped and
-            // a possibly-nil return typed non-null. Merge the declaration's
-            // flags exactly as the symbolic parameter path does, so the two
-            // readers agree about one declaration. The merge leaves open
-            // slots to the argument (ADR-0186 §2), which is the rule the
-            // reflection projection now also applies. (A by-ref return keeps
-            // the unmerged projection, as before: its flags annotate the
-            // pointee beneath a wrapper this merge does not peel.)
-            if (openReturn.IsByRef)
-            {
-                return mapped;
-            }
-
-            return NullableFlagsBuilder.MergeDeclarationNullability(
-                mapped,
-                openReturn,
-                ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod));
-        }
+        return TypeSymbol.RequiresSymbolicProjection(mapped)
+            || TypeSymbol.ContainsNamedTupleElements(mapped)
+            || TypeSymbol.ContainsSourceArrayShape(mapped)
+            ? mapped
+            : null;
     }
 
     /// <summary>

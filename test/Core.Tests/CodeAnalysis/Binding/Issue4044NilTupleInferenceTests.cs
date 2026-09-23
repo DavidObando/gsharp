@@ -150,7 +150,22 @@ public class Issue4044NilTupleInferenceTests
             }
             """;
 
-        AssertRejectsOnlyTheNilElement(CompileWithReferences(source, ImportedLibraryPath));
+        // Pinned: this row is the behaviour ADR-0186's platform-types mode
+        // changes. Under `--nullability=enabled` ADR-0136's widening still
+        // applies and the call compiles — the control below.
+        using (NullabilityOptions.Enter(NullabilityMode.PlatformTypes))
+        {
+            AssertRejectsOnlyTheNilElement(
+                CompileWithReferences(source, NullabilityMode.PlatformTypes, ImportedLibraryPath),
+                "(string, bool)");
+        }
+
+        using (NullabilityOptions.Enter(NullabilityMode.Enabled))
+        {
+            Assert.DoesNotContain(
+                CompileWithReferences(source, NullabilityMode.Enabled, ImportedLibraryPath),
+                diagnostic => diagnostic.IsError);
+        }
     }
 
     /// <summary>The G#-declared control for the imported row above.</summary>
@@ -169,7 +184,7 @@ public class Issue4044NilTupleInferenceTests
             }
             """;
 
-        AssertRejectsOnlyTheNilElement(Compile(source));
+        AssertRejectsOnlyTheNilElement(Compile(source), "(string, bool)");
     }
 
     /// <summary>
@@ -189,7 +204,19 @@ public class Issue4044NilTupleInferenceTests
             }
             """;
 
-        AssertRejectsOnlyTheNilElement(CompileWithReferences(source, ImportedLibraryPath));
+        using (NullabilityOptions.Enter(NullabilityMode.PlatformTypes))
+        {
+            AssertRejectsOnlyTheNilElement(
+                CompileWithReferences(source, NullabilityMode.PlatformTypes, ImportedLibraryPath),
+                "(string, int32)");
+        }
+
+        using (NullabilityOptions.Enter(NullabilityMode.Enabled))
+        {
+            Assert.DoesNotContain(
+                CompileWithReferences(source, NullabilityMode.Enabled, ImportedLibraryPath),
+                diagnostic => diagnostic.IsError);
+        }
     }
 
     /// <summary>
@@ -214,15 +241,48 @@ public class Issue4044NilTupleInferenceTests
             diagnostic => diagnostic.IsError);
     }
 
-    private static void AssertRejectsOnlyTheNilElement(ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics)
+    /// <summary>
+    /// Asserts the call failed only at the nil element's conversion, and in
+    /// the right DIRECTION: the rejected source is the <c>(nil, …)</c> tuple
+    /// and the required type is the sibling-inferred
+    /// <paramref name="inferredTarget"/>. The old #4044 failure fixed <c>T</c>
+    /// as <c>(nil, bool)</c> and rejected the sibling with the same diagnostic
+    /// ids, so the ids alone cannot tell the two apart.
+    /// </summary>
+    private static void AssertRejectsOnlyTheNilElement(
+        ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics,
+        string inferredTarget)
     {
         var errors = diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
         Assert.NotEmpty(errors);
         Assert.All(
             errors,
-            error => Assert.True(
-                error.Id is "GS0154" or "GS0155",
-                $"expected only the nil element's conversion to be rejected, got {error.Id}: {error.Message}"));
+            error =>
+            {
+                Assert.True(
+                    error.Id is "GS0154" or "GS0155",
+                    $"expected only the nil element's conversion to be rejected, got {error.Id}: {error.Message}");
+                // Either the whole tuple (`'(nil, bool)'` -> `'(string, bool)'`,
+                // the G#-generic spelling) or just its element (`'nil'` ->
+                // `'string'`, the imported-params spelling) — but always the
+                // nil side as SOURCE and the sibling-inferred side as TARGET.
+                var elementTarget = inferredTarget.Substring(1, inferredTarget.IndexOf(',') - 1);
+                var (source, target) = SourceAndTarget(error);
+                Assert.True(
+                    (source.StartsWith("(nil,", StringComparison.Ordinal) || source == "nil")
+                        && (target == inferredTarget || target == elementTarget),
+                    $"expected a nil source rejected against '{inferredTarget}' (or its '{elementTarget}' element), got {error.Id}: {error.Message}");
+            });
+    }
+
+    // GS0155: "Cannot convert type 'S' to 'T'."; GS0154: "Parameter 'p'
+    // requires a value of type 'T' but was given a value of type 'S'."
+    private static (string Source, string Target) SourceAndTarget(GSharp.Core.CodeAnalysis.Diagnostic error)
+    {
+        var quoted = error.Message.Split('\'').Where((_, index) => index % 2 == 1).ToArray();
+        return error.Id == "GS0154"
+            ? (quoted[^1], quoted[^2])
+            : (quoted[0], quoted[1]);
     }
 
     private static System.Collections.Immutable.ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Compile(string source)
@@ -234,6 +294,12 @@ public class Issue4044NilTupleInferenceTests
     private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> CompileWithReferences(
         string source,
         params string[] additionalReferences)
+        => CompileWithReferences(source, mode: null, additionalReferences);
+
+    private static ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> CompileWithReferences(
+        string source,
+        NullabilityMode? mode,
+        params string[] additionalReferences)
     {
         var runtimeDirectory = System.Runtime.InteropServices.RuntimeEnvironment.GetRuntimeDirectory();
         var references = ReferenceResolver.WithReferences(
@@ -244,6 +310,11 @@ public class Issue4044NilTupleInferenceTests
         {
             IsLibrary = true,
         };
+
+        if (mode is { } pinned)
+        {
+            compilation.Nullability = pinned;
+        }
 
         return compilation.BoundProgram.Diagnostics;
     }

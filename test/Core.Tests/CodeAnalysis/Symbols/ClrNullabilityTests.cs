@@ -555,6 +555,17 @@ public class ClrNullabilityTests
 
         Assert.Equal("[]?string!", SymbolDisplay.ToTypeDisplayString(NullableTypeSymbol.Get(annotated)));
         Assert.Equal("[]!string!", SymbolDisplay.ToTypeDisplayString(PlatformTypeSymbol.Get(annotated)));
+
+        // Review round 3: rendering a platform argument must not start
+        // rendering a NULLABLE sibling. `Dictionary<string, string?>` with an
+        // oblivious key shows the key's `!` and keeps the value's `?` unshown,
+        // exactly as before the display change.
+        var dictionary = new NullabilityAnnotatedTypeSymbol(
+            TypeSymbol.FromClrType(typeof(Dictionary<string, string>)),
+            ImmutableArray.Create((byte)1, (byte)0, (byte)2));
+        Assert.Equal(
+            "System.Collections.Generic.Dictionary[string!, string]",
+            SymbolDisplay.ToTypeDisplayString(dictionary));
     }
 
     /// <summary>
