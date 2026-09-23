@@ -1144,34 +1144,71 @@ public sealed partial class CSharpToGSharpTranslator
             TypeDeclarationKind ownerKind,
             Receiver forcedReceiver = null,
             INamedTypeSymbol ownedExtensionTarget = null,
-            bool forceExtensionReceiver = false)
+            bool forceExtensionReceiver = false,
+            MethodDeclarationSyntax declaringPartNode = null)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
+            bool isOrdinaryMemberPosition = forcedReceiver == null
+                && ownedExtensionTarget == null
+                && !forceExtensionReceiver;
 
-            // ADR-0143 §D: G# has no partial methods, so a C# `partial`
-            // method-DEFINITION node never yields a G# member.
+            // ADR-0143's partial-method rule, as amended 2026-09-23 for
+            // ADR-0192 (G# partial methods). A C# `partial` method translates
+            // in one of three ways:
             //
             //   * Unimplemented partial method (`IsPartialDefinition` with a
             //     null `PartialImplementationPart`): the whole method is elided
             //     — no member here, and its call sites are dropped by the
-            //     statement visitor (see IsElidedPartialMethodInvocation).
-            //   * Implemented partial method (a defining + implementing pair):
-            //     only the implementation part translates. The defining part
-            //     (`IsPartialDefinition` with a non-null
-            //     `PartialImplementationPart`) is skipped here; the
-            //     implementation part (`IsPartialDefinition == false`,
-            //     `PartialDefinitionPart != null`) falls through and translates
-            //     normally, so the member is emitted exactly once.
-            //
-            // This holds in BOTH translation modes and correctly handles the
-            // issue #1910 partial-TYPE merge, whose merged member list may
-            // contain both the defining and implementing method nodes: the
-            // defining node is filtered out by this single guard.
+            //     statement visitor (see IsElidedPartialMethodInvocation). G#
+            //     rejects a lone declaring part (GS0609), so this stays.
+            //   * Implemented pair that IsEmittablePartialMethodPair accepts
+            //     (preserve-parts mode, both parts hand-authored source this
+            //     run translates, a shape G# can spell): each C# part becomes
+            //     its own G# `partial func` part, in the G# partial type part
+            //     of its own C# file. The declaring part is NOT translated from
+            //     the C# definition's signature: the definition node re-enters
+            //     this method with the IMPLEMENTATION's node and symbol and
+            //     `declaringPartNode` set, so both parts come out of the same
+            //     signature pipeline (types, nullability promotion, `async` —
+            //     which C# only lets the implementation say — iterator and
+            //     suspend unwrapping) and agree by construction (GS0611). Only
+            //     the method-level attributes differ: each part keeps its own.
+            //   * Any other implemented pair (legacy merge mode — a
+            //     non-partial G# type, where `partial func` is GS0608 —, a
+            //     part in a generated/dropped document, an extension or
+            //     explicit-interface method, differing parameter names, ...):
+            //     only the implementation part translates, as an ordinary
+            //     method. The defining node yields nothing here; the
+            //     implementation node falls through and translates normally,
+            //     so the member is emitted exactly once. This also covers the
+            //     issue #1910 partial-TYPE merge, whose merged member list may
+            //     contain both the defining and implementing method nodes.
             if (symbol != null && symbol.IsPartialDefinition)
             {
+                if (declaringPartNode == null
+                    && isOrdinaryMemberPosition
+                    && this.IsEmittablePartialMethodPair(
+                        symbol,
+                        ownerKind,
+                        out MethodDeclarationSyntax implementationNode))
+                {
+                    using IDisposable implementationModelScope =
+                        this.context.UseSemanticModelFor(implementationNode.SyntaxTree);
+                    return this.TranslateMethod(
+                        implementationNode,
+                        ownerKind,
+                        declaringPartNode: node);
+                }
+
                 return (null, false);
             }
+
+            bool isDeclaringPart = declaringPartNode != null;
+            bool isPartialPart = isDeclaringPart
+                || (isOrdinaryMemberPosition
+                    && symbol?.PartialDefinitionPart is IMethodSymbol partialDefinition
+                    && this.IsEmittablePartialMethodPair(partialDefinition, ownerKind, out _));
 
             // Issue #1911 / #2010 / ADR-0149: C# `string IGreeter.Greet() { ... }`
             // (explicit interface implementation) has no direct G# surface
@@ -1331,6 +1368,10 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             List<Parameter> parameters = this.MapParameters(symbol, node.ParameterList, skipFirstParameter);
+            if (isPartialPart)
+            {
+                parameters = this.ReconcilePartialMethodParameters(symbol, parameters);
+            }
 
             // ADR-0174 D4: an `async ValueTask`/`ValueTask<T>` method that
             // touches the Gsharp.Concurrency runtime (or carries [Suspending])
@@ -1340,7 +1381,11 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference returnType = this.MapReturnType(symbol, node, unwrapValueTask: isEmittedSuspend);
             List<TypeParameter> typeParameters = this.MapMethodTypeParameters(symbol);
 
-            bool hasBody = node.Body != null || node.ExpressionBody != null;
+            // ADR-0192: the declaring part is signature-only — the
+            // implementation's body is translated once, by the implementing
+            // part, never here (a second translation would report its body
+            // diagnostics twice).
+            bool hasBody = !isDeclaringPart && (node.Body != null || node.ExpressionBody != null);
             BlockStatement body;
             bool isAnalyzerHarness = false;
             if (hasBody
@@ -1438,6 +1483,7 @@ public sealed partial class CSharpToGSharpTranslator
             GStatement arrowBody =
                 !isAsyncVoidHandler
                 && ownerKind != TypeDeclarationKind.Interface
+                && body != null
                 && node.ExpressionBody != null
                     ? TryFoldArrowBody(body)
                     : null;
@@ -1466,6 +1512,10 @@ public sealed partial class CSharpToGSharpTranslator
             // `async` func returning `Task` cannot `return` a value.
             bool isEmittedAsync = !isAnalyzerHarness && !isEmittedSuspend && symbol != null && symbol.IsAsync;
 
+            // ADR-0192 §C: method-level attributes are unioned across the
+            // parts by gsc, so each part carries only its OWN — the declaring
+            // part the C# definition's (which the pre-ADR-0192
+            // implementation-only translation silently dropped).
             var method = new MethodDeclaration(
                 this.EmittedName(symbol, node.Identifier.ValueText),
                 parameters: parameters,
@@ -1477,14 +1527,178 @@ public sealed partial class CSharpToGSharpTranslator
                 isOpen: isOpen,
                 isOverride: isOverride,
                 isAsync: isEmittedAsync,
-                attributes: this.MapAttributes(node.AttributeLists),
+                attributes: this.MapAttributes((declaringPartNode ?? node).AttributeLists),
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfaceType,
                 isRefReturn: symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly),
                 isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true,
-                isSuspend: isEmittedSuspend);
+                isSuspend: isEmittedSuspend,
+                isPartial: isPartialPart);
 
             return (method, isStatic);
+        }
+
+        /// <summary>
+        /// ADR-0143 2026-09-23 amendment / ADR-0192: whether the implemented
+        /// C# partial method <paramref name="definition"/> translates to a G#
+        /// declaring part plus implementing part rather than to a single
+        /// ordinary method. Evaluated identically from the definition node and
+        /// from the implementation node, so the implementing part is marked
+        /// <c>partial</c> exactly when the declaring part is emitted.
+        /// </summary>
+        /// <param name="definition">The partial method's defining-part symbol.</param>
+        /// <param name="ownerKind">The G# kind of the containing type.</param>
+        /// <param name="implementationNode">The implementing part's declaration, when eligible.</param>
+        /// <returns><see langword="true"/> when both parts are emitted.</returns>
+        private bool IsEmittablePartialMethodPair(
+            IMethodSymbol definition,
+            TypeDeclarationKind ownerKind,
+            out MethodDeclarationSyntax implementationNode)
+        {
+            implementationNode = null;
+
+            // Legacy issue #1910 merge mode produces ONE non-partial G# type,
+            // where a `partial func` is GS0608. G# partial methods live only in
+            // a `partial class` / `partial struct` (ADR-0192 §A): records map to
+            // `data class`/`data struct` and interfaces reject them (GS0607).
+            if (!this.preservePartialParts
+                || ownerKind is not (TypeDeclarationKind.Class or TypeDeclarationKind.Struct)
+                || !definition.IsPartialDefinition
+                || definition.PartialImplementationPart is not IMethodSymbol implementation)
+            {
+                return false;
+            }
+
+            // Shapes G# cannot spell as a partial method (ADR-0192 §F, GS0607):
+            // cs2gs lowers an extension method to a receiver-clause func (or
+            // moves it into its receiver type, issue #2821), and an explicit
+            // interface implementation carries a qualifier clause. A partial
+            // method of the hoisted C# entry class becomes a top-level func.
+            // An `extern` implementation (a P/Invoke-style body) has no G#
+            // implementing-part spelling.
+            if (definition.IsExtensionMethod
+                || implementation.IsExtern
+                || definition.ExplicitInterfaceImplementations.Length > 0
+                || implementation.ExplicitInterfaceImplementations.Length > 0
+                || (this.entryType != null
+                    && SymbolEqualityComparer.Default.Equals(
+                        definition.ContainingType?.OriginalDefinition,
+                        this.entryType.OriginalDefinition)))
+            {
+                return false;
+            }
+
+            // C# only warns (CS8826) when the parts name a parameter
+            // differently; G# requires identical names on both parts (GS0611),
+            // and each name is observable to callers passing arguments by name.
+            // There is no faithful G# spelling, so keep the pre-ADR-0192 shape.
+            if (definition.Parameters.Length != implementation.Parameters.Length
+                || definition.Parameters
+                    .Zip(implementation.Parameters, (d, i) => d.Name == i.Name)
+                    .Any(sameName => !sameName))
+            {
+                return false;
+            }
+
+            if (definition.DeclaringSyntaxReferences.Length != 1
+                || implementation.DeclaringSyntaxReferences.Length != 1
+                || definition.DeclaringSyntaxReferences[0].GetSyntax() is not MethodDeclarationSyntax definitionNode
+                || implementation.DeclaringSyntaxReferences[0].GetSyntax() is not MethodDeclarationSyntax implNode)
+            {
+                return false;
+            }
+
+            // Both parts must be hand-authored source that this translation
+            // emits. A part in a generated document is dropped by cs2gs and
+            // regenerated at build by gsgen (ADR-0143 §A / ADR-0145) — the
+            // common case is a generator-declared `partial void OnXChanged(T)`
+            // hook with a user-written implementation — so emitting the other
+            // part as `partial func` would leave it without its partner
+            // (GS0610). See IsHandAuthoredTranslatedTree for the signal.
+            if (!this.IsHandAuthoredTranslatedTree(definitionNode.SyntaxTree)
+                || !this.IsHandAuthoredTranslatedTree(implNode.SyntaxTree))
+            {
+                return false;
+            }
+
+            // Out of scope for this slice: `[GeneratedRegex]` keeps its own
+            // TryTranslateGeneratedRegex rewrite, and an ADR-0169 analyzer test
+            // harness rewrite changes the implementation's signature (drops
+            // `async`) in a way the declaring part would not see.
+            if (definition.GetAttributes().Any(attribute =>
+                    attribute.AttributeClass?.ToDisplayString() ==
+                        "System.Text.RegularExpressions.GeneratedRegexAttribute")
+                || this.IsAnalyzerHarnessEntry(implementation)
+                || this.IsAnalyzerHarnessSupportMember(definitionNode)
+                || this.IsAnalyzerHarnessSupportMember(implNode))
+            {
+                return false;
+            }
+
+            implementationNode = implNode;
+            return true;
+        }
+
+        /// <summary>
+        /// Whether <paramref name="tree"/> is a hand-authored C# document this
+        /// translation emits — the same file set <c>CSharpProjectLoader</c>
+        /// keeps. When the caller supplies <c>retainedFilePaths</c> (a project
+        /// with analyzer/generator references, issue #2215) the tree must be in
+        /// it: source-generator output is excluded from that set. Otherwise the
+        /// tree must not carry the <c>&lt;auto-generated&gt;</c> header, the
+        /// loader's content test for a build-generated file
+        /// (<see cref="GeneratedSourceDetection"/>).
+        /// </summary>
+        private bool IsHandAuthoredTranslatedTree(Microsoft.CodeAnalysis.SyntaxTree tree) =>
+            (this.retainedFilePaths == null || this.retainedFilePaths.Contains(tree.FilePath))
+            && !GeneratedSourceDetection.HasAutoGeneratedHeader(tree);
+
+        /// <summary>
+        /// ADR-0192 §C/§D: both parts of a G# partial method must agree on every
+        /// parameter's default value and annotations. The mapped parameters come
+        /// from the implementation's symbols (so types and nullability agree
+        /// by construction); this replaces each default with the C#
+        /// DEFINITION's — the one C# callers observe (a default written on the
+        /// implementation is ignored, CS1066) — and each parameter's
+        /// attributes with the union of both C# parts' attribute lists
+        /// (definition first), which is exactly C#'s own parameter-attribute
+        /// rule. The same list is emitted on both G# parts.
+        /// </summary>
+        private List<Parameter> ReconcilePartialMethodParameters(
+            IMethodSymbol symbol,
+            List<Parameter> parameters)
+        {
+            IMethodSymbol definition = symbol.PartialDefinitionPart ?? symbol;
+            IMethodSymbol implementation = symbol.PartialImplementationPart ?? symbol;
+            var reconciled = new List<Parameter>(parameters.Count);
+            for (int i = 0; i < parameters.Count; i++)
+            {
+                Parameter mapped = parameters[i];
+                IParameterSymbol definitionParameter = definition.Parameters[i];
+                GExpression defaultValue = this.BuildOptionalParameterDefault(
+                    definitionParameter,
+                    mapped.Type,
+                    definitionParameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax());
+
+                var attributes = new List<AttributeUse>();
+                foreach (IParameterSymbol part in new[] { definitionParameter, implementation.Parameters[i] })
+                {
+                    if (part.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is ParameterSyntax partSyntax)
+                    {
+                        attributes.AddRange(this.MapAttributes(partSyntax.AttributeLists));
+                    }
+                }
+
+                reconciled.Add(new Parameter(
+                    mapped.Name,
+                    mapped.Type,
+                    mapped.IsVariadic,
+                    mapped.RefKind,
+                    defaultValue,
+                    attributes));
+            }
+
+            return reconciled;
         }
 
         private BlockStatement BuildOwnerScopedExtensionCompanionBody(
