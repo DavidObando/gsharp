@@ -1658,6 +1658,53 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
+    /// <b>ADR-0186 step 4 — the <c>StringTrim</c> half of the same gate, on a
+    /// source-declared <c>string?</c>.</b>
+    /// <para>
+    /// The ADR's step-4 sequencing names two witnesses for a source-declared
+    /// nilable receiver: <c>ListReverse</c>
+    /// (<see cref="Step4_ASourceDeclaredNilableContainer_Selects_TheInstanceMember"/>)
+    /// and this one. The competing member here is
+    /// <c>MemoryExtensions.Trim(this ReadOnlySpan&lt;char&gt;)</c>, reachable
+    /// from a <c>string</c> by the implicit span conversion and in scope
+    /// through <c>import System</c>. The silent failure is <c>s.Trim()</c>
+    /// retyping to <c>ReadOnlySpan&lt;char&gt;</c> on a receiver whose only
+    /// difference from the baseline is its declared nullability, so the
+    /// assertion is on the bound result TYPE, which is what distinguishes the
+    /// two — running the probe would not, since both print the same text.
+    /// </para>
+    /// <para>
+    /// As with the <c>ListReverse</c> witness, <c>GlobalProbeType</c> requires
+    /// the probe to bind error-free; that is incidental, not an assertion that
+    /// an instance call on a nilable receiver <em>should</em> go unreported
+    /// (#4287's open call-path half).
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Step4_ASourceDeclaredNilableString_Trim_Stays_TheStringInstanceMember()
+    {
+        const string nilable = """
+            let s string? = "  a  "
+            let probe = s.Trim()
+            """;
+        const string baseline = """
+            let s = "  a  "
+            let probe = s.Trim()
+            """;
+
+        using var world = new World();
+
+        foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
+        {
+            var expected = world.GlobalProbeType(baseline, mode);
+            var actual = world.GlobalProbeType(nilable, mode);
+
+            Assert.Equal(typeof(string), expected.ClrType);
+            Assert.Equal(expected.ClrType, actual.ClrType);
+        }
+    }
+
+    /// <summary>
     /// <b>ADR-0186 step 4 — the population the deletion actually moves.</b>
     /// <para>
     /// An <em>annotated</em>-nullable CLR property (<c>string?</c> under
