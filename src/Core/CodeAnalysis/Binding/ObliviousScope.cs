@@ -246,7 +246,9 @@ internal static class ObliviousScope
             // Explicit type arguments in expressions (`F[string](x)`,
             // `Enumerable.Empty[string]()`): a type argument is a position
             // of the constructed method or type, exactly as it is inside a
-            // written type.
+            // written type. The intrinsics whose "type argument" is really a
+            // cast or adapter target (`cast[T]`, `adapt[I]`) read through the
+            // top-level wrapper where they bind it.
             TypeArgumentListSyntax => true,
 
             ParameterSyntax parameter => ReferenceEquals(parameter.Type, clause),

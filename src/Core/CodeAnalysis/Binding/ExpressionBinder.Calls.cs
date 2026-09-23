@@ -1305,6 +1305,12 @@ internal sealed partial class ExpressionBinder
                     return true;
                 }
 
+                // ADR-0186 §9: `cast[T]`'s argument is a cast target, not a
+                // slot — its top level is left alone in an oblivious scope
+                // (nested positions keep their platform reading), so
+                // `cast[string](o)` still produces a non-null `string`.
+                targetType = PlatformTypeSymbol.StripTopLevel(targetType);
+
                 reportObsoleteUseIfApplicable(
                     syntax.TypeArgumentList.Arguments[0].Location,
                     targetType,

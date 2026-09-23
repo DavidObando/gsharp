@@ -991,6 +991,28 @@ public class Adr0186ObliviousScopeTests
     }
 
     /// <summary>
+    /// A <c>cast[T]</c> target is not a slot (found in review, PR #4357):
+    /// in an oblivious scope <c>cast[string](o)</c> still produces a non-null
+    /// <c>string</c>, not <c>string!</c>.
+    /// </summary>
+    [Fact]
+    public void A_Cast_Target_Is_Not_A_Position()
+    {
+        var locals = BindLocals(
+            """
+            class Holder {
+                @Oblivious
+                func Body(o object) {
+                    let casted = cast[string](o)
+                    Console.WriteLine(casted)
+                }
+            }
+            """);
+
+        Assert.Same(TypeSymbol.String, locals["casted"]);
+    }
+
+    /// <summary>
     /// A select arm awaiting a task checks a nil oblivious task like a plain
     /// <c>await</c> does (found in review, PR #4357).
     /// </summary>
