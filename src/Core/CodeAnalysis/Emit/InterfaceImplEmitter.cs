@@ -291,7 +291,7 @@ internal sealed class InterfaceImplEmitter
 
             foreach (var iface in structSymbol.Interfaces)
             {
-                if (!DeclarationBinder.TypeSignaturesEquivalent(
+                if (!DeclarationBinder.ConformanceSignaturesEquivalent(
                     Invariant.Required(prop.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"),
                     iface))
                 {
@@ -748,7 +748,7 @@ internal sealed class InterfaceImplEmitter
                 if (!candidate.HasExplicitInterfaceClause
                     && candidate.Name == name
                     && (ReferenceEquals(current, type) || candidate.Accessibility == Accessibility.Public)
-                    && DeclarationBinder.TypeSignaturesEquivalent(slotType, candidate.Type))
+                    && DeclarationBinder.ConformanceSignaturesEquivalent(slotType, candidate.Type))
                 {
                     implementation = candidate;
                     declaringType = current;
@@ -1127,7 +1127,7 @@ internal sealed class InterfaceImplEmitter
                 foreach (var explicitCandidate in structSymbol.StaticProperties)
                 {
                     if (ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp)
-                        && DeclarationBinder.TypeSignaturesEquivalent(
+                        && DeclarationBinder.ConformanceSignaturesEquivalent(
                             Invariant.Required(explicitCandidate.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"),
                             iface))
                     {

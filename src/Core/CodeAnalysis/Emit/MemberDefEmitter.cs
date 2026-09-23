@@ -1037,7 +1037,7 @@ internal sealed class MemberDefEmitter
                     var parametersMatch = true;
                     for (var i = 0; i < indexParameters.Length; i++)
                     {
-                        if (!DeclarationBinder.TypeSignaturesEquivalent(
+                        if (!DeclarationBinder.ConformanceSignaturesEquivalent(
                             prop.Parameters[i].Type,
                             MemberLookup.GetIndexerParameterTypeSymbol(
                                 Invariant.Required(ifaceSym, "a CLR interface entry has a type symbol"),
@@ -1081,7 +1081,7 @@ internal sealed class MemberDefEmitter
 
         for (var i = 0; i < property.Parameters.Length; i++)
         {
-            if (!DeclarationBinder.TypeSignaturesEquivalent(
+            if (!DeclarationBinder.ConformanceSignaturesEquivalent(
                 interfaceProperty.Parameters[i].Type,
                 property.Parameters[i].Type,
                 typeParameterMap))

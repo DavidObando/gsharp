@@ -2570,7 +2570,7 @@ public sealed class StructSymbol : TypeSymbol
                 ? SubstituteTypeForConstruction(derivedParams[i].Type, candidateSubst)
                 : derivedParams[i].Type;
 
-            if (!DeclarationBinder.TypeSignaturesEquivalent(baseType, derivedType))
+            if (!DeclarationBinder.ConformanceSignaturesEquivalent(baseType, derivedType))
             {
                 return false;
             }

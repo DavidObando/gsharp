@@ -282,7 +282,7 @@ internal sealed partial class DeclarationBinder
                     foreach (var slot in target.ClrType.GetEvents(BindingFlags.Public | BindingFlags.Instance))
                     {
                         if (slot.Name != eventSymbol.Name
-                            || !TypeSignaturesEquivalent(
+                            || !ConformanceSignaturesEquivalent(
                                 eventSymbol.Type,
                                 MemberLookup.GetClrEventHandlerTypeSymbol(target, slot)))
                         {
@@ -345,7 +345,7 @@ internal sealed partial class DeclarationBinder
             || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot)
             || (slot.GetMethod != null) != property.HasGetter
             || (slot.SetMethod != null) != property.HasSetter
-            || !TypeSignaturesEquivalent(property.Type, slotType))
+            || !ConformanceSignaturesEquivalent(property.Type, slotType))
         {
             return false;
         }
@@ -840,7 +840,7 @@ internal sealed partial class DeclarationBinder
                 var parametersMatch = true;
                 for (var i = 0; i < interfaceProperty.Parameters.Length; i++)
                 {
-                    if (!TypeSignaturesEquivalent(
+                    if (!ConformanceSignaturesEquivalent(
                         interfaceProperty.Parameters[i].Type,
                         candidate.Parameters[i].Type,
                         typeParameterMap))
@@ -906,7 +906,7 @@ internal sealed partial class DeclarationBinder
             var parametersMatch = true;
             for (var i = 0; i < interfaceProperty.Parameters.Length; i++)
             {
-                if (!TypeSignaturesEquivalent(
+                if (!ConformanceSignaturesEquivalent(
                     interfaceProperty.Parameters[i].Type,
                     MemberLookup.GetIndexerParameterTypeSymbol(importedBase, candidate, i),
                     typeParameterMap))

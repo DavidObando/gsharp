@@ -239,7 +239,7 @@ internal static class MethodInfoHelpers
 
         for (var i = 0; i < interfaceParameters.Length; i++)
         {
-            if (!DeclarationBinder.TypeSignaturesEquivalent(
+            if (!DeclarationBinder.ConformanceSignaturesEquivalent(
                 interfaceParameters[i].Type,
                 implementationParameters[i].Type,
                 typeParameterMap))
@@ -310,7 +310,7 @@ internal static class MethodInfoHelpers
         TypeSymbol b,
         System.Collections.Generic.IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
     {
-        if (DeclarationBinder.TypeSignaturesEquivalent(a, b, typeParameterMap))
+        if (DeclarationBinder.ConformanceSignaturesEquivalent(a, b, typeParameterMap))
         {
             return true;
         }

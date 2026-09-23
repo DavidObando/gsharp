@@ -900,8 +900,8 @@ public class Adr0186ObliviousScopeTests
     // ---------------------------------------------------------------
 
     /// <summary>
-    /// Neither annotation takes arguments or a target, and the two cannot be
-    /// combined — each is GS9307, never a silent pick.
+    /// Neither annotation takes arguments or a target specifier, and the two
+    /// cannot be combined — each is GS9307, never a silent pick.
     /// </summary>
     /// <param name="declaration">The malformed declaration.</param>
     /// <param name="expected">A fragment of the expected message.</param>
@@ -909,6 +909,7 @@ public class Adr0186ObliviousScopeTests
     [InlineData("@Oblivious(true) class Holder { }", "'@Oblivious' takes no arguments")]
     [InlineData("@NullabilityEnabled(1) class Holder { }", "'@NullabilityEnabled' takes no arguments")]
     [InlineData("@Oblivious @NullabilityEnabled class Holder { }", "cannot be combined with @Oblivious")]
+    [InlineData("class Holder { @field:Oblivious var F string }", "'@Oblivious' takes no target specifier")]
     public void Malformed_Scope_Annotations_Report_GS9307(string declaration, string expected)
     {
         var diagnostics = Compile(declaration, NullabilityMode.PlatformTypes).GlobalScope.Diagnostics;

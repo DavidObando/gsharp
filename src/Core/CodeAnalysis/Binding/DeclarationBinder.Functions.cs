@@ -2019,7 +2019,7 @@ internal sealed partial class DeclarationBinder
 
         for (var i = 0; i < derivedParams.Length; i++)
         {
-            if (!TypeSignaturesEquivalent(baseParams[i].Type, derivedParams[i].Type, typeParamMap))
+            if (!ConformanceSignaturesEquivalent(baseParams[i].Type, derivedParams[i].Type, typeParamMap))
             {
                 return false;
             }
@@ -2086,7 +2086,7 @@ internal sealed partial class DeclarationBinder
         if (AsyncIteratorDetection.IsAsyncIteratorReturnType(baseMethod.Type)
             && AsyncIteratorDetection.IsAsyncIteratorReturnType(derivedReturnType))
         {
-            return TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap);
+            return ConformanceSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap);
         }
 
         if (baseMethod.IsAsyncVoid || derivedIsAsyncVoid)
@@ -2100,7 +2100,7 @@ internal sealed partial class DeclarationBinder
 
         if (baseIsAsync == derivedIsAsync)
         {
-            return TypeSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap);
+            return ConformanceSignaturesEquivalent(baseMethod.Type, derivedReturnType, typeParamMap);
         }
 
         if (derivedIsAsync)
@@ -2108,13 +2108,13 @@ internal sealed partial class DeclarationBinder
             // Derived is async (declared = awaited result); the base must declare
             // the matching Task / Task[T] wrapper.
             return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(baseMethod.Type, out var baseAwaited)
-                && TypeSignaturesEquivalent(baseAwaited, derivedReturnType, typeParamMap);
+                && ConformanceSignaturesEquivalent(baseAwaited, derivedReturnType, typeParamMap);
         }
 
         // Base is async (declared = awaited result); the derived (non-async)
         // method must declare the matching Task / Task[T] wrapper.
         return AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(derivedReturnType, out var derivedAwaited)
-            && TypeSignaturesEquivalent(baseMethod.Type, derivedAwaited, typeParamMap);
+            && ConformanceSignaturesEquivalent(baseMethod.Type, derivedAwaited, typeParamMap);
     }
 
     /// <summary>
@@ -2282,7 +2282,7 @@ internal sealed partial class DeclarationBinder
         foreach (var candidate in structSymbol.Properties)
         {
             if (ReferenceEquals(candidate.ExplicitInterfaceMember, iprop)
-                && TypeSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface))
+                && ConformanceSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface))
             {
                 setterKindMismatch = InterfacePropertySetterKindsMismatch(iprop, candidate);
                 return candidate;
@@ -2294,7 +2294,7 @@ internal sealed partial class DeclarationBinder
             }
 
             if (candidate.ExplicitInterfaceClauseTarget == null ||
-                !TypeSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface) ||
+                !ConformanceSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface) ||
                 candidate.Name != iprop.Name)
             {
                 continue;
@@ -2333,7 +2333,7 @@ internal sealed partial class DeclarationBinder
             var parametersMatch = true;
             for (var i = 0; i < iprop.Parameters.Length; i++)
             {
-                if (!TypeSignaturesEquivalent(iprop.Parameters[i].Type, candidate.Parameters[i].Type, typeParamMap))
+                if (!ConformanceSignaturesEquivalent(iprop.Parameters[i].Type, candidate.Parameters[i].Type, typeParamMap))
                 {
                     parametersMatch = false;
                     break;
@@ -2396,14 +2396,14 @@ internal sealed partial class DeclarationBinder
             }
 
             if (candidate.ExplicitInterfaceClauseTarget == null ||
-                !TypeSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface) ||
+                !ConformanceSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface) ||
                 candidate.Name != ievent.Name)
             {
                 continue;
             }
 
             var typeParamMap = BuildInterfaceTypeParameterMap(iface);
-            if (!TypeSignaturesEquivalent(ievent.Type, candidate.Type, typeParamMap))
+            if (!ConformanceSignaturesEquivalent(ievent.Type, candidate.Type, typeParamMap))
             {
                 continue;
             }
@@ -2920,6 +2920,37 @@ internal sealed partial class DeclarationBinder
     internal static bool TypeSignaturesEquivalent(TypeSymbol? a, TypeSymbol? b)
         => TypeSignaturesEquivalent(a, b, typeParamMap: null);
 
+    [ThreadStatic]
+    private static int conformanceMatchingDepth;
+
+    /// <summary>
+    /// ADR-0186: <see cref="TypeSignaturesEquivalent(TypeSymbol, TypeSymbol, IReadOnlyDictionary{TypeParameterSymbol, TypeSymbol})"/>
+    /// asked as a <em>conformance</em> question — does this member implement
+    /// or override that slot — which reads through a platform wrapper
+    /// (<c>T!</c> has <c>T</c>'s signature) at every nesting level. Every
+    /// other caller keeps the exact comparison. The scope is thread-static and
+    /// counted, so it follows the recursion and nests safely.
+    /// </summary>
+    /// <param name="a">The slot's type.</param>
+    /// <param name="b">The candidate's type.</param>
+    /// <param name="typeParamMap">The method type-parameter correspondence, if any.</param>
+    /// <returns><see langword="true"/> when the signatures conform.</returns>
+    internal static bool ConformanceSignaturesEquivalent(
+        TypeSymbol? a,
+        TypeSymbol? b,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? typeParamMap = null)
+    {
+        conformanceMatchingDepth++;
+        try
+        {
+            return TypeSignaturesEquivalent(a, b, typeParamMap);
+        }
+        finally
+        {
+            conformanceMatchingDepth--;
+        }
+    }
+
     private static TypeSymbol? StripPlatformOrReferenceNullable(TypeSymbol? type) => type switch
     {
         PlatformTypeSymbol platform => platform.UnderlyingType,
@@ -2934,7 +2965,7 @@ internal sealed partial class DeclarationBinder
         => iface != null
             && interfaceEvent != null
             && implementation != null
-            && TypeSignaturesEquivalent(
+            && ConformanceSignaturesEquivalent(
                 interfaceEvent.Type,
                 implementation.Type,
                 BuildInterfaceTypeParameterMap(iface));
@@ -2953,14 +2984,20 @@ internal sealed partial class DeclarationBinder
         }
 
         // ADR-0186: signature matching (interface implementation, override,
-        // event equivalence) is a conformance relation, and `T!` has `T`'s
+        // event equivalence) is a conformance relation — and ONLY there does
+        // this apply: this predicate is also the exact pointee gate for
+        // `ref`/`out`/`in` arguments and the identity test for constructed
+        // types, where treating `T!` as `T` would forward a platform slot's
+        // address to a non-null `ref T` parameter with no §4 check, or reopen
+        // ADR-0186 §3 rule 3 for source generics. So it is scoped to callers
+        // that go through ConformanceSignaturesEquivalent. `T!` has `T`'s
         // signature (§1). A member declared in an ADR-0186 §9 oblivious scope
         // (`func Make(x Item) Item` there is `Item! -> Item!`) must match the
         // slot an enabled declaration wrote as `Item` — and, since oblivious
         // means "nothing was stated", one written as `Item?` too, as C#
         // accepts an oblivious override of an annotated member. Recursion
         // applies the same reading to nested positions.
-        if (a is PlatformTypeSymbol || b is PlatformTypeSymbol)
+        if (conformanceMatchingDepth > 0 && (a is PlatformTypeSymbol || b is PlatformTypeSymbol))
         {
             a = StripPlatformOrReferenceNullable(a);
             b = StripPlatformOrReferenceNullable(b);
