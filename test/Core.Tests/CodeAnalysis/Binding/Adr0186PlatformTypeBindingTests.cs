@@ -1251,7 +1251,14 @@ public sealed class Adr0186PlatformTypeBindingTests
     [InlineData("    var a []string = Ob.EmptyArr[string]()\n    Console.WriteLine(a.Length)", "0")]
 
     // `Enumerable.Empty[T]()` into a nullable interface, and as a `??` fallback.
+    // The `??` rows are BINDING witnesses for #4361's GS0129 ("'??' is not
+    // defined for 'IEnumerable[string]?' and 'IEnumerable[string!]!'"), not
+    // a claim about the fallback's nil safety: the result of `x ?? y` is
+    // the non-null underlying whatever `y`'s platform-ness (ADR-0186 §6,
+    // pinned by cs2gs's `Issue2579` contract), so the `!!` in the second row —
+    // kept because it is the migrated corpus's exact spelling — is redundant.
     [InlineData("    var e IEnumerable[string]? = Ob.EmptySeq[string]()\n    Console.WriteLine(e!!.Count())", "0")]
+    [InlineData("    let x IEnumerable[string]? = nil\n    let p = x ?? Ob.EmptySeq[string]()\n    Console.WriteLine(p.Count())", "0")]
     [InlineData("    let x IEnumerable[string]? = nil\n    let p = (x ?? Ob.EmptySeq[string]())!!\n    Console.WriteLine(p.Count())", "0")]
 
     // `T` INFERRED from a fully-typed argument (`Array.FindAll(xs, …)`).
