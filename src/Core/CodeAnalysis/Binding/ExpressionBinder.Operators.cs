@@ -1723,6 +1723,10 @@ internal sealed partial class ExpressionBinder
             return operand;
         }
 
+        // ADR-0186 §4: a receive requires a non-null channel, so a platform
+        // operand is checked (and unwrapped) here, like any other receiver.
+        operand = PlatformCoercion.InsertCheck(operand, syntax.Operand.Location, "a channel receive operand");
+
         if (!ChannelTypeSymbol.TryGetChannelShape(operand.Type, out var elementType, out var direction, out _))
         {
             Diagnostics.ReportReceiveOperandIsNotChannel(syntax.Operand.Location, operand.Type);

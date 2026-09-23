@@ -101,11 +101,19 @@ internal sealed partial class OverloadResolver
 
             var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
                 .ToString(System.Globalization.CultureInfo.InvariantCulture);
-            var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: receiverType);
+
+            // ADR-0186: the guard above already tests for nil, so a platform
+            // receiver needs no §4 check here — only its wrapper removed, so
+            // the emitter still sees a named delegate as one.
+            var capture = new LocalVariableSymbol(captureName, isReadOnly: true, type: PlatformTypeSymbol.StripTopLevel(receiverType));
             var invoke = new BoundIndirectCallExpression(null, new BoundVariableExpression(null, capture), fnType, args, argumentRefKinds);
             return BuildNullConditionalDelegateResult(syntax, receiverLoad, capture, invoke, fnType.ReturnType);
         }
 
+        // ADR-0186 §4, issue #4325: invoking a platform function value
+        // (`f(x)` where `f` is declared in an ADR-0186 §9 oblivious scope) is
+        // a coercion to non-null like every other delegate invocation target.
+        receiverLoad = PlatformCoercion.InsertCheck(receiverLoad, syntax.Identifier.Location, "a delegate invocation target");
         return new BoundIndirectCallExpression(null, receiverLoad, fnType, args, argumentRefKinds);
     }
 

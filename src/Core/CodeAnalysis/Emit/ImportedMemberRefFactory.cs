@@ -91,6 +91,16 @@ internal sealed class ImportedMemberRefFactory
 
     internal EntityHandle GetElementTypeToken(TypeSymbol element)
     {
+        // ADR-0186 §1: `T!` is erased at emit and has no value-type case, so
+        // its token is exactly `T`'s. Tokenising the UNDERLYING symbol matters
+        // for a G#-declared type, which has no `ClrType` for the fallback
+        // below to use — and ADR-0186 §9 makes a platform-wrapped G# class
+        // routine (`var t Tag` in an oblivious scope is `Tag!`).
+        if (element is PlatformTypeSymbol platformElement)
+        {
+            return this.GetElementTypeToken(platformElement.UnderlyingType);
+        }
+
         // P2-7 / Issue #421: nullable over a value type tokenises as
         // System.Nullable<T>. NullableTypeSymbol over a reference type
         // continues to share the underlying CLR type (handled below by

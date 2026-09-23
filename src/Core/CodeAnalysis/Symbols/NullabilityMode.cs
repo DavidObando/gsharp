@@ -10,9 +10,20 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// <c>/nullability:&lt;mode&gt;</c>).
 /// <para>
 /// This is modelled as a named mode rather than a boolean because ADR-0186 §9
-/// adds a second, orthogonal value (<c>oblivious</c> — a declaration-scope
-/// switch for cs2gs) to the same switch in a later step. A <c>bool</c> here
-/// would have to be renamed then.
+/// adds a third value, <see cref="Oblivious"/> — a declaration-scope switch for
+/// cs2gs — to the same switch (step 5). It is a third <em>value</em> rather
+/// than a second axis because the combination an axis would add, "ADR-0136's
+/// <c>T?</c> import reading plus oblivious source declarations", has no
+/// consumer: an oblivious declaration exists to be read as <c>T!</c>, and only
+/// a mode that reads <c>T!</c> can say so.
+/// </para>
+/// <para>
+/// <b>Spelling, reconciled with ADR-0186 §9.</b> §9 names the switch's values
+/// <c>enabled|oblivious</c>, default <c>enabled</c>, where "enabled" means
+/// "source declarations are nullability-enabled". Steps 1–3 had already given
+/// <c>enabled</c> a different meaning on this switch — ADR-0136's import
+/// reading — so §9's "enabled" is spelled <c>platform-types</c> here (the
+/// default), and <c>enabled</c> keeps its step-1 meaning.
 /// </para>
 /// </summary>
 public enum NullabilityMode
@@ -52,6 +63,28 @@ public enum NullabilityMode
     /// (see <c>ExpressionBinder.CanBindClrInstanceMember</c>). Under this mode
     /// an oblivious receiver no longer reaches it.
     /// </para>
+    /// <para>
+    /// This is also ADR-0186 §9's <em>nullability-enabled</em> compilation: an
+    /// unadorned reference position a G# declaration writes means <c>T</c>,
+    /// unless an enclosing <c>@Oblivious</c> says otherwise.
+    /// </para>
     /// </summary>
     PlatformTypes,
+
+    /// <summary>
+    /// ADR-0186 §9's <b>oblivious compilation</b>
+    /// (<c>--nullability=oblivious</c>): everything
+    /// <see cref="PlatformTypes"/> does, and in addition every unadorned
+    /// reference position <em>written in G# source</em> means <c>T!</c> unless
+    /// an enclosing <c>@NullabilityEnabled</c> says otherwise. <c>T?</c> still
+    /// means <c>T?</c>.
+    /// <para>
+    /// Hand-written G# never uses it. It exists for one consumer, cs2gs, which
+    /// renders a nullability-oblivious C# project with it; it is removable per
+    /// project as that project's C# source migrates. Which source positions
+    /// it reaches is decided by <c>Binding.ObliviousScope</c>, and the answer
+    /// is the same one <c>@Oblivious</c> gives a single declaration.
+    /// </para>
+    /// </summary>
+    Oblivious,
 }

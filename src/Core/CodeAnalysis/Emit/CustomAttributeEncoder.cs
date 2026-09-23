@@ -322,6 +322,31 @@ internal sealed class CustomAttributeEncoder
     }
 
     /// <summary>
+    /// ADR-0186 §8: emits a per-event
+    /// <c>System.Runtime.CompilerServices.NullableAttribute</c> on an Event row
+    /// under the same "deviates from non-null default" condition as
+    /// <see cref="EmitNullableAttributeOnField"/>. The Event row is where the
+    /// import side reads an event's handler nullability
+    /// (<c>MemberLookup.ApplyEventDeclarationNullability</c> reads
+    /// <c>ClrNullability.ReadNullableFlags</c> off the event), and it is where
+    /// csc writes it; before ADR-0186 step 5 gsc wrote nothing there, so an
+    /// event's handler type re-imported through the type-level
+    /// <c>[NullableContext(1)]</c> as wholly non-null — an <c>@Oblivious</c>
+    /// event came back non-null, and so did the <c>string?</c> in an
+    /// <c>Action[string?]</c> handler.
+    /// </summary>
+    /// <param name="eventHandle">The Event row to attach the attribute to.</param>
+    /// <param name="type">The event's declared handler type.</param>
+    public void EmitNullableAttributeOnEvent(EventDefinitionHandle eventHandle, TypeSymbol type)
+    {
+        var flags = NullableFlagsBuilder.Build(type);
+        if (ShouldEmitPerPositionNullable(flags))
+        {
+            this.EmitNullableAttributeOnEntity(eventHandle, flags);
+        }
+    }
+
+    /// <summary>
     /// Issue #1354: returns <c>true</c> when a per-position
     /// <c>[NullableAttribute]</c> must be emitted for a field/property — i.e. the
     /// flags array is non-empty AND contains at least one byte that is not

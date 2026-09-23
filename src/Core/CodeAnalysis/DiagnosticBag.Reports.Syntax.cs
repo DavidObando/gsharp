@@ -249,6 +249,18 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.SuppressDiagnosticInvalidId, text);
 
     /// <summary>
+    /// ADR-0186 §9: reports GS9307 when an <c>@Oblivious</c> or
+    /// <c>@NullabilityEnabled</c> scope annotation is written in a shape it
+    /// does not support — with arguments, with a target specifier, or both on
+    /// one declaration.
+    /// </summary>
+    /// <param name="location">The source location of the offending syntax.</param>
+    /// <param name="annotationName">The annotation as written (<c>@Oblivious</c> / <c>@NullabilityEnabled</c>).</param>
+    /// <param name="problem">What is wrong with it.</param>
+    public void ReportNullabilityScopeAnnotationInvalid(TextLocation location, string annotationName, string problem)
+    => Report(location, DiagnosticDescriptors.NullabilityScopeAnnotationInvalid, annotationName, problem);
+
+    /// <summary>
     /// ADR-0055: reports an interpolation hole whose alignment clause
     /// (<c>${expr,alignment}</c>) is not a constant integer.
     /// </summary>

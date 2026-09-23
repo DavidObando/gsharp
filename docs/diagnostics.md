@@ -385,6 +385,7 @@ GS92xx block belongs to the gsgen source-generator host.)
 | GS9304 | Warning | An analyzer reported a diagnostic whose ID is not declared in its `SupportedDiagnostics`; the diagnostic is suppressed. |
 | GS9305 | Error | `@SuppressDiagnostic` (ADR-0175) was given an argument that is not a constant string shaped like a diagnostic ID, or no argument at all. |
 | GS9306 | Error | `@ExtensionOwner` (issue #4234), synthesized by cs2gs to preserve a migrated C# static extension class's CLR owner-type identity, was used outside the one shape it supports: a top-level extension function carrying a single `typeof(T)` argument naming a non-generic class declared in the same package. |
+| GS9307 | Error | `@Oblivious` / `@NullabilityEnabled` (ADR-0186 §9) was written in a shape it does not support: with arguments, with a target specifier, or both annotations on the same declaration. Neither takes arguments; the nearest annotation decides whether the unadorned reference types written inside it are oblivious (`T!`). |
 
 ### Internal diagnostics (GS9996–GS9999)
 

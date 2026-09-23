@@ -1506,7 +1506,12 @@ internal sealed partial class OverloadResolver
         // add func(int, int) int = ...` reduce to BoundIndirectCallExpression.
         var variable = symbol as VariableSymbol;
         var callableType = narrowedCallTargetType ?? variable?.Type;
-        var fnType = callableType as FunctionTypeSymbol;
+
+        // ADR-0186: a platform function value (`((string) -> string)!`,
+        // routine for a function-typed slot declared in an ADR-0186 §9
+        // oblivious scope) is invoked as its underlying function type;
+        // BuildIndirectDelegateCall inserts §4's check on the load.
+        var fnType = (callableType is null ? null : PlatformTypeSymbol.StripTopLevel(callableType)) as FunctionTypeSymbol;
         if (variable != null && fnType != null)
         {
             if (!TryBindFunctionTypeArguments(
@@ -1532,8 +1537,9 @@ internal sealed partial class OverloadResolver
         // of a user-declared named delegate type. Mirrors the CLR-delegate
         // branch below — both end up dispatching through Invoke.
         var namedDelegateVar = symbol as VariableSymbol;
+        var namedDelegateCallable = narrowedCallTargetType ?? namedDelegateVar?.Type;
         var namedDelegateSym =
-            (narrowedCallTargetType ?? namedDelegateVar?.Type) as DelegateTypeSymbol;
+            (namedDelegateCallable is null ? null : PlatformTypeSymbol.StripTopLevel(namedDelegateCallable)) as DelegateTypeSymbol;
         if (namedDelegateVar != null && namedDelegateSym != null)
         {
             if (!TryBindNamedDelegateArguments(

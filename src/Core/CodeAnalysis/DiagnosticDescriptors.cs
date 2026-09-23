@@ -626,6 +626,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor AnalyzerUnsupportedDiagnosticId = new("GS9304", DiagnosticSeverity.Warning, "Analyzer '{0}' reported diagnostic '{1}', which is not declared in its SupportedDiagnostics; the diagnostic was suppressed.");
     internal static readonly DiagnosticDescriptor SuppressDiagnosticInvalidId = new("GS9305", DiagnosticSeverity.Error, "'@SuppressDiagnostic' takes one or more constant string diagnostic identifiers (for example \"GSA0005\"); '{0}' is not one.");
     internal static readonly DiagnosticDescriptor ExtensionOwnerInvalid = new("GS9306", DiagnosticSeverity.Error, "'@ExtensionOwner' {0}.");
+    internal static readonly DiagnosticDescriptor NullabilityScopeAnnotationInvalid = new("GS9307", DiagnosticSeverity.Error, "'{0}' {1}.");
     internal static readonly DiagnosticDescriptor SourceGeneratorExecutionFailure = new("GS9996", DiagnosticSeverity.Error, "Source generator execution failed: {0}");
     internal static readonly DiagnosticDescriptor FatalCompilerIOError = new("GS9997", DiagnosticSeverity.Error, "Fatal compiler I/O error: {0}");
 }

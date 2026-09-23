@@ -83,6 +83,9 @@ public static class IteratorRewriter
 
     private static TypeSymbol? GetIteratorElementType(TypeSymbol type)
     {
+        // ADR-0186 §9: see PlatformTypeSymbol.StripTopLevel.
+        type = PlatformTypeSymbol.StripTopLevel(type);
+
         if (type is SequenceTypeSymbol seq)
         {
             return seq.ElementType;

@@ -682,6 +682,34 @@ non-null, nullable stays nullable, **oblivious stays oblivious**. Under ADR-0136
 the third case was not expressible — an oblivious G# declaration had to be
 emitted as something it was not.
 
+> **Implementation note (step 5): gsc emits the explicit byte `0`, not nothing.**
+> "Nothing" is only `csc`'s shape for a *wholly* disabled type. gsc stamps
+> `[NullableContext(1)]` on every type it emits, so an attribute-free member
+> inside one reads back through the context walk as **non-null** — the exact
+> laundering this ADR exists to end — and a declaration-level `@Oblivious`
+> member inside an enabled type (or an `@NullabilityEnabled` member inside an
+> oblivious one) has no attribute-free spelling at all. Emitting nothing would
+> have needed two shapes, a conditional type-level context, and a change to
+> the method-level context chooser's assembly-default assumption. The explicit
+> shape needed none of that: an oblivious declaration's positions are
+> `PlatformTypeSymbol`s, `NullableFlagsBuilder` already writes them as `0`
+> (step 3 taught it to, for captured `string!` locals), the field/property
+> emitters already emit any array containing a non-`1` byte, and the method
+> emitter already stamps `[NullableContext(0)]` when `0` is the majority. It is
+> also how `csc` writes a `#nullable disable` member of an otherwise-enabled
+> type; `Adr0186ObliviousRoundTripEmitTests` compares both compilers' metadata
+> for the same declarations and requires every position to re-import
+> identically. Emitting nothing for a wholly oblivious type remains available as
+> a later emit-size optimization.
+>
+> Step 5 also closed an **event** hole that predates this ADR: the import side
+> reads an event's handler nullability off the Event row (where `csc` writes
+> it), and gsc wrote nothing there, so every gsc-emitted event re-imported
+> through its type's `[NullableContext(1)]` as wholly non-null — an
+> `Action[string?]` handler lost its `?`, and an oblivious one would have lost
+> its obliviousness. Event rows now carry `[Nullable]` under the same
+> "any byte other than `1`" rule as fields and properties.
+
 ### 9. Declaring obliviousness in G# source
 
 `T!` is unspellable, so a G# *source* declaration cannot write a platform type
@@ -693,12 +721,113 @@ directives; ADR-0047/ADR-0175 established the annotation as the mechanism.
 1. **Compilation level.** `--nullability=enabled|oblivious`, default **enabled**.
    In an oblivious compilation, every unadorned reference position in a
    *declaration signature* means `T!`; `T?` still means `T?`. Expression-level
-   typing is unchanged — this switch governs declarations only.
+   typing is unchanged — this switch governs declarations only. *(Superseded in
+   part by step 5: the scope reaches every type-writing position, not only
+   signatures — see the implementation note below — and the switch's values are
+   spelled differently on the command line.)*
 2. **Declaration level.** `@Oblivious` — an ADR-0047 annotation valid wherever an
    annotation already is (type, function, property, field, event, parameter) —
    makes that declaration's unadorned reference positions `T!` regardless of the
    compilation default. `@NullabilityEnabled` is its inverse, for a declaration
    inside an oblivious compilation.
+
+> **Implementation note (step 5).**
+>
+> **Spelling.** Steps 1–3 had already given `--nullability` the values
+> `enabled` (ADR-0136's `T?` *import* reading) and `platform-types` (this ADR's,
+> the default since step 3). §9's "enabled" — source declarations are
+> nullability-enabled — is therefore what the switch spells `platform-types`,
+> and §9's oblivious compilation is a third value, `--nullability=oblivious`:
+> the `platform-types` reading plus oblivious source declarations. The
+> combination a second axis would add ("`T?` import reading, oblivious
+> declarations") has no consumer. Under legacy `--nullability=enabled`, an
+> `@Oblivious` declaration reads as that mode reads every oblivious position —
+> `T?` — because the scope rule maps through `ClrNullability.SymbolForState`,
+> the one cell of ADR-0136's table this ADR changes; nothing constructs a
+> `PlatformTypeSymbol` in that mode.
+>
+> **Annotations.** `@Oblivious` and `@NullabilityEnabled` are compiler-intrinsic,
+> recognised by spelling like ADR-0175's `@SuppressDiagnostic`: no CLR attribute
+> type, no assembly reference, nothing written to metadata of their own. Both
+> are also accepted on a **block** (`@Oblivious { … }`), the analogue of a
+> `#nullable disable` region inside a method body. Arguments, a target
+> specifier, or both annotations on one declaration are **GS9307**.
+>
+> **Precedence.** The nearest enclosing annotation wins; with none, the
+> compilation switch answers. A parameter's annotation beats its function's, a
+> function's beats its type's, and any declaration-level annotation beats the
+> compilation default. Scopes are lexical (by source span), so a partial type's
+> annotation governs the part it is written on, as `#nullable` does per file.
+>
+> **Reach — open question 12, settled.** An oblivious scope makes every
+> unadorned reference position of every type *written inside it* `T!`, where a
+> position is a slot a value lives in. That is one rule, applied in one place
+> (`Binder.BindTypeClause`, through `ObliviousScope`), not a list of
+> declaration kinds:
+>
+> | Written type | Top level | Nested positions |
+> | --- | --- | --- |
+> | declared type of a field, property, event, parameter (incl. receiver and lambda parameter), function/lambda/delegate return, local `var`/`let`, `for`-range variable, inline `out` declaration | **`T!`** | **`T!`** |
+> | explicit type argument (`F[string](x)`), array/slice element (`[]string{…}`) | **`T!`** | **`T!`** |
+> | construction target (`List[string]{}`), cast, `as`, `typeof`, `sizeof`, `default`, explicit-interface qualifier, attribute type, type alias | unchanged | **`T!`** |
+> | type pattern, `catch` variable, `if let` / `guard let` / `while let` binding | unchanged (non-null) | **`T!`** |
+> | base-type / interface list, generic constraint (a *conformance* clause) | unchanged | unchanged |
+> | signature of an `@DllImport` / `@LibraryImport` function | unchanged | unchanged |
+>
+> Nested positions are oblivious *wherever* a type is written, expressions
+> included, and that is not a choice: §3 rule 3 gives `C[T]` and `C[T!]` no
+> conversion in either direction, so an oblivious
+> `var xs List[string] = List[string]{}` compiles only if both spellings of
+> `List[string]` name the same type — which is also `csc`'s rule for type
+> syntax inside `#nullable disable`. The top level of a type written for any
+> reason other than declaring a slot is not a position. A test-introduced
+> binding keeps a non-null top level because §4 says it is non-null *because the
+> test succeeded*, so `T!` there would state less than the language already
+> knows. Value types and open type parameters have no oblivious reading, as in
+> §2.
+>
+> The two exempt rows are exempt for reasons, not convenience. A conformance
+> clause is a *relation* (open question 13: there is no point at which a check
+> could be inserted), gsc writes no nullability metadata for it, and wrapping
+> its arguments split one interface into two — an oblivious
+> `class Bag : IEnumerable[Item]` declared `IEnumerable[Item!]`, which no
+> member written against `IEnumerable[Item]` matched, so the slot was left
+> without an implementation and the runtime threw `TypeLoadException` on a
+> program the binder accepted. The members implementing the relation stay
+> oblivious; slot matching reads through their wrappers, since `T!` has `T`'s
+> signature (§1). A native-interop signature's reference positions describe
+> marshalling (a `string` parameter marshals as a native string, a delegate
+> return is rejected, `@MarshalAs` is validated against the written type), not
+> a CLR nullability contract; a nilable native reference is spelled `T?`.
+>
+> **The cost the ADR budgeted ("636 sites") came due here.** Before step 5 a
+> `PlatformTypeSymbol` only ever wrapped an *imported* type, which carries a
+> `ClrType`; §9 wraps G#-declared classes, interfaces, function types, named
+> delegates and channels, and every `is StructSymbol` / `is FunctionTypeSymbol`
+> / `is ChannelTypeSymbol` test that had never seen that population missed it.
+> Step 5 made those it found read through the wrapper (signature encoding,
+> element-type tokens, emitter conversions, iterator / async / enumerator
+> shapes, delegate invocation and lambda target typing, channel operands,
+> constraint satisfaction, structural projection, `copy`/`with`, `adapt`,
+> interface-slot matching, event metadata). Measured by running the whole of
+> `Core.Tests` with every fixture forced oblivious (`GSHARP_NULLABILITY=oblivious`
+> — every unadorned reference in every test program becomes `T!`): 796 of
+> 9,779 tests failed before those fixes and 502 after. The remainder is mostly
+> tests asserting a non-platform type or diagnostic, which is expected, plus
+> a residue step 6 must budget for: generic type inference from a `T!`
+> argument (`Cannot infer type argument`), extension lookup on a platform
+> receiver of a G# or slice type (`Cannot find function Select`), smart-cast
+> narrowing a platform value by a type test, and variadic `[]T` parameters.
+> Expression trees reject oblivious values by design (issue #2130) and will
+> reject EF Core shapes cs2gs emits in an oblivious scope.
+>
+> **What this does not change.** A `C[T!]` built in an oblivious scope still
+> cannot be passed where an enabled declaration says `C[T]` (§3 rule 3). That is
+> the cost §3 already accepts for imported oblivious containers, now reachable
+> from oblivious *source* too: an oblivious C# caller handing
+> `new List<string>()` to an enabled `List<string>` parameter has no
+> assertion-free translation. It is the generic-container analogue of open
+> question 2, and step 6 should measure it.
 
 Hand-written G# never uses either. Both exist for one consumer — cs2gs — and
 both are removable per project as that project's C# source migrates, exactly as
@@ -1397,8 +1526,12 @@ Ordered by how much a wrong answer would cost.
     should check the implementing PR's diff against whichever baseline is real at
     that time.
 
-12. **§9 covers declaration *signatures* only, and that is corpus-wide
-    insufficient.** The oblivious-scope mechanism as specified governs types,
+12. ~~**§9 covers declaration *signatures* only, and that is corpus-wide
+    insufficient.**~~ **Settled at step 5: the scope reaches every type-writing
+    position, by one rule** — see the implementation note under §9, which
+    lists what counts as a position and the two deliberate exceptions (the top
+    level of a type written for a non-slot reason, and of a test-introduced
+    binding). The original question follows. The oblivious-scope mechanism as specified governs types,
     functions, properties, fields, events and parameters. cs2gs also renders
     **explicitly-typed locals**, and §9 says nothing about them — nor about `out`
     parameters, `foreach` variables, lambda parameters, or catch and pattern
@@ -1481,7 +1614,9 @@ Suggested sequencing, each step independently landable and green:
    source-declared `List[int32]?`.
 5. §9's oblivious scope — **covering every type-writing position, not only
    declaration signatures (open question 12)** — and §8's emit; verify the
-   three-valued round-trip.
+   three-valued round-trip. *(Done: `--nullability=oblivious`, `@Oblivious` /
+   `@NullabilityEnabled`, explicit byte-`0` emit — see the implementation notes
+   under §8 and §9. No cs2gs change; that is step 6.)*
 6. cs2gs: switch to the per-position Roslyn read, gut the fixpoint (**preserving
    the enabled-C# rules that share its file**), remove the oblivious half of the
    forgiveness insertion, re-baseline `nullAssertionCeiling`, and run the full

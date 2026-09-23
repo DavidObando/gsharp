@@ -145,6 +145,20 @@ internal sealed class SignatureEncoder
                 + "and pass the pointee type to EncodeTypeSymbol.");
         }
 
+        // ADR-0186 §1: `T!` is erased at emit — its CLR signature is exactly
+        // `T`'s, and there is no value-type case (§2: no `int32!`). Encoding
+        // the UNDERLYING symbol, rather than falling through to the wrapper's
+        // `ClrType` below, matters twice over: a G#-declared class (`Box!`,
+        // `Box[string]!`) has no `ClrType` at all, and ADR-0186 §9 makes such
+        // wrappers routine — every unadorned reference in an oblivious scope
+        // is one — and a symbolic generic's `ClrType` is erased, so going
+        // through it would drop the `Var`/`MVar` slots its arguments carry.
+        if (type is PlatformTypeSymbol platform)
+        {
+            this.EncodeTypeSymbol(encoder, platform.UnderlyingType);
+            return;
+        }
+
         // Phase 3 exit: `T?` for reference types is metadata-only (same CLR
         // signature as `T`). For value types it lowers to `Nullable<T>`.
         if (type is NullableTypeSymbol nullable)

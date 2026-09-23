@@ -47,6 +47,8 @@ public class Adr0186NullabilitySwitchTests
     [InlineData("/nullability:platformtypes")]
     [InlineData("--nullability=platform-types")]
     [InlineData("--nullability=enabled")]
+    [InlineData("/nullability:oblivious")]
+    [InlineData("--nullability=oblivious")]
     public void ValidModes_Are_Accepted(string argument)
     {
         var (exit, output, error) = RunGsc(argument);
@@ -69,7 +71,7 @@ public class Adr0186NullabilitySwitchTests
 
         Assert.NotEqual(0, exit);
         Assert.Contains("unknown mode 'bogus'", error);
-        Assert.Contains("expected enabled or platform-types", error);
+        Assert.Contains("expected enabled, platform-types or oblivious", error);
     }
 
     /// <summary>
@@ -85,7 +87,7 @@ public class Adr0186NullabilitySwitchTests
         var (exit, _, error) = RunGsc(argument);
 
         Assert.NotEqual(0, exit);
-        Assert.Contains("expected enabled or platform-types", error);
+        Assert.Contains("expected enabled, platform-types or oblivious", error);
     }
 
     /// <summary>
@@ -109,6 +111,10 @@ public class Adr0186NullabilitySwitchTests
             // bug that no other test can see.
             Assert.Contains("platform-types (default", help);
             Assert.Contains("enabled", help);
+
+            // ADR-0186 step 5: the §9 oblivious compilation is a third value
+            // of the same switch, and `/help` has to name it.
+            Assert.Contains("oblivious also makes this compilation's own declarations oblivious", help);
             Assert.Contains("/platform-nil-checks:", help);
         }
         finally

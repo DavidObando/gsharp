@@ -69,6 +69,9 @@ public static class AsyncIteratorDetection
     /// <returns><see langword="true"/> for the enumerable form.</returns>
     public static bool IsAsyncEnumerable(TypeSymbol type)
     {
+        // ADR-0186 §9: see PlatformTypeSymbol.StripTopLevel.
+        type = PlatformTypeSymbol.StripTopLevel(type);
+
         // sequence[T] in an async return position aliases IAsyncEnumerable<T>.
         if (type is AsyncSequenceTypeSymbol)
         {
@@ -102,6 +105,9 @@ public static class AsyncIteratorDetection
     /// <paramref name="type"/> is not an async-iterator return type.</returns>
     public static TypeSymbol? GetElementType(TypeSymbol type)
     {
+        // ADR-0186 §9: see PlatformTypeSymbol.StripTopLevel.
+        type = PlatformTypeSymbol.StripTopLevel(type);
+
         // Issue #798: `async sequence[T]` (AsyncSequenceTypeSymbol) carries
         // its element symbolically; honor it directly so an open T does not
         // collapse via the ClrType branch.

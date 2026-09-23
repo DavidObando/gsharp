@@ -79,6 +79,7 @@ internal sealed class MemberDefEmitter
     private readonly Func<Type, EntityHandle> getTypeHandleForMember;
     private readonly Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken;
     private readonly Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty;
+    private readonly Action<EventDefinitionHandle, TypeSymbol> emitNullableAttributeOnEvent;
     private readonly Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes;
 
     public MemberDefEmitter(
@@ -92,6 +93,7 @@ internal sealed class MemberDefEmitter
         Func<Type, EntityHandle> getTypeHandleForMember,
         Func<StructSymbol, FieldSymbol, EntityHandle> resolveFieldToken,
         Action<PropertyDefinitionHandle, TypeSymbol> emitNullableAttributeOnProperty,
+        Action<EventDefinitionHandle, TypeSymbol> emitNullableAttributeOnEvent,
         Action<EntityHandle, Symbol, AttributeTargetKind> emitUserAttributes)
     {
         this.emitCtx = emitCtx ?? throw new ArgumentNullException(nameof(emitCtx));
@@ -104,6 +106,7 @@ internal sealed class MemberDefEmitter
         this.getTypeHandleForMember = getTypeHandleForMember ?? throw new ArgumentNullException(nameof(getTypeHandleForMember));
         this.resolveFieldToken = resolveFieldToken ?? throw new ArgumentNullException(nameof(resolveFieldToken));
         this.emitNullableAttributeOnProperty = emitNullableAttributeOnProperty ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnProperty));
+        this.emitNullableAttributeOnEvent = emitNullableAttributeOnEvent ?? throw new ArgumentNullException(nameof(emitNullableAttributeOnEvent));
         this.emitUserAttributes = emitUserAttributes ?? throw new ArgumentNullException(nameof(emitUserAttributes));
     }
 
@@ -815,6 +818,10 @@ internal sealed class MemberDefEmitter
             // the EventDef (parity with the class/interface member path).
             this.emitUserAttributes(eventDef, ev, AttributeTargetKind.Event);
 
+            // ADR-0186 §8: the handler's nullability, on the row the import
+            // side reads it from — see CustomAttributeEncoder.EmitNullableAttributeOnEvent.
+            this.emitNullableAttributeOnEvent(eventDef, ev.Type);
+
             if (firstEventDef.IsNil)
             {
                 firstEventDef = eventDef;
@@ -1202,6 +1209,10 @@ internal sealed class MemberDefEmitter
             // Issue #2129: emit user @annotations as CustomAttribute rows on
             // the EventDef (parity with the class/interface member path).
             this.emitUserAttributes(eventDef, ev, AttributeTargetKind.Event);
+
+            // ADR-0186 §8: the handler's nullability, on the row the import
+            // side reads it from — see CustomAttributeEncoder.EmitNullableAttributeOnEvent.
+            this.emitNullableAttributeOnEvent(eventDef, ev.Type);
 
             if (firstEventDef.IsNil)
             {
@@ -1964,6 +1975,10 @@ internal sealed class MemberDefEmitter
             // Issue #2129: emit user @annotations as CustomAttribute rows on
             // the EventDef (parity with the class/interface member path).
             this.emitUserAttributes(eventDef, ev, AttributeTargetKind.Event);
+
+            // ADR-0186 §8: the handler's nullability, on the row the import
+            // side reads it from — see CustomAttributeEncoder.EmitNullableAttributeOnEvent.
+            this.emitNullableAttributeOnEvent(eventDef, ev.Type);
 
             if (firstEventDef.IsNil)
             {

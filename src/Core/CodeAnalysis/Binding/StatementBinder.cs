@@ -287,16 +287,25 @@ internal sealed partial class StatementBinder
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
         scope = new BoundScope(scope);
 
-        // ADR-0175 (#3820/#3824): the only annotation a block statement accepts
-        // is the compiler-intrinsic `@SuppressDiagnostic`, whose scope is this
-        // block's `{`..`}`. It is consumed straight from the syntax tree by the
-        // analyzer driver and never bound; anything else in annotation position
-        // before a block is the ADR-0047 §2 "not allowed on statement" error.
+        // ADR-0175 (#3820/#3824): a block statement accepts only the
+        // compiler-intrinsic scope annotations — `@SuppressDiagnostic`, and
+        // (ADR-0186 §9) `@Oblivious` / `@NullabilityEnabled` — each scoped to
+        // this block's `{`..`}`. They are consumed straight from the syntax
+        // tree and never bound; anything else in annotation position before a
+        // block is the ADR-0047 §2 "not allowed on statement" error.
         foreach (var annotation in syntax.Annotations)
         {
             if (Analyzers.DiagnosticSuppressionMap.IsSuppressDiagnostic(annotation))
             {
                 DeclarationBinder.ValidateSuppressDiagnostic(annotation, Diagnostics);
+            }
+            else if (ObliviousScope.IsScopeAnnotation(annotation))
+            {
+                // ADR-0186 §9: `@Oblivious { … }` / `@NullabilityEnabled { … }`
+                // scope every type written inside the block, the analogue of
+                // a C# `#nullable disable` / `#nullable enable` region inside a
+                // method body. Read by ObliviousScope from the block's span.
+                ObliviousScope.Validate(annotation, syntax.Annotations, Diagnostics);
             }
             else
             {

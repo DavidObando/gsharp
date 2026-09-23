@@ -230,6 +230,28 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
+        // ADR-0186 §1: `T!` erases to `T` at emit, and — unlike `T?` — has no
+        // value-type case to lower (§2: no `int32!`), so every arm below sees
+        // the conversion between the underlying types. `nil -> T!` is first
+        // answered on the wrapper, because stripping it would leave
+        // `nil -> string`, which the nil arm below (deliberately narrow) does
+        // not admit. Before ADR-0186 §9 a platform wrapper only ever reached
+        // here over an imported type, whose `ClrType` let the CLR arms below
+        // cope; a G#-declared class, interface or delegate under one
+        // (`Derived! -> Base!`, `Dog -> Animal!`, a lambda to `Predicate!`)
+        // fell through to the unsupported-conversion throw.
+        if (from == TypeSymbol.Null && to is PlatformTypeSymbol)
+        {
+            return;
+        }
+
+        from = PlatformTypeSymbol.StripTopLevel(from);
+        to = PlatformTypeSymbol.StripTopLevel(to);
+        if (from == to)
+        {
+            return;
+        }
+
         // ADR-0122 / issue #1014: unmanaged pointer conversions. Pointer and
         // native-int (`nint`/`nuint`/pointer) share the CLR native-int
         // representation, so pointer<->pointer and pointer<->nint are no-ops.
@@ -283,17 +305,10 @@ internal sealed partial class MethodBodyEmitter
         // future binder path forgets to lower, fail loudly instead of
         // silently emitting an `ldnull` against a value-type slot
         // (issue #504).
-        // ADR-0186 §3's last row: `nil -> T!` is an ordinary null store, and
-        // `T!` is a REFERENCE-nullability annotation (§2 excludes value types
-        // outright), so the `ldnull` the source already pushed is the whole
-        // conversion — exactly as for the `T?` sibling beside it. Without
-        // this arm the pair fell through to the "not yet supported by the
-        // emitter" throw at the end of this method: the binder admitted the
-        // store (correctly) and emit refused it, which is a GS9998 crash
-        // rather than a diagnostic.
+        // (ADR-0186 §3's `nil -> T!` row is answered above, before the
+        // platform wrapper is stripped.)
         if (from == TypeSymbol.Null
             && ((to is NullableTypeSymbol toNullForNil && !ReflectionMetadataEmitter.IsValueTypeNullable(toNullForNil))
-                || to is PlatformTypeSymbol
                 || Conversion.IsNilAssignableWithoutNullableWrapper(to)))
         {
             return;
@@ -834,14 +849,26 @@ internal sealed partial class MethodBodyEmitter
     /// <returns>The unwrapped type, or <paramref name="type"/> when no reference-nullable wrapper applies.</returns>
     private static TypeSymbol UnwrapReferenceNullable(TypeSymbol type)
     {
-        while (type is NullableTypeSymbol nullable
-            && !ReflectionMetadataEmitter.IsValueTypeNullable(nullable)
-            && nullable.UnderlyingType != null)
+        while (true)
         {
-            type = nullable.UnderlyingType;
-        }
+            if (type is NullableTypeSymbol nullable
+                && !ReflectionMetadataEmitter.IsValueTypeNullable(nullable)
+                && nullable.UnderlyingType != null)
+            {
+                type = nullable.UnderlyingType;
+                continue;
+            }
 
-        return type;
+            // ADR-0186 §1: `T!` is a reference-nullability annotation over an
+            // identical CLR representation, exactly as a reference `T?` is.
+            if (type is PlatformTypeSymbol platform)
+            {
+                type = platform.UnderlyingType;
+                continue;
+            }
+
+            return type;
+        }
     }
 
     // Issues #1356/#2542/#2618: reference nullability erases from parameter and

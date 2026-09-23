@@ -1059,6 +1059,9 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, channel);
         }
 
+        // ADR-0186 §4: a send requires a non-null channel.
+        channel = PlatformCoercion.InsertCheck(channel, syntax.Channel.Location, "a channel send target");
+
         if (!ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var elementType, out var direction, out _))
         {
             Diagnostics.ReportSendTargetIsNotChannel(syntax.Channel.Location, channel.Type);

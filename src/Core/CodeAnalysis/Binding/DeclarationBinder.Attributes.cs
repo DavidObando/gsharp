@@ -257,6 +257,19 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
+            // ADR-0186 §9: `@Oblivious` / `@NullabilityEnabled` are
+            // compiler-intrinsic, like `@SuppressDiagnostic`: no CLR attribute
+            // type, no metadata of their own. `ObliviousScope` reads them
+            // straight from the syntax tree when a type clause inside them is
+            // bound; here they are only validated and consumed. Intercepted
+            // at the list level rather than in BindAttribute because the
+            // "both on one declaration" check needs the siblings.
+            if (ObliviousScope.IsScopeAnnotation(annotation))
+            {
+                ObliviousScope.Validate(annotation, annotations, Diagnostics);
+                continue;
+            }
+
             // Issue #3336: merged partial annotations retain the declaring part's tree.
             var bindingScope = scope;
             var previousTree = bindingScope.SetCurrentReferencingSyntaxTree(annotation.SyntaxTree);
