@@ -1486,13 +1486,20 @@ public sealed partial class CSharpToGSharpTranslator
             // emitted G# round-trips (ADR-0115 §B.6).
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
-            // Receiver-clause methods and value-aggregate members have no
-            // `open`/`override`: G# value aggregates expose no open base method
-            // to override. Drop the modifiers so the emitted G# binds.
-            if (receiver != null || IsValueAggregate(ownerKind))
+            // Receiver-clause methods have no `open`/`override`, and a value
+            // aggregate has no open members of its own. Issue #4350: a value
+            // aggregate's `override` of an inherited `object` member
+            // (`Equals`, `GetHashCode`, `ToString`) is KEPT — dropping it
+            // declared a new non-virtual method that hid the override, so boxed
+            // equality and hashing silently fell back to `ValueType`'s.
+            if (receiver != null)
             {
                 isOpen = false;
                 isOverride = false;
+            }
+            else if (IsValueAggregate(ownerKind))
+            {
+                isOpen = false;
             }
 
             // Generic interface methods are supported by the G# parser since

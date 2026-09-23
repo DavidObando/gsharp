@@ -267,7 +267,7 @@ internal sealed partial class DeclarationBinder
         BindStructProperties(syntax, package, structSymbol, memberBinding);
         BindStructEvents(syntax, package, structSymbol, baseBinding, memberBinding);
         BindStructSharedBlock(syntax, package, structSymbol, fieldBinding, memberBinding);
-        RegisterStructConversionOperators(package, memberBinding.PendingConversionOperators);
+        RegisterStructConversionOperators(package, structSymbol, memberBinding.PendingConversionOperators);
         RegisterStructDeferredInitializers(package, structSymbol, fieldBinding);
         RegisterStructInterfaceChecks(syntax, structSymbol, baseBinding);
         BindStructFinalMembers(syntax, package, structSymbol, baseBinding);
@@ -3327,6 +3327,7 @@ internal sealed partial class DeclarationBinder
 
     private void RegisterStructConversionOperators(
         PackageSymbol package,
+        StructSymbol declaringType,
         List<(FunctionDeclarationSyntax Syntax, ImmutableArray<ParameterSymbol> Parameters, TypeSymbol ReturnType, Accessibility Accessibility, ImmutableArray<BoundAttribute> Attributes)> pendingConversionOperators)
     {
         // Issue #1283: register in-body conversion operators as static
@@ -3342,7 +3343,8 @@ internal sealed partial class DeclarationBinder
                 conversionOperator.ReturnType,
                 conversionOperator.Accessibility,
                 package,
-                conversionOperator.Attributes);
+                conversionOperator.Attributes,
+                declaringType);
         }
     }
 

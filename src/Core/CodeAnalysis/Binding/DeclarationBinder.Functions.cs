@@ -1094,13 +1094,17 @@ internal sealed partial class DeclarationBinder
     /// <param name="accessibility">The declaration's resolved accessibility.</param>
     /// <param name="package">The owning package.</param>
     /// <param name="functionAttributes">Bound annotation attributes for the declaration.</param>
+    /// <param name="declaringType">Issue #4350: the enclosing type of an in-body
+    /// operator, which must be its source or target and always owns it (as in
+    /// C#); <see langword="null"/> for the free-function form.</param>
     private void BindConversionOperatorDeclaration(
         FunctionDeclarationSyntax syntax,
         ImmutableArray<ParameterSymbol> parameters,
         TypeSymbol returnType,
         Accessibility accessibility,
         PackageSymbol package,
-        ImmutableArray<BoundAttribute> functionAttributes)
+        ImmutableArray<BoundAttribute> functionAttributes,
+        StructSymbol? declaringType = null)
     {
         var isExplicit = syntax.ConversionIsExplicit;
         var opName = isExplicit ? "op_Explicit" : "op_Implicit";
@@ -1135,8 +1139,17 @@ internal sealed partial class DeclarationBinder
         }
 
         // At least one of source/target must be a same-package user type that
-        // owns (emits) the operator.
-        var owner = TryGetSamePackageOwner(sourceType, package) ?? TryGetSamePackageOwner(targetType, package);
+        // owns (emits) the operator. Issue #4350: an in-body operator is owned
+        // by its ENCLOSING type, exactly as in C#. Attaching it to the source
+        // instead changed the declaring type in metadata, and when the source
+        // type bound later its `shared` block replaced the static-method table
+        // and dropped the operator from the assembly altogether.
+        var declaringDefinition = declaringType == null ? null : declaringType.Definition ?? declaringType;
+        var sourceOwner = TryGetSamePackageOwner(sourceType, package);
+        var targetOwner = TryGetSamePackageOwner(targetType, package);
+        var owner = declaringDefinition != null
+            ? (ReferenceEquals(sourceOwner, declaringDefinition) || ReferenceEquals(targetOwner, declaringDefinition) ? declaringDefinition : null)
+            : sourceOwner ?? targetOwner;
         if (owner == null)
         {
             Diagnostics.ReportConversionOperatorMustInvolveEnclosingType(syntax.Identifier.Location);

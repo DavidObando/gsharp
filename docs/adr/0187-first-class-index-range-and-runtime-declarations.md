@@ -47,6 +47,17 @@ implementation PR once the re-entry criteria below pass.
   loud-gap guards are gone. `CSharpTypeMapper.IsRecognizedRuntimeConsumerType`
   keeps `Slice`/`ReadOnlySlice`/`ManagedRef`/`ReadOnlyManagedRef` nominal when
   their original definition lives in the compilation being translated.
+- **Shared defects closed for re-entry.** Translating and compiling
+  `Gsharp.Runtime.Values` exposed general gaps, fixed without any
+  runtime-specific exception: overloaded and multi-parameter user indexers;
+  C#'s scoped-`this` receiver rule for ref returns through struct members;
+  type parameters introduced by a nullable generic receiver clause;
+  construction preferred over a same-named bare-form extension; cs2gs keeping
+  every indexer argument and widening (not narrowing) a constant operand;
+  symbolic `out var` pointees for inferred generic CLR methods;
+  auto-dereferenced ref-returning static CLR calls; and source-declared
+  generic implicit conversions (`Span[T] -> ReadOnlySpan[T]`) parented at the
+  symbolic TypeSpec.
 
 ## Context
 
@@ -346,17 +357,17 @@ This recovery can merge before any ADR implementation.
 
 ## Acceptance criteria
 
-- [ ] `^x` is a reusable `System.Index` expression in every expression context.
-- [ ] `^a..^b` and all omitted-bound forms produce reusable
+- [x] `^x` is a reusable `System.Index` expression in every expression context.
+- [x] `^a..^b` and all omitted-bound forms produce reusable
       `System.Range` values.
-- [ ] `~x` is unary ones-complement and binary `x ^ y` remains XOR.
-- [ ] Saved Index/Range values preserve C# evaluation and runtime behavior.
-- [ ] cs2gs translates Index/Range declarations and expressions without
+- [x] `~x` is unary ones-complement and binary `x ^ y` remains XOR.
+- [x] Saved Index/Range values preserve C# evaluation and runtime behavior.
+- [x] cs2gs translates Index/Range declarations and expressions without
       unsupported diagnostics or factory-noise fallbacks.
-- [ ] Source declarations of every compiler-recognized runtime type remain
+- [x] Source declarations of every compiler-recognized runtime type remain
       nominal during translation of their declaring compilation.
-- [ ] Referenced metadata types retain native consumer spelling and semantics.
-- [ ] `Gsharp.Runtime.Values` passes all four migration stages after re-entry.
+- [x] Referenced metadata types retain native consumer spelling and semantics.
+- [x] `Gsharp.Runtime.Values` passes all four migration stages after re-entry.
 - [ ] The full corpus is green with the existing ratchets and without the
       temporary Runtime.Values exclusion.
 - [ ] C# and G# consumers observe the same runtime assembly/type/member ABI.

@@ -69,15 +69,20 @@ namespace Corpus.Issue4350
 ");
 
         // Every argument survives, in source order, for reads, writes,
-        // compound writes, and null-conditional access. Binding the printed
-        // multi-parameter access needs gsc's multi-parameter indexer support,
-        // which is tracked separately; before this fix cs2gs silently printed
-        // `grid[Step(log, "r", 1)]` and gsc bound the wrong indexer.
+        // compound writes, and null-conditional access. Before this fix cs2gs
+        // silently printed `grid[Step(log, "r", 1)]` and gsc bound the wrong
+        // indexer.
         Assert.Contains("grid[Step(log, \"r\", 1), Flag(log, \"f\", true)]", printed, StringComparison.Ordinal);
         Assert.Contains("grid[0, false] = 10", printed, StringComparison.Ordinal);
         Assert.Contains("grid[Step(log, \"c\", 0), Flag(log, \"g\", false)] += 5", printed, StringComparison.Ordinal);
         Assert.Contains("?[2, false]", printed, StringComparison.Ordinal);
         Assert.Contains("grid[0, false]", printed, StringComparison.Ordinal);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+
+        var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("5,15,3,rfcg", result.Value);
     }
 
     [Fact]
