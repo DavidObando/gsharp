@@ -1596,6 +1596,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // A pair the reconciliation loop demoted (its parts spelled
+            // different signatures): translate exactly as with pairs off.
+            // Checked before anything is mapped, so the re-translated file
+            // records no import or alias for the dropped declaring part.
+            if (this.suppressedPartialPairKeys?.Contains(PartialPairKeyOf(implementation)) == true)
+            {
+                return false;
+            }
+
             // Shapes G# cannot spell as a partial method (ADR-0192 §F, GS0607):
             // cs2gs lowers an extension method to a receiver-clause func (or
             // moves it into its receiver type, issue #2821), and an explicit

@@ -396,10 +396,11 @@ public sealed class TranslateStage : IMigrationStage
                 usedOutputPaths);
 
             // ADR-0143 2026-09-23 amendment / ADR-0192: translate EVERY unit of
-            // the project first, then reconcile the tentative partial method
-            // pairs across all of them (only then are both parts' spellings
-            // known), then print/format/write each unit exactly as before, in
-            // the same order.
+            // the project first, reconciling the tentative partial method pairs
+            // across all of them (only then are both parts' spellings known;
+            // a mismatched pair's units are re-translated with it suppressed),
+            // then print/format/write each unit exactly as before, in the same
+            // order.
             var translatedDocuments = new List<TranslatedDocument>();
             foreach (LoadedDocument document in currentProject.Documents)
             {
@@ -420,20 +421,9 @@ public sealed class TranslateStage : IMigrationStage
                 for (int unitIndex = 0; unitIndex < unitCount; unitIndex++)
                 {
                     string package = packages.Count > 1 ? packages[unitIndex] : null;
-                    var translationContext = new TranslationContext(
-                        currentProject.Compilation,
-                        document.SemanticModel,
-                        document.FilePath,
-                        siblingCompilations,
-                        repositoryCompilations);
 
-                    // ADR-0169 M5 / issue #3778: analyzer-test snippets are C#
-                    // source embedded in the tests, and the migrated verifier
-                    // compiles them as G#. The snippet translator needs a C#
-                    // project loader, so it lives one assembly above the
-                    // translator and is injected here.
-                    translationContext.TranslateAnalyzerSnippet =
-                        Cs2Gs.Translator.Analyzers.SnippetTranslator.Translate;
+                    // One translator per unit, reused if the unit is
+                    // re-translated (its anonymous-type registry must survive).
                     CSharpToGSharpTranslator unitTranslator = package is null
                         ? translator
                         : new CSharpToGSharpTranslator(
@@ -445,10 +435,43 @@ public sealed class TranslateStage : IMigrationStage
                             preserveEntryType: preserveEntryType,
                             projectDirectory: currentProject.ProjectDirectory,
                             emitPartialMethodPairs: true);
-                    CompilationUnit unit;
+                    translatedDocument.Units.Add(new TranslatedUnit(document, unitIndex, package, unitTranslator));
+                }
+
+                translatedDocuments.Add(translatedDocument);
+            }
+
+            List<TranslatedUnit> allUnits = translatedDocuments.SelectMany(d => d.Units).ToList();
+            IReadOnlyList<CompilationUnit> stableUnits = PartialMethodPairReconciler.TranslateUntilStable(
+                allUnits.Count,
+                (index, suppressedPartialPairKeys) =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    TranslatedUnit pending = allUnits[index];
+
+                    // A fresh context per (re-)translation: its diagnostics are
+                    // the ones this unit's final output reports.
+                    var translationContext = new TranslationContext(
+                        currentProject.Compilation,
+                        pending.Document.SemanticModel,
+                        pending.Document.FilePath,
+                        siblingCompilations,
+                        repositoryCompilations);
+
+                    // ADR-0169 M5 / issue #3778: analyzer-test snippets are C#
+                    // source embedded in the tests, and the migrated verifier
+                    // compiles them as G#. The snippet translator needs a C#
+                    // project loader, so it lives one assembly above the
+                    // translator and is injected here.
+                    translationContext.TranslateAnalyzerSnippet =
+                        Cs2Gs.Translator.Analyzers.SnippetTranslator.Translate;
+                    pending.Context = translationContext;
                     try
                     {
-                        unit = unitTranslator.TranslateDocument(document, translationContext);
+                        return pending.Translator.TranslateDocument(
+                            pending.Document,
+                            translationContext,
+                            suppressedPartialPairKeys);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException
                         and not TranslationCrashException)
@@ -459,21 +482,12 @@ public sealed class TranslateStage : IMigrationStage
                         // tree and file a cs2gs defect as a language gap. All
                         // this adds is the one fact the artifact was missing:
                         // which source was on the table.
-                        throw new TranslationCrashException(document.FilePath, ex);
+                        throw new TranslationCrashException(pending.Document.FilePath, ex);
                     }
-
-                    translatedDocument.Units.Add(new TranslatedUnit(unitIndex, package, translationContext, unit));
-                }
-
-                translatedDocuments.Add(translatedDocument);
-            }
-
-            List<TranslatedUnit> allUnits = translatedDocuments.SelectMany(d => d.Units).ToList();
-            IReadOnlyList<CompilationUnit> reconciled =
-                PartialMethodPairReconciler.Reconcile(allUnits.Select(u => u.Unit).ToList());
+                });
             for (int i = 0; i < allUnits.Count; i++)
             {
-                allUnits[i].Unit = reconciled[i];
+                allUnits[i].Unit = stableUnits[i];
             }
 
             foreach (TranslatedDocument translatedDocument in translatedDocuments)
@@ -1334,19 +1348,28 @@ public sealed class TranslateStage : IMigrationStage
 
     private sealed class TranslatedUnit
     {
-        public TranslatedUnit(int unitIndex, string package, TranslationContext context, CompilationUnit unit)
+        public TranslatedUnit(
+            LoadedDocument document,
+            int unitIndex,
+            string package,
+            CSharpToGSharpTranslator translator)
         {
+            this.Document = document;
             this.UnitIndex = unitIndex;
             this.Package = package;
-            this.Context = context;
-            this.Unit = unit;
+            this.Translator = translator;
         }
+
+        public LoadedDocument Document { get; }
 
         public int UnitIndex { get; }
 
         public string Package { get; }
 
-        public TranslationContext Context { get; }
+        public CSharpToGSharpTranslator Translator { get; }
+
+        // The context of the unit's latest (final) translation.
+        public TranslationContext Context { get; set; }
 
         public CompilationUnit Unit { get; set; }
     }

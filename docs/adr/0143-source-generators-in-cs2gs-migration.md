@@ -217,14 +217,18 @@ written only on the definition). ADR-0192 has since given G# partial methods
   other file's spelling. The translator therefore only emits a pair when the
   caller sets `emitPartialMethodPairs` (default off: the implementation alone
   is emitted, exactly as before), and then only TENTATIVELY: both parts carry
-  a pair key. The caller must translate every unit of the project and run
-  `PartialMethodPairReconciler` before printing anything (the cs2gs
-  `TranslateStage` does). A pair survives only when it has exactly one
-  declaring and one implementing part whose printed signatures — without
+  a pair key. The caller must translate the whole project through
+  `PartialMethodPairReconciler.TranslateUntilStable` before printing anything
+  (the cs2gs `TranslateStage` does). A pair survives only when it has exactly
+  one declaring and one implementing part whose printed signatures — without
   body or method-level attributes, with parameter annotations and defaults —
-  are identical; anything else is demoted to the pre-amendment shape (the
-  declaring part is removed, the implementing part becomes an ordinary
-  method).
+  are identical. A mismatched pair's key is suppressed and every unit holding
+  one of its parts is **re-translated** with the translator treating that
+  method as if pairs were off, so its output is exactly the pre-amendment
+  output (re-translation, not editing the printed tree, also discards any
+  import or alias the dropped declaring part had recorded). The check repeats
+  until no pair mismatches, since re-translating a file can change how its
+  other pairs spell; a round cap suppresses every remaining pair.
 - **Parameter attributes.** A pair whose two parts are in one file emits the
   union on both parts. A cross-file pair with any parameter attribute on
   either part is not emitted at all: copying one file's attribute into the

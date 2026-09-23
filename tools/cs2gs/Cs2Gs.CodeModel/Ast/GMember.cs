@@ -393,49 +393,6 @@ public sealed class MethodDeclaration : GMember
     /// reconciliation pass has compared both parts' printed signatures.
     /// </summary>
     public string PartialPairKey { get; }
-
-    /// <summary>
-    /// Returns a copy of this method with the given body, attributes and
-    /// partial-pair state, preserving every other field and the attached
-    /// comments.
-    /// </summary>
-    /// <param name="body">The body of the copy.</param>
-    /// <param name="expressionBody">The arrow body of the copy.</param>
-    /// <param name="attributes">The attributes of the copy.</param>
-    /// <param name="isPartial">Whether the copy is a partial part.</param>
-    /// <param name="partialPairKey">The pair key of the copy.</param>
-    /// <returns>The copy.</returns>
-    public MethodDeclaration With(
-        BlockStatement body,
-        GStatement expressionBody,
-        IReadOnlyList<AttributeUse> attributes,
-        bool isPartial,
-        string partialPairKey)
-    {
-        return new MethodDeclaration(
-            Name,
-            Parameters,
-            ReturnType,
-            body,
-            TypeParameters,
-            Receiver,
-            Visibility,
-            IsOpen,
-            IsOverride,
-            IsAsync,
-            attributes,
-            expressionBody,
-            IsRefReturn,
-            ExplicitInterfaceType,
-            IsSuspend,
-            IsReadOnlyRefReturn,
-            isPartial,
-            partialPairKey)
-        {
-            AttachedComments = AttachedComments,
-            TrailingComment = TrailingComment,
-        };
-    }
 }
 
 /// <summary>
@@ -518,16 +475,6 @@ public sealed class SharedBlock : GMember
 
     /// <summary>Gets the static members.</summary>
     public IReadOnlyList<GMember> Members { get; }
-
-    /// <summary>Returns a copy of this block with different members.</summary>
-    /// <param name="members">The members of the copy.</param>
-    /// <returns>The copy, with this block's attached comments.</returns>
-    public SharedBlock WithMembers(IReadOnlyList<GMember> members) =>
-        new SharedBlock(members)
-        {
-            AttachedComments = AttachedComments,
-            TrailingComment = TrailingComment,
-        };
 }
 
 /// <summary>

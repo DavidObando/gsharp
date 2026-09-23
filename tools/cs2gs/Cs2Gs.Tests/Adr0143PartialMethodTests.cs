@@ -1055,6 +1055,67 @@ namespace Demo
         Assert.Equal(1, CountOccurrences(translated, "func OnReady("));
     }
 
+    [Fact]
+    public void TwoPairsInOneFile_OneKeptOneDemoted()
+    {
+        // The implementation's file aliases `Timer` (a qualified
+        // System.Timers.Timer sibling), so M's parts spell differently and M
+        // is demoted; K's parts agree and K stays a pair. Re-translating the
+        // units for M must neither lose K nor leave M's alias behind.
+        (string FileName, string Source)[] files =
+        {
+            ("Decl.cs", @"
+using System.Threading;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(Timer t);
+
+        partial void K(int x);
+    }
+}"),
+            ("Impl.cs", @"
+using System.Threading;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(Timer t)
+        {
+        }
+
+        partial void K(int x)
+        {
+        }
+
+        public void Use(System.Timers.Timer x, System.Timers.ElapsedEventArgs e)
+        {
+        }
+    }
+}"),
+        };
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true, retainedFilePaths: null, projectDirectory: null, emitPartialMethodPairs: true, files);
+        IReadOnlyList<string> withoutPairs = TranslateFiles(
+            preservePartialParts: true, retainedFilePaths: null, projectDirectory: null, emitPartialMethodPairs: false, files);
+
+        Assert.Contains("private partial func K(x int32);", printed[0]);
+        Assert.Contains("private partial func K(x int32) {", printed[1]);
+        string combined = string.Join("\n---\n", printed);
+        Assert.DoesNotContain("partial func M(", combined);
+        Assert.Equal(1, CountOccurrences(combined, "func M("));
+        for (int i = 0; i < printed.Count; i++)
+        {
+            Assert.Equal(ImportLines(withoutPairs[i]), ImportLines(printed[i]));
+        }
+    }
+
+    private static string ImportLines(string printed) =>
+        string.Join("\n", printed.Split('\n').Where(line => line.StartsWith("import ", StringComparison.Ordinal)));
+
     private const string TimerDefinitionWithQualifiedSibling = @"
 using System.Threading;
 
@@ -1135,27 +1196,27 @@ namespace Demo
             "Snippet should bind with no C# errors: " +
                 string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
-        var units = new List<CompilationUnit>();
-
         // Mirror the loader: a file under the project's obj/bin directory is
         // never translated (LoadInMemory has no project directory to apply
         // that rule itself).
-        foreach (LoadedDocument document in project.Documents.Where(document =>
+        List<LoadedDocument> documents = project.Documents.Where(document =>
             (retainedFilePaths == null || retainedFilePaths.Contains(document.FilePath))
-            && !GeneratedSourceDetection.IsUnderBuildOutputDirectory(document.FilePath, projectDirectory)))
-        {
-            var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-            CompilationUnit unit = new CSharpToGSharpTranslator(
-                preservePartialParts,
-                retainedFilePaths: retainedFilePaths,
-                projectDirectory: projectDirectory,
-                emitPartialMethodPairs: emitPartialMethodPairs).TranslateDocument(document, context);
-            units.Add(unit);
-        }
+            && !GeneratedSourceDetection.IsUnderBuildOutputDirectory(document.FilePath, projectDirectory))
+            .ToList();
 
-        IReadOnlyList<CompilationUnit> reconciled = emitPartialMethodPairs
-            ? PartialMethodPairReconciler.Reconcile(units)
-            : units;
+        // One translator for the whole project, as TranslateStage uses, and
+        // the same translate/reconcile/re-translate loop.
+        var translator = new CSharpToGSharpTranslator(
+            preservePartialParts,
+            retainedFilePaths: retainedFilePaths,
+            projectDirectory: projectDirectory,
+            emitPartialMethodPairs: emitPartialMethodPairs);
+        IReadOnlyList<CompilationUnit> reconciled = PartialMethodPairReconciler.TranslateUntilStable(
+            documents.Count,
+            (index, suppressedPartialPairKeys) => translator.TranslateDocument(
+                documents[index],
+                new TranslationContext(project.Compilation, documents[index].SemanticModel, documents[index].FilePath),
+                suppressedPartialPairKeys));
         var printedFiles = reconciled.Select(GSharpPrinter.Print).ToList();
 
         // Bind every translated file TOGETHER: an ADR-0192 partial method's

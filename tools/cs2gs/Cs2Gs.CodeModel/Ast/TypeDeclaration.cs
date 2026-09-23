@@ -139,33 +139,6 @@ public sealed class TypeDeclaration : GMember
     /// all (<c>TypeLoadException</c> out of <c>GetExportedTypes()</c>, #3869).
     /// </summary>
     public bool IsRefLike { get; }
-
-    /// <summary>Returns a copy of this declaration with different members.</summary>
-    /// <param name="members">The members of the copy.</param>
-    /// <returns>The copy, with every other field and the attached comments preserved.</returns>
-    public TypeDeclaration WithMembers(IReadOnlyList<GMember> members) =>
-        new TypeDeclaration(
-            Kind,
-            Name,
-            TypeParameters,
-            PrimaryConstructorParameters,
-            BaseType,
-            BaseConstructorArguments,
-            Interfaces,
-            members,
-            Visibility,
-            IsOpen,
-            IsSealed,
-            IsAbstract,
-            IsPartial,
-            HasBody,
-            Attributes,
-            IsUnsafe,
-            IsRefLike)
-        {
-            AttachedComments = AttachedComments,
-            TrailingComment = TrailingComment,
-        };
 }
 
 /// <summary>

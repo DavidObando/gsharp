@@ -82,14 +82,25 @@ public static class GSharpPrinter
             throw new ArgumentNullException(nameof(method));
         }
 
-        return RenderMethod(
-            method.With(
-                body: null,
-                expressionBody: null,
-                attributes: null,
-                isPartial: method.IsPartial,
-                partialPairKey: method.PartialPairKey),
-            0);
+        var signature = new MethodDeclaration(
+            method.Name,
+            method.Parameters,
+            method.ReturnType,
+            body: null,
+            method.TypeParameters,
+            method.Receiver,
+            method.Visibility,
+            method.IsOpen,
+            method.IsOverride,
+            method.IsAsync,
+            attributes: null,
+            expressionBody: null,
+            method.IsRefReturn,
+            method.ExplicitInterfaceType,
+            method.IsSuspend,
+            method.IsReadOnlyRefReturn,
+            method.IsPartial);
+        return RenderMethod(signature, 0);
     }
 
     private static string Indent(int level)
