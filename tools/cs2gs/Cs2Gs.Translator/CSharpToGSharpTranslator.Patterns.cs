@@ -1985,6 +1985,18 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     GExpression stepGuard = new BinaryExpression(memberReceiver, "!=", LiteralExpression.Null());
                     guard = guard == null ? stepGuard : new BinaryExpression(guard, "&&", stepGuard);
+
+                    // Issue #4356: the guard does not narrow a member-access
+                    // chain unless every link is stable (gsc's
+                    // SmartCastStability), so the next link reads through an
+                    // assertion the guard has just made safe — the same
+                    // treatment TranslateRecursivePatternTest gives the nested
+                    // spelling (`{ Start: { X: 0 } }`). Without it, a chain
+                    // through an imported member bound only via gsc's old
+                    // member-lookup carve-out, and a source-declared one did
+                    // not bind at all. Where gsc does narrow, the assertion is
+                    // reported redundant (GS0536) and the polish pass strips it.
+                    memberReceiver = EnsureNonNullAssertion(memberReceiver);
                 }
             }
 

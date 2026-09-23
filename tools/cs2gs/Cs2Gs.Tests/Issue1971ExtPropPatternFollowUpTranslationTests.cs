@@ -89,10 +89,11 @@ namespace Corpus.Issue1971
 }
 ");
 
-        Assert.Contains("s.Start != nil && s.Start.X == 0", rendered, StringComparison.Ordinal);
-        AssertRoundTripParses(
-            rendered,
-            "G# does not flow-narrow repeated nullable member access after the emitted nil guard.");
+        // Issue #4356: G# does not narrow a mutable field chain after the
+        // guard, so the guarded link is asserted for the next read — which
+        // makes the output bind, not merely parse.
+        Assert.Contains("s.Start != nil && s.Start!!.X == 0", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     [Fact]
@@ -156,10 +157,8 @@ namespace Corpus.Issue1971
 }
 ");
 
-        Assert.Contains("a.B != nil && a.B.C != nil && a.B.C.Value == 0", rendered, StringComparison.Ordinal);
-        AssertRoundTripParses(
-            rendered,
-            "G# does not flow-narrow repeated nullable member access after emitted nil guards.");
+        Assert.Contains("a.B != nil && a.B!!.C != nil && a.B!!.C!!.Value == 0", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     [Fact]

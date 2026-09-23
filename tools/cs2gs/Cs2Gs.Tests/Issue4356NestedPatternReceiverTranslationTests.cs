@@ -46,6 +46,31 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
     }
 
     [Fact]
+    public void ExtendedPropertySubpatternOverImportedNullableMember_AssertsTheGuardedReceiver()
+    {
+        // The flattened spelling of the nested case above (`{ DeclaringType.IsInterface: true }`)
+        // takes the extended-property path, which guards each nullable
+        // intermediate with its own `!= nil` and must then assert it for the
+        // next link, exactly as the nested path does.
+        string printed = Translate("""
+            #nullable enable
+            using System.Reflection;
+
+            namespace Sample;
+
+            public static class Probe
+            {
+                public static bool IsWidening(MethodInfo candidate)
+                    => candidate is { IsAbstract: true, DeclaringType.IsInterface: true };
+            }
+            """);
+
+        // The printer wraps this chain across lines; compare with whitespace collapsed.
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("candidate.DeclaringType != nil && candidate.DeclaringType!!.IsInterface == true", flat, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void LocalSubject_IsNarrowedByTheGuard_AndNotAsserted()
     {
         string printed = Translate("""
