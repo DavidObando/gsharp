@@ -3085,7 +3085,7 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private string EnclosingTypeDisplayName()
     {
-        if (function?.ReceiverType is { } recv)
+        if ((function?.ReceiverType ?? GetBaseAccessThisParameter()?.Type) is { } recv)
         {
             return recv.Name;
         }
@@ -3165,7 +3165,7 @@ internal sealed partial class ExpressionBinder
         // Reuse the full instance-call binding pipeline (named-argument
         // reordering, generic substitution, variadic packing, per-argument
         // conversions). The receiver is the enclosing method's `this`.
-        if (function?.ThisParameter is not { } thisParameter)
+        if (GetBaseAccessThisParameter() is not { } thisParameter)
         {
             return new BoundErrorExpression(null);
         }
@@ -3267,7 +3267,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var arguments = BindBaseCallArguments(ce);
-        if (function?.ThisParameter is not { } thisParameter)
+        if (GetBaseAccessThisParameter() is not { } thisParameter)
         {
             return false;
         }
@@ -3287,6 +3287,17 @@ internal sealed partial class ExpressionBinder
             nonVirtualBaseCall: true,
             baseMemberLocation: ce.Identifier.Location);
     }
+
+    /// <summary>
+    /// The <c>this</c> a <c>base.Member</c> access binds against: the
+    /// enclosing instance member's own, or, inside a function literal (whose
+    /// synthetic symbol has no receiver), the enclosing member's <c>this</c>
+    /// that the literal captures. <see langword="null"/> outside an instance
+    /// member.
+    /// </summary>
+    /// <returns>The receiver parameter, or <see langword="null"/>.</returns>
+    private ParameterSymbol? GetBaseAccessThisParameter()
+        => function?.ThisParameter ?? GetEffectiveThisParameter();
 
     /// <summary>Issue #1260: a readable display name for a CLR base type used in base-call member-not-found diagnostics.</summary>
     private static string ClrTypeDisplayName(System.Type? clrType) => clrType?.Name ?? "object";
@@ -3370,10 +3381,12 @@ internal sealed partial class ExpressionBinder
         searchBase = null;
         clrBaseFallback = null;
 
-        // The access site must live in an instance member of a class. Top-level
-        // functions, `shared` statics, and structs (no base class) all fail.
-        var enclosingType = function?.ReceiverType as StructSymbol;
-        if (enclosingType == null || function?.ThisParameter == null || !enclosingType.IsClass)
+        // The access site must live in an instance member of a class, or in a
+        // function literal nested in one (a closure keeps its enclosing
+        // member's `base`, as in C#). Top-level functions, `shared` statics,
+        // and structs (no base class) all fail.
+        var enclosingType = GetBaseAccessThisParameter()?.Type as StructSymbol;
+        if (enclosingType == null || !enclosingType.IsClass)
         {
             Diagnostics.ReportBaseClassCallHasNoBaseClass(baseLocation, EnclosingTypeDisplayName());
             return false;
@@ -3542,7 +3555,7 @@ internal sealed partial class ExpressionBinder
             Diagnostics.ReportMemberInaccessible(member.IdentifierToken.Location, prop.Name, declaringType.Name, prop.GetterAccessibility);
         }
 
-        if (function?.ThisParameter is not { } thisParameter)
+        if (GetBaseAccessThisParameter() is not { } thisParameter)
         {
             return new BoundErrorExpression(null);
         }
@@ -3675,7 +3688,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var converted = conversions.BindConversion(valueLocation, value, prop.Type);
-        if (function?.ThisParameter is not { } thisParameter)
+        if (GetBaseAccessThisParameter() is not { } thisParameter)
         {
             return new BoundErrorExpression(null);
         }
@@ -3754,7 +3767,7 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        if (function?.ThisParameter is not { } thisParameter)
+        if (GetBaseAccessThisParameter() is not { } thisParameter)
         {
             return false;
         }
@@ -3832,7 +3845,7 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        if (function?.ThisParameter is not { } thisParameter)
+        if (GetBaseAccessThisParameter() is not { } thisParameter)
         {
             return false;
         }
@@ -3886,7 +3899,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (function?.ThisParameter is not { } thisParameter)
+        if (GetBaseAccessThisParameter() is not { } thisParameter)
         {
             return false;
         }
@@ -3944,7 +3957,7 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
-        if (function?.ThisParameter is not { } thisParameter)
+        if (GetBaseAccessThisParameter() is not { } thisParameter)
         {
             return false;
         }

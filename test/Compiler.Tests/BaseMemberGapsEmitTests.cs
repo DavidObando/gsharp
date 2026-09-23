@@ -178,6 +178,101 @@ Console.WriteLine(Derived.GoStatic().ToString())
 ",
             new[] { "21", "7" },
         };
+
+        // Gap 2: base calls, base auto-property accessors and a base method
+        // group inside function literals, including a nested literal and an
+        // async member. Every one targets a virtual member the derived class
+        // overrides, so a non-virtual call left in the closure method would
+        // fail ILVerify (ThisMismatch / LdftnNonFinalVirtual); the forwarder
+        // keeps the call on the class's own `this`.
+        yield return new object[]
+        {
+            "base-in-function-literal",
+            @"
+package P
+import System
+import System.Threading.Tasks
+
+open class Base {
+    open func Name() string { return ""base"" }
+    open prop Auto int32 { get; set; }
+}
+
+class Derived : Base {
+    override func Name() string { return ""derived"" }
+    override prop Auto int32 {
+        get -> 1000
+        set { }
+    }
+
+    func Go() string {
+        let call = func () string { return base.Name() }
+        let prop = func (n int32) int32 {
+            base.Auto = n
+            let inner = () -> base.Auto + 1
+            return inner()
+        }
+        let group = func () string {
+            let h () -> string = base.Name
+            return h()
+        }
+        return ""${call()} ${prop(41)} ${group()} ${Name()}""
+    }
+
+    async func GoAsync() Task[string] {
+        await Task.Yield()
+        let f = () -> base.Name()
+        return f()
+    }
+}
+
+Console.WriteLine(Derived().Go())
+Console.WriteLine(Derived().GoAsync().Result)
+",
+            new[] { "base 42 base derived", "base" },
+        };
+
+        // All three gaps in the shape the [GeneratedRegex] output takes after
+        // cs2gs: a Regex subclass validating its timeout through the
+        // protected static Regex.ValidateMatchTimeout, and a RegexRunner
+        // subclass that increments base.runtextpos and calls base.Crawlpos()
+        // from a translated local function.
+        yield return new object[]
+        {
+            "regex-generated-shape",
+            @"
+package P
+import System
+import System.Text.RegularExpressions
+
+class GeneratedRegex : Regex {
+    init(timeout TimeSpan) {
+        ValidateMatchTimeout(timeout)
+        Regex.ValidateMatchTimeout(timeout)
+    }
+}
+
+class GeneratedRunner : RegexRunner {
+    func Scan(start int32) string {
+        base.runtextpos = start
+        base.runcrawl = []int32{0, 0, 0, 0, 0}
+        base.runcrawlpos = 2
+        let uncapture = func () int32 {
+            base.runtextpos++
+            return base.Crawlpos()
+        }
+        let crawled = uncapture()
+        ++base.runtextpos
+        base.runtextpos += crawled
+        return ""${base.runtextpos} $crawled""
+    }
+}
+
+let r = GeneratedRegex(Regex.InfiniteMatchTimeout)
+Console.WriteLine(GeneratedRunner().Scan(10))
+",
+            new[] { "15 3" },
+        };
     }
 
     /// <summary>

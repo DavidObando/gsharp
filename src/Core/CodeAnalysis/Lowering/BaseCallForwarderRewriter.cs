@@ -12,8 +12,9 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 
 /// <summary>
 /// Issues #1467 and #2667: routes <c>base.M(args)</c> calls that appear inside
-/// async / iterator method bodies through a synthesized non-virtual forwarder
-/// method on the containing class.
+/// async / iterator method bodies, or inside a function literal nested in any
+/// instance member, through a synthesized non-virtual forwarder method on the
+/// containing class.
 /// </summary>
 /// <remarks>
 /// A base-class call lowers to a non-virtual <c>call instance R Base::M(...)</c>.
@@ -22,6 +23,10 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// (<c>ldarg.0</c>). Inside an async / iterator state machine the original
 /// <c>this</c> is hoisted into a <c>&lt;&gt;4__this</c> field, so the base call's
 /// receiver is a field load — producing an ilverify <c>ThisMismatch</c> error.
+/// A function literal is emitted as a method of a closure class that holds
+/// the captured <c>this</c> in a field, so a base call inside it has the same
+/// problem (ADR-0192 follow-on 2: a translated C# local function calling
+/// <c>base.Crawlpos()</c>). Roslyn forwards those calls the same way.
 /// <para>
 /// Mirroring Roslyn's <c>&lt;&gt;n__N</c> forwarders, this pass synthesizes a
 /// private instance method on the containing class whose body is
@@ -63,14 +68,12 @@ public static class BaseCallForwarderRewriter
                 continue;
             }
 
+            // A state-machine body forwards every base call; any other
+            // instance member forwards only the base calls nested in its
+            // function literals, whose `this` is a captured field.
             var isStateMachine = function.IsAsyncOrSuspending || IteratorDetection.ContainsYield(body);
-            if (!isStateMachine)
-            {
-                continue;
-            }
-
             var classDef = containingType.Definition ?? containingType;
-            var rewriter = new Rewriter(classDef, function, forwarders, forwarderBodies, ordinalByClass);
+            var rewriter = new Rewriter(classDef, function, forwarders, forwarderBodies, ordinalByClass, isStateMachine);
             var newBody = (BoundBlockStatement)rewriter.RewriteStatement(body);
             if (!ReferenceEquals(newBody, body))
             {
@@ -134,41 +137,74 @@ public static class BaseCallForwarderRewriter
         };
     }
 
-    private sealed class Rewriter : BoundTreeRewriter
+    private sealed class Rewriter : NestedFunctionBodyRewriter
     {
         private readonly StructSymbol classDef;
         private readonly FunctionSymbol containingFunction;
         private readonly Dictionary<(StructSymbol Class, FunctionSymbol Method), FunctionSymbol> forwarders;
         private readonly Dictionary<FunctionSymbol, BoundBlockStatement> forwarderBodies;
         private readonly Dictionary<StructSymbol, int> ordinalByClass;
+        private readonly bool isStateMachine;
+        private int functionLiteralDepth;
 
         public Rewriter(
             StructSymbol classDef,
             FunctionSymbol containingFunction,
             Dictionary<(StructSymbol Class, FunctionSymbol Method), FunctionSymbol> forwarders,
             Dictionary<FunctionSymbol, BoundBlockStatement> forwarderBodies,
-            Dictionary<StructSymbol, int> ordinalByClass)
+            Dictionary<StructSymbol, int> ordinalByClass,
+            bool isStateMachine)
         {
             this.classDef = classDef;
             this.containingFunction = containingFunction;
             this.forwarders = forwarders;
             this.forwarderBodies = forwarderBodies;
             this.ordinalByClass = ordinalByClass;
+            this.isStateMachine = isStateMachine;
+        }
+
+        private bool ForwardsBaseCalls => this.isStateMachine || this.functionLiteralDepth > 0;
+
+        protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
+        {
+            this.functionLiteralDepth++;
+            try
+            {
+                return base.RewriteFunctionLiteralExpression(node);
+            }
+            finally
+            {
+                this.functionLiteralDepth--;
+            }
         }
 
         protected override BoundExpression RewriteBaseClassCallExpression(BoundBaseClassCallExpression node)
         {
-            // Property base-accessors and computed-property bridges are left
-            // unchanged — only ordinary method base calls are forwarded.
-            if (node.Method == null || node.Property != null)
-            {
-                return base.RewriteBaseClassCallExpression(node);
-            }
-
             // Recurse into arguments first.
             var rewritten = (BoundBaseClassCallExpression)base.RewriteBaseClassCallExpression(node);
+            if (!this.ForwardsBaseCalls)
+            {
+                return rewritten;
+            }
 
-            var forwarder = this.GetOrCreateForwarder(rewritten);
+            // A base auto-property accessor has no accessor symbol of its own:
+            // forward it through a forwarder that repeats the same accessor
+            // call on its own `this`.
+            if (rewritten.IsPropertyAccessor)
+            {
+                var accessorForwarder = this.CreatePropertyAccessorForwarder(rewritten);
+                return new BoundUserInstanceCallExpression(
+                    rewritten.Syntax,
+                    rewritten.Receiver,
+                    accessorForwarder,
+                    rewritten.Arguments,
+                    rewritten.Type);
+            }
+
+            var method = Invariant.Required(
+                rewritten.Method,
+                "the property-accessor form returned above, so only the method form reaches here");
+            var forwarder = this.GetOrCreateForwarder(rewritten.BaseClass, method, rewritten.Type);
             return new BoundUserInstanceCallExpression(
                 rewritten.Syntax,
                 rewritten.Receiver,
@@ -177,10 +213,42 @@ public static class BaseCallForwarderRewriter
                 rewritten.Type);
         }
 
+        protected override BoundExpression RewriteMethodGroupExpression(BoundMethodGroupExpression node)
+        {
+            // `base.M` converted to a delegate loads the base method with a
+            // non-virtual `ldftn`, which the verifier accepts only on the
+            // calling method's own `this`. Point the delegate at the
+            // forwarder, which is private and non-virtual, instead.
+            var rewritten = (BoundMethodGroupExpression)base.RewriteMethodGroupExpression(node);
+            if (!rewritten.ForceNonVirtualDispatch
+                || !this.ForwardsBaseCalls
+                || rewritten.Receiver == null
+                || rewritten.Function is not { } method
+                || rewritten.FunctionType is not { } functionType
+                || rewritten.Candidates.Length != 1
+                || !rewritten.MethodTypeArguments.IsDefaultOrEmpty
+                || method.IsGeneric
+                || method.ReceiverType is not StructSymbol baseClass)
+            {
+                return rewritten;
+            }
+
+            var forwarder = this.GetOrCreateForwarder(baseClass, method, method.Type);
+            return new BoundMethodGroupExpression(
+                rewritten.Syntax,
+                rewritten.Receiver,
+                forwarder,
+                functionType,
+                rewritten.StaticOwnerType)
+            {
+                HasTargetDelegateType = rewritten.HasTargetDelegateType,
+            };
+        }
+
         protected override BoundExpression RewriteImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
         {
             var rewritten = (BoundImportedInstanceCallExpression)base.RewriteImportedInstanceCallExpression(node);
-            if (!rewritten.IsNonVirtualBaseCall)
+            if (!rewritten.IsNonVirtualBaseCall || !this.ForwardsBaseCalls)
             {
                 return rewritten;
             }
@@ -194,12 +262,8 @@ public static class BaseCallForwarderRewriter
                 rewritten.Type);
         }
 
-        private FunctionSymbol GetOrCreateForwarder(BoundBaseClassCallExpression node)
+        private FunctionSymbol GetOrCreateForwarder(StructSymbol baseClass, FunctionSymbol method, TypeSymbol returnType)
         {
-            var method = Invariant.Required(
-                node.Method,
-                "RewriteBaseClassCallExpression returns early for the property-accessor form, so only the method form reaches here");
-
             var key = (this.classDef, method);
             if (this.forwarders.TryGetValue(key, out var existing))
             {
@@ -221,7 +285,7 @@ public static class BaseCallForwarderRewriter
             var forwarder = new FunctionSymbol(
                 "<>n__" + ordinal,
                 parameters,
-                node.Type,
+                returnType,
                 declaration: null,
                 this.containingFunction.Package,
                 Accessibility.Private,
@@ -238,24 +302,55 @@ public static class BaseCallForwarderRewriter
             var innerCall = new BoundBaseClassCallExpression(
                 null,
                 thisExpr,
-                node.BaseClass,
+                baseClass,
                 method,
                 argBuilder.ToImmutable(),
-                node.Type);
-
-            var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            if (node.Type == null || node.Type == TypeSymbol.Void)
-            {
-                statements.Add(new BoundExpressionStatement(null, innerCall));
-                statements.Add(new BoundReturnStatement(null, null));
-            }
-            else
-            {
-                statements.Add(new BoundReturnStatement(null, innerCall));
-            }
+                returnType);
 
             this.forwarders[key] = forwarder;
-            this.forwarderBodies[forwarder] = new BoundBlockStatement(null, statements.ToImmutable());
+            this.forwarderBodies[forwarder] = CreateForwarderBody(innerCall, returnType);
+            return forwarder;
+        }
+
+        private FunctionSymbol CreatePropertyAccessorForwarder(BoundBaseClassCallExpression node)
+        {
+            this.ordinalByClass.TryGetValue(this.classDef, out var ordinal);
+            this.ordinalByClass[this.classDef] = ordinal + 1;
+
+            var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(node.Arguments.Length);
+            foreach (var argument in node.Arguments)
+            {
+                parameters.Add(new ParameterSymbol("value", argument.Type));
+            }
+
+            var parameterArray = parameters.ToImmutable();
+            var forwarder = new FunctionSymbol(
+                "<>n__" + ordinal,
+                parameterArray,
+                node.Type,
+                declaration: null,
+                this.containingFunction.Package,
+                Accessibility.Private,
+                receiverType: this.classDef,
+                explicitReceiverParameter: null);
+
+            var arguments = ImmutableArray.CreateBuilder<BoundExpression>(parameterArray.Length);
+            foreach (var parameter in parameterArray)
+            {
+                arguments.Add(new BoundVariableExpression(null, parameter));
+            }
+
+            var innerCall = new BoundBaseClassCallExpression(
+                null,
+                new BoundVariableExpression(null, Invariant.Required(forwarder.ThisParameter, "a synthesized forwarder has an instance receiver")),
+                node.BaseClass,
+                node.Method,
+                arguments.ToImmutable(),
+                node.Type,
+                node.Property,
+                node.IsSetterAccessor);
+
+            this.forwarderBodies[forwarder] = CreateForwarderBody(innerCall, node.Type);
             return forwarder;
         }
 
@@ -305,8 +400,14 @@ public static class BaseCallForwarderRewriter
                 node.TypeArgumentSymbols,
                 isNonVirtualBaseCall: true);
 
+            this.forwarderBodies[forwarder] = CreateForwarderBody(innerCall, node.Type);
+            return forwarder;
+        }
+
+        private static BoundBlockStatement CreateForwarderBody(BoundExpression innerCall, TypeSymbol? type)
+        {
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-            if (node.Type == null || node.Type == TypeSymbol.Void)
+            if (type == null || type == TypeSymbol.Void)
             {
                 statements.Add(new BoundExpressionStatement(null, innerCall));
                 statements.Add(new BoundReturnStatement(null, null));
@@ -316,8 +417,7 @@ public static class BaseCallForwarderRewriter
                 statements.Add(new BoundReturnStatement(null, innerCall));
             }
 
-            this.forwarderBodies[forwarder] = new BoundBlockStatement(null, statements.ToImmutable());
-            return forwarder;
+            return new BoundBlockStatement(null, statements.ToImmutable());
         }
     }
 }
