@@ -14517,6 +14517,31 @@ public sealed class Binder
     /// <param name="syntax">The syntax node whose attached doc-comment text is being attached.</param>
     internal static void AttachDocumentation(Symbol symbol, SyntaxNode? syntax)
     {
+        // ADR-0192 / Copilot review round 7: a merged partial method's own
+        // node is a NEW SyntaxNode PartialMethodMerger builds — never
+        // present in either original part's tree at the point
+        // DocumentationAttacher indexed it by reference. Looking it up
+        // directly therefore always misses, silently dropping every `///`
+        // comment on a cross-file partial method. Prefer the DECLARING
+        // part — the public signature authors naturally write `///` on,
+        // matching §C's annotation-union convention (declaring part first)
+        // — falling back to the ordinary lookup below (which still covers a
+        // plain non-merged method, or an implementing-part doc comment)
+        // when the declaring part carries none.
+        if (syntax is FunctionDeclarationSyntax { DeclaringPart: { } declaringPart })
+        {
+            var declaringDocText = declaringPart.SyntaxTree?.GetDocumentation(declaringPart);
+            if (declaringDocText != null)
+            {
+                var declaringDoc = GSharpDocumentationParser.Parse(declaringDocText);
+                if (declaringDoc != null)
+                {
+                    symbol.SetDocumentation(declaringDoc);
+                    return;
+                }
+            }
+        }
+
         var docText = syntax?.SyntaxTree?.GetDocumentation(syntax);
         if (docText == null)
         {

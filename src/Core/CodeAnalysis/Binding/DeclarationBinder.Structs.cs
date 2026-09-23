@@ -957,6 +957,124 @@ internal sealed partial class DeclarationBinder
             pendingConversionOperators);
     }
 
+    /// <summary>
+    /// ADR-0192 / Copilot review round 7: a merged partial method's DECLARING
+    /// signature is never actually bound — <c>PartialMethodMerger</c> compares
+    /// the two parts' return/parameter TYPE CLAUSES only as normalized source
+    /// TEXT (<c>ValidateConsistency</c>), then discards the declaring part's
+    /// clauses entirely and keeps only the implementing part's (already-bound
+    /// <paramref name="returnType"/>/<paramref name="methodParameters"/>). A
+    /// textual match is not proof of a semantic one: the declaring file can
+    /// spell a type the same way as the implementing file and still mean
+    /// something different (an unresolved/differently-imported short name,
+    /// or two distinct types of the same short name from different
+    /// namespaces) — GS0611 would then never fire and the merge would
+    /// silently adopt the implementing file's resolution.
+    /// <para>
+    /// Binds the declaring part's return type and each parameter's type
+    /// directly via <c>bindTypeClause</c>, which already redirects the
+    /// scope's import resolution to <em>the type clause's own</em>
+    /// <see cref="SyntaxNode.SyntaxTree"/> (see <c>Binder.BindTypeClause</c>'s
+    /// "Issue #3336" comment) — so no explicit
+    /// <c>SetCurrentReferencingSyntaxTree</c> call is needed here; passing
+    /// the declaring part's own <see cref="TypeClauseSyntax"/> is enough to
+    /// bind it against the DECLARING file's imports. The method's own type
+    /// parameters (if generic) are unaffected: they were seeded into
+    /// <c>binderCtx.CurrentTypeParameters</c> from the implementing/merged
+    /// declaration's own type-parameter list before this runs (in the same
+    /// still-open scope), and ADR-0192's syntax-level check already requires
+    /// the two parts' type-parameter list TEXT to match — so a same-named
+    /// type parameter in the declaring part's clause resolves, by name, to
+    /// the SAME shared <c>TypeParameterSymbol</c> instance, not a distinct
+    /// one. Compared with <c>TypeSignaturesEquivalent</c> — the same
+    /// resolved-type-identity check override/interface-implementation
+    /// matching uses — rather than a raw <c>ReferenceEquals</c>, so a
+    /// constructed generic/array/nullable type still compares structurally.
+    /// </para>
+    /// <para>
+    /// A totally unresolved declaring-side type (no import at all) is left
+    /// alone here: <c>bindTypeClause</c> already reports GS0021-family
+    /// "type not found" diagnostics of its own in that case, which is a more
+    /// precise complaint than a generic "resolves differently" GS0611 would
+    /// be — this method's own <c>TypeSymbol.Error</c> guards avoid piling a
+    /// second, redundant diagnostic on top of that one.
+    /// </para>
+    /// </summary>
+    private void ValidateMergedPartialMethodSignatureBinding(
+        FunctionDeclarationSyntax methodSyntax,
+        TypeSymbol returnType,
+        ImmutableArray<ParameterSymbol> methodParameters)
+    {
+        if (methodSyntax.DeclaringPart is not { } declaringPart)
+        {
+            return;
+        }
+
+        var methodName = methodSyntax.Identifier.ValueText;
+
+        // The implementing-side `returnType`/`methodParameters` passed in are
+        // not raw `bindTypeClause` results — they've been through the SAME
+        // post-processing every ordinary method's signature goes through
+        // (async Task/ValueTask wrapping, a variadic parameter's `...T` to
+        // `[]T` widening). Comparing a raw declaring-side bind against an
+        // already-transformed implementing-side value is an apples-to-
+        // oranges mismatch that fires on every async or variadic partial
+        // method — caught by PartialOverloadsDifferingOnlyByVariadicMarker_
+        // AreNotPairedWithEachOther regressing during this fix's own
+        // development. Re-derive the declaring side through the identical
+        // pipeline (using its own IsAsync/IsVariadic — already required to
+        // match the implementing part's by the syntax-level consistency
+        // check) so both sides are equally transformed before comparing.
+        if (declaringPart.Type != null)
+        {
+            var declaringReturnType = bindReturnTypeClause(declaringPart.Type, declaringPart.IsAsync) ?? TypeSymbol.Error;
+            if (declaringReturnType != TypeSymbol.Error)
+            {
+                declaringReturnType = NormalizeAsyncDeclaredReturnType(declaringReturnType, declaringPart.IsAsync, out _);
+            }
+
+            if (declaringReturnType != TypeSymbol.Error
+                && returnType != TypeSymbol.Error
+                && !TypeSignaturesEquivalent(declaringReturnType, returnType))
+            {
+                Diagnostics.ReportPartialMethodPartsDisagree(
+                    methodSyntax.Identifier.Location,
+                    methodName,
+                    "the return type (the same spelling resolves to two different types across the declaring and implementing files' imports)");
+                return;
+            }
+        }
+
+        var declaringParameters = declaringPart.Parameters;
+        for (var i = 0; i < declaringParameters.Count && i < methodParameters.Length; i++)
+        {
+            var declaringParameterSyntax = declaringParameters[i];
+            var declaringParameterTypeSyntax = declaringParameterSyntax.Type;
+            if (declaringParameterTypeSyntax == null)
+            {
+                continue;
+            }
+
+            var declaringParameterType = bindTypeClause(declaringParameterTypeSyntax) ?? TypeSymbol.Error;
+            if (declaringParameterType != TypeSymbol.Error && declaringParameterSyntax.IsVariadic)
+            {
+                declaringParameterType = VariadicCarriers.ResolveDeclaredParameterType(declaringParameterType);
+            }
+
+            var implementingParameterType = methodParameters[i].Type;
+            if (declaringParameterType != TypeSymbol.Error
+                && implementingParameterType != TypeSymbol.Error
+                && !TypeSignaturesEquivalent(declaringParameterType, implementingParameterType))
+            {
+                Diagnostics.ReportPartialMethodPartsDisagree(
+                    methodSyntax.Identifier.Location,
+                    methodName,
+                    $"parameter {i + 1}'s type (the same spelling resolves to two different types across the declaring and implementing files' imports)");
+                return;
+            }
+        }
+    }
+
     private void BindStructInstanceMethods(
         StructDeclarationSyntax syntax,
         PackageSymbol package,
@@ -1101,6 +1219,12 @@ internal sealed partial class DeclarationBinder
                     returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodParameters = parameters.ToImmutable();
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
+
+                    // Copilot review round 7: the declaring part's own
+                    // return/parameter type clauses were discarded after
+                    // only a textual comparison; bind and compare them
+                    // semantically too.
+                    ValidateMergedPartialMethodSignatureBinding(methodSyntax, returnType, methodParameters);
 
                     // Issue #1283: a conversion operator declared in the body is
                     // not an instance method — defer it to the static
@@ -2560,10 +2684,17 @@ internal sealed partial class DeclarationBinder
                     var methodIsAsyncVoid = IsExplicitAsyncVoid(methodSyntax, returnType);
                     returnType = NormalizeAsyncDeclaredReturnType(returnType, methodSyntax.IsAsync, out var returnTypeIsValueTask);
                     var methodReturnRefKind = ValidateReturnRefKind(methodSyntax, returnType);
+                    var sharedMethodParameters = parameters.ToImmutable();
+
+                    // Copilot review round 7: the declaring part's own
+                    // return/parameter type clauses were discarded after
+                    // only a textual comparison; bind and compare them
+                    // semantically too.
+                    ValidateMergedPartialMethodSignatureBinding(methodSyntax, returnType, sharedMethodParameters);
 
                     var methodSymbol = new FunctionSymbol(
                         methodName,
-                        parameters.ToImmutable(),
+                        sharedMethodParameters,
                         returnType,
                         methodSyntax,
                         package,

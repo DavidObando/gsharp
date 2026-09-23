@@ -73,6 +73,31 @@ System.Console.WriteLine(g.Greet(""world""))
         Assert.Contains("hello, world", output);
     }
 
+    [Fact]
+    public void MatchingAsyncPartialMethod_MergesWithoutFalselyReportingGS0611()
+    {
+        // Round-7 regression: the semantic signature-binding check
+        // (ValidateMergedPartialMethodSignatureBinding) originally compared
+        // a raw `bindTypeClause` result for the declaring part's return type
+        // against the implementing side's ALREADY async-wrapped
+        // `Task[int32]` — a spurious mismatch on every matching-async
+        // partial method, not just a mismatched one. Both parts here
+        // consistently declare `async func … int32`, which must merge and
+        // run clean.
+        var diagnostics = Compile(@"package App
+import System.Threading.Tasks
+
+partial class A {
+    partial async func F() int32;
+}
+
+partial class A {
+    partial async func F() int32 { return 1 }
+}
+");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+    }
+
     // ─────────────────────────────────────────────────────────────────────────
     // 1b. Cross-file import scope — declaring/implementing parts bind against
     // their OWN file's imports, not each other's (ADR-0192 §C/§G)
@@ -162,6 +187,112 @@ partial class Widget {
         var diagnostics = new Compilation(declaringFile, implementingFile) { IsLibrary = true }
             .Emit(peStream)
             .Diagnostics;
+        Assert.Contains(diagnostics, d => d.IsError);
+    }
+
+    [Fact]
+    public void DocCommentOnTheDeclaringPart_IsAttachedToTheMergedMethod()
+    {
+        // Copilot review round 7: the merged node PartialMethodMerger builds
+        // is a NEW SyntaxNode, never present in either original part's tree
+        // when DocumentationAttacher indexed doc comments by reference.
+        // AttachDocumentation looking it up directly always missed, so a
+        // cross-file partial method silently lost its `///` comment (and
+        // the XML doc file omitted it entirely).
+        var declaringFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class Greeter {
+    /// Greets someone by name.
+    /// @param name the person to greet
+    /// @returns the greeting
+    partial func Greet(name string) string;
+}
+",
+            "Greeter.gs"));
+
+        var implementingFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class Greeter {
+    partial func Greet(name string) string {
+        return ""hello, "" + name
+    }
+}
+",
+            "Greeter.g.gs"));
+
+        var xml = EmitDocXml(new[] { declaringFile, implementingFile }, "Adr0192-DocComment");
+        Assert.Contains("Greets someone by name.", xml);
+        Assert.Contains("<param name=\"name\">", xml);
+        Assert.Contains("<returns>", xml);
+    }
+
+    [Fact]
+    public void SameSpellingResolvesToTwoDifferentTypesAcrossFiles_ReportsGS0611()
+    {
+        // Copilot review round 7: the declaring part's signature was only
+        // ever compared as normalized TEXT, never actually bound. `Timer`
+        // spells the same in both files but the declaring file imports
+        // `System.Timers` (`System.Timers.Timer`) while the implementing
+        // file imports `System.Threading` (`System.Threading.Timer`) — two
+        // genuinely unrelated CLR types. The merge used to adopt the
+        // implementing file's resolution silently; it must now disagree.
+        var declaringFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+import System.Timers
+
+partial class Widget {
+    partial func Make(t Timer) int32;
+}
+",
+            "Widget.gs"));
+
+        var implementingFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+import System.Threading
+
+partial class Widget {
+    partial func Make(t Timer) int32 { return 1 }
+}
+",
+            "Widget.g.gs"));
+
+        var diagnostics = EmitDiagnostics(new[] { declaringFile, implementingFile });
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
+    }
+
+    [Fact]
+    public void DeclaringSideTypeIsTotallyUnresolved_ReportsOnlyTheUndefinedTypeDiagnostic()
+    {
+        // Complement: when the declaring side's type doesn't resolve to
+        // ANYTHING (no import at all), bindTypeClause's own "type not found"
+        // diagnostic already names the exact problem — this check's
+        // TypeSymbol.Error guard must not pile a second, less precise GS0611
+        // on top of it.
+        var declaringFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class Widget {
+    partial func Make() StringBuilder;
+}
+",
+            "Widget.gs"));
+
+        var implementingFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+import System.Text
+
+partial class Widget {
+    partial func Make() StringBuilder {
+        return StringBuilder()
+    }
+}
+",
+            "Widget.g.gs"));
+
+        var diagnostics = EmitDiagnostics(new[] { declaringFile, implementingFile });
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0611");
         Assert.Contains(diagnostics, d => d.IsError);
     }
 
@@ -1126,6 +1257,26 @@ partial class A {
         {
             IsLibrary = true,
         }.Emit(peStream).Diagnostics.ToArray();
+    }
+
+    private static IReadOnlyList<GSharp.Core.CodeAnalysis.Diagnostic> EmitDiagnostics(SyntaxTree[] trees)
+    {
+        using var peStream = new MemoryStream();
+        return new Compilation(trees)
+        {
+            IsLibrary = true,
+        }.Emit(peStream).Diagnostics.ToArray();
+    }
+
+    /// <summary>Emits <paramref name="trees"/> and returns the produced XML documentation file's text.</summary>
+    private static string EmitDocXml(SyntaxTree[] trees, string assemblyName)
+    {
+        var compilation = new Compilation(trees) { IsLibrary = true };
+        using var peStream = new MemoryStream();
+        using var docStream = new MemoryStream();
+        var result = compilation.Emit(peStream, pdbStream: null, refStream: null, docStream, assemblyName);
+        Assert.True(result.Success, string.Join("\n", result.Diagnostics));
+        return System.Text.Encoding.UTF8.GetString(docStream.ToArray());
     }
 
     /// <summary>Emits <paramref name="source"/> and returns the method names on <paramref name="typeName"/>'s TypeDef.</summary>
