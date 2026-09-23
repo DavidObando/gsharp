@@ -1312,6 +1312,10 @@ internal sealed partial class StatementBinder
     {
         var taskSyntax = Invariant.Required(caseSyntax.Channel, "an await select case has a task expression");
         var task = bindExpression(taskSyntax);
+
+        // ADR-0186 §4: awaiting a task in a select arm requires a non-null
+        // task, exactly as a plain `await` does (ExpressionBinder.BindAwaitExpression).
+        task = PlatformCoercion.InsertCheck(task, taskSyntax.Location, "an awaited select case task");
         var guard = BindSelectArmGuard(caseSyntax);
         TypeSymbol? result = null;
         var recognized = task is BoundErrorExpression;

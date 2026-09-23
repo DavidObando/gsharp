@@ -358,7 +358,7 @@ internal static class ObliviousScope
                 case FunctionDeclarationSyntax function:
                     foreach (var annotation in function.Annotations)
                     {
-                        if (HasSimpleName(annotation, "DllImport") || HasSimpleName(annotation, "LibraryImport"))
+                        if (IsInteropAttribute(annotation, "DllImport") || IsInteropAttribute(annotation, "LibraryImport"))
                         {
                             return true;
                         }
@@ -378,27 +378,37 @@ internal static class ObliviousScope
     }
 
     /// <summary>
-    /// Like <see cref="HasName"/>, but on the last segment of a qualified
-    /// spelling too: the P/Invoke binder recognises
-    /// <c>@System.Runtime.InteropServices.DllImport(…)</c> by CLR identity
-    /// (issue #1206), and the exemption has to reach the same declarations.
-    /// It is decided by spelling rather than by the bound attribute because a
-    /// declaration's type clauses are bound before, and independently of, its
-    /// attributes; a user attribute that shadows or aliases the BCL name is
-    /// not a supported P/Invoke spelling either way.
+    /// Gets a value indicating whether <paramref name="annotation"/> spells
+    /// the BCL interop attribute <paramref name="name"/>: bare (<c>@DllImport</c>,
+    /// as a <c>System.Runtime.InteropServices</c> import brings it into scope)
+    /// or fully qualified (<c>@System.Runtime.InteropServices.DllImport</c>,
+    /// which the P/Invoke binder recognises by CLR identity — issue #1206). A
+    /// differently-qualified name (<c>@MyInterop.DllImport</c>) is some other
+    /// attribute and is not exempt.
+    /// <para>
+    /// This is decided by spelling rather than by the bound attribute because
+    /// a declaration's type clauses are bound before, and independently of,
+    /// its attributes. The one spelling it cannot tell apart is a user type
+    /// named <c>DllImport</c> brought into scope unqualified, shadowing the BCL
+    /// one; such a function's signature is then left as written.
+    /// </para>
     /// </summary>
-    private static bool HasSimpleName(AnnotationSyntax annotation, string name)
+    private static bool IsInteropAttribute(AnnotationSyntax annotation, string name)
     {
+        const string InteropNamespace = "System.Runtime.InteropServices.";
+        if (HasName(annotation, name))
+        {
+            return true;
+        }
+
         if (annotation.HasTypeArgumentList)
         {
             return false;
         }
 
         var text = annotation.GetNameText();
-        var dot = text.LastIndexOf('.');
-        var simple = dot < 0 ? text : text.Substring(dot + 1);
-        return string.Equals(simple, name, StringComparison.Ordinal)
-            || string.Equals(simple, name + "Attribute", StringComparison.Ordinal);
+        return string.Equals(text, InteropNamespace + name, StringComparison.Ordinal)
+            || string.Equals(text, InteropNamespace + name + "Attribute", StringComparison.Ordinal);
     }
 
     private static bool HasName(AnnotationSyntax annotation, string name)

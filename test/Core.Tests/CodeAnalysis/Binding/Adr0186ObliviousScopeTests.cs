@@ -835,6 +835,66 @@ public class Adr0186ObliviousScopeTests
         AssertNoErrors(emit.Diagnostics);
     }
 
+    /// <summary>
+    /// A select arm awaiting a task checks a nil oblivious task like a plain
+    /// <c>await</c> does (found in review, PR #4357).
+    /// </summary>
+    [Fact]
+    public void A_Select_Await_Of_A_Nil_Oblivious_Task_Is_Checked()
+    {
+        var failure = Assert.ThrowsAny<Exception>(() => Run(
+            """
+            @Oblivious
+            class Source {
+                func Pending() Task[int32] { return nil }
+
+                async func Pick() Task[string] {
+                    let never = chan[int32]()
+                    let t = this.Pending()
+                    select {
+                    case let v = await t {
+                        return "task=" + v.ToString()
+                    }
+                    case <-never {
+                        return "never"
+                    }
+                    }
+                }
+            }
+
+            Console.WriteLine(Source{}.Pick().Result)
+            """,
+            "import System.Threading.Tasks\n"));
+
+        var nre = failure as NullReferenceException ?? Assert.IsType<NullReferenceException>(failure.InnerException);
+        Assert.Contains("an awaited select case task", nre.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The native-interop exemption is for the BCL attributes only. A user
+    /// attribute that merely shares the simple name, spelled with its own
+    /// qualifier, is not native interop, so its function's signature is
+    /// oblivious like any other (found in review, PR #4357).
+    /// </summary>
+    [Fact]
+    public void A_Differently_Qualified_DllImport_Is_Not_Exempt()
+    {
+        // The qualified user attribute does not resolve (GS0198) — which is
+        // beside the point: the scope rule decides by spelling, before any
+        // attribute binds, and only the parameter's type is asserted.
+        var scope = Compile(
+            """
+            class Holder {
+                @MyInterop.DllImport
+                func Send(s string) string { return s }
+            }
+            """,
+            NullabilityMode.Oblivious).GlobalScope;
+
+        var holder = Assert.Single(scope.Structs, s => s.Name == "Holder");
+        AssertPlatform(TypeSymbol.String, Method(holder, "Send").Parameters.Single().Type);
+    }
+
     // ---------------------------------------------------------------
     // GS9307.
     // ---------------------------------------------------------------
