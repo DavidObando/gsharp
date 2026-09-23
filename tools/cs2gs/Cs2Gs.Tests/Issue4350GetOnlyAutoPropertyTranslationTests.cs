@@ -142,6 +142,56 @@ namespace Corpus.Issue4350
         Assert.Equal("6,40,21,3", result.Value);
     }
 
+    [Fact]
+    public void LoweredBackingField_AvoidsPrimaryConstructorFieldNames()
+    {
+        // Review finding: a constructor write reached before its property must
+        // not reserve `_value` when a primary-constructor parameter `_value`
+        // becomes a synthesized field of the same name.
+        string printed = Render(@"
+namespace Corpus.Issue4350
+{
+    public class Holder(int _value)
+    {
+        public int Seed => _value;
+
+        public virtual int Value { get; } = _value * 2;
+    }
+
+    public class Lifted
+    {
+        private readonly int _value;
+
+        public Lifted(int _value)
+        {
+            this._value = _value;
+            this.Value = _value + 1;
+        }
+
+        public int Seed => _value;
+
+        public virtual int Value { get; }
+    }
+
+    public class Probe
+    {
+        public static string Run()
+        {
+            var holder = new Holder(4);
+            var lifted = new Lifted(6);
+            return holder.Seed + "","" + holder.Value + "","" + lifted.Seed + "","" + lifted.Value;
+        }
+    }
+}
+");
+
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+        var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("4,8,6,7", result.Value);
+    }
+
     private static string Render(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Source.cs", source) });

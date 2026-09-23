@@ -1492,6 +1492,21 @@ public sealed partial class CSharpToGSharpTranslator
             var primaryCtorParamNames = new HashSet<string>(
                 primaryCtor?.Select(p => p.Name) ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
 
+            // Issue #4350 (review): allocate every lowered get-only
+            // auto-property's backing field NOW, with the primary-constructor
+            // names reserved, so a constructor write translated before its
+            // property (`this.Value = v` or `Value = v`) reuses a name that
+            // cannot collide with a synthesized primary-constructor field.
+            foreach (PropertyDeclarationSyntax loweredCandidate in mergedMembers.OfType<PropertyDeclarationSyntax>())
+            {
+                using IDisposable loweredModelScope = this.context.UseSemanticModelFor(loweredCandidate.SyntaxTree);
+                if (this.context.GetDeclaredSymbol(loweredCandidate) is IPropertySymbol loweredSymbol
+                    && this.IsBackingFieldLoweredGetOnlyAutoProperty(loweredSymbol))
+                {
+                    this.RegisterSynthesizedPropertyBackingField(loweredSymbol, primaryCtorParamNames);
+                }
+            }
+
             // OD-T1: when the explicit constructor is kept (not lifted to a primary
             // constructor) and the type is a plain class/struct, get-only
             // auto-property inline initializers (`{ get; } = new();`) must move into

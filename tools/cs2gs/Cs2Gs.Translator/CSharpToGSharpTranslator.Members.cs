@@ -3104,6 +3104,17 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 taken.UnionWith(primaryCtorParamNames);
             }
+            else
+            {
+                // Issue #4350 (review): a caller without the aggregate's
+                // primary-constructor name set (a write site reached first)
+                // conservatively reserves every instance-constructor parameter
+                // name, since a lifted primary constructor's synthesized fields
+                // are named after exactly those parameters.
+                taken.UnionWith(symbol.ContainingType.InstanceConstructors
+                    .SelectMany(constructor => constructor.Parameters)
+                    .Select(parameter => parameter.Name));
+            }
 
             taken.UnionWith(this.state.SynthesizedPropertyBackingFieldNames.Values);
 
