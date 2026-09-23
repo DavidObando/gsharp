@@ -966,6 +966,31 @@ public class Adr0186ObliviousScopeTests
     }
 
     /// <summary>
+    /// Scope lookup across many disjoint annotated declarations, with nested
+    /// ones and unannotated ones between them: every member reads the scope
+    /// that actually encloses it (the lookup climbs the enclosing chain, not
+    /// the earlier siblings).
+    /// </summary>
+    [Fact]
+    public void Scope_Lookup_Finds_The_Enclosing_Scope_Among_Many_Siblings()
+    {
+        var source = new System.Text.StringBuilder();
+        for (var i = 0; i < 40; i++)
+        {
+            source.AppendLine($"@Oblivious class O{i} {{ var F string\n @NullabilityEnabled func M(p string) string {{ return p }} }}");
+            source.AppendLine($"class E{i} {{ var F string = \"\" }}");
+        }
+
+        var types = BindStructs(source.ToString(), NullabilityMode.PlatformTypes);
+        for (var i = 0; i < 40; i++)
+        {
+            AssertPlatform(TypeSymbol.String, Field(types[$"O{i}"], "F"));
+            Assert.Same(TypeSymbol.String, Method(types[$"O{i}"], "M").Parameters.Single().Type);
+            Assert.Same(TypeSymbol.String, Field(types[$"E{i}"], "F"));
+        }
+    }
+
+    /// <summary>
     /// A select arm awaiting a task checks a nil oblivious task like a plain
     /// <c>await</c> does (found in review, PR #4357).
     /// </summary>
@@ -1040,6 +1065,8 @@ public class Adr0186ObliviousScopeTests
     [InlineData("@NullabilityEnabled(1) class Holder { }", "'@NullabilityEnabled' takes no arguments")]
     [InlineData("@Oblivious @NullabilityEnabled class Holder { }", "cannot be combined with @Oblivious")]
     [InlineData("class Holder { @field:Oblivious var F string }", "'@Oblivious' takes no target specifier")]
+    [InlineData("@Oblivious() class Holder { }", "'@Oblivious' takes no arguments")]
+    [InlineData("@NullabilityEnabled() class Holder { }", "'@NullabilityEnabled' takes no arguments")]
     public void Malformed_Scope_Annotations_Report_GS9307(string declaration, string expected)
     {
         var diagnostics = Compile(declaration, NullabilityMode.PlatformTypes).GlobalScope.Diagnostics;

@@ -52,9 +52,13 @@ public class Adr0186ObliviousRoundTripEmitTests
         import System
         import System.Collections.Generic
 
+        delegate Mapper[T](x T) T;
+
         class Holder {
             var NonNullField string = ""
             var MaybeField string?
+            @Oblivious var ObliviousSequence sequence[List[string]?]
+            @Oblivious var ObliviousMapper Mapper[string?]
             @Oblivious var ObliviousField string
             @Oblivious var ObliviousList List[string]
             @Oblivious var ObliviousStatedElements List[string?]
@@ -130,6 +134,28 @@ public class Adr0186ObliviousRoundTripEmitTests
             Assert.IsNotType<PlatformTypeSymbol>(enabled);
             AssertNullableString(TypeArgumentAt(enabled, 0));
             Assert.Same(TypeSymbol.String, TypeArgumentAt(enabled, 1));
+        });
+    }
+
+    /// <summary>
+    /// The other G# structural shapes an oblivious scope now reaches, each
+    /// mixing a stated <c>?</c> with oblivious positions: a
+    /// <c>sequence[List[string]?]</c> (element stated nullable, its own
+    /// argument oblivious) and a constructed source delegate
+    /// <c>Mapper[string?]</c>. Before the flags builder walked their symbolic
+    /// arguments, both were written from the erased CLR shape.
+    /// </summary>
+    [Fact]
+    public void Sequence_And_Source_Delegate_Positions_Round_Trip()
+    {
+        WithCompiledType(MixedSource, "Probe.Holder", Array.Empty<string>(), holder =>
+        {
+            var sequence = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(holder.GetField("ObliviousSequence")!));
+            var element = Assert.IsType<NullableTypeSymbol>(TypeArgumentAt(sequence.UnderlyingType, 0));
+            AssertPlatformString(TypeArgumentAt(element.UnderlyingType, 0));
+
+            var mapper = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(holder.GetField("ObliviousMapper")!));
+            AssertNullableString(TypeArgumentAt(mapper.UnderlyingType, 0));
         });
     }
 

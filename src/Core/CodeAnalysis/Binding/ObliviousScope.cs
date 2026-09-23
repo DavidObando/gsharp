@@ -132,10 +132,14 @@ internal static class ObliviousScope
                 "takes no target specifier");
         }
 
-        if (annotation.Arguments is { Count: > 0 } arguments)
+        // An argument list at all is the error — `@Oblivious()` included —
+        // since neither annotation has anything an argument could say.
+        if (annotation.HasArgumentList)
         {
             diagnostics.ReportNullabilityScopeAnnotationInvalid(
-                arguments[0].Location,
+                annotation.Arguments is { Count: > 0 } arguments
+                    ? arguments[0].Location
+                    : Invariant.Required(annotation.OpenParenthesisToken, "an argument list has an open parenthesis").Location,
                 name,
                 "takes no arguments");
         }
@@ -449,9 +453,34 @@ internal static class ObliviousScope
 
         private readonly ImmutableArray<(TextSpan Span, bool Oblivious)> scopes;
 
+        /// <summary>
+        /// For each scope, the index of the scope immediately enclosing it, or
+        /// <c>-1</c>. A lookup that misses a scope climbs this chain rather
+        /// than walking back through every earlier sibling, so it costs the
+        /// nesting depth, not the number of annotated declarations before it.
+        /// </summary>
+        private readonly ImmutableArray<int> enclosing;
+
         private ScopeMap(ImmutableArray<(TextSpan Span, bool Oblivious)> scopes)
         {
             this.scopes = scopes;
+
+            // Scopes are sorted by start, and any two nest or are disjoint, so
+            // one pass with a stack of open scopes finds each one's parent.
+            var parents = ImmutableArray.CreateBuilder<int>(scopes.Length);
+            var open = new System.Collections.Generic.Stack<int>();
+            for (var i = 0; i < scopes.Length; i++)
+            {
+                while (open.Count > 0 && scopes[open.Peek()].Span.End <= scopes[i].Span.Start)
+                {
+                    open.Pop();
+                }
+
+                parents.Add(open.Count > 0 ? open.Peek() : -1);
+                open.Push(i);
+            }
+
+            this.enclosing = parents.MoveToImmutable();
         }
 
         internal static ScopeMap Build(SyntaxTree tree)
@@ -504,9 +533,11 @@ internal static class ObliviousScope
         /// Scopes come from syntax, so any two either nest or are disjoint:
         /// among the scopes that contain a position, the innermost is the one
         /// that starts last. The scopes are sorted by start, so this binary-
-        /// searches for the last scope starting at or before the position and
-        /// walks back to the first one that still contains it — typically a
-        /// step or two, since only enclosing declarations lie in between.
+        /// searches for the last scope starting at or before the position,
+        /// then climbs that scope's enclosing chain until one still contains
+        /// the position. Every scope containing the position encloses that
+        /// last-starting one (they nest), so the climb cannot skip it, and it
+        /// never visits an ended sibling.
         /// </summary>
         internal bool TryFind(int position, out bool oblivious)
         {
@@ -528,7 +559,7 @@ internal static class ObliviousScope
                 }
             }
 
-            for (var i = last; i >= 0; i--)
+            for (var i = last; i >= 0; i = this.enclosing[i])
             {
                 var (span, value) = this.scopes[i];
                 if (position < span.End)
