@@ -2746,6 +2746,10 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax? receiverSyntax,
         int? receiverStart)
     {
+        // A derived class may call an inherited `protected` static member by a
+        // type name (`Regex.ValidateMatchTimeout(...)` inside a class deriving
+        // from `Regex`), exactly as in C#.
+        classSymbol = classSymbol == null ? null : WithFamilyAccess(classSymbol);
         var methodName = ce.Identifier.ValueText;
         if (string.Equals(methodName, "Invoke", System.StringComparison.Ordinal))
         {

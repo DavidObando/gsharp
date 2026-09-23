@@ -106,6 +106,78 @@ Console.WriteLine(Derived().Go())
 ",
             new[] { "7 6 600 2" },
         };
+
+        // Gap 3: the generated Regex constructor validates its timeout through
+        // the protected internal static Regex.ValidateMatchTimeout, qualified
+        // and unqualified, and from a static member.
+        yield return new object[]
+        {
+            "protected-static-imported-regex",
+            @"
+package P
+import System
+import System.Text.RegularExpressions
+
+class Generated : Regex {
+    init(timeout TimeSpan) {
+        Regex.ValidateMatchTimeout(timeout)
+        ValidateMatchTimeout(timeout)
+    }
+
+    shared {
+        func Probe(timeout TimeSpan) string {
+            try {
+                ValidateMatchTimeout(timeout)
+                return ""valid""
+            } catch (e ArgumentOutOfRangeException) {
+                return ""rejected""
+            }
+        }
+    }
+}
+
+let g = Generated(Regex.InfiniteMatchTimeout)
+Console.WriteLine(Generated.Probe(TimeSpan.FromSeconds(-1.0)))
+Console.WriteLine(Generated.Probe(TimeSpan.FromSeconds(2.0)))
+",
+            new[] { "rejected", "valid" },
+        };
+
+        // Gap 3: same-compilation base. Unqualified inherited static methods,
+        // and qualified protected static field and property compound writes.
+        yield return new object[]
+        {
+            "protected-static-source-base",
+            @"
+package P
+import System
+
+open class Base {
+    shared {
+        protected func Guarded() int32 -> 7
+        protected var count int32 = 3
+        protected prop Scale int32 { get; set; }
+    }
+}
+
+class Derived : Base {
+    func Go() int32 {
+        Base.count++
+        Base.Scale = 2
+        Base.Scale *= 5
+        return Guarded() + Base.count + Base.Scale
+    }
+
+    shared {
+        func GoStatic() int32 -> Guarded()
+    }
+}
+
+Console.WriteLine(Derived().Go().ToString())
+Console.WriteLine(Derived.GoStatic().ToString())
+",
+            new[] { "21", "7" },
+        };
     }
 
     /// <summary>
@@ -143,7 +215,137 @@ Console.WriteLine(Derived().Go())
         }
     }
 
-    private static (int Exit, string Stdout, string Stderr) Compile(string tempDir, string name, string source)
+    /// <summary>
+    /// Gap 3 against an imported base that declares <c>protected</c> static
+    /// fields, properties and methods. The BCL has no public base class with
+    /// a protected static field or property, so a C# library supplies one. A
+    /// protected static member is reached qualified by the base's name and,
+    /// for methods, unqualified; an unrelated class is still refused.
+    /// </summary>
+    [Fact]
+    public void ImportedProtectedStaticFieldPropertyAndMethod_CompileVerifyAndRun()
+    {
+        const string csSource = """
+            namespace BaseGaps.CSharp
+            {
+                public class Counter
+                {
+                    protected static int count = 1;
+                    protected internal static int Scale { get; set; } = 2;
+                    protected static string Tag(int value) => "t" + value;
+                    public static int Peek() => count * 1000 + Scale;
+                }
+            }
+            """;
+
+        const string source = @"
+package P
+import System
+import BaseGaps.CSharp
+
+class Derived : Counter {
+    func Go() string {
+        Counter.count += 4
+        Counter.count++
+        Counter.Scale = Counter.Scale * 10
+        Counter.Scale--
+        return Tag(Counter.count) + "" "" + Counter.Tag(Counter.Scale)
+    }
+}
+
+Console.WriteLine(Derived().Go())
+Console.WriteLine(Counter.Peek().ToString())
+";
+
+        const string rejected = @"
+package P
+import BaseGaps.CSharp
+
+class Unrelated {
+    func Go() int32 -> Counter.count
+}
+";
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_basegaps_cs_").FullName;
+        try
+        {
+            var library = BuildCsLibrary(tempDir, csSource, "BaseGaps.CSharp");
+
+            var (exit, stdout, stderr) = Compile(tempDir, "imported-protected-static", source, library);
+            Assert.True(exit == 0, $"gsc failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            var outPath = Path.Combine(tempDir, "imported-protected-static.dll");
+            IlVerifier.Verify(outPath, new[] { library });
+            File.Copy(library, Path.Combine(tempDir, Path.GetFileName(library)), overwrite: true);
+
+            var (runExit, output) = RunDotnet(outPath);
+            Assert.True(runExit == 0, $"program must run to completion. Exit {runExit}:\n{output}");
+            var lines = output
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0)
+                .ToArray();
+            Assert.Equal(new[] { "t6 t19", "6019" }, lines);
+
+            var (rejectedExit, rejectedStdout, rejectedStderr) = Compile(tempDir, "imported-protected-static-rejected", rejected, library);
+            Assert.True(
+                rejectedExit != 0,
+                $"an unrelated class must not reach a protected static field.\nstdout:\n{rejectedStdout}\nstderr:\n{rejectedStderr}");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    private static string BuildCsLibrary(string workDir, string source, string assemblyName)
+    {
+        var csDir = Path.Combine(workDir, "csref");
+        Directory.CreateDirectory(csDir);
+        File.WriteAllText(Path.Combine(csDir, "Lib.cs"), source);
+        File.WriteAllText(Path.Combine(csDir, "Lib.csproj"), $"""
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <OutputType>Library</OutputType>
+                <TargetFramework>net10.0</TargetFramework>
+                <Nullable>enable</Nullable>
+                <RunAnalyzers>false</RunAnalyzers>
+                <NoWarn>1591</NoWarn>
+                <AssemblyName>{assemblyName}</AssemblyName>
+              </PropertyGroup>
+            </Project>
+            """);
+
+        var outDir = Path.Combine(csDir, "out");
+        var (exit, output) = RunProcess(csDir, "dotnet", "build", "-c", "Release", "--nologo", "-o", outDir);
+        Assert.True(exit == 0, $"building the C# library failed:\n{output}");
+        var dll = Path.Combine(outDir, assemblyName + ".dll");
+        Assert.True(File.Exists(dll), $"C# library not found at {dll}");
+        return dll;
+    }
+
+    private static (int Exit, string Output) RunProcess(string workingDir, string fileName, params string[] args)
+    {
+        var psi = new ProcessStartInfo(fileName)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            WorkingDirectory = workingDir,
+        };
+        foreach (var arg in args)
+        {
+            psi.ArgumentList.Add(arg);
+        }
+
+        using var process = Process.Start(psi)
+            ?? throw new InvalidOperationException($"could not start {fileName}");
+        var stdoutTask = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, stdoutTask.Result + stderr);
+    }
+
+    private static (int Exit, string Stdout, string Stderr) Compile(string tempDir, string name, string source, params string[] extraReferences)
     {
         var srcPath = Path.Combine(tempDir, "Program.gs");
         File.WriteAllText(srcPath, source);
@@ -155,7 +357,7 @@ Console.WriteLine(Derived().Go())
             "/target:exe",
             "/targetframework:net10.0",
         };
-        foreach (var reference in TrustedPlatformAssemblies())
+        foreach (var reference in TrustedPlatformAssemblies().Concat(extraReferences))
         {
             args.Add("/reference:" + reference);
         }

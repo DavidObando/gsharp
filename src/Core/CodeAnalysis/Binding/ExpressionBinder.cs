@@ -2958,6 +2958,44 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// The CLR base type whose <c>protected</c> static members the current
+    /// binding site may reach: the imported base of the enclosing source
+    /// class, or of a class that lexically contains it. Function literals use
+    /// the member they are nested in. <see langword="null"/> when no enclosing
+    /// class derives from an imported type.
+    /// </summary>
+    /// <returns>The imported CLR base, or <see langword="null"/>.</returns>
+    internal Type? GetFamilyAccessBase()
+    {
+        var current = function;
+        TypeSymbol? enclosing = current?.ReceiverType
+            ?? current?.StaticOwnerType
+            ?? current?.LexicalEnclosingType
+            ?? GetEffectiveThisParameter()?.Type;
+        for (var type = enclosing; type != null; type = type.ContainingType)
+        {
+            if (type is StructSymbol { IsClass: true } classSymbol
+                && GetInheritedClrBaseType(classSymbol) is { } clrBase)
+            {
+                return clrBase;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gives an imported class symbol used as a static-member receiver the
+    /// family access of the current binding site (see
+    /// <see cref="GetFamilyAccessBase"/>), so a derived class can call an
+    /// inherited <c>protected</c> static member by its type name.
+    /// </summary>
+    /// <param name="classSymbol">The imported class receiver.</param>
+    /// <returns>The receiver, carrying the site's family-access base.</returns>
+    internal ImportedClassSymbol WithFamilyAccess(ImportedClassSymbol classSymbol)
+        => classSymbol.WithFamilyAccessBase(GetFamilyAccessBase());
+
+    /// <summary>
     /// Issue #1582: resolves the CLR/metadata base type that a user-defined G#
     /// class (transitively) derives from, so inherited CLR members can be
     /// surfaced on instances of the derived type. Walks the user

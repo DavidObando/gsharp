@@ -159,7 +159,7 @@ internal sealed partial class ExpressionBinder
         int? receiverStart = null)
         => BindAccessorStepAfterPlatformReceiverCheck(
             CheckPlatformReceiver(receiver, receiverSyntax?.Location ?? rightPart.Location),
-            classSymbol,
+            classSymbol == null ? null : WithFamilyAccess(classSymbol),
             rightPart,
             receiverSyntax,
             receiverStart);

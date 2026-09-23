@@ -859,7 +859,7 @@ internal sealed partial class ExpressionBinder
 
             if (TypeMemberModel.GetNearestImportedBase(userStruct)?.ClrType is Type importedBaseClr)
             {
-                var importedBase = new ImportedClassSymbol(importedBaseClr, syntax, references: scope.References);
+                var importedBase = WithFamilyAccess(new ImportedClassSymbol(importedBaseClr, syntax, references: scope.References));
                 if (importedBase.TryLookupMember(fieldName, ne: null, out var inheritedStaticMember)
                     && TryGetWritableClrMember(inheritedStaticMember, out _, out var inheritedTarget, out _, fromDerivedType: true))
                 {
@@ -925,13 +925,21 @@ internal sealed partial class ExpressionBinder
         if (importedClass != null
             || scope.TryLookupImportedClass(receiverName, declaration: null, out importedClass))
         {
+            // A derived class may write an inherited `protected` static member
+            // through the declaring type's name, as in C#.
+            importedClass = WithFamilyAccess(importedClass);
             if (!importedClass.TryLookupMember(syntax.FieldIdentifier.ValueText, ne: null, out var staticMember))
             {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText);
                 return new BoundErrorExpression(null);
             }
 
-            if (!TryGetWritableClrMember(staticMember, out var staticTargetType, out var staticTargetSymbol, out var staticWritable))
+            if (!TryGetWritableClrMember(
+                    staticMember,
+                    out var staticTargetType,
+                    out var staticTargetSymbol,
+                    out var staticWritable,
+                    fromDerivedType: importedClass.IsFamilyAccessible(staticMember.DeclaringType)))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
                 return new BoundErrorExpression(null);
@@ -2564,17 +2572,22 @@ internal sealed partial class ExpressionBinder
         SyntaxKind baseOpSyntaxKind,
         ImportedTypeSymbol? symbolicContainerType = null)
     {
-        var importedClass = new ImportedClassSymbol(
+        var importedClass = WithFamilyAccess(new ImportedClassSymbol(
             clrReceiverType,
             memberNameSyntax,
             symbolicContainerType,
-            scope.References);
+            scope.References));
         if (!importedClass.TryLookupMember(memberName, ne: null, out var staticMember))
         {
             return null;
         }
 
-        if (!TryGetWritableClrMember(staticMember, out _, out var targetSymbol, out _))
+        if (!TryGetWritableClrMember(
+                staticMember,
+                out _,
+                out var targetSymbol,
+                out _,
+                fromDerivedType: importedClass.IsFamilyAccessible(staticMember.DeclaringType)))
         {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
             return new BoundErrorExpression(null);
