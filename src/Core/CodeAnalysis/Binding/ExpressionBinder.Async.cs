@@ -69,6 +69,21 @@ internal sealed partial class ExpressionBinder
             || syntax.OperatorToken.Kind == SyntaxKind.MinusEqualsToken;
         SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind);
 
+        // `base.Member op= rhs` and `base.Member++` / `++base.Member`: the
+        // parser desugars every compound form of a member target to this node,
+        // but `base` is a contextual keyword with no value of its own — binding
+        // it as the receiver below reported GS0125 "Variable 'base' doesn't
+        // exist" even though the plain read (`base.Member`) and write
+        // (`base.Member = v`) both bind. Compose the compound from those same
+        // two paths so the read and the write resolve the member identically
+        // (nearest base first, field before property, non-virtual accessor
+        // calls). A real value named `base` keeps its ordinary meaning.
+        if (accessor.LeftPart is NameExpressionSyntax { IdentifierToken.ValueText: "base" } baseName
+            && scope.TryLookupSymbol("base") is not VariableSymbol)
+        {
+            return BindBaseMemberCompoundAssignment(baseName, eventNameSyntax, syntax, baseOpSyntaxKind);
+        }
+
         // Resolve receiver: either an ImportedClassSymbol (static event) or
         // any value-producing expression with a CLR-backed type (instance event).
         BoundExpression? boundReceiver = null;

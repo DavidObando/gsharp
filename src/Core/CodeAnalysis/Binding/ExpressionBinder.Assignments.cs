@@ -2626,6 +2626,104 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Binds a compound assignment or increment/decrement whose target is a
+    /// base-qualified member: <c>base.M op= rhs</c>, <c>base.M++</c>,
+    /// <c>--base.M</c>, and so on. The member is read with
+    /// <see cref="BindBaseClassPropertyRead"/> and written with
+    /// <see cref="BindBaseClassPropertyWrite"/>, so every member shape either
+    /// path accepts (a same-compilation field or property, an imported
+    /// property, an imported field such as <c>RegexRunner.runtextpos</c>)
+    /// takes part, and a property is read and written through its base
+    /// accessors non-virtually, as C# does.
+    /// </summary>
+    /// <remarks>
+    /// The receiver is always the enclosing member's <c>this</c>, which has no
+    /// side effects, so reading the member and then writing it evaluates the
+    /// receiver twice without observable difference. The written value is
+    /// held in a local so the expression's own value (the old value for a
+    /// postfix form, the new value otherwise) never depends on the write
+    /// node's type: a base property setter call is <c>void</c>.
+    /// </remarks>
+    /// <param name="baseName">The <c>base</c> receiver name.</param>
+    /// <param name="memberNameSyntax">The member name.</param>
+    /// <param name="syntax">The compound-assignment syntax.</param>
+    /// <param name="baseOpSyntaxKind">The binary operator the compound operator applies.</param>
+    /// <returns>The bound compound assignment, or an error expression.</returns>
+    private BoundExpression BindBaseMemberCompoundAssignment(
+        NameExpressionSyntax baseName,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        SyntaxKind baseOpSyntaxKind)
+    {
+        var baseLocation = baseName.Location;
+        BoundExpression leftRead = BindBaseClassPropertyRead(
+            memberNameSyntax,
+            baseLocation,
+            explicitBaseType: null,
+            selectorLocation: baseLocation);
+        var boundRhs = BindExpression(syntax.Value);
+        if (leftRead is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var targetType = leftRead.Type;
+        var previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            ref leftRead,
+            out var previousDeclaration);
+        var binary = TryBindCompoundBinaryOperation(
+            baseOpSyntaxKind,
+            leftRead,
+            boundRhs,
+            syntax.Value.Location);
+        if (binary == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(
+                syntax.OperatorToken.Location,
+                syntax.OperatorToken.Text,
+                targetType,
+                boundRhs.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (previousDeclaration != null)
+        {
+            statements.Add(previousDeclaration);
+        }
+
+        var converted = conversions.BindConversion(syntax.Value.Location, binary, targetType);
+        var name = $"<compound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var newValue = new LocalVariableSymbol(name, isReadOnly: true, targetType);
+        if (!scope.TryDeclareVariable(newValue))
+        {
+            throw new System.InvalidOperationException(
+                $"Failed to declare synthesized compound value local '{name}'.");
+        }
+
+        statements.Add(new BoundVariableDeclaration(syntax, newValue, converted));
+        var write = BindBaseClassPropertyWrite(
+            memberNameSyntax.IdentifierToken.ValueText,
+            memberNameSyntax.IdentifierToken.Location,
+            baseLocation,
+            new BoundVariableExpression(null, newValue),
+            syntax.Value.Location,
+            syntax.OperatorToken.Location,
+            explicitBaseType: null,
+            selectorLocation: baseLocation);
+        if (write is BoundErrorExpression)
+        {
+            return write;
+        }
+
+        statements.Add(new BoundExpressionStatement(syntax, write));
+        BoundExpression result = previousValue ?? new BoundVariableExpression(null, newValue);
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), result);
+    }
+
+    /// <summary>
     /// ADR-0060 §13 / issue #4350: binds assignment through an explicit pointer
     /// dereference or a writable ref-returning call.
     /// </summary>
