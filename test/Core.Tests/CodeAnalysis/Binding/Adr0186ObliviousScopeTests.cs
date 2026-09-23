@@ -935,6 +935,37 @@ public class Adr0186ObliviousScopeTests
     }
 
     /// <summary>
+    /// An explicit <c>await</c> on a call to a suspending function (ADR-0174
+    /// D4: already awaited implicitly) whose logical result is oblivious
+    /// (found in review, PR #4357). The §4 check on an awaited operand must
+    /// not run first: it would hide the completed call from the redundant-
+    /// await test and assert a legitimate nil result.
+    /// </summary>
+    [Fact]
+    public void Awaiting_A_Suspending_Call_With_An_Oblivious_Result_Is_Not_Checked()
+    {
+        var output = Run(
+            """
+            @Oblivious
+            suspend func read(ch in chan[string]) string {
+                return <-ch
+            }
+
+            @Oblivious
+            suspend func run() bool {
+                let ch = chan[string](1)
+                ch <- nil
+                let value = await read(ch)
+                return value == nil
+            }
+
+            Console.WriteLine(run())
+            """);
+
+        Assert.Equal("True\n", output.Replace("\r\n", "\n"));
+    }
+
+    /// <summary>
     /// A select arm awaiting a task checks a nil oblivious task like a plain
     /// <c>await</c> does (found in review, PR #4357).
     /// </summary>

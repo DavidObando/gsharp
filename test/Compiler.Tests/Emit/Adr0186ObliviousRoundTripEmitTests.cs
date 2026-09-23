@@ -63,6 +63,8 @@ public class Adr0186ObliviousRoundTripEmitTests
             @Oblivious prop ObliviousProp string { get; set }
             @Oblivious func ObliviousMethod(p string) string { return p }
             func MixedMethod(@Oblivious oblivious string, maybe string?, nonNull string) string { return nonNull }
+            @Oblivious var ObliviousMap map[string?, string]
+            var EnabledMap map[string?, string] = map[string?, string]{}
             @Oblivious event ObliviousEvent Action[string]
             event MaybeArgsEvent Action[string?]
             event PlainEvent Action[string]
@@ -105,6 +107,29 @@ public class Adr0186ObliviousRoundTripEmitTests
             var stated = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(holder.GetField("ObliviousStatedElements")!));
             var statedArguments = Assert.IsAssignableFrom<NullabilityAnnotatedTypeSymbol>(stated.UnderlyingType);
             AssertNullableString(statedArguments.GetTypeArgumentSymbol(0));
+        });
+    }
+
+    /// <summary>
+    /// G#'s own structural types round-trip their nested positions too
+    /// (found in review, PR #4357): a <c>map[string?, string]</c> used to be
+    /// written from its erased CLR shape, so its flags said <c>1,1,1</c> —
+    /// losing the stated <c>?</c> even in an enabled declaration, and unable
+    /// to say <c>0</c> for an oblivious one's value.
+    /// </summary>
+    [Fact]
+    public void Map_Positions_Round_Trip()
+    {
+        WithCompiledType(MixedSource, "Probe.Holder", Array.Empty<string>(), holder =>
+        {
+            var oblivious = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(holder.GetField("ObliviousMap")!));
+            AssertNullableString(TypeArgumentAt(oblivious.UnderlyingType, 0));
+            AssertPlatformString(TypeArgumentAt(oblivious.UnderlyingType, 1));
+
+            var enabled = ClrNullability.GetFieldTypeSymbol(holder.GetField("EnabledMap")!);
+            Assert.IsNotType<PlatformTypeSymbol>(enabled);
+            AssertNullableString(TypeArgumentAt(enabled, 0));
+            Assert.Same(TypeSymbol.String, TypeArgumentAt(enabled, 1));
         });
     }
 
@@ -317,10 +342,13 @@ public class Adr0186ObliviousRoundTripEmitTests
         }
     }
 
-    private static TypeSymbol FirstTypeArgument(TypeSymbol type) => type switch
+    private static TypeSymbol FirstTypeArgument(TypeSymbol type) => TypeArgumentAt(type, 0);
+
+    private static TypeSymbol TypeArgumentAt(TypeSymbol type, int index) => type switch
     {
-        NullabilityAnnotatedTypeSymbol annotated => annotated.GetTypeArgumentSymbol(0),
-        ImportedTypeSymbol imported => imported.TypeArguments[0],
+        NullabilityAnnotatedTypeSymbol annotated => annotated.GetTypeArgumentSymbol(index),
+        ImportedTypeSymbol imported => imported.TypeArguments[index],
+        MapTypeSymbol map => index == 0 ? map.KeyType : map.ValueType,
         _ => throw new InvalidOperationException($"'{type}' ({type.GetType().Name}) carries no type arguments."),
     };
 

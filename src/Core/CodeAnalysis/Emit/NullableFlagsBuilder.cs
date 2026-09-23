@@ -523,6 +523,23 @@ internal static class NullableFlagsBuilder
             return;
         }
 
+        // ADR-0186 step 5: G#'s own reference-shaped collection, channel,
+        // sequence and constructed-delegate symbols. Each erases to a single
+        // generic CLR class/interface (Dictionary<K,V>, a Chan<T>/Channel<T>
+        // view, IEnumerable<T>/IAsyncEnumerable<T>, the delegate's TypeDef),
+        // so the layout is one reference byte followed by the arguments'
+        // subtrees — written from the SYMBOLIC arguments. The CLR fallback
+        // below erased them: `map[string?, string]` came out `1,1,1`, and an
+        // oblivious one could not say `0` for its value. (This fixes the
+        // enabled `?` case too, which predates ADR-0186.)
+        if (type is MapTypeSymbol or ChannelTypeSymbol or SequenceTypeSymbol or AsyncSequenceTypeSymbol
+            || type is DelegateTypeSymbol { TypeArguments.IsDefaultOrEmpty: false })
+        {
+            builder.Add(NotAnnotated);
+            AppendGenericArguments(type, builder);
+            return;
+        }
+
         if (type is FunctionTypeSymbol function)
         {
             var start = builder.Count;
@@ -695,6 +712,31 @@ internal static class NullableFlagsBuilder
             }
 
             return;
+        }
+
+        // ADR-0186 step 5: see the matching arm in Append.
+        switch (type)
+        {
+            case MapTypeSymbol map:
+                Append(map.KeyType, builder);
+                Append(map.ValueType, builder);
+                return;
+            case ChannelTypeSymbol channel:
+                Append(channel.ElementType, builder);
+                return;
+            case SequenceTypeSymbol sequence:
+                Append(sequence.ElementType, builder);
+                return;
+            case AsyncSequenceTypeSymbol asyncSequence:
+                Append(asyncSequence.ElementType, builder);
+                return;
+            case DelegateTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } constructedDelegate:
+                foreach (var arg in constructedDelegate.TypeArguments)
+                {
+                    Append(arg, builder);
+                }
+
+                return;
         }
 
         if (type is ArrayTypeSymbol array)
