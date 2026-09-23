@@ -39,10 +39,12 @@ internal sealed class RepositoryExcludedScope
     /// </summary>
     /// <param name="sourceRoot">The migrated repository's source root.</param>
     /// <param name="excludedProjectPaths">Absolute <c>.csproj</c> paths excluded from the run, or <see langword="null"/>.</param>
+    /// <param name="evaluatedCompileSources">Evaluated compile-source paths keyed by project path.</param>
     /// <returns>The derived scope; <see cref="None"/> when nothing was excluded.</returns>
     internal static RepositoryExcludedScope Compute(
         string sourceRoot,
-        IReadOnlyCollection<string> excludedProjectPaths)
+        IReadOnlyCollection<string> excludedProjectPaths,
+        IReadOnlyDictionary<string, IReadOnlyList<string>> evaluatedCompileSources = null)
     {
         if (excludedProjectPaths == null || excludedProjectPaths.Count == 0)
         {
@@ -54,7 +56,9 @@ internal sealed class RepositoryExcludedScope
         string fullSourceRoot = Path.GetFullPath(sourceRoot);
         foreach (string projectPath in excludedProjectPaths)
         {
-            string projectDirectory = Path.GetDirectoryName(Path.GetFullPath(projectPath));
+            string fullProjectPath = Path.GetFullPath(projectPath);
+            string projectDirectory = Path.GetDirectoryName(fullProjectPath);
+            AddFileWithinRoot(fullProjectPath);
             string relativeDirectory = Path.GetRelativePath(fullSourceRoot, projectDirectory)
                 .Replace('\\', '/');
             if (relativeDirectory.Length > 0
@@ -85,9 +89,28 @@ internal sealed class RepositoryExcludedScope
                     compileFiles.Add(relativeInclude);
                 }
             }
+
+            if (evaluatedCompileSources != null
+                && evaluatedCompileSources.TryGetValue(fullProjectPath, out IReadOnlyList<string> evaluatedSources))
+            {
+                foreach (string evaluatedSource in evaluatedSources)
+                {
+                    AddFileWithinRoot(evaluatedSource);
+                }
+            }
         }
 
         return new RepositoryExcludedScope(directories, compileFiles);
+
+        void AddFileWithinRoot(string path)
+        {
+            string relativePath = Path.GetRelativePath(fullSourceRoot, Path.GetFullPath(path))
+                .Replace('\\', '/');
+            if (!relativePath.StartsWith("..", StringComparison.Ordinal))
+            {
+                compileFiles.Add(relativePath);
+            }
+        }
     }
 
     /// <summary>

@@ -244,7 +244,9 @@ internal sealed partial class ExpressionBinder
         BoundExpression target,
         ExpressionSyntax indexSyntax,
         SyntaxToken operation,
-        ExpressionSyntax valueSyntax)
+        ExpressionSyntax valueSyntax,
+        bool returnsPreviousValue,
+        bool isIncrementDecrement)
     {
         NativeSliceTypes.TryGetElement(target.Type, out _, out var readOnly);
         if (readOnly)
@@ -270,7 +272,32 @@ internal sealed partial class ExpressionBinder
         var address = DeclareRangeTemp("address", access.Operand.Type, access.Operand, statements);
         var addressRef = new BoundVariableExpression(null, address);
         SyntaxFacts.TryGetCompoundAssignmentBaseOperator(operation.Kind, out var binaryKind);
-        var result = TryBindCompoundBinaryOperation(binaryKind, new BoundDereferenceExpression(null, addressRef), value, valueSyntax.Location);
+        BoundExpression read = new BoundDereferenceExpression(null, addressRef);
+        var compoundTarget = read;
+        var previousValue = CapturePostfixCompoundValue(
+            returnsPreviousValue,
+            indexSyntax,
+            ref read,
+            out var previousDeclaration);
+        var userCompound = TryBindUserCompoundAssignmentOperator(
+            operation.Kind,
+            compoundTarget,
+            value,
+            valueSyntax.Location);
+        if (userCompound != null)
+        {
+            return FinishUserCompoundIncrement(
+                indexSyntax,
+                returnsPreviousValue,
+                isIncrementDecrement,
+                compoundTarget,
+                userCompound,
+                previousDeclaration,
+                previousValue,
+                statements);
+        }
+
+        var result = TryBindCompoundBinaryOperation(binaryKind, read, value, valueSyntax.Location);
         if (result == null)
         {
             Diagnostics.ReportUndefinedBinaryOperator(operation.Location, operation.Text, access.Type, value.Type);
@@ -278,7 +305,13 @@ internal sealed partial class ExpressionBinder
         }
 
         result = conversions.BindConversion(valueSyntax.Location, result, access.Type);
-        return new BoundBlockExpression(indexSyntax, statements.ToImmutable(), new BoundIndirectAssignmentExpression(indexSyntax, addressRef, result));
+        var assignment = new BoundIndirectAssignmentExpression(indexSyntax, addressRef, result);
+        return FinishPostfixCompoundAssignment(
+            indexSyntax,
+            statements,
+            previousDeclaration,
+            previousValue,
+            assignment);
     }
 
     private BoundExpression BindNativeBufferLiteral(CollectionInitializerExpressionSyntax syntax)

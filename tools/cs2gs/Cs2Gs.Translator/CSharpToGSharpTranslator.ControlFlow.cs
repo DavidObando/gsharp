@@ -1683,6 +1683,10 @@ public sealed partial class CSharpToGSharpTranslator
                     new ArrayTypeReference(array.ElementType, array.Rank) { IsNullable = true },
                 PointerTypeReference pointer =>
                     new PointerTypeReference(pointer.ElementType) { IsNullable = true },
+                NativeSliceTypeReference slice =>
+                    new NativeSliceTypeReference(slice.ElementType, slice.IsReadOnly) { IsNullable = true },
+                ManagedReferenceTypeReference managed =>
+                    new ManagedReferenceTypeReference(managed.ElementType, managed.IsReadOnly) { IsNullable = true },
                 TupleTypeReference tuple =>
                     new TupleTypeReference(tuple.ElementTypes, tuple.ElementNames) { IsNullable = true },
                 ArrowTypeReference arrow =>

@@ -7,9 +7,8 @@
 #
 # Compile, ILVerify and test-parity are independent per app — that is the axis
 # this shards on. The DISCOVERED app set stays the whole repository (identical
-# --exclude list): `cs2gs validate --app` narrows what is executed, never what
-# exists, because excluding a project another app project-references breaks
-# reference resolution and manufactures phantom cascades.
+# --exclude/--passthrough list): `cs2gs validate --app` narrows what is
+# executed, never what exists.
 #
 # Inputs (from the migrate artifact, unpacked under $SELFMIG_GATE_ROOT):
 #   migrated/               the migrated tree
@@ -78,7 +77,7 @@ dotnet "$repo_root/out/bin/Release/Cs2Gs.Cli/cs2gs.dll" validate \
   --artifacts "$shard_out/runs" \
   --manifests "$manifest_run_dir" \
   --config Release \
-  "${selfmig_excludes[@]}" \
+  "${selfmig_project_filters[@]}" \
   "${app_args[@]}" \
   | tee "$shard_out/validate.log"
 validate_exit=${PIPESTATUS[0]}

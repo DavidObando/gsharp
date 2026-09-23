@@ -163,6 +163,199 @@ public class Issue4224RefReturningCallStorageTests
     }
 
     [Fact]
+    public void WritableRefReturningCall_AssignmentAndPostfixIncrement_EvaluateCallOnce()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func At(values []int32, index int32) ref int32 {
+                calls++
+                return ref values[index]
+            }
+            func Run() int32 {
+                var values = []int32{10}
+                At(values, 0) = 41
+                let prior = At(values, 0)++
+                return values[0] * 100 + prior * 10 + calls
+            }
+            var calls = 0
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(4612, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void WritableRefReturningCall_AssignmentUsesConstantNarrowing()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func At(values []uint8) ref uint8 {
+                return ref values[0]
+            }
+            func Run() uint8 {
+                var values = []uint8{0}
+                At(values) = 1
+                return values[0]
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal((byte)1, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void WritableRefReturningCall_IncrementUsesUserCompoundOperator()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Bag {
+                var total int32
+                prop Total int32 { get { return total } }
+                func operator +=(amount int32) { total = total + amount }
+            }
+            func Forward(ref value Bag) ref Bag {
+                calls++
+                return ref value
+            }
+            func Run() int32 {
+                var bag = Bag()
+                let previous = Forward(ref bag)++
+                return bag.Total * 10 + calls
+            }
+            var calls = 0
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(11, result.ReadGlobals()["answer"]);
+    }
+
+    [Theory]
+    [InlineData("At(values, 0) = await Task.FromResult(1)")]
+    [InlineData("At(values, 0) += await Task.FromResult(1)")]
+    public void WritableRefReturningCall_SuspendingRhsIsRejected(string assignment)
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            import System.Threading.Tasks
+            func At(values []int32, index int32) ref int32 {
+                return ref values[index]
+            }
+            async func Bad() int32 {
+                var values = []int32{0}
+                {{assignment}}
+                return values[0]
+            }
+            """);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id == "GS0604"
+                && diagnostic.Message.Contains(
+                    "cannot survive suspension",
+                    System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void WritableRefReturningProperty_CompoundSuspendingRhsIsRejected()
+    {
+        var result = EmittedOracle.Evaluate($$"""
+            import System.Threading.Tasks
+            class Holder {
+                var values []int32
+                prop Value ref int32 { get { return ref values[0] } }
+                func Init() { values = []int32{0} }
+            }
+            async func Bad() int32 {
+                var holder = Holder{}
+                holder.Init()
+                holder.Value += await Task.FromResult(1)
+                return holder.Value
+            }
+            """);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Id == "GS0604"
+                && diagnostic.Message.Contains(
+                    "cannot survive suspension",
+                    System.StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ImportedWritableRefReturningCall_AssignmentAndIncrementMutateReferent()
+    {
+        var result = EmittedOracle.Evaluate("""
+            import System
+
+            func Run() int32 {
+                var values = []int32{10}
+                var span = Span[int32](values)
+                span.GetPinnableReference() = 20
+                span.GetPinnableReference()++
+                return values[0]
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(21, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void ReadOnlyRefReturningCall_RemainsProtectedFromDirectAssignment()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func View(values []int32) ref readonly int32 {
+                return ref values[0]
+            }
+            func Run() {
+                var values = []int32{10}
+                View(values) = 20
+            }
+            """);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains(
+                "readonly storage cannot be written through",
+                System.StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
+    public void BaseClassRefReturningCall_AssignmentAndIncrementMutateBaseStorage()
+    {
+        var result = EmittedOracle.Evaluate("""
+            open class Base {
+                var values []int32 = []int32{10}
+                open func At(index int32) ref int32 { return ref values[index] }
+            }
+            class Derived : Base {
+                func Run() int32 {
+                    base.At(0) = 20
+                    base.At(0)++
+                    return base.At(0)
+                }
+            }
+            var answer = Derived{}.Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(21, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void BaseInterfaceRefReturningCall_AssignmentAndIncrementMutateArgument()
+    {
+        var result = EmittedOracle.Evaluate("""
+            interface IRef {
+                func First(values []int32) ref int32 { return ref values[0] }
+            }
+            class Holder : IRef {
+                func Run() int32 {
+                    var values = []int32{10}
+                    base[IRef].First(values) = 20
+                    base[IRef].First(values)++
+                    return values[0]
+                }
+            }
+            var answer = Holder{}.Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(21, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
     public void AliasFromImportedRefIndexer_StillMutatesOriginalArrayElement()
     {
         // Not a new code path — ConversionClassifier.AutoDereferenceRefReturn
@@ -229,6 +422,36 @@ public class Issue4224RefReturningCallStorageTests
             """);
         Assert.Empty(result.Diagnostics);
         Assert.Equal(701, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void WritableRefGetter_IncrementAndDecrementWriteThroughBareAndQualifiedTargets()
+    {
+        var result = EmittedOracle.Evaluate("""
+            class Holder {
+                var slot int32 = 10
+                var calls int32
+                prop Value ref int32 {
+                    get {
+                        calls++
+                        return ref slot
+                    }
+                }
+                func Run() bool {
+                    let barePrevious = Value++
+                    let qualifiedPrevious = this.Value--
+                    let updated = ++Value
+                    return barePrevious == 10 &&
+                        qualifiedPrevious == 11 &&
+                        updated == 11 &&
+                        slot == 11 &&
+                        calls == 3
+                }
+            }
+            var answer = Holder{}.Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.ReadGlobals()["answer"]);
     }
 
     [Fact]

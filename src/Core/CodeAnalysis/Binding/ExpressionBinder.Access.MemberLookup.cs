@@ -1863,7 +1863,13 @@ internal sealed partial class ExpressionBinder
         if (NativeSliceTypes.TryGetElement(boundReceiver.Type, out _, out _)
             && compoundOperatorToken != null && compoundRhsSyntax != null)
         {
-            return BindNativeSliceCompoundAssignment(boundReceiver, indexSyntax, compoundOperatorToken, compoundRhsSyntax);
+            return BindNativeSliceCompoundAssignment(
+                boundReceiver,
+                indexSyntax,
+                compoundOperatorToken,
+                compoundRhsSyntax,
+                outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
+                outerSyntax is CompoundIndexAssignmentExpressionSyntax { IsIncrementDecrement: true });
         }
 
         var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
@@ -1882,6 +1888,8 @@ internal sealed partial class ExpressionBinder
         statements.Add(new BoundVariableDeclaration(outerSyntax, tempVar, boundReceiver));
 
         BoundExpression assignment;
+        BoundVariableDeclaration? previousDeclaration = null;
+        BoundVariableExpression? previousValue = null;
         if (compoundOperatorToken != null)
         {
             if (!SyntaxFacts.TryGetCompoundAssignmentBaseOperator(compoundOperatorToken.Kind, out var baseOpKind))
@@ -1934,6 +1942,8 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
+            var compoundTarget = indexRead;
+
             if (compoundRhsSyntax is not { } resolvedCompoundRhsSyntax)
             {
                 return new BoundErrorExpression(null);
@@ -1944,6 +1954,136 @@ internal sealed partial class ExpressionBinder
             {
                 return new BoundErrorExpression(null);
             }
+
+            // A user-defined `operator op=` mutates its receiver in place, so a
+            // NON-addressable element read (a map or indexer `get` returns a
+            // copy) has to be staged in a local and written back through the
+            // setter below. The staging local is created BEFORE resolution so
+            // the operator — and the conversion of its argument, which may
+            // report diagnostics — is bound exactly once, against the target
+            // that is actually mutated. It is materialised only if resolution
+            // succeeds. A pointer dereference and an array-backed element are
+            // already addressable, so they keep the in-place application; a
+            // WRITABLE native ref-returning indexer (issue #4224) becomes
+            // addressable by hoisting the reference its getter returns, which
+            // also keeps that getter evaluated exactly once across the read,
+            // the postfix capture, and the mutation.
+            var refReturningElement = RefCapabilities.IsNativeRefReturningCall(compoundTarget)
+                && !RefCapabilities.IsReadOnlyStorage(compoundTarget)
+                && IsLvalue(compoundTarget);
+            LocalVariableSymbol? addressTemp = null;
+            BoundAddressOfExpression? elementAddress = null;
+            LocalVariableSymbol? valueTemp = null;
+            if (refReturningElement)
+            {
+                elementAddress = new BoundAddressOfExpression(null, compoundTarget, unmanaged: false);
+                addressTemp = new LocalVariableSymbol(
+                    $"<idxRef{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly: true,
+                    elementAddress.Type);
+            }
+            else if (GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(compoundTarget.Type)
+                && compoundTarget is not BoundDereferenceExpression
+                && compoundTarget is not BoundIndexExpression { IsArrayBackedElementAccess: true })
+            {
+                valueTemp = new LocalVariableSymbol(
+                    $"<idxCompound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                    isReadOnly: false,
+                    compoundTarget.Type);
+            }
+
+            BoundExpression userCompoundTarget = compoundTarget;
+            if (addressTemp != null)
+            {
+                userCompoundTarget = new BoundDereferenceExpression(
+                    null,
+                    new BoundVariableExpression(null, addressTemp));
+            }
+            else if (valueTemp != null)
+            {
+                userCompoundTarget = new BoundVariableExpression(null, valueTemp);
+            }
+
+            var userCompound = TryBindUserCompoundAssignmentOperator(
+                compoundOperatorToken.Kind,
+                userCompoundTarget,
+                rhsBound,
+                resolvedCompoundRhsSyntax.Location);
+            if (userCompound != null)
+            {
+                if (addressTemp != null)
+                {
+                    // The captured managed pointer cannot survive a suspension
+                    // of the enclosing async method, so an awaiting right-hand
+                    // side is rejected exactly as it is for a ref-returning
+                    // call or property target.
+                    if (AsyncBoundTreeQueries.HasAwait(rhsBound))
+                    {
+                        Diagnostics.ReportManagedReference(
+                            resolvedCompoundRhsSyntax.Location,
+                            "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target");
+                        return new BoundErrorExpression(outerSyntax);
+                    }
+
+                    scope.TryDeclareVariable(addressTemp);
+                    statements.Add(new BoundVariableDeclaration(
+                        outerSyntax,
+                        addressTemp,
+                        Invariant.Required(elementAddress, "a hoisted element reference has an address")));
+                }
+                else if (valueTemp != null)
+                {
+                    scope.TryDeclareVariable(valueTemp);
+                    statements.Add(new BoundVariableDeclaration(outerSyntax, valueTemp, compoundTarget));
+                }
+
+                BoundExpression previousRead = userCompoundTarget;
+                previousValue = CapturePostfixCompoundValue(
+                    outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
+                    outerSyntax,
+                    ref previousRead,
+                    out previousDeclaration);
+
+                if (valueTemp != null)
+                {
+                    if (previousDeclaration != null)
+                    {
+                        statements.Add(previousDeclaration);
+                    }
+
+                    statements.Add(new BoundExpressionStatement(outerSyntax, userCompound));
+                    var writeBack = BindIndexedAssignmentToVariableWithBoundValue(
+                        tempVar,
+                        indexSyntax,
+                        userCompoundTarget,
+                        diagnosticLocation,
+                        sharedIndex,
+                        boundReceiver);
+                    if (previousValue != null)
+                    {
+                        statements.Add(new BoundExpressionStatement(outerSyntax, writeBack));
+                        return new BoundBlockExpression(outerSyntax, statements.ToImmutable(), previousValue);
+                    }
+
+                    return new BoundBlockExpression(outerSyntax, statements.ToImmutable(), writeBack);
+                }
+
+                return FinishUserCompoundIncrement(
+                    outerSyntax,
+                    outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
+                    outerSyntax is CompoundIndexAssignmentExpressionSyntax { IsIncrementDecrement: true },
+                    userCompoundTarget,
+                    userCompound,
+                    previousDeclaration,
+                    previousValue,
+                    statements);
+            }
+
+            previousValue = CapturePostfixCompoundValue(
+                outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
+                outerSyntax,
+                ref indexRead,
+                out previousDeclaration);
 
             // issue #1226 / #1246: the right operand of a compound element/indexer
             // assignment (`data[i] op= v`, including the synthetic `1` for
@@ -1988,7 +2128,12 @@ internal sealed partial class ExpressionBinder
             return assignment;
         }
 
-        return new BoundBlockExpression(outerSyntax, statements.ToImmutable(), assignment);
+        return FinishPostfixCompoundAssignment(
+            outerSyntax,
+            statements,
+            previousDeclaration,
+            previousValue,
+            assignment);
     }
 
     private bool TryCaptureCompoundIndexArgument(

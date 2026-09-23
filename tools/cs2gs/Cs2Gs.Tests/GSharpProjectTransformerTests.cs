@@ -117,7 +117,7 @@ public sealed class GSharpProjectTransformerTests
             "Gsharp.NET.Sdk/1.0.0",
             new Dictionary<string, string>
             {
-                [Path.Combine(scratch.Path, "source", "Other.csproj")] =
+                [Path.Combine(scratch.Path, "Other", "Other.csproj")] =
                     Path.Combine(scratch.Path, "generated", "Other.gsproj"),
             });
 
@@ -131,9 +131,113 @@ public sealed class GSharpProjectTransformerTests
             "@(SharedProjects->'%(RootDir)%(Directory)%(Filename).gsproj')",
             references[2].Attribute("Include")?.Value);
         Assert.Equal(
-            "@(GeneratedProjects->'%(RootDir)%(Directory)%(Filename).gsproj'); ../Other/Other.gsproj",
+            "@(GeneratedProjects->'%(RootDir)%(Directory)%(Filename).gsproj'); Other.gsproj",
             references[3].Attribute("Include")?.Value);
         Assert.Equal("Gsharp.NET.Sdk/1.0.0", transformed.Root?.Attribute("Sdk")?.Value);
+    }
+
+    [Fact]
+    public void Transform_KeepsPassthroughProjectOutputAsCompileReference()
+    {
+        using var scratch = new ScratchDirectory();
+        string sourceProject = Path.Combine(scratch.Path, "source", "App", "App.csproj");
+        string sourceRuntime = Path.Combine(scratch.Path, "source", "Runtime", "Runtime.csproj");
+        string sourceCompiler = Path.Combine(scratch.Path, "source", "Compiler", "Compiler.csproj");
+        string destinationDirectory = Path.Combine(scratch.Path, "generated", "App");
+        string passthroughRuntime = Path.Combine(scratch.Path, "generated", "Runtime", "Runtime.csproj");
+        string generatedCompiler = Path.Combine(scratch.Path, "generated", "Compiler", "Compiler.gsproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceProject));
+        Directory.CreateDirectory(destinationDirectory);
+        File.WriteAllText(
+            sourceProject,
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <DependencyProjects>..\Runtime\Runtime.csproj; ..\Compiler\Compiler.csproj</DependencyProjects>
+              </PropertyGroup>
+              <ItemGroup>
+                <DependencyProjects Include="..\Runtime\Runtime.csproj; ..\Compiler\Compiler.csproj" />
+                <ProjectReference Include="..\Runtime\Runtime.csproj" />
+                <ProjectReference Include="..\Runtime\Runtime.csproj; ..\Compiler\Compiler.csproj" />
+                <ProjectReference Include="$(DependencyProjects)" />
+                <ProjectReference Include="@(DependencyProjects)" />
+                <ProjectReference Include="..\External\One.csproj; ..\External\Two.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            sourceProject,
+            destinationDirectory,
+            "Gsharp.NET.Sdk/1.0.0",
+            new Dictionary<string, string>
+            {
+                [Path.GetFullPath(sourceRuntime)] = passthroughRuntime,
+                [Path.GetFullPath(sourceCompiler)] = generatedCompiler,
+            });
+
+        Assert.Equal(
+            "../Runtime/Runtime.csproj; ../Compiler/Compiler.gsproj",
+            ElementsNamed(transformed, "DependencyProjects").Single(element => element.Attribute("Include") is null)
+                .Value);
+        Assert.Equal(
+            "../Runtime/Runtime.csproj; ../Compiler/Compiler.gsproj",
+            ElementsNamed(transformed, "DependencyProjects").Single(element => element.Attribute("Include") is not null)
+                .Attribute("Include")?.Value);
+
+        XElement[] references = ElementsNamed(transformed, "ProjectReference").ToArray();
+        Assert.Equal("../Runtime/Runtime.csproj", references[0].Attribute("Include")?.Value);
+        Assert.Equal(
+            "../Runtime/Runtime.csproj; ../Compiler/Compiler.gsproj",
+            references[1].Attribute("Include")?.Value);
+        Assert.Equal("$(DependencyProjects)", references[2].Attribute("Include")?.Value);
+        Assert.Equal("@(DependencyProjects)", references[3].Attribute("Include")?.Value);
+        Assert.Equal(
+            @"..\External\One.csproj; ..\External\Two.csproj",
+            references[4].Attribute("Include")?.Value);
+        Assert.Equal("false", references[4].Attribute("ReferenceOutputAssembly")?.Value);
+        Assert.All(references.Take(4), reference => Assert.Null(reference.Attribute("ReferenceOutputAssembly")));
+    }
+
+    [Fact]
+    public void Transform_ResolvesAnchoredPathsAndSplitsMixedLiteralReferences()
+    {
+        using var scratch = new ScratchDirectory();
+        string sourceProject = Path.Combine(scratch.Path, "source", "App", "App.csproj");
+        string sourceRuntime = Path.Combine(scratch.Path, "source", "Runtime", "Runtime.csproj");
+        string destinationDirectory = Path.Combine(scratch.Path, "generated", "App");
+        string generatedRuntime = Path.Combine(scratch.Path, "generated", "Runtime", "Runtime.csproj");
+        Directory.CreateDirectory(Path.GetDirectoryName(sourceProject));
+        Directory.CreateDirectory(destinationDirectory);
+        File.WriteAllText(
+            sourceProject,
+            """
+            <Project>
+              <ItemGroup>
+                <ProjectReference Include="$(MSBuildProjectDirectory)\..\Runtime\Runtime.csproj" />
+                <ProjectReference Include="..\Runtime\Runtime.csproj;..\External\External.csproj" />
+              </ItemGroup>
+            </Project>
+            """);
+
+        XDocument transformed = GSharpProjectTransformer.Transform(
+            sourceProject,
+            destinationDirectory,
+            "Gsharp.NET.Sdk/1.0.0",
+            new Dictionary<string, string>
+            {
+                [Path.GetFullPath(sourceRuntime)] = generatedRuntime,
+            });
+
+        XElement[] references = ElementsNamed(transformed, "ProjectReference").ToArray();
+        Assert.Equal(3, references.Length);
+        Assert.Equal(
+            "$(MSBuildProjectDirectory)/../Runtime/Runtime.csproj",
+            references[0].Attribute("Include")?.Value);
+        Assert.Equal("../Runtime/Runtime.csproj", references[1].Attribute("Include")?.Value);
+        Assert.Null(references[1].Attribute("ReferenceOutputAssembly"));
+        Assert.Equal(@"..\External\External.csproj", references[2].Attribute("Include")?.Value);
+        Assert.Equal("false", references[2].Attribute("ReferenceOutputAssembly")?.Value);
     }
 
     [Fact]

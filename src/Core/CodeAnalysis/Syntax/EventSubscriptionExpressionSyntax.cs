@@ -20,16 +20,22 @@ public sealed class EventSubscriptionExpressionSyntax : ExpressionSyntax
     /// <param name="leftHandSide">The accessor chain identifying the event (receiver.Event).</param>
     /// <param name="operatorToken">The <c>+=</c> or <c>-=</c> token.</param>
     /// <param name="value">The handler expression on the right side.</param>
+    /// <param name="returnsPreviousValue">Whether the expression yields the value read before the write.</param>
+    /// <param name="isIncrementDecrement">Whether this node originated from a <c>++</c> or <c>--</c> expression.</param>
     public EventSubscriptionExpressionSyntax(
         SyntaxTree syntaxTree,
         ExpressionSyntax leftHandSide,
         SyntaxToken operatorToken,
-        ExpressionSyntax value)
+        ExpressionSyntax value,
+        bool returnsPreviousValue = false,
+        bool isIncrementDecrement = false)
         : base(syntaxTree)
     {
         LeftHandSide = leftHandSide;
         OperatorToken = operatorToken;
         Value = value;
+        ReturnsPreviousValue = returnsPreviousValue;
+        IsIncrementDecrement = isIncrementDecrement;
     }
 
     /// <inheritdoc/>
@@ -43,4 +49,10 @@ public sealed class EventSubscriptionExpressionSyntax : ExpressionSyntax
 
     /// <summary>Gets the handler expression on the right-hand side.</summary>
     public ExpressionSyntax Value { get; }
+
+    /// <summary>Gets a value indicating whether this expression yields the pre-write value.</summary>
+    public bool ReturnsPreviousValue { get; }
+
+    /// <summary>Gets a value indicating whether this expression originated from increment/decrement syntax.</summary>
+    public bool IsIncrementDecrement { get; }
 }

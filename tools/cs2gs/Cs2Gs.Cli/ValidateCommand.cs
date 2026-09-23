@@ -88,6 +88,9 @@ internal static class ValidateCommand
                 case "--exclude":
                     options.ExcludeAppIdPrefixes.Add(Next(args, ref i, arg).Replace('\\', '/').TrimEnd('/'));
                     break;
+                case "--passthrough":
+                    options.PassthroughAppIdPrefixes.Add(Next(args, ref i, arg).Replace('\\', '/').TrimEnd('/'));
+                    break;
                 case "--config":
                     options.Config = Next(args, ref i, arg);
                     break;
@@ -283,7 +286,8 @@ internal static class ValidateCommand
         IReadOnlyList<CorpusApp> apps,
         PipelineOptions options)
     {
-        if (options.ExcludeAppIdPrefixes.Count == 0)
+        if (options.ExcludeAppIdPrefixes.Count == 0
+            && options.PassthroughAppIdPrefixes.Count == 0)
         {
             return apps;
         }
@@ -291,10 +295,17 @@ internal static class ValidateCommand
         var kept = new List<CorpusApp>(apps.Count);
         foreach (CorpusApp app in apps)
         {
-            if (options.ExcludeAppIdPrefixes.Any(prefix =>
-                app.Id.StartsWith(prefix, StringComparison.Ordinal)))
+            bool passthrough = options.PassthroughAppIdPrefixes.Any(prefix =>
+                app.Id.StartsWith(prefix, StringComparison.Ordinal));
+            bool excluded = passthrough || options.ExcludeAppIdPrefixes.Any(prefix =>
+                app.Id.StartsWith(prefix, StringComparison.Ordinal));
+            if (excluded)
             {
                 options.ExcludedProjectPaths.Add(app.ProjectPath);
+                if (passthrough)
+                {
+                    options.PassthroughProjectPaths.Add(app.ProjectPath);
+                }
             }
             else
             {
@@ -345,6 +356,8 @@ internal static class ValidateCommand
         Console.WriteLine("  --shard <i>/<N>    Validate every Nth app starting at i (1-based); excludes --app.");
         Console.WriteLine("  --exclude <path>   MUST match the migrate pass exactly — it defines the discovered set,");
         Console.WriteLine("                     not the executed subset. Narrowing it breaks reference resolution.");
+        Console.WriteLine("  --passthrough <path>  MUST match migrate: exclude from validation while preserving");
+        Console.WriteLine("                     the original C# project in the migrated tree.");
         Console.WriteLine("  --config <name>    Build config used to find gsc and the SDK package (default: Release).");
         Console.WriteLine("  --gsc <path>       Override gsc.dll.");
         Console.WriteLine("  --gsgen <path>     Override gsgen.dll.");

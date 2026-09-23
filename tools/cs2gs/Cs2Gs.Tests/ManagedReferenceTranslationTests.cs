@@ -158,4 +158,32 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Null(result.UnhandledException);
         Assert.Equal(7, result.Value);
     }
+
+    [Fact]
+    public void NullableManagedReferenceCastUsesIntrinsicSyntax()
+    {
+        const string source = """
+            #nullable enable
+            using Gsharp.Values;
+            namespace ManagedCastTranslation;
+            public class Probe {
+                public static ManagedRef<int>? Lift(ManagedRef<int> value) =>
+                    (ManagedRef<int>?)value;
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("ManagedCast.cs", source) }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("cast[managed[int32]?](value)", text);
+        var result = EmittedOracle.Evaluate(text, new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+    }
 }

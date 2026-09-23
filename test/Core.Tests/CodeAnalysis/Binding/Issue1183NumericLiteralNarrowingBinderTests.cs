@@ -7,6 +7,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -83,6 +84,31 @@ public class Issue1183NumericLiteralNarrowingBinderTests
         // cast and must NOT be allowed implicitly.
         var source = Wrap("func F(n int32) { var x uint8 = n }");
         Assert.Contains(Errors(source), d => d.Id == "GS0156");
+    }
+
+    [Fact]
+    public void TupleLiteralElements_UseContextualConstantNarrowing()
+    {
+        var result = EmittedOracle.Evaluate("""
+            func Run() uint8 {
+                let values = [](int32, uint8){(1, 2)}
+                return values[0].Item2
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal((byte)2, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void TupleLiteralNonConstantElement_StillRequiresCast()
+    {
+        var diagnostics = Errors("""
+            func F(n int32) {
+                let values = [](int32, uint8){(1, n)}
+            }
+            """);
+        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0156");
     }
 
     [Fact]

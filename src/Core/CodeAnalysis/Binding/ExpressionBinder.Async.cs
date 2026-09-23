@@ -128,6 +128,7 @@ internal sealed partial class ExpressionBinder
             // operators (issue #2154) can never be an event, so skip straight
             // to the compound-assignment fallback.
             if (isEventCapableOperator
+                && !SourceStaticValueMemberPrecedesInheritedEvent(staticStruct, eventName)
                 && TypeMemberModel.TryGetStaticEventIncludingInherited(staticStruct, eventName, out var ev, out var eventOwner))
             {
                 if (!AccessibilityChecker.IsAccessible(ev.Accessibility, eventOwner, function))
@@ -203,6 +204,7 @@ internal sealed partial class ExpressionBinder
             // carried construction drives per-construction emit/storage.
             if (ctorStruct != null
                 && isEventCapableOperator
+                && !SourceStaticValueMemberPrecedesInheritedEvent(ctorStruct, eventName)
                 && TypeMemberModel.TryGetStaticEventIncludingInherited(ctorStruct, eventName, out var ctorEvent, out var ctorEventOwner))
             {
                 if (!AccessibilityChecker.IsAccessible(ctorEvent.Accessibility, ctorEventOwner, function))
@@ -294,6 +296,25 @@ internal sealed partial class ExpressionBinder
                 eventName = GetTupleFieldName(eventName, tupleType);
             }
 
+            // A nearer source field/property hides an inherited event, while
+            // an event declared at the same level retains event precedence.
+            if (isEventCapableOperator
+                && boundReceiver.Type is StructSymbol sourceValueType
+                && SourceValueMemberPrecedesInheritedEvent(sourceValueType, eventName))
+            {
+                var sourceCompound = TryBindChainedCompoundAssignment(
+                    sourceValueType,
+                    boundReceiver,
+                    eventName,
+                    eventNameSyntax,
+                    syntax,
+                    baseOpSyntaxKind);
+                if (sourceCompound != null)
+                {
+                    return sourceCompound;
+                }
+            }
+
             // Check for user-defined event on a StructSymbol before falling through to CLR reflection.
             // ADR-0112 A5: TryGetEvent walks the base chain, so inherited instance
             // events on `open class` bases now resolve (parity with the bare-`this`
@@ -372,6 +393,26 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
+            // Issue #4350: a source type keeps precedence over its imported
+            // base for compound member writes, matching reads and plain writes.
+            // Otherwise `this.SourceProperty += value` on a class deriving from
+            // an imported base skips the source property and reports GS0158
+            // against the base's CLR surface.
+            if (boundReceiver.Type is StructSymbol sourceCompoundType)
+            {
+                var sourceCompound = TryBindChainedCompoundAssignment(
+                    sourceCompoundType,
+                    boundReceiver,
+                    eventName,
+                    eventNameSyntax,
+                    syntax,
+                    baseOpSyntaxKind);
+                if (sourceCompound != null)
+                {
+                    return sourceCompound;
+                }
+            }
+
             importedEventTarget = boundReceiver.Type;
             receiverClrType = importedEventTarget?.ClrType;
             if (receiverClrType == null
@@ -389,16 +430,6 @@ internal sealed partial class ExpressionBinder
                 // `a.B.C += 1`, `a.B.C *= 2`). The parser routes all `lhs.member op=
                 // rhs` through EventSubscriptionExpression; when the member is not an
                 // event we fall back to compound assignment.
-                if (boundReceiver.Type is StructSymbol compoundStruct)
-                {
-                    var compoundResult = TryBindChainedCompoundAssignment(
-                        compoundStruct, boundReceiver, eventName, eventNameSyntax, syntax, baseOpSyntaxKind);
-                    if (compoundResult != null)
-                    {
-                        return compoundResult;
-                    }
-                }
-
                 if (boundReceiver.Type is InterfaceSymbol compoundInterface)
                 {
                     var compoundResult = TryBindInterfaceCompoundAssignment(

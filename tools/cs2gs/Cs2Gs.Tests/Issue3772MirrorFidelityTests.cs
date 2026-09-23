@@ -138,6 +138,141 @@ public sealed class Issue3772MirrorFidelityTests : IDisposable
     }
 
     /// <summary>
+    /// A passthrough project remains buildable as C#, so retained migrated
+    /// consumers can continue to reference it.
+    /// </summary>
+    [Fact]
+    public void MirrorPassthroughProjects_CopiesProjectAndCSharpSources()
+    {
+        string source = Path.Combine(this.root, "source");
+        string destination = Path.Combine(this.root, "destination");
+        string runtimeDirectory = Path.Combine(source, "src", "Runtime");
+        string compilerDirectory = Path.Combine(source, "src", "Compiler");
+        string supportDirectory = Path.Combine(source, "src", "Support");
+        Directory.CreateDirectory(runtimeDirectory);
+        Directory.CreateDirectory(compilerDirectory);
+        Directory.CreateDirectory(supportDirectory);
+        File.WriteAllText(Path.Combine(compilerDirectory, "Compiler.csproj"), "<Project />");
+        File.WriteAllText(
+            Path.Combine(runtimeDirectory, "Runtime.csproj"),
+            """
+            <Project Sdk="Microsoft.NET.Sdk">
+              <PropertyGroup>
+                <DependencyProjects>..\Compiler\Compiler.csproj; ..\Support\Support.csproj</DependencyProjects>
+              </PropertyGroup>
+              <ItemGroup>
+                <DependencyProjects Include="..\Compiler\Compiler.csproj; ..\Support\Support.csproj" />
+                <ProjectReference Include="..\Compiler\Compiler.csproj" />
+                <ProjectReference Include="..\Compiler\Compiler.csproj; ..\Support\Support.csproj" />
+                <ProjectReference Include="..\Compiler\Compiler.csproj; ..\External\External.csproj" />
+                <ProjectReference Include="$(DependencyProjects)" />
+                <ProjectReference Include="@(DependencyProjects)" />
+                <ProjectReference Include="@(GsharpCore)" />
+              </ItemGroup>
+              <Target Name="BuildCompiler">
+                <MSBuild Projects="..\Compiler\Compiler.csproj" />
+              </Target>
+            </Project>
+            """);
+        File.WriteAllText(Path.Combine(runtimeDirectory, "Runtime.cs"), "class Runtime {}");
+
+        var scope = ExcludedScope(source, Path.Combine(runtimeDirectory, "Runtime.csproj"));
+        IReadOnlyList<string> written = RepositoryMirror.MirrorPassthroughProjects(
+            source,
+            destination,
+            new[]
+            {
+                "src/Compiler/Compiler.csproj",
+                "src/Runtime/Runtime.cs",
+                "src/Runtime/Runtime.csproj",
+            },
+            scope,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [Path.Combine(compilerDirectory, "Compiler.csproj")] =
+                    Path.Combine(destination, "src", "Compiler", "Compiler.gsproj"),
+                [Path.Combine(supportDirectory, "Support.csproj")] =
+                    Path.Combine(destination, "src", "Support", "Support.csproj"),
+            });
+
+        Assert.Equal(
+            new[]
+            {
+                Path.Combine("src", "Runtime", "Runtime.cs"),
+                Path.Combine("src", "Runtime", "Runtime.csproj"),
+            },
+            written.OrderBy(path => path, StringComparer.Ordinal).ToArray());
+        Assert.Equal(
+            "class Runtime {}",
+            File.ReadAllText(Path.Combine(destination, "src", "Runtime", "Runtime.cs")));
+
+        XDocument project = XDocument.Load(
+            Path.Combine(destination, "src", "Runtime", "Runtime.csproj"));
+        Assert.Equal("Microsoft.NET.Sdk", project.Root.Attribute("Sdk").Value);
+        Assert.Equal(
+            "../Compiler/Compiler.gsproj; ../Support/Support.csproj",
+            project.Descendants("DependencyProjects").Single(element => element.Attribute("Include") is null).Value);
+        Assert.Equal(
+            "../Compiler/Compiler.gsproj; ../Support/Support.csproj",
+            project.Descendants("DependencyProjects").Single(element => element.Attribute("Include") is not null)
+                .Attribute("Include").Value);
+        Assert.Equal(
+            new[]
+            {
+                "../Compiler/Compiler.gsproj",
+                "../Compiler/Compiler.gsproj; ../Support/Support.csproj",
+                "../Compiler/Compiler.gsproj",
+                @"..\External\External.csproj",
+                "$(DependencyProjects)",
+                "@(DependencyProjects)",
+                "@(GsharpCore->'%(RootDir)%(Directory)%(Filename).gsproj')",
+            },
+            project.Descendants("ProjectReference")
+                .Select(reference => reference.Attribute("Include").Value)
+                .ToArray());
+        Assert.Equal(
+            "../Compiler/Compiler.gsproj",
+            project.Descendants("MSBuild").Single().Attribute("Projects").Value);
+    }
+
+    [Fact]
+    public void MirrorPassthroughProjects_CopiesRootProjectAndEvaluatedSources()
+    {
+        string source = Path.Combine(this.root, "source");
+        string destination = Path.Combine(this.root, "destination");
+        string projectPath = Path.Combine(source, "Root.csproj");
+        string rootSource = Path.Combine(source, "Root.cs");
+        string linkedSource = Path.Combine(source, "Shared", "Linked.cs");
+        Directory.CreateDirectory(Path.GetDirectoryName(linkedSource));
+        File.WriteAllText(projectPath, "<Project Sdk=\"Microsoft.NET.Sdk\" />");
+        File.WriteAllText(rootSource, "class Root {}");
+        File.WriteAllText(linkedSource, "class Linked {}");
+        File.WriteAllText(Path.Combine(source, "Other.cs"), "class Other {}");
+
+        RepositoryExcludedScope scope = RepositoryExcludedScope.Compute(
+            source,
+            new[] { projectPath },
+            new Dictionary<string, IReadOnlyList<string>>(StringComparer.OrdinalIgnoreCase)
+            {
+                [projectPath] = new[] { rootSource, linkedSource },
+            });
+        IReadOnlyList<string> written = RepositoryMirror.MirrorPassthroughProjects(
+            source,
+            destination,
+            new[] { "Root.csproj", "Root.cs", "Shared/Linked.cs", "Other.cs" },
+            scope,
+            new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase)
+            {
+                [projectPath] = Path.Combine(destination, "Root.csproj"),
+            });
+
+        Assert.Equal(
+            new[] { "Root.cs", "Root.csproj", Path.Combine("Shared", "Linked.cs") },
+            written.OrderBy(path => path, StringComparer.Ordinal).ToArray());
+        Assert.False(File.Exists(Path.Combine(destination, "Other.cs")));
+    }
+
+    /// <summary>
     /// A legacy solution is mirrored under its own name — the file name the
     /// repository's own sources use to find the repository root — with its
     /// project paths retargeted, and the buildable `.slnx` lands beside it.

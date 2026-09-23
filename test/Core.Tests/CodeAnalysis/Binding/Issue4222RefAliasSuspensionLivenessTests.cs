@@ -66,6 +66,30 @@ async func run() int32 {
     }
 
     [Fact]
+    public void LetRef_BaseCallAlias_LiveAcrossAwait_ReportsGS0258()
+    {
+        var source = @"
+import System.Threading.Tasks
+
+open class Base {
+    var values []int32 = []int32{10}
+    open func At(index int32) ref int32 { return ref values[index] }
+}
+
+class Derived : Base {
+    async func run() int32 {
+        var ref alias = base.At(0)
+        await Task.Delay(1)
+        alias = 42
+        return base.At(0)
+    }
+}
+";
+        var result = Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0258");
+    }
+
+    [Fact]
     public void LetRef_AssignedThroughAliasAcrossAwait_ReportsGS0258()
     {
         // `alias = await X()` needs the alias's address AFTER the await

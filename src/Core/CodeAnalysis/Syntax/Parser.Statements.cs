@@ -363,40 +363,18 @@ public partial class Parser
     {
         var identifier = MatchToken(SyntaxKind.IdentifierToken);
         var op = NextToken();
-        var baseOpKind = op.Kind == SyntaxKind.PlusPlusToken ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
-
         var leftName = new NameExpressionSyntax(syntaxTree, identifier);
-        var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, op.Position, SyntaxFacts.GetTextOrEmpty(baseOpKind), null);
-        var oneToken = new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, op.Position, "1", 1);
-        var oneLiteral = new LiteralExpressionSyntax(syntaxTree, oneToken, 1);
-        var binary = new BinaryExpressionSyntax(syntaxTree, leftName, baseOpToken, oneLiteral);
-        var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, op.Position, SyntaxFacts.GetTextOrEmpty(SyntaxKind.EqualsToken), null);
-        var assignment = new AssignmentExpressionSyntax(syntaxTree, identifier, equalsToken, binary);
-        return new ExpressionStatementSyntax(syntaxTree, assignment);
+        return new ExpressionStatementSyntax(
+            syntaxTree,
+            BuildIncrementDecrementExpression(leftName, op, isPrefix: true));
     }
 
     /// <summary>
-    /// ADR-0126 / issue #1027: desugars a prefix (<c>++x</c> / <c>--x</c>) or
-    /// postfix (<c>x++</c> / <c>x--</c>) increment/decrement <em>expression</em>
-    /// into existing value-producing assignment syntax, mirroring the
-    /// statement-level desugar in <see cref="ParseIncrementDecrementStatement"/>
-    /// and the compound-assignment desugar in
-    /// <see cref="ParseAssignmentExpression"/>.
-    /// <para>
-    /// The write reuses the read-modify-write nodes that already yield the
-    /// mutated (new) value: a bare variable lowers to
-    /// <c>operand = operand ± 1</c>, an array element / indexer lowers to the
-    /// single-evaluating <see cref="CompoundIndexAssignmentExpressionSyntax"/>
-    /// (<c>operand ±= 1</c>), and a field lowers to a
-    /// <see cref="MemberFieldAssignmentExpressionSyntax"/>.
-    /// </para>
-    /// <para>
-    /// A <em>prefix</em> form yields that new value directly. A <em>postfix</em>
-    /// form must yield the value <em>before</em> mutation, so it wraps the write
-    /// in <c>(write) ∓ 1</c> — exact for the integer operand types G# accepts
-    /// for <c>++</c>/<c>--</c> (the literal <c>1</c> is <c>int32</c>; floating
-    /// point operands are rejected by the binder, so no rounding gap exists).
-    /// </para>
+    /// ADR-0126 / issue #1027 / #4350: pointer dereferences and ref-returning
+    /// calls use the indirect compound path. Bare names and setter-based
+    /// members/indexers/maps retain their established compound paths, whose
+    /// binders distinguish storage from properties and capture the exact
+    /// postfix value.
     /// </summary>
     /// <param name="operand">The already-parsed lvalue operand.</param>
     /// <param name="op">The <c>++</c> or <c>--</c> operator token.</param>
@@ -405,77 +383,78 @@ public partial class Parser
     private ExpressionSyntax BuildIncrementDecrementExpression(ExpressionSyntax operand, SyntaxToken op, bool isPrefix)
     {
         var isIncrement = op.Kind == SyntaxKind.PlusPlusToken;
-        var baseOpKind = isIncrement ? SyntaxKind.PlusToken : SyntaxKind.MinusToken;
-        var inverseOpKind = isIncrement ? SyntaxKind.MinusToken : SyntaxKind.PlusToken;
         var compoundOpKind = isIncrement ? SyntaxKind.PlusEqualsToken : SyntaxKind.MinusEqualsToken;
         var pos = op.Position;
 
         LiteralExpressionSyntax OneLiteral() =>
-            new LiteralExpressionSyntax(syntaxTree, new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, pos, "1", 1), 1);
+            new(
+                syntaxTree,
+                new SyntaxToken(syntaxTree, SyntaxKind.NumberToken, pos, "1", 1),
+                1);
+
+        var compoundToken = new SyntaxToken(
+            syntaxTree,
+            compoundOpKind,
+            pos,
+            SyntaxFacts.GetTextOrEmpty(compoundOpKind),
+            null);
 
         ExpressionSyntax write;
-        if (AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(operand, out var indexed))
+        var unwrappedOperand = AssignmentTargetSyntaxFacts.UnwrapParentheses(operand);
+        var exactPostfix = unwrappedOperand is UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.StarToken }
+            || AssignmentTargetSyntaxFacts.IsCallResult(unwrappedOperand);
+        if (exactPostfix)
         {
-            // Array element / indexer: route through the single-evaluating
-            // compound-index assignment so the receiver chain is computed once.
-            var compoundToken = new SyntaxToken(syntaxTree, compoundOpKind, pos, SyntaxFacts.GetTextOrEmpty(compoundOpKind), null);
-            write = new CompoundIndexAssignmentExpressionSyntax(syntaxTree, indexed, compoundToken, OneLiteral());
+            return new IndirectCompoundAssignmentExpressionSyntax(
+                syntaxTree,
+                unwrappedOperand,
+                compoundToken,
+                OneLiteral(),
+                returnsPreviousValue: !isPrefix,
+                isIncrementDecrement: true);
+        }
+
+        if (unwrappedOperand is NameExpressionSyntax)
+        {
+            write = new EventSubscriptionExpressionSyntax(
+                syntaxTree,
+                unwrappedOperand,
+                compoundToken,
+                OneLiteral(),
+                returnsPreviousValue: !isPrefix,
+                isIncrementDecrement: true);
+        }
+        else if (AssignmentTargetSyntaxFacts.TryLiftTrailingIndexer(unwrappedOperand, out var indexed))
+        {
+            write = new CompoundIndexAssignmentExpressionSyntax(
+                syntaxTree,
+                indexed,
+                compoundToken,
+                OneLiteral(),
+                returnsPreviousValue: !isPrefix,
+                isIncrementDecrement: true);
+        }
+        else if (AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
+            unwrappedOperand,
+            out _,
+            out _,
+            out _))
+        {
+            write = new EventSubscriptionExpressionSyntax(
+                syntaxTree,
+                unwrappedOperand,
+                compoundToken,
+                OneLiteral(),
+                returnsPreviousValue: !isPrefix,
+                isIncrementDecrement: true);
         }
         else
         {
-            var baseOpToken = new SyntaxToken(syntaxTree, baseOpKind, pos, SyntaxFacts.GetTextOrEmpty(baseOpKind), null);
-            var newValue = new BinaryExpressionSyntax(syntaxTree, operand, baseOpToken, OneLiteral());
-            var equalsToken = new SyntaxToken(syntaxTree, SyntaxKind.EqualsToken, pos, SyntaxFacts.GetTextOrEmpty(SyntaxKind.EqualsToken), null);
-
-            if (operand is NameExpressionSyntax name)
-            {
-                write = new AssignmentExpressionSyntax(syntaxTree, name.IdentifierToken, equalsToken, newValue);
-            }
-            else if (AssignmentTargetSyntaxFacts.TryLiftTrailingMemberAccess(
-                operand,
-                out var receiver,
-                out var dotToken,
-                out var fieldIdentifier))
-            {
-                // Prefer the simple `id.field = value` form when the receiver is
-                // a bare name: it binds through the field-assignment path that
-                // correctly takes the address of a struct-local receiver in
-                // value position (the chained member form copies a value-type
-                // receiver by value, which would drop the mutation).
-                //
-                // Issue #3292: a CHAINED receiver (`ps[i].X++`, `a.B.C++`)
-                // routes through the compound-assignment desugar
-                // (`operand ±= 1`) instead of `operand = operand ± 1`: the
-                // member-field form binds the receiver chain twice (once for
-                // the write, once inside the re-parsed read), double-firing
-                // any side-effecting sub-expression (`ps[idx()].X++`) —
-                // while the compound path binds the chain exactly once and
-                // shares it between the read and write sides.
-                if (receiver is NameExpressionSyntax simpleReceiver)
-                {
-                    write = new FieldAssignmentExpressionSyntax(syntaxTree, simpleReceiver.IdentifierToken, dotToken, fieldIdentifier, equalsToken, newValue);
-                }
-                else
-                {
-                    var memberCompoundToken = new SyntaxToken(syntaxTree, compoundOpKind, pos, SyntaxFacts.GetTextOrEmpty(compoundOpKind), null);
-                    write = new EventSubscriptionExpressionSyntax(syntaxTree, operand, memberCompoundToken, OneLiteral());
-                }
-            }
-            else
-            {
-                Diagnostics.ReportInvalidIncrementDecrementTarget(operand.Location, op.Text);
-                return operand;
-            }
+            Diagnostics.ReportInvalidIncrementDecrementTarget(operand.Location, op.Text);
+            return operand;
         }
 
-        if (isPrefix)
-        {
-            return write;
-        }
-
-        // Postfix yields the value before mutation: (write) ∓ 1.
-        var inverseOpToken = new SyntaxToken(syntaxTree, inverseOpKind, pos, SyntaxFacts.GetTextOrEmpty(inverseOpKind), null);
-        return new BinaryExpressionSyntax(syntaxTree, write, inverseOpToken, OneLiteral());
+        return write;
     }
 
     private bool LooksLikeMultiAssignment()

@@ -455,6 +455,9 @@ internal sealed class ManagedReferenceSafetyAnalyzer : BoundTreeWalker
             BoundImportedInstanceCallExpression call => ManagedReferenceOrigins.IsHandleBorrow(call)
                 || (call.Type is ByRefTypeSymbol && this.IsManagedLocation(call.Receiver)),
             BoundUserInstanceCallExpression call => call.Method.ReturnRefKind != RefKind.None && this.IsManagedLocation(call.Receiver),
+            BoundBaseInterfaceCallExpression call => call.Method.ReturnRefKind != RefKind.None,
+            BoundBaseClassCallExpression call =>
+                (call.Method?.ReturnRefKind ?? call.Property?.ReturnRefKind) != RefKind.None,
             BoundPropertyAccessExpression property => property.Property.ReturnRefKind != RefKind.None
                 && property.Receiver != null && this.IsManagedLocation(property.Receiver),
             BoundBlockExpression block => this.IsManagedLocation(block.Expression),

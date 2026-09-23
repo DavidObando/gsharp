@@ -190,6 +190,26 @@ public partial class Parser
             return new IndirectCompoundAssignmentExpressionSyntax(syntaxTree, unaryDerefCompound, compoundOpToken, value);
         }
 
+        // Issue #4350: a writable ref-returning call is storage. Parse direct
+        // assignment/compound assignment through the same indirect nodes as
+        // `*p = value` / `*p op= value`; the binder verifies that the call
+        // actually returns a writable reference and captures its address once.
+        if (AssignmentTargetSyntaxFacts.IsCallResult(expression)
+            && Current.Kind == SyntaxKind.EqualsToken)
+        {
+            var equalsToken = NextToken();
+            var value = ParseAssignmentExpression();
+            return new IndirectAssignmentExpressionSyntax(syntaxTree, expression, equalsToken, value);
+        }
+
+        if (AssignmentTargetSyntaxFacts.IsCallResult(expression)
+            && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _))
+        {
+            var compoundOpToken = NextToken();
+            var value = ParseAssignmentExpression();
+            return new IndirectCompoundAssignmentExpressionSyntax(syntaxTree, expression, compoundOpToken, value);
+        }
+
         // Stream B′: `receiver.Event += handler` / `receiver.Event -= handler`
         // is captured as an EventSubscriptionExpressionSyntax once the LHS has
         // been parsed as a member-access chain. The binder later validates that
@@ -205,6 +225,7 @@ public partial class Parser
         // entirely for non-`+=`/`-=` operators and going straight to compound
         // assignment.
         if (expression is AccessorExpressionSyntax accessor
+            && !AssignmentTargetSyntaxFacts.IsCallResult(expression)
             && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(Current.Kind, out _))
         {
             var opToken = NextToken();

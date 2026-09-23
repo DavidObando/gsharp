@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -23,6 +24,35 @@ namespace Cs2Gs.Tests;
 /// </summary>
 public class MigrationPipelineTests
 {
+    [Fact]
+    public void GeneratedProjectMap_PreservesPassthroughProjectsDuringValidation()
+    {
+        string sourceRoot = Path.Combine(Path.GetTempPath(), "source-" + Guid.NewGuid().ToString("N"));
+        string destinationRoot = Path.Combine(Path.GetTempPath(), "migrated-" + Guid.NewGuid().ToString("N"));
+        string appProject = Path.Combine(sourceRoot, "src", "App", "App.csproj");
+        string runtimeProject = Path.Combine(sourceRoot, "src", "Runtime", "Runtime.csproj");
+        var app = new CorpusApp(
+            "src/App/App.csproj",
+            appProject,
+            TargetKind.Library,
+            relativeProjectPath: "src/App/App.csproj");
+
+        IReadOnlyDictionary<string, string> paths = MigrationPipeline.BuildGeneratedProjectPaths(
+            new[] { app },
+            new[] { runtimeProject },
+            sourceRoot,
+            destinationRoot,
+            runDir: Path.Combine(destinationRoot, "runs"),
+            repositoryLayout: true);
+
+        Assert.Equal(
+            Path.Combine(destinationRoot, "src", "App", "App.gsproj"),
+            paths[Path.GetFullPath(appProject)]);
+        Assert.Equal(
+            Path.Combine(destinationRoot, "src", "Runtime", "Runtime.csproj"),
+            paths[Path.GetFullPath(runtimeProject)]);
+    }
+
     /// <summary>
     /// The dedup fingerprint (§D.2) is identical for the same
     /// category/stage/diagnostic/construct-skeleton even when identifiers,

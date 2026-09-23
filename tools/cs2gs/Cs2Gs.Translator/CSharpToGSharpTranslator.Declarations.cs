@@ -1986,6 +1986,7 @@ public sealed partial class CSharpToGSharpTranslator
             };
         }
 
+#nullable enable annotations
         private ConstructorLift AnalyzeConstructorLift(
             TypeDeclarationSyntax node,
             IReadOnlyList<MemberDeclarationSyntax> members,
@@ -2049,7 +2050,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             var paramToTarget =
-                new Dictionary<IParameterSymbol, (string Name, ITypeSymbol Type, IPropertySymbol Property)>(
+                new Dictionary<IParameterSymbol, (string Name, ITypeSymbol Type, IPropertySymbol? Property)>(
                     SymbolEqualityComparer.Default);
             var fieldInitializers = new Dictionary<string, GExpression>();
             var residualInitStatements = new List<GStatement>();
@@ -2072,7 +2073,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // constructor parameter named after the member.
                     string targetName;
                     ITypeSymbol targetType;
-                    IPropertySymbol targetProperty;
+                    IPropertySymbol? targetProperty;
                     ISymbol leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol;
                     if (leftSymbol is IFieldSymbol fieldSymbol &&
                         !fieldSymbol.IsStatic &&
@@ -2192,7 +2193,7 @@ public sealed partial class CSharpToGSharpTranslator
             var propertiesAsParams = new HashSet<IPropertySymbol>(SymbolEqualityComparer.Default);
             foreach (IParameterSymbol param in ctorSymbol.Parameters)
             {
-                (string Name, ITypeSymbol Type, IPropertySymbol Property) target = paramToTarget[param];
+                (string Name, ITypeSymbol Type, IPropertySymbol? Property) target = paramToTarget[param];
                 GTypeReference type = this.typeMapper.Map(target.Type, this.context, param.Locations.FirstOrDefault());
 
                 // Issue #914 (oblivious sink): a T2-lifted primary-constructor

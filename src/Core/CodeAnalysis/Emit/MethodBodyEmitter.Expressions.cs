@@ -2169,6 +2169,14 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitPropertyAccess(propAcc, addressOnly: true);
                 break;
 
+            case BoundBaseInterfaceCallExpression baseInterface:
+                this.EmitBaseInterfaceCall(baseInterface);
+                break;
+
+            case BoundBaseClassCallExpression { Method: not null } baseClass:
+                this.EmitBaseClassCall(baseClass);
+                break;
+
             default:
                 throw new InvalidOperationException($"Cannot take address of expression kind '{node.Operand.GetType().Name}'.");
         }

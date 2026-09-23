@@ -26,11 +26,13 @@ public sealed class NativeSliceRuntimeLayoutTests
     [Fact]
     public void ValuesRuntimeIsPackagedOnceWithNoCompilerDependency()
     {
-        var sdk = XDocument.Load(Path.Combine(RepoRoot.Path, "src", "Sdk", "Gsharp.NET.Sdk", "Gsharp.NET.Sdk.csproj"));
+        var sdk = XDocument.Load(RepoRoot.ResolveSourcePath(
+            Path.Combine(RepoRoot.Path, "src", "Sdk", "Gsharp.NET.Sdk", "Gsharp.NET.Sdk.csproj")));
         Assert.Single(sdk.Descendants("ProjectReference"), e => ((string)e.Attribute("Include")).Contains("Gsharp.Runtime.Values"));
         var target = Assert.Single(sdk.Descendants("Target"), e => (string)e.Attribute("Name") == "PackGsharpValuesRuntime");
         Assert.Contains(target.Descendants("None"), e => (string)e.Attribute("PackagePath") == "tools\\values\\");
-        var runtime = XDocument.Load(Path.Combine(RepoRoot.Path, "src", "Sdk", "Gsharp.Runtime.Values", "Gsharp.Runtime.Values.csproj"));
+        var runtime = XDocument.Load(RepoRoot.ResolveSourcePath(
+            Path.Combine(RepoRoot.Path, "src", "Sdk", "Gsharp.Runtime.Values", "Gsharp.Runtime.Values.csproj")));
         Assert.Empty(runtime.Descendants("ProjectReference"));
     }
 }

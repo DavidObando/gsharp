@@ -1856,12 +1856,19 @@ public sealed partial class CSharpToGSharpTranslator
                 && targetRequiresNonNull
                 && argumentOperation is { Parameter: { } parameter })
             {
-                translated = this.ForgiveNullableReferenceValue(
-                    argument.Expression,
-                    translated,
-                    parameter.Type,
-                    parameter,
-                    includePromotedValue: true);
+                translated = IsNullOrSuppressedNull(argument.Expression)
+                    && parameter.Type.IsReferenceType
+                    && parameter.ContainingAssembly?.Name == "Gsharp.Runtime.Values"
+                        ? new DefaultValueExpression(this.typeMapper.Map(
+                            parameter.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
+                            this.context,
+                            argument.Expression.GetLocation()))
+                        : this.ForgiveNullableReferenceValue(
+                            argument.Expression,
+                            translated,
+                            parameter.Type,
+                            parameter,
+                            includePromotedValue: true);
             }
             else if (!IsNameOfArgument(argument)
                 && !isXunitNullAssertion
@@ -4001,8 +4008,14 @@ public sealed partial class CSharpToGSharpTranslator
             // `((TaskArm, SelectWaiter))state!` in ArmDescriptor.cs came out as
             // eight "variable doesn't exist" errors. `cast[(A, B)](expr)` is the
             // only form that binds, and it is what the unambiguous flag emits.
+            // Issue #4350: native slice types are not identifier/generic call
+            // heads, so `slice[T]?(value)` does not parse as a conversion call.
+            // The intrinsic form accepts any type clause and preserves the
+            // explicit nullable value conversion.
             bool unambiguous = this.CastUsesCheckedReferenceConversion(cast)
-                || targetSymbol is INamedTypeSymbol { IsTupleType: true };
+                || targetSymbol is INamedTypeSymbol { IsTupleType: true }
+                || conversionTargetType is NativeSliceTypeReference
+                || conversionTargetType is ManagedReferenceTypeReference;
 
             return new ConversionExpression(
                 conversionTargetType,
