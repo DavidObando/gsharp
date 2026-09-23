@@ -1629,14 +1629,23 @@ public sealed partial class CSharpToGSharpTranslator
                     attribute.AttributeClass?.ToDisplayString() ==
                         "System.Text.RegularExpressions.GeneratedRegexAttribute")
                 || this.IsAnalyzerHarnessEntry(implementation)
-                || this.IsAnalyzerHarnessSupportMember(definitionNode)
-                || this.IsAnalyzerHarnessSupportMember(implNode))
+                || this.IsAnalyzerHarnessSupportMemberInOwnTree(definitionNode)
+                || this.IsAnalyzerHarnessSupportMemberInOwnTree(implNode))
             {
                 return false;
             }
 
             implementationNode = implNode;
             return true;
+        }
+
+        // The two parts of a pair may live in different files, and this check
+        // runs from either part's node, so it resolves symbols through the
+        // node's OWN tree's semantic model.
+        private bool IsAnalyzerHarnessSupportMemberInOwnTree(MethodDeclarationSyntax method)
+        {
+            using IDisposable modelScope = this.context.UseSemanticModelFor(method.SyntaxTree);
+            return this.IsAnalyzerHarnessSupportMember(method);
         }
 
         /// <summary>
