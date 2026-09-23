@@ -2650,6 +2650,8 @@ internal sealed partial class ExpressionBinder
     {
         ImmutableArray<BoundExpression>.Builder? rebuilt = null;
         System.Reflection.ParameterInfo[]? parameters = null;
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default;
+        var symbolicMethodTypeArgsComputed = false;
         for (var i = 0; i < arguments.Length; i++)
         {
             if (!TryGetInlineOutVarArgument(ce, i, out var refArg))
@@ -2658,6 +2660,20 @@ internal sealed partial class ExpressionBinder
             }
 
             parameters ??= resolvedMethod.GetParameters();
+
+            // Issue #4350: an inferred (not explicitly listed) method type
+            // argument that is an in-scope G# type parameter was erased to
+            // `object` when the CLR method closed, so recover the symbolic
+            // vector from the other arguments before typing the new local.
+            if (!symbolicMethodTypeArgsComputed && resolvedMethod.IsGenericMethod && parameterMapping.IsDefault)
+            {
+                symbolicMethodTypeArgsComputed = true;
+                symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
+                    resolvedMethod,
+                    typeArgSymbols,
+                    ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
+            }
+
             var paramIndex = !parameterMapping.IsDefault && i < parameterMapping.Length ? parameterMapping[i] : i;
             if (paramIndex < 0 || paramIndex >= parameters.Length)
             {
@@ -2676,6 +2692,7 @@ internal sealed partial class ExpressionBinder
             // type arguments (mirroring `ResolveInstanceReturnTypeFromReceiver`).
             var pointeeType = ResolveInstanceParameterPointeeTypeFromReceiver(receiverType, resolvedMethod, paramIndex)
                 ?? ResolveMethodGenericParameterPointeeType(resolvedMethod, paramIndex, typeArgSymbols)
+                ?? MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs(resolvedMethod, paramIndex, symbolicMethodTypeArgs, receiverType)
                 ?? TypeSymbol.FromClrType(pointeeClr);
             var syntheticParameter = new ParameterSymbol(
                 parameters[paramIndex].Name ?? "value",
