@@ -383,27 +383,41 @@ public partial class Parser
             accessibilityModifier = NextToken();
         }
 
-        // ADR-0122 / issue #1014: an optional `unsafe` contextual modifier may
-        // precede `func` (with or without an accessibility / async modifier).
-        // It introduces an unsafe context in which unmanaged raw pointers
-        // (`*T`) and raw-pointer operations are legal. The `unsafe` class/struct
-        // modifier (issue #1202) is handled inside ParseAggregateDeclaration so
-        // it composes with `open`/`sealed`/etc. in any order.
+        // ADR-0192 / issue #4301 + ADR-0122 / issue #1014 + ADR-0023 /
+        // ADR-0174 D4: consume the whole `partial`/`unsafe`/colour modifier run
+        // in ONE order-independent pass. `partial` is never valid on a
+        // TOP-LEVEL `func` — a partial method is a member of a `partial class`
+        // or `partial struct` — but the recovery promise is a SINGLE GS0607, so
+        // the rest of the run must be consumed too or the `func` after it fails
+        // to parse and one intended error becomes a cascade.
         SyntaxToken? unsafeModifier = null;
-        if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
-            && (Peek(1).Kind == SyntaxKind.FuncKeyword
-                || IsFunctionColorModifier(Peek(1).Kind)))
-        {
-            unsafeModifier = NextToken();
-        }
-
-        // Phase 5.1 / ADR-0023: an optional `async` modifier may precede
-        // `func` (with or without an accessibility modifier). ADR-0174 D4:
-        // `suspend` takes the same slot.
         SyntaxToken? asyncModifier = null;
-        if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+        SyntaxToken? topLevelPartialModifier = null;
+        if (TryConsumeFunctionModifierRun(ref topLevelPartialModifier, ref unsafeModifier, ref asyncModifier))
         {
-            asyncModifier = NextToken();
+            if (topLevelPartialModifier != null)
+            {
+                Diagnostics.ReportPartialModifierNotValidHere(topLevelPartialModifier.Location);
+            }
+        }
+        else
+        {
+            // The run does not end in `func`. Fall back to the exact
+            // pre-ADR-0192 probes. `unsafe` introduces an unsafe context in
+            // which unmanaged raw pointers (`*T`) are legal; the `unsafe`
+            // class/struct modifier (issue #1202) is handled inside
+            // ParseAggregateDeclaration so it composes with `open`/`sealed`.
+            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
+                && (Peek(1).Kind == SyntaxKind.FuncKeyword
+                    || IsFunctionColorModifier(Peek(1).Kind)))
+            {
+                unsafeModifier = NextToken();
+            }
+
+            if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+            {
+                asyncModifier = NextToken();
+            }
         }
 
         MemberSyntax member;

@@ -14,6 +14,261 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 public partial class Parser
 {
     /// <summary>
+    /// ADR-0192 / issue #4301: probes for the contextual <c>partial</c> modifier
+    /// at member position and consumes it when it heads a <c>func</c> member.
+    /// <c>partial</c> stays an ordinary identifier everywhere else (<c>var
+    /// partial = 1</c>, <c>func partial()</c>) — it is only special when the
+    /// modifier run it starts terminates in <c>func</c>, exactly as ADR-0144
+    /// made it special only when the run terminates in an aggregate keyword.
+    /// </summary>
+    /// <param name="partialModifier">Receives the consumed token, or <see langword="null"/>.</param>
+    /// <returns><see langword="true"/> when a <c>partial</c> modifier was consumed.</returns>
+    private bool TryConsumePartialFuncModifier(out SyntaxToken? partialModifier)
+    {
+        partialModifier = null;
+        if (!PartialModifierIntroducesFunc())
+        {
+            return false;
+        }
+
+        partialModifier = NextToken();
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0192 / issue #4301 (Copilot review round 4): an interface method
+    /// signature's only legal accessibility modifier is <c>private</c>
+    /// (ADR-0090), and it must be consumed before probing for a misplaced
+    /// <c>partial</c> — otherwise <c>private partial func F();</c> left
+    /// <c>private</c> for <see cref="IsInterfaceMethodSignatureStart"/>,
+    /// whose lookahead requires <c>func</c> immediately after
+    /// <c>private</c>. That lookahead fails with <c>partial</c> in between,
+    /// so the loop fell through to an "unexpected token" diagnostic for
+    /// <c>private</c> BEFORE the partial probe on the same member ever ran,
+    /// producing two diagnostics instead of the intended single GS0607.
+    /// Mirrors the class/struct member loop's own accessibility lookahead,
+    /// which already skips a partial-bearing run via
+    /// <see cref="SkipPartialBearingModifierRun"/> for the same reason.
+    /// </summary>
+    /// <returns>The consumed <c>private</c> token, or <see langword="null"/> when none is consumed.</returns>
+    private SyntaxToken? TryConsumeInterfacePrivateBeforePartial()
+    {
+        if (Current.Kind != SyntaxKind.PrivateKeyword)
+        {
+            return null;
+        }
+
+        if (Peek(SkipPartialBearingModifierRun(1)).Kind != SyntaxKind.FuncKeyword)
+        {
+            return null;
+        }
+
+        return NextToken();
+    }
+
+    /// <summary>
+    /// ADR-0192: returns <see langword="true"/> when the current token is the
+    /// contextual <c>partial</c> identifier and the modifier run it starts
+    /// terminates in <c>func</c>. <c>unsafe</c> (ADR-0122) and the function
+    /// colour modifiers <c>async</c>/<c>suspend</c> (ADR-0023/ADR-0174) may
+    /// appear between <c>partial</c> and <c>func</c> in either order, so all of
+    /// <c>partial func</c>, <c>partial async func</c>, <c>partial unsafe async
+    /// func</c> are recognised. The scan does not consume tokens.
+    /// </summary>
+    /// <returns><see langword="true"/> when <c>partial</c> heads a <c>func</c> member.</returns>
+    private bool PartialModifierIntroducesFunc()
+        => Current.Kind == SyntaxKind.IdentifierToken
+        && Current.Text == "partial"
+        && FunctionModifierRunEndsInFunc(1);
+
+    /// <summary>
+    /// ADR-0192: scans the run of <c>func</c>-member modifiers starting at
+    /// <paramref name="startOffset"/> — <c>partial</c> (ADR-0192),
+    /// <c>unsafe</c> (ADR-0122), and the colour modifiers
+    /// <c>async</c>/<c>suspend</c> (ADR-0023 / ADR-0174 D4), each at most once
+    /// and in any order — and reports whether the run terminates in <c>func</c>.
+    /// The existing probes for those modifiers used to hard-code
+    /// <c>Peek(n) == func</c>, which is why they must route through this helper
+    /// now: `partial` may sit between them and the keyword. The scan does not
+    /// consume tokens.
+    /// </summary>
+    /// <param name="startOffset">The lookahead offset to start scanning at.</param>
+    /// <returns><see langword="true"/> when the modifier run ends in <c>func</c>.</returns>
+    private bool FunctionModifierRunEndsInFunc(int startOffset)
+    {
+        var offset = startOffset;
+        var sawUnsafe = false;
+        var sawColor = false;
+        var sawPartial = false;
+        while (true)
+        {
+            var token = Peek(offset);
+            if (!sawUnsafe && token.Kind == SyntaxKind.IdentifierToken && token.Text == "unsafe")
+            {
+                sawUnsafe = true;
+                offset++;
+                continue;
+            }
+
+            if (!sawPartial && token.Kind == SyntaxKind.IdentifierToken && token.Text == "partial")
+            {
+                sawPartial = true;
+                offset++;
+                continue;
+            }
+
+            if (!sawColor && IsFunctionColorModifier(token.Kind))
+            {
+                sawColor = true;
+                offset++;
+                continue;
+            }
+
+            break;
+        }
+
+        return Peek(offset).Kind == SyntaxKind.FuncKeyword;
+    }
+
+    /// <summary>
+    /// ADR-0192 / issue #4301: consumes the complete run of <c>func</c>-member
+    /// modifiers at the current token — <c>partial</c>, <c>unsafe</c>, and one
+    /// colour modifier (<c>async</c>/<c>suspend</c>) — <strong>in any
+    /// order</strong>, but only when that run terminates in <c>func</c>.
+    /// <para>
+    /// This is the single consumer every call site routes through. The earlier
+    /// shape probed for each modifier in a fixed sequence, which could not
+    /// match an ordering that placed <c>partial</c> BETWEEN the colour modifier
+    /// and <c>unsafe</c> (<c>async partial unsafe func</c>,
+    /// <c>unsafe partial async func</c>): the fixed probe consumed one modifier,
+    /// skipped past the slot the next one actually occupied, and left a stray
+    /// token where <c>func</c> was expected — cascading into recovery. A single
+    /// order-independent loop is the only way to keep the any-order contract
+    /// ADR-0192 §A advertises without every call site re-deriving it.
+    /// </para>
+    /// Consumes nothing and returns <see langword="false"/> when the run does
+    /// not end in <c>func</c>, so each caller's pre-ADR-0192 error-recovery
+    /// path still sees exactly the tokens it used to.
+    /// </summary>
+    /// <param name="partialModifier">Receives the <c>partial</c> token, if present.</param>
+    /// <param name="unsafeModifier">Receives the <c>unsafe</c> token, if present.</param>
+    /// <param name="colorModifier">Receives the <c>async</c>/<c>suspend</c> token, if present.</param>
+    /// <returns><see langword="true"/> when the modifier run was consumed.</returns>
+    private bool TryConsumeFunctionModifierRun(
+        ref SyntaxToken? partialModifier,
+        ref SyntaxToken? unsafeModifier,
+        ref SyntaxToken? colorModifier)
+    {
+        if (!FunctionModifierRunEndsInFunc(0))
+        {
+            return false;
+        }
+
+        while (Current.Kind != SyntaxKind.FuncKeyword)
+        {
+            if (partialModifier == null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "partial")
+            {
+                partialModifier = NextToken();
+                continue;
+            }
+
+            if (unsafeModifier == null && Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe")
+            {
+                unsafeModifier = NextToken();
+                continue;
+            }
+
+            if (colorModifier == null && IsFunctionColorModifier(Current.Kind))
+            {
+                colorModifier = NextToken();
+                continue;
+            }
+
+            break;
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0192: advances <paramref name="offset"/> past a modifier run that
+    /// contains a <c>partial</c> token, so an accessibility lookahead can see
+    /// the member keyword (<c>func</c>, <c>prop</c>, <c>event</c>, …) that
+    /// actually follows it. Without this, <c>public partial prop P …</c> left
+    /// <c>public</c> unconsumed — the lookahead stopped on <c>partial</c>,
+    /// matched nothing, and the misplaced-modifier rejection path that issues
+    /// GS0607 was never reached, so the user got a field-declaration cascade
+    /// instead of the one intended diagnostic.
+    /// <para>
+    /// Deliberately returns <paramref name="offset"/> UNCHANGED when the run
+    /// contains no <c>partial</c>: a run of <c>unsafe</c>/colour modifiers
+    /// alone must keep resolving exactly as it did before ADR-0192, so this
+    /// helper can never alter a pre-existing lookahead decision.
+    /// </para>
+    /// </summary>
+    /// <param name="offset">The lookahead offset to scan from.</param>
+    /// <returns>The offset past the run, or the original offset when it holds no <c>partial</c>.</returns>
+    private int SkipPartialBearingModifierRun(int offset)
+    {
+        var scan = offset;
+        var sawPartial = false;
+        var sawUnsafe = false;
+        var sawColor = false;
+        while (true)
+        {
+            var token = Peek(scan);
+            if (!sawPartial && token.Kind == SyntaxKind.IdentifierToken && token.Text == "partial")
+            {
+                sawPartial = true;
+                scan++;
+                continue;
+            }
+
+            if (!sawUnsafe && token.Kind == SyntaxKind.IdentifierToken && token.Text == "unsafe")
+            {
+                sawUnsafe = true;
+                scan++;
+                continue;
+            }
+
+            if (!sawColor && IsFunctionColorModifier(token.Kind))
+            {
+                sawColor = true;
+                scan++;
+                continue;
+            }
+
+            break;
+        }
+
+        return sawPartial ? scan : offset;
+    }
+
+    /// <summary>
+    /// ADR-0192 / issue #4301: consumes a <c>partial</c> token that sits at
+    /// member position but heads neither a <c>func</c> (ADR-0192) nor an
+    /// aggregate declaration (ADR-0144) — for example <c>partial prop</c>,
+    /// <c>partial event</c>, or <c>partial var</c> — and reports GS0607. Doing
+    /// this here keeps the token out of <c>ParseFieldDeclaration</c>, which
+    /// would otherwise surface a misleading "expected type clause" cascade.
+    /// </summary>
+    /// <returns><see langword="true"/> when a misplaced <c>partial</c> was consumed and diagnosed.</returns>
+    private bool TryRejectMisplacedPartialModifier()
+    {
+        if (Current.Kind != SyntaxKind.IdentifierToken
+            || Current.Text != "partial"
+            || PartialModifierIntroducesFunc()
+            || TryDetectAggregateDeclarationHead())
+        {
+            return false;
+        }
+
+        Diagnostics.ReportPartialModifierNotValidHere(Current.Location);
+        NextToken();
+        return true;
+    }
+
+    /// <summary>
     /// ADR-0068 / issue #698: parses a class-body destructor declaration
     /// <c>deinit { body }</c>. The keyword carries no parameters, no return
     /// type, no accessibility modifier. A malformed parameter list (the user
@@ -153,7 +408,23 @@ public partial class Parser
                     ahead++;
                 }
 
-                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
+                // ADR-0192: skip a `partial`-bearing modifier run so the
+                // member keyword after it decides whether `public` is a member
+                // modifier — `public partial func …` inside `shared { }`, and
+                // `public partial prop …`, whose GS0607 rejection path only
+                // runs once the accessibility token has been consumed.
+                // Copilot review round 9: ANY partial-bearing run consumes the
+                // accessibility token, whatever member follows — otherwise
+                // `public partial var x int32` left `public` for
+                // ParseFieldDeclaration, which then read `partial` as the
+                // field name (a cascade, no GS0607). The field path below
+                // receives the consumed token so the field keeps it.
+                var runStart = ahead;
+                ahead = SkipPartialBearingModifierRun(ahead);
+                var partialRunFollows = ahead != runStart;
+
+                if (partialRunFollows ||
+                    Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event"))
                 {
@@ -161,29 +432,42 @@ public partial class Parser
                 }
             }
 
-            // Issue #502: `async` modifier is allowed on static methods inside
-            // a `shared` block, mirroring the instance-method path above.
+            // ADR-0192 / issue #4301: `partial` (ADR-0192), `unsafe`
+            // (ADR-0122 / issue #1036) and one colour modifier (issue #502) may
+            // precede `func` on a STATIC method inside a `shared` block in ANY
+            // order — the same one shared, order-independent consumer the
+            // instance-method path uses. This is the shape the motivating
+            // scenario needs: C#'s
+            // `[GeneratedRegex] private static partial Regex Foo();` translates
+            // to a `partial func` inside `shared { }`. Consuming `unsafe` here
+            // also makes the method's SIGNATURE bind in an unsafe context (the
+            // binder consults the per-method `IsUnsafe` flag).
+            SyntaxToken? sharedMemberPartialModifier = null;
             SyntaxToken? sharedMemberAsyncModifier = null;
-            if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
-            {
-                sharedMemberAsyncModifier = NextToken();
-            }
-
-            // ADR-0122 / issue #1036: optional `unsafe` contextual modifier on a
-            // static `func` method inside a `shared` block, mirroring the
-            // instance-method path. Consumed only when immediately followed by
-            // `func` (or `async func`), so its SIGNATURE binds in an unsafe
-            // context too (the binder consults the per-method `IsUnsafe` flag).
             SyntaxToken? sharedMemberUnsafeModifier = null;
-            if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
-                && (Peek(1).Kind == SyntaxKind.FuncKeyword || IsFunctionColorModifier(Peek(1).Kind)))
+            if (!TryConsumeFunctionModifierRun(ref sharedMemberPartialModifier, ref sharedMemberUnsafeModifier, ref sharedMemberAsyncModifier))
             {
-                sharedMemberUnsafeModifier = NextToken();
-                if (sharedMemberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+                // Pre-ADR-0192 recovery probes, unchanged, for a run that does
+                // not end in `func`.
+                if (IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
                 {
                     sharedMemberAsyncModifier = NextToken();
                 }
+
+                if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "unsafe"
+                    && (Peek(1).Kind == SyntaxKind.FuncKeyword || IsFunctionColorModifier(Peek(1).Kind)))
+                {
+                    sharedMemberUnsafeModifier = NextToken();
+                    if (sharedMemberAsyncModifier == null && IsFunctionColorModifier(Current.Kind) && Peek(1).Kind == SyntaxKind.FuncKeyword)
+                    {
+                        sharedMemberAsyncModifier = NextToken();
+                    }
+                }
             }
+
+            // ADR-0192: `partial` on a shared-block member that is not a `func`
+            // (`partial prop`, `partial var`, `partial init { }`) is GS0607.
+            TryRejectMisplacedPartialModifier();
 
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "init"
                 && Peek(1).Kind == SyntaxKind.OpenBraceToken)
@@ -255,16 +539,27 @@ public partial class Parser
                     method.UnsafeModifier = sharedMemberUnsafeModifier;
                 }
 
+                // ADR-0192 / issue #4301: mark this static method as one part of
+                // a partial method.
+                method.PartialModifier = sharedMemberPartialModifier;
+
                 methods.Add(method);
             }
             else
             {
+                // ADR-0192: `partial` consumed for a shared-block member that
+                // did not turn out to be a `func` (error recovery only).
+                if (sharedMemberPartialModifier != null)
+                {
+                    Diagnostics.ReportPartialModifierNotValidHere(sharedMemberPartialModifier.Location);
+                }
+
                 if (sharedMemberAsyncModifier != null)
                 {
                     Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
-                fields.Add(ParseFieldDeclaration().WithAnnotations(memberAnnotations));
+                fields.Add(ParseFieldDeclaration(memberAccessibility).WithAnnotations(memberAnnotations));
             }
 
             if (Current == startToken)
@@ -316,9 +611,36 @@ public partial class Parser
             // property / event / method signature that follows.
             var annotations = ParseAnnotations();
 
+            // ADR-0192 / issue #4301 (Copilot review round 4): the sole
+            // accessibility modifier an interface method signature accepts —
+            // `private` (ADR-0090) — must be consumed BEFORE the partial
+            // probe below, or a `partial` between them (`private partial
+            // func F();`) strands `private` for the "unexpected token" catch-
+            // all further down, doubling up on the intended GS0607.
+            var interfaceMemberAccessibility = TryConsumeInterfacePrivateBeforePartial();
+
+            // ADR-0192 / issue #4301: partial methods are a `class`/`struct`
+            // feature. An interface method signature is already body-less and
+            // already expects an implementation elsewhere, so splitting it into
+            // a declaring and an implementing part has no meaning — `partial`
+            // on an interface member is GS0607. (A `partial interface` TYPE, per
+            // ADR-0144, remains legal; only its MEMBERS cannot be partial.)
+            if (TryConsumePartialFuncModifier(out var interfacePartialModifier) && interfacePartialModifier != null)
+            {
+                Diagnostics.ReportPartialModifierNotValidHere(interfacePartialModifier.Location);
+            }
+            else
+            {
+                TryRejectMisplacedPartialModifier();
+            }
+
             if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "shared" && Peek(1).Kind == SyntaxKind.OpenBraceToken)
             {
                 ParseInterfaceSharedBlock(methods, properties, staticFields, ref seenSharedBlock, identifier.Text);
+            }
+            else if (interfaceMemberAccessibility != null)
+            {
+                methods.Add((FunctionDeclarationSyntax)ParseInterfaceMethodSignatureCore(interfaceMemberAccessibility, staticModifier: null).WithAnnotations(annotations));
             }
             else if (Current.Kind == SyntaxKind.IdentifierToken && Current.Text == "prop")
             {
@@ -520,10 +842,23 @@ public partial class Parser
         {
             var startToken = Current;
 
-            SyntaxToken? accessibilityModifier = null;
-            if (Current.Kind == SyntaxKind.PrivateKeyword && Peek(1).Kind == SyntaxKind.FuncKeyword)
+            // ADR-0192 / issue #4301 (Copilot review round 4): skip a
+            // partial-bearing run so `private partial func F();` is still
+            // recognized as `private`-led — the plain `Peek(1) ==
+            // FuncKeyword` check below only matched when nothing sat between
+            // `private` and `func`.
+            var accessibilityModifier = TryConsumeInterfacePrivateBeforePartial();
+
+            // ADR-0192 / issue #4301: partial methods are out of scope for
+            // interfaces (see the instance-member loop above) — that includes
+            // an interface's static-virtual `shared { }` slots.
+            if (TryConsumePartialFuncModifier(out var sharedPartialModifier) && sharedPartialModifier != null)
             {
-                accessibilityModifier = NextToken();
+                Diagnostics.ReportPartialModifierNotValidHere(sharedPartialModifier.Location);
+            }
+            else
+            {
+                TryRejectMisplacedPartialModifier();
             }
 
             if (Current.Kind == SyntaxKind.FuncKeyword)
@@ -1144,13 +1479,15 @@ public partial class Parser
         return (openBrace, getAccessor, closeBrace);
     }
 
-    private FieldDeclarationSyntax ParseFieldDeclaration()
+    private FieldDeclarationSyntax ParseFieldDeclaration(SyntaxToken? consumedAccessibility = null)
     {
-        SyntaxToken? fieldAccessibility = null;
-        if (Current.Kind == SyntaxKind.PublicKeyword ||
+        // ADR-0192: a member loop that already consumed the accessibility
+        // token (to reach a misplaced `partial` after it) passes it in here.
+        var fieldAccessibility = consumedAccessibility;
+        if (fieldAccessibility == null && (Current.Kind == SyntaxKind.PublicKeyword ||
             Current.Kind == SyntaxKind.InternalKeyword ||
             Current.Kind == SyntaxKind.PrivateKeyword ||
-            Current.Kind == SyntaxKind.ProtectedKeyword)
+            Current.Kind == SyntaxKind.ProtectedKeyword))
         {
             fieldAccessibility = NextToken();
         }

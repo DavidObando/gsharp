@@ -578,6 +578,22 @@ internal static class DiagnosticDescriptors
     // tuple-typed argument.
     internal static readonly DiagnosticDescriptor DestructuringParameterRequiresAtLeastTwoElements = new("GS0592", DiagnosticSeverity.Error, "A tuple-destructuring parameter pattern requires at least two elements, but got {0}.");
 
+    // ADR-0192 / issue #4301: partial methods. Originally allocated at
+    // GS0600-GS0604 (skipping GS0593-GS0596, already claimed on the in-flight
+    // native-@GeneratedRegex branch, PR #4326). Renumbered to GS0607-GS0611
+    // after rebasing onto main, which had independently landed the native-
+    // slice/managed-reference diagnostics (ADR-0189/0190) at GS0600-GS0604 in
+    // the meantime — an additive collision git's rebase did not flag.
+    internal static readonly DiagnosticDescriptor PartialModifierNotValidHere = new("GS0607", DiagnosticSeverity.Error, "'partial' is not valid here; only a 'func' member of a 'partial class' or 'partial struct' may be partial.");
+
+    internal static readonly DiagnosticDescriptor PartialMethodRequiresPartialType = new("GS0608", DiagnosticSeverity.Error, "Partial method '{0}' must be declared inside a 'partial class' or 'partial struct'.");
+
+    internal static readonly DiagnosticDescriptor PartialMethodHasNoImplementation = new("GS0609", DiagnosticSeverity.Error, "Partial method '{0}' has no implementing part; every partial method declared in G# must be implemented by exactly one part with a body.");
+
+    internal static readonly DiagnosticDescriptor PartialMethodPartCount = new("GS0610", DiagnosticSeverity.Error, "Partial method '{0}' must have exactly one signature-only declaring part and one implementing part with a body, but found {1} declaring part(s) and {2} implementing part(s).");
+
+    internal static readonly DiagnosticDescriptor PartialMethodPartsDisagree = new("GS0611", DiagnosticSeverity.Error, "Partial declarations of method '{0}' disagree on {1}.");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

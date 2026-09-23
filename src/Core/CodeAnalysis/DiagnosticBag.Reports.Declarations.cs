@@ -890,6 +890,67 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.PartialNotValidOnKind, kind);
 
     /// <summary>
+    /// ADR-0192 / issue #4301: GS0607 — the <c>partial</c> contextual modifier
+    /// appeared somewhere a partial member cannot be declared: on a top-level
+    /// <c>func</c>, on an interface method signature, or on a <c>prop</c> /
+    /// <c>event</c> / <c>init</c> member. Only a <c>func</c> inside a
+    /// <c>partial class</c> or <c>partial struct</c> may be partial.
+    /// </summary>
+    /// <param name="location">The source location of the offending <c>partial</c> modifier.</param>
+    public void ReportPartialModifierNotValidHere(TextLocation location)
+    => Report(location, DiagnosticDescriptors.PartialModifierNotValidHere);
+
+    /// <summary>
+    /// ADR-0192 / issue #4301: GS0608 — a <c>partial func</c> was declared in a
+    /// type that is not itself <c>partial</c> (the analog of C# CS0751).
+    /// Reported by <c>PartialMethodMerger</c> rather than the parser, because
+    /// the enclosing declaration's <c>partial</c> modifier is only attached
+    /// after its member list has been parsed.
+    /// </summary>
+    /// <param name="location">The source location of the partial method's identifier.</param>
+    /// <param name="name">The method name.</param>
+    public void ReportPartialMethodRequiresPartialType(TextLocation location, string name)
+    => Report(location, DiagnosticDescriptors.PartialMethodRequiresPartialType, name);
+
+    /// <summary>
+    /// ADR-0192 / issue #4301: GS0609 — a partial method has a declaring part
+    /// but no implementing part. G# diverges from C# here: C# silently elides
+    /// an unimplemented <c>void</c> partial method (and its call sites),
+    /// whereas G# requires an implementation, matching how every other
+    /// body-less G# declaration is diagnosed when nothing satisfies it
+    /// (ADR-0086 §1 / GS0325).
+    /// </summary>
+    /// <param name="location">The source location of the declaring part's identifier.</param>
+    /// <param name="name">The method name.</param>
+    public void ReportPartialMethodHasNoImplementation(TextLocation location, string name)
+    => Report(location, DiagnosticDescriptors.PartialMethodHasNoImplementation, name);
+
+    /// <summary>
+    /// ADR-0192 / issue #4301: GS0610 — the parts of a partial method do not
+    /// form the required one-declaring/one-implementing pair (for example two
+    /// bodies, two signature-only parts, or an implementing part with no
+    /// declaring part).
+    /// </summary>
+    /// <param name="location">The source location of the offending part's identifier.</param>
+    /// <param name="name">The method name.</param>
+    /// <param name="declaringCount">How many signature-only declaring parts were found.</param>
+    /// <param name="implementingCount">How many parts supplied a body.</param>
+    public void ReportPartialMethodPartCount(TextLocation location, string name, int declaringCount, int implementingCount)
+    => Report(location, DiagnosticDescriptors.PartialMethodPartCount, name, declaringCount, implementingCount);
+
+    /// <summary>
+    /// ADR-0192 / issue #4301: GS0611 — the declaring and implementing parts of
+    /// a partial method disagree on some aspect of their signature or modifier
+    /// set (return type, parameter names/modifiers, accessibility,
+    /// <c>open</c>/<c>override</c>, <c>ref</c> return, generic parameters, …).
+    /// </summary>
+    /// <param name="location">The source location of the implementing part's identifier.</param>
+    /// <param name="name">The method name.</param>
+    /// <param name="aspect">A short description of the aspect the parts disagree on.</param>
+    public void ReportPartialMethodPartsDisagree(TextLocation location, string name, string aspect)
+    => Report(location, DiagnosticDescriptors.PartialMethodPartsDisagree, name, aspect);
+
+    /// <summary>
     /// ADR-0144 / issue #2201: GS0475 — a declaration in a partial-type group
     /// lacks the <c>partial</c> modifier while another declaration of the same
     /// type carries it (the analog of C# CS0260).

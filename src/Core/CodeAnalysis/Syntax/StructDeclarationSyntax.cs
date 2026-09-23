@@ -507,7 +507,7 @@ public sealed class StructDeclarationSyntax : MemberSyntax
     /// <summary>Gets the event declarations in the body (ADR-0052). Empty for types that declare no events.</summary>
     public ImmutableArray<EventDeclarationSyntax> Events { get; }
 
-    /// <summary>Gets the method declarations declared inside the body (Phase 3.B.3 sub-step 2b — classes only). Empty for struct types and for bodyless declarations.</summary>
+    /// <summary>Gets the method declarations declared inside the body (Phase 3.B.3 sub-step 2b). Both classes and structs may declare methods; empty only when the type declares none, or has no body.</summary>
     public ImmutableArray<FunctionDeclarationSyntax> Methods { get; }
 
     /// <summary>Gets the closing brace.</summary>
@@ -644,4 +644,76 @@ public sealed class StructDeclarationSyntax : MemberSyntax
 
     /// <summary>Gets or sets the number of lexical generic parameters predeclared on a rich-anonymous shell.</summary>
     internal int RichAnonymousShellTypeParameterCount { get; set; }
+
+    /// <summary>
+    /// Gets the parsed declaration this node is a <see cref="WithMemberLists"/>
+    /// copy of, or <see langword="null"/> for a declaration straight from the
+    /// parser. <c>///</c> comments are indexed by node reference, so the
+    /// binder looks up a copy's type documentation through this (ADR-0192).
+    /// </summary>
+    internal StructDeclarationSyntax? DocumentationSource { get; private set; }
+
+    /// <summary>
+    /// ADR-0192: returns a copy of this declaration with the given method list,
+    /// shared block, and nested types, and every other constructor argument and
+    /// settable property carried over unchanged. <c>PartialMethodMerger</c>
+    /// uses it to hand the binder a normalized declaration without mutating
+    /// the parsed tree, which the language server reuses across compilations.
+    /// Keep it in sync with this class's settable properties: one left out here
+    /// is silently dropped for every type that declares a partial method.
+    /// </summary>
+    /// <param name="methods">The method list for the copy.</param>
+    /// <param name="sharedBlock">The shared block for the copy.</param>
+    /// <param name="nestedTypes">The nested types for the copy.</param>
+    /// <returns>The copy.</returns>
+    internal StructDeclarationSyntax WithMemberLists(
+        ImmutableArray<FunctionDeclarationSyntax> methods,
+        SharedBlockSyntax? sharedBlock,
+        ImmutableArray<MemberSyntax> nestedTypes)
+    {
+        var copy = new StructDeclarationSyntax(
+            SyntaxTree,
+            AccessibilityModifier,
+            TypeKeyword,
+            Identifier,
+            DataKeyword,
+            InlineKeyword,
+            OpenModifier,
+            StructKeyword,
+            PrimaryConstructorOpenParenthesisToken,
+            PrimaryConstructorParameters,
+            PrimaryConstructorCloseParenthesisToken,
+            BaseColonToken,
+            BaseTypeIdentifier,
+            AdditionalBaseTypeIdentifiers,
+            OpenBraceToken,
+            Fields,
+            Properties,
+            Events,
+            methods,
+            CloseBraceToken)
+        {
+            BaseTypeClauses = BaseTypeClauses,
+            UnsafeModifier = UnsafeModifier,
+            PartialModifier = PartialModifier,
+            PartialPartLocations = PartialPartLocations,
+            TypeParameterList = TypeParameterList,
+            RefModifier = RefModifier,
+            SharedBlock = sharedBlock,
+            BaseConstructorOpenParenthesisToken = BaseConstructorOpenParenthesisToken,
+            BaseConstructorArguments = BaseConstructorArguments,
+            BaseConstructorCloseParenthesisToken = BaseConstructorCloseParenthesisToken,
+            SealedKeyword = SealedKeyword,
+            Constructors = Constructors,
+            Deinitializer = Deinitializer,
+            NestedTypes = nestedTypes,
+            PartialTypeParameterLists = PartialTypeParameterLists,
+            IsSynthesizedRichAnonymousObject = IsSynthesizedRichAnonymousObject,
+            RichAnonymousShellTypeParameterCount = RichAnonymousShellTypeParameterCount,
+            DocumentationSource = DocumentationSource ?? this,
+        };
+
+        copy.WithAnnotations(Annotations);
+        return copy;
+    }
 }
