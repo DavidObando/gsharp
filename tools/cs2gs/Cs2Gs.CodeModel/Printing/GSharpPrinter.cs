@@ -544,8 +544,8 @@ public static class GSharpPrinter
             var leftMin = isRightAssociative ? precedence + 1 : precedence;
             var rightMin = isRightAssociative ? precedence : precedence + 1;
 
-            var leftText = RenderExpression(outerBinary.Left, indent, leftMin);
-            var rightText = RenderExpression(outerBinary.Right, indent, rightMin);
+            var leftText = RenderBinaryOperand(outerBinary.Left, indent, leftMin);
+            var rightText = RenderBinaryOperand(outerBinary.Right, indent, rightMin);
             var rendered = $"{leftText} {outerBinary.Operator} {rightText}";
             return precedence < minPrecedence ? $"({rendered})" : rendered;
         }
@@ -555,6 +555,15 @@ public static class GSharpPrinter
 
     private static string RenderExpression(GExpression expression, int indent) =>
         RenderExpression(expression, indent, 0);
+
+    // Issue #4350 (review): C#'s range operator binds tighter than every binary
+    // operator (`saved ?? 1..2` is `saved ?? (1..2)`), but a G# standalone range
+    // binds LOOSER than all of them, so a range operand of any binary operator
+    // is parenthesized to keep the original tree shape when re-parsed.
+    private static string RenderBinaryOperand(GExpression operand, int indent, int minPrecedence) =>
+        operand is RangeIndexExpression
+            ? $"({RenderExpression(operand, indent)})"
+            : RenderExpression(operand, indent, minPrecedence);
 
     // Issue #3470: the printer renders each statement on one line regardless
     // of source formatting, producing 300+ character lines from deliberately

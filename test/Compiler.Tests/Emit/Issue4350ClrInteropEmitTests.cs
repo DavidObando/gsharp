@@ -120,12 +120,27 @@ public class Issue4350ClrInteropEmitTests
             run()
             """;
 
-        Assert.Equal(Lines("10", "20", "30", "7", "50"), CompileAndRun(source, CompileCSharpLibrary(library, "RefLib")));
+        var fixtureDirectory = Directory.CreateTempSubdirectory("gs_issue4350_reflib_").FullName;
+        try
+        {
+            Assert.Equal(
+                Lines("10", "20", "30", "7", "50"),
+                CompileAndRun(source, CompileCSharpLibrary(library, "RefLib", fixtureDirectory)));
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(fixtureDirectory, recursive: true);
+            }
+            catch
+            {
+            }
+        }
     }
 
-    private static string CompileCSharpLibrary(string source, string name)
+    private static string CompileCSharpLibrary(string source, string name, string directory)
     {
-        var directory = Directory.CreateTempSubdirectory("gs_issue4350_reflib_").FullName;
         var path = Path.Combine(directory, name + ".dll");
         var references = ((string)AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES")!)
             .Split(Path.PathSeparator)

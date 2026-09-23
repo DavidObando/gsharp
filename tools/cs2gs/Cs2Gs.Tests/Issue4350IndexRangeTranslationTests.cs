@@ -317,6 +317,38 @@ namespace Corpus.Issue4350
         Assert.Equal("True,True,key1", result.Value);
     }
 
+    [Fact]
+    public void RangeOperandOfBinaryOperator_IsParenthesized()
+    {
+        // Review finding: C# `saved ?? 1..2` is `saved ?? (1..2)`; G# parses a
+        // standalone range below every binary operator, so the printed range
+        // operand must keep its parentheses.
+        string printed = Render(@"
+using System;
+namespace Corpus.Issue4350
+{
+    public class Probe
+    {
+        public static string Run(bool useSaved)
+        {
+            Range? saved = useSaved ? 2..3 : null;
+            Range r = saved ?? 1..2;
+            int[] values = { 10, 20, 30, 40 };
+            return string.Join("","", values[r]);
+        }
+    }
+}
+");
+
+        Assert.Contains("?? (1..2)", printed, StringComparison.Ordinal);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+
+        var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe.Run(false) + \"|\" + Probe.Run(true)");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("20|30", result.Value);
+    }
+
     private static string Render(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Source.cs", source) });
