@@ -949,8 +949,12 @@ requires a decision about how far the change should reach.
 > scope*). The disjunct is therefore **kept**. Under the default mode it cannot
 > re-admit an oblivious receiver: that receiver is `T!`, the §4 coercion checks
 > and unwraps it before lookup, and it satisfies the first disjunct as plain
-> `T`. What the second disjunct admits is exactly the annotated-nullable chain
-> it always admitted, with the same (unchecked) dereference as before this ADR.
+> `T`. What the second disjunct admits under the default mode is exactly the
+> stated-nullable chains it always admitted: annotated-nullable members, and a
+> plain generic `T` member read through an explicitly nullable type argument
+> (`Box[string?].Value`, whose `T?` `NullableFlagsBuilder.MergeDeclarationNullability`
+> keeps from the receiver). Both keep the same (unchecked) dereference as
+> before this ADR.
 > Step 4's binder change is therefore documentation and tests pinning that
 > separation, not a deletion.
 

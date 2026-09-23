@@ -1045,13 +1045,18 @@ internal sealed partial class ExpressionBinder
     /// <c>Exception.InnerException</c>, or a Roslyn API member declared
     /// <c>T?</c>), which have always continued a member chain through this
     /// disjunct. ADR-0186 leaves annotated members untouched, so deleting it
-    /// would have been a breaking change outside the ADR's scope. Under the
-    /// default mode the receivers it admits are exactly those annotated-nullable
-    /// reads; under <c>--nullability=enabled</c> it also admits oblivious
-    /// reads, which is ADR-0136's behaviour for that compatibility mode,
-    /// unchanged. The chained dereference through such a receiver is not
-    /// nil-checked by the compiler — a pre-existing property of annotated
-    /// members that this predicate neither introduces nor fixes.
+    /// would have been a breaking change outside the ADR's scope. A third
+    /// population reaches it too: a plain generic <c>T</c> member read through
+    /// a receiver with an explicitly nullable type argument
+    /// (<c>Box[string?].Value</c>), whose <c>T?</c> is kept from the receiver
+    /// by <c>NullableFlagsBuilder.MergeDeclarationNullability</c> rather than
+    /// declared on the member. Under the default mode the receivers it admits
+    /// are exactly those two stated-nullable populations — never an oblivious
+    /// one; under <c>--nullability=enabled</c> it also admits oblivious reads,
+    /// which is ADR-0136's behaviour for that compatibility mode, unchanged.
+    /// The chained dereference through such a receiver is not nil-checked by
+    /// the compiler — a pre-existing property that this predicate neither
+    /// introduces nor fixes.
     /// </para>
     /// </summary>
     private static bool CanBindClrInstanceMember(BoundExpression? receiver)

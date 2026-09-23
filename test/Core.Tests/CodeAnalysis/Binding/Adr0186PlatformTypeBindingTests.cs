@@ -214,6 +214,17 @@ public sealed class Adr0186PlatformTypeBindingTests
 
             public string? MaybeText { get; set; } = "v";
         }
+
+        // The carve-out's third population: a plain generic `T` member whose
+        // nullability comes from the RECEIVER's explicitly nullable type
+        // argument (`Box[List[int32]?].Value` is `List[int32]?`), not from any
+        // `[Nullable(2)]` on the declaration.
+        public class Box<T>
+        {
+            public T Value { get; set; }
+
+            public T Field;
+        }
         """;
 
     /// <summary>
@@ -1786,6 +1797,49 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
+    /// <b>ADR-0186 step 4 — the carve-out's third population: a nullable type
+    /// argument substituted into a plain generic member.</b>
+    /// <para>
+    /// <c>Box&lt;T&gt;.Value</c> and <c>.Field</c> are declared plain
+    /// <c>T</c>, with no <c>[Nullable(2)]</c>. On a <c>Box[List[int32]?]</c>
+    /// receiver the member lookup keeps the receiver-supplied <c>?</c>
+    /// (<c>NullableFlagsBuilder.MergeDeclarationNullability</c>), so the read
+    /// is a <c>NullableTypeSymbol</c> carried by a
+    /// <c>BoundClrPropertyAccessExpression</c> and continues its chain through
+    /// the same disjunct. The nullability here was written in G# source, so
+    /// this is not an oblivious position and ADR-0186 does not move it. Pinned
+    /// so that narrowing the carve-out to declaration-site annotations alone
+    /// would fail here rather than silently breaking explicit generic
+    /// nullability.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Step4_AChainThroughANullableGenericSubstitution_Still_Binds()
+    {
+        const string body = """
+                let b = Box[List[int32]?]()
+                b.Value = List[int32]()
+                b.Field = List[int32]()
+                b.Value.Capacity = 4
+                b.Field.Capacity = 5
+                Console.WriteLine(b.Value.Capacity)
+                Console.WriteLine(b.Field.Count)
+            """;
+
+        using var world = new World();
+
+        foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
+        {
+            Assert.Equal(
+                new[] { "4", "0" },
+                world.Run(body, mode).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
+            Assert.IsType<NullableTypeSymbol>(world.GlobalProbeType("let b = Box[List[int32]?]()\nlet probe = b.Value", mode));
+        }
+
+        Assert.Equal(0, world.CountPlatformChecks(body));
+    }
+
+    /// <summary>
     /// <b>ADR-0186 step 4 — the discriminator: an OBLIVIOUS field-read
     /// receiver never reaches the carve-out under the default mode.</b>
     /// <para>
@@ -1801,10 +1855,11 @@ public sealed class Adr0186PlatformTypeBindingTests
     /// Under the default mode the receiver is <c>T!</c>, a §4 check is
     /// inserted for it, and a nil one throws the attributed
     /// <c>NullReferenceException</c> — so it went through the coercion, not
-    /// the carve-out, which would have inserted nothing. The annotated
-    /// counterpart in
+    /// the carve-out, which would have inserted nothing. The stated-nullable
+    /// counterparts in
     /// <see cref="Step4_AChainThroughAnAnnotatedNullableClrMember_Still_Binds"/>
-    /// is the other half: <c>T?</c>, and zero checks. If the carve-out ever
+    /// and <see cref="Step4_AChainThroughANullableGenericSubstitution_Still_Binds"/>
+    /// are the other half: <c>T?</c>, and zero checks. If the carve-out ever
     /// started admitting an oblivious receiver ahead of the coercion, the
     /// check count here drops to zero and the nil case stops being attributed.
     /// </para>
