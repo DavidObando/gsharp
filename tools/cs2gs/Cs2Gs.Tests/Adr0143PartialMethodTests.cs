@@ -668,6 +668,129 @@ namespace Demo
     }
 
     [Fact]
+    public void ImplementedPair_CrossFileIterator_EmitsMatchingParts()
+    {
+        // The iterator check reads the IMPLEMENTATION's body, so the
+        // declaring part in the other file must still spell the same return
+        // type as the implementing part.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Decl.cs", @"
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public partial class A
+    {
+        private partial IEnumerable<int> Items();
+    }
+}"),
+            ("Impl.cs", @"
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public partial class A
+    {
+        private partial IEnumerable<int> Items()
+        {
+            yield return 1;
+        }
+    }
+}"));
+
+        AssertMatchingPair(printed[0], printed[1], "Items");
+    }
+
+    [Fact]
+    public void ImplementedPair_CrossFileAsyncValueTask_EmitsMatchingParts()
+    {
+        // `async` and the ValueTask unwrapping are implementation-only facts;
+        // the declaring part in the other file must carry the same ones.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Decl.cs", @"
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public partial class A
+    {
+        private partial ValueTask<int> GetAsync();
+    }
+}"),
+            ("Impl.cs", @"
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public partial class A
+    {
+        private async partial ValueTask<int> GetAsync()
+        {
+            await Task.Yield();
+            return 1;
+        }
+    }
+}"));
+
+        AssertMatchingPair(printed[0], printed[1], "GetAsync");
+    }
+
+    [Fact]
+    public void DemotedPair_ReTranslatedFilesWithAnonymousTypes_DeclareEachShapeOnce()
+    {
+        // Demotion re-translates both files; an anonymous-type shape used in
+        // both must still be declared exactly once, by the file that first
+        // declared it.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Decl.cs", @"
+using System.Threading;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(Timer t);
+
+        public void Use(System.Timers.Timer x, System.Timers.ElapsedEventArgs e)
+        {
+        }
+
+        public int First()
+        {
+            var p = new { Name = ""a"", Count = 1 };
+            return p.Count;
+        }
+    }
+}"),
+            ("Impl.cs", @"
+using System.Threading;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(Timer t)
+        {
+        }
+
+        public int Second()
+        {
+            var q = new { Name = ""b"", Count = 2 };
+            return q.Count;
+        }
+    }
+}"));
+
+        string combined = string.Join("\n---\n", printed);
+        Assert.DoesNotContain("partial func", combined);
+        Assert.Equal(1, CountOccurrences(combined, "func M("));
+        Assert.Equal(1, CountOccurrences(combined, "data class "));
+    }
+
+    [Fact]
     public void ImplementedPair_SameUsingsAcrossFiles_EmitsPairEvenWhenTypeNeedsAlias()
     {
         // Positive control for the using-scope rule: both files import both
@@ -1275,6 +1398,18 @@ namespace Demo
         // would report its lone part (GS0609/GS0610).
         TranslationTestValidation.AssertBinds(printedFiles.ToArray());
         return printedFiles;
+    }
+
+    // Asserts the declaring part (in `declaringFile`) and the implementing part
+    // (in `implementingFile`) of `name` were both emitted with identical headers.
+    private static void AssertMatchingPair(string declaringFile, string implementingFile, string name)
+    {
+        string marker = "partial func " + name + "(";
+        int declaringStart = declaringFile.IndexOf(marker, StringComparison.Ordinal);
+        Assert.True(declaringStart >= 0, declaringFile);
+        int lineStart = declaringFile.LastIndexOf('\n', declaringStart) + 1;
+        string header = declaringFile.Substring(lineStart, declaringFile.IndexOf(';', declaringStart) - lineStart).Trim();
+        Assert.Contains(header + " {", implementingFile);
     }
 
     private static int CountOccurrences(string haystack, string needle)
