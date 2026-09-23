@@ -912,6 +912,20 @@ a generic field: reading or writing `box.Value` where `box : Box[int32]` binds
 as `int32`. The accessor call on a constructed receiver is emitted
 against the constructed type so the substitution holds at run time.
 
+#### Get-only auto-properties
+
+A get-only auto-property (`prop Length int32 { get; }`) exposes only a getter,
+but — as in C# — it may be assigned inside an instance constructor (`init(...)`)
+of the **declaring** type, on the instance being constructed: `Length = n`,
+`this.Length = n`, compound assignment (`Length += 1`), and increment
+(`Count++`) all store its synthesized backing field directly. No setter or
+`init` accessor is emitted, so the property keeps a get-only CLR ABI. Anywhere
+else the property is read-only (`GS0127`): an ordinary method, another instance
+(`other.Length = n`), a derived type's constructor, and a lambda or local
+function inside the constructor (C# CS0200). A `shared` get-only auto-property
+has no user-writable static constructor body and is assigned only through its
+declaration.
+
 #### Init-only accessors
 
 A property may declare an **`init` accessor** in place of `set`, in either the

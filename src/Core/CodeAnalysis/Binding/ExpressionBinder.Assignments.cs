@@ -161,7 +161,8 @@ internal sealed partial class ExpressionBinder
             // Issue #4224: a writable-ref-returning getter (no setter, but
             // `ReturnRefKind == Ref`) stores through the getter instead of
             // failing outright, mirroring the explicit-receiver forms below.
-            if (!implicitProp.Property.HasSetter)
+            if (!implicitProp.Property.HasSetter
+                && !IsGetOnlyAutoPropertyConstructorWrite(implicitProp.Property, implicitProp.StructType, receiver: null))
             {
                 var implicitRefConverted = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitProp.Property.Type);
                 if (TryBindRefGetterWriteThrough(
@@ -374,6 +375,71 @@ internal sealed partial class ExpressionBinder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #4350: whether an assignment to a get-only auto-property
+    /// (<c>prop P T { get; }</c>) is the C#-legal constructor write that stores
+    /// its synthesized backing field. As in C#, only the DECLARING type's
+    /// instance constructor may assign it, and only on the instance being
+    /// constructed; a lambda or local function inside that constructor is a
+    /// different function and stays rejected (C# CS0200). The write needs no
+    /// setter: the lowerer turns a declaring-type auto-property store into a
+    /// backing-field store.
+    /// </summary>
+    /// <param name="property">The property being assigned.</param>
+    /// <param name="declaringType">The type that declares <paramref name="property"/>.</param>
+    /// <param name="receiver">The bound receiver, or <see langword="null"/> for an implicit <c>this</c>.</param>
+    /// <returns><see langword="true"/> when the write is a permitted constructor store.</returns>
+    private bool IsGetOnlyAutoPropertyConstructorWrite(PropertySymbol property, TypeSymbol? declaringType, BoundExpression? receiver)
+    {
+        if (property.HasSetter
+            || !property.IsAutoProperty
+            || property.BackingField == null
+            || property.ReturnRefKind != RefKind.None)
+        {
+            return false;
+        }
+
+        var fn = this.function;
+        if (fn == null || fn.Name != ".ctor" || fn.ThisParameter == null)
+        {
+            return false;
+        }
+
+        var receiverIsThis = receiver == null
+            || (receiver is BoundVariableExpression variableReceiver
+                && ReferenceEquals(variableReceiver.Variable, fn.ThisParameter));
+        if (!receiverIsThis)
+        {
+            return false;
+        }
+
+        // C# forbids a derived constructor from assigning a base type's
+        // get-only auto-property; only the declaring type's constructor may.
+        // Compared through the constructor's own property list (backing-field
+        // identity survives generic substitution) because an implicit bare
+        // name reports the enclosing type, not the declaring one.
+        if (fn.ReceiverType is not StructSymbol constructedType)
+        {
+            return false;
+        }
+
+        if (declaringType is StructSymbol declaringStruct
+            && !ReferenceEquals(declaringStruct.Definition ?? declaringStruct, constructedType.Definition ?? constructedType))
+        {
+            return false;
+        }
+
+        foreach (var own in (constructedType.Definition ?? constructedType).Properties)
+        {
+            if (ReferenceEquals(own, property) || ReferenceEquals(own.BackingField, property.BackingField))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -1224,7 +1290,7 @@ internal sealed partial class ExpressionBinder
             if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.ValueText, out var prop, out var propDeclaringType))
             {
                 propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
-                if (!prop.HasSetter)
+                if (!prop.HasSetter && !IsGetOnlyAutoPropertyConstructorWrite(prop, propDeclaringType, assignmentReceiver))
                 {
                     // Issue #4224: a writable-ref-returning getter (no setter,
                     // but `ReturnRefKind == Ref`) stores through the getter
@@ -1719,7 +1785,8 @@ internal sealed partial class ExpressionBinder
 
         if (variable is ImplicitPropertyVariableSymbol implicitProp)
         {
-            if (!implicitProp.Property.HasSetter)
+            if (!implicitProp.Property.HasSetter
+                && !IsGetOnlyAutoPropertyConstructorWrite(implicitProp.Property, implicitProp.StructType, receiver: null))
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
             }
@@ -2385,7 +2452,8 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            if (!prop.HasGetter || !prop.HasSetter)
+            if (!prop.HasGetter
+                || (!prop.HasSetter && !IsGetOnlyAutoPropertyConstructorWrite(prop, propDeclaringType, boundReceiver)))
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
                 return new BoundErrorExpression(null);
@@ -3539,7 +3607,7 @@ internal sealed partial class ExpressionBinder
             if (TypeMemberModel.TryGetProperty(structSym, fieldName, out var prop, out var propDeclaringType))
             {
                 propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
-                if (!prop.HasSetter)
+                if (!prop.HasSetter && !IsGetOnlyAutoPropertyConstructorWrite(prop, propDeclaringType, receiver))
                 {
                     // Issue #4224: a writable-ref-returning getter (no setter,
                     // but `ReturnRefKind == Ref`) stores through the getter

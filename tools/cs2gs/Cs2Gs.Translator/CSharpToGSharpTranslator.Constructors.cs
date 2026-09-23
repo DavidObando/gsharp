@@ -382,16 +382,33 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // OD-T1: a C# get-only auto-property (`{ get; }`, body-less, no set/init)
-            // is settable in the declaring type's constructor. G# `{ get; }` alone
-            // is read-only (assigning it gives GS0127), so emit it as an init-only
-            // auto-property `{ get; init; }`. Interface/abstract contract members
-            // carry no backing field and remain read-only contracts.
+            // is settable in the declaring type's constructor. Issue #4350: G#
+            // follows the same rule for an instance `{ get; }` auto-property, so
+            // it keeps its get-only shape and ABI — no `set_P`/`init` accessor
+            // appears in metadata. Static, virtual, and override members keep
+            // the init-only `{ get; init; }` spelling: G# has no user static
+            // constructor body to assign a static one, and a body-less `open`
+            // or `override` `{ get; }` declares an abstract slot rather than an
+            // auto-property. Interface/abstract contract members carry no
+            // backing field and remain read-only contracts.
             if (!anyBodied && hasGet && !hasSet && !hasInit)
             {
                 var propSymbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
                 bool isContract = propSymbol != null &&
                     (propSymbol.IsAbstract ||
                         propSymbol.ContainingType?.TypeKind == TypeKind.Interface);
+                bool keepsGetOnlyShape = propSymbol != null
+                    && !propSymbol.IsStatic
+                    && !propSymbol.IsVirtual
+                    && !propSymbol.IsOverride;
+                if (!isContract && keepsGetOnlyShape)
+                {
+                    return new List<PropertyAccessor>
+                    {
+                        new PropertyAccessor(AccessorKind.Get, null),
+                    };
+                }
+
                 if (!isContract)
                 {
                     return new List<PropertyAccessor>
