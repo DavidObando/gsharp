@@ -48,8 +48,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <para>
 /// The top level of a type written for any other reason is left alone,
 /// because it is not a slot: a construction target, a cast, <c>as</c>,
-/// <c>typeof</c>, <c>sizeof</c>, <c>default</c>, an explicit-interface
-/// qualifier, an attribute type, a type alias. So is
+/// <c>typeof</c>, <c>sizeof</c>, <c>default</c>, an attribute type, a type
+/// alias. So is
 /// the top level of a <b>test-introduced binding</b> — a type pattern, a
 /// <c>catch</c> variable, an <c>if let</c> / <c>guard let</c> /
 /// <c>while let</c> binding: ADR-0186 §4 is explicit that such a binding is
@@ -60,7 +60,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <para>
 /// Two places are exempt outright, nested positions included (see
 /// <c>IsExempt</c>): a <b>conformance clause</b> — a base-type or interface
-/// list, or a generic constraint — and the signature of a <b>native-interop</b>
+/// list, a generic constraint, or an explicit-interface qualifier — and the
+/// signature of a <b>native-interop</b>
 /// function (<c>@DllImport</c> / <c>@LibraryImport</c>).
 /// </para>
 /// <para>
@@ -262,8 +263,8 @@ internal static class ObliviousScope
             // constraints are additionally exempt outright — IsExempt):
             // base-type / interface lists, constraints, construction targets, casts, `as`, `is` and type
             // patterns, `catch`, `if let` / `guard let` / `while let`,
-            // `typeof`, `sizeof`, `default`, explicit-interface qualifiers,
-            // attribute types, type aliases, and synthesized clauses with no
+            // `typeof`, `sizeof`, `default`, explicit-interface qualifiers
+            // (also exempt outright), attribute types, type aliases, and synthesized clauses with no
             // parent in the tree.
             _ => false,
         };
@@ -323,16 +324,27 @@ internal static class ObliviousScope
     /// <returns><see langword="true"/> inside a base list or constraint.</returns>
     private static bool IsInConformanceClause(TypeClauseSyntax clause)
     {
+        SyntaxNode outermost = clause;
         SyntaxNode? node = clause.Parent;
         while (node is TypeClauseSyntax or TypeArgumentListSyntax)
         {
+            outermost = node;
             node = node.Parent;
         }
 
-        return node is StructDeclarationSyntax
-            or InterfaceDeclarationSyntax
-            or TypeParameterSyntax
-            or AnonymousClassExpressionSyntax;
+        return node switch
+        {
+            StructDeclarationSyntax or InterfaceDeclarationSyntax or TypeParameterSyntax or AnonymousClassExpressionSyntax => true,
+
+            // An explicit-interface qualifier (`func (IFoo[Item]) M()`) names
+            // the base-list entry it implements, and is resolved against that
+            // entry — so it is a conformance clause too, and must name the same
+            // type the (exempt) base list does.
+            FunctionDeclarationSyntax function => ReferenceEquals(function.ExplicitInterfaceType, outermost),
+            PropertyDeclarationSyntax property => ReferenceEquals(property.ExplicitInterfaceType, outermost),
+            EventDeclarationSyntax @event => ReferenceEquals(@event.ExplicitInterfaceType, outermost),
+            _ => false,
+        };
     }
 
     /// <summary>

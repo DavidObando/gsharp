@@ -770,6 +770,16 @@ internal sealed partial class DeclarationBinder
 
         var implementationIsNullable = implementationType is NullableTypeSymbol;
         var substitutedInterfaceType = SubstituteInterfacePropertyType(interfaceType, typeParameterMap);
+
+        // ADR-0186: a platform property (declared in an ADR-0186 §9 oblivious
+        // scope, or read from oblivious metadata) states nothing about nil, so
+        // it conforms to a slot written either way — including a settable
+        // `T?` slot, which the exact-nullability rule below would reject.
+        if (implementationType is PlatformTypeSymbol || substitutedInterfaceType is PlatformTypeSymbol)
+        {
+            return true;
+        }
+
         var interfaceIsNullable = substitutedInterfaceType is NullableTypeSymbol;
         return hasSetter
             ? interfaceIsNullable == implementationIsNullable
@@ -1578,12 +1588,18 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     private static bool StaticVirtualSignaturesMatch(FunctionSymbol iface, FunctionSymbol impl)
     {
+        // ADR-0186: exact identity, except that a platform type on either side
+        // conforms as its underlying (see ConformanceSignaturesEquivalent).
+        static bool StaticVirtualTypesMatch(TypeSymbol a, TypeSymbol b)
+            => System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(a, b)
+                || ((a is PlatformTypeSymbol || b is PlatformTypeSymbol) && ConformanceSignaturesEquivalent(a, b));
+
         if (iface.Parameters.Length != impl.Parameters.Length)
         {
             return false;
         }
 
-        if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(iface.Type, impl.Type))
+        if (!StaticVirtualTypesMatch(iface.Type, impl.Type))
         {
             return false;
         }
@@ -1595,7 +1611,7 @@ internal sealed partial class DeclarationBinder
 
         for (var i = 0; i < iface.Parameters.Length; i++)
         {
-            if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(iface.Parameters[i].Type, impl.Parameters[i].Type))
+            if (!StaticVirtualTypesMatch(iface.Parameters[i].Type, impl.Parameters[i].Type))
             {
                 return false;
             }

@@ -769,9 +769,9 @@ directives; ADR-0047/ADR-0175 established the annotation as the mechanism.
 > | --- | --- | --- |
 > | declared type of a field, property, event, parameter (incl. receiver and lambda parameter), function/lambda/delegate return, local `var`/`let`, `for`-range variable, inline `out` declaration | **`T!`** | **`T!`** |
 > | explicit type argument (`F[string](x)`), array/slice element (`[]string{…}`) | **`T!`** | **`T!`** |
-> | construction target (`List[string]{}`), cast, `as`, `typeof`, `sizeof`, `default`, explicit-interface qualifier, attribute type, type alias | unchanged | **`T!`** |
+> | construction target (`List[string]{}`), cast, `as`, `typeof`, `sizeof`, `default`, attribute type, type alias | unchanged | **`T!`** |
 > | type pattern, `catch` variable, `if let` / `guard let` / `while let` binding | unchanged (non-null) | **`T!`** |
-> | base-type / interface list, generic constraint (a *conformance* clause) | unchanged | unchanged |
+> | base-type / interface list, generic constraint, explicit-interface qualifier (a *conformance* clause) | unchanged | unchanged |
 > | signature of an `@DllImport` / `@LibraryImport` function | unchanged | unchanged |
 >
 > Nested positions are oblivious *wherever* a type is written, expressions
@@ -793,9 +793,14 @@ directives; ADR-0047/ADR-0175 established the annotation as the mechanism.
 > `class Bag : IEnumerable[Item]` declared `IEnumerable[Item!]`, which no
 > member written against `IEnumerable[Item]` matched, so the slot was left
 > without an implementation and the runtime threw `TypeLoadException` on a
-> program the binder accepted. The members implementing the relation stay
-> oblivious; slot matching reads through their wrappers, since `T!` has `T`'s
-> signature (§1). A native-interop signature's reference positions describe
+> program the binder accepted. An explicit-interface qualifier names a
+> base-list entry and is resolved against it, so it follows the same rule. The
+> members implementing the relation stay oblivious; implementation, override,
+> event, property-slot and static-member matching read through their wrappers,
+> since `T!` has `T`'s signature (§1), and — because oblivious states nothing —
+> an oblivious member also conforms to a slot written `T?`. That relaxation is
+> scoped to conformance: the same comparison gates `ref` argument pointees and
+> constructed-type identity, where it stays exact. A native-interop signature's reference positions describe
 > marshalling (a `string` parameter marshals as a native string, a delegate
 > return is rejected, `@MarshalAs` is validated against the written type), not
 > a CLR nullability contract; a nilable native reference is spelled `T?`.

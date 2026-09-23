@@ -836,6 +836,58 @@ public class Adr0186ObliviousScopeTests
     }
 
     /// <summary>
+    /// Three more conformance shapes found in review (PR #4357): an explicit
+    /// implementation of a generic source interface (its qualifier names the
+    /// exempt base-list entry, so it is a conformance clause too), a static
+    /// (<c>shared</c>) interface member, and a settable interface property
+    /// written <c>Item?</c> — each implemented from an oblivious type.
+    /// </summary>
+    [Fact]
+    public void An_Oblivious_Type_Implements_Explicit_Static_And_Settable_Slots()
+    {
+        var output = Run(
+            """
+            class Item {
+                var Value int32
+            }
+
+            interface IBox[T] {
+                func Get() T;
+            }
+
+            interface IFactory {
+                shared {
+                    func Make(x Item) Item;
+                }
+            }
+
+            interface IHolder {
+                prop Current Item? { get; set }
+            }
+
+            @Oblivious
+            class Impl : IBox[Item], IFactory, IHolder {
+                private func (IBox[Item]) Get() Item { return Item{Value: 5} }
+
+                shared {
+                    func Make(x Item) Item { return x }
+                }
+
+                prop Current Item { get; set }
+            }
+
+            let box IBox[Item] = Impl{}
+            let holder IHolder = Impl{}
+            holder.Current = nil
+            Console.WriteLine(box.Get().Value)
+            Console.WriteLine(Impl.Make(Item{Value: 6}).Value)
+            Console.WriteLine(holder.Current == nil)
+            """);
+
+        Assert.Equal("5\n6\nTrue\n", output.Replace("\r\n", "\n"));
+    }
+
+    /// <summary>
     /// A select arm awaiting a task checks a nil oblivious task like a plain
     /// <c>await</c> does (found in review, PR #4357).
     /// </summary>

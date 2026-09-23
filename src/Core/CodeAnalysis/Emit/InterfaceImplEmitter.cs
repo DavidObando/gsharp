@@ -1193,22 +1193,29 @@ internal sealed class InterfaceImplEmitter
 
         // FunctionSymbol.Type and parameter Type values are compiler symbols
         // canonicalized for this emit pass, not reflection Type instances.
-        if (!ReferenceEquals(a.Type, b.Type) && a.Type?.Name != b.Type?.Name)
+        if (!Same(a.Type, b.Type))
         {
             return false;
         }
 
         for (var i = 0; i < a.Parameters.Length; i++)
         {
-            var pa = a.Parameters[i].Type;
-            var pb = b.Parameters[i].Type;
-            if (!ReferenceEquals(pa, pb) && pa?.Name != pb?.Name)
+            if (!Same(a.Parameters[i].Type, b.Parameters[i].Type))
             {
                 return false;
             }
         }
 
         return true;
+
+        // ADR-0186: a platform type on either side (a static member declared
+        // in an ADR-0186 §9 oblivious scope) conforms as its underlying type,
+        // as the binder's StaticVirtualSignaturesMatch already decided.
+        static bool Same(TypeSymbol? x, TypeSymbol? y)
+            => ReferenceEquals(x, y)
+                || x?.Name == y?.Name
+                || ((x is PlatformTypeSymbol || y is PlatformTypeSymbol)
+                    && Binding.DeclarationBinder.ConformanceSignaturesEquivalent(x, y));
     }
 
     private sealed record InheritedEventBridge(
