@@ -10,6 +10,7 @@ using System.Linq;
 using System.Text;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.GeneratorHost;
 
@@ -30,6 +31,12 @@ public sealed class GsStubRenderer
 {
     private readonly GsToCSharpTypeSpeller speller;
     private readonly List<string> notes = new();
+
+    // Identifier locations gsc reported GS0610 (wrong partial part count) at.
+    // PartialMethodMerger's error recovery keeps one bodiless declaring part
+    // when a group has several and no implementation; that survivor must not
+    // be offered to generators as a lone definition to implement.
+    private HashSet<TextLocation> partCountErrorLocations = new();
 
     /// <summary>
     /// Initializes a new instance of the <see cref="GsStubRenderer"/> class.
@@ -99,6 +106,11 @@ public sealed class GsStubRenderer
         {
             throw new ArgumentNullException(nameof(scope));
         }
+
+        this.partCountErrorLocations = scope.Diagnostics
+            .Where(diagnostic => diagnostic.Id == "GS0610")
+            .Select(diagnostic => diagnostic.Location)
+            .ToHashSet();
 
         var builder = new StringBuilder();
         builder.AppendLine("#nullable enable");
@@ -514,12 +526,13 @@ public sealed class GsStubRenderer
     /// <c>partial</c> with no body — any other shape is SYSLIB1043 — so that
     /// part renders as a C# partial method definition. A pair gsc has already
     /// merged renders as a C# definition plus implementation. Every other shape
-    /// keeps the ordinary-method rendering: a lone implementing part (GS0610),
+    /// keeps the ordinary-method rendering: a lone implementing part, or the
+    /// declaring part gsc kept to recover from several declaring parts (both GS0610),
     /// a partial method in a non-partial type (GS0608), or a receiver-clause or
     /// explicit-interface partial (GS0607). C# would reject a partial member in
     /// each of those, and gsc has already reported the real error.
     /// </summary>
-    private static PartialShape ClassifyPartialShape(FunctionSymbol method, bool isPartialType)
+    private PartialShape ClassifyPartialShape(FunctionSymbol method, bool isPartialType)
     {
         var declaration = method.Declaration;
         if (!isPartialType
@@ -535,7 +548,10 @@ public sealed class GsStubRenderer
             return PartialShape.Pair;
         }
 
-        return declaration.Body == null ? PartialShape.Definition : PartialShape.None;
+        return declaration.Body == null
+            && !this.partCountErrorLocations.Contains(declaration.Identifier.Location)
+                ? PartialShape.Definition
+                : PartialShape.None;
     }
 
     private void RenderMethod(

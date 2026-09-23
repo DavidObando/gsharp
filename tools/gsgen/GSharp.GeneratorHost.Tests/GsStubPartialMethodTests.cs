@@ -140,6 +140,27 @@ partial class Config {
     }
 
     [Fact]
+    public void TwoDeclaringPartsNoImplementation_RecoverySurvivorRendersOrdinaryMethod()
+    {
+        // GS0610 (two declaring parts, no implementing part): gsc keeps ONE
+        // bodiless declaring part to recover. It is not a lone definition, so
+        // the stub must not offer it to generators to implement (which would
+        // turn the real error into a 2-declaring/1-implementing cascade).
+        var stub = Project(@"
+package App
+
+partial class Config {
+    partial func Version() int32;
+    partial func Version() int32;
+}
+");
+
+        AssertParses(stub);
+        var method = SingleMethod(stub, "Version");
+        Assert.DoesNotContain(method.Modifiers, m => m.Text == "partial");
+    }
+
+    [Fact]
     public void DeclaringPartInNonPartialType_RendersOrdinaryMethod()
     {
         // GS0608: a partial method outside a partial type. A C# partial method
