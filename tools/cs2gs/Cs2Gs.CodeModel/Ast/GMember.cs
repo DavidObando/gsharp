@@ -271,6 +271,7 @@ public sealed class MethodDeclaration : GMember
     /// </param>
     /// <param name="isSuspend">ADR-0174: whether the method renders as a <c>suspend func</c>; see <see cref="IsSuspend"/>.</param>
     /// <param name="isReadOnlyRefReturn">Whether the return reference is readonly.</param>
+    /// <param name="isPartial">ADR-0192: whether the method renders as one part of a <c>partial func</c> pair; see <see cref="IsPartial"/>.</param>
     public MethodDeclaration(
         string name,
         IReadOnlyList<Parameter> parameters = null,
@@ -287,7 +288,8 @@ public sealed class MethodDeclaration : GMember
         bool isRefReturn = false,
         GTypeReference explicitInterfaceType = null,
         bool isSuspend = false,
-        bool isReadOnlyRefReturn = false)
+        bool isReadOnlyRefReturn = false,
+        bool isPartial = false)
     {
         Name = name;
         Parameters = parameters ?? new List<Parameter>();
@@ -305,6 +307,7 @@ public sealed class MethodDeclaration : GMember
         IsReadOnlyRefReturn = isReadOnlyRefReturn;
         ExplicitInterfaceType = explicitInterfaceType;
         IsSuspend = isSuspend;
+        IsPartial = isPartial;
     }
 
     /// <summary>Gets the method name.</summary>
@@ -370,6 +373,15 @@ public sealed class MethodDeclaration : GMember
     /// <see langword="null"/> for an ordinary method.
     /// </summary>
     public GTypeReference ExplicitInterfaceType { get; }
+
+    /// <summary>
+    /// Gets a value indicating whether this method is one part of an ADR-0192
+    /// partial method: the body-less declaring part (<see cref="Body"/> and
+    /// <see cref="ExpressionBody"/> both <see langword="null"/>, rendered with
+    /// the <c>;</c> no-body marker) or the implementing part. Renders the
+    /// <c>partial</c> modifier immediately before <c>func</c>.
+    /// </summary>
+    public bool IsPartial { get; }
 }
 
 /// <summary>

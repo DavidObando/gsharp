@@ -2359,6 +2359,15 @@ public static class GSharpPrinter
             sb.Append("suspend ");
         }
 
+        if (method.IsPartial)
+        {
+            // ADR-0192 §A: `partial` joins the order-independent modifier run
+            // with `async`/`suspend`; canonical style places it immediately
+            // before `func`. Accessibility and `open`/`override` must precede
+            // that run, which the order above already guarantees.
+            sb.Append("partial ");
+        }
+
         sb.Append("func ");
         if (method.Receiver != null)
         {
