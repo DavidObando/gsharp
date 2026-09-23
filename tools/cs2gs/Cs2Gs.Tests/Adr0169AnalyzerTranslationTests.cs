@@ -558,6 +558,45 @@ public sealed class ArgumentShapeAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void PropertyPatternOverRetargetedNullableMember_TakesTheNativePattern()
+    {
+        // Issue #4356: ParameterSyntax.Identifier is a SyntaxToken struct in
+        // Roslyn but `SyntaxToken?` on the G# analyzer API. A nested property
+        // pattern over it must take G#'s native pattern (one read, nil-safe),
+        // not the boolean lowering, which would treat the struct as non-nil
+        // and emit a bare `parameter.Identifier.Text`.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ParameterNameAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static bool FirstIsNamedX(MethodDeclarationSyntax declaration)
+    {
+        var parameter = declaration.ParameterList.Parameters[0];
+        return parameter is { Identifier: { Text: ""x"" } };
+    }
+}
+");
+
+        Assert.Contains("parameter is { Identifier: { Text: \"x\" } }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Identifier.Text", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
     {
         // Issue #4356: SingleVariableDesignationSyntax.Identifier (a Roslyn

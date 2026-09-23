@@ -118,12 +118,13 @@ namespace Corpus.Issue1923
 }
 ");
 
-        // `Friend` is declared nullable, so the outer member access still needs
-        // its own guard — the fix must not over-correct into dropping it here.
-        Assert.Contains("person.Friend != nil", rendered, StringComparison.Ordinal);
-        AssertRoundTripParses(
-            rendered,
-            "G# does not flow-narrow repeated nullable member access after the emitted nil guard.");
+        // `Friend` is declared nullable, so a nil member must still be handled —
+        // the fix must not over-correct into dropping that. Issue #4356: a nullable member tested through a nested property
+        // pattern now takes G#'s native pattern, which reads `Friend` once and
+        // keeps C#'s semantics for a nil member (`not { Age: 0 }` matches it;
+        // pinned at run time by Issue4356's NestedMemberSubpatterns_ReadTheMemberOnce).
+        Assert.Contains("person is { Friend: not { Age: 0 } }", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     private static void AssertRoundTripParses(string rendered, string roundTripOnlyReason = null)

@@ -103,26 +103,37 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
     /// C# reads a property subpattern's member ONCE and tests every nested
     /// subpattern against that one value. A getter that returns non-nil and
     /// then nil pins it: lowering to <c>o.P != nil &amp;&amp; o.P!!.X == 0</c>
-    /// would read <c>P</c> twice and throw on the second read. Both spellings,
-    /// nested and extended, must read it exactly once and match, as C# does.
+    /// read <c>P</c> twice and threw on the second read. Every shape that
+    /// reads a nested member more than once must read it exactly once and
+    /// match, as C# does — whether it takes G#'s native property pattern or
+    /// the boolean lowering (a positional or negated nested pattern, a list
+    /// element, a non-nullable member, a reassigned nested binder).
     /// </summary>
     [Fact]
-    public void NestedNullableMemberSubpatterns_ReadTheMemberOnce()
+    public void NestedMemberSubpatterns_ReadTheMemberOnce()
     {
         string printed = Translate("""
             #nullable enable
             using System;
-
             namespace Sample;
 
             public sealed class Inner
             {
                 public int X;
+                public int Y;
+
+                public void Deconstruct(out int x, out int y)
+                {
+                    x = X;
+                    y = Y;
+                }
             }
 
             public sealed class Outer
             {
                 public int Reads;
+                public int QReads;
+                public int ItemReads;
 
                 public Inner? P
                 {
@@ -132,22 +143,69 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
                         return Reads == 1 ? new Inner() : null;
                     }
                 }
+
+                public Inner Q
+                {
+                    get
+                    {
+                        QReads++;
+                        return new Inner { X = QReads == 1 ? 0 : 7 };
+                    }
+                }
+
+                public Inner[] Items
+                {
+                    get
+                    {
+                        ItemReads++;
+                        return ItemReads == 1 ? new[] { new Inner() } : new Inner[0];
+                    }
+                }
+            }
+
+            public sealed class NilOuter
+            {
+                public Inner? P => null;
             }
 
             public static class C
             {
                 public static void Run()
                 {
-                    var o = new Outer();
-                    bool nested = o is { P: { X: 0 } };
-                    var o2 = new Outer();
-                    bool extended = o2 is { P.X: 0 };
-                    Console.WriteLine(nested + "," + o.Reads + "," + extended + "," + o2.Reads);
+                    bool nilNegated = new NilOuter() is { P: not { X: 1 } };
+                    bool nilNested = new NilOuter() is { P: { X: 0 } };
+                    var a = new Outer();
+                    bool nested = a is { P: { X: 0 } };
+                    var b = new Outer();
+                    bool extended = b is { P.X: 0 };
+                    var c = new Outer();
+                    bool positional = c is { P: (0, 0) };
+                    var d = new Outer();
+                    bool negated = d is { P: not { X: 1 } };
+                    var e = new Outer();
+                    bool nonNullable = e is { Q: { X: 0, Y: 0 } };
+                    var f = new Outer();
+                    bool listElement = f is { Items: [{ X: 0 }] };
+                    var g = new Outer();
+                    bool bound = false;
+                    if (g is { P: { X: 0 } p })
+                    {
+                        bound = true;
+                        p = new Inner();
+                    }
+
+                    Console.WriteLine(
+                        nested + "," + a.Reads + ";" + extended + "," + b.Reads + ";" +
+                        positional + "," + c.Reads + ";" + negated + "," + d.Reads + ";" +
+                        nonNullable + "," + e.QReads + ";" + listElement + "," + f.ItemReads + ";" +
+                        bound + "," + g.Reads + ";" + nilNegated + "," + nilNested);
                 }
             }
             """);
 
-        Assert.Equal("True,1,True,1", CompileAndRun(printed, "C.Run()").Trim());
+        Assert.Equal(
+            "True,1;True,1;True,1;True,1;True,1;True,1;True,1;True,False",
+            CompileAndRun(printed, "C.Run()").Trim());
     }
 
     private static string CompileAndRun(string printed, string callExpression)
@@ -157,18 +215,36 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
 
         string workDir = System.IO.Path.Combine(AppContext.BaseDirectory, "issue-4356-e2e", Guid.NewGuid().ToString("N"));
         System.IO.Directory.CreateDirectory(workDir);
-        string gsPath = System.IO.Path.Combine(workDir, "Snippet.gs");
-        string dllPath = System.IO.Path.Combine(workDir, "Snippet.dll");
-        System.IO.File.WriteAllText(gsPath, printed + Environment.NewLine + callExpression + Environment.NewLine);
+        try
+        {
+            string gsPath = System.IO.Path.Combine(workDir, "Snippet.gs");
+            string dllPath = System.IO.Path.Combine(workDir, "Snippet.dll");
+            System.IO.File.WriteAllText(gsPath, printed + Environment.NewLine + callExpression + Environment.NewLine);
 
-        (int compileExit, string compileOut) = RunDotnet($"\"{compiler}\" /target:exe /out:\"{dllPath}\" \"{gsPath}\"");
-        Assert.True(
-            compileExit == 0 && !compileOut.Contains("error", StringComparison.OrdinalIgnoreCase),
-            "gsc must compile the translated snippet. Output:\n" + compileOut + "\n\nTranslated G#:\n" + printed);
+            (int compileExit, string compileOut) = RunDotnet($"\"{compiler}\" /target:exe /out:\"{dllPath}\" \"{gsPath}\"");
+            Assert.True(
+                compileExit == 0 && !compileOut.Contains("error", StringComparison.OrdinalIgnoreCase),
+                "gsc must compile the translated snippet. Output:\n" + compileOut + "\n\nTranslated G#:\n" + printed);
 
-        (int runExit, string stdout) = RunDotnet($"\"{dllPath}\"");
-        Assert.True(runExit == 0, "Translated snippet must run. Output:\n" + stdout + "\n\nTranslated G#:\n" + printed);
-        return stdout;
+            (int runExit, string stdout) = RunDotnet($"\"{dllPath}\"");
+            Assert.True(runExit == 0, "Translated snippet must run. Output:\n" + stdout + "\n\nTranslated G#:\n" + printed);
+            return stdout;
+        }
+        finally
+        {
+            try
+            {
+                System.IO.Directory.Delete(workDir, recursive: true);
+            }
+            catch (System.IO.IOException)
+            {
+                // Best-effort cleanup: a process still releasing the output must not fail the test.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Same as above.
+            }
+        }
     }
 
     private static (int Exit, string Output) RunDotnet(string arguments)
