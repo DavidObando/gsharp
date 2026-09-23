@@ -2289,9 +2289,33 @@ public sealed partial class CSharpToGSharpTranslator
         /// evaluation of each argument).
         /// </summary>
         private List<GExpression> TranslateIndexArguments(BracketedArgumentListSyntax arguments)
-            => arguments.Arguments
+        {
+            // Review finding (#4350): a named index argument binds by name, so
+            // `grid[column: c, row: r]` targets `this[int row, int column]`
+            // in the opposite order to its text. G# index arguments are purely
+            // positional; an in-order named list simply drops its names, and a
+            // REORDERED one is reported rather than silently swapping the
+            // bound parameters.
+            for (var i = 0; i < arguments.Arguments.Count; i++)
+            {
+                ArgumentSyntax argument = arguments.Arguments[i];
+                if (argument.NameColon != null
+                    && this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } parameter }
+                    && parameter.Ordinal != i)
+                {
+                    this.context.Report(new TranslationDiagnostic(
+                        "ElementAccessExpression",
+                        $"named index argument '{argument.NameColon.Name.Identifier.ValueText}' is out of parameter order; G# index arguments are positional, so reordered named index arguments have no faithful translation (issue #4350).",
+                        argument.GetLocation(),
+                        TranslationSeverity.Unsupported));
+                    break;
+                }
+            }
+
+            return arguments.Arguments
                 .Select(this.TranslateIndexArgumentWithNullForgiveness)
                 .ToList();
+        }
 
         /// <summary>
         /// Translates a CLR rectangular-array element access directly to native

@@ -85,8 +85,13 @@ namespace Corpus.Issue4350
     }
 
     [Fact]
-    public void VirtualAndStaticGetOnlyAutoProperties_KeepInitOnlySpelling()
+    public void VirtualOverrideAndStaticGetOnlyAutoProperties_LowerToBackingFields()
     {
+        // Review finding (#4350): `{ get; init; }` would add a public write
+        // accessor C# never emits. A body-less `open`/`override` `{ get; }` is an
+        // abstract slot in G#, and G# has no static-constructor body, so these
+        // lower to a private backing field plus an arrow getter, and the
+        // constructor/initializer writes target the field.
         string printed = Render(@"
 namespace Corpus.Issue4350
 {
@@ -95,17 +100,45 @@ namespace Corpus.Issue4350
         public Base(int value)
         {
             Value = value;
+            Value++;
         }
 
         public virtual int Value { get; }
+
+        public static int Count { get; } = 3;
+    }
+
+    public class Derived : Base
+    {
+        public Derived(int value) : base(value)
+        {
+            Extra = value * 10;
+        }
+
+        public override int Value { get; } = 40;
+
+        public virtual int Extra { get; }
+    }
+
+    public class Probe
+    {
+        public static string Run()
+        {
+            Base b = new Base(5);
+            Base d = new Derived(2);
+            return b.Value + "","" + d.Value + "","" + ((Derived)d).Extra + "","" + Base.Count;
+        }
     }
 }
 ");
 
-        // A body-less `open prop X T { get; }` would declare an abstract slot,
-        // so a virtual get-only auto-property keeps `{ get; init; }`.
-        Assert.Matches(@"prop Value int32 \{\s*get;\s*init;\s*\}", printed);
+        Assert.DoesNotContain("init;", printed, StringComparison.Ordinal);
         Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+
+        var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("6,40,20,3", result.Value);
     }
 
     private static string Render(string source)

@@ -385,12 +385,13 @@ public sealed partial class CSharpToGSharpTranslator
             // is settable in the declaring type's constructor. Issue #4350: G#
             // follows the same rule for an instance `{ get; }` auto-property, so
             // it keeps its get-only shape and ABI — no `set_P`/`init` accessor
-            // appears in metadata. Static, virtual, and override members keep
-            // the init-only `{ get; init; }` spelling: G# has no user static
-            // constructor body to assign a static one, and a body-less `open`
-            // or `override` `{ get; }` declares an abstract slot rather than an
-            // auto-property. Interface/abstract contract members carry no
-            // backing field and remain read-only contracts.
+            // appears in metadata. Static, virtual, and override members are
+            // lowered by TranslateProperty to a private backing field plus an
+            // arrow getter (G# has no user static constructor body, and a
+            // body-less `open`/`override` `{ get; }` declares an abstract
+            // slot), so the `{ get; init; }` spelling below is only a fallback
+            // that property never reaches. Interface/abstract contract members
+            // carry no backing field and remain read-only contracts.
             if (!anyBodied && hasGet && !hasSet && !hasInit)
             {
                 var propSymbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;

@@ -2669,13 +2669,13 @@ internal sealed partial class ExpressionBinder
             // argument that is an in-scope G# type parameter was erased to
             // `object` when the CLR method closed, so recover the symbolic
             // vector from the other arguments before typing the new local.
-            if (!symbolicMethodTypeArgsComputed && resolvedMethod.IsGenericMethod && parameterMapping.IsDefault)
+            if (!symbolicMethodTypeArgsComputed && resolvedMethod.IsGenericMethod)
             {
                 symbolicMethodTypeArgsComputed = true;
                 symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
                     resolvedMethod,
                     typeArgSymbols,
-                    ImmutableArray.CreateRange(arguments.Select(a => a.Type)));
+                    SymbolicArgumentTypesInParameterOrder(arguments, parameterMapping, parameters.Length));
             }
 
             var paramIndex = !parameterMapping.IsDefault && i < parameterMapping.Length ? parameterMapping[i] : i;
@@ -2709,6 +2709,40 @@ internal sealed partial class ExpressionBinder
         }
 
         return rebuilt != null ? rebuilt.ToImmutable() : arguments;
+    }
+
+    /// <summary>
+    /// Issue #4350: the bound argument types in PARAMETER order, so a named call
+    /// (<c>TryGetArray(segment: out var s, memory: m)</c>) recovers the same
+    /// symbolic method type arguments as its positional spelling. A parameter
+    /// with no source argument (an omitted default) contributes nothing.
+    /// </summary>
+    /// <param name="arguments">The bound arguments in source order.</param>
+    /// <param name="parameterMapping">The source-argument to parameter mapping; default for positional calls.</param>
+    /// <param name="parameterCount">The resolved method's parameter count.</param>
+    /// <returns>The argument types in parameter order.</returns>
+    private static ImmutableArray<TypeSymbol> SymbolicArgumentTypesInParameterOrder(
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<int> parameterMapping,
+        int parameterCount)
+    {
+        if (parameterMapping.IsDefault)
+        {
+            return ImmutableArray.CreateRange(arguments.Select(a => a.Type));
+        }
+
+        var ordered = new TypeSymbol[parameterCount];
+        Array.Fill(ordered, TypeSymbol.Error);
+        for (var i = 0; i < arguments.Length && i < parameterMapping.Length; i++)
+        {
+            var parameterIndex = parameterMapping[i];
+            if (parameterIndex >= 0 && parameterIndex < parameterCount && ordered[parameterIndex] == TypeSymbol.Error)
+            {
+                ordered[parameterIndex] = arguments[i].Type;
+            }
+        }
+
+        return ImmutableArray.Create(ordered);
     }
 
     /// <summary>

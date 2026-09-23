@@ -535,7 +535,14 @@ public sealed partial class CSharpToGSharpTranslator
             // converted-type path below, which widens the non-constant side.
             bool isComparison = IsComparisonOperator(op);
 
-            if (rightConst
+            // Issue #4350 (review): a shift is typed by its LEFT operand alone and
+            // its count is always `int`, so neither side's constant is retyped to
+            // the other's type — `2L << count` stays a `long` shift. Roslyn's
+            // converted types below already describe the shift faithfully.
+            bool isShift = op is "<<" or ">>" or ">>>";
+
+            if (!isShift
+                && rightConst
                 && !leftConst
                 && leftIsIntegral
                 && rightIsIntegral
@@ -549,7 +556,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return new BinaryExpression(left, op, right);
             }
 
-            if (leftConst
+            if (!isShift
+                && leftConst
                 && !rightConst
                 && leftIsIntegral
                 && rightIsIntegral

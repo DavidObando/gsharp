@@ -36,6 +36,14 @@ public class Issue4350InferredOutVarEmitTests
                         return nil
                     }
 
+                    func Named(memory ReadOnlyMemory[T]) int32 {
+                        if MemoryMarshal.TryGetArray(segment: out var segment, memory: memory) {
+                            let copy ArraySegment[T] = segment
+                            return copy.Offset
+                        }
+                        return -1
+                    }
+
                     func Count(memory ReadOnlyMemory[T]) int32 {
                         if MemoryMarshal.TryGetArray(memory, out var segment) {
                             let copy ArraySegment[T] = segment
@@ -50,9 +58,10 @@ public class Issue4350InferredOutVarEmitTests
             let owner = Box[string].Owner(ReadOnlyMemory[string](xs, 1, 2))
             Console.WriteLine(object.ReferenceEquals(owner, xs))
             Console.WriteLine(Box[string].Count(ReadOnlyMemory[string](xs, 1, 2)))
+            Console.WriteLine(Box[string].Named(ReadOnlyMemory[string](xs, 1, 2)))
             """;
 
-        Assert.Equal(Lines("True", "2"), CompileAndRun(source));
+        Assert.Equal(Lines("True", "2", "1"), CompileAndRun(source));
     }
 
     private static string Lines(params string[] lines)

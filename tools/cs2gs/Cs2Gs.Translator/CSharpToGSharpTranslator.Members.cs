@@ -2929,7 +2929,14 @@ public sealed partial class CSharpToGSharpTranslator
             // TranslateExpression's FieldExpressionSyntax case) resolves to it.
             string fieldKeywordBackingName = this.TryRegisterFieldKeywordBackingField(
                 node, symbol, primaryCtorParamNames, out IFieldSymbol fieldKeywordBackingSymbol);
-            if (fieldKeywordBackingName == null
+            bool lowersToBackingField = symbol != null && this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol);
+            if (fieldKeywordBackingName == null && lowersToBackingField)
+            {
+                fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(
+                    symbol,
+                    primaryCtorParamNames);
+            }
+            else if (fieldKeywordBackingName == null
                 && !isStatic
                 && node.Initializer != null
                 && (!IsGetOnlyAutoProperty(node)
@@ -3002,10 +3009,8 @@ public sealed partial class CSharpToGSharpTranslator
             // implementing the abstract getter. Lower it to the synthesized
             // private backing field (seeded with the initializer above) plus a
             // computed arrow reading it.
-            if (isOverride
-                && !isStatic
-                && node.Initializer != null
-                && IsGetOnlyAutoProperty(node)
+            if ((lowersToBackingField
+                    || (isOverride && !isStatic && node.Initializer != null && IsGetOnlyAutoProperty(node)))
                 && fieldKeywordBackingName != null)
             {
                 arrowBody = new ReturnStatement(new IdentifierExpression(fieldKeywordBackingName));

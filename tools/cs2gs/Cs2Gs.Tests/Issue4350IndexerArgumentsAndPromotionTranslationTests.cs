@@ -110,6 +110,31 @@ namespace Corpus.Issue4350
     }
 
     [Fact]
+    public void LongConstantShiftedByInt_ShiftsInLong()
+    {
+        // Review finding: a shift is typed by its left operand; `2L << count`
+        // is a `long` shift even though the count is `int`.
+        string printed = Render(@"
+namespace Corpus.Issue4350
+{
+    public class Probe
+    {
+        public static long Run(int count) => (2L << count) + (1L >> count);
+    }
+}
+");
+
+        Assert.DoesNotContain("int32(2L)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("int32(1L)", printed, StringComparison.Ordinal);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+
+        var result = EmittedOracle.Evaluate(printed + System.Environment.NewLine + "Probe.Run(40)");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(2L << 40, result.Value);
+    }
+
+    [Fact]
     public void IntConstantComparedWithNarrowOperand_StaysNarrowed()
     {
         // Comparisons are unaffected: the result is bool either way, so the
@@ -127,6 +152,56 @@ namespace Corpus.Issue4350
         Assert.Contains("channelCount == uint16(2)", printed, StringComparison.Ordinal);
         Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
     }
+
+    [Fact]
+    public void NamedIndexArgumentsInParameterOrder_DropNames()
+    {
+        string printed = Render(GridSource("grid[row: 1, fromEnd: true]"));
+
+        Assert.Contains("grid[1, true]", printed, StringComparison.Ordinal);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+        var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(5, result.Value);
+    }
+
+    [Fact]
+    public void ReorderedNamedIndexArguments_ReportUnsupported()
+    {
+        // Review finding: `grid[fromEnd: true, row: 1]` binds by name; printing
+        // it positionally would swap the parameters, so it is reported.
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", GridSource("grid[fromEnd: true, row: 1]")) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("out of parameter order", StringComparison.Ordinal));
+    }
+
+    private static string GridSource(string access) => @"
+namespace Corpus.Issue4350
+{
+    public class Grid
+    {
+        private readonly int[] cells = { 1, 2, 3, 4, 5, 6 };
+
+        public int this[int row, bool fromEnd] => fromEnd ? cells[cells.Length - 1 - row] : cells[row];
+    }
+
+    public class Probe
+    {
+        public static int Run()
+        {
+            var grid = new Grid();
+            return " + access + @";
+        }
+    }
+}
+";
 
     private static string Render(string source)
     {
