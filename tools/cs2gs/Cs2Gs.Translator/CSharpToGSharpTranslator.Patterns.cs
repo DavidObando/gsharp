@@ -241,15 +241,25 @@ public sealed partial class CSharpToGSharpTranslator
                     // plain index expression is now the correct lowering, with
                     // the same read semantics C# gives it. Issue #4220 also
                     // preserves the readonly form at its declaration.
+                    //
+                    // Issue #4350: a multi-parameter user/CLR indexer
+                    // (`slice[index, fromEnd]`) keeps EVERY argument, in source
+                    // order; only the single-`int32` indexer shape is coerced.
+                    GExpression indexedReceiver = this.TranslateReceiverWithNullForgiveness(elementAccess.Expression);
+                    if (elementAccess.ArgumentList.Arguments.Count > 1)
+                    {
+                        return new IndexExpression(
+                            indexedReceiver,
+                            this.TranslateIndexArguments(elementAccess.ArgumentList));
+                    }
+
                     GExpression index = elementAccess.ArgumentList.Arguments.Count > 0
                         ? this.CoerceIndexToInt32(
                             elementAccess,
                             this.TranslateIndexArgumentWithNullForgiveness(
                                 elementAccess.ArgumentList.Arguments[0]))
                         : new IdentifierExpression("nil");
-                    return new IndexExpression(
-                        this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
-                        index);
+                    return new IndexExpression(indexedReceiver, index);
 
                 case SimpleLambdaExpressionSyntax simpleLambda:
                     return this.TranslateLambda(simpleLambda);
@@ -407,6 +417,13 @@ public sealed partial class CSharpToGSharpTranslator
                         elementBinding.ArgumentList.Arguments[0].Expression is RangeExpressionSyntax conditionalRange)
                     {
                         return this.TranslateRangeSlice(bindingReceiver, conditionalRange);
+                    }
+
+                    if (elementBinding.ArgumentList.Arguments.Count > 1)
+                    {
+                        return new IndexExpression(
+                            bindingReceiver,
+                            this.TranslateIndexArguments(elementBinding.ArgumentList));
                     }
 
                     GExpression bindingIndex = elementBinding.ArgumentList.Arguments.Count > 0
@@ -2265,6 +2282,16 @@ public sealed partial class CSharpToGSharpTranslator
                     (InitializerExpressionSyntax)child, level + 1, rank, dims, leaves);
             }
         }
+
+        /// <summary>
+        /// Issue #4350: translates every argument of a multi-parameter indexer
+        /// access, preserving source order (and so C#'s left-to-right single
+        /// evaluation of each argument).
+        /// </summary>
+        private List<GExpression> TranslateIndexArguments(BracketedArgumentListSyntax arguments)
+            => arguments.Arguments
+                .Select(this.TranslateIndexArgumentWithNullForgiveness)
+                .ToList();
 
         /// <summary>
         /// Translates a CLR rectangular-array element access directly to native

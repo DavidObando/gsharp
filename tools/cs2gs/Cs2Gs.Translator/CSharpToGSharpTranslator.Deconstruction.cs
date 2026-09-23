@@ -1511,6 +1511,15 @@ public sealed partial class CSharpToGSharpTranslator
                     bool isFromEnd = syntax is ElementAccessExpressionSyntax elementAccess
                         && elementAccess.ArgumentList.Arguments.Count == 1
                         && elementAccess.ArgumentList.Arguments[0].Expression.IsKind(SyntaxKind.IndexExpression);
+                    if (index.Indices.Count > 1)
+                    {
+                        // Issue #4350: a multi-parameter indexer spills every
+                        // argument, left to right, so each still runs once.
+                        return new IndexExpression(
+                            safeTarget,
+                            index.Indices.Select(i => this.SpillOperand(i, prologue)).ToList());
+                    }
+
                     GExpression safeIndex = isFromEnd
                         && index.Index is FromEndIndexExpression fromEnd
                         ? new FromEndIndexExpression(this.SpillOperand(fromEnd.Operand, prologue))

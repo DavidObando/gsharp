@@ -526,10 +526,20 @@ public sealed partial class CSharpToGSharpTranslator
             bool leftIsIntegral = IsIntegralNumericKind(leftUnderlying);
             bool rightIsIntegral = IsIntegralNumericKind(rightUnderlying);
 
+            // Issue #4350: retyping the constant is faithful for a comparison
+            // (the result is `bool` either way), but NOT for an arithmetic or
+            // bitwise operator whose C# operation type is the constant's own
+            // wider type: `2L * capacity` multiplies in `long`, so narrowing the
+            // literal to `int32(2L)` would silently change it into an `int`
+            // multiplication that overflows. Those operators take the
+            // converted-type path below, which widens the non-constant side.
+            bool isComparison = IsComparisonOperator(op);
+
             if (rightConst
                 && !leftConst
                 && leftIsIntegral
                 && rightIsIntegral
+                && (isComparison || !this.OperandWidenedToConstantType(binary.Left, rightUnderlying))
                 && this.IntegralConstantFits(binary.Right, leftUnderlying))
             {
                 right = this.CoerceOperandTo(
@@ -543,6 +553,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && !rightConst
                 && leftIsIntegral
                 && rightIsIntegral
+                && (isComparison || !this.OperandWidenedToConstantType(binary.Right, leftUnderlying))
                 && this.IntegralConstantFits(binary.Left, rightUnderlying))
             {
                 left = this.CoerceOperandTo(
@@ -582,6 +593,21 @@ public sealed partial class CSharpToGSharpTranslator
 
             return new BinaryExpression(left, op, right);
         }
+
+        // Issue #4350: whether C# binary numeric promotion widened the
+        // non-constant operand to the constant's own type, i.e. the operation
+        // itself runs in the constant's (wider) type.
+        private bool OperandWidenedToConstantType(ExpressionSyntax nonConstant, SpecialType constantUnderlying)
+        {
+            TypeInfo info = this.context.GetTypeInfo(nonConstant);
+            return TryGetNumericKind(info.Type, out SpecialType own)
+                && TryGetNumericKind(info.ConvertedType, out SpecialType converted)
+                && own != converted
+                && converted == constantUnderlying;
+        }
+
+        private static bool IsComparisonOperator(string op) =>
+            op is "==" or "!=" or "<" or "<=" or ">" or ">=";
 
         private GExpression TranslateBinaryRightOperand(BinaryExpressionSyntax binary)
         {
