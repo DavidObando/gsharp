@@ -1040,7 +1040,10 @@ So the accurate claim is: **the bug class is eliminated** — no site anywhere
 reconstructs metadata origin from a bound-node shape, because the type carries it
 — and the large line-count win is on the cs2gs side, provisionally ~7,000–7,300
 lines pending the telemetry measurement (§10). The binder's win is structural
-rather than numeric: on `main`'s baseline it is **one disjunct**.
+rather than numeric: on `main`'s baseline it is **one disjunct**. *(Superseded
+in part: that disjunct is kept, not deleted — see the implementation note under
+Deleted. The structural claim stands: an oblivious receiver no longer depends
+on it.)*
 
 ### Cost the implementer must budget for
 
@@ -1366,7 +1369,8 @@ Ordered by how much a wrong answer would cost.
 
 11. **The binder change is one condition, not one block — and only if that block
     exists.** On `main` the deletion is a single disjunct
-    (`|| receiver is BoundClrPropertyAccessExpression`); PR #4308's
+    (`|| receiver is BoundClrPropertyAccessExpression`) — *superseded: that
+    disjunct is kept (see the implementation note under Deleted)*; PR #4308's
     `nullableInnerVt is { IsValueType: false }` block is **branch-only** and not
     on `main` at all, so this item applies only in the world where that branch
     lands first. In that world the block **must not be deleted** — it is the only
@@ -1443,13 +1447,22 @@ Suggested sequencing, each step independently landable and green:
    (`Environment.Version.ToString()` reporting GS0159 again, with main's
    property-read carve-out removed and nothing replacing it). The flip is the
    point at which the new model becomes load-bearing and the old carve-out becomes
-   dead code — in that order, never the reverse.
-4. Delete the old carve-out — on `main`'s baseline, the
-   `|| receiver is BoundClrPropertyAccessExpression` disjunct; additionally
-   `IsImportedClrChainReceiver` and the `CanBindClrInstanceMember` conjunct if PR
-   #4308 landed first, **keeping that block's body**. Verify the #4287 regression
-   suite still reports on G#-declared `string?` receivers, and that the
-   `ListReverse` / `StringTrim` gate witnesses from `359538cd` stay green for a
+   dead code — in that order, never the reverse. *(Superseded in part: the
+   carve-out does not become dead code; see step 4.)*
+4. ~~Delete the old carve-out — on `main`'s baseline, the
+   `|| receiver is BoundClrPropertyAccessExpression` disjunct~~ **Superseded
+   (PR #4353): keep that disjunct.** It also carries member chains through
+   stated-nullable imported reads (annotated-nullable members, and generic `T`
+   members read through an explicitly nullable type argument), which this ADR
+   leaves out of scope; deleting it broke real code. See the implementation
+   note under *Implementation impact → Deleted*. Step 4 instead pins, by test,
+   that an oblivious field-read receiver never reaches the disjunct under the
+   default mode (it is `T!`, checked and unwrapped first). The rest of the
+   original step still applies: remove `IsImportedClrChainReceiver` and the
+   `CanBindClrInstanceMember` conjunct only if PR #4308 lands first,
+   **keeping that block's body**. Verify the #4287 regression suite still
+   reports on G#-declared `string?` receivers, and that the `ListReverse` /
+   `StringTrim` gate witnesses from `359538cd` stay green for a
    source-declared `List[int32]?`.
 5. §9's oblivious scope — **covering every type-writing position, not only
    declaration signatures (open question 12)** — and §8's emit; verify the

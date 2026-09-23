@@ -203,11 +203,12 @@ public sealed class Adr0186PlatformTypeBindingTests
 
         // ADR-0186 step 4's discriminating fixture: an ANNOTATED-nullable
         // property, i.e. a member the author explicitly declared may be nil.
-        // Under the default mode this is the only population
-        // `CanBindClrInstanceMember`'s `BoundClrPropertyAccessExpression`
-        // carve-out still admits — the oblivious members above arrive as `T!`
-        // and are checked and unwrapped before lookup — and it is why step 4
-        // keeps that carve-out rather than deleting it.
+        // Under the default mode this is one of the two stated-nullable
+        // populations `CanBindClrInstanceMember`'s
+        // `BoundClrPropertyAccessExpression` carve-out still admits (the other
+        // is `Box<T>` below) — the oblivious members above arrive as `T!` and
+        // are checked and unwrapped before lookup — and it is why step 4 keeps
+        // that carve-out rather than deleting it.
         public class Annotated
         {
             public List<int>? MaybeNumbers { get; set; } = new List<int> { 1, 2, 3 };
