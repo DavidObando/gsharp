@@ -1046,6 +1046,46 @@ partial class A {
     }
 
     [Fact]
+    public void OmittedDeclaringReturnType_AgainstAnInferredObjectBody_ReportsGS0611()
+    {
+        // Copilot review round 10: the semantic return-type comparison was
+        // skipped whenever the declaring part omitted a type. Both parts'
+        // type TEXT is empty here, so the syntax check agrees too — but the
+        // implementing `-> object { … }` body infers a non-void return
+        // (InferAnonymousClassLiteralReturnType). An omitted declaring type
+        // is `void` and must be compared as such.
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func F();
+}
+
+partial class A {
+    partial func F() -> object { let Secret = 42 }
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
+    }
+
+    [Fact]
+    public void OmittedReturnTypeOnBothParts_WithAnOrdinaryBody_MergesClean()
+    {
+        // Complement: omitted-on-both with a plain block body is genuinely
+        // void on both sides and must not start reporting GS0611.
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func F();
+}
+
+partial class A {
+    partial func F() { }
+}
+");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+    }
+
+    [Fact]
     public void TextuallyDifferentReturnTypes_ReportGS0611ExactlyOnce()
     {
         var diagnostics = Compile(@"package App
@@ -1314,6 +1354,32 @@ partial class A {
         Assert.Equal(
             first.Count(d => d.Id == "GS0610"),
             second.Count(d => d.Id == "GS0610"));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void BindingTwice_MalformedPartsSplitAcrossTwoFiles_ReportsTheSameDiagnosticsBothTimes(bool bothImplementing)
+    {
+        // Copilot review round 10: with the malformed parts in two separate
+        // `partial class` blocks, PartialTypeMerger rebuilds the type from
+        // the untouched originals on every bind, so the siblings the first
+        // bind "dropped" are back. The survivor's marker used to make it
+        // replay on its own while the siblings were regrouped without it —
+        // GS0609 appeared on the second bind (two declaring parts), or
+        // GS0610 with the wrong counts (two implementing parts).
+        var part = bothImplementing ? "partial func F() int32 { return 1 }" : "partial func F() int32;";
+        var first = SyntaxTree.Parse(SourceText.From($"package App\n\npartial class A {{\n    {part}\n}}\n", "A1.gs"));
+        var second = SyntaxTree.Parse(SourceText.From($"package App\n\npartial class A {{\n    {part}\n}}\n", "A2.gs"));
+
+        static string[] Shape(IReadOnlyList<GSharp.Core.CodeAnalysis.Diagnostic> ds)
+            => ds.Where(d => d.IsError).Select(d => d.Id + "|" + d.Message).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+
+        var firstBind = Shape(EmitDiagnostics(new[] { first, second }));
+        var secondBind = Shape(EmitDiagnostics(new[] { first, second }));
+
+        Assert.Equal(2, firstBind.Count(x => x.StartsWith("GS0610|", StringComparison.Ordinal)));
+        Assert.Equal(firstBind, secondBind);
     }
 
     [Fact]

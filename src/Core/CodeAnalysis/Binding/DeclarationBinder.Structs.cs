@@ -1036,24 +1036,29 @@ internal sealed partial class DeclarationBinder
         // pipeline (using its own IsAsync/IsVariadic — already required to
         // match the implementing part's by the syntax-level consistency
         // check) so both sides are equally transformed before comparing.
-        if (declaringPart.Type != null)
+        // Copilot review round 10: an omitted declaring return type is
+        // `void`, not "nothing to compare". The implementing part's own
+        // omitted type is NOT always void — InferAnonymousClassLiteralReturnType
+        // infers a type from a `-> object { … }` body — so skipping the check
+        // let `partial func F();` merge with an implementation that exposes a
+        // non-void inferred return.
+        var declaringReturnType = declaringPart.Type != null
+            ? bindReturnTypeClause(declaringPart.Type, declaringPart.IsAsync) ?? TypeSymbol.Error
+            : TypeSymbol.Void;
+        if (declaringReturnType != TypeSymbol.Error)
         {
-            var declaringReturnType = bindReturnTypeClause(declaringPart.Type, declaringPart.IsAsync) ?? TypeSymbol.Error;
-            if (declaringReturnType != TypeSymbol.Error)
-            {
-                declaringReturnType = NormalizeAsyncDeclaredReturnType(declaringReturnType, declaringPart.IsAsync, out _);
-            }
+            declaringReturnType = NormalizeAsyncDeclaredReturnType(declaringReturnType, declaringPart.IsAsync, out _);
+        }
 
-            if (declaringReturnType != TypeSymbol.Error
-                && returnType != TypeSymbol.Error
-                && !TypeSignaturesEquivalent(declaringReturnType, returnType))
-            {
-                Diagnostics.ReportPartialMethodPartsDisagree(
-                    methodSyntax.Identifier.Location,
-                    methodName,
-                    "the return type (the same spelling resolves to two different types across the declaring and implementing files' imports)");
-                return;
-            }
+        if (declaringReturnType != TypeSymbol.Error
+            && returnType != TypeSymbol.Error
+            && !TypeSignaturesEquivalent(declaringReturnType, returnType))
+        {
+            var returnAspect = declaringPart.Type != null
+                ? "the return type (the same spelling resolves to two different types across the declaring and implementing files' imports)"
+                : $"the return type (the declaring part states none, but the implementing part's body infers '{returnType.Name}')";
+            Diagnostics.ReportPartialMethodPartsDisagree(methodSyntax.Identifier.Location, methodName, returnAspect);
+            return;
         }
 
         var declaringParameters = declaringPart.Parameters;

@@ -109,37 +109,6 @@ internal static class PartialMethodMerger
         var groupByKey = new Dictionary<MethodKey, List<FunctionDeclarationSyntax>>();
         foreach (var method in methods)
         {
-            // Copilot review round 5: a survivor of a PREVIOUS bind's
-            // part-count-mismatch recovery (see RecoveredPartCountMismatch's
-            // doc comment) — its sibling parts are already gone from this
-            // type's member list, so re-grouping it fresh would misread its
-            // shape. Re-report the ORIGINAL counts directly and pass it
-            // through unchanged, reaching a fixed point instead of drifting
-            // to a different diagnostic on every subsequent bind.
-            if (method.RecoveredPartCountMismatch is { } recovered)
-            {
-                if (!enclosingTypeIsPartial)
-                {
-                    diagnostics.ReportPartialMethodRequiresPartialType(method.Identifier.Location, method.Identifier.Text ?? string.Empty);
-                }
-
-                // Copilot review round 8: replay GS0610 at EVERY original
-                // part's location, not just the survivor's — the first
-                // bind reports it once PER PART, so replaying only once
-                // here would silently lose every other part's location on
-                // the second bind even though the message stayed correct.
-                foreach (var partLocation in recovered.PartLocations)
-                {
-                    diagnostics.ReportPartialMethodPartCount(
-                        partLocation,
-                        method.Identifier.Text ?? string.Empty,
-                        recovered.DeclaringCount,
-                        recovered.ImplementingCount);
-                }
-
-                continue;
-            }
-
             // Already-merged nodes (DeclaringPart set) are complete methods,
             // not parts awaiting a partner — never re-group or re-merge them.
             // But a PREVIOUS bind's merge is exactly where GS0608 and GS0611
@@ -202,9 +171,44 @@ internal static class PartialMethodMerger
                 _ = part.SyntaxTree?.GetDocumentation(part);
             }
 
+            var name = group[0].Identifier.Text ?? string.Empty;
+
+            // Copilot review rounds 5/8/10: the survivor of an earlier bind's
+            // part-count-mismatch recovery, now ALONE in its group — its
+            // siblings really were dropped from this (in-place rewritten)
+            // member list, so regrouping it would misread its shape. Replay
+            // the recorded diagnostics exactly and pass it through unchanged.
+            // Only when it is alone: if the malformed parts span several
+            // `partial class` blocks, PartialTypeMerger rebuilds the type from
+            // the untouched originals on every bind, the siblings are back,
+            // and the whole group must be reprocessed from scratch below.
+            if (group.Count == 1 && group[0].RecoveredPartCountMismatch is { } recovered)
+            {
+                if (!enclosingTypeIsPartial)
+                {
+                    diagnostics.ReportPartialMethodRequiresPartialType(recovered.AnchorLocation, name);
+                }
+
+                foreach (var partLocation in recovered.PartLocations)
+                {
+                    diagnostics.ReportPartialMethodPartCount(
+                        partLocation,
+                        name,
+                        recovered.DeclaringCount,
+                        recovered.ImplementingCount);
+                }
+
+                continue;
+            }
+
+            foreach (var part in group)
+            {
+                part.RecoveredPartCountMismatch = null;
+            }
+
             var declaringParts = group.Where(p => !HasImplementation(p)).ToList();
             var implementingParts = group.Where(HasImplementation).ToList();
-            var name = group[0].Identifier.Text ?? string.Empty;
+            var groupAnchor = declaringParts.Count > 0 ? declaringParts[0] : group[0];
 
             // GS0608: a `partial func` outside a `partial class`/`partial
             // struct` is invalid regardless of its part shape — the ADR's
@@ -220,8 +224,7 @@ internal static class PartialMethodMerger
             // implementing parts and no declaring part at all).
             if (!enclosingTypeIsPartial)
             {
-                var anchor = declaringParts.Count > 0 ? declaringParts[0] : group[0];
-                diagnostics.ReportPartialMethodRequiresPartialType(anchor.Identifier.Location, name);
+                diagnostics.ReportPartialMethodRequiresPartialType(groupAnchor.Identifier.Location, name);
             }
 
             if (declaringParts.Count == 1 && implementingParts.Count == 1)
@@ -287,7 +290,8 @@ internal static class PartialMethodMerger
                 survivor.RecoveredPartCountMismatch = (
                     declaringParts.Count,
                     implementingParts.Count,
-                    group.Select(p => p.Identifier.Location).ToImmutableArray());
+                    group.Select(p => p.Identifier.Location).ToImmutableArray(),
+                    groupAnchor.Identifier.Location);
             }
 
             // Error recovery: keep ONE part so callers of the method still bind

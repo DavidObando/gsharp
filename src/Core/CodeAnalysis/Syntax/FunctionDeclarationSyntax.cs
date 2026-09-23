@@ -379,8 +379,17 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// bind, silently losing every other part's location even though the
     /// message/count stays correct — still not a true fixed point.
     /// </para>
+    /// <para>
+    /// <c>AnchorLocation</c> is where GS0608 went on the first bind (the
+    /// first declaring part, else the first part), which is not always the
+    /// survivor. The marker is only replayed when the survivor is alone in
+    /// its group: when the malformed parts span several <c>partial class</c>
+    /// blocks, each bind rebuilds the type from the untouched originals, the
+    /// siblings reappear, and the group is reprocessed from scratch (Copilot
+    /// review round 10).
+    /// </para>
     /// </summary>
-    public (int DeclaringCount, int ImplementingCount, ImmutableArray<TextLocation> PartLocations)? RecoveredPartCountMismatch { get; set; }
+    public (int DeclaringCount, int ImplementingCount, ImmutableArray<TextLocation> PartLocations, TextLocation AnchorLocation)? RecoveredPartCountMismatch { get; set; }
 
     /// <summary>Gets the optional open parenthesis introducing the receiver clause (Phase 3.B.6).</summary>
     public SyntaxToken? ReceiverOpenParenthesisToken { get; }
