@@ -963,8 +963,15 @@ public sealed partial class CSharpToGSharpTranslator
         private Parameter MapParameter(
             IParameterSymbol symbol,
             SyntaxNode fallbackNode,
-            bool promoteNullability = true)
+            bool promoteNullability = true,
+            Location spellingLocation = null)
         {
+            // ADR-0192: a partial method's declaring part maps the
+            // implementation's parameter symbols but must spell their types in
+            // the DEFINITION's file, so the caller passes the definition
+            // parameter's location to spell at.
+            spellingLocation ??= symbol.Locations.FirstOrDefault();
+
             string refKind = symbol.RefKind switch
             {
                 RefKind.Ref => "ref",
@@ -1040,11 +1047,11 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.typeMapper.MapExplicitType(
                     parameterType,
                     this.context,
-                    symbol.Locations.FirstOrDefault())
+                    spellingLocation)
                 : this.typeMapper.Map(
                     parameterType,
                     this.context,
-                    symbol.Locations.FirstOrDefault());
+                    spellingLocation);
 
             // Issue #1072/#3888: promote the declaration position that actually
             // receives null. Ordinary parameters use their carrier symbol; a
@@ -1211,8 +1218,17 @@ public sealed partial class CSharpToGSharpTranslator
             return null;
         }
 
-        private GTypeReference MapReturnType(IMethodSymbol symbol, MethodDeclarationSyntax node, bool unwrapValueTask = false)
+        private GTypeReference MapReturnType(
+            IMethodSymbol symbol,
+            MethodDeclarationSyntax node,
+            bool unwrapValueTask = false,
+            MethodDeclarationSyntax iteratorBodySource = null)
         {
+            // ADR-0192: a partial method's declaring part spells its return
+            // type at the definition (`node`) but takes the iterator fact from
+            // the implementation's body.
+            iteratorBodySource ??= node;
+
             if (symbol != null)
             {
                 if (symbol.ReturnsVoid)
@@ -1236,7 +1252,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // `func GetEnumerator() IEnumerator` (issue #985). A G# generator may
                 // return `IEnumerator[T]`, so the `yield` body is unaffected — only
                 // `IEnumerable[T]` returns are rewritten to `sequence[T]`.
-                if (IsIteratorBody(node) &&
+                if (IsIteratorBody(iteratorBodySource) &&
                     returnType is INamedTypeSymbol { IsGenericType: true } enumerable &&
                     enumerable.Name is "IEnumerable")
                 {

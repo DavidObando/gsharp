@@ -395,6 +395,8 @@ namespace Demo
     }
 }"),
             ("Api.Impl.cs", @"
+using System;
+
 namespace Demo
 {
     public partial class Api
@@ -448,19 +450,12 @@ namespace Demo
     public void ImplementedPair_PreserveMode_ParameterAttributeOnOnePart_IsUnionedOntoBothParts()
     {
         // C# unions parameter attributes across the parts; G# requires the
-        // same annotations on both parts, so both get the union.
+        // same annotations on both parts, so both get the union. The two C#
+        // files share one using scope, so the attribute resolves identically
+        // in both G# files.
         IReadOnlyList<string> printed = TranslateFiles(
             preservePartialParts: true,
-            ("Note.cs", @"
-using System;
-
-namespace Demo
-{
-    [AttributeUsage(AttributeTargets.Parameter)]
-    public sealed class NoteAttribute : Attribute
-    {
-    }
-}"),
+            ("Note.cs", NoteAttributeSource),
             ("Api.Decl.cs", @"
 namespace Demo
 {
@@ -480,10 +475,159 @@ namespace Demo
     }
 }"));
 
-        string declaring = printed[1];
-        string implementing = printed[2];
-        Assert.Contains("partial func Log(@Note message string);", declaring);
-        Assert.Contains("partial func Log(@Note message string) {", implementing);
+        Assert.Contains("partial func Log(@Note message string);", printed[1]);
+        Assert.Contains("partial func Log(@Note message string) {", printed[2]);
+    }
+
+    [Fact]
+    public void ImplementedPair_ParameterAttributeResolvingDifferentlyPerFile_KeepsSingleImplementation()
+    {
+        // Review repro: `Tag` names N1.TagAttribute in the definition's file
+        // and N2.TagAttribute in the implementation's. Unioning the
+        // definition's `@Tag` onto the implementing part dragged `import N1`
+        // into its file, breaking that file's own `@Tag` (N2).
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("N1.cs", @"
+using System;
+
+namespace N1
+{
+    public sealed class TagAttribute : Attribute
+    {
+    }
+}"),
+            ("N2.cs", @"
+using System;
+
+namespace N2
+{
+    public sealed class TagAttribute : Attribute
+    {
+    }
+
+    public class Other
+    {
+    }
+}"),
+            ("Decl.cs", @"
+using N1;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M([Tag] int x);
+    }
+}"),
+            ("Impl.cs", @"
+using N2;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(int x)
+        {
+        }
+
+        [Tag]
+        public void Use(Other o)
+        {
+        }
+    }
+}"));
+
+        string combined = string.Join("\n---\n", printed);
+        Assert.DoesNotContain("partial func", combined);
+        Assert.Equal(1, CountOccurrences(combined, "func M("));
+        Assert.DoesNotContain("import N1", printed[3]);
+    }
+
+    [Fact]
+    public void ImplementedPair_TypeSpelledDifferentlyPerFile_KeepsSingleImplementation()
+    {
+        // Review repro: `Timer` is ambiguous (System.Threading vs
+        // System.Timers) only in the definition's file, so the two G# files
+        // would spell the parameter type differently (an alias in one, the
+        // bare name in the other) — gsc compares the parts as text (GS0611).
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Decl.cs", @"
+using System.Threading;
+using System.Timers;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(System.Threading.Timer t);
+
+        public void Use(ElapsedEventArgs e, CancellationToken c)
+        {
+        }
+    }
+}"),
+            ("Impl.cs", @"
+using System.Threading;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(Timer t)
+        {
+        }
+    }
+}"));
+
+        string combined = string.Join("\n---\n", printed);
+        Assert.DoesNotContain("partial func", combined);
+        Assert.Equal(1, CountOccurrences(combined, "func M("));
+    }
+
+    [Fact]
+    public void ImplementedPair_SameUsingsAcrossFiles_EmitsPairEvenWhenTypeNeedsAlias()
+    {
+        // Positive control for the using-scope rule: both files import both
+        // namespaces, so `Timer` is ambiguous in both and both G# files spell
+        // it the same (aliased) way.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Decl.cs", @"
+using System.Threading;
+using System.Timers;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(System.Threading.Timer t);
+
+        public void Use(ElapsedEventArgs e, CancellationToken c)
+        {
+        }
+    }
+}"),
+            ("Impl.cs", @"
+using System.Threading;
+using System.Timers;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(System.Threading.Timer t)
+        {
+        }
+    }
+}"));
+
+        Assert.Contains("private partial func M(t ThreadingTimer);", printed[0]);
+        Assert.Contains("private partial func M(t ThreadingTimer) {", printed[1]);
+        string declaringHeader = printed[0].Substring(printed[0].IndexOf("private partial func M(", StringComparison.Ordinal));
+        declaringHeader = declaringHeader.Substring(0, declaringHeader.IndexOf(';'));
+        Assert.Contains(declaringHeader + " {", printed[1]);
     }
 
     [Fact]
@@ -666,6 +810,55 @@ namespace Demo
         Assert.Equal(1, CountOccurrences(translated, "func OnConfigured("));
     }
 
+    [Fact]
+    public void ImplementedPair_PreserveMode_DefinitionUnderObjDirectory_KeepsSingleImplementation()
+    {
+        // The loader also drops a file under the project's obj/bin directory
+        // even without an <auto-generated> header; the translator applies the
+        // same rule (GeneratedSourceDetection) when it knows the project
+        // directory.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            retainedFilePaths: null,
+            projectDirectory: "/src/App",
+            ("/src/App/obj/Debug/VM.Hooks.cs", @"
+namespace Demo
+{
+    public partial class VM
+    {
+        partial void OnConfigured(int value);
+    }
+}"),
+            ("/src/App/VM.cs", @"
+namespace Demo
+{
+    public partial class VM
+    {
+        private int _seen;
+
+        partial void OnConfigured(int value)
+        {
+            _seen = value;
+        }
+    }
+}"));
+
+        string translated = Assert.Single(printed);
+        Assert.DoesNotContain("partial func", translated);
+        Assert.Equal(1, CountOccurrences(translated, "func OnConfigured("));
+    }
+
+    private const string NoteAttributeSource = @"
+using System;
+
+namespace Demo
+{
+    [AttributeUsage(AttributeTargets.Parameter)]
+    public sealed class NoteAttribute : Attribute
+    {
+    }
+}";
+
     private static string TranslateSingle(
         bool preservePartialParts,
         (string FileName, string Source) file)
@@ -681,6 +874,13 @@ namespace Demo
     private static IReadOnlyList<string> TranslateFiles(
         bool preservePartialParts,
         IReadOnlyCollection<string> retainedFilePaths,
+        params (string FileName, string Source)[] files) =>
+        TranslateFiles(preservePartialParts, retainedFilePaths, projectDirectory: null, files);
+
+    private static IReadOnlyList<string> TranslateFiles(
+        bool preservePartialParts,
+        IReadOnlyCollection<string> retainedFilePaths,
+        string projectDirectory,
         params (string FileName, string Source)[] files)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(files);
@@ -690,13 +890,18 @@ namespace Demo
                 string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
         var printedFiles = new List<string>();
+        // Mirror the loader: a file under the project's obj/bin directory is
+        // never translated (LoadInMemory has no project directory to apply
+        // that rule itself).
         foreach (LoadedDocument document in project.Documents.Where(document =>
-            retainedFilePaths == null || retainedFilePaths.Contains(document.FilePath)))
+            (retainedFilePaths == null || retainedFilePaths.Contains(document.FilePath))
+            && !GeneratedSourceDetection.IsUnderBuildOutputDirectory(document.FilePath, projectDirectory)))
         {
             var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
             CompilationUnit unit = new CSharpToGSharpTranslator(
                 preservePartialParts,
-                retainedFilePaths: retainedFilePaths).TranslateDocument(document, context);
+                retainedFilePaths: retainedFilePaths,
+                projectDirectory: projectDirectory).TranslateDocument(document, context);
 
             printedFiles.Add(GSharpPrinter.Print(unit));
         }
