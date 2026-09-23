@@ -824,18 +824,33 @@ public sealed partial class CSharpToGSharpTranslator
             return symbol.TypeParameters.Select(this.MapTypeParameter).ToList();
         }
 
-        private List<TypeParameter> MapMethodTypeParameters(IMethodSymbol symbol)
+        // ADR-0192: an emitted declaring part maps the implementation's type
+        // parameters (its facts) but spells their constraints at the
+        // definition's locations (`spellingSymbol`), so the constraint types
+        // resolve in the definition file's scope — as MapParameter's
+        // `spellingLocation` does for parameter types.
+        private List<TypeParameter> MapMethodTypeParameters(IMethodSymbol symbol, IMethodSymbol spellingSymbol = null)
         {
             if (symbol == null || symbol.TypeParameters.Length == 0)
             {
                 return new List<TypeParameter>();
             }
 
-            return symbol.TypeParameters.Select(this.MapTypeParameter).ToList();
+            return symbol.TypeParameters
+                .Select((tp, index) => this.MapTypeParameter(
+                    tp,
+                    spellingSymbol?.TypeParameters[index].Locations.FirstOrDefault()))
+                .ToList();
         }
 
         private TypeParameter MapTypeParameter(ITypeParameterSymbol tp)
         {
+            return this.MapTypeParameter(tp, spellingLocation: null);
+        }
+
+        private TypeParameter MapTypeParameter(ITypeParameterSymbol tp, Location spellingLocation)
+        {
+            spellingLocation ??= tp.Locations.FirstOrDefault();
             var flags = new List<string>();
             if (tp.HasReferenceTypeConstraint)
             {
@@ -867,7 +882,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.Report(new TranslationDiagnostic(
                     nameof(SyntaxKind.TypeParameterConstraintClause),
                     $"type parameter '{tp.Name}' has a 'notnull' constraint; G# has no equivalent constraint keyword, so it is dropped (ADR-0115 §B.7 gap).",
-                    tp.Locations.FirstOrDefault(),
+                    spellingLocation,
                     TranslationSeverity.Info));
             }
 
@@ -884,7 +899,7 @@ public sealed partial class CSharpToGSharpTranslator
                 GTypeReference constraintRef = this.typeMapper.MapConstraintType(
                     primary,
                     this.context,
-                    tp.Locations.FirstOrDefault());
+                    spellingLocation);
                 legacy = GSharpPrinter.RenderTypeReference(constraintRef);
 
                 if (tp.ConstraintTypes.Length > 1)
@@ -892,7 +907,7 @@ public sealed partial class CSharpToGSharpTranslator
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.TypeParameterConstraintClause),
                         $"type parameter '{tp.Name}' has multiple constraint types; only the first ('{legacy}') is carried into the G# legacy-constraint slot (ADR-0115 §B.7).",
-                        tp.Locations.FirstOrDefault(),
+                        spellingLocation,
                         TranslationSeverity.Info));
                 }
             }
@@ -963,8 +978,15 @@ public sealed partial class CSharpToGSharpTranslator
         private Parameter MapParameter(
             IParameterSymbol symbol,
             SyntaxNode fallbackNode,
-            bool promoteNullability = true)
+            bool promoteNullability = true,
+            Location spellingLocation = null)
         {
+            // ADR-0192: a partial method's declaring part maps the
+            // implementation's parameter symbols but must spell their types in
+            // the DEFINITION's file, so the caller passes the definition
+            // parameter's location to spell at.
+            spellingLocation ??= symbol.Locations.FirstOrDefault();
+
             string refKind = symbol.RefKind switch
             {
                 RefKind.Ref => "ref",
@@ -1040,11 +1062,11 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.typeMapper.MapExplicitType(
                     parameterType,
                     this.context,
-                    symbol.Locations.FirstOrDefault())
+                    spellingLocation)
                 : this.typeMapper.Map(
                     parameterType,
                     this.context,
-                    symbol.Locations.FirstOrDefault());
+                    spellingLocation);
 
             // Issue #1072/#3888: promote the declaration position that actually
             // receives null. Ordinary parameters use their carrier symbol; a
@@ -1178,14 +1200,18 @@ public sealed partial class CSharpToGSharpTranslator
         /// and is omitted, never translated. So `SpillOperand`'s no-seam
         /// fallback can never be reached from here.
         /// </remarks>
-        private GExpression BuildOptionalParameterDefault(IParameterSymbol symbol, GTypeReference type, SyntaxNode fallbackNode)
+        private GExpression BuildOptionalParameterDefault(
+            IParameterSymbol symbol,
+            GTypeReference type,
+            SyntaxNode fallbackNode,
+            SyntaxNode spellingNode = null)
         {
             if (!symbol.HasExplicitDefaultValue)
             {
                 return null;
             }
 
-            GExpression defaultValue = this.MapConstantDefault(symbol, fallbackNode);
+            GExpression defaultValue = this.MapConstantDefault(symbol, fallbackNode, spellingNode);
             if (defaultValue != null)
             {
                 return defaultValue;
@@ -1206,13 +1232,22 @@ public sealed partial class CSharpToGSharpTranslator
             this.context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.EqualsValueClause),
                 $"parameter '{symbol.Name}' has a default value that is not a simple literal; the default is omitted for now (deferred to step 7).",
-                symbol.Locations.FirstOrDefault(),
+                spellingNode?.GetLocation() ?? symbol.Locations.FirstOrDefault(),
                 TranslationSeverity.Info));
             return null;
         }
 
-        private GTypeReference MapReturnType(IMethodSymbol symbol, MethodDeclarationSyntax node, bool unwrapValueTask = false)
+        private GTypeReference MapReturnType(
+            IMethodSymbol symbol,
+            MethodDeclarationSyntax node,
+            bool unwrapValueTask = false,
+            MethodDeclarationSyntax iteratorBodySource = null)
         {
+            // ADR-0192: a partial method's declaring part spells its return
+            // type at the definition (`node`) but takes the iterator fact from
+            // the implementation's body.
+            iteratorBodySource ??= node;
+
             if (symbol != null)
             {
                 if (symbol.ReturnsVoid)
@@ -1236,7 +1271,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // `func GetEnumerator() IEnumerator` (issue #985). A G# generator may
                 // return `IEnumerator[T]`, so the `yield` body is unaffected — only
                 // `IEnumerable[T]` returns are rewritten to `sequence[T]`.
-                if (IsIteratorBody(node) &&
+                if (IsIteratorBody(iteratorBodySource) &&
                     returnType is INamedTypeSymbol { IsGenericType: true } enumerable &&
                     enumerable.Name is "IEnumerable")
                 {

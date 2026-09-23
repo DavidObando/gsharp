@@ -114,6 +114,11 @@ public sealed class CSharpTypeMapper
     /// </summary>
     private readonly List<TypeDeclaration> pendingAnonymousDataClasses = new();
 
+    // Shapes this mapper (one document translation) has declared, so an owner
+    // document re-translated for ADR-0192 pair reconciliation declares each
+    // of its shapes exactly once.
+    private readonly HashSet<string> declaredAnonymousShapes = new(System.StringComparer.Ordinal);
+
     private readonly Dictionary<string, string> synthesizedTypeAliases =
         new(System.StringComparer.Ordinal);
 
@@ -1203,7 +1208,14 @@ public sealed class CSharpTypeMapper
         // A shape synthesized by an earlier file in the same package is reused
         // without redeclaration. A new shape gets the same deterministic name
         // in every document or project that translates it (#2598).
-        if (this.anonymousTypeRegistry.TryGetExisting(shapeKey, out NamedTypeReference existing))
+        //
+        // ADR-0192 partial-pair reconciliation re-translates a document with
+        // the SAME translator (so its registry still holds this document's
+        // shapes). The document that first declared a shape owns it and must
+        // declare it again when it is re-translated — once per translation.
+        if (this.anonymousTypeRegistry.TryGetExisting(shapeKey, out NamedTypeReference existing)
+            && (!this.anonymousTypeRegistry.IsOwnedBy(shapeKey, context.FilePath)
+                || this.declaredAnonymousShapes.Contains(shapeKey)))
         {
             return (existing, properties);
         }
@@ -1230,7 +1242,8 @@ public sealed class CSharpTypeMapper
             visibility: Visibility.Internal);
 
         var reference = new NamedTypeReference(syntheticName);
-        this.anonymousTypeRegistry.Register(shapeKey, reference);
+        this.anonymousTypeRegistry.Register(shapeKey, reference, context.FilePath);
+        this.declaredAnonymousShapes.Add(shapeKey);
         this.pendingAnonymousDataClasses.Add(declaration);
         return (reference, properties);
     }
@@ -3189,6 +3202,9 @@ public sealed class AnonymousTypeRegistry
 {
     private readonly Dictionary<string, NamedTypeReference> byShape = new(System.StringComparer.Ordinal);
 
+    // The document (file path) that first declared each shape.
+    private readonly Dictionary<string, string> ownerByShape = new(System.StringComparer.Ordinal);
+
     /// <summary>
     /// Looks up an already-synthesized data-class reference for
     /// <paramref name="shapeKey"/> (an anonymous type's ordered
@@ -3224,5 +3240,26 @@ public sealed class AnonymousTypeRegistry
     /// </summary>
     /// <param name="shapeKey">The structural shape key.</param>
     /// <param name="reference">The synthesized data class's type reference.</param>
-    public void Register(string shapeKey, NamedTypeReference reference) => this.byShape[shapeKey] = reference;
+    /// <param name="ownerFilePath">The document that declares the data class.</param>
+    public void Register(string shapeKey, NamedTypeReference reference, string ownerFilePath)
+    {
+        this.byShape[shapeKey] = reference;
+        if (ownerFilePath != null)
+        {
+            this.ownerByShape.TryAdd(shapeKey, ownerFilePath);
+        }
+    }
+
+    /// <summary>
+    /// Whether <paramref name="filePath"/> is the document that first declared
+    /// <paramref name="shapeKey"/>'s data class (and so declares it again when
+    /// it is re-translated for ADR-0192 partial-pair reconciliation).
+    /// </summary>
+    /// <param name="shapeKey">The structural shape key.</param>
+    /// <param name="filePath">The document being translated.</param>
+    /// <returns><see langword="true"/> for the owning document.</returns>
+    public bool IsOwnedBy(string shapeKey, string filePath) =>
+        filePath != null
+        && this.ownerByShape.TryGetValue(shapeKey, out string owner)
+        && string.Equals(owner, filePath, System.StringComparison.Ordinal);
 }

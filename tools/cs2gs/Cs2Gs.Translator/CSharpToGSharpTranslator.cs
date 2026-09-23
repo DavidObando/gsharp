@@ -116,6 +116,20 @@ public sealed partial class CSharpToGSharpTranslator
     // duplicating what gsc's own `/analyzer:`-triggered gsgen run later adds
     // (GS0102). Null (default) preserves the exact prior no-filter behavior.
     private readonly HashSet<string> retainedFilePaths;
+
+    // ADR-0192 / ADR-0143 amendment: when true, a hand-authored implemented C#
+    // partial method may be emitted as a TENTATIVE G# partial pair (both
+    // parts tagged with MethodDeclaration.PartialPairKey). The caller MUST
+    // translate the project through PartialMethodPairReconciler.
+    // TranslateUntilStable, which compares both files' spellings and
+    // re-translates a mismatched pair's units with it suppressed. False
+    // (default) keeps the single-implementation shape.
+    private readonly bool emitPartialMethodPairs;
+
+    // The translated project's directory, when known, so the translator applies
+    // the loader's full generated-source rule (the obj/bin path half of
+    // GeneratedSourceDetection) to a partial method's other part.
+    private readonly string projectDirectory;
     private readonly string packageFilter;
     private readonly bool includeFileAttributes;
     private readonly bool analyzerApiMode;
@@ -191,6 +205,19 @@ public sealed partial class CSharpToGSharpTranslator
     /// an executable project referenced by another project in the same run,
     /// whose entry class is consumable API surface.
     /// </param>
+    /// <param name="emitPartialMethodPairs">
+    /// When <see langword="true"/>, hand-authored implemented C# partial
+    /// methods may be emitted as tentative ADR-0192 partial pairs; the caller
+    /// must translate every unit of the project through
+    /// <see cref="PartialMethodPairReconciler.TranslateUntilStable"/> before
+    /// printing.
+    /// Default <see langword="false"/>: the implementation alone is emitted.
+    /// </param>
+    /// <param name="projectDirectory">
+    /// The translated project's directory, or <see langword="null"/> when
+    /// unknown (in-memory sources). Used only to recognize a partial method
+    /// part in a build-generated file (<see cref="Loading.GeneratedSourceDetection"/>).
+    /// </param>
     public CSharpToGSharpTranslator(
         bool preservePartialParts = true,
         bool markMergedTypePartial = false,
@@ -199,8 +226,12 @@ public sealed partial class CSharpToGSharpTranslator
         bool includeFileAttributes = true,
         bool widenObliviousReferenceFields = false,
         bool analyzerApiMode = false,
-        bool preserveEntryType = false)
+        bool preserveEntryType = false,
+        string projectDirectory = null,
+        bool emitPartialMethodPairs = false)
     {
+        this.projectDirectory = projectDirectory;
+        this.emitPartialMethodPairs = emitPartialMethodPairs;
         this.analyzerApiMode = analyzerApiMode;
         this.preserveEntryType = preserveEntryType;
         this.preservePartialParts = preservePartialParts;
@@ -237,7 +268,27 @@ public sealed partial class CSharpToGSharpTranslator
     /// <param name="document">The bound C# document to translate.</param>
     /// <param name="context">The translation context that accumulates diagnostics.</param>
     /// <returns>The G# compilation unit.</returns>
-    public CompilationUnit TranslateDocument(LoadedDocument document, TranslationContext context)
+    public CompilationUnit TranslateDocument(LoadedDocument document, TranslationContext context) =>
+        this.TranslateDocument(document, context, suppressedPartialPairKeys: null);
+
+    /// <summary>
+    /// Translates a loaded C# document, treating every partial method whose
+    /// pair key (<see cref="MethodDeclaration.PartialPairKey"/>) is in
+    /// <paramref name="suppressedPartialPairKeys"/> as if
+    /// <c>emitPartialMethodPairs</c> were off: no declaring part, and the
+    /// implementation emitted as an ordinary method. Used by
+    /// <see cref="PartialMethodPairReconciler.TranslateUntilStable"/> to
+    /// re-translate the units of a pair whose two parts did not spell the same
+    /// signature.
+    /// </summary>
+    /// <param name="document">The bound C# document to translate.</param>
+    /// <param name="context">The translation context that accumulates diagnostics.</param>
+    /// <param name="suppressedPartialPairKeys">Pair keys to emit as ordinary methods, or <see langword="null"/>.</param>
+    /// <returns>The G# compilation unit.</returns>
+    public CompilationUnit TranslateDocument(
+        LoadedDocument document,
+        TranslationContext context,
+        IReadOnlyCollection<string> suppressedPartialPairKeys)
     {
         CompilationUnitSyntax root = document.GetRoot();
 
@@ -351,7 +402,10 @@ public sealed partial class CSharpToGSharpTranslator
             this.preservePartialParts,
             this.markMergedTypePartial,
             this.widenObliviousReferenceFields,
-            this.retainedFilePaths);
+            this.retainedFilePaths,
+            this.projectDirectory,
+            this.emitPartialMethodPairs,
+            suppressedPartialPairKeys);
 
         IReadOnlyList<AttributeUse> fileAttributes = this.includeFileAttributes
             ? visitor.MapFileAttributes(
@@ -1526,6 +1580,16 @@ public sealed partial class CSharpToGSharpTranslator
         // produces no G# output.
         private readonly HashSet<string> retainedFilePaths;
 
+        // See `CSharpToGSharpTranslator.projectDirectory`.
+        private readonly string projectDirectory;
+
+        // See `CSharpToGSharpTranslator.emitPartialMethodPairs`.
+        private readonly bool emitPartialMethodPairs;
+
+        // Pair keys the reconciliation loop demoted: those partial methods
+        // translate as if emitPartialMethodPairs were off.
+        private readonly IReadOnlyCollection<string> suppressedPartialPairKeys;
+
         // ADR-0145 (§C/§D): when true, `partial` parts are NOT merged — every
         // part is emitted as its own standalone G# `partial` declaration (using
         // only its own members), so a generated part augments the user's real G#
@@ -1595,9 +1659,15 @@ public sealed partial class CSharpToGSharpTranslator
             bool preservePartialParts = false,
             bool markMergedTypePartial = false,
             bool widenObliviousReferenceFields = false,
-            HashSet<string> retainedFilePaths = null)
+            HashSet<string> retainedFilePaths = null,
+            string projectDirectory = null,
+            bool emitPartialMethodPairs = false,
+            IReadOnlyCollection<string> suppressedPartialPairKeys = null)
         {
+            this.suppressedPartialPairKeys = suppressedPartialPairKeys;
             this.retainedFilePaths = retainedFilePaths;
+            this.projectDirectory = projectDirectory;
+            this.emitPartialMethodPairs = emitPartialMethodPairs;
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;

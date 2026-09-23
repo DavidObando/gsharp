@@ -368,7 +368,8 @@ containing a `partial` **type** onto the full-rebuild path, and a partial
 method requires a partial type, so it is covered for free.
 
 **cs2gs `GSharpPrinter`** deliberately does **not** learn to print `partial` on
-a `func` in this ADR. That is consumer-side work — see "Follow-on work".
+a `func` in this ADR. That is consumer-side work — see "Follow-on work" (item 1
+has since landed).
 
 ### G. Binder mechanics — as built
 
@@ -547,6 +548,10 @@ and it is covered by its own test.
 
 1. **cs2gs `GSharpPrinter`**: render `partial` on a `func` so cs2gs and gsgen
    can *emit* partial parts (the type-level equivalent landed with ADR-0144 §G).
+   **Done** (2026-09-23): the printer renders `partial` on a method, and cs2gs
+   emits a hand-authored implemented C# pair as a declaring + implementing part
+   (ADR-0143's 2026-09-23 amendment). gsgen does not yet emit partial-method
+   parts — that remains item 2.
 2. **gsgen wiring**: have ADR-0145's generator host translate real
    `[GeneratedRegex]` output into a G# implementing part against a user-written
    declaring part.

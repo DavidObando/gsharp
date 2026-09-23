@@ -66,6 +66,43 @@ public static class GSharpPrinter
     /// <returns>The rendered G# type form.</returns>
     public static string RenderTypeReference(GTypeReference type) => RenderType(type);
 
+    /// <summary>
+    /// ADR-0192: renders a method's signature — everything but its body and
+    /// its method-level attributes (which gsc unions across partial parts),
+    /// keeping parameter annotations and defaults — exactly as the printer
+    /// would spell it. Used to check that the two parts of a partial method
+    /// pair spell the same signature.
+    /// </summary>
+    /// <param name="method">The method.</param>
+    /// <returns>The rendered signature.</returns>
+    public static string RenderMethodSignature(MethodDeclaration method)
+    {
+        if (method == null)
+        {
+            throw new ArgumentNullException(nameof(method));
+        }
+
+        var signature = new MethodDeclaration(
+            method.Name,
+            method.Parameters,
+            method.ReturnType,
+            body: null,
+            method.TypeParameters,
+            method.Receiver,
+            method.Visibility,
+            method.IsOpen,
+            method.IsOverride,
+            method.IsAsync,
+            attributes: null,
+            expressionBody: null,
+            method.IsRefReturn,
+            method.ExplicitInterfaceType,
+            method.IsSuspend,
+            method.IsReadOnlyRefReturn,
+            method.IsPartial);
+        return RenderMethod(signature, 0);
+    }
+
     private static string Indent(int level)
     {
         // ponytail: no shared cache — Print is a public static API and xunit
@@ -2357,6 +2394,15 @@ public static class GSharpPrinter
             // ADR-0174 D4: a suspending function; the return type is the
             // logical result, the `suspend` modifier supplies the ValueTask.
             sb.Append("suspend ");
+        }
+
+        if (method.IsPartial)
+        {
+            // ADR-0192 §A: `partial` joins the order-independent modifier run
+            // with `async`/`suspend`; canonical style places it immediately
+            // before `func`. Accessibility and `open`/`override` must precede
+            // that run, which the order above already guarantees.
+            sb.Append("partial ");
         }
 
         sb.Append("func ");

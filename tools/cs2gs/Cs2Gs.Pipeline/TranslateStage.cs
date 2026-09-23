@@ -385,7 +385,9 @@ public sealed class TranslateStage : IMigrationStage
                 preservePartialParts: true,
                 retainedFilePaths: retainedFilePaths,
                 analyzerApiMode: analyzerApiMode,
-                preserveEntryType: preserveEntryType);
+                preserveEntryType: preserveEntryType,
+                projectDirectory: currentProject.ProjectDirectory,
+                emitPartialMethodPairs: true);
 
             PreserveGeneratedFriendAssemblyAnnotations(
                 context,
@@ -393,6 +395,13 @@ public sealed class TranslateStage : IMigrationStage
                 isReferencedProject,
                 usedOutputPaths);
 
+            // ADR-0143 2026-09-23 amendment / ADR-0192: translate EVERY unit of
+            // the project first, reconciling the tentative partial method pairs
+            // across all of them (only then are both parts' spellings known;
+            // a mismatched pair's units are re-translated with it suppressed),
+            // then print/format/write each unit exactly as before, in the same
+            // order.
+            var translatedDocuments = new List<TranslatedDocument>();
             foreach (LoadedDocument document in currentProject.Documents)
             {
                 cancellationToken.ThrowIfCancellationRequested();
@@ -407,15 +416,45 @@ public sealed class TranslateStage : IMigrationStage
                             .OrderBy(package => package.Count(c => c == '.'))
                             .ToList()
                         : Array.Empty<string>();
+                var translatedDocument = new TranslatedDocument(document, packages);
                 int unitCount = Math.Max(1, packages.Count);
-                string primaryGsRelativePath = null;
                 for (int unitIndex = 0; unitIndex < unitCount; unitIndex++)
                 {
                     string package = packages.Count > 1 ? packages[unitIndex] : null;
+
+                    // One translator per unit, reused if the unit is
+                    // re-translated (its anonymous-type registry must survive).
+                    CSharpToGSharpTranslator unitTranslator = package is null
+                        ? translator
+                        : new CSharpToGSharpTranslator(
+                            preservePartialParts: true,
+                            retainedFilePaths: retainedFilePaths,
+                            packageFilter: package,
+                            includeFileAttributes: unitIndex == 0,
+                            analyzerApiMode: analyzerApiMode,
+                            preserveEntryType: preserveEntryType,
+                            projectDirectory: currentProject.ProjectDirectory,
+                            emitPartialMethodPairs: true);
+                    translatedDocument.Units.Add(new TranslatedUnit(document, unitIndex, package, unitTranslator));
+                }
+
+                translatedDocuments.Add(translatedDocument);
+            }
+
+            List<TranslatedUnit> allUnits = translatedDocuments.SelectMany(d => d.Units).ToList();
+            IReadOnlyList<CompilationUnit> stableUnits = PartialMethodPairReconciler.TranslateUntilStable(
+                allUnits.Count,
+                (index, suppressedPartialPairKeys) =>
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    TranslatedUnit pending = allUnits[index];
+
+                    // A fresh context per (re-)translation: its diagnostics are
+                    // the ones this unit's final output reports.
                     var translationContext = new TranslationContext(
                         currentProject.Compilation,
-                        document.SemanticModel,
-                        document.FilePath,
+                        pending.Document.SemanticModel,
+                        pending.Document.FilePath,
                         siblingCompilations,
                         repositoryCompilations);
 
@@ -426,20 +465,13 @@ public sealed class TranslateStage : IMigrationStage
                     // translator and is injected here.
                     translationContext.TranslateAnalyzerSnippet =
                         Cs2Gs.Translator.Analyzers.SnippetTranslator.Translate;
-                    CSharpToGSharpTranslator unitTranslator = package is null
-                        ? translator
-                        : new CSharpToGSharpTranslator(
-                            preservePartialParts: true,
-                            retainedFilePaths: retainedFilePaths,
-                            packageFilter: package,
-                            includeFileAttributes: unitIndex == 0,
-                            analyzerApiMode: analyzerApiMode,
-                            preserveEntryType: preserveEntryType);
-                    string printed;
+                    pending.Context = translationContext;
                     try
                     {
-                        printed = GSharpPrinter.Print(
-                            unitTranslator.TranslateDocument(document, translationContext));
+                        return pending.Translator.TranslateDocument(
+                            pending.Document,
+                            translationContext,
+                            suppressedPartialPairKeys);
                     }
                     catch (Exception ex) when (ex is not OperationCanceledException
                         and not TranslationCrashException)
@@ -450,6 +482,34 @@ public sealed class TranslateStage : IMigrationStage
                         // tree and file a cs2gs defect as a language gap. All
                         // this adds is the one fact the artifact was missing:
                         // which source was on the table.
+                        throw new TranslationCrashException(pending.Document.FilePath, ex);
+                    }
+                });
+            for (int i = 0; i < allUnits.Count; i++)
+            {
+                allUnits[i].Unit = stableUnits[i];
+            }
+
+            foreach (TranslatedDocument translatedDocument in translatedDocuments)
+            {
+                LoadedDocument document = translatedDocument.Document;
+                IReadOnlyList<string> packages = translatedDocument.Packages;
+                string primaryGsRelativePath = null;
+                foreach (TranslatedUnit translatedUnit in translatedDocument.Units)
+                {
+                    cancellationToken.ThrowIfCancellationRequested();
+                    int unitIndex = translatedUnit.UnitIndex;
+                    string package = translatedUnit.Package;
+                    TranslationContext translationContext = translatedUnit.Context;
+                    string printed;
+                    try
+                    {
+                        printed = GSharpPrinter.Print(translatedUnit.Unit);
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException
+                        and not TranslationCrashException)
+                    {
+                        // Issue #3804: see the translate loop above.
                         throw new TranslationCrashException(document.FilePath, ex);
                     }
 
@@ -1265,5 +1325,52 @@ public sealed class TranslateStage : IMigrationStage
                 privateAssets ?? "all",
                 includeAssets));
         }
+    }
+
+    // One source document's translated units (one per namespace in the
+    // repository layout, otherwise exactly one), held between the translate
+    // pass and the print pass so partial method pairs can be reconciled across
+    // the whole project first.
+    private sealed class TranslatedDocument
+    {
+        public TranslatedDocument(LoadedDocument document, IReadOnlyList<string> packages)
+        {
+            this.Document = document;
+            this.Packages = packages;
+        }
+
+        public LoadedDocument Document { get; }
+
+        public IReadOnlyList<string> Packages { get; }
+
+        public List<TranslatedUnit> Units { get; } = new List<TranslatedUnit>();
+    }
+
+    private sealed class TranslatedUnit
+    {
+        public TranslatedUnit(
+            LoadedDocument document,
+            int unitIndex,
+            string package,
+            CSharpToGSharpTranslator translator)
+        {
+            this.Document = document;
+            this.UnitIndex = unitIndex;
+            this.Package = package;
+            this.Translator = translator;
+        }
+
+        public LoadedDocument Document { get; }
+
+        public int UnitIndex { get; }
+
+        public string Package { get; }
+
+        public CSharpToGSharpTranslator Translator { get; }
+
+        // The context of the unit's latest (final) translation.
+        public TranslationContext Context { get; set; }
+
+        public CompilationUnit Unit { get; set; }
     }
 }
