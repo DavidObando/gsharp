@@ -49,6 +49,16 @@ public sealed class CompilationUnit : GNode
 
     /// <summary>Gets assembly- or module-targeted file-level attributes.</summary>
     public IReadOnlyList<AttributeUse> FileAttributes { get; }
+
+    /// <summary>Returns a copy of this unit with different members.</summary>
+    /// <param name="members">The members of the copy.</param>
+    /// <returns>The copy, with every other field and the attached comments preserved.</returns>
+    public CompilationUnit WithMembers(IReadOnlyList<GNode> members) =>
+        new CompilationUnit(Package, Imports, members, LeadingComments, FileAttributes)
+        {
+            AttachedComments = AttachedComments,
+            TrailingComment = TrailingComment,
+        };
 }
 
 /// <summary>

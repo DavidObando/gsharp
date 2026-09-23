@@ -209,16 +209,27 @@ written only on the definition). ADR-0192 has since given G# partial methods
   — are the same on both. Parameter defaults are the definition's (the ones C#
   callers see) and parameter attributes are the union of both C# parts' (C#'s
   own rule), emitted identically on both parts.
-- **Both parts must spell identically in their own files.** gsc compares the
-  two signatures as text (ADR-0192 §D, GS0611) and binds each in its own
-  file's imports, while cs2gs builds each G# file's imports and synthesized
-  type aliases from that C# file's own `using` directives. A type ambiguous in
-  only one file is aliased there and not in the other, and a parameter
-  attribute copied across files can resolve differently or drag in a foreign
-  import. So the pair is emitted only when both C# parts see the **same
-  `using` scope** (the same directives at the same namespace nesting);
-  otherwise the pre-amendment rule applies. The check needs no type mapping,
-  so a fallback leaves no import or alias behind.
+- **Pairs are opt-in and reconciled after translation.** gsc compares the two
+  signatures as text (ADR-0192 §D, GS0611) and binds each in its own file's
+  imports, while cs2gs builds each G# file's imports and type aliases while
+  translating that file — including a whole-file pre-scan of qualified
+  references — so no check made while translating one file can predict the
+  other file's spelling. The translator therefore only emits a pair when the
+  caller sets `emitPartialMethodPairs` (default off: the implementation alone
+  is emitted, exactly as before), and then only TENTATIVELY: both parts carry
+  a pair key. The caller must translate every unit of the project and run
+  `PartialMethodPairReconciler` before printing anything (the cs2gs
+  `TranslateStage` does). A pair survives only when it has exactly one
+  declaring and one implementing part whose printed signatures — without
+  body or method-level attributes, with parameter annotations and defaults —
+  are identical; anything else is demoted to the pre-amendment shape (the
+  declaring part is removed, the implementing part becomes an ordinary
+  method).
+- **Parameter attributes.** A pair whose two parts are in one file emits the
+  union on both parts. A cross-file pair with any parameter attribute on
+  either part is not emitted at all: copying one file's attribute into the
+  other file can resolve it to a different type or add an import that breaks
+  that file's own code, a leak the signature comparison cannot see.
 - **Boundaries — the pre-amendment rule still applies** when any of these
   holds: legacy merge mode (`preservePartialParts: false`, whose single
   non-partial G# type cannot hold a partial method, GS0608); either part lives

@@ -272,6 +272,7 @@ public sealed class MethodDeclaration : GMember
     /// <param name="isSuspend">ADR-0174: whether the method renders as a <c>suspend func</c>; see <see cref="IsSuspend"/>.</param>
     /// <param name="isReadOnlyRefReturn">Whether the return reference is readonly.</param>
     /// <param name="isPartial">ADR-0192: whether the method renders as one part of a <c>partial func</c> pair; see <see cref="IsPartial"/>.</param>
+    /// <param name="partialPairKey">ADR-0192: identifies the two parts of one partial method pair across compilation units; see <see cref="PartialPairKey"/>.</param>
     public MethodDeclaration(
         string name,
         IReadOnlyList<Parameter> parameters = null,
@@ -289,7 +290,8 @@ public sealed class MethodDeclaration : GMember
         GTypeReference explicitInterfaceType = null,
         bool isSuspend = false,
         bool isReadOnlyRefReturn = false,
-        bool isPartial = false)
+        bool isPartial = false,
+        string partialPairKey = null)
     {
         Name = name;
         Parameters = parameters ?? new List<Parameter>();
@@ -308,6 +310,7 @@ public sealed class MethodDeclaration : GMember
         ExplicitInterfaceType = explicitInterfaceType;
         IsSuspend = isSuspend;
         IsPartial = isPartial;
+        PartialPairKey = partialPairKey;
     }
 
     /// <summary>Gets the method name.</summary>
@@ -382,6 +385,57 @@ public sealed class MethodDeclaration : GMember
     /// <c>partial</c> modifier immediately before <c>func</c>.
     /// </summary>
     public bool IsPartial { get; }
+
+    /// <summary>
+    /// Gets the key shared by the two parts of one ADR-0192 partial method pair
+    /// (stable across the compilation units of one translation), or
+    /// <see langword="null"/>. The pair is tentative until a post-translation
+    /// reconciliation pass has compared both parts' printed signatures.
+    /// </summary>
+    public string PartialPairKey { get; }
+
+    /// <summary>
+    /// Returns a copy of this method with the given body, attributes and
+    /// partial-pair state, preserving every other field and the attached
+    /// comments.
+    /// </summary>
+    /// <param name="body">The body of the copy.</param>
+    /// <param name="expressionBody">The arrow body of the copy.</param>
+    /// <param name="attributes">The attributes of the copy.</param>
+    /// <param name="isPartial">Whether the copy is a partial part.</param>
+    /// <param name="partialPairKey">The pair key of the copy.</param>
+    /// <returns>The copy.</returns>
+    public MethodDeclaration With(
+        BlockStatement body,
+        GStatement expressionBody,
+        IReadOnlyList<AttributeUse> attributes,
+        bool isPartial,
+        string partialPairKey)
+    {
+        return new MethodDeclaration(
+            Name,
+            Parameters,
+            ReturnType,
+            body,
+            TypeParameters,
+            Receiver,
+            Visibility,
+            IsOpen,
+            IsOverride,
+            IsAsync,
+            attributes,
+            expressionBody,
+            IsRefReturn,
+            ExplicitInterfaceType,
+            IsSuspend,
+            IsReadOnlyRefReturn,
+            isPartial,
+            partialPairKey)
+        {
+            AttachedComments = AttachedComments,
+            TrailingComment = TrailingComment,
+        };
+    }
 }
 
 /// <summary>
@@ -464,6 +518,16 @@ public sealed class SharedBlock : GMember
 
     /// <summary>Gets the static members.</summary>
     public IReadOnlyList<GMember> Members { get; }
+
+    /// <summary>Returns a copy of this block with different members.</summary>
+    /// <param name="members">The members of the copy.</param>
+    /// <returns>The copy, with this block's attached comments.</returns>
+    public SharedBlock WithMembers(IReadOnlyList<GMember> members) =>
+        new SharedBlock(members)
+        {
+            AttachedComments = AttachedComments,
+            TrailingComment = TrailingComment,
+        };
 }
 
 /// <summary>

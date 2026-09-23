@@ -447,12 +447,39 @@ namespace Demo
     }
 
     [Fact]
-    public void ImplementedPair_PreserveMode_ParameterAttributeOnOnePart_IsUnionedOntoBothParts()
+    public void ImplementedPair_PreserveMode_SameFileParameterAttributeOnOnePart_IsUnionedOntoBothParts()
     {
         // C# unions parameter attributes across the parts; G# requires the
-        // same annotations on both parts, so both get the union. The two C#
-        // files share one using scope, so the attribute resolves identically
-        // in both G# files.
+        // same annotations on both parts, so both get the union. Both parts
+        // are in one file (one type mapper), so the union cannot move an
+        // attribute into another file.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Note.cs", NoteAttributeSource),
+            ("Api.cs", @"
+namespace Demo
+{
+    public partial class Api
+    {
+        public partial void Log([Note] string message);
+
+        public partial void Log(string message)
+        {
+        }
+    }
+}"));
+
+        Assert.Contains("partial func Log(@Note message string);", printed[1]);
+        Assert.Contains("partial func Log(@Note message string) {", printed[1]);
+    }
+
+    [Fact]
+    public void ImplementedPair_CrossFileParameterAttribute_KeepsSingleImplementation()
+    {
+        // Across files, the union would copy one file's attribute into the
+        // other file, where it can resolve differently or add an import that
+        // breaks that file (a leak the post-pass cannot see), so a cross-file
+        // pair with any parameter attribute keeps the pre-ADR-0192 shape.
         IReadOnlyList<string> printed = TranslateFiles(
             preservePartialParts: true,
             ("Note.cs", NoteAttributeSource),
@@ -475,8 +502,9 @@ namespace Demo
     }
 }"));
 
-        Assert.Contains("partial func Log(@Note message string);", printed[1]);
-        Assert.Contains("partial func Log(@Note message string) {", printed[2]);
+        string combined = string.Join("\n---\n", printed);
+        Assert.DoesNotContain("partial func", combined);
+        Assert.Equal(1, CountOccurrences(combined, "func Log("));
     }
 
     [Fact]
@@ -848,6 +876,213 @@ namespace Demo
         Assert.Equal(1, CountOccurrences(translated, "func OnConfigured("));
     }
 
+    [Fact]
+    public void ImplementedPair_QualifiedParameterAttributeUnderSameUsings_KeepsSingleImplementation()
+    {
+        // Review repro: both files see only `using N2;`, but the definition
+        // writes `[N1.Tag]`. Unioning it onto the implementing part added
+        // `import N1` to that file, where `@Tag` on `Use` then stopped binding.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("N1.cs", @"
+using System;
+
+namespace N1
+{
+    public sealed class TagAttribute : Attribute
+    {
+    }
+}"),
+            ("N2.cs", @"
+using System;
+
+namespace N2
+{
+    public sealed class TagAttribute : Attribute
+    {
+    }
+
+    public class Other
+    {
+    }
+}"),
+            ("Decl.cs", @"
+using N2;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M([N1.Tag] int x);
+    }
+}"),
+            ("Impl.cs", @"
+using N2;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(int x)
+        {
+        }
+
+        [Tag]
+        public void Use(Other o)
+        {
+        }
+    }
+}"));
+
+        string combined = string.Join("\n---\n", printed);
+        Assert.DoesNotContain("partial func", combined);
+        Assert.Equal(1, CountOccurrences(combined, "func M("));
+        Assert.DoesNotContain("import N1", printed[3]);
+    }
+
+    [Fact]
+    public void ImplementedPair_QualifiedMemberElsewhereInDefinitionFile_IsDemotedByReconciliation()
+    {
+        // Review repro: identical usings, but a qualified System.Timers.Timer
+        // elsewhere in the DEFINITION's file makes that file's pre-scan alias
+        // `Timer` (ThreadingTimer), while the implementation's file prints the
+        // bare `Timer`. Only the post-translation comparison can see that; it
+        // demotes the pair to the single-implementation shape.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Decl.cs", TimerDefinitionWithQualifiedSibling),
+            ("Impl.cs", TimerImplementation));
+
+        string combined = string.Join("\n---\n", printed);
+        Assert.DoesNotContain("partial func", combined);
+        Assert.Equal(1, CountOccurrences(combined, "func M("));
+    }
+
+    [Fact]
+    public void ImplementedPair_QualifiedMemberElsewhereInImplementationFile_IsDemotedByReconciliation()
+    {
+        // Mirror of the previous test: the qualified sibling is in the
+        // implementation's file.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("Decl.cs", @"
+using System.Threading;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(Timer t);
+    }
+}"),
+            ("Impl.cs", @"
+using System.Threading;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(Timer t)
+        {
+        }
+
+        public void Use(System.Timers.Timer x, System.Timers.ElapsedEventArgs e)
+        {
+        }
+    }
+}"));
+
+        string combined = string.Join("\n---\n", printed);
+        Assert.DoesNotContain("partial func", combined);
+        Assert.Equal(1, CountOccurrences(combined, "func M("));
+    }
+
+    [Fact]
+    public void DemotedPair_DefinitionFileOutput_EqualsTranslationWithoutPairs()
+    {
+        // A demoted pair's declaring part was already spelled into its file
+        // (which may have recorded imports/aliases) before the post-pass
+        // removed it. The definition file must still come out exactly as it
+        // does with pairs disabled (the pre-ADR-0192 output).
+        (string FileName, string Source)[] files =
+        {
+            ("Decl.cs", TimerDefinitionWithQualifiedSibling),
+            ("Impl.cs", TimerImplementation),
+        };
+        IReadOnlyList<string> demoted = TranslateFiles(
+            preservePartialParts: true, retainedFilePaths: null, projectDirectory: null, emitPartialMethodPairs: true, files);
+        IReadOnlyList<string> withoutPairs = TranslateFiles(
+            preservePartialParts: true, retainedFilePaths: null, projectDirectory: null, emitPartialMethodPairs: false, files);
+
+        for (int i = 0; i < withoutPairs.Count; i++)
+        {
+            Assert.True(
+                withoutPairs[i] == demoted[i],
+                $"File {i} differs.\n--- without pairs ---\n{withoutPairs[i]}\n--- demoted ---\n{demoted[i]}");
+        }
+    }
+
+    [Fact]
+    public void ImplementedPair_WithoutEmitPartialMethodPairsOption_KeepsSingleImplementation()
+    {
+        // Pairs are opt-in: a caller that does not run the reconciliation
+        // post-pass (TestParityStage, SnippetTranslator, gsgen, direct
+        // translation) keeps today's output even for a pair that would
+        // otherwise be emitted.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            retainedFilePaths: null,
+            projectDirectory: null,
+            emitPartialMethodPairs: false,
+            ("VM.cs", @"
+namespace Demo
+{
+    public partial class VM
+    {
+        private int _count;
+
+        partial void OnReady();
+
+        partial void OnReady()
+        {
+            _count++;
+        }
+    }
+}"));
+
+        string translated = Assert.Single(printed);
+        Assert.DoesNotContain("partial func", translated);
+        Assert.Equal(1, CountOccurrences(translated, "func OnReady("));
+    }
+
+    private const string TimerDefinitionWithQualifiedSibling = @"
+using System.Threading;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(Timer t);
+
+        public void Use(System.Timers.Timer x, System.Timers.ElapsedEventArgs e)
+        {
+        }
+    }
+}";
+
+    private const string TimerImplementation = @"
+using System.Threading;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M(Timer t)
+        {
+        }
+    }
+}";
+
     private const string NoteAttributeSource = @"
 using System;
 
@@ -881,6 +1116,17 @@ namespace Demo
         bool preservePartialParts,
         IReadOnlyCollection<string> retainedFilePaths,
         string projectDirectory,
+        params (string FileName, string Source)[] files) =>
+        TranslateFiles(preservePartialParts, retainedFilePaths, projectDirectory, emitPartialMethodPairs: true, files);
+
+    // Translates every file, then (with emitPartialMethodPairs, as
+    // TranslateStage does) reconciles the tentative partial method pairs
+    // across ALL units before printing any of them.
+    private static IReadOnlyList<string> TranslateFiles(
+        bool preservePartialParts,
+        IReadOnlyCollection<string> retainedFilePaths,
+        string projectDirectory,
+        bool emitPartialMethodPairs,
         params (string FileName, string Source)[] files)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(files);
@@ -889,7 +1135,8 @@ namespace Demo
             "Snippet should bind with no C# errors: " +
                 string.Join(Environment.NewLine, project.ErrorDiagnostics));
 
-        var printedFiles = new List<string>();
+        var units = new List<CompilationUnit>();
+
         // Mirror the loader: a file under the project's obj/bin directory is
         // never translated (LoadInMemory has no project directory to apply
         // that rule itself).
@@ -901,10 +1148,15 @@ namespace Demo
             CompilationUnit unit = new CSharpToGSharpTranslator(
                 preservePartialParts,
                 retainedFilePaths: retainedFilePaths,
-                projectDirectory: projectDirectory).TranslateDocument(document, context);
-
-            printedFiles.Add(GSharpPrinter.Print(unit));
+                projectDirectory: projectDirectory,
+                emitPartialMethodPairs: emitPartialMethodPairs).TranslateDocument(document, context);
+            units.Add(unit);
         }
+
+        IReadOnlyList<CompilationUnit> reconciled = emitPartialMethodPairs
+            ? PartialMethodPairReconciler.Reconcile(units)
+            : units;
+        var printedFiles = reconciled.Select(GSharpPrinter.Print).ToList();
 
         // Bind every translated file TOGETHER: an ADR-0192 partial method's
         // two parts may live in different files, and a file bound alone

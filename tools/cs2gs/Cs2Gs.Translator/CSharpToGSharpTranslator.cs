@@ -117,6 +117,14 @@ public sealed partial class CSharpToGSharpTranslator
     // (GS0102). Null (default) preserves the exact prior no-filter behavior.
     private readonly HashSet<string> retainedFilePaths;
 
+    // ADR-0192 / ADR-0143 amendment: when true, a hand-authored implemented C#
+    // partial method may be emitted as a TENTATIVE G# partial pair (both
+    // parts tagged with MethodDeclaration.PartialPairKey). The caller MUST then
+    // run PartialMethodPairReconciler over every translated unit of the
+    // project before printing: only that post-pass can see both files'
+    // spellings. False (default) keeps the single-implementation shape.
+    private readonly bool emitPartialMethodPairs;
+
     // The translated project's directory, when known, so the translator applies
     // the loader's full generated-source rule (the obj/bin path half of
     // GeneratedSourceDetection) to a partial method's other part.
@@ -196,6 +204,13 @@ public sealed partial class CSharpToGSharpTranslator
     /// an executable project referenced by another project in the same run,
     /// whose entry class is consumable API surface.
     /// </param>
+    /// <param name="emitPartialMethodPairs">
+    /// When <see langword="true"/>, hand-authored implemented C# partial
+    /// methods may be emitted as tentative ADR-0192 partial pairs; the caller
+    /// must reconcile every translated unit of the project with
+    /// <see cref="PartialMethodPairReconciler.Reconcile"/> before printing.
+    /// Default <see langword="false"/>: the implementation alone is emitted.
+    /// </param>
     /// <param name="projectDirectory">
     /// The translated project's directory, or <see langword="null"/> when
     /// unknown (in-memory sources). Used only to recognize a partial method
@@ -210,9 +225,11 @@ public sealed partial class CSharpToGSharpTranslator
         bool widenObliviousReferenceFields = false,
         bool analyzerApiMode = false,
         bool preserveEntryType = false,
-        string projectDirectory = null)
+        string projectDirectory = null,
+        bool emitPartialMethodPairs = false)
     {
         this.projectDirectory = projectDirectory;
+        this.emitPartialMethodPairs = emitPartialMethodPairs;
         this.analyzerApiMode = analyzerApiMode;
         this.preserveEntryType = preserveEntryType;
         this.preservePartialParts = preservePartialParts;
@@ -364,7 +381,8 @@ public sealed partial class CSharpToGSharpTranslator
             this.markMergedTypePartial,
             this.widenObliviousReferenceFields,
             this.retainedFilePaths,
-            this.projectDirectory);
+            this.projectDirectory,
+            this.emitPartialMethodPairs);
 
         IReadOnlyList<AttributeUse> fileAttributes = this.includeFileAttributes
             ? visitor.MapFileAttributes(
@@ -1542,6 +1560,9 @@ public sealed partial class CSharpToGSharpTranslator
         // See `CSharpToGSharpTranslator.projectDirectory`.
         private readonly string projectDirectory;
 
+        // See `CSharpToGSharpTranslator.emitPartialMethodPairs`.
+        private readonly bool emitPartialMethodPairs;
+
         // ADR-0145 (§C/§D): when true, `partial` parts are NOT merged — every
         // part is emitted as its own standalone G# `partial` declaration (using
         // only its own members), so a generated part augments the user's real G#
@@ -1612,10 +1633,12 @@ public sealed partial class CSharpToGSharpTranslator
             bool markMergedTypePartial = false,
             bool widenObliviousReferenceFields = false,
             HashSet<string> retainedFilePaths = null,
-            string projectDirectory = null)
+            string projectDirectory = null,
+            bool emitPartialMethodPairs = false)
         {
             this.retainedFilePaths = retainedFilePaths;
             this.projectDirectory = projectDirectory;
+            this.emitPartialMethodPairs = emitPartialMethodPairs;
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;

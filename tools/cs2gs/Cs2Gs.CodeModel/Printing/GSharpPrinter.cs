@@ -66,6 +66,32 @@ public static class GSharpPrinter
     /// <returns>The rendered G# type form.</returns>
     public static string RenderTypeReference(GTypeReference type) => RenderType(type);
 
+    /// <summary>
+    /// ADR-0192: renders a method's signature — everything but its body and
+    /// its method-level attributes (which gsc unions across partial parts),
+    /// keeping parameter annotations and defaults — exactly as the printer
+    /// would spell it. Used to check that the two parts of a partial method
+    /// pair spell the same signature.
+    /// </summary>
+    /// <param name="method">The method.</param>
+    /// <returns>The rendered signature.</returns>
+    public static string RenderMethodSignature(MethodDeclaration method)
+    {
+        if (method == null)
+        {
+            throw new ArgumentNullException(nameof(method));
+        }
+
+        return RenderMethod(
+            method.With(
+                body: null,
+                expressionBody: null,
+                attributes: null,
+                isPartial: method.IsPartial,
+                partialPairKey: method.PartialPairKey),
+            0);
+    }
+
     private static string Indent(int level)
     {
         // ponytail: no shared cache — Print is a public static API and xunit

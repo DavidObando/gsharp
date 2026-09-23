@@ -1176,12 +1176,16 @@ public sealed partial class CSharpToGSharpTranslator
             //     nullability promotion keyed on its parameters — are the same
             //     on both parts. gsc compares the two signatures as text
             //     (GS0611), so the two files must also spell every type the same
-            //     way: the pair is only emitted when both C# parts see the same
-            //     `using` scope (see IsEmittablePartialMethodPair). Parameter
+            //     way, which only a post-pass over every translated file can
+            //     check: the pair is TENTATIVE (both parts carry a
+            //     PartialPairKey) and PartialMethodPairReconciler demotes it to
+            //     the single-implementation shape when the printed signatures
+            //     differ. This path is opt-in (`emitPartialMethodPairs`), for
+            //     callers that run that post-pass. Parameter
             //     defaults (the definition's) and parameter attributes (the
-            //     union of both parts, C#'s rule) are emitted identically on
-            //     both parts; method-level attributes are unioned by gsc, so
-            //     each part keeps its own.
+            //     union of both parts, C#'s rule — same-file pairs only) are
+            //     emitted identically on both parts; method-level attributes
+            //     are unioned by gsc, so each part keeps its own.
             //   * Any other implemented pair (legacy merge mode — a
             //     non-partial G# type, where `partial func` is GS0608 —, a
             //     part in a generated/dropped document, an extension or
@@ -1554,7 +1558,8 @@ public sealed partial class CSharpToGSharpTranslator
                 isRefReturn: symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly),
                 isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true,
                 isSuspend: isEmittedSuspend,
-                isPartial: isPartialPart);
+                isPartial: isPartialPart,
+                partialPairKey: isPartialPart ? PartialPairKeyOf(symbol) : null);
 
             return (method, isStatic);
         }
@@ -1582,7 +1587,8 @@ public sealed partial class CSharpToGSharpTranslator
             // where a `partial func` is GS0608. G# partial methods live only in
             // a `partial class` / `partial struct` (ADR-0192 §A): records map to
             // `data class`/`data struct` and interfaces reject them (GS0607).
-            if (!this.preservePartialParts
+            if (!this.emitPartialMethodPairs
+                || !this.preservePartialParts
                 || ownerKind is not (TypeDeclarationKind.Class or TypeDeclarationKind.Struct)
                 || !definition.IsPartialDefinition
                 || definition.PartialImplementationPart is not IMethodSymbol implementation)
@@ -1657,16 +1663,19 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // gsc requires both parts' signatures to be textually identical
-            // (GS0611) AND each to resolve in its own file. Each G# file's
-            // imports and synthesized type aliases are built per output file
-            // (one CSharpTypeMapper per translated document) from that C#
-            // file's `using` directives, so a type can spell differently in the
-            // two files (a short name ambiguous in only one of them gets an
-            // alias there), and a parameter attribute copied from one part
-            // into the other file can resolve to a different type or drag in a
-            // foreign import. Both disappear when both C# parts see the SAME
-            // `using` scope, so that is required.
-            if (!HaveSameUsingScope(definitionNode, implNode))
+            // (GS0611) and each to resolve in its own file. Each G# file's
+            // imports and aliases are built per output file, so whether the two
+            // files spell the signature the same way is only known once both
+            // are translated: PartialMethodPairReconciler compares the printed
+            // signatures afterwards and demotes a mismatched pair. A parameter
+            // attribute is decided HERE instead: gsc requires the same
+            // annotations on both parts, so a cross-file pair would copy one
+            // file's attribute into the other file, where it can resolve to a
+            // different type or add an import that breaks that file's own
+            // code — a leak the post-pass cannot see. Within one file (one
+            // type mapper) the union is safe.
+            if (definitionNode.SyntaxTree != implNode.SyntaxTree
+                && definition.Parameters.Concat(implementation.Parameters).Any(HasParameterAttributes))
             {
                 return false;
             }
@@ -1675,41 +1684,17 @@ public sealed partial class CSharpToGSharpTranslator
             return true;
         }
 
-        /// <summary>
-        /// Whether two declarations see the same <c>using</c> directives, at the
-        /// same namespace nesting: the compilation unit's and every enclosing
-        /// namespace's directives, compared as normalized text. (Global usings
-        /// declared in other files apply to both alike.)
-        /// </summary>
-        private static bool HaveSameUsingScope(SyntaxNode first, SyntaxNode second) =>
-            string.Equals(DescribeUsingScope(first), DescribeUsingScope(second), StringComparison.Ordinal);
+        // Both parts are built from the implementation's symbol, so its
+        // documentation-comment id (containing type + name + parameter types)
+        // identifies the pair across every unit of the compilation.
+        private static string PartialPairKeyOf(IMethodSymbol implementation) =>
+            implementation.GetDocumentationCommentId() ?? implementation.ToDisplayString();
 
-        private static string DescribeUsingScope(SyntaxNode node)
-        {
-            var levels = new List<string>();
-            foreach (SyntaxNode ancestor in node.Ancestors())
+        private static bool HasParameterAttributes(IParameterSymbol parameter) =>
+            parameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() is ParameterSyntax
             {
-                switch (ancestor)
-                {
-                    case BaseNamespaceDeclarationSyntax ns:
-                        levels.Add(ns.Name.ToString() + "{" + DescribeUsings(ns.Usings) + "}");
-                        break;
-                    case CompilationUnitSyntax unit:
-                        levels.Add("{" + DescribeUsings(unit.Usings) + "}");
-                        break;
-                }
-            }
-
-            levels.Reverse();
-            return string.Join("/", levels);
-        }
-
-        private static string DescribeUsings(SyntaxList<UsingDirectiveSyntax> usings) =>
-            string.Join(
-                ";",
-                usings
-                    .Select(directive => directive.WithoutTrivia().NormalizeWhitespace().ToFullString())
-                    .OrderBy(text => text, StringComparer.Ordinal));
+                AttributeLists.Count: > 0,
+            };
 
         // The two parts of a pair may live in different files, and this check
         // runs from either part's node, so it resolves symbols through the
@@ -1745,9 +1730,9 @@ public sealed partial class CSharpToGSharpTranslator
         /// attribute lists, definition first: C#'s own parameter-attribute rule
         /// (a non-AllowMultiple attribute on both parts is already CS0579), so
         /// the same list is emitted on both parts. IsEmittablePartialMethodPair
-        /// required both parts to share one `using` scope, so an attribute
-        /// written on the other part resolves to the same type in this file
-        /// and adds no import this file's own C# scope lacks.
+        /// only lets a pair carry parameter attributes when both parts are in
+        /// ONE file (one type mapper), so the union never moves an attribute
+        /// into another file.
         /// </summary>
         private List<Parameter> ReconcilePartialMethodParameters(
             IMethodSymbol symbol,
