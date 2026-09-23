@@ -370,8 +370,23 @@ internal sealed partial class ExpressionBinder
         var capturedArguments = arguments.MoveToImmutable();
         var elementType = SubstituteIndexerType(storedType, substitution);
 
+        // No setter: storedType came from the writable ref getter. Review
+        // finding (#4350): call that getter exactly ONCE and hoist the
+        // reference it returns, so a compound assignment reads and writes the
+        // same location even when the getter has side effects.
+        LocalVariableSymbol? referenceTemp = null;
+        if (setter == null)
+        {
+            var refGetterCall = Invariant.Required(refGetter, "a stored type without a setter comes from a ref getter");
+            var refCall = new BoundUserInstanceCallExpression(null, receiver, refGetterCall, capturedArguments, elementType);
+            var reference = new BoundAddressOfExpression(null, refCall, unmanaged: false);
+            referenceTemp = DeclareRangeTemp("ref", reference.Type, reference, statements);
+        }
+
         BoundExpression ReadCurrent()
-            => BindUserIndexerRead(receiver, indexer, substitution, (i, _) => capturedArguments[i], location);
+            => referenceTemp != null
+                ? new BoundDereferenceExpression(null, new BoundVariableExpression(null, referenceTemp))
+                : BindUserIndexerRead(receiver, indexer, substitution, (i, _) => capturedArguments[i], location);
 
         var value = conversions.BindConversion(location, bindValue(elementType, ReadCurrent), elementType);
         if (value is BoundErrorExpression)
@@ -379,15 +394,22 @@ internal sealed partial class ExpressionBinder
             return value;
         }
 
-        if (setter == null)
+        if (referenceTemp != null)
         {
-            // No setter: storedType came from the writable ref getter.
-            var refGetterCall = Invariant.Required(refGetter, "a stored type without a setter comes from a ref getter");
-            var refCall = new BoundUserInstanceCallExpression(null, receiver, refGetterCall, capturedArguments, elementType);
+            // The hoisted managed pointer cannot survive a suspension of the
+            // enclosing async method, exactly as for a ref-returning call target.
+            if (GSharp.Core.CodeAnalysis.Lowering.Async.AsyncBoundTreeQueries.HasAwait(value))
+            {
+                Diagnostics.ReportManagedReference(
+                    location,
+                    "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target");
+                return new BoundErrorExpression(null);
+            }
+
             return new BoundBlockExpression(
                 null,
                 statements.ToImmutable(),
-                new BoundIndirectAssignmentExpression(null, new BoundAddressOfExpression(null, refCall, unmanaged: false), value));
+                new BoundIndirectAssignmentExpression(null, new BoundVariableExpression(null, referenceTemp), value));
         }
 
         var valueLocal = DeclareRangeTemp("value", elementType, value, statements);
@@ -397,7 +419,7 @@ internal sealed partial class ExpressionBinder
             new BoundUserInstanceCallExpression(
                 null,
                 receiver,
-                setter,
+                Invariant.Required(setter, "without a hoisted reference the indexer has a setter"),
                 capturedArguments.Add(valueRead))));
         return new BoundBlockExpression(null, statements.ToImmutable(), valueRead);
     }

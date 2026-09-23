@@ -2136,6 +2136,28 @@ internal sealed partial class ExpressionBinder
                     statements);
             }
 
+            // Review finding (#4350): a built-in operator over a writable
+            // ref-returning element must also call the getter exactly once —
+            // read and write through the hoisted reference rather than binding
+            // a second getter call for the store.
+            if (addressTemp != null)
+            {
+                if (AsyncBoundTreeQueries.HasAwait(rhsBound))
+                {
+                    Diagnostics.ReportManagedReference(
+                        resolvedCompoundRhsSyntax.Location,
+                        "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target");
+                    return new BoundErrorExpression(outerSyntax);
+                }
+
+                scope.TryDeclareVariable(addressTemp);
+                statements.Add(new BoundVariableDeclaration(
+                    outerSyntax,
+                    addressTemp,
+                    Invariant.Required(elementAddress, "a hoisted element reference has an address")));
+                indexRead = userCompoundTarget;
+            }
+
             previousValue = CapturePostfixCompoundValue(
                 outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
                 outerSyntax,
@@ -2158,13 +2180,18 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            assignment = BindIndexedAssignmentToVariableWithBoundValue(
-                tempVar,
-                indexSyntax,
-                combined,
-                diagnosticLocation,
-                sharedIndex,
-                boundReceiver);
+            assignment = addressTemp != null
+                ? new BoundIndirectAssignmentExpression(
+                    outerSyntax,
+                    new BoundVariableExpression(null, addressTemp),
+                    conversions.BindConversion(resolvedCompoundRhsSyntax.Location, combined, compoundTarget.Type))
+                : BindIndexedAssignmentToVariableWithBoundValue(
+                    tempVar,
+                    indexSyntax,
+                    combined,
+                    diagnosticLocation,
+                    sharedIndex,
+                    boundReceiver);
         }
         else if (boundValueOverride != null)
         {

@@ -1878,9 +1878,12 @@ internal sealed class UserTokenResolver
 
     // Review finding (#4350): a symbolic index parameter has no reflected
     // `ClrType`, but it must still discriminate between same-arity overloads
-    // (`this[T]` vs `this[int32]`) rather than match anything. A type
-    // parameter matches only the generic parameter at the same position; any
-    // other symbolic type matches only a reflected type of the same name.
+    // (`this[T]` vs `this[int32]`, `this[A.Key]` vs `this[B.Key]`) rather than
+    // match anything. A type parameter matches only the generic parameter at
+    // the same position; a source type matches only the reflected type with
+    // the same namespace, name and arity, with its type arguments matched the
+    // same way; an array or slice matches element-wise. Any other symbolic
+    // shape is not matched, so no overload is picked by accident.
     private static bool IndexParameterTypeMatches(Type clrParameterType, TypeSymbol parameterType)
     {
         if (parameterType.ClrType is { } parameterClrType)
@@ -1888,16 +1891,65 @@ internal sealed class UserTokenResolver
             return ClrTypeUtilities.AreSame(clrParameterType, parameterClrType);
         }
 
-        if (parameterType is TypeParameterSymbol typeParameter)
+        switch (parameterType)
         {
-            return clrParameterType.IsGenericParameter
-                && clrParameterType.GenericParameterPosition == typeParameter.Ordinal;
+            case TypeParameterSymbol typeParameter:
+                return clrParameterType.IsGenericParameter
+                    && clrParameterType.GenericParameterPosition == typeParameter.Ordinal;
+            case ArrayTypeSymbol array:
+                return clrParameterType.IsArray
+                    && clrParameterType.GetElementType() is { } arrayElement
+                    && IndexParameterTypeMatches(arrayElement, array.ElementType);
+            case SliceTypeSymbol slice:
+                return clrParameterType.IsArray
+                    && clrParameterType.GetElementType() is { } sliceElement
+                    && IndexParameterTypeMatches(sliceElement, slice.ElementType);
+            case StructSymbol structSymbol:
+                return SourceTypeMatches(clrParameterType, structSymbol.PackageName, structSymbol.Name, structSymbol.TypeArguments);
+            case InterfaceSymbol interfaceSymbol:
+                return SourceTypeMatches(clrParameterType, interfaceSymbol.PackageName, interfaceSymbol.Name, interfaceSymbol.TypeArguments);
+            case EnumSymbol enumSymbol:
+                return SourceTypeMatches(clrParameterType, enumSymbol.PackageName, enumSymbol.Name, ImmutableArray<TypeSymbol>.Empty);
+            default:
+                return false;
+        }
+    }
+
+    private static bool SourceTypeMatches(
+        Type clrType,
+        string packageName,
+        string name,
+        ImmutableArray<TypeSymbol> typeArguments)
+    {
+        if (clrType.IsGenericParameter)
+        {
+            return false;
         }
 
-        var clrName = clrParameterType.Name;
+        var clrName = clrType.Name;
         var arityMarker = clrName.IndexOf('`', StringComparison.Ordinal);
-        return !clrParameterType.IsGenericParameter
-            && string.Equals(arityMarker < 0 ? clrName : clrName.Substring(0, arityMarker), parameterType.Name, StringComparison.Ordinal);
+        if (!string.Equals(arityMarker < 0 ? clrName : clrName.Substring(0, arityMarker), name, StringComparison.Ordinal)
+            || !string.Equals(clrType.Namespace ?? string.Empty, packageName ?? string.Empty, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var clrArguments = clrType.IsGenericType ? clrType.GetGenericArguments() : Type.EmptyTypes;
+        var symbolArguments = typeArguments.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArguments;
+        if (clrArguments.Length != symbolArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < clrArguments.Length; i++)
+        {
+            if (!IndexParameterTypeMatches(clrArguments[i], symbolArguments[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>

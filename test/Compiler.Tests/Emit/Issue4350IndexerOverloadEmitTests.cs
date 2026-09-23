@@ -177,6 +177,64 @@ public class Issue4350IndexerOverloadEmitTests
     }
 
     [Fact]
+    public void RefGetterCompoundAssignment_CallsGetterOnce()
+    {
+        // Review finding: without a setter, a compound assignment writes
+        // through the ref getter; it must call that getter exactly once so a
+        // side-effecting getter reads and writes the same element.
+        var source = """
+            package P
+            import System
+
+            class Counter {
+                shared {
+                    var Calls int32 = 0
+                }
+            }
+
+            struct Cells {
+                private let items []int32
+
+                init(items []int32) {
+                    this.items = items
+                }
+
+                prop this[index int32] ref int32 {
+                    get {
+                        Counter.Calls += 1
+                        return ref items[index + Counter.Calls - 1]
+                    }
+                }
+
+                prop this[index int32, offset int32] ref int32 {
+                    get {
+                        Counter.Calls += 1
+                        return ref items[index + offset + Counter.Calls - 1]
+                    }
+                }
+            }
+
+            let values = []int32{10, 20, 30}
+            var cells = Cells(values)
+            cells[0] += 5
+            Console.WriteLine(Counter.Calls)
+            Console.WriteLine(String.Join(",", values))
+            cells[1]++
+            cells[0] -= 1
+            Console.WriteLine(Counter.Calls)
+            Console.WriteLine(String.Join(",", values))
+            Counter.Calls = 0
+            cells[0, 1] += 100
+            Console.WriteLine(Counter.Calls)
+            Console.WriteLine(String.Join(",", values))
+            """;
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, "1", "15,20,30", "3", "15,20,30", "1", "15,120,30") + Environment.NewLine,
+            CompileAndRun(source));
+    }
+
+    [Fact]
     public void OverloadedIndexers_EmitOneItemPropertyPerSignature()
     {
         var libraryPath = EmitGSharpLibrary("Shape", Library);
