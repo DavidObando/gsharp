@@ -615,6 +615,59 @@ namespace Demo
     }
 
     [Fact]
+    public void ImplementedPair_ConstraintType_IsSpelledInDefinitionFilesScope()
+    {
+        // PR #4360 review: the declaring part's type-parameter constraint is
+        // mapped at the DEFINITION's location, as its parameter types are.
+        // Only the definition's file sees the source type MyLib.Stream, so the
+        // metadata constraint System.IO.Stream must not be spelled bare there.
+        // The emitted pair must spell it the same way in both files and bind.
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("MyLib.cs", @"
+namespace MyLib
+{
+    public class Stream
+    {
+    }
+
+    public class Gadget
+    {
+    }
+}"),
+            ("Decl.cs", @"
+using System.IO;
+using MyLib;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M<T>(T item) where T : System.IO.Stream;
+
+        public void Use(Gadget g)
+        {
+        }
+    }
+}"),
+            ("Impl.cs", @"
+using System.IO;
+
+namespace Demo
+{
+    public partial class A
+    {
+        partial void M<T>(T item) where T : Stream
+        {
+        }
+    }
+}"));
+
+        Assert.Contains("private partial func M[T IOStream](item T);", printed[1]);
+        Assert.Contains("private partial func M[T IOStream](item T) {", printed[2]);
+    }
+
+    [Fact]
     public void ImplementedPair_SameUsingsAcrossFiles_EmitsPairEvenWhenTypeNeedsAlias()
     {
         // Positive control for the using-scope rule: both files import both
@@ -682,12 +735,10 @@ namespace Demo
     {
         private int _last;
 
-#pragma warning disable CS8826
         partial void OnSet(int newValue)
         {
             _last = newValue;
         }
-#pragma warning restore CS8826
     }
 }"));
 

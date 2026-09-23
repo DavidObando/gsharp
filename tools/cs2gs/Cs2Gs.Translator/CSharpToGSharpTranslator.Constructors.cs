@@ -824,18 +824,33 @@ public sealed partial class CSharpToGSharpTranslator
             return symbol.TypeParameters.Select(this.MapTypeParameter).ToList();
         }
 
-        private List<TypeParameter> MapMethodTypeParameters(IMethodSymbol symbol)
+        // ADR-0192: an emitted declaring part maps the implementation's type
+        // parameters (its facts) but spells their constraints at the
+        // definition's locations (`spellingSymbol`), so the constraint types
+        // resolve in the definition file's scope — as MapParameter's
+        // `spellingLocation` does for parameter types.
+        private List<TypeParameter> MapMethodTypeParameters(IMethodSymbol symbol, IMethodSymbol spellingSymbol = null)
         {
             if (symbol == null || symbol.TypeParameters.Length == 0)
             {
                 return new List<TypeParameter>();
             }
 
-            return symbol.TypeParameters.Select(this.MapTypeParameter).ToList();
+            return symbol.TypeParameters
+                .Select((tp, index) => this.MapTypeParameter(
+                    tp,
+                    spellingSymbol?.TypeParameters[index].Locations.FirstOrDefault()))
+                .ToList();
         }
 
         private TypeParameter MapTypeParameter(ITypeParameterSymbol tp)
         {
+            return this.MapTypeParameter(tp, spellingLocation: null);
+        }
+
+        private TypeParameter MapTypeParameter(ITypeParameterSymbol tp, Location spellingLocation)
+        {
+            spellingLocation ??= tp.Locations.FirstOrDefault();
             var flags = new List<string>();
             if (tp.HasReferenceTypeConstraint)
             {
@@ -867,7 +882,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.Report(new TranslationDiagnostic(
                     nameof(SyntaxKind.TypeParameterConstraintClause),
                     $"type parameter '{tp.Name}' has a 'notnull' constraint; G# has no equivalent constraint keyword, so it is dropped (ADR-0115 §B.7 gap).",
-                    tp.Locations.FirstOrDefault(),
+                    spellingLocation,
                     TranslationSeverity.Info));
             }
 
@@ -884,7 +899,7 @@ public sealed partial class CSharpToGSharpTranslator
                 GTypeReference constraintRef = this.typeMapper.MapConstraintType(
                     primary,
                     this.context,
-                    tp.Locations.FirstOrDefault());
+                    spellingLocation);
                 legacy = GSharpPrinter.RenderTypeReference(constraintRef);
 
                 if (tp.ConstraintTypes.Length > 1)
@@ -892,7 +907,7 @@ public sealed partial class CSharpToGSharpTranslator
                     this.context.Report(new TranslationDiagnostic(
                         nameof(SyntaxKind.TypeParameterConstraintClause),
                         $"type parameter '{tp.Name}' has multiple constraint types; only the first ('{legacy}') is carried into the G# legacy-constraint slot (ADR-0115 §B.7).",
-                        tp.Locations.FirstOrDefault(),
+                        spellingLocation,
                         TranslationSeverity.Info));
                 }
             }

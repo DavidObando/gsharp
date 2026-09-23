@@ -1403,7 +1403,9 @@ public sealed partial class CSharpToGSharpTranslator
                 node,
                 unwrapValueTask: isEmittedSuspend,
                 iteratorBodySource: signatureFactsNode);
-            List<TypeParameter> typeParameters = this.MapMethodTypeParameters(symbol);
+            List<TypeParameter> typeParameters = this.MapMethodTypeParameters(
+                symbol,
+                isDeclaringPart ? symbol.PartialDefinitionPart : null);
 
             // ADR-0192: the declaring part is signature-only — the
             // implementation's body is translated once, by the implementing
