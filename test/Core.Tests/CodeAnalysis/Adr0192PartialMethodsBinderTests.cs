@@ -338,6 +338,76 @@ partial class Widget {
         Assert.Contains(diagnostics, d => d.Id == "GS0611");
     }
 
+    // Copilot review round 12: the declaring part's constraints, parameter
+    // annotations, and default values were compared only as text and never
+    // bound, so a name that doesn't resolve in the DECLARING file went
+    // unreported whenever the implementing file imported it. Each case below
+    // imports the namespace only in the implementing file. (Not `System`: G#
+    // makes it visible without an import, which would make the test vacuous.)
+    [Theory]
+    [InlineData(
+        "partial func F[T IStructuralEquatable](x T) int32",
+        "System.Collections",
+        "IStructuralEquatable")]
+    [InlineData(
+        "partial func F(@AllowNull x string) int32",
+        "System.Diagnostics.CodeAnalysis",
+        "AllowNull")]
+    [InlineData(
+        "partial func F(x int32 = Timeout.Infinite) int32",
+        "System.Threading",
+        "Timeout")]
+    public void NameUnresolvedOnlyInTheDeclaringFile_IsReported(string signature, string importedOnlyByImplementation, string name)
+    {
+        var declaringFile = SyntaxTree.Parse(SourceText.From(
+            $"package App\n\npartial class A {{\n    {signature};\n}}\n",
+            "A.gs"));
+        var implementingFile = SyntaxTree.Parse(SourceText.From(
+            $"package App\nimport {importedOnlyByImplementation}\n\npartial class A {{\n    {signature} {{ return 1 }}\n}}\n",
+            "A.g.gs"));
+
+        var diagnostics = EmitDiagnostics(new[] { declaringFile, implementingFile });
+        Assert.Contains(diagnostics, d => d.IsError && d.Message.Contains(name, StringComparison.Ordinal) && d.Location.Text.FileName == "A.gs");
+
+        var bothImport = EmitDiagnostics(new[]
+        {
+            SyntaxTree.Parse(SourceText.From($"package App\nimport {importedOnlyByImplementation}\n\npartial class A {{\n    {signature};\n}}\n", "A.gs")),
+            implementingFile,
+        });
+        Assert.DoesNotContain(bothImport, d => d.IsError);
+    }
+
+    [Fact]
+    public void ConversionOperatorPairedWithAnOrdinaryEscapedMethod_ReportsGS0611()
+    {
+        // Copilot review round 12: `operator implicit` and an escaped
+        // `$op_Implicit` share a grouping key, and the merge took whichever
+        // form the implementing part used.
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func operator implicit (x A) int32;
+}
+
+partial class A {
+    partial func $op_Implicit(x A) int32 { return 1 }
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611" && d.Message.Contains("conversion-operator form", StringComparison.Ordinal));
+
+        var matching = Compile(@"package App
+
+partial class A {
+    partial func operator implicit (x A) int32;
+}
+
+partial class A {
+    partial func operator implicit (x A) int32 { return 1 }
+}
+");
+        Assert.DoesNotContain(matching, d => d.IsError);
+    }
+
     [Fact]
     public void DeclaringSideTypeIsTotallyUnresolved_ReportsOnlyTheUndefinedTypeDiagnostic()
     {

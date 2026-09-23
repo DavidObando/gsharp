@@ -298,6 +298,16 @@ internal static class PartialMethodMerger
             return Disagree("the 'async'/'suspend' modifier");
         }
 
+        // A conversion operator and an ordinary method can share a grouping key
+        // (`operator implicit` and an escaped `$op_Implicit` have the same
+        // value text), and the merge takes the implementing part's form — so
+        // the two parts must agree on it (Copilot review round 12).
+        if (declaring.IsConversionOperator != implementing.IsConversionOperator
+            || declaring.ConversionIsExplicit != implementing.ConversionIsExplicit)
+        {
+            return Disagree("the conversion-operator form");
+        }
+
         if (NormalizeNodeText(declaring.TypeParameterList) != NormalizeNodeText(implementing.TypeParameterList))
         {
             return Disagree("the type parameter list");

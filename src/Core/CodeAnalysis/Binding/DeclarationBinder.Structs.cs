@@ -958,90 +958,71 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
-    /// ADR-0192 / Copilot review round 7: a merged partial method's DECLARING
-    /// signature is never actually bound — <c>PartialMethodMerger</c> compares
-    /// the two parts' return/parameter TYPE CLAUSES only as normalized source
-    /// TEXT (<c>ValidateConsistency</c>), then discards the declaring part's
-    /// clauses entirely and keeps only the implementing part's (already-bound
-    /// <paramref name="returnType"/>/<paramref name="methodParameters"/>). A
-    /// textual match is not proof of a semantic one: the declaring file can
-    /// spell a type the same way as the implementing file and still mean
-    /// something different (an unresolved/differently-imported short name,
-    /// or two distinct types of the same short name from different
-    /// namespaces) — GS0611 would then never fire and the merge would
-    /// silently adopt the implementing file's resolution.
+    /// ADR-0192: semantic half of the partial-method consistency check.
+    /// <c>PartialMethodMerger</c> compares the two parts as source text and then
+    /// keeps only the implementing part's signature, which is what gets bound
+    /// (<paramref name="returnType"/>, <paramref name="methodParameters"/>,
+    /// <paramref name="methodTypeParameters"/>). Identical text is not proof of
+    /// an identical signature: each part binds against its own file's imports,
+    /// so a name can be unresolved in the declaring file, or resolve to a
+    /// different type there. This binds the declaring part's own type-parameter
+    /// constraints, return type, parameter types, parameter attributes, and
+    /// default values in the declaring file and compares them with the
+    /// implementing part's, reporting GS0611 on the first difference
+    /// (Copilot review rounds 7, 10 and 12).
     /// <para>
-    /// Binds the declaring part's return type and each parameter's type
-    /// directly via <c>bindTypeClause</c>, which already redirects the
-    /// scope's import resolution to <em>the type clause's own</em>
-    /// <see cref="SyntaxNode.SyntaxTree"/> (see <c>Binder.BindTypeClause</c>'s
-    /// "Issue #3336" comment) — so no explicit
-    /// <c>SetCurrentReferencingSyntaxTree</c> call is needed here; passing
-    /// the declaring part's own <see cref="TypeClauseSyntax"/> is enough to
-    /// bind it against the DECLARING file's imports. The method's own type
-    /// parameters (if generic) are unaffected: they were seeded into
-    /// <c>binderCtx.CurrentTypeParameters</c> from the implementing/merged
-    /// declaration's own type-parameter list before this runs (in the same
-    /// still-open scope), and ADR-0192's syntax-level check already requires
-    /// the two parts' type-parameter list TEXT to match — so a same-named
-    /// type parameter in the declaring part's clause resolves, by name, to
-    /// the SAME shared <c>TypeParameterSymbol</c> instance, not a distinct
-    /// one. Compared with <c>TypeSignaturesEquivalent</c> — the same
-    /// resolved-type-identity check override/interface-implementation
-    /// matching uses — rather than a raw <c>ReferenceEquals</c>, so a
-    /// constructed generic/array/nullable type still compares structurally.
-    /// </para>
-    /// <para>
-    /// A totally unresolved declaring-side type (no import at all) is left
-    /// alone here: <c>bindTypeClause</c> already reports GS0021-family
-    /// "type not found" diagnostics of its own in that case, which is a more
-    /// precise complaint than a generic "resolves differently" GS0611 would
-    /// be — this method's own <c>TypeSymbol.Error</c> guards avoid piling a
-    /// second, redundant diagnostic on top of that one.
+    /// Type clauses bind in their own file through <c>bindTypeClause</c>, which
+    /// redirects import lookup to the clause's own tree ("Issue #3336");
+    /// attributes and deferred defaults do the same by their syntax's tree.
+    /// Each comparison is skipped when binding the declaring side already
+    /// reported an error — that error names the problem more precisely than a
+    /// follow-on GS0611. The declaring side goes through the same post-processing
+    /// as the implementing side (async return wrapping, variadic widening), or
+    /// every async or variadic pair would compare unequal.
     /// </para>
     /// </summary>
     private void ValidateMergedPartialMethodSignatureBinding(
         FunctionDeclarationSyntax methodSyntax,
         TypeSymbol returnType,
-        ImmutableArray<ParameterSymbol> methodParameters)
+        ImmutableArray<ParameterSymbol> methodParameters,
+        ImmutableArray<TypeParameterSymbol> methodTypeParameters,
+        StructSymbol structSymbol,
+        PackageSymbol package)
     {
-        if (methodSyntax.DeclaringPart is not { } declaringPart)
-        {
-            return;
-        }
-
-        // Copilot review round 9: the syntax-level check already reported a
-        // GS0611 for this pair (the merge proceeds anyway). Past that point
-        // this cross-file resolution check can only cascade — e.g. `Echo[T]`
-        // paired with `Echo[U]` binds with only `U` seeded, so re-binding the
-        // declaring side's `T` adds an unrelated "type not found", and a
-        // textual return-type mismatch would be reported a second time here.
-        if (methodSyntax.PartsDisagreement != null)
+        // Skip a pair the syntax-level check already rejected: past that
+        // point this check can only cascade (e.g. `Echo[T]` paired with
+        // `Echo[U]` binds with only `U` in scope).
+        if (methodSyntax.DeclaringPart is not { } declaringPart || methodSyntax.PartsDisagreement != null)
         {
             return;
         }
 
         var methodName = methodSyntax.Identifier.ValueText;
+        const string ResolvesDifferently = "the same spelling resolves differently in the declaring and implementing files";
 
-        // The implementing-side `returnType`/`methodParameters` passed in are
-        // not raw `bindTypeClause` results — they've been through the SAME
-        // post-processing every ordinary method's signature goes through
-        // (async Task/ValueTask wrapping, a variadic parameter's `...T` to
-        // `[]T` widening). Comparing a raw declaring-side bind against an
-        // already-transformed implementing-side value is an apples-to-
-        // oranges mismatch that fires on every async or variadic partial
-        // method — caught by PartialOverloadsDifferingOnlyByVariadicMarker_
-        // AreNotPairedWithEachOther regressing during this fix's own
-        // development. Re-derive the declaring side through the identical
-        // pipeline (using its own IsAsync/IsVariadic — already required to
-        // match the implementing part's by the syntax-level consistency
-        // check) so both sides are equally transformed before comparing.
-        // Copilot review round 10: an omitted declaring return type is
-        // `void`, not "nothing to compare". The implementing part's own
-        // omitted type is NOT always void — InferAnonymousClassLiteralReturnType
-        // infers a type from a `-> object { … }` body — so skipping the check
-        // let `partial func F();` merge with an implementation that exposes a
-        // non-void inferred return.
+        void Disagree(string aspect)
+            => Diagnostics.ReportPartialMethodPartsDisagree(methodSyntax.Identifier.Location, methodName, aspect);
+
+        bool BindsCleanly(System.Action bind)
+        {
+            var before = Diagnostics.Count;
+            bind();
+            return !Diagnostics.Skip(before).Any(d => d.IsError);
+        }
+
+        if (declaringPart.TypeParameterList is { } declaringTypeParameterList && !methodTypeParameters.IsDefaultOrEmpty)
+        {
+            var declaringTypeParameters = ImmutableArray<TypeParameterSymbol>.Empty;
+            if (BindsCleanly(() => declaringTypeParameters = BindTypeParameterList(declaringTypeParameterList))
+                && !TypeParameterConstraintSignaturesEquivalent(methodTypeParameters, declaringTypeParameters))
+            {
+                Disagree($"the type parameter constraints ({ResolvesDifferently})");
+                return;
+            }
+        }
+
+        // An omitted declaring return type is `void`: the implementing part's
+        // omitted type is not always void, since a `-> object { … }` body infers one.
         var declaringReturnType = declaringPart.Type != null
             ? bindReturnTypeClause(declaringPart.Type, declaringPart.IsAsync) ?? TypeSymbol.Error
             : TypeSymbol.Void;
@@ -1054,10 +1035,9 @@ internal sealed partial class DeclarationBinder
             && returnType != TypeSymbol.Error
             && !TypeSignaturesEquivalent(declaringReturnType, returnType))
         {
-            var returnAspect = declaringPart.Type != null
-                ? "the return type (the same spelling resolves to two different types across the declaring and implementing files' imports)"
-                : $"the return type (the declaring part states none, but the implementing part's body infers '{returnType.Name}')";
-            Diagnostics.ReportPartialMethodPartsDisagree(methodSyntax.Identifier.Location, methodName, returnAspect);
+            Disagree(declaringPart.Type != null
+                ? $"the return type ({ResolvesDifferently})"
+                : $"the return type (the declaring part states none, but the implementing part's body infers '{returnType.Name}')");
             return;
         }
 
@@ -1065,28 +1045,68 @@ internal sealed partial class DeclarationBinder
         for (var i = 0; i < declaringParameters.Count && i < methodParameters.Length; i++)
         {
             var declaringParameterSyntax = declaringParameters[i];
-            var declaringParameterTypeSyntax = declaringParameterSyntax.Type;
-            if (declaringParameterTypeSyntax == null)
+            var implementingParameter = methodParameters[i];
+            var parameterNumber = i + 1;
+
+            if (declaringParameterSyntax.Type is { } declaringParameterTypeSyntax)
             {
-                continue;
+                var declaringParameterType = bindTypeClause(declaringParameterTypeSyntax) ?? TypeSymbol.Error;
+                if (declaringParameterType != TypeSymbol.Error && declaringParameterSyntax.IsVariadic)
+                {
+                    declaringParameterType = VariadicCarriers.ResolveDeclaredParameterType(declaringParameterType);
+                }
+
+                if (declaringParameterType != TypeSymbol.Error
+                    && implementingParameter.Type != TypeSymbol.Error
+                    && !TypeSignaturesEquivalent(declaringParameterType, implementingParameter.Type))
+                {
+                    Disagree($"parameter {parameterNumber}'s type ({ResolvesDifferently})");
+                    return;
+                }
             }
 
-            var declaringParameterType = bindTypeClause(declaringParameterTypeSyntax) ?? TypeSymbol.Error;
-            if (declaringParameterType != TypeSymbol.Error && declaringParameterSyntax.IsVariadic)
+            if (!declaringParameterSyntax.Annotations.IsDefaultOrEmpty)
             {
-                declaringParameterType = VariadicCarriers.ResolveDeclaredParameterType(declaringParameterType);
+                var declaringAttributes = ImmutableArray<BoundAttribute>.Empty;
+                var implementingAttributes = implementingParameter.Attributes.IsDefault
+                    ? ImmutableArray<BoundAttribute>.Empty
+                    : implementingParameter.Attributes;
+                if (BindsCleanly(() => declaringAttributes = BindAttributes(
+                        declaringParameterSyntax.Annotations,
+                        AttributeTargetKind.Param,
+                        Binder.ParameterAllowedTargets,
+                        "a parameter declaration",
+                        System.AttributeTargets.Parameter))
+                    && (declaringAttributes.Length != implementingAttributes.Length
+                        || declaringAttributes.Zip(implementingAttributes).Any(pair => !TypeSignaturesEquivalent(pair.First.AttributeType, pair.Second.AttributeType))))
+                {
+                    Disagree($"parameter {parameterNumber}'s annotations ({ResolvesDifferently})");
+                    return;
+                }
             }
 
-            var implementingParameterType = methodParameters[i].Type;
-            if (declaringParameterType != TypeSymbol.Error
-                && implementingParameterType != TypeSymbol.Error
-                && !TypeSignaturesEquivalent(declaringParameterType, implementingParameterType))
+            if (declaringParameterSyntax.HasDefaultValue)
             {
-                Diagnostics.ReportPartialMethodPartsDisagree(
-                    methodSyntax.Identifier.Location,
-                    methodName,
-                    $"parameter {i + 1}'s type (the same spelling resolves to two different types across the declaring and implementing files' imports)");
-                return;
+                // Defaults bind in a deferred pass once every type's static
+                // members exist. Bind the declaring part's default into a
+                // stand-in symbol there too, then compare once both are done.
+                var declaringDefault = new ParameterSymbol(
+                    implementingParameter.Name,
+                    implementingParameter.Type,
+                    implementingParameter.IsVariadic,
+                    declaringParameterSyntax.Identifier,
+                    implementingParameter.IsScoped,
+                    implementingParameter.RefKind);
+                DeferParameterDefaultValueBinding(declaringParameterSyntax, declaringDefault, structSymbol, package, methodTypeParameters);
+                pendingParameterDefaultValueBindings.Add(() =>
+                {
+                    if (declaringDefault.HasExplicitDefaultValue
+                        && implementingParameter.HasExplicitDefaultValue
+                        && !Equals(declaringDefault.ExplicitDefaultValue, implementingParameter.ExplicitDefaultValue))
+                    {
+                        Disagree($"parameter {parameterNumber}'s default value ({ResolvesDifferently})");
+                    }
+                });
             }
         }
     }
@@ -1240,7 +1260,7 @@ internal sealed partial class DeclarationBinder
                     // return/parameter type clauses were discarded after
                     // only a textual comparison; bind and compare them
                     // semantically too.
-                    ValidateMergedPartialMethodSignatureBinding(methodSyntax, returnType, methodParameters);
+                    ValidateMergedPartialMethodSignatureBinding(methodSyntax, returnType, methodParameters, methodTypeParameters, structSymbol, package);
 
                     // Issue #1283: a conversion operator declared in the body is
                     // not an instance method — defer it to the static
@@ -2706,7 +2726,7 @@ internal sealed partial class DeclarationBinder
                     // return/parameter type clauses were discarded after
                     // only a textual comparison; bind and compare them
                     // semantically too.
-                    ValidateMergedPartialMethodSignatureBinding(methodSyntax, returnType, sharedMethodParameters);
+                    ValidateMergedPartialMethodSignatureBinding(methodSyntax, returnType, sharedMethodParameters, methodTypeParameters, structSymbol, package);
 
                     var methodSymbol = new FunctionSymbol(
                         methodName,
