@@ -144,6 +144,9 @@ public sealed class Adr0186PlatformTypeBindingTests
             public static T[] Same<T>(T[] values) => values;
 
             public static Holder<T> Hold<T>(T value) => new Holder<T> { Value = value };
+
+            public static System.Threading.Tasks.Task<T> MakeTask<T>(T value)
+                => System.Threading.Tasks.Task.FromResult(value);
         }
 
         public class Holder<T>
@@ -1284,6 +1287,10 @@ public sealed class Adr0186PlatformTypeBindingTests
     [Theory]
     [InlineData("let probe = Ob.EmptyArr[string?]()")]
     [InlineData("let probe = Ob.Hold[string?](nil)")]
+
+    // Review round 2: the `Task`/`ValueTask`/`IAsyncEnumerable` arm returned
+    // before the merge ever ran.
+    [InlineData("let probe = Ob.MakeTask[string?](nil)")]
     public void Section2_ASymbolicTypeArgument_KeepsTheConcreteContainersPlatformType(string globals)
     {
         using var world = new World();

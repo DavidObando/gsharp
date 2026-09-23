@@ -270,6 +270,21 @@ internal static class NullableFlagsBuilder
                 return projected;
             }
 
+            // Issue #4361 (review): an UNCONSTRAINED type parameter is the hazard
+            // the open-slot comment above names — it may be substituted with a
+            // value type, where G#'s `K?` means `Nullable<K>` and changes the
+            // contract. C#'s `TSource? Min<TSource>(…)` says "may be default",
+            // which `K?` cannot express, so an unconstrained parameter is left
+            // as the caller wrote it. Only a reference-constrained parameter
+            // (`[T class]`, or a class-base constraint) can soundly widen.
+            // Measured: `func GenericMin[T](values IEnumerable[T]) T ->
+            // values.Min()` became `T?` once the symbolic return path started
+            // merging declaration flags.
+            if (projected is TypeParameterSymbol { HasReferenceTypeConstraint: false, ClassConstraint: null })
+            {
+                return projected;
+            }
+
             var isValueType = projected switch
             {
                 TypeParameterSymbol parameter => parameter.HasValueTypeConstraint,

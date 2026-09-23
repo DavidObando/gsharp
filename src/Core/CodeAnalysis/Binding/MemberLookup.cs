@@ -1717,7 +1717,10 @@ internal sealed class MemberLookup
                     openReturnDefinition.GetGenericArguments(),
                     symbolicArguments,
                     erasedObject) ?? openReturn;
-                return ImportedTypeSymbol.GetConstructed(closedReturn, openReturnDefinition, symbolicArguments);
+                return MergeReturnDeclarationNullability(
+                    ImportedTypeSymbol.GetConstructed(closedReturn, openReturnDefinition, symbolicArguments),
+                    openReturn,
+                    openMethod);
             }
         }
 
@@ -1751,28 +1754,38 @@ internal sealed class MemberLookup
             return null;
         }
 
-        // Issue #4361 (review): the symbolic projection carries the
-        // ARGUMENT's nullability at every open slot, but nothing about the
-        // declaration's CONCRETE positions — so `Ob.EmptyArr[string?]()` on
-        // an oblivious `T[] EmptyArr<T>()` came back `[]string?` where the
-        // reflection path (which the same call takes for a non-symbolic
-        // argument) says `[]!string?`: the concrete container's `!` was
-        // dropped and a possibly-nil return typed non-null. Merge the
-        // declaration's flags exactly as the parameter path above does, so
-        // the two readers agree about one declaration. The merge leaves open
-        // slots to the argument (ADR-0186 §2), which is the rule the
-        // reflection projection now also applies. (A by-ref return keeps the
-        // unmerged projection, as before: its flags annotate the pointee
-        // beneath a wrapper this merge does not peel.)
-        if (openReturn.IsByRef)
-        {
-            return mapped;
-        }
+        return MergeReturnDeclarationNullability(mapped, openReturn, openMethod);
 
-        return NullableFlagsBuilder.MergeDeclarationNullability(
-            mapped,
-            openReturn,
-            ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod));
+        // Applies the declaration's return nullability to a symbolic return
+        // projection. EVERY non-null answer above goes through this one local
+        // function — the `Task`/`ValueTask`/`IAsyncEnumerable` arm included —
+        // so no branch can return a projection the declaration never
+        // annotated (issue #4361, review rounds 1 and 2).
+        static TypeSymbol MergeReturnDeclarationNullability(TypeSymbol mapped, Type openReturn, MethodInfo openMethod)
+        {
+            // The symbolic projection carries the ARGUMENT's nullability at
+            // every open slot, but nothing about the declaration's CONCRETE
+            // positions — so `Ob.EmptyArr[string?]()` on an oblivious
+            // `T[] EmptyArr<T>()` came back `[]string?` where the reflection
+            // path (which the same call takes for a non-symbolic argument)
+            // says `[]!string?`: the concrete container's `!` was dropped and
+            // a possibly-nil return typed non-null. Merge the declaration's
+            // flags exactly as the symbolic parameter path does, so the two
+            // readers agree about one declaration. The merge leaves open
+            // slots to the argument (ADR-0186 §2), which is the rule the
+            // reflection projection now also applies. (A by-ref return keeps
+            // the unmerged projection, as before: its flags annotate the
+            // pointee beneath a wrapper this merge does not peel.)
+            if (openReturn.IsByRef)
+            {
+                return mapped;
+            }
+
+            return NullableFlagsBuilder.MergeDeclarationNullability(
+                mapped,
+                openReturn,
+                ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod));
+        }
     }
 
     /// <summary>
