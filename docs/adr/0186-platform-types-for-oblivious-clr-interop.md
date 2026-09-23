@@ -144,6 +144,15 @@ and silently wrong for every other node kind that carries the same fact. PR
 metadata-origin nullability exactly as a property read does, and the one-arm
 predicate could not see it.
 
+> *Step 4 note (PR #4353):* read as "this `?` came from oblivious metadata", the
+> disjunct is a proxy, and under this ADR an oblivious receiver no longer depends
+> on it. But the same disjunct has always had a second, legitimate job: it
+> continues member chains through *stated*-nullable imported reads
+> (annotated-nullable members, and generic `T` members read through an
+> explicitly nullable type argument). That job is out of this ADR's scope, so
+> the disjunct is kept. See the implementation note under *Implementation
+> impact → Deleted*.
+
 That is the shape of the whole problem: the predicate is wrong whenever a new
 node kind appears (failure mode 1), unavailable wherever the node has no syntax
 (failure mode 3), and blind to the fact that the same path spelled differently is
@@ -279,7 +288,11 @@ caller may collapse. An implementer meets this on day one.
 
 **Annotated BCL members are entirely unaffected.** Modern .NET assemblies carry
 `[NullableContext(1)]`, so their reference members stay non-null `T`, and a
-genuinely annotated nullable member stays `T?` and still requires narrowing.
+genuinely annotated nullable member stays `T?` and still requires narrowing
+wherever it flows into a non-null destination. *(Step 4 note: a member chain
+through such a member, such as `e.InnerException.Message`, continues via `main`'s
+member-lookup carve-out without narrowing, exactly as before this ADR. That
+carve-out is kept; see the implementation note under Deleted.)*
 `System.Object.ToString()` still returns `string?` and still must be coalesced or
 bound. This pivot does not un-annotate the BCL; it changes only the answer for
 positions that say nothing.
@@ -579,12 +592,14 @@ nothing about *what type the expression has afterwards*.
 > nullability applied. Unwrapping `T!` for lookup must not degrade a symbolic or
 > generic-substituted projection to an erased one.
 
-**5a** is the mechanism that replaces the carve-out system and makes failure mode
-5 unrepresentable: a receiver's platform-ness cannot influence which member is
-chosen, because the lookup never sees it. An instance member wins over an
+**5a** is the mechanism that replaces the carve-out system *for oblivious
+receivers* and makes failure mode 5 unrepresentable: a receiver's platform-ness
+cannot influence which member is chosen, because the lookup never sees it. An instance member wins over an
 extension by the ordinary priority rule; `List[int32]!.Reverse()` binds
 `List<T>.Reverse` because `List[int32].Reverse()` does; `string!.Trim()` binds
-`string.Trim` because `string.Trim()` does.
+`string.Trim` because `string.Trim()` does. (Step 4 kept `main`'s member-lookup
+disjunct for stated-nullable chains; an oblivious receiver no longer reaches it.
+See the implementation note under Deleted.)
 
 **5b** is the clause an implementer will get wrong by default, and it has a
 named hazard. `GetImportedTypeSymbol` is a *closed switch* over receiver type
@@ -937,6 +952,27 @@ requires a decision about how far the change should reach.
 | --- | --- |
 | `ExpressionBinder.Access.MemberLookup.cs:941–946` | The `\|\| receiver is BoundClrPropertyAccessExpression` disjunct of `CanBindClrInstanceMember`. It reverts to the plain non-nullable test, because a `PlatformTypeSymbol` receiver is not a `NullableTypeSymbol` and never enters the branch the disjunct exists to rescue. **That is the entire binder deletion on main: one disjunct.** |
 
+> **Implementation note (step 4, PR #4353): this row was not performed.** The
+> premise — that the disjunct's whole population is oblivious members imported
+> as `T?` — missed a second population it has always carried: *annotated*-
+> nullable imported members (`[Nullable(2)]`, e.g. `Exception.InnerException`,
+> or Roslyn API members declared `T?`) used as an intermediate link in a member
+> chain, read or write (`e.InnerException.Message`,
+> `a.MaybeNumbers.Capacity = 4`). Deleting it broke that code — 20
+> `Cs2Gs.Tests` failures on real Roslyn-analyzer source and the Oahu migration
+> gate — and this ADR leaves annotated members out of scope (*Explicitly out of
+> scope*). The disjunct is therefore **kept**. Under the default mode it cannot
+> re-admit an oblivious receiver: that receiver is `T!`, the §4 coercion checks
+> and unwraps it before lookup, and it satisfies the first disjunct as plain
+> `T`. What the second disjunct admits under the default mode is exactly the
+> stated-nullable chains it always admitted: annotated-nullable members, and a
+> plain generic `T` member read through an explicitly nullable type argument
+> (`Box[string?].Value`, whose `T?` `NullableFlagsBuilder.MergeDeclarationNullability`
+> keeps from the receiver). Both keep the same (unchecked) dereference as
+> before this ADR.
+> Step 4's binder change is therefore documentation and tests pinning that
+> separation, not a deletion.
+
 **Binder — additionally, *if* PR #4308 lands first** (it is closed and unmerged;
 none of these symbols exists on `main`):
 
@@ -1019,7 +1055,10 @@ So the accurate claim is: **the bug class is eliminated** — no site anywhere
 reconstructs metadata origin from a bound-node shape, because the type carries it
 — and the large line-count win is on the cs2gs side, provisionally ~7,000–7,300
 lines pending the telemetry measurement (§10). The binder's win is structural
-rather than numeric: on `main`'s baseline it is **one disjunct**.
+rather than numeric: on `main`'s baseline it is **one disjunct**. *(Superseded
+in part: that disjunct is kept, not deleted — see the implementation note under
+Deleted. The structural claim stands: an oblivious receiver no longer depends
+on it.)*
 
 ### Cost the implementer must budget for
 
@@ -1345,7 +1384,8 @@ Ordered by how much a wrong answer would cost.
 
 11. **The binder change is one condition, not one block — and only if that block
     exists.** On `main` the deletion is a single disjunct
-    (`|| receiver is BoundClrPropertyAccessExpression`); PR #4308's
+    (`|| receiver is BoundClrPropertyAccessExpression`) — *superseded: that
+    disjunct is kept (see the implementation note under Deleted)*; PR #4308's
     `nullableInnerVt is { IsValueType: false }` block is **branch-only** and not
     on `main` at all, so this item applies only in the world where that branch
     lands first. In that world the block **must not be deleted** — it is the only
@@ -1422,13 +1462,22 @@ Suggested sequencing, each step independently landable and green:
    (`Environment.Version.ToString()` reporting GS0159 again, with main's
    property-read carve-out removed and nothing replacing it). The flip is the
    point at which the new model becomes load-bearing and the old carve-out becomes
-   dead code — in that order, never the reverse.
-4. Delete the old carve-out — on `main`'s baseline, the
-   `|| receiver is BoundClrPropertyAccessExpression` disjunct; additionally
-   `IsImportedClrChainReceiver` and the `CanBindClrInstanceMember` conjunct if PR
-   #4308 landed first, **keeping that block's body**. Verify the #4287 regression
-   suite still reports on G#-declared `string?` receivers, and that the
-   `ListReverse` / `StringTrim` gate witnesses from `359538cd` stay green for a
+   dead code — in that order, never the reverse. *(Superseded in part: the
+   carve-out does not become dead code; see step 4.)*
+4. ~~Delete the old carve-out — on `main`'s baseline, the
+   `|| receiver is BoundClrPropertyAccessExpression` disjunct~~ **Superseded
+   (PR #4353): keep that disjunct.** It also carries member chains through
+   stated-nullable imported reads (annotated-nullable members, and generic `T`
+   members read through an explicitly nullable type argument), which this ADR
+   leaves out of scope; deleting it broke real code. See the implementation
+   note under *Implementation impact → Deleted*. Step 4 instead pins, by test,
+   that an oblivious field-read receiver never reaches the disjunct under the
+   default mode (it is `T!`, checked and unwrapped first). The rest of the
+   original step still applies: remove `IsImportedClrChainReceiver` and the
+   `CanBindClrInstanceMember` conjunct only if PR #4308 lands first,
+   **keeping that block's body**. Verify the #4287 regression suite still
+   reports on G#-declared `string?` receivers, and that the `ListReverse` /
+   `StringTrim` gate witnesses from `359538cd` stay green for a
    source-declared `List[int32]?`.
 5. §9's oblivious scope — **covering every type-writing position, not only
    declaration signatures (open question 12)** — and §8's emit; verify the

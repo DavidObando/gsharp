@@ -779,10 +779,15 @@ internal sealed partial class ExpressionBinder
                     // Phase 4 exit: read a public instance property or field on
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
                     // `kvp.Key`). Static members are reached through
-                    // ImportedClassSymbol; this path covers instances. Permit a
-                    // chained CLR member whose oblivious metadata made its
-                    // result nullable, while explicit nullable variables still
-                    // require narrowing or `?.`. Issue #3311: an open-generic
+                    // ImportedClassSymbol; this path covers instances. A
+                    // chained imported field or property read whose annotated
+                    // metadata made it `T?` still continues the chain here,
+                    // while a source-declared `T?` variable requires narrowing
+                    // or `?.` (see CanBindClrInstanceMember). An oblivious
+                    // imported result arrives as a platform type `T!` under
+                    // the default mode (ADR-0186), is checked and unwrapped by
+                    // CheckPlatformReceiver before this dispatch, and reaches
+                    // it as plain `T`. Issue #3311: an open-generic
                     // `map[K, V]` receiver (null ClrType) is normalized to its
                     // symbolic Dictionary view so `.Keys`/`.Count`/… resolve
                     // over the erased closed shape with symbolic [K, V]
@@ -1013,9 +1018,46 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
-    /// Returns whether CLR instance lookup may continue through a receiver.
-    /// Imported fields and properties can carry oblivious reference metadata as
-    /// a nullable type, but remain valid intermediate receivers in a member chain.
+    /// Returns whether CLR instance lookup may continue through a receiver:
+    /// the receiver has a loadable <see cref="TypeSymbol.ClrType"/>, and either
+    /// its type is not a <see cref="NullableTypeSymbol"/> or the receiver is
+    /// itself an imported field or property read
+    /// (<see cref="BoundClrPropertyAccessExpression"/>) — an intermediate link
+    /// in a member chain such as <c>e.InnerException.Message</c> or
+    /// <c>a.MaybeNumbers.Capacity = 4</c>.
+    /// <para>
+    /// This predicate never sees a <see cref="PlatformTypeSymbol"/>: both
+    /// callers run <c>PlatformCoercion.InsertCheck</c> on the receiver first
+    /// (the read path through <c>CheckPlatformReceiver</c>, the write path
+    /// explicitly in <c>BindMemberFieldAssignmentExpression</c>), which inserts
+    /// ADR-0186 §4's nil check and unwraps <c>T!</c> to its underlying
+    /// <c>T</c>. Under the default <c>--nullability=platform-types</c> an
+    /// oblivious imported position is <c>T!</c>, so it satisfies the first
+    /// disjunct after that coercion and never reaches the second: its safety
+    /// question is answered by §4's check, not here.
+    /// </para>
+    /// <para>
+    /// <b>The second disjunct is kept deliberately (ADR-0186 step 4).</b> The
+    /// ADR planned to delete it on the premise that its whole population was
+    /// oblivious members imported as <c>T?</c> under ADR-0136. That premise
+    /// missed a second, pre-existing population: <em>annotated</em>-nullable
+    /// imported members (<c>[Nullable(2)]</c>, e.g. the BCL's
+    /// <c>Exception.InnerException</c>, or a Roslyn API member declared
+    /// <c>T?</c>), which have always continued a member chain through this
+    /// disjunct. ADR-0186 leaves annotated members untouched, so deleting it
+    /// would have been a breaking change outside the ADR's scope. A third
+    /// population reaches it too: a plain generic <c>T</c> member read through
+    /// a receiver with an explicitly nullable type argument
+    /// (<c>Box[string?].Value</c>), whose <c>T?</c> is kept from the receiver
+    /// by <c>NullableFlagsBuilder.MergeDeclarationNullability</c> rather than
+    /// declared on the member. Under the default mode the receivers it admits
+    /// are exactly those two stated-nullable populations — never an oblivious
+    /// one; under <c>--nullability=enabled</c> it also admits oblivious reads,
+    /// which is ADR-0136's behaviour for that compatibility mode, unchanged.
+    /// The chained dereference through such a receiver is not nil-checked by
+    /// the compiler — a pre-existing property that this predicate neither
+    /// introduces nor fixes.
+    /// </para>
     /// </summary>
     private static bool CanBindClrInstanceMember(BoundExpression? receiver)
     {

@@ -17,9 +17,13 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// honest one for a position imported from nullability-<em>oblivious</em> CLR
 /// metadata: <em>the declarer said nothing</em>. ADR-0136 collapsed that third
 /// answer onto <c>T?</c>, which is what forced every use site to discharge a
-/// proof obligation about a fact the compiler does not have — and what the
-/// carve-out predicates ADR-0186 removes were reconstructing, one bound-node
-/// kind at a time.
+/// proof obligation about a fact the compiler does not have — and what
+/// bound-node carve-out predicates were reconstructing for oblivious
+/// receivers, one node kind at a time. With this symbol an oblivious receiver
+/// no longer depends on any of them. (ADR-0186 step 4 kept the one such
+/// predicate on <c>main</c>, <c>CanBindClrInstanceMember</c>'s
+/// <c>BoundClrPropertyAccessExpression</c> disjunct, because it also carries
+/// member chains through stated-nullable imported reads.)
 /// </para>
 /// <para>
 /// The wrapper is deliberately a <b>distinct symbol</b> rather than a flag on
@@ -45,10 +49,12 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </para>
 /// </summary>
 /// <remarks>
-/// ADR-0186 step 1 builds the symbol and its read path behind
-/// <c>--nullability=platform-types</c>, which defaults <b>off</b>
-/// (<see cref="NullabilityOptions"/>). With the flag off nothing constructs one
-/// during a real compilation, so every existing behaviour is unchanged.
+/// ADR-0186 step 1 built the symbol and its read path behind
+/// <c>--nullability=platform-types</c>; step 3 made that mode the <b>default</b>
+/// (<see cref="NullabilityOptions"/>), so an ordinary compilation constructs
+/// these wrappers for every oblivious imported reference position.
+/// <c>--nullability=enabled</c> restores ADR-0136's reading, and under it
+/// nothing constructs one.
 /// </remarks>
 public sealed class PlatformTypeSymbol : TypeSymbol
 {

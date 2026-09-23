@@ -480,9 +480,10 @@ public static class ClrNullability
     /// metadata-transparent <c>Nullable&lt;T&gt;</c> recurses directly into T.
     /// Struct-constrained generic parameters likewise force a <c>0</c> slot.
     /// Empty and missing positions use the importer's current reading rule and
-    /// expand to <see cref="DefaultAbsentFill"/> — byte <c>2</c>
-    /// (nullable-by-default, ADR-0136) unless ADR-0186's platform-types mode is
-    /// on, in which case byte <c>0</c> (oblivious).
+    /// expand to <see cref="DefaultAbsentFill"/> — byte <c>0</c> (oblivious)
+    /// under ADR-0186's platform-types mode, which is the default since step 3,
+    /// and byte <c>2</c> (nullable-by-default, ADR-0136) under
+    /// <c>--nullability=enabled</c>.
     /// </summary>
     /// <param name="type">CLR type tree to expand.</param>
     /// <param name="flags">Physical nullable flags, possibly scalar or empty.</param>
@@ -494,14 +495,18 @@ public static class ClrNullability
     /// Issue #3705 family 2: <see cref="ExpandNullableFlags(Type, ImmutableArray{byte})"/>
     /// with an explicit fill for positions the declaration did not supply.
     /// <para>
-    /// The default fill of <c>2</c> IS the #1354 rule — "the declarer said
-    /// nothing, so assume nullable". That is right for a concrete reference
-    /// position and wrong for an OPEN type-parameter position, whose
-    /// nullability comes from the substituted argument instead. A caller that
-    /// must distinguish "the declaration explicitly said <c>2</c>" from "the
-    /// declaration was silent and we defaulted to <c>2</c>" cannot do it from
-    /// the default expansion, because both look identical. Passing
-    /// <c>absentFill: 0</c> yields the literal reading.
+    /// The fill the two-argument overload chooses IS the reading rule. Under
+    /// <c>--nullability=enabled</c> it is <c>2</c> — the #1354 rule, "the
+    /// declarer said nothing, so assume nullable" — and under ADR-0186's
+    /// platform-types mode, the default since step 3, it is <c>0</c>
+    /// (see <see cref="DefaultAbsentFill"/>). Either way it is right for a
+    /// concrete reference position and wrong for an OPEN type-parameter
+    /// position, whose nullability comes from the substituted argument
+    /// instead. A caller that must distinguish "the declaration explicitly
+    /// said <c>2</c>" from "the declaration was silent and the ADR-0136
+    /// reading defaulted it to <c>2</c>" cannot do it from the default
+    /// expansion, because both look identical. Passing <c>absentFill: 0</c>
+    /// yields the literal reading in either mode.
     /// </para>
     /// <para>
     /// A scalar or context byte is a genuine statement about every position and
@@ -884,8 +889,10 @@ public static class ClrNullability
     /// preserves that rule.
     /// </para>
     /// <para>
-    /// With the mode off — the default — this is the literal constant
-    /// <c>2</c> the two-argument overload always used, so nothing changes.
+    /// Platform-types is the default since ADR-0186 step 3, so <c>0</c> is the
+    /// ordinary answer. Under <c>--nullability=enabled</c> this is the literal
+    /// constant <c>2</c> the two-argument overload always used, so that mode
+    /// keeps ADR-0136's reading unchanged.
     /// </para>
     /// </summary>
     /// <returns>The fill byte for positions the declaration did not supply.</returns>
