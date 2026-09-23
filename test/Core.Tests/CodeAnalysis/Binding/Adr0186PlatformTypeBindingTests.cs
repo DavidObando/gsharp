@@ -1276,6 +1276,34 @@ public sealed class Adr0186PlatformTypeBindingTests
         Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
     }
 
+    /// <summary>
+    /// Issue #4361, at the reader: an open slot of an unannotated generic reads
+    /// the argument's nullability, the concrete container stays oblivious, and
+    /// a CONCRETE inner position is untouched. Observed through the display,
+    /// which is also issue #4361's diagnostic fix: an imported platform array
+    /// is spelled <c>[]!T</c> (ADR-0132's positional rule) and a nested
+    /// platform argument shows its <c>!</c>.
+    /// <para>
+    /// Uses the csc-emitted library rather than an in-assembly
+    /// <c>#nullable disable</c> fixture on purpose: the latter stops being
+    /// oblivious when <c>test/Core.Tests</c> is itself self-migrated to G#,
+    /// and the migrated suite's test parity would then fail it.
+    /// </para>
+    /// </summary>
+    /// <param name="globals">The probe.</param>
+    /// <param name="expected">The expected display of the probe's type.</param>
+    [Theory]
+    [InlineData("let probe = Ob.EmptyArr[string]()", "[]!string")]
+    [InlineData("let probe = Ob.EmptySeq[string]()", "System.Collections.Generic.IEnumerable[string]!")]
+    [InlineData("let probe = Ob.Hold(\"x\")", "Adr0186.Step2.Library.Holder[string]!")]
+    [InlineData("let probe = Ob.Strings()", "System.Collections.Generic.List[string!]!")]
+    public void Section2_AnOpenSlot_OfAnUnannotatedGeneric_Reads_ItsArgument(string globals, string expected)
+    {
+        using var world = new World();
+
+        Assert.IsType<PlatformTypeSymbol>(world.GlobalProbeType(globals, NullabilityMode.PlatformTypes));
+        Assert.Equal(expected, world.LastProbeDisplay);
+    }
 
     /// <summary>
     /// ADR-0186 §3 rule 2 at an <b>indexer parameter</b>: a
@@ -2057,6 +2085,9 @@ public sealed class Adr0186PlatformTypeBindingTests
 
         internal string LibraryPath { get; }
 
+        /// <summary>Gets the display string of the last <see cref="GlobalProbeType"/> result.</summary>
+        internal string LastProbeDisplay { get; private set; } = string.Empty;
+
         public void Dispose()
         {
             try
@@ -2195,7 +2226,13 @@ public sealed class Adr0186PlatformTypeBindingTests
             Assert.DoesNotContain(
                 scope.Diagnostics,
                 d => d.IsError && !(tolerateNilableReceiverReport && IsToleratedNilableReceiverReport(d)));
-            return Assert.Single(scope.Variables, v => v.Name == "probe").Type;
+            var type = Assert.Single(scope.Variables, v => v.Name == "probe").Type;
+
+            // Rendered while the metadata context is still alive: an imported
+            // type's display reads its CLR shape, which is gone once
+            // `resolver` is disposed.
+            this.LastProbeDisplay = GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplay.ToTypeDisplayString(type);
+            return type;
         }
 
         /// <summary>

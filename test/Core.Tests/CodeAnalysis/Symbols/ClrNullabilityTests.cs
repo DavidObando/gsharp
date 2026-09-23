@@ -464,8 +464,9 @@ public class ClrNullabilityTests
     /// named one type twice because a nested argument's <c>!</c> does not
     /// reach the display — and it is what took the self-migration guard from
     /// 8/8 to 2/8. The absent case (a declaration with no nullable metadata
-    /// at all) gets the same answer — issue #4361 — and is pinned by
-    /// <see cref="Adr0186_AnOpenSlot_OfAnUnannotatedDeclaration_AlsoTakesItsNullabilityFromTheArgument"/>.
+    /// at all) gets the same answer — issue #4361 — and is pinned against
+    /// csc-emitted oblivious metadata by
+    /// <c>Adr0186PlatformTypeBindingTests.Section2_AnOpenSlot_OfAnUnannotatedGeneric_Reads_ItsArgument</c>.
     /// </para>
     /// </summary>
     [Fact]
@@ -491,50 +492,6 @@ public class ClrNullabilityTests
         {
             Assert.IsNotType<PlatformTypeSymbol>(annotated.GetTypeArgumentSymbol(0));
         }
-    }
-
-    /// <summary>
-    /// Issue #4361: ADR-0186 §2's open-type-parameter rule holds for a
-    /// declaration with <b>no</b> nullable metadata at all, not only for one
-    /// that carries an explicit <c>0</c>.
-    /// <para>
-    /// A netstandard2.0 or <c>#nullable disable</c> assembly's
-    /// <c>T[] Empty&lt;T&gt;()</c> says nothing about <c>T</c>, and an open
-    /// slot is not a concrete reference position however silent its
-    /// declaration is: the element's nullability arrives with the argument.
-    /// Stamping the absent byte onto the substituted argument produced
-    /// <c>[]!string!</c> for <c>Empty[string]()</c>, whose nested platform
-    /// element §3 rule 3 then (correctly) refused to convert to
-    /// <c>[]?string</c> or <c>[]string</c> — which is what took the nightly
-    /// self-migration corpus red. The CONTAINER is a concrete oblivious
-    /// position and stays platform-typed; only the invented inner <c>!</c>
-    /// goes. A concrete inner position (<c>List&lt;string&gt;</c>) is
-    /// untouched and still reads <c>List[string!]!</c>.
-    /// </para>
-    /// </summary>
-    [Fact]
-    public void Adr0186_AnOpenSlot_OfAnUnannotatedDeclaration_AlsoTakesItsNullabilityFromTheArgument()
-    {
-        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
-
-        var emptyArray = typeof(ObliviousContainer)
-            .GetMethod(nameof(ObliviousContainer.EmptyArray))! // the fixture declares this method, so reflection finds it
-            .MakeGenericMethod(typeof(string));
-        var array = ClrNullability.GetReturnTypeSymbol(emptyArray);
-        var platformArray = Assert.IsType<PlatformTypeSymbol>(array);
-        Assert.Equal("[]!string", SymbolDisplay.ToTypeDisplayString(platformArray));
-
-        var emptyList = typeof(ObliviousContainer)
-            .GetMethod(nameof(ObliviousContainer.EmptyList))! // the fixture declares this method, so reflection finds it
-            .MakeGenericMethod(typeof(string));
-        var list = ClrNullability.GetReturnTypeSymbol(emptyList);
-        var platformList = Assert.IsType<PlatformTypeSymbol>(list);
-        Assert.DoesNotContain("string!", SymbolDisplay.ToTypeDisplayString(platformList), StringComparison.Ordinal);
-
-        // The concrete inner position is genuinely oblivious and keeps its `!`.
-        var concrete = ClrNullability.GetReturnTypeSymbol(
-            typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetList))!); // declared on the fixture
-        Assert.Contains("[string!]!", SymbolDisplay.ToTypeDisplayString(concrete), StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -1093,12 +1050,6 @@ public class ClrNullabilityTests
         public List<string> GetList() => null;
 
         public string GetString() => null;
-
-        // Issue #4361: open type-parameter slots in an unannotated
-        // declaration — the `Array.Empty<T>` / `Enumerable.Empty<T>` shape.
-        public static T[] EmptyArray<T>() => new T[0];
-
-        public static List<T> EmptyList<T>() => new List<T>();
     }
 #nullable restore
 
