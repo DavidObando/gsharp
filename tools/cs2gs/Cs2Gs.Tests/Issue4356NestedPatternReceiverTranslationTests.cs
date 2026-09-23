@@ -180,6 +180,9 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
             UseShellExecute = false,
         };
 
+        // Process.Start(ProcessStartInfo) returns null only when UseShellExecute
+        // reuses an existing process; psi sets UseShellExecute = false above, so
+        // a process is always started (or Start throws).
         using var process = System.Diagnostics.Process.Start(psi)!;
         string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
         process.WaitForExit();
