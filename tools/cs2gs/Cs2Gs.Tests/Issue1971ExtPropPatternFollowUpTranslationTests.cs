@@ -89,10 +89,13 @@ namespace Corpus.Issue1971
 }
 ");
 
-        // Issue #4356: G# does not narrow a mutable field chain after the
-        // guard, so the guarded link is asserted for the next read — which
-        // makes the output bind, not merely parse.
-        Assert.Contains("s.Start != nil && s.Start!!.X == 0", rendered, StringComparison.Ordinal);
+        // Issue #4356: a nullable intermediate takes G#'s native property
+        // pattern, which reads `Start` once and falls through on nil exactly
+        // as C# does (`EmitPropertyPattern`'s NullableTypeSymbol guard). The
+        // old guard-lowered `s.Start != nil && s.Start.X == 0` read it twice
+        // and never bound, since G# does not narrow a mutable field chain.
+        Assert.Contains("s is { Start: { X: 0 } }", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("s.Start", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -157,7 +160,8 @@ namespace Corpus.Issue1971
 }
 ");
 
-        Assert.Contains("a.B != nil && a.B!!.C != nil && a.B!!.C!!.Value == 0", rendered, StringComparison.Ordinal);
+        Assert.Contains("a is { B: { C: { Value: 0 } } }", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("a.B", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

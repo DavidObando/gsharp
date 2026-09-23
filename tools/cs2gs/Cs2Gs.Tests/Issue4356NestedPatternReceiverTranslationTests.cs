@@ -14,19 +14,27 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #4356: a property pattern lowers to <c>x != nil &amp;&amp; x.Member …</c>.
-/// When <c>x</c> is itself a member-access chain over a stated-nullable
-/// imported member, gsc does not narrow it after the guard (only a chain of
-/// stable links narrows), so the member reads assert the receiver. They used
-/// to bind only because gsc's member lookup let any chained imported read
-/// through regardless of its stated nullability; found by the hot-core
-/// self-migration guard on <c>src/Core/CodeAnalysis/Binding/MemberLookup.cs</c>.
+/// Issue #4356: a property subpattern that tests members of a nullable member
+/// (<c>{ DeclaringType: { IsInterface: true } }</c>, or the extended
+/// <c>{ DeclaringType.IsInterface: true }</c>) used to be guard-lowered to
+/// <c>c.DeclaringType != nil &amp;&amp; c.DeclaringType.IsInterface</c>. That
+/// read the member twice, unlike C#, and gsc does not narrow the second read
+/// (only a chain of stable links narrows), so it bound only because gsc's
+/// member lookup let any chained imported read through regardless of its
+/// stated nullability. Found by the hot-core self-migration guard on
+/// <c>src/Core/CodeAnalysis/Binding/MemberLookup.cs</c>. Such patterns now take
+/// G#'s native property pattern, which reads each member once.
 /// </summary>
 public sealed class Issue4356NestedPatternReceiverTranslationTests
 {
     [Fact]
-    public void NestedSubpatternOverImportedNullableMember_AssertsTheGuardedReceiver()
+    public void NestedSubpatternOverImportedNullableMember_TakesTheNativePattern()
     {
+        // `MethodInfo.DeclaringType` is an imported, annotated `Type?`. The
+        // guard-lowered form (`c.DeclaringType != nil && c.DeclaringType.IsInterface`)
+        // read it twice and bound only through gsc's old member-lookup
+        // carve-out; G#'s native pattern reads it once, like C#, and binds
+        // without it.
         string printed = Translate("""
             #nullable enable
             using System.Reflection;
@@ -40,18 +48,18 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
             }
             """);
 
-        Assert.Contains("candidate.DeclaringType != nil", printed, StringComparison.Ordinal);
-        Assert.Contains("candidate.DeclaringType!!.IsInterface", printed, StringComparison.Ordinal);
-        Assert.Contains("candidate.DeclaringType!!.IsGenericType", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "candidate is { IsAbstract: true, DeclaringType: { IsInterface: true, IsGenericType: false } }",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("candidate.DeclaringType", printed, StringComparison.Ordinal);
     }
 
     [Fact]
-    public void ExtendedPropertySubpatternOverImportedNullableMember_AssertsTheGuardedReceiver()
+    public void ExtendedPropertySubpatternOverImportedNullableMember_TakesTheNativePattern()
     {
-        // The flattened spelling of the nested case above (`{ DeclaringType.IsInterface: true }`)
-        // takes the extended-property path, which guards each nullable
-        // intermediate with its own `!= nil` and must then assert it for the
-        // next link, exactly as the nested path does.
+        // The flattened spelling of the case above lowers to the same nested
+        // native field (#1891).
         string printed = Translate("""
             #nullable enable
             using System.Reflection;
@@ -65,9 +73,11 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
             }
             """);
 
-        // The printer wraps this chain across lines; compare with whitespace collapsed.
-        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
-        Assert.Contains("candidate.DeclaringType != nil && candidate.DeclaringType!!.IsInterface == true", flat, StringComparison.Ordinal);
+        Assert.Contains(
+            "candidate is { IsAbstract: true, DeclaringType: { IsInterface: true } }",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("candidate.DeclaringType", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -87,6 +97,113 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
 
         Assert.Contains("type != nil && type.IsInterface", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("type!!", printed, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// C# reads a property subpattern's member ONCE and tests every nested
+    /// subpattern against that one value. A getter that returns non-nil and
+    /// then nil pins it: lowering to <c>o.P != nil &amp;&amp; o.P!!.X == 0</c>
+    /// would read <c>P</c> twice and throw on the second read. Both spellings,
+    /// nested and extended, must read it exactly once and match, as C# does.
+    /// </summary>
+    [Fact]
+    public void NestedNullableMemberSubpatterns_ReadTheMemberOnce()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System;
+
+            namespace Sample;
+
+            public sealed class Inner
+            {
+                public int X;
+            }
+
+            public sealed class Outer
+            {
+                public int Reads;
+
+                public Inner? P
+                {
+                    get
+                    {
+                        Reads++;
+                        return Reads == 1 ? new Inner() : null;
+                    }
+                }
+            }
+
+            public static class C
+            {
+                public static void Run()
+                {
+                    var o = new Outer();
+                    bool nested = o is { P: { X: 0 } };
+                    var o2 = new Outer();
+                    bool extended = o2 is { P.X: 0 };
+                    Console.WriteLine(nested + "," + o.Reads + "," + extended + "," + o2.Reads);
+                }
+            }
+            """);
+
+        Assert.Equal("True,1,True,1", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    private static string CompileAndRun(string printed, string callExpression)
+    {
+        string? compiler = FindCompiler();
+        Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+
+        string workDir = System.IO.Path.Combine(AppContext.BaseDirectory, "issue-4356-e2e", Guid.NewGuid().ToString("N"));
+        System.IO.Directory.CreateDirectory(workDir);
+        string gsPath = System.IO.Path.Combine(workDir, "Snippet.gs");
+        string dllPath = System.IO.Path.Combine(workDir, "Snippet.dll");
+        System.IO.File.WriteAllText(gsPath, printed + Environment.NewLine + callExpression + Environment.NewLine);
+
+        (int compileExit, string compileOut) = RunDotnet($"\"{compiler}\" /target:exe /out:\"{dllPath}\" \"{gsPath}\"");
+        Assert.True(
+            compileExit == 0 && !compileOut.Contains("error", StringComparison.OrdinalIgnoreCase),
+            "gsc must compile the translated snippet. Output:\n" + compileOut + "\n\nTranslated G#:\n" + printed);
+
+        (int runExit, string stdout) = RunDotnet($"\"{dllPath}\"");
+        Assert.True(runExit == 0, "Translated snippet must run. Output:\n" + stdout + "\n\nTranslated G#:\n" + printed);
+        return stdout;
+    }
+
+    private static (int Exit, string Output) RunDotnet(string arguments)
+    {
+        var psi = new System.Diagnostics.ProcessStartInfo("dotnet", arguments)
+        {
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+        };
+
+        using var process = System.Diagnostics.Process.Start(psi)!;
+        string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+        process.WaitForExit();
+        return (process.ExitCode, output);
+    }
+
+    private static string? FindCompiler()
+    {
+        var dir = new System.IO.DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            foreach (string config in new[] { "Release", "Debug" })
+            {
+                string candidate = System.IO.Path.Combine(dir.FullName, "out", "bin", config, "Compiler", "gsc.dll");
+                if (System.IO.File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
     }
 
     private static string Translate(string source)

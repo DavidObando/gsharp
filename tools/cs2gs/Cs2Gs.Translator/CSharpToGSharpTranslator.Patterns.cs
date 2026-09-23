@@ -883,7 +883,8 @@ public sealed partial class CSharpToGSharpTranslator
                 && (requiresNativeDisjunctiveNarrowing
                     || (!PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
                         && !this.IsSmartCastableScrutinee(isPattern.Expression))
-                    || PatternRequiresNestedTypeNarrowing(isPattern.Pattern)))
+                    || PatternRequiresNestedTypeNarrowing(isPattern.Pattern)
+                    || this.PatternTestsMembersOfNullableMember(isPattern.Pattern)))
             {
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 var guards = new List<GExpression>();
@@ -937,6 +938,82 @@ public sealed partial class CSharpToGSharpTranslator
                 receiverType,
                 isPattern.Expression);
             return this.MaterializeFallbackPatternBindings(isPattern, receiver, test);
+        }
+
+        // Issue #4356: true when a property subpattern tests MEMBERS of a member
+        // whose declared type is a nullable reference — nested
+        // (`{ P: { X: 0 } }`) or extended (`{ P.X: 0 }`). C# reads `P` once and
+        // tests every nested subpattern against that one value. Guard-lowering
+        // cannot: it emits `o.P != nil && o.P!!.X == 0`, which reads `P` twice,
+        // so a getter that is non-nil and then nil throws where C# matches
+        // (and gsc never narrows the unstable second read anyway). G#'s native
+        // property pattern evaluates each member once, like C#, so such
+        // patterns take that form (see TranslateIsPattern). Mirrors the
+        // nullable test the lowering itself uses to decide on a `!= nil` guard.
+        private bool PatternTestsMembersOfNullableMember(PatternSyntax pattern)
+        {
+            switch (pattern)
+            {
+                case RecursivePatternSyntax recursive:
+                    foreach (SubpatternSyntax subpattern in
+                        recursive.PropertyPatternClause?.Subpatterns
+                        ?? default(SeparatedSyntaxList<SubpatternSyntax>))
+                    {
+                        if (subpattern.NameColon != null
+                            && subpattern.Pattern is RecursivePatternSyntax { PropertyPatternClause.Subpatterns.Count: > 0 }
+                            && IsNullableReference(this.TryGetSubpatternMemberType(subpattern)))
+                        {
+                            return true;
+                        }
+
+                        if (subpattern.ExpressionColon?.Expression is MemberAccessExpressionSyntax path)
+                        {
+                            for (ExpressionSyntax link = path.Expression;
+                                link != null;
+                                link = (link as MemberAccessExpressionSyntax)?.Expression)
+                            {
+                                if (IsNullableReference(this.ResolveDeclaredReceiverType(
+                                    this.context.GetTypeInfo(link).Type, link)))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+
+                        if (this.PatternTestsMembersOfNullableMember(subpattern.Pattern))
+                        {
+                            return true;
+                        }
+                    }
+
+                    foreach (SubpatternSyntax subpattern in
+                        recursive.PositionalPatternClause?.Subpatterns
+                        ?? default(SeparatedSyntaxList<SubpatternSyntax>))
+                    {
+                        if (this.PatternTestsMembersOfNullableMember(subpattern.Pattern))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+
+                case UnaryPatternSyntax unary:
+                    return this.PatternTestsMembersOfNullableMember(unary.Pattern);
+
+                case BinaryPatternSyntax binary:
+                    return this.PatternTestsMembersOfNullableMember(binary.Left)
+                        || this.PatternTestsMembersOfNullableMember(binary.Right);
+
+                case ParenthesizedPatternSyntax parenthesized:
+                    return this.PatternTestsMembersOfNullableMember(parenthesized.Pattern);
+
+                default:
+                    return false;
+            }
+
+            static bool IsNullableReference(ITypeSymbol type) =>
+                type is { IsReferenceType: true } && type.NullableAnnotation == NullableAnnotation.Annotated;
         }
 
         // Issue #3555: true when a property subpattern's value is itself a
@@ -1721,7 +1798,12 @@ public sealed partial class CSharpToGSharpTranslator
 
             // Issue #4356: the same holds for a nested subpattern member over a
             // nullable REFERENCE (`{ DeclaringType: { IsInterface: true } }`):
-            // the receiver is a member-access chain, not a local. gsc narrows such a chain after `!= nil`
+            // the receiver is a member-access chain, not a local. Such a
+            // pattern normally never reaches this lowering at all —
+            // TranslateIsPattern routes it to G#'s native property pattern,
+            // which reads the member once as C# does
+            // (PatternTestsMembersOfNullableMember); this is the fallback for
+            // a shape the native form cannot express. gsc narrows such a chain after `!= nil`
             // only when every link is stable (SmartCastStability: a `let`
             // field, or a non-virtual get-only auto-property); an imported
             // `MethodInfo.DeclaringType` is neither, so
@@ -1986,10 +2068,13 @@ public sealed partial class CSharpToGSharpTranslator
                     GExpression stepGuard = new BinaryExpression(memberReceiver, "!=", LiteralExpression.Null());
                     guard = guard == null ? stepGuard : new BinaryExpression(guard, "&&", stepGuard);
 
-                    // Issue #4356: the guard does not narrow a member-access
-                    // chain unless every link is stable (gsc's
-                    // SmartCastStability), so the next link reads through an
-                    // assertion the guard has just made safe — the same
+                    // Issue #4356: an `is` pattern of this shape normally takes
+                    // the native property pattern instead (see
+                    // PatternTestsMembersOfNullableMember), which reads each
+                    // link once; this is the fallback. The guard does not
+                    // narrow a member-access chain unless every link is stable
+                    // (gsc's SmartCastStability), so the next link reads
+                    // through an assertion the guard has just made safe — the same
                     // treatment TranslateRecursivePatternTest gives the nested
                     // spelling (`{ Start: { X: 0 } }`). Without it, a chain
                     // through an imported member bound only via gsc's old
