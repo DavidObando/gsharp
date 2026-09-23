@@ -319,7 +319,7 @@ public sealed record BoundBinaryOperator
 
             if (leftUnderlying == rightUnderlying)
             {
-                var result = rightType is NullableTypeSymbol ? (TypeSymbol)NullableTypeSymbol.Get(leftUnderlying) : leftUnderlying;
+                var result = CoalesceResult(leftUnderlying, rightType);
                 return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, result);
             }
 
@@ -360,11 +360,7 @@ public sealed record BoundBinaryOperator
 
                 if (common != null)
                 {
-                    if (rightType is NullableTypeSymbol)
-                    {
-                        common = NullableTypeSymbol.Get(common);
-                    }
-
+                    common = CoalesceResult(common, rightType);
                     return new BoundBinaryOperator(syntaxKind, BoundBinaryOperatorKind.NullCoalesce, leftType, rightType, common);
                 }
             }
@@ -588,6 +584,32 @@ public sealed record BoundBinaryOperator
                 return false;
         }
     }
+
+    /// <summary>
+    /// The result of <c>left ?? right</c> given the non-null common type: the
+    /// fallback decides the result's nullability, because the result IS the
+    /// fallback whenever the left side is nil.
+    /// <para>
+    /// ADR-0186 §3 / issue #4361: a platform fallback yields a platform
+    /// result. Dropping its <c>!</c> — which the old two-way test did, since
+    /// it only recognised a <c>T?</c> fallback — typed
+    /// <c>x ?? obliviousCall()</c> as non-null <c>T</c> with no check
+    /// anywhere, although the oblivious call may well return nil; and it
+    /// made the <c>!!</c> cs2gs writes on exactly that shape report GS0536
+    /// as redundant. With the <c>!</c> kept, a flow into a non-null
+    /// destination gets §4's check at its coercion point like any other
+    /// platform value, and <c>!!</c> is the explicit spelling of it.
+    /// </para>
+    /// </summary>
+    /// <param name="common">The non-null common type of the two operands.</param>
+    /// <param name="rightType">The fallback operand's type.</param>
+    /// <returns>The coalesce result type.</returns>
+    private static TypeSymbol CoalesceResult(TypeSymbol common, TypeSymbol rightType) => rightType switch
+    {
+        NullableTypeSymbol => NullableTypeSymbol.Get(common),
+        PlatformTypeSymbol => PlatformTypeSymbol.Get(common),
+        _ => common,
+    };
 
     /// <summary>
     /// Issue #1927: true when <paramref name="type"/> is <c>string</c>,

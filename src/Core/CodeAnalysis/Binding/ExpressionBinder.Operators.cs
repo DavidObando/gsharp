@@ -2736,16 +2736,22 @@ internal sealed partial class ExpressionBinder
         // Issue #3463: C# defines string concatenation with char operands in
         // either order. Keep char-to-string adaptation local to `+` rather
         // than introducing a general implicit char -> string conversion.
+        //
+        // Issue #4324 / ADR-0186 §6: the string side may be `string!` as well
+        // as `string`/`string?`. Testing only the `?` wrapper made
+        // `obliviousString + 'c'` (and `s += 'c'` on a `string!` local)
+        // report GS0129 while `obliviousString + "x"` bound — the char arm
+        // was the one concatenation path that never learned about `T!`.
         if (boundOperator == null && operatorKind == SyntaxKind.PlusToken)
         {
-            if (GetNullableUnderlying(boundLeft.Type) == TypeSymbol.String
+            if (GetReferenceNullabilityUnderlying(boundLeft.Type) == TypeSymbol.String
                 && boundRight.Type == TypeSymbol.Char)
             {
                 boundRight = ConvertStringConcatCharOperand(boundRight, rightLocation);
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
             }
             else if (boundLeft.Type == TypeSymbol.Char
-                && GetNullableUnderlying(boundRight.Type) == TypeSymbol.String)
+                && GetReferenceNullabilityUnderlying(boundRight.Type) == TypeSymbol.String)
             {
                 boundLeft = ConvertStringConcatCharOperand(boundLeft, leftLocation);
                 boundOperator = BoundBinaryOperator.Bind(operatorKind, boundLeft.Type, boundRight.Type);
@@ -3317,6 +3323,16 @@ internal sealed partial class ExpressionBinder
 
     private static TypeSymbol? GetNullableUnderlying(TypeSymbol type) =>
         type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+
+    // Issue #4324: strips either reference-nullability wrapper — `T?` or
+    // ADR-0186's platform `T!` — for operand tests that are about the
+    // underlying type rather than about whether the value may be nil.
+    private static TypeSymbol? GetReferenceNullabilityUnderlying(TypeSymbol type) => type switch
+    {
+        NullableTypeSymbol nullable => nullable.UnderlyingType,
+        PlatformTypeSymbol platform => platform.UnderlyingType,
+        _ => type,
+    };
 
     // issue #1144: the ten G# integer primitive types (signed + unsigned,
     // including the native-int pair). Membership mirrors the integral sets in

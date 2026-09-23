@@ -952,23 +952,10 @@ public static class ClrNullability
         ImmutableArray<byte> flags)
     {
         var layoutFlags = ExpandNullableFlags(layoutType, flags);
-
-        // Two expansions with DIFFERENT absent fills, used only to answer one
-        // question the single expansion cannot: did the declaration actually
-        // DESCRIBE this position, or did the expansion invent a byte for it?
-        // A position the declaration described expands to the same byte under
-        // both fills; one it did not expands to the fill itself, so the two
-        // disagree. The open-type-parameter arm below is the only consumer,
-        // and the distinction is load-bearing there — see the comment at the
-        // arm.
-        var describedLow = ExpandNullableFlags(layoutType, flags, absentFill: 1);
-        var describedHigh = ExpandNullableFlags(layoutType, flags, absentFill: 2);
         var builder = ImmutableArray.CreateBuilder<byte>();
         var layoutOffset = 0;
         Append(actualType, layoutType);
         return builder.ToImmutable();
-
-        bool LayoutDescribed(int position) => describedLow[position] == describedHigh[position];
 
         void Append(Type actual, Type layout)
         {
@@ -1016,8 +1003,9 @@ public static class ClrNullability
                 // parameter that may be a value type), so `a` came back as
                 // `IEnumerable[MethodBase!]` — obliviousness invented for a
                 // position whose nullability arrives with the ARGUMENT, and a
-                // diagnostic that names one type twice because a nested
-                // argument's `!` does not reach the display.
+                // diagnostic that named one type twice because a nested
+                // argument's `!` did not reach the display (it does now:
+                // `SymbolDisplay` renders nested platform arguments).
                 // `Dictionary[string, int32].Enumerator` in
                 // `samples/NestedTypeOfConstructedGeneric.gs` is the same
                 // defect through the enclosing type's arguments.
@@ -1031,31 +1019,52 @@ public static class ClrNullability
                 // fabrication is observable, so §2's rule is applied and the
                 // argument is left to speak for itself.
                 //
-                // Gated on `LayoutDescribed` too, and THAT distinction is the
-                // whole correctness of this arm. Two different declarations
-                // reach here with byte `0` at an open slot and they mean
-                // opposite things:
+                // NOT gated on whether the declaration described the slot,
+                // and issue #4361 is what that gate cost. An earlier version
+                // applied §2 only to an EXPLICIT `0` (the annotated BCL's
+                // `Enumerable.Cast<TResult>`) and let an ABSENT byte — a
+                // `#nullable disable` or netstandard2.0 assembly, which
+                // carries no nullable metadata at all — fall through to this
+                // expansion's own `0` fill and stamp `T!` onto the argument.
+                // §2 draws no such line: an open slot is not a concrete
+                // reference position however silent its declaration is, and
+                // "absent" is precisely the case the rule was written for
+                // (under ADR-0136 the same fabricated byte was a `2`). The
+                // stamp made every open slot of an unannotated generic
+                // produce a NESTED platform type, which §3 rule 3 then
+                // correctly refused to convert:
                 //
-                //   * `Enumerable.Cast<TResult>` in the ANNOTATED BCL carries
-                //     an EXPLICIT `0` there — csc's encoding for an
-                //     unconstrained parameter that may be a value type. The
-                //     declaration described the slot and did not say `T?`, so
-                //     §2 applies and the caller's argument wins.
-                //   * A method in a `#nullable disable` assembly carries NO
-                //     nullable metadata at all, and the `0` is this
-                //     expansion's own fill. The declaration described
-                //     nothing, which is obliviousness in the ordinary sense,
-                //     and §2's table says that reads as `T!`.
+                //   var a []?string = Array.Empty[string]()      // netstandard2.0
+                //   // GS0155: '[]string!' to '[]?string'
+                //   let p = x ?? Enumerable.Empty[string]()
+                //   // GS0129: '??' on 'IEnumerable[string]?' and 'IEnumerable[string!]!'
+                //   let r []string = Array.FindAll(xs, pred)     // T inferred from `xs`
+                //   return Arb.From(TypeGen)!!                   // FsCheck: 'Arbitrary[Type!]'
                 //
-                // Collapsing the two re-broke issue #4322 — a `nil` tuple
-                // element stopped widening through an oblivious `params T[]`
-                // again, because the element came back non-null instead of
-                // `T!`. Both directions are pinned:
-                // `Issue4044NilTupleInferenceTests` for the absent case and
-                // `Adr0186_AnOpenSlot_TakesItsNullabilityFromTheArgument`
-                // for the explicit one.
+                // — which is what took `main`'s nightly self-migration corpus
+                // red (`Gsharp.NET.Sdk` targets netstandard2.0; `Core.Tests`
+                // uses FsCheck). The argument really was `string` (explicit,
+                // or inferred from a fully-typed `[]string`/`Gen[Type]`), so
+                // `string!` was invented, not read.
+                //
+                // This is also the rule the MERGE reader already applies
+                // (`NullableFlagsBuilder.MergeDeclarationNullability`'s
+                // open-parameter arm: "Absent and oblivious leave it alone"),
+                // so the projection path no longer disagrees with its sibling
+                // about the same declaration — the #3705 family-2 shape
+                // ADR-0136's single-predicate rule exists to prevent.
+                //
+                // The gate had been added for issue #4322: a `nil` tuple
+                // element passed to an oblivious `params T[]` whose `T` is
+                // inferred from a non-null sibling (`AnyEqual((nil, false),
+                // ("x", false))`). With the argument winning, that call is
+                // rejected exactly as the same call to a G#-declared
+                // `func AnyEqual[T](values ...T)` always has been: `T` is
+                // `(string, bool)`, and `nil -> string` is an error. It only
+                // compiled before because the oblivious slot fabricated a
+                // `T?` (ADR-0136) and then a `T!`; neither is §2's answer.
+                // `Issue4044NilTupleInferenceTests` pins the parity.
                 if (NullabilityOptions.PlatformTypesEnabled
-                    && LayoutDescribed(layoutOffset - 1)
                     && ClassifyFlag(flag) != ClrNullabilityState.Annotated)
                 {
                     flag = 1;

@@ -119,8 +119,28 @@ public class Issue4044NilTupleInferenceTests
             diagnostic => diagnostic.IsError);
     }
 
+    /// <summary>
+    /// A nil tuple element closed against a NON-NULL sibling through an
+    /// unannotated <c>params T[]</c>: <c>T</c> is inferred as
+    /// <c>(string, bool)</c>, and <c>nil -&gt; string</c> is rejected — exactly
+    /// as the same call to a G#-declared <c>func AnyEqual[T](values ...T)</c>
+    /// is (<see cref="GSharpParamsGeneric_NilTupleElement_AgainstANonNullSibling_IsRejected"/>).
+    /// <para>
+    /// Issue #4361 reversed this row. It compiled only because the open
+    /// <c>T</c> slot's ABSENT nullability byte was stamped onto the inferred
+    /// argument — <c>T?</c> under ADR-0136 and then <c>T!</c> under ADR-0186
+    /// (the issue #4322 fix). ADR-0186 §2 says an open slot's nullability
+    /// arrives with the type argument, however silent the declaration is,
+    /// and that stamp is what gave every unannotated generic's result a
+    /// nested platform type (<c>Array.Empty[string]()</c> as <c>[]!string!</c>)
+    /// and broke the nightly self-migration corpus. What #4044 is about still
+    /// holds: the nil element stays open and <c>T</c> closes against the
+    /// sibling rather than being fixed as <c>(nil, bool)</c>; the error is the
+    /// element conversion, not an inference failure.
+    /// </para>
+    /// </summary>
     [Fact]
-    public void ImportedParamsGeneric_NilTupleElement_UsesSiblingArgument()
+    public void ImportedParamsGeneric_NilTupleElement_AgainstANonNullSibling_IsRejected_LikeAGSharpGeneric()
     {
         const string source = """
             package P
@@ -130,11 +150,34 @@ public class Issue4044NilTupleInferenceTests
             }
             """;
 
-        Assert.DoesNotContain(
-            CompileWithReferences(source, ImportedLibraryPath),
-            diagnostic => diagnostic.IsError);
+        AssertRejectsOnlyTheNilElement(CompileWithReferences(source, ImportedLibraryPath));
     }
 
+    /// <summary>The G#-declared control for the imported row above.</summary>
+    [Fact]
+    public void GSharpParamsGeneric_NilTupleElement_AgainstANonNullSibling_IsRejected()
+    {
+        const string source = """
+            package P
+            class Extensions {
+                shared {
+                    func AnyEqual[T](values ...T) bool { return true }
+                }
+            }
+            func Run() {
+                let found = Extensions.AnyEqual((nil, false), ("x", false))
+            }
+            """;
+
+        AssertRejectsOnlyTheNilElement(Compile(source));
+    }
+
+    /// <summary>
+    /// The same parity for a nil element whose OTHER element still drives
+    /// inference: <c>U</c> is inferred from the <c>1</c>, <c>T</c> from the
+    /// non-null <c>seed</c>, so the nil element meets a non-null
+    /// <c>string</c> — see the row above for why that is now rejected.
+    /// </summary>
     [Fact]
     public void ImportedParamsGeneric_NilTupleElement_PreservesOtherElementInference()
     {
@@ -146,9 +189,40 @@ public class Issue4044NilTupleInferenceTests
             }
             """;
 
+        AssertRejectsOnlyTheNilElement(CompileWithReferences(source, ImportedLibraryPath));
+    }
+
+    /// <summary>
+    /// The nil element may be carried through a nilable sibling, which is the
+    /// shape #4044 exists for, and that still compiles through an unannotated
+    /// <c>params T[]</c>.
+    /// </summary>
+    [Fact]
+    public void ImportedParamsGeneric_NilTupleElement_UsesANilableSiblingArgument()
+    {
+        const string source = """
+            package P
+            import Lib4044
+            func Receive2() (string?, bool) -> (nil, false)
+            func Run() {
+                let found = Extensions.AnyEqual((nil, false), Receive2())
+            }
+            """;
+
         Assert.DoesNotContain(
             CompileWithReferences(source, ImportedLibraryPath),
             diagnostic => diagnostic.IsError);
+    }
+
+    private static void AssertRejectsOnlyTheNilElement(ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> diagnostics)
+    {
+        var errors = diagnostics.Where(diagnostic => diagnostic.IsError).ToArray();
+        Assert.NotEmpty(errors);
+        Assert.All(
+            errors,
+            error => Assert.True(
+                error.Id is "GS0154" or "GS0155",
+                $"expected only the nil element's conversion to be rejected, got {error.Id}: {error.Message}"));
     }
 
     private static System.Collections.Immutable.ImmutableArray<GSharp.Core.CodeAnalysis.Diagnostic> Compile(string source)
