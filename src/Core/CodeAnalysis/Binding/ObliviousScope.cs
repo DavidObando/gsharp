@@ -187,6 +187,17 @@ internal static class ObliviousScope
         => IsInObliviousScope(clause) && !IsExempt(clause) ? Wrap(element) : element;
 
     /// <summary>
+    /// Applies ADR-0186 §9 to the element of an array literal whose element
+    /// is written as a bare identifier (<c>[]string{…}</c>, <c>[N]string{…}</c>)
+    /// rather than as a type clause. An element is always a position.
+    /// </summary>
+    /// <param name="literal">The array-creation syntax.</param>
+    /// <param name="element">The resolved element type.</param>
+    /// <returns>The element type the literal denotes.</returns>
+    internal static TypeSymbol ApplyToArrayLiteralElement(ArrayCreationExpressionSyntax literal, TypeSymbol element)
+        => IsInObliviousScope(literal) ? Wrap(element) : element;
+
+    /// <summary>
     /// Gets a value indicating whether <paramref name="node"/> lies in an
     /// oblivious scope: the nearest enclosing <c>@Oblivious</c> or
     /// <c>@NullabilityEnabled</c> answers, and with neither the compilation's

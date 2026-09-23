@@ -1157,6 +1157,9 @@ internal sealed partial class StatementBinder
             // channels.
             var channelSyntax = Invariant.Required(caseSyntax.Channel, "a non-default select case has a channel");
             var channelExpr = bindExpression(channelSyntax);
+
+            // ADR-0186 §4: a select case operates on a non-null channel.
+            channelExpr = PlatformCoercion.InsertCheck(channelExpr, channelSyntax.Location, "a select case channel");
             ChannelTypeSymbol? chan = null;
             TypeSymbol? selectableElement = null;
             if (channelExpr is not BoundErrorExpression

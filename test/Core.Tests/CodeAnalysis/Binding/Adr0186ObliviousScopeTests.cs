@@ -653,6 +653,84 @@ public class Adr0186ObliviousScopeTests
         Assert.Equal("6\n", output.Replace("\r\n", "\n"));
     }
 
+    /// <summary>
+    /// Three shapes found in review (PR #4357): a user pattern enumerator
+    /// returned from an oblivious <c>GetEnumerator</c> (the binder read its
+    /// shape through the wrapper but lowering did not), an identifier-form
+    /// array literal (<c>[]string{…}</c> names its element by a bare token, so
+    /// the type-clause hook never saw it), and the two-value receive
+    /// <c>let (v, ok) = &lt;-ch</c> on an oblivious channel.
+    /// </summary>
+    [Fact]
+    public void Pattern_Enumerators_Array_Literals_And_Two_Value_Receives()
+    {
+        var output = Run(
+            """
+            class Counter {
+                var Current int32
+                func MoveNext() bool {
+                    this.Current = this.Current + 1
+                    return this.Current <= 3
+                }
+            }
+
+            @Oblivious
+            class Numbers {
+                func GetEnumerator() Counter { return Counter{} }
+
+                func Literal() int32 {
+                    var xs []string = []string{"a", nil}
+                    return xs.Length
+                }
+
+                func Receive() string {
+                    var ch chan[string] = chan[string](1)
+                    ch <- nil
+                    let (value, ok) = <-ch
+                    return if ok && value == nil { "nil received" } else { "?" }
+                }
+            }
+
+            var sum = 0
+            for n in Numbers{} {
+                sum = sum + n
+            }
+
+            let numbers = Numbers{}
+            Console.WriteLine(sum)
+            Console.WriteLine(numbers.Literal())
+            Console.WriteLine(numbers.Receive())
+            """);
+
+        Assert.Equal("6\n2\nnil received\n", output.Replace("\r\n", "\n"));
+    }
+
+    /// <summary>
+    /// The two-value receive checks a nil platform channel like the
+    /// single-value receive does (ADR-0186 §4), rather than handing it to the
+    /// channel runtime.
+    /// </summary>
+    [Fact]
+    public void A_Two_Value_Receive_From_A_Nil_Oblivious_Channel_Is_Checked()
+    {
+        var failure = Assert.Throws<NullReferenceException>(() => Run(
+            """
+            @Oblivious
+            class Source {
+                var Channel chan[int32]
+
+                func Drain() bool {
+                    let (value, ok) = <-this.Channel
+                    return ok
+                }
+            }
+
+            Console.WriteLine(Source{}.Drain())
+            """));
+
+        Assert.Contains("nullability-oblivious", failure.Message, StringComparison.Ordinal);
+    }
+
     // ---------------------------------------------------------------
     // GS9307.
     // ---------------------------------------------------------------

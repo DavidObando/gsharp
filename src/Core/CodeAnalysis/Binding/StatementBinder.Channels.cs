@@ -77,6 +77,11 @@ internal sealed partial class StatementBinder
             return null;
         }
 
+        // ADR-0186 §4: a receive requires a non-null channel — the same check
+        // the single-value receive (`ExpressionBinder.BindChannelReceiveExpression`)
+        // inserts, for `let (v, ok) = <-ch`, `while let` and `if let` alike.
+        operand = PlatformCoercion.InsertCheck(operand, receive.Operand.Location, "a channel receive operand");
+
         if (!TryGetReceivableChannelShape(operand, receive.Operand.Location, receive.OperatorToken.Location, out elementType, out var direction))
         {
             return null;

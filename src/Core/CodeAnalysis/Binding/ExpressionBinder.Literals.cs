@@ -3667,6 +3667,14 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportUndefinedType(elementTypeIdentifier.Location, elementTypeIdentifier.ValueText);
                 return new BoundErrorExpression(null);
             }
+
+            // ADR-0186 §9: an array element is a position wherever the array
+            // is written. The identifier-only form (`[]string{…}`) names its
+            // element by a bare token rather than a type clause, so
+            // BindTypeClause's hook never sees it; without this an oblivious
+            // `var xs []string = []string{…}` would pair `[]string!` with
+            // `[]string`, which ADR-0186 §3 rule 3 gives no conversion.
+            elementType = ObliviousScope.ApplyToArrayLiteralElement(syntax, elementType);
         }
 
         if (elementType is EnumSymbol bareElementEnum)
