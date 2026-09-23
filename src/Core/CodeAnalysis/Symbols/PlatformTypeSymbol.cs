@@ -20,10 +20,10 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// proof obligation about a fact the compiler does not have — and what
 /// bound-node carve-out predicates were reconstructing for oblivious
 /// receivers, one node kind at a time. With this symbol an oblivious receiver
-/// no longer depends on any of them. (ADR-0186 step 4 kept the one such
-/// predicate on <c>main</c>, <c>CanBindClrInstanceMember</c>'s
-/// <c>BoundClrPropertyAccessExpression</c> disjunct, because it also carries
-/// member chains through stated-nullable imported reads.)
+/// no longer depends on any of them. (The last such predicate on <c>main</c>,
+/// <c>CanBindClrInstanceMember</c>'s <c>BoundClrPropertyAccessExpression</c>
+/// disjunct, outlived step 4 because it also carried member chains through
+/// stated-nullable imported reads; issue #4356 deleted it.)
 /// </para>
 /// <para>
 /// The wrapper is deliberately a <b>distinct symbol</b> rather than a flag on

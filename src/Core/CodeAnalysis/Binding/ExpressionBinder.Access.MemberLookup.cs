@@ -780,10 +780,10 @@ internal sealed partial class ExpressionBinder
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
                     // `kvp.Key`). Static members are reached through
                     // ImportedClassSymbol; this path covers instances. A
-                    // chained imported field or property read whose annotated
-                    // metadata made it `T?` still continues the chain here,
-                    // while a source-declared `T?` variable requires narrowing
-                    // or `?.` (see CanBindClrInstanceMember). An oblivious
+                    // receiver stated `T?` — source-declared, annotated
+                    // imported metadata, or a nullable type argument — never
+                    // reaches this arm and requires narrowing, `!!` or `?.`
+                    // (see CanBindClrInstanceMember, #4356). An oblivious
                     // imported result arrives as a platform type `T!` under
                     // the default mode (ADR-0186), is checked and unwrapped by
                     // CheckPlatformReceiver before this dispatch, and reaches
@@ -1019,67 +1019,57 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// Returns whether CLR instance lookup may continue through a receiver:
-    /// the receiver has a loadable <see cref="TypeSymbol.ClrType"/>, and either
-    /// its type is not a <see cref="NullableTypeSymbol"/> or the receiver is
-    /// itself an imported field or property read
-    /// (<see cref="BoundClrPropertyAccessExpression"/>) — an intermediate link
-    /// in a member chain such as <c>e.InnerException.Message</c> or
-    /// <c>a.MaybeNumbers.Capacity = 4</c>.
+    /// the receiver has a loadable <see cref="TypeSymbol.ClrType"/> and its
+    /// type is not a <see cref="NullableTypeSymbol"/> — that is, nobody has
+    /// stated it <c>T?</c>. A receiver that IS stated nullable, whether a
+    /// source-declared <c>T?</c>, an annotated-nullable imported member
+    /// (<c>e.InnerException</c>) or a generic member substituted with a
+    /// nullable type argument (<c>Box[string?].Value</c>), must be narrowed,
+    /// asserted (<c>!!</c>) or read through <c>?.</c> first.
     /// <para>
     /// This predicate never sees a <see cref="PlatformTypeSymbol"/>: both
     /// callers run <c>PlatformCoercion.InsertCheck</c> on the receiver first
     /// (the read path through <c>CheckPlatformReceiver</c>, the write path
     /// explicitly in <c>BindMemberFieldAssignmentExpression</c>), which inserts
     /// ADR-0186 §4's nil check and unwraps <c>T!</c> to its underlying
-    /// <c>T</c>. Under the default <c>--nullability=platform-types</c> an
-    /// oblivious imported position is <c>T!</c>, so it satisfies the first
-    /// disjunct after that coercion and never reaches the second: its safety
-    /// question is answered by §4's check, not here.
+    /// <c>T</c>. That coercion, not this test, answers an oblivious receiver's
+    /// safety question.
     /// </para>
     /// <para>
-    /// <b>The second disjunct is kept deliberately (ADR-0186 step 4).</b> The
-    /// ADR planned to delete it on the premise that its whole population was
-    /// oblivious members imported as <c>T?</c> under ADR-0136. That premise
-    /// missed a second, pre-existing population: <em>annotated</em>-nullable
-    /// imported members (<c>[Nullable(2)]</c>, e.g. the BCL's
-    /// <c>Exception.InnerException</c>, or a Roslyn API member declared
-    /// <c>T?</c>), which have always continued a member chain through this
-    /// disjunct. ADR-0186 leaves annotated members untouched, so deleting it
-    /// would have been a breaking change outside the ADR's scope. A third
-    /// population reaches it too: a plain generic <c>T</c> member read through
-    /// a receiver with an explicitly nullable type argument
-    /// (<c>Box[string?].Value</c>), whose <c>T?</c> is kept from the receiver
-    /// by <c>NullableFlagsBuilder.MergeDeclarationNullability</c> rather than
-    /// declared on the member. Under the default mode the receivers it admits
-    /// are exactly those two stated-nullable populations — never an oblivious
-    /// one; under <c>--nullability=enabled</c> it also admits oblivious reads,
-    /// which is ADR-0136's behaviour for that compatibility mode, unchanged.
-    /// The chained dereference through such a receiver is not nil-checked by
-    /// the compiler — a pre-existing property that this predicate neither
-    /// introduces nor fixes.
+    /// <b>Issue #4356.</b> This test used to carry a second disjunct,
+    /// <c>|| receiver is BoundClrPropertyAccessExpression</c>, which let lookup
+    /// continue through ANY nullable receiver that happened to be an imported
+    /// field or property read. It was added (#2459) for oblivious members,
+    /// which ADR-0136 imported as <c>T?</c>; ADR-0186's <c>T!</c> now handles
+    /// those. But it tested the kind of bound node rather than where the
+    /// nullability came from, so it also waved through stated-nullable chains
+    /// with no narrowing and no nil check. ADR-0186 step 4 kept it only because
+    /// cs2gs output depended on it; #4356 fixed cs2gs and deleted it, along
+    /// with its twin in <see cref="TryGetUserInstanceMemberReceiverType"/>.
     /// </para>
     /// </summary>
     private static bool CanBindClrInstanceMember(BoundExpression? receiver)
     {
         return receiver?.Type?.ClrType != null
-            && (receiver.Type is not NullableTypeSymbol
-                || receiver is BoundClrPropertyAccessExpression);
+            && receiver.Type is not NullableTypeSymbol;
     }
 
+    /// <summary>
+    /// Returns the G#-declared class or struct whose instance members a
+    /// receiver reads. A stated-nullable receiver (<c>T?</c>) does not qualify
+    /// here either (issue #4356): an imported read projected to a G# class
+    /// through a nullable type argument (#4121) used to be accepted when it was
+    /// a <see cref="BoundClrPropertyAccessExpression"/>, the same node-shape
+    /// carve-out <see cref="CanBindClrInstanceMember"/> carried.
+    /// </summary>
+    /// <param name="receiver">The bound receiver.</param>
+    /// <param name="receiverType">The receiver's G# struct/class symbol.</param>
+    /// <returns><see langword="true"/> when the receiver is a G# struct/class.</returns>
     private static bool TryGetUserInstanceMemberReceiverType(
         BoundExpression receiver,
         [NotNullWhen(true)] out StructSymbol? receiverType)
     {
         receiverType = receiver.Type as StructSymbol;
-        if (receiverType != null)
-        {
-            return true;
-        }
-
-        receiverType = receiver is BoundClrPropertyAccessExpression
-            && receiver.Type is NullableTypeSymbol { UnderlyingType: StructSymbol { IsClass: true } symbolic }
-                ? symbolic
-                : null;
         return receiverType != null;
     }
 

@@ -67,7 +67,7 @@ namespace GSharp.Compiler.Tests;
 /// <c>GS0580</c>. Both are rows here.</para>
 /// <para><b>Issue #4059 closed the shared follow-up.</b> A member whose type
 /// is the erased type parameter now projects through the symbolic receiver on
-/// both spellings, so <c>Handler[MyOptions]().Options.Name</c> and the literal
+/// both spellings, so <c>Handler[MyOptions]().Options!!.Name</c> and the literal
 /// twin bind and execute against <c>MyOptions</c>, not <c>object</c>.</para>
 /// </remarks>
 public class Issue4042ImportedGenericLiteralOverSourceTypeTests
@@ -229,6 +229,14 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
         // symbolic argument that nonetheless has a faithful closed CLR type, so
         // each keeps taking the plain path. `[]T` is #4024's row, `[N]T` is
         // #3962's, the named tuple is ADR-0172's.
+        //
+        // The `!!` on the two reads is issue #4356, not a change of
+        // subject: `Box<T>.Value` is declared `T?`, so the read is a
+        // dereference of an ANNOTATED-nullable imported member. Member lookup
+        // used to wave that through — the carve-out #4356 deleted could not
+        // tell it from an oblivious member — and now reports it like any other
+        // `T?`. What this row asserts is the literal SPELLING still binding,
+        // which it does; the reads are how the row observes the values.
         yield return new object[]
         {
             "control-the-three-lossy-but-real-spellings-still-bind",
@@ -238,10 +246,10 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
             import HelperLib2
 
             let slice = Box[[]int32]{ Value: []int32{1, 2, 3} }
-            Console.WriteLine(slice.Value.Length)
+            Console.WriteLine(slice.Value!!.Length)
 
             let fixedLen = Box[[3]int32]{ Value: [3]int32{1, 2, 3} }
-            Console.WriteLine(fixedLen.Value.Length)
+            Console.WriteLine(fixedLen.Value!!.Length)
 
             let named = Box[(a int32, b string)]{ Tag: "nt" }
             Console.WriteLine(named.Tag)
@@ -401,7 +409,8 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
             let o = MyOptions()
             o.Name = "n1"
             let h = Handler[MyOptions]{Tag: "z", Options: o}
-            Console.WriteLine(h.Options.Name)
+            // Issue #4356: `Options` is declared `TOptions?`; the chained read asserts.
+            Console.WriteLine(h.Options!!.Name)
             """;
 
         const string ViaConstructor = """
@@ -416,7 +425,8 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
             o.Name = "n1"
             let h = Handler[MyOptions]()
             h.Options = o
-            Console.WriteLine(h.Options.Name)
+            // Issue #4356: `Options` is declared `TOptions?`; the chained read asserts.
+            Console.WriteLine(h.Options!!.Name)
             """;
 
         var tempDir = Directory.CreateTempSubdirectory("gs_4042_erasure_").FullName;

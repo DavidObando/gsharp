@@ -268,7 +268,11 @@ public class Issue4059And4066ImportedGenericMemberProjectionTests
             h.Options = option
             h.Field = option
             h[0] = option
-            Console.WriteLine(h.Options.Name)
+            // Issue #4356: `Handler<TOptions>.Options` is declared `TOptions?`,
+            // so reading through it asserts first; member lookup no longer
+            // waves a stated-nullable chain through. The projection this test
+            // is about is unaffected.
+            Console.WriteLine(h.Options!!.Name)
             Console.WriteLine(h.Field.Name)
             Console.WriteLine(h.Get().Name)
             Console.WriteLine(h[0].Name)
