@@ -1658,7 +1658,7 @@ public sealed class Adr0186PlatformTypeBindingTests
         {
             Assert.Equal(
                 world.SelectedReverseDeclaringType(baseline, mode),
-                world.SelectedReverseDeclaringType(nilable, mode));
+                world.SelectedReverseDeclaringType(nilable, mode, tolerateNilableReceiverReport: true));
         }
     }
 
@@ -2090,8 +2090,13 @@ public sealed class Adr0186PlatformTypeBindingTests
         /// </summary>
         /// <param name="body">The probe body containing exactly one <c>Reverse()</c> call.</param>
         /// <param name="mode">The nullability mode.</param>
+        /// <param name="tolerateNilableReceiverReport">
+        /// Accept a <c>GS0159</c> in the probe — see
+        /// <see cref="IsToleratedNilableReceiverReport"/>. Only a nilable probe
+        /// should pass <see langword="true"/>.
+        /// </param>
         /// <returns>The selected method's declaring type name.</returns>
-        internal string SelectedReverseDeclaringType(string body, NullabilityMode mode)
+        internal string SelectedReverseDeclaringType(string body, NullabilityMode mode, bool tolerateNilableReceiverReport = false)
         {
             using var resolver = ReferenceResolver.WithReferences(new[] { this.LibraryPath });
             resolver.CurrentAssemblyName = Consumer;
@@ -2103,13 +2108,15 @@ public sealed class Adr0186PlatformTypeBindingTests
                 Nullability = mode,
             };
 
-            // A nilable receiver's call is allowed to be REPORTED here: this
-            // helper's subject is which method was selected, and #4287's
-            // still-open call-path half would add exactly that report once
-            // fixed. The selection is still asserted below, so a call that
-            // failed to bind at all finds no `Reverse` and fails there.
+            // Opt-in, for a NILABLE probe only: its call is allowed to be
+            // REPORTED, because this helper's subject is which method was
+            // selected and #4287's still-open call-path half would add exactly
+            // that report once fixed. Baselines and platform probes stay
+            // strict, so a regression that makes THEM report is still caught.
             var program = compilation.BoundProgram;
-            Assert.DoesNotContain(program.Diagnostics, d => d.IsError && !IsToleratedNilableReceiverReport(d));
+            Assert.DoesNotContain(
+                program.Diagnostics,
+                d => d.IsError && !(tolerateNilableReceiverReport && IsToleratedNilableReceiverReport(d)));
 
             var collector = new ReverseCallCollector();
             foreach (var function in program.Functions)
