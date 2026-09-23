@@ -385,7 +385,8 @@ public sealed class TranslateStage : IMigrationStage
                 preservePartialParts: true,
                 retainedFilePaths: retainedFilePaths,
                 analyzerApiMode: analyzerApiMode,
-                preserveEntryType: preserveEntryType);
+                preserveEntryType: preserveEntryType,
+                projectDirectory: currentProject.ProjectDirectory);
 
             PreserveGeneratedFriendAssemblyAnnotations(
                 context,
@@ -434,7 +435,8 @@ public sealed class TranslateStage : IMigrationStage
                             packageFilter: package,
                             includeFileAttributes: unitIndex == 0,
                             analyzerApiMode: analyzerApiMode,
-                            preserveEntryType: preserveEntryType);
+                            preserveEntryType: preserveEntryType,
+                            projectDirectory: currentProject.ProjectDirectory);
                     string printed;
                     try
                     {

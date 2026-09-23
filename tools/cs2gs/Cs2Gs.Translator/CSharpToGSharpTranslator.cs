@@ -116,6 +116,11 @@ public sealed partial class CSharpToGSharpTranslator
     // duplicating what gsc's own `/analyzer:`-triggered gsgen run later adds
     // (GS0102). Null (default) preserves the exact prior no-filter behavior.
     private readonly HashSet<string> retainedFilePaths;
+
+    // The translated project's directory, when known, so the translator applies
+    // the loader's full generated-source rule (the obj/bin path half of
+    // GeneratedSourceDetection) to a partial method's other part.
+    private readonly string projectDirectory;
     private readonly string packageFilter;
     private readonly bool includeFileAttributes;
     private readonly bool analyzerApiMode;
@@ -191,6 +196,11 @@ public sealed partial class CSharpToGSharpTranslator
     /// an executable project referenced by another project in the same run,
     /// whose entry class is consumable API surface.
     /// </param>
+    /// <param name="projectDirectory">
+    /// The translated project's directory, or <see langword="null"/> when
+    /// unknown (in-memory sources). Used only to recognize a partial method
+    /// part in a build-generated file (<see cref="Loading.GeneratedSourceDetection"/>).
+    /// </param>
     public CSharpToGSharpTranslator(
         bool preservePartialParts = true,
         bool markMergedTypePartial = false,
@@ -199,8 +209,10 @@ public sealed partial class CSharpToGSharpTranslator
         bool includeFileAttributes = true,
         bool widenObliviousReferenceFields = false,
         bool analyzerApiMode = false,
-        bool preserveEntryType = false)
+        bool preserveEntryType = false,
+        string projectDirectory = null)
     {
+        this.projectDirectory = projectDirectory;
         this.analyzerApiMode = analyzerApiMode;
         this.preserveEntryType = preserveEntryType;
         this.preservePartialParts = preservePartialParts;
@@ -351,7 +363,8 @@ public sealed partial class CSharpToGSharpTranslator
             this.preservePartialParts,
             this.markMergedTypePartial,
             this.widenObliviousReferenceFields,
-            this.retainedFilePaths);
+            this.retainedFilePaths,
+            this.projectDirectory);
 
         IReadOnlyList<AttributeUse> fileAttributes = this.includeFileAttributes
             ? visitor.MapFileAttributes(
@@ -1526,6 +1539,9 @@ public sealed partial class CSharpToGSharpTranslator
         // produces no G# output.
         private readonly HashSet<string> retainedFilePaths;
 
+        // See `CSharpToGSharpTranslator.projectDirectory`.
+        private readonly string projectDirectory;
+
         // ADR-0145 (§C/§D): when true, `partial` parts are NOT merged — every
         // part is emitted as its own standalone G# `partial` declaration (using
         // only its own members), so a generated part augments the user's real G#
@@ -1595,9 +1611,11 @@ public sealed partial class CSharpToGSharpTranslator
             bool preservePartialParts = false,
             bool markMergedTypePartial = false,
             bool widenObliviousReferenceFields = false,
-            HashSet<string> retainedFilePaths = null)
+            HashSet<string> retainedFilePaths = null,
+            string projectDirectory = null)
         {
             this.retainedFilePaths = retainedFilePaths;
+            this.projectDirectory = projectDirectory;
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;
