@@ -749,10 +749,32 @@ public sealed class GsStubRenderer
     /// </summary>
     private string RenderConstant(object value, TypeSymbol type)
     {
+        // Issue #4144: an enum (or enum-array) element of an `object[]`
+        // argument keeps its enum type by arriving wrapped in its own bound
+        // argument; render it with that type.
+        if (value is BoundAttributeArgument wrapped)
+        {
+            return RenderConstant(wrapped.Value, wrapped.Type);
+        }
+
+        if (value != null && EnumTypeOf(type) is { } enumType)
+        {
+            return RenderEnumConstant(value, speller.Spell(enumType));
+        }
+
+        if (value is Array array)
+        {
+            return RenderArray(array, type);
+        }
+
         switch (value)
         {
             case null:
                 return "null";
+            case Enum boxedEnum:
+                // A real enum instance whose static type is not an enum (an
+                // element of an enum-typed CLR array read without its type).
+                return RenderEnumConstant(boxedEnum, SpellClrType(boxedEnum.GetType()));
             case string s:
                 return "\"" + EscapeString(s) + "\"";
             case bool b:
@@ -762,7 +784,7 @@ public sealed class GsStubRenderer
             case TypeSymbol ts:
                 return $"typeof({speller.Spell(ts)})";
             case Type clrType:
-                return $"typeof(global::{clrType.FullName?.Replace('+', '.') ?? clrType.Name})";
+                return $"typeof({SpellClrType(clrType)})";
             case float f:
                 return f.ToString("R", CultureInfo.InvariantCulture) + "f";
             case double d:
@@ -781,6 +803,86 @@ public sealed class GsStubRenderer
 
         return null;
     }
+
+    /// <summary>
+    /// Returns the enum type a constant of static type <paramref name="type"/>
+    /// must be cast to — the type itself, or the underlying type of a nullable
+    /// enum — or <see langword="null"/> when it is not an enum.
+    /// </summary>
+    private static TypeSymbol EnumTypeOf(TypeSymbol type)
+    {
+        var candidate = type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+        return candidate is EnumSymbol || candidate?.ClrType.IsEnumSafe() == true ? candidate : null;
+    }
+
+    /// <summary>
+    /// Renders an enum constant as a cast of its underlying integral value to
+    /// <paramref name="enumSpelling"/>. gsc binds an enum argument to its
+    /// underlying primitive, and C# converts only the constant <c>0</c>
+    /// implicitly to an enum, so a bare number binds the wrong overload or
+    /// none (<c>[GeneratedRegex("…", 513)]</c> is SYSLIB1040 for the Regex
+    /// generator) and loses the enum type through an <c>object</c> parameter.
+    /// A cast needs no member-name lookup and is exact for any value, including
+    /// flag combinations and values no member names.
+    /// </summary>
+    private string RenderEnumConstant(object value, string enumSpelling)
+    {
+        var underlying = value is Enum boxedEnum
+            ? Convert.ChangeType(boxedEnum, Enum.GetUnderlyingType(boxedEnum.GetType()), CultureInfo.InvariantCulture)
+            : value;
+        if (underlying is not (sbyte or byte or short or ushort or int or uint or long or ulong))
+        {
+            return null;
+        }
+
+        var literal = RenderConstant(underlying, type: null);
+
+        // `(E)-1` parses as the subtraction `E - 1`; parenthesize the operand.
+        if (literal.StartsWith('-'))
+        {
+            literal = "(" + literal + ")";
+        }
+
+        return "(" + enumSpelling + ")" + literal;
+    }
+
+    /// <summary>
+    /// Renders a one-dimensional array constant as a typed array creation.
+    /// Every element must be renderable, or the whole argument is omitted.
+    /// </summary>
+    private string RenderArray(Array array, TypeSymbol type)
+    {
+        var arrayType = type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
+        var elementType = arrayType switch
+        {
+            ArrayTypeSymbol arraySymbol => arraySymbol.ElementType,
+            SliceTypeSymbol slice => slice.ElementType,
+            _ => null,
+        };
+
+        var elementSpelling = elementType != null
+            ? speller.Spell(elementType)
+            : SpellClrType(array.GetType().GetElementType() ?? typeof(object));
+
+        var elements = new List<string>(array.Length);
+        foreach (var element in array)
+        {
+            var rendered = RenderConstant(element, elementType);
+            if (rendered == null)
+            {
+                return null;
+            }
+
+            elements.Add(rendered);
+        }
+
+        return elements.Count == 0
+            ? $"new {elementSpelling}[0]"
+            : $"new {elementSpelling}[] {{ {string.Join(", ", elements)} }}";
+    }
+
+    private static string SpellClrType(Type clrType) =>
+        "global::" + (clrType.FullName?.Replace('+', '.') ?? clrType.Name);
 
     private static string EscapeString(string value)
     {

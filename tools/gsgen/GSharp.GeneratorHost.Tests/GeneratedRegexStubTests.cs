@@ -24,6 +24,9 @@ public class GeneratedRegexStubTests
 {
     [Theory]
     [InlineData(@"""\\d+""", "\"\\\\d+\"")]
+    [InlineData(
+        @"""^(?<y>\\d{4})-(?<m>\\d{2})$"", RegexOptions.IgnoreCase | RegexOptions.CultureInvariant",
+        "\"^(?<y>\\\\d{4})-(?<m>\\\\d{2})$\", (global::System.Text.RegularExpressions.RegexOptions)513")]
     public void DeclaringPart_DrivesTheRealRegexGenerator_ToEmitTheImplementation(string gsArguments, string stubArguments)
     {
         var stub = Project(@"
