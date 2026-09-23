@@ -55,9 +55,12 @@ implementation PR once the re-entry criteria below pass.
   construction preferred over a same-named bare-form extension; cs2gs keeping
   every indexer argument and widening (not narrowing) a constant operand;
   symbolic `out var` pointees for inferred generic CLR methods;
-  auto-dereferenced ref-returning static CLR calls; and source-declared
+  auto-dereferenced ref-returning static CLR calls; source-declared
   generic implicit conversions (`Span[T] -> ReadOnlySpan[T]`) parented at the
-  symbolic TypeSpec.
+  symbolic TypeSpec; plain-struct `override` members kept by cs2gs; in-body
+  conversion operators owned by their enclosing type; and C#-equivalent
+  constructor assignment of get-only auto-properties (so cs2gs no longer adds
+  `init` setters).
 
 ## Context
 
@@ -370,7 +373,18 @@ This recovery can merge before any ADR implementation.
 - [x] `Gsharp.Runtime.Values` passes all four migration stages after re-entry.
 - [ ] The full corpus is green with the existing ratchets and without the
       temporary Runtime.Values exclusion.
-- [ ] C# and G# consumers observe the same runtime assembly/type/member ABI.
+- [x] C# and G# consumers observe the same runtime assembly/type/member ABI.
+      Verified by a metadata comparison of the C# and migrated assemblies:
+      every public/protected type and member matches in name, signature,
+      static-ness and virtual dispatch. The comparison found and fixed four
+      divergences: struct `Equals`/`GetHashCode` overrides printed without
+      `override`; an in-body `op_Implicit` attached to (and later dropped
+      from) the source type; and `init` setters added to get-only
+      auto-properties. Remaining differences are additive G# conventions —
+      the `<Program>` host types, a default constructor on the extension
+      owner `SliceExtensions`, sealed (`final`) overrides, inherited
+      interfaces resolved by the runtime rather than re-listed in metadata,
+      and missing `specialname` flags on arrow-bodied property getters.
 
 ## Compatibility
 
