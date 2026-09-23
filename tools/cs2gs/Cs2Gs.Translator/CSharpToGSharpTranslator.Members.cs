@@ -1757,10 +1757,12 @@ public sealed partial class CSharpToGSharpTranslator
                 Parameter mapped = parameters[i];
                 IParameterSymbol definitionParameter = definition.Parameters[i];
                 IParameterSymbol ownParameter = isDeclaringPart ? definitionParameter : symbol.Parameters[i];
+                SyntaxNode ownParameterSyntax = ownParameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
                 GExpression defaultValue = this.BuildOptionalParameterDefault(
                     definitionParameter,
                     mapped.Type,
-                    ownParameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax());
+                    ownParameterSyntax,
+                    spellingNode: ownParameterSyntax);
                 var attributes = new List<AttributeUse>();
                 foreach (IParameterSymbol part in new[] { definitionParameter, symbol.Parameters[i] })
                 {

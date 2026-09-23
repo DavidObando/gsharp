@@ -1200,14 +1200,18 @@ public sealed partial class CSharpToGSharpTranslator
         /// and is omitted, never translated. So `SpillOperand`'s no-seam
         /// fallback can never be reached from here.
         /// </remarks>
-        private GExpression BuildOptionalParameterDefault(IParameterSymbol symbol, GTypeReference type, SyntaxNode fallbackNode)
+        private GExpression BuildOptionalParameterDefault(
+            IParameterSymbol symbol,
+            GTypeReference type,
+            SyntaxNode fallbackNode,
+            SyntaxNode spellingNode = null)
         {
             if (!symbol.HasExplicitDefaultValue)
             {
                 return null;
             }
 
-            GExpression defaultValue = this.MapConstantDefault(symbol, fallbackNode);
+            GExpression defaultValue = this.MapConstantDefault(symbol, fallbackNode, spellingNode);
             if (defaultValue != null)
             {
                 return defaultValue;
@@ -1228,7 +1232,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.context.Report(new TranslationDiagnostic(
                 nameof(SyntaxKind.EqualsValueClause),
                 $"parameter '{symbol.Name}' has a default value that is not a simple literal; the default is omitted for now (deferred to step 7).",
-                symbol.Locations.FirstOrDefault(),
+                spellingNode?.GetLocation() ?? symbol.Locations.FirstOrDefault(),
                 TranslationSeverity.Info));
             return null;
         }

@@ -1012,8 +1012,11 @@ public sealed partial class CSharpToGSharpTranslator
                     (c.Initializer == null || c.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.BaseKeyword)));
         }
 
-        private GExpression MapConstantDefault(IParameterSymbol symbol, SyntaxNode fallbackNode) =>
-            this.MapConstantValue(symbol.ExplicitDefaultValue, symbol.Type, symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() ?? fallbackNode, $"parameter '{symbol.Name}''s default value");
+        // `spellingNode`, when given, overrides where the default is spelled:
+        // an ADR-0192 implementing part emits the DEFINITION's default value
+        // but must map it at its own parameter, in its own file's scope.
+        private GExpression MapConstantDefault(IParameterSymbol symbol, SyntaxNode fallbackNode, SyntaxNode spellingNode = null) =>
+            this.MapConstantValue(symbol.ExplicitDefaultValue, symbol.Type, spellingNode ?? symbol.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax() ?? fallbackNode, $"parameter '{symbol.Name}''s default value");
 
         /// <summary>
         /// Maps a compile-time constant <paramref name="value"/> of type
