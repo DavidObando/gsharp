@@ -1867,14 +1867,37 @@ internal sealed class UserTokenResolver
 
         for (var i = 0; i < clrParameters.Length; i++)
         {
-            var parameterClrType = parameters[i].Type.ClrType;
-            if (parameterClrType != null && !ClrTypeUtilities.AreSame(clrParameters[i].ParameterType, parameterClrType))
+            if (!IndexParameterTypeMatches(clrParameters[i].ParameterType, parameters[i].Type))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    // Review finding (#4350): a symbolic index parameter has no reflected
+    // `ClrType`, but it must still discriminate between same-arity overloads
+    // (`this[T]` vs `this[int32]`) rather than match anything. A type
+    // parameter matches only the generic parameter at the same position; any
+    // other symbolic type matches only a reflected type of the same name.
+    private static bool IndexParameterTypeMatches(Type clrParameterType, TypeSymbol parameterType)
+    {
+        if (parameterType.ClrType is { } parameterClrType)
+        {
+            return ClrTypeUtilities.AreSame(clrParameterType, parameterClrType);
+        }
+
+        if (parameterType is TypeParameterSymbol typeParameter)
+        {
+            return clrParameterType.IsGenericParameter
+                && clrParameterType.GenericParameterPosition == typeParameter.Ordinal;
+        }
+
+        var clrName = clrParameterType.Name;
+        var arityMarker = clrName.IndexOf('`', StringComparison.Ordinal);
+        return !clrParameterType.IsGenericParameter
+            && string.Equals(arityMarker < 0 ? clrName : clrName.Substring(0, arityMarker), parameterType.Name, StringComparison.Ordinal);
     }
 
     /// <summary>

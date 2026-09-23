@@ -148,6 +148,35 @@ public class Issue4350IndexerOverloadEmitTests
     }
 
     [Fact]
+    public void GenericParameterAndConcreteIndexerOverloads_DispatchBySignature()
+    {
+        // Review finding: a `this[key T]` parameter has no reflected CLR type,
+        // so it must not match any same-arity overload — `this[index int32]`
+        // and `this[key T]` each dispatch to their own accessor.
+        var source = """
+            package P
+            import System
+
+            class Lookup[T] {
+                prop this[key T] string -> "key:" + key.ToString()
+                prop this[index int32] string -> "index:" + index.ToString()
+            }
+
+            func probe[U](lookup Lookup[U], key U) string -> lookup[key] + "|" + lookup[1]
+
+            let lookup = Lookup[string]()
+            Console.WriteLine(lookup["a"])
+            Console.WriteLine(lookup[2])
+            Console.WriteLine(probe(lookup, "b"))
+            Console.WriteLine(probe(Lookup[bool](), true))
+            """;
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, "key:a", "index:2", "key:b|index:1", "key:True|index:1") + Environment.NewLine,
+            CompileAndRun(source));
+    }
+
+    [Fact]
     public void OverloadedIndexers_EmitOneItemPropertyPerSignature()
     {
         var libraryPath = EmitGSharpLibrary("Shape", Library);
