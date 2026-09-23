@@ -228,6 +228,71 @@ partial class Greeter {
         Assert.Contains("<returns>", xml);
     }
 
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void DocComment_BothPartsInOneTypeBlock_IsAttachedToTheMergedMethod(bool onDeclaringPart)
+    {
+        // Copilot review round 9: with both parts in ONE type block,
+        // PartialTypeMerger hands back the same node and PartialMethodMerger
+        // rewrites its member list in place. The tree's `///` table is built
+        // lazily from the CURRENT member list, so if nothing had asked for
+        // documentation yet, the declaring node was already gone by the time
+        // the table was built — and its comment was never indexed.
+        // Deliberately no `package` line: attaching a package's own doc
+        // comment happens to build the table before the merge, which masks
+        // the bug (verified: with `package App` this test passes even without
+        // the fix).
+        var declaringDoc = onDeclaringPart ? "    /// Greets someone by name.\n" : string.Empty;
+        var implementingDoc = onDeclaringPart ? string.Empty : "    /// Greets someone by name.\n";
+        var source = "partial class Greeter {\n"
+            + declaringDoc
+            + "    partial func Greet(name string) string;\n\n"
+            + implementingDoc
+            + "    partial func Greet(name string) string {\n        return name\n    }\n}\n";
+
+        var xml = EmitDocXml(new[] { SyntaxTree.Parse(SourceText.From(source, "Greeter.gs")) }, "Adr0192-DocSingleBlock");
+        Assert.Contains("Greets someone by name.", xml);
+    }
+
+    [Fact]
+    public void DocCommentOnTheImplementingPartOnly_IsStillAttachedToTheMergedMethod()
+    {
+        // Copilot review round 8: round 7's fix only ever recovered a
+        // declaring-part doc comment — its fallback to the ordinary lookup
+        // on the merged node itself could never have found an
+        // implementing-only comment either, since the merged node is
+        // (like the declaring part) never indexed by DocumentationAttacher.
+        // Needs its own explicit ImplementingPart-based recovery path.
+        var declaringFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class Greeter {
+    partial func Greet(name string) string;
+}
+",
+            "Greeter.gs"));
+
+        var implementingFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class Greeter {
+    /// Greets someone by name.
+    /// @param name the person to greet
+    /// @returns the greeting
+    partial func Greet(name string) string {
+        return ""hello, "" + name
+    }
+}
+",
+            "Greeter.g.gs"));
+
+        var xml = EmitDocXml(new[] { declaringFile, implementingFile }, "Adr0192-DocCommentImplementingOnly");
+        Assert.Contains("Greets someone by name.", xml);
+        Assert.Contains("<param name=\"name\">", xml);
+        Assert.Contains("<returns>", xml);
+    }
+
     [Fact]
     public void SameSpellingResolvesToTwoDifferentTypesAcrossFiles_ReportsGS0611()
     {
@@ -932,6 +997,91 @@ partial class A {
     }
 
     [Fact]
+    public void EscapedGenericTypeParameter_PairsWithThePlainSpelling()
+    {
+        // Copilot review round 8: `MethodKey.For` stored/matched
+        // type-parameter names by raw `Text` (keeping the ADR-0170 `$`
+        // marker), and `SubstituteTypeParameters` scanned raw source text
+        // with no awareness of `$` at all — so a declaring `Echo[$T](value
+        // $T) $T;` and an implementing `Echo[T](value T) T { … }` split into
+        // two unmatched groups (GS0609 + GS0610 + a GS0264 cascade) despite
+        // `$T` and `T` being the same identifier everywhere else in the
+        // binder. Even after fixing the grouping key, ValidateConsistency's
+        // own type-parameter-list/return-type text comparison independently
+        // needed the same `$`-unescaping fix, or the correctly-grouped pair
+        // would still spuriously report GS0611.
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func Echo[$T](value $T) $T;
+}
+
+partial class A {
+    partial func Echo[T](value T) T { return value }
+}
+");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+    }
+
+    [Fact]
+    public void DifferentTypeParameterNames_ReportExactlyOneError()
+    {
+        // Copilot review round 9: after the syntax-level GS0611 for `[T]` vs
+        // `[U]`, the semantic signature check re-bound the declaring side's
+        // `T` with only `U` in scope and piled an unrelated "type doesn't
+        // exist" error on top. Once the syntax check has failed, the
+        // semantic check must stand down.
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func Echo[T](value T) T;
+}
+
+partial class A {
+    partial func Echo[U](value U) U { return value }
+}
+");
+        Assert.Equal(1, diagnostics.Count(d => d.IsError));
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
+    }
+
+    [Fact]
+    public void TextuallyDifferentReturnTypes_ReportGS0611ExactlyOnce()
+    {
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func F() int32;
+}
+
+partial class A {
+    partial func F() string { return """" }
+}
+");
+        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0611"));
+    }
+
+    [Fact]
+    public void EscapedGenericTypeParameter_WithATrulyDifferentName_StillReportsGS0611()
+    {
+        // Complement: `$T` vs `$U` (or `$T` vs `U`) are genuinely different
+        // type-parameter names once unescaped, and must still disagree —
+        // unescaping must not collapse every generic partial method into
+        // one group regardless of its actual type-parameter names.
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func Echo[$T](value $T) $T;
+}
+
+partial class A {
+    partial func Echo[U](value U) U { return value }
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0611");
+    }
+
+    [Fact]
     public void PartsWithDifferentParameterNames_ReportGS0611()
     {
         // Stricter than C#, which only warns (CS8826): a G# caller may pass the
@@ -1126,6 +1276,14 @@ partial class A {
         Assert.DoesNotContain(first, d => d.Id == "GS0609");
         Assert.Contains(second, d => d.Id == "GS0610");
         Assert.DoesNotContain(second, d => d.Id == "GS0609");
+
+        // Copilot review round 8: the first bind reports GS0610 once PER
+        // PART (two, here), and a true fixed point means the SECOND bind
+        // reports the same COUNT — not just the same diagnostic ID at a
+        // single, collapsed location.
+        Assert.Equal(
+            first.Count(d => d.Id == "GS0610"),
+            second.Count(d => d.Id == "GS0610"));
     }
 
     [Fact]
@@ -1150,6 +1308,12 @@ partial class A {
         var second = EmitDiagnostics(tree);
         Assert.Contains(first, d => d.Id == "GS0610" && d.Message.Contains("0 declaring part(s) and 2 implementing part(s)"));
         Assert.Contains(second, d => d.Id == "GS0610" && d.Message.Contains("0 declaring part(s) and 2 implementing part(s)"));
+
+        // Copilot review round 8: same fixed-point-by-count requirement as
+        // the two-declaring-parts test above.
+        Assert.Equal(
+            first.Count(d => d.Id == "GS0610"),
+            second.Count(d => d.Id == "GS0610"));
     }
 
     [Fact]

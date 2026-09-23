@@ -123,11 +123,20 @@ internal static class PartialMethodMerger
                     diagnostics.ReportPartialMethodRequiresPartialType(method.Identifier.Location, method.Identifier.Text ?? string.Empty);
                 }
 
-                diagnostics.ReportPartialMethodPartCount(
-                    method.Identifier.Location,
-                    method.Identifier.Text ?? string.Empty,
-                    recovered.DeclaringCount,
-                    recovered.ImplementingCount);
+                // Copilot review round 8: replay GS0610 at EVERY original
+                // part's location, not just the survivor's — the first
+                // bind reports it once PER PART, so replaying only once
+                // here would silently lose every other part's location on
+                // the second bind even though the message stayed correct.
+                foreach (var partLocation in recovered.PartLocations)
+                {
+                    diagnostics.ReportPartialMethodPartCount(
+                        partLocation,
+                        method.Identifier.Text ?? string.Empty,
+                        recovered.DeclaringCount,
+                        recovered.ImplementingCount);
+                }
+
                 continue;
             }
 
@@ -182,6 +191,17 @@ internal static class PartialMethodMerger
         var replacementByPart = new Dictionary<FunctionDeclarationSyntax, FunctionDeclarationSyntax?>();
         foreach (var group in groups)
         {
+            // Copilot review round 9: each tree's `///` table is built lazily
+            // by walking the tree's CURRENT member lists. When both parts sit
+            // in one type block, the rewrite below removes the declaring node
+            // from that list before anything has asked for documentation, so
+            // a later build could no longer see it. Force every part's table
+            // now, while each original node is still in its tree.
+            foreach (var part in group)
+            {
+                _ = part.SyntaxTree?.GetDocumentation(part);
+            }
+
             var declaringParts = group.Where(p => !HasImplementation(p)).ToList();
             var implementingParts = group.Where(HasImplementation).ToList();
             var name = group[0].Identifier.Text ?? string.Empty;
@@ -256,12 +276,18 @@ internal static class PartialMethodMerger
                         implementingParts.Count);
                 }
 
-                // Copilot review round 5: record the shape being dropped so a
-                // later bind of the same tree (only the survivor remains by
-                // then, per the "error recovery" comment below) can
-                // re-report this SAME diagnostic instead of misreading the
-                // survivor as a freshly-encountered, differently-shaped part.
-                survivor.RecoveredPartCountMismatch = (declaringParts.Count, implementingParts.Count);
+                // Copilot review round 5 (locations added in round 8): record
+                // the shape being dropped — including EVERY part's own
+                // location, not just the survivor's, since the loop above
+                // reports once per part — so a later bind of the same tree
+                // (only the survivor remains by then, per the "error
+                // recovery" comment below) can replay the exact same set of
+                // diagnostics instead of misreading the survivor as a
+                // freshly-encountered, differently-shaped part.
+                survivor.RecoveredPartCountMismatch = (
+                    declaringParts.Count,
+                    implementingParts.Count,
+                    group.Select(p => p.Identifier.Location).ToImmutableArray());
             }
 
             // Error recovery: keep ONE part so callers of the method still bind
@@ -440,6 +466,7 @@ internal static class PartialMethodMerger
         {
             PartialModifier = implementing.PartialModifier ?? declaring.PartialModifier,
             DeclaringPart = declaring,
+            ImplementingPart = implementing,
             StaticModifier = implementing.StaticModifier ?? declaring.StaticModifier,
 
             // `unsafe` is per-part in ADR-0144 §C, and unioning is the only safe
@@ -519,7 +546,15 @@ internal static class PartialMethodMerger
     {
         if (node is SyntaxToken token)
         {
-            builder.Append((int)token.Kind).Append('').Append(token.Text).Append('');
+            // ADR-0170 / Copilot review round 8: an identifier token's
+            // ValueText strips the `$` escape marker (`$T` and `T` are the
+            // same identifier) -- everywhere else in the binder compares
+            // identifiers this way. Scoped to IdentifierToken specifically
+            // so every OTHER token kind (crucially, a string-literal
+            // token's raw quoted text) keeps the exact Text comparison
+            // round 5 relied on to preserve a literal's own content.
+            var text = token.Kind == SyntaxKind.IdentifierToken ? token.ValueText : token.Text;
+            builder.Append((int)token.Kind).Append('').Append(text).Append('');
             return;
         }
 
@@ -562,8 +597,12 @@ internal static class PartialMethodMerger
             // consistency error — not two unrelated declarations. Substituting
             // `!0`, `!1`, … for the declaration's own type-parameter names
             // before hashing lets them group so that diagnostic can fire.
+            // ADR-0170 / Copilot review round 8: ValueText, not Text — `$T`
+            // and `T` are the same type-parameter name, and storing the
+            // escaped spelling would keep SubstituteTypeParameters below
+            // from ever matching a `$`-escaped reference to it.
             var typeParameterNames = method.TypeParameterList?.Parameters
-                .Select(parameter => parameter.Identifier.Text ?? string.Empty)
+                .Select(parameter => parameter.Identifier.ValueText ?? string.Empty)
                 .Where(text => text.Length > 0)
                 .ToList();
 
@@ -615,10 +654,23 @@ internal static class PartialMethodMerger
         /// parameter names in <paramref name="text"/> with positional markers.
         /// Whole-identifier matching keeps a type named <c>T2</c> from being
         /// mangled by a type parameter named <c>T</c>.
+        /// <para>
+        /// ADR-0170 / Copilot review round 8: this scans raw TEXT, not
+        /// tokens, so a <c>$</c> escape marker (<c>$T</c> ≡ <c>T</c>) is
+        /// otherwise invisible to it — `!char.IsLetter('$')` sends it down
+        /// the single-character "not an identifier" branch, so `$T` scans as
+        /// the two-character sequence `$` + `T` instead of the one
+        /// identifier `T`, and never matches a stored (now-<c>ValueText</c>)
+        /// type-parameter name. Recognizing the marker here — and emitting
+        /// the UNESCAPED spelling on a miss too, since `$Money` and `Money`
+        /// are the same identifier everywhere else in the binder — keeps a
+        /// generic partial method's parts pairing correctly regardless of
+        /// which spelling either one happens to use.
+        /// </para>
         /// </summary>
         private static string SubstituteTypeParameters(string text, List<string>? typeParameterNames)
         {
-            if (typeParameterNames == null || typeParameterNames.Count == 0 || text.Length == 0)
+            if (text.Length == 0)
             {
                 return text;
             }
@@ -628,9 +680,17 @@ internal static class PartialMethodMerger
             while (index < text.Length)
             {
                 var character = text[index];
+                if (character == '$'
+                    && index + 1 < text.Length
+                    && (char.IsLetter(text[index + 1]) || text[index + 1] == '_'))
+                {
+                    index++;
+                    character = text[index];
+                }
+
                 if (!char.IsLetter(character) && character != '_')
                 {
-                    result.Append(character);
+                    result.Append(text[index]);
                     index++;
                     continue;
                 }
@@ -642,7 +702,7 @@ internal static class PartialMethodMerger
                 }
 
                 var identifier = text[start..index];
-                var position = typeParameterNames.IndexOf(identifier);
+                var position = typeParameterNames?.IndexOf(identifier) ?? -1;
                 result.Append(position >= 0 ? "!" + position.ToString(System.Globalization.CultureInfo.InvariantCulture) : identifier);
             }
 

@@ -2,6 +2,9 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Text;
+
 namespace GSharp.Core.CodeAnalysis.Syntax;
 
 /// <summary>
@@ -299,6 +302,33 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public FunctionDeclarationSyntax? DeclaringPart { get; set; }
 
     /// <summary>
+    /// Gets or sets the <em>implementing</em> part this node was merged from
+    /// (ADR-0192). Non-<see langword="null"/> only alongside
+    /// <see cref="DeclaringPart"/>, on the same synthetic merged node.
+    /// <para>
+    /// Every OTHER property on the merged node is copied FROM this part
+    /// (its <c>Identifier</c>, <c>Body</c>, <c>Type</c>, … are the
+    /// implementing part's own tokens/nodes, carried over verbatim by
+    /// <c>BuildMergedMethod</c>) — but the implementing part's OWN
+    /// <see cref="SyntaxNode"/> identity is not one of them, and
+    /// <c>DocumentationAttacher</c> indexes doc comments by node reference.
+    /// Copilot review round 8: a <c>///</c> comment written ONLY on the
+    /// implementing part (never on the declaring part) had nowhere to be
+    /// recovered from once <c>Binder.AttachDocumentation</c>'s
+    /// declaring-part lookup (added in round 7) also missed — this
+    /// property is that recovery path. Kept purely for that lookup: nothing
+    /// else needs the implementing part once the merge is built, since the
+    /// merged node already carries its data.
+    /// </para>
+    /// <c>[SyntaxChildIgnore]</c>: for the same reason as
+    /// <see cref="DeclaringPart"/> — its tokens already belong to the
+    /// merged node itself (they were copied from here), so re-parenting the
+    /// ORIGINAL node too would double-count them in child enumeration.
+    /// </summary>
+    [SyntaxChildIgnore]
+    public FunctionDeclarationSyntax? ImplementingPart { get; set; }
+
+    /// <summary>
     /// Gets or sets the GS0611 aspect the declaring/implementing pair
     /// disagreed on when this merged node was built, or <see langword="null"/>
     /// when they agreed (ADR-0192). Set only on a node with
@@ -321,11 +351,10 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     public string? RecoveredPartsDisagreement { get; set; }
 
     /// <summary>
-    /// Gets or sets the original declaring/implementing part counts of a
-    /// malformed partial-method group (GS0610) whose sibling parts error
-    /// recovery already dropped from the type's member list, leaving this
-    /// node as the sole survivor (ADR-0192). Non-<see langword="null"/> only
-    /// on that survivor.
+    /// Gets or sets the original shape of a malformed partial-method group
+    /// (GS0610) whose sibling parts error recovery already dropped from the
+    /// type's member list, leaving this node as the sole survivor
+    /// (ADR-0192). Non-<see langword="null"/> only on that survivor.
     /// <para>
     /// Recovery drops every other part to suppress the GS0102
     /// duplicate-member cascade — but that means a SECOND bind of the same
@@ -340,8 +369,18 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// the original counts here lets a later bind re-report the SAME GS0610
     /// instead, reaching a genuine fixed point after the first bind.
     /// </para>
+    /// <para>
+    /// <c>PartLocations</c> — one entry per ORIGINAL part, not just the
+    /// survivor — exists because the first bind reports GS0610 once PER
+    /// PART (so a two-part malformed group produces two diagnostics, one at
+    /// each part's own location). Recording only the survivor's own
+    /// location (as an early version of this fix did — Copilot review
+    /// round 8 caught it) would replay just one diagnostic on a later
+    /// bind, silently losing every other part's location even though the
+    /// message/count stays correct — still not a true fixed point.
+    /// </para>
     /// </summary>
-    public (int DeclaringCount, int ImplementingCount)? RecoveredPartCountMismatch { get; set; }
+    public (int DeclaringCount, int ImplementingCount, ImmutableArray<TextLocation> PartLocations)? RecoveredPartCountMismatch { get; set; }
 
     /// <summary>Gets the optional open parenthesis introducing the receiver clause (Phase 3.B.6).</summary>
     public SyntaxToken? ReceiverOpenParenthesisToken { get; }

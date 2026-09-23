@@ -413,9 +413,18 @@ public partial class Parser
                 // modifier — `public partial func …` inside `shared { }`, and
                 // `public partial prop …`, whose GS0607 rejection path only
                 // runs once the accessibility token has been consumed.
+                // Copilot review round 9: ANY partial-bearing run consumes the
+                // accessibility token, whatever member follows — otherwise
+                // `public partial var x int32` left `public` for
+                // ParseFieldDeclaration, which then read `partial` as the
+                // field name (a cascade, no GS0607). The field path below
+                // receives the consumed token so the field keeps it.
+                var runStart = ahead;
                 ahead = SkipPartialBearingModifierRun(ahead);
+                var partialRunFollows = ahead != runStart;
 
-                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
+                if (partialRunFollows ||
+                    Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event"))
                 {
@@ -550,7 +559,7 @@ public partial class Parser
                     Diagnostics.ReportUnexpectedToken(sharedMemberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
-                fields.Add(ParseFieldDeclaration().WithAnnotations(memberAnnotations));
+                fields.Add(ParseFieldDeclaration(memberAccessibility).WithAnnotations(memberAnnotations));
             }
 
             if (Current == startToken)
@@ -1470,13 +1479,15 @@ public partial class Parser
         return (openBrace, getAccessor, closeBrace);
     }
 
-    private FieldDeclarationSyntax ParseFieldDeclaration()
+    private FieldDeclarationSyntax ParseFieldDeclaration(SyntaxToken? consumedAccessibility = null)
     {
-        SyntaxToken? fieldAccessibility = null;
-        if (Current.Kind == SyntaxKind.PublicKeyword ||
+        // ADR-0192: a member loop that already consumed the accessibility
+        // token (to reach a misplaced `partial` after it) passes it in here.
+        var fieldAccessibility = consumedAccessibility;
+        if (fieldAccessibility == null && (Current.Kind == SyntaxKind.PublicKeyword ||
             Current.Kind == SyntaxKind.InternalKeyword ||
             Current.Kind == SyntaxKind.PrivateKeyword ||
-            Current.Kind == SyntaxKind.ProtectedKeyword)
+            Current.Kind == SyntaxKind.ProtectedKeyword))
         {
             fieldAccessibility = NextToken();
         }

@@ -1378,9 +1378,18 @@ public partial class Parser
                 // with GS0607 — but the rejection path only runs if `public`
                 // was consumed first). A run without `partial` is left exactly
                 // where it was, so no pre-ADR-0192 decision changes.
+                // Copilot review round 9: ANY partial-bearing run consumes the
+                // accessibility token, whatever member follows — otherwise
+                // `public partial var x int32` left `public` for
+                // ParseFieldDeclaration, which then read `partial` as the
+                // field name (a cascade, no GS0607). The field path below
+                // receives the consumed token so the field keeps it.
+                var runStart = ahead;
                 ahead = SkipPartialBearingModifierRun(ahead);
+                var partialRunFollows = ahead != runStart;
 
-                if (Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
+                if (partialRunFollows ||
+                    Peek(ahead).Kind == SyntaxKind.FuncKeyword ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "prop") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "event") ||
                     (Peek(ahead).Kind == SyntaxKind.IdentifierToken && Peek(ahead).Text == "init" && Peek(ahead + 1).Kind == SyntaxKind.OpenParenthesisToken) ||
@@ -1609,6 +1618,17 @@ public partial class Parser
                 {
                     NextToken(); // consume the `func` keyword
 
+                    // Copilot review round 9: TryConsumeFunctionModifierRun
+                    // consumed a `partial` here because the run ends in
+                    // `func` — but `func init(...)` is a constructor, and
+                    // ADR-0192 makes `partial` on `init` GS0607. Without this
+                    // the modifier was silently dropped and the constructor
+                    // accepted.
+                    if (memberPartialModifier != null)
+                    {
+                        Diagnostics.ReportPartialModifierNotValidHere(memberPartialModifier.Location);
+                    }
+
                     if (memberOpenModifier != null || memberOverrideModifier != null)
                     {
                         // The enclosing `if` tests these same modifiers for non-null,
@@ -1696,7 +1716,7 @@ public partial class Parser
                     Diagnostics.ReportUnexpectedToken(memberAsyncModifier.Location, SyntaxKind.AsyncKeyword, SyntaxKind.FuncKeyword);
                 }
 
-                fields.Add(ParseFieldDeclaration().WithAnnotations(memberAnnotations));
+                fields.Add(ParseFieldDeclaration(memberAccessibility).WithAnnotations(memberAnnotations));
             }
 
             if (Current == startToken)

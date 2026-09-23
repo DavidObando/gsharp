@@ -14524,10 +14524,7 @@ public sealed class Binder
         // directly therefore always misses, silently dropping every `///`
         // comment on a cross-file partial method. Prefer the DECLARING
         // part — the public signature authors naturally write `///` on,
-        // matching §C's annotation-union convention (declaring part first)
-        // — falling back to the ordinary lookup below (which still covers a
-        // plain non-merged method, or an implementing-part doc comment)
-        // when the declaring part carries none.
+        // matching §C's annotation-union convention (declaring part first).
         if (syntax is FunctionDeclarationSyntax { DeclaringPart: { } declaringPart })
         {
             var declaringDocText = declaringPart.SyntaxTree?.GetDocumentation(declaringPart);
@@ -14540,6 +14537,34 @@ public sealed class Binder
                     return;
                 }
             }
+
+            // Copilot review round 8: the declaring part carried none — the
+            // round-7 fallback to the ordinary lookup below on `syntax`
+            // itself could never have recovered a comment written ONLY on
+            // the implementing part, because `syntax` (the merged node) is
+            // ALSO never indexed by DocumentationAttacher, same as the
+            // declaring part above. ImplementingPart is the one original
+            // node the merged node doesn't already carry an identity link
+            // to, so it needs its own explicit lookup here.
+            if (syntax is FunctionDeclarationSyntax { ImplementingPart: { } implementingPart })
+            {
+                var implementingDocText = implementingPart.SyntaxTree?.GetDocumentation(implementingPart);
+                if (implementingDocText != null)
+                {
+                    var implementingDoc = GSharpDocumentationParser.Parse(implementingDocText);
+                    if (implementingDoc != null)
+                    {
+                        symbol.SetDocumentation(implementingDoc);
+                        return;
+                    }
+                }
+            }
+
+            // Neither part carried a doc comment. The ordinary lookup below
+            // on `syntax` itself is provably unreachable for a merged node
+            // (it was never indexed either), but is left in place because
+            // it is still the correct — and only — path for every NON-merged
+            // declaration this same method is called for.
         }
 
         var docText = syntax?.SyntaxTree?.GetDocumentation(syntax);

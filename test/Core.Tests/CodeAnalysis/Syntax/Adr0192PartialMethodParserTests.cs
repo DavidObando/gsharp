@@ -208,6 +208,65 @@ partial class A {
     }
 
     [Fact]
+    public void AccessibilityBeforeAMisplacedPartialField_ReportsExactlyOneGS0607AndKeepsTheField()
+    {
+        // Copilot review round 9: `var` was not in the accessibility
+        // lookahead's member-kind list, so `public` stayed current,
+        // ParseFieldDeclaration consumed it, and then read `partial` as the
+        // field name — a GS0288 cascade with no GS0607.
+        var source = @"package App
+
+partial class A {
+    public partial var x int32 = 1
+}
+";
+        var diagnostics = ParseDiagnostics(source);
+        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0607"));
+        Assert.DoesNotContain(diagnostics, d => d.IsError && d.Id != "GS0607");
+
+        var type = Parse(source).Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var field = Assert.Single(type.Fields);
+        Assert.Equal("x", field.Identifier.Text);
+        Assert.NotNull(field.AccessibilityModifier);
+    }
+
+    [Fact]
+    public void AccessibilityBeforeAMisplacedPartialFieldInASharedBlock_ReportsExactlyOneGS0607()
+    {
+        var source = @"package App
+
+partial class A {
+    shared {
+        public partial var x int32 = 1
+    }
+}
+";
+        var diagnostics = ParseDiagnostics(source);
+        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0607"));
+        Assert.DoesNotContain(diagnostics, d => d.IsError && d.Id != "GS0607");
+
+        var type = Parse(source).Root.Members.OfType<StructDeclarationSyntax>().Single();
+        var field = Assert.Single(type.SharedBlock!.Fields);
+        Assert.Equal("x", field.Identifier.Text);
+        Assert.NotNull(field.AccessibilityModifier);
+    }
+
+    [Fact]
+    public void PartialOnFuncInitConstructor_ReportsGS0607()
+    {
+        // Copilot review round 9: the modifier-run consumer takes `partial`
+        // because the run ends in `func`, but the `func init(...)` branch
+        // never looked at it — the constructor was silently accepted.
+        var diagnostics = ParseDiagnostics(@"package App
+
+partial class A {
+    partial func init() { }
+}
+");
+        Assert.Equal(1, diagnostics.Count(d => d.Id == "GS0607"));
+    }
+
+    [Fact]
     public void AccessibilityBeforeAPartialFuncInASharedBlock_IsConsumedAsAMemberModifier()
     {
         var tree = Parse(@"package App

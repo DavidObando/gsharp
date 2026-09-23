@@ -1010,6 +1010,17 @@ internal sealed partial class DeclarationBinder
             return;
         }
 
+        // Copilot review round 9: the syntax-level check already reported a
+        // GS0611 for this pair (the merge proceeds anyway). Past that point
+        // this cross-file resolution check can only cascade — e.g. `Echo[T]`
+        // paired with `Echo[U]` binds with only `U` seeded, so re-binding the
+        // declaring side's `T` adds an unrelated "type not found", and a
+        // textual return-type mismatch would be reported a second time here.
+        if (methodSyntax.RecoveredPartsDisagreement != null)
+        {
+            return;
+        }
+
         var methodName = methodSyntax.Identifier.ValueText;
 
         // The implementing-side `returnType`/`methodParameters` passed in are
