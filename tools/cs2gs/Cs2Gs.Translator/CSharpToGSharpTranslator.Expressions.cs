@@ -985,7 +985,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (iteratorForeachReceiverRequiresAssertion
                 || importedGenericTupleElementRequiresAssertion
                 || (!this.IsActivePatternBinding(recv)
-                && !this.IsWithinExpressionTreeLambda(recv)
+                && !this.ExpressionTreeForbidsReceiverAssertion(recv)
                 && !this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(recv)
                 && (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
                     || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
@@ -1197,6 +1197,16 @@ public sealed partial class CSharpToGSharpTranslator
 
             ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
 
+            // Issue #4356: in ADR-0169 analyzer mode the read is retargeted
+            // onto the G# analyzer API, whose counterpart of some Roslyn
+            // members is declared `T?` although Roslyn's is non-null — often a
+            // SyntaxToken STRUCT, which the reference-type test below would
+            // reject outright. The C# symbol cannot say so, so ask the map.
+            if (this.IsGSharpNullableAnalyzerApiMember(symbol))
+            {
+                return true;
+            }
+
             // Issue #2113: in a nullable-OBLIVIOUS compilation the whole-program
             // taint analysis may promote a LOCAL or PARAMETER receiver to `T?`.
             // gsc smart-casts locals only after a flow-proven guard (inert under
@@ -1243,6 +1253,23 @@ public sealed partial class CSharpToGSharpTranslator
             return declared.NullableAnnotation == NullableAnnotation.Annotated
                 || this.ShouldPromoteToNullableReference(symbol);
         }
+
+        /// <summary>
+        /// Issue #4356: whether <paramref name="symbol"/> is a Roslyn property or
+        /// field that ADR-0169 analyzer mode retargets onto a G# analyzer-API
+        /// member declared <c>T?</c>, although Roslyn declares it non-null
+        /// (see <c>RoslynAnalyzerApiMap.IsGSharpNullableMember</c>). The C#
+        /// symbol's own nullability cannot say so — for a <c>SyntaxToken</c>
+        /// it is a struct — so the forgiveness predicates ask here.
+        /// </summary>
+        /// <param name="symbol">The bound C# symbol of the read.</param>
+        /// <returns>True when the translated read is <c>T?</c> in G#.</returns>
+        private bool IsGSharpNullableAnalyzerApiMember(ISymbol symbol) =>
+            this.InAnalyzerApiMode
+            && symbol is IPropertySymbol or IFieldSymbol
+            && Analyzers.RoslynAnalyzerApiMap.IsGSharpNullableMember(
+                RoslynTypeMetadataName(symbol.OriginalDefinition.ContainingType),
+                symbol.Name);
 
         // Issue #2113: true for a nullable-oblivious compilation
         // (NullableContextOptions.Disable) — the only mode in which the
@@ -1803,6 +1830,15 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+
+            // Issue #4356: a Roslyn member that is non-null in C# — even a
+            // SyntaxToken struct — but `T?` on the G# analyzer API it is
+            // retargeted onto is never statically non-null in the output.
+            if (this.IsGSharpNullableAnalyzerApiMember(symbol))
+            {
+                return false;
+            }
+
             if (symbol is ILocalSymbol inferredLocal)
             {
                 if (this.TryGetInferredLocalStaticNonNull(
@@ -4396,6 +4432,32 @@ public sealed partial class CSharpToGSharpTranslator
 
             return null;
         }
+
+        /// <summary>
+        /// Issue #4356: whether a <c>!!</c> on the member/element-access RECEIVER
+        /// <paramref name="recv"/> would be unrepresentable because it sits
+        /// inside an expression-tree lambda.
+        /// </summary>
+        /// <remarks>
+        /// Issue #2496 suppressed every such receiver assertion, because gsc then
+        /// rejected any <c>!!</c> in an expression tree (GS0473). gsc has since
+        /// narrowed that (issue #3349): over a REFERENCE type the assertion is
+        /// pure static annotation and <c>ExpressionTreeLowerer</c> erases it, and
+        /// a receiver-position check over an ADR-0186 platform operand is elided
+        /// by <c>ExpressionTreeRestrictionValidator.ValidateReceiver</c>. Only an
+        /// assertion that strips a nullable VALUE type — a real
+        /// <c>Nullable&lt;T&gt;.Value</c> conversion — is still rejected, and gsc
+        /// treats an unconstrained type parameter the same way, since it may be
+        /// instantiated with one. Suppressing the reference case too left
+        /// <c>b.Conversion.AccountId</c> (a stated-<c>T?</c> navigation property
+        /// in an EF <c>Where</c>) printed with no <c>!!</c>, binding only through
+        /// gsc's old member-lookup carve-out.
+        /// </remarks>
+        /// <param name="recv">The receiver expression.</param>
+        /// <returns>True when the receiver is inside an expression tree and not a reference type.</returns>
+        private bool ExpressionTreeForbidsReceiverAssertion(ExpressionSyntax recv) =>
+            this.IsWithinExpressionTreeLambda(recv)
+            && this.context.GetTypeInfo(recv).Type is not { IsReferenceType: true };
 
         private bool IsWithinExpressionTreeLambda(SyntaxNode node) =>
             node.AncestorsAndSelf()

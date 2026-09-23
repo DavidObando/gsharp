@@ -429,6 +429,52 @@ internal static class RoslynAnalyzerApiMap
     };
 
     /// <summary>
+    /// Roslyn members that Roslyn declares non-null (a <c>SyntaxToken</c>
+    /// struct, or a reference the API annotates as non-null) but whose G#
+    /// analyzer-API counterpart — after any <see cref="MemberMap"/> rename — is
+    /// declared <c>T?</c>. Keyed by the declaring Roslyn type's metadata name
+    /// and the Roslyn member name.
+    /// <para>
+    /// Issue #4356: C#'s own nullability says nothing about these, so none of
+    /// the translator's forgiveness predicates, which read the C# symbol, can
+    /// see that the translated read is <c>T?</c>. A dereference through one
+    /// (<c>parameter.Identifier.Text</c>) then printed without a <c>!!</c>, and
+    /// only bound at all because gsc's member lookup waved a chained imported
+    /// read through regardless of its stated nullability. Each row makes the
+    /// read a nullable-reference receiver in analyzer mode, so it gets the same
+    /// <c>!!</c> as a Roslyn-annotated <c>T?</c> member would.
+    /// <see cref="IsNamespaceSymbolType"/> is the same mismatch for a whole
+    /// type rather than one member.
+    /// </para>
+    /// </summary>
+    private static readonly HashSet<(string Type, string Member)> GSharpNullableMembers = new()
+    {
+        // ParameterSyntax.Identifier: G# `SyntaxToken?` (a receiver-clause or
+        // discard parameter has none); Roslyn's is a SyntaxToken struct.
+        ("Microsoft.CodeAnalysis.CSharp.Syntax.ParameterSyntax", "Identifier"),
+
+        // SingleVariableDesignationSyntax.Identifier maps to
+        // PatternSyntax.BindingIdentifier (see MemberMap), which is `SyntaxToken?`
+        // because most patterns bind nothing.
+        ("Microsoft.CodeAnalysis.CSharp.Syntax.SingleVariableDesignationSyntax", "Identifier"),
+
+        // IOperation.Syntax maps to BoundNode.Syntax, which is `SyntaxNode?`: a
+        // synthesized bound node may have no syntax of its own.
+        ("Microsoft.CodeAnalysis.IOperation", "Syntax"),
+    };
+
+    /// <summary>
+    /// Whether the Roslyn member <paramref name="memberName"/> declared on
+    /// <paramref name="typeMetadataName"/> is non-null in Roslyn but <c>T?</c>
+    /// on the G# analyzer API (see <see cref="GSharpNullableMembers"/>).
+    /// </summary>
+    /// <param name="typeMetadataName">The declaring Roslyn type's metadata name.</param>
+    /// <param name="memberName">The Roslyn member name.</param>
+    /// <returns>True when the G# counterpart is declared nullable.</returns>
+    public static bool IsGSharpNullableMember(string typeMetadataName, string memberName)
+        => typeMetadataName != null && GSharpNullableMembers.Contains((typeMetadataName, memberName));
+
+    /// <summary>
     /// Determines whether <paramref name="namespaceName"/> belongs to the
     /// Roslyn API surface this map rewrites.
     /// </summary>

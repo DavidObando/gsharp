@@ -125,6 +125,14 @@ public sealed class LeftCheckAnalyzer : DiagnosticAnalyzer
         Assert.Contains("SyntaxKind.CompoundIndexAssignmentExpression", printed, StringComparison.Ordinal);
         Assert.Contains("SyntaxKind.MemberFieldAssignmentExpression", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(".Left", printed, StringComparison.Ordinal);
+
+        // Issue #4356: the C# is a pattern TEST on `current.Parent` (a nil parent
+        // just fails it), so the synthesized `.Kind` read is null-conditional —
+        // not `!!`, and not a bare `.Kind` through a `SyntaxNode?` receiver,
+        // which bound only through gsc's old member-lookup carve-out.
+        Assert.Contains(".Parent?.Kind == SyntaxKind.MemberIndexAssignmentExpression", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Parent.Kind", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Parent!!.Kind", printed, StringComparison.Ordinal);
         Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
             && d.Message.Contains("write-node parent-kind check", StringComparison.Ordinal));
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
@@ -258,6 +266,11 @@ public sealed class BinaryComparisonAnalyzer : DiagnosticAnalyzer
         Assert.Contains("BoundNodeKind.TypeOfExpression", printed, StringComparison.Ordinal);
         Assert.Contains("BoundConversionExpression", printed, StringComparison.Ordinal);
         Assert.Contains("conversion.Expression", printed, StringComparison.Ordinal);
+
+        // Issue #4356: Roslyn's IOperation.Syntax is non-null, but G#'s
+        // BoundNode.Syntax is `SyntaxNode?`, so `.GetLocation()`'s rewrite to
+        // `.Location` dereferences a stated-nullable receiver and asserts it.
+        Assert.Contains("operation.Syntax!!.Location", printed, StringComparison.Ordinal);
 
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printed);
@@ -536,6 +549,56 @@ public sealed class ArgumentShapeAnalyzer : DiagnosticAnalyzer
         Assert.Contains(".Arguments", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ParameterList", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ArgumentList", printed, StringComparison.Ordinal);
+
+        // Issue #4356: Roslyn's ParameterSyntax.Identifier is a SyntaxToken
+        // struct, G#'s is `SyntaxToken?` — dereferencing it asserts.
+        Assert.Contains("declaration.Parameters[0].Identifier!!.Text", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
+    {
+        // Issue #4356: SingleVariableDesignationSyntax.Identifier (a Roslyn
+        // SyntaxToken struct) maps to PatternSyntax.BindingIdentifier, which G#
+        // declares `SyntaxToken?`. The walk filters to non-nil tokens, but a
+        // filter proves nothing to the G# binder about a property read, so the
+        // dereference asserts — as the same read on a Roslyn-annotated `T?`
+        // member would.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Collections.Generic;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class DesignationAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static HashSet<string> Designations(SyntaxNode node)
+    {
+        var names = new HashSet<string>();
+        foreach (var designation in node.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
+        {
+            names.Add(designation.Identifier.Text);
+        }
+
+        return names;
+    }
+}
+");
+
+        Assert.Contains("designation.BindingIdentifier!!.Text", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printed);
     }

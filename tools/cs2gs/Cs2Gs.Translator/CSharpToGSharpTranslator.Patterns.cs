@@ -1719,6 +1719,26 @@ public sealed partial class CSharpToGSharpTranslator
                 ? new NonNullAssertionExpression(receiver)
                 : receiver;
 
+            // Issue #4356: the same holds for a nested subpattern member over a
+            // nullable REFERENCE (`{ DeclaringType: { IsInterface: true } }`):
+            // the receiver is a member-access chain, not a local. gsc narrows such a chain after `!= nil`
+            // only when every link is stable (SmartCastStability: a `let`
+            // field, or a non-virtual get-only auto-property); an imported
+            // `MethodInfo.DeclaringType` is neither, so
+            // `c.DeclaringType != nil && c.DeclaringType.IsInterface` bound
+            // only through gsc's old member-lookup carve-out for stated-nullable
+            // chains. The `!!` is safe for the same reason as above — the guard
+            // just proved the receiver non-nil — and where gsc DID narrow the
+            // chain it reports the assertion redundant (GS0536), which the
+            // polish pass strips.
+            if (test is BinaryExpression { Operator: "!=" }
+                && recursive.Type == null
+                && !receiverIsValueType
+                && isNestedPatternMember)
+            {
+                memberReceiver = EnsureNonNullAssertion(receiver);
+            }
+
             if (recursive.PropertyPatternClause != null)
             {
                 foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
