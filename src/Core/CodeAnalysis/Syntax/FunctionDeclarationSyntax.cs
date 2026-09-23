@@ -281,9 +281,15 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// <c>PartialMethodMerger</c> builds from a declaring/implementing pair; it
     /// records the signature-only part so tooling can report both part
     /// locations, and it is the merger's idempotency guard — a method whose
-    /// <c>DeclaringPart</c> is already set is passed through untouched when the
-    /// same syntax tree is bound again (the LSP rebinds, and a test may compile
-    /// one tree more than once).
+    /// <c>DeclaringPart</c> is already set is never re-merged when the same
+    /// syntax tree is bound again (the LSP rebinds, and a test may compile one
+    /// tree more than once). It IS, however, re-checked for GS0608 (enclosing
+    /// type not partial — cheap to recompute fresh each bind) and replayed for
+    /// <see cref="RecoveredPartsDisagreement"/> (GS0611 — NOT cheap to
+    /// recompute, since the two original parts' own disagreement can be masked
+    /// once their data is unioned into this one node): Copilot review round 6
+    /// caught both diagnostics silently disappearing on a second bind, which
+    /// this doc comment's earlier "passed through untouched" claim missed.
     /// <c>[SyntaxChildIgnore]</c>: the declaring part's tokens already belong to
     /// their own declaration in its own file, so re-parenting them here would
     /// double-count them in child enumeration and stretch this node's
@@ -291,6 +297,28 @@ public sealed class FunctionDeclarationSyntax : MemberSyntax
     /// </summary>
     [SyntaxChildIgnore]
     public FunctionDeclarationSyntax? DeclaringPart { get; set; }
+
+    /// <summary>
+    /// Gets or sets the GS0611 aspect the declaring/implementing pair
+    /// disagreed on when this merged node was built, or <see langword="null"/>
+    /// when they agreed (ADR-0192). Set only on a node with
+    /// <see cref="DeclaringPart"/> non-null.
+    /// <para>
+    /// A real signature disagreement does not stop the merge — see
+    /// <c>ValidateConsistency</c>'s caller — so a SECOND bind of the same
+    /// syntax tree would otherwise see only the already-merged node and, per
+    /// <see cref="DeclaringPart"/>'s idempotency guard, skip re-deriving
+    /// anything from it. Re-running the same comparison against the merged
+    /// node itself is not a safe substitute: the merge unions several
+    /// modifiers with <c>??</c> (e.g. <c>OpenModifier</c>), which can make an
+    /// aspect the two ORIGINAL parts genuinely disagreed on look consistent
+    /// again once compared against the union. Recording the aspect here at
+    /// merge time — when both original parts are still directly
+    /// available — lets a later bind replay the SAME GS0611 instead of
+    /// silently turning a real compile error into success.
+    /// </para>
+    /// </summary>
+    public string? RecoveredPartsDisagreement { get; set; }
 
     /// <summary>
     /// Gets or sets the original declaring/implementing part counts of a

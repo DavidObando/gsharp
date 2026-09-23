@@ -131,9 +131,33 @@ internal static class PartialMethodMerger
                 continue;
             }
 
-            // Already-merged nodes (DeclaringPart set) are complete methods, not
-            // parts awaiting a partner — never re-group them.
-            if (!method.IsPartial || method.DeclaringPart != null)
+            // Already-merged nodes (DeclaringPart set) are complete methods,
+            // not parts awaiting a partner — never re-group or re-merge them.
+            // But a PREVIOUS bind's merge is exactly where GS0608 and GS0611
+            // would have been reported, and skipping this node unconditionally
+            // would skip re-reporting them too — silently turning a real
+            // compile error into success on the second bind of an unchanged
+            // tree (Copilot review round 6). GS0608 is cheap to recompute
+            // fresh (it depends only on the enclosing type, unaffected by the
+            // merge); GS0611 is replayed from the aspect recorded at merge
+            // time, since re-deriving it from the merged node itself is not
+            // safe (see RecoveredPartsDisagreement's doc comment).
+            if (method.DeclaringPart != null)
+            {
+                if (!enclosingTypeIsPartial)
+                {
+                    diagnostics.ReportPartialMethodRequiresPartialType(method.DeclaringPart.Identifier.Location, method.Identifier.Text ?? string.Empty);
+                }
+
+                if (method.RecoveredPartsDisagreement is { } aspect)
+                {
+                    diagnostics.ReportPartialMethodPartsDisagree(method.Identifier.Location, method.Identifier.Text ?? string.Empty, aspect);
+                }
+
+                continue;
+            }
+
+            if (!method.IsPartial)
             {
                 continue;
             }
@@ -188,9 +212,15 @@ internal static class PartialMethodMerger
                 // Still merges afterward rather than bailing out, so a single
                 // mistake does not also cascade into GS0102 (duplicate member
                 // name) from the two unmerged parts.
-                ValidateConsistency(declaring, implementing, name, diagnostics);
+                var disagreement = ValidateConsistency(declaring, implementing, name, diagnostics);
 
                 var merged = BuildMergedMethod(declaring, implementing);
+
+                // Copilot review round 6: record the aspect (if any) so a
+                // later bind of the same tree — which sees only this merged
+                // node — can replay the SAME GS0611 instead of losing it to
+                // the DeclaringPart idempotency guard above.
+                merged.RecoveredPartsDisagreement = disagreement;
 
                 // The merged node takes the DECLARING part's slot; the
                 // implementing part's slot is removed.
@@ -274,14 +304,24 @@ internal static class PartialMethodMerger
     /// Validates that the declaring and implementing parts describe the same
     /// method, reporting GS0611 for the first aspect they disagree on.
     /// </summary>
-    private static void ValidateConsistency(
+    /// <summary>
+    /// Validates that the declaring and implementing parts describe the same
+    /// method, reporting GS0611 for the first aspect they disagree on and
+    /// returning that aspect (or <see langword="null"/> when they agree) so
+    /// the caller can replay the SAME diagnostic on a later bind — see
+    /// <see cref="FunctionDeclarationSyntax.RecoveredPartsDisagreement"/>.
+    /// </summary>
+    private static string? ValidateConsistency(
         FunctionDeclarationSyntax declaring,
         FunctionDeclarationSyntax implementing,
         string name,
         DiagnosticBag diagnostics)
     {
-        void Disagree(string aspect)
-            => diagnostics.ReportPartialMethodPartsDisagree(implementing.Identifier.Location, name, aspect);
+        string Disagree(string aspect)
+        {
+            diagnostics.ReportPartialMethodPartsDisagree(implementing.Identifier.Location, name, aspect);
+            return aspect;
+        }
 
         // Return type. Compared as normalized source text, the same textual
         // convention ADR-0144 §E uses for base clauses and type-parameter
@@ -290,15 +330,13 @@ internal static class PartialMethodMerger
         // relaxable later without breaking existing code.
         if (NormalizeNodeText(declaring.Type) != NormalizeNodeText(implementing.Type))
         {
-            Disagree("the return type");
-            return;
+            return Disagree("the return type");
         }
 
         if (declaring.IsRefReturn != implementing.IsRefReturn
             || (declaring.ReturnReadOnlyModifier != null) != (implementing.ReturnReadOnlyModifier != null))
         {
-            Disagree("the 'ref' return modifiers");
-            return;
+            return Disagree("the 'ref' return modifiers");
         }
 
         // `async`/`suspend` is part of a G# method's OBSERVABLE contract — an
@@ -309,14 +347,12 @@ internal static class PartialMethodMerger
         // describe different signatures. Both parts must agree.
         if (declaring.IsAsync != implementing.IsAsync || declaring.IsSuspend != implementing.IsSuspend)
         {
-            Disagree("the 'async'/'suspend' modifier");
-            return;
+            return Disagree("the 'async'/'suspend' modifier");
         }
 
         if (NormalizeNodeText(declaring.TypeParameterList) != NormalizeNodeText(implementing.TypeParameterList))
         {
-            Disagree("the type parameter list");
-            return;
+            return Disagree("the type parameter list");
         }
 
         // Accessibility follows ADR-0144 §C's rule for type parts: a part may
@@ -326,32 +362,27 @@ internal static class PartialMethodMerger
             && implementing.AccessibilityModifier is { } implementedAccess
             && declaredAccess.Kind != implementedAccess.Kind)
         {
-            Disagree("accessibility");
-            return;
+            return Disagree("accessibility");
         }
 
         if (declaring.IsOpen != implementing.IsOpen)
         {
-            Disagree("the 'open' modifier");
-            return;
+            return Disagree("the 'open' modifier");
         }
 
         if (declaring.IsOverride != implementing.IsOverride)
         {
-            Disagree("the 'override' modifier");
-            return;
+            return Disagree("the 'override' modifier");
         }
 
         if (NormalizeNodeText(declaring.ExplicitInterfaceType) != NormalizeNodeText(implementing.ExplicitInterfaceType))
         {
-            Disagree("the explicit-interface qualifier");
-            return;
+            return Disagree("the explicit-interface qualifier");
         }
 
         if (NormalizeNodeText(declaring.Receiver) != NormalizeNodeText(implementing.Receiver))
         {
-            Disagree("the receiver clause");
-            return;
+            return Disagree("the receiver clause");
         }
 
         // Parameters. The grouping key already matched parameter TYPES (that is
@@ -366,8 +397,7 @@ internal static class PartialMethodMerger
         var implementingParameters = implementing.Parameters;
         if (declaringParameters.Count != implementingParameters.Count)
         {
-            Disagree("the number of parameters");
-            return;
+            return Disagree("the number of parameters");
         }
 
         for (var i = 0; i < declaringParameters.Count; i++)
@@ -376,11 +406,12 @@ internal static class PartialMethodMerger
             var implementingParameter = implementingParameters[i];
             if (NormalizeNodeText(declaringParameter) != NormalizeNodeText(implementingParameter))
             {
-                Disagree(
+                return Disagree(
                     $"parameter {i + 1} ('{NormalizeNodeText(declaringParameter)}' vs '{NormalizeNodeText(implementingParameter)}')");
-                return;
             }
         }
+
+        return null;
     }
 
     /// <summary>
@@ -561,8 +592,15 @@ internal static class PartialMethodMerger
                     return $"{refKind} {variadic}{type}";
                 }));
 
+            // ADR-0170: `$F` and `F` are equivalent spellings of the same
+            // identifier — the binder consistently declares methods with
+            // `Identifier.ValueText`, never the verbatim `Text` (which keeps
+            // the `$`). Using `Text` here would split a declaring `partial
+            // func $F();` and an implementing `partial func F() { … }` into
+            // two unmatched, unrelated groups instead of pairing them
+            // (Copilot review round 6).
             return new MethodKey(
-                method.Identifier.Text ?? string.Empty,
+                method.Identifier.ValueText ?? string.Empty,
                 method.TypeParameterList?.Parameters.Count ?? 0,
                 parameterTypes);
         }

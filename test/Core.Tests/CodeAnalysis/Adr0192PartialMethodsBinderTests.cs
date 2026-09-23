@@ -617,6 +617,28 @@ class A {
     }
 
     [Fact]
+    public void EscapedIdentifierDeclaringPart_MatchesThePlainIdentifierImplementingPart()
+    {
+        // Copilot review round 6: MethodKey.For used to key on
+        // Identifier.Text, which keeps the ADR-0170 `$` escape marker, while
+        // every other name comparison in the binder uses ValueText (`$F` and
+        // `F` are the same identifier). A declaring `$F` and an implementing
+        // plain `F` therefore hashed to two DIFFERENT keys and were treated
+        // as two unrelated, unmatched declarations — GS0609 ("no
+        // implementation") for the declaring part, GS0610 ("wrong part
+        // count") for the implementing part, AND a GS0264 duplicate-overload
+        // cascade on top — instead of being merged as one method.
+        var diagnostics = Compile(@"package App
+
+partial class A {
+    partial func $F() int32;
+    partial func F() int32 { return 1 }
+}
+");
+        Assert.DoesNotContain(diagnostics, d => d.IsError);
+    }
+
+    [Fact]
     public void UnimplementedPartialMethodInANonPartialType_ReportsBothGS0608AndGS0609()
     {
         // Copilot review round 4: GS0608 was only checked inside the
@@ -997,6 +1019,57 @@ partial class A {
         var second = EmitDiagnostics(tree);
         Assert.Contains(first, d => d.Id == "GS0610" && d.Message.Contains("0 declaring part(s) and 2 implementing part(s)"));
         Assert.Contains(second, d => d.Id == "GS0610" && d.Message.Contains("0 declaring part(s) and 2 implementing part(s)"));
+    }
+
+    [Fact]
+    public void BindingTheSameSyntaxTreeTwice_WellFormedPairInANonPartialType_ReportsGS0608BothTimes()
+    {
+        // Copilot review round 6: a well-formed pair (one declaring, one
+        // implementing part) still merges even when the enclosing type is
+        // not partial — GS0608 is reported but doesn't block the merge. The
+        // merged node's DeclaringPart idempotency guard then made the SECOND
+        // bind of this same tree (a single `class A { }` block, so
+        // PartialTypeMerger hands back the SAME node both times regardless
+        // of the type's own `partial`-ness) skip the node entirely — turning
+        // a real GS0608 compile error into silent success.
+        var tree = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+class A {
+    partial func F() int32;
+    partial func F() int32 { return 1 }
+}
+",
+            "Test.gs"));
+
+        var first = EmitDiagnostics(tree);
+        var second = EmitDiagnostics(tree);
+        Assert.Contains(first, d => d.Id == "GS0608");
+        Assert.Contains(second, d => d.Id == "GS0608");
+    }
+
+    [Fact]
+    public void BindingTheSameSyntaxTreeTwice_PartsDisagree_ReportsGS0611BothTimes()
+    {
+        // The other half of the same bug: ValidateConsistency reports GS0611
+        // but the merge still proceeds. On a second bind, the DeclaringPart
+        // guard would otherwise skip re-deriving anything from the
+        // already-merged node — silently turning this real compile error
+        // into success too.
+        var tree = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial class A {
+    partial func F() int32;
+    partial func F() string { return """" }
+}
+",
+            "Test.gs"));
+
+        var first = EmitDiagnostics(tree);
+        var second = EmitDiagnostics(tree);
+        Assert.Contains(first, d => d.Id == "GS0611");
+        Assert.Contains(second, d => d.Id == "GS0611");
     }
 
     [Fact]
