@@ -2920,6 +2920,13 @@ internal sealed partial class DeclarationBinder
     internal static bool TypeSignaturesEquivalent(TypeSymbol? a, TypeSymbol? b)
         => TypeSignaturesEquivalent(a, b, typeParamMap: null);
 
+    private static TypeSymbol? StripPlatformOrReferenceNullable(TypeSymbol? type) => type switch
+    {
+        PlatformTypeSymbol platform => platform.UnderlyingType,
+        NullableTypeSymbol nullable when Conversion.IsReferenceLikeTarget(nullable.UnderlyingType) => nullable.UnderlyingType,
+        _ => type,
+    };
+
     internal static bool InterfaceEventTypesEquivalent(
         InterfaceSymbol iface,
         EventSymbol interfaceEvent,
@@ -2943,6 +2950,20 @@ internal sealed partial class DeclarationBinder
         if (typeParamMap != null && a is TypeParameterSymbol tpa && typeParamMap.TryGetValue(tpa, out var mappedA))
         {
             a = mappedA;
+        }
+
+        // ADR-0186: signature matching (interface implementation, override,
+        // event equivalence) is a conformance relation, and `T!` has `T`'s
+        // signature (§1). A member declared in an ADR-0186 §9 oblivious scope
+        // (`func Make(x Item) Item` there is `Item! -> Item!`) must match the
+        // slot an enabled declaration wrote as `Item` — and, since oblivious
+        // means "nothing was stated", one written as `Item?` too, as C#
+        // accepts an oblivious override of an annotated member. Recursion
+        // applies the same reading to nested positions.
+        if (a is PlatformTypeSymbol || b is PlatformTypeSymbol)
+        {
+            a = StripPlatformOrReferenceNullable(a);
+            b = StripPlatformOrReferenceNullable(b);
         }
 
         if (ReferenceEquals(a, b))

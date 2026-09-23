@@ -731,6 +731,50 @@ public class Adr0186ObliviousScopeTests
         Assert.Contains("nullability-oblivious", failure.Message, StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Found in review (PR #4357): source signature matching had no platform
+    /// arm, so an oblivious class could neither implement an enabled G#
+    /// interface method nor override an enabled base method written over a
+    /// G# class (<c>Item! -&gt; Item!</c> against <c>Item -&gt; Item</c>): GS0187
+    /// and GS0185. <c>T!</c> has <c>T</c>'s signature; and since oblivious
+    /// states nothing, an oblivious member also matches a slot written
+    /// <c>Item?</c>.
+    /// </summary>
+    [Fact]
+    public void An_Oblivious_Type_Implements_And_Overrides_Enabled_Source_Signatures()
+    {
+        var output = Run(
+            """
+            class Item {
+                var Value int32
+            }
+
+            interface IMaker {
+                func Make(x Item) Item;
+                func Maybe(x Item?) Item?;
+            }
+
+            open class Base {
+                open func Twice(x Item) Item { return x }
+            }
+
+            @Oblivious
+            class Maker : Base, IMaker {
+                func Make(x Item) Item { return x }
+                func Maybe(x Item) Item { return x }
+                override func Twice(x Item) Item { return x }
+            }
+
+            let m IMaker = Maker{}
+            let b Base = Maker{}
+            Console.WriteLine(m.Make(Item{Value: 3}).Value)
+            Console.WriteLine(m.Maybe(nil) == nil)
+            Console.WriteLine(b.Twice(Item{Value: 4}).Value)
+            """);
+
+        Assert.Equal("3\nTrue\n4\n", output.Replace("\r\n", "\n"));
+    }
+
     // ---------------------------------------------------------------
     // GS9307.
     // ---------------------------------------------------------------
