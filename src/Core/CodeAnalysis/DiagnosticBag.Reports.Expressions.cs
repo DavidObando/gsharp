@@ -689,19 +689,6 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.RefLocalAliasCannotBeCaptured, localName);
 
     /// <summary>
-    /// GS0410: a from-end index marker <c>^</c> appeared where it is not
-    /// allowed — at the very start of a standalone range expression
-    /// (<c>^a..b</c>) or as a bare expression. The leading <c>^</c> is
-    /// ambiguous with the one's-complement unary operator, so it is only
-    /// recognised as a from-end marker inside index brackets
-    /// (<c>arr[^1]</c>, <c>arr[a..^b]</c>) or after <c>..</c> in a standalone
-    /// range upper bound (<c>a..^b</c>) (issue #1038).
-    /// </summary>
-    /// <param name="location">The text location of the <c>^</c> marker.</param>
-    public void ReportFromEndMarkerNotAllowedInStandaloneRange(TextLocation location)
-    => Report(location, DiagnosticDescriptors.FromEndMarkerNotAllowedInStandaloneRange);
-
-    /// <summary>
     /// Reports that a <c>nameof(...)</c> argument is not a valid name
     /// reference (it must denote an identifier, member access, or type).
     /// </summary>

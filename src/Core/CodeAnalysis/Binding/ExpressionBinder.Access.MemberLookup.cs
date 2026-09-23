@@ -3446,11 +3446,11 @@ internal sealed partial class ExpressionBinder
 
         BoundExpression SrcLenRef() => new BoundVariableExpression(null, srcLenLocal);
 
-        var lowerBound = BindRangeBoundValue(range.LowerBound, SrcLenRef, new BoundLiteralExpression(null, 0));
+        var lowerBound = BindRangeBoundValue(BindRangeBound(range.LowerBound), SrcLenRef, new BoundLiteralExpression(null, 0), statements);
         var startLocal = DeclareRangeTemp("start", TypeSymbol.Int32, lowerBound, statements);
         var startRef = new BoundVariableExpression(null, startLocal);
 
-        var upperBound = BindRangeBoundValue(range.UpperBound, SrcLenRef, SrcLenRef());
+        var upperBound = BindRangeBoundValue(BindRangeBound(range.UpperBound), SrcLenRef, SrcLenRef(), statements);
 
         var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32)!;
         var lengthExpr = new BoundBinaryExpression(null, upperBound, subtractOp, startRef);
@@ -3462,24 +3462,64 @@ internal sealed partial class ExpressionBinder
             new BoundVariableExpression(null, lenLocal));
     }
 
-    // Issue #1022: bind a single range bound to an int32 offset. A from-end
-    // marker `^n` lowers to `srcLen - n`; a missing bound uses
-    // <paramref name="defaultValue"/>; otherwise the bound is the plain value.
-    private BoundExpression BindRangeBoundValue(ExpressionSyntax? boundSyntax, Func<BoundExpression> srcLenRef, BoundExpression defaultValue)
+    // ADR-0192: bind one written range bound exactly once. A `^n` marker keeps
+    // its int32 operand and from-end flag so the direct slicing paths can
+    // resolve it against the source length; a bound that is already a
+    // `System.Index` value (`i..j` over saved indices, `(^1)..`) is kept as an
+    // Index; any other bound converts to an int32 from-start offset.
+    private RangeBound? BindRangeBound(ExpressionSyntax? boundSyntax)
     {
         if (boundSyntax == null)
         {
-            return defaultValue;
+            return null;
         }
 
         if (boundSyntax is FromEndIndexExpressionSyntax fromEnd)
         {
-            var offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
-            var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32)!;
-            return new BoundBinaryExpression(null, srcLenRef(), subtractOp, offset);
+            return new RangeBound(conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32), FromEnd: true, IsIndexValue: false);
         }
 
-        return conversions.BindConversion(boundSyntax, TypeSymbol.Int32);
+        if (boundSyntax is DefaultExpressionSyntax or InterpolatedStringExpressionSyntax)
+        {
+            return new RangeBound(conversions.BindConversion(boundSyntax, TypeSymbol.Int32), FromEnd: false, IsIndexValue: false);
+        }
+
+        var bound = BindExpression(boundSyntax);
+        if (bound is not BoundErrorExpression && ClrTypeUtilities.AreSame(bound.Type?.ClrType, typeof(System.Index)))
+        {
+            return new RangeBound(bound, FromEnd: false, IsIndexValue: true);
+        }
+
+        return new RangeBound(conversions.BindConversion(boundSyntax.Location, bound, TypeSymbol.Int32), FromEnd: false, IsIndexValue: false);
+    }
+
+    // Issue #1022: resolve a bound range bound to an int32 offset. A from-end
+    // marker `^n` lowers to `srcLen - n`; an Index value resolves through
+    // `Index.GetOffset(srcLen)` (ADR-0192); a missing bound uses
+    // <paramref name="defaultValue"/>; otherwise the bound is the plain value.
+    private BoundExpression BindRangeBoundValue(
+        RangeBound? bound,
+        Func<BoundExpression> srcLenRef,
+        BoundExpression defaultValue,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        if (bound is not { } value)
+        {
+            return defaultValue;
+        }
+
+        if (value.IsIndexValue)
+        {
+            return BuildSystemIndexOffset(value.Value, srcLenRef(), statements);
+        }
+
+        if (value.FromEnd)
+        {
+            var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32)!;
+            return new BoundBinaryExpression(null, srcLenRef(), subtractOp, value.Value);
+        }
+
+        return value.Value;
     }
 
     private BoundExpression BindArraySlice(BoundExpression target, RangeExpressionSyntax range, TypeSymbol elementType)
@@ -3610,48 +3650,48 @@ internal sealed partial class ExpressionBinder
     // expression's bounds. Each bound becomes a `System.Index`: an open lower
     // defaults to the start (`Index(0, fromEnd: false)`), an open upper to the
     // end (`Index(0, fromEnd: true)`), a `^n` marker to `Index(n, fromEnd:
-    // true)`, and a plain value `v` to `Index(v, fromEnd: false)`. Shared by the
-    // `this[System.Range]` indexer-slice path (#1016) and the standalone range
-    // value `let r = 1..3` (#1038).
+    // true)`, a bound that is already a `System.Index` value is used as-is
+    // (ADR-0192: `^3..^1`, `i..j`), and a plain value `v` to `Index(v,
+    // fromEnd: false)`. Shared by the `this[System.Range]` indexer-slice path
+    // (#1016), the native-slice path, and the standalone range value (#1038).
+    // Bounds are bound, and therefore evaluated, exactly once, left to right.
     private BoundExpression BuildSystemRangeValue(RangeExpressionSyntax range)
+    {
+        var lower = BindRangeBound(range.LowerBound);
+        var upper = BindRangeBound(range.UpperBound);
+        return BuildSystemRangeValue(lower, upper);
+    }
+
+    private static BoundExpression BuildSystemRangeValue(RangeBound? lower, RangeBound? upper)
     {
         var indexCtor = typeof(System.Index).GetConstructor(new[] { typeof(int), typeof(bool) })!;
         var rangeCtor = typeof(System.Range).GetConstructor(new[] { typeof(System.Index), typeof(System.Index) })!;
         var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
         var rangeSym = TypeSymbol.FromClrType(typeof(System.Range));
 
-        BoundExpression MakeIndex(ExpressionSyntax? boundSyntax, bool defaultFromEnd)
+        BoundExpression MakeIndex(RangeBound? bound, bool defaultFromEnd)
         {
-            // Issue #1022: a `^n` bound becomes System.Index(n, fromEnd: true);
-            // the System.Range value resolves the concrete offset at runtime.
-            if (boundSyntax is FromEndIndexExpressionSyntax fromEnd)
+            if (bound is { IsIndexValue: true } indexValue)
             {
-                var endValue = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
-                return new BoundClrConstructorCallExpression(
-                    null,
-                    typeof(System.Index),
-                    indexCtor,
-                    ImmutableArray.Create<BoundExpression>(endValue, new BoundLiteralExpression(null, true)),
-                    indexSym);
+                return indexValue.Value;
             }
 
-            var value = boundSyntax != null
-                ? conversions.BindConversion(boundSyntax, TypeSymbol.Int32)
-                : new BoundLiteralExpression(null, 0);
+            // Issue #1022: a `^n` bound becomes System.Index(n, fromEnd: true);
+            // the System.Range value resolves the concrete offset at runtime.
+            var value = bound?.Value ?? new BoundLiteralExpression(null, 0);
+            var fromEnd = bound?.FromEnd ?? defaultFromEnd;
             return new BoundClrConstructorCallExpression(
                 null,
                 typeof(System.Index),
                 indexCtor,
-                ImmutableArray.Create<BoundExpression>(value, new BoundLiteralExpression(null, defaultFromEnd)),
+                ImmutableArray.Create<BoundExpression>(value, new BoundLiteralExpression(null, fromEnd)),
                 indexSym);
         }
 
         // Open lower defaults to the start (0, from-start); open upper defaults
         // to the end (^0, i.e. value 0 from-end).
-        var startIndex = MakeIndex(range.LowerBound, defaultFromEnd: false);
-        var endIndex = range.UpperBound != null
-            ? MakeIndex(range.UpperBound, defaultFromEnd: false)
-            : MakeIndex(null, defaultFromEnd: true);
+        var startIndex = MakeIndex(lower, defaultFromEnd: false);
+        var endIndex = MakeIndex(upper, defaultFromEnd: true);
 
         return new BoundClrConstructorCallExpression(
             null,
@@ -3661,29 +3701,25 @@ internal sealed partial class ExpressionBinder
             rangeSym);
     }
 
-    // Issue #1038: bind a standalone range expression (`let r = 1..3`) to a
-    // constructed `System.Range` value. A leading `^` at the very start is
-    // genuinely ambiguous with the one's-complement unary operator, so the
-    // parser reads `^a..` as `(~a)..`; reject that here (GS0410) so the from-end
-    // intent isn't silently misread — use an indexer (`arr[^a..]`) or
-    // parenthesise the complement (`(^a)..`).
-    private BoundExpression BindStandaloneRange(RangeExpressionSyntax range)
+    // ADR-0192: bind a first-class `^n` expression to a `System.Index` value.
+    private BoundExpression BindFromEndIndexValue(FromEndIndexExpressionSyntax syntax)
     {
-        if (range.LowerBound is UnaryExpressionSyntax leadingUnary
-            && leadingUnary.OperatorToken.Kind == SyntaxKind.HatToken)
-        {
-            Diagnostics.ReportFromEndMarkerNotAllowedInStandaloneRange(leadingUnary.OperatorToken.Location);
-            _ = BindExpression(leadingUnary.Operand);
-            if (range.UpperBound != null)
-            {
-                _ = BindExpression(range.UpperBound is FromEndIndexExpressionSyntax fe ? fe.Operand : range.UpperBound);
-            }
-
-            return new BoundErrorExpression(range);
-        }
-
-        return BuildSystemRangeValue(range);
+        _ = TryBindSystemIndexValue(syntax, out var indexValue);
+        return Invariant.Required(indexValue, "TryBindSystemIndexValue always binds a from-end index expression");
     }
+
+    // Issue #1038 / ADR-0192: bind a standalone range expression (`let r =
+    // 1..3`, `^4..^1`, `..`) to a constructed `System.Range` value.
+    private BoundExpression BindStandaloneRange(RangeExpressionSyntax range)
+        => BuildSystemRangeValue(range);
+
+    /// <summary>
+    /// ADR-0192: one bound written in a range expression, bound exactly once.
+    /// </summary>
+    /// <param name="Value">The bound int32 offset or <c>System.Index</c> value.</param>
+    /// <param name="FromEnd">Whether <paramref name="Value"/> is the operand of a written <c>^n</c> marker.</param>
+    /// <param name="IsIndexValue">Whether <paramref name="Value"/> is already a <c>System.Index</c>.</param>
+    private readonly record struct RangeBound(BoundExpression Value, bool FromEnd, bool IsIndexValue);
 
     // Issue #1038: slice a target by a runtime `System.Range` value (`a[r]`,
     // where `r : System.Range`). Mirrors the syntactic `a[1..3]` shapes from

@@ -197,18 +197,21 @@ public class Issue1038StandaloneRangeEmitTests
     }
 
     [Fact]
-    public void LeadingFromEndMarker_ReportsGs0410()
+    public void LeadingFromEndMarker_BuildsReusableRange_Adr0192()
     {
         var source = """
             package P
             import System
 
             let r = ^1..3
-            Console.WriteLine(0)
+            Console.WriteLine(r.Start.IsFromEnd)
+            Console.WriteLine(r.Start.Value)
+            Console.WriteLine(r.End.IsFromEnd)
+            Console.WriteLine(r.End.Value)
             """;
 
-        var diagnostics = CompileExpectingFailure(source);
-        Assert.Contains("GS0410", diagnostics);
+        var nl = Environment.NewLine;
+        Assert.Equal($"True{nl}1{nl}False{nl}3{nl}", CompileAndRun(source));
     }
 
     private static string CompileAndRun(string source)
@@ -269,52 +272,6 @@ public class Issue1038StandaloneRangeEmitTests
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
 
             return stdout.ReplaceLineEndings(Environment.NewLine);
-        }
-        finally
-        {
-            try
-            {
-                Directory.Delete(tempDir, recursive: true);
-            }
-            catch
-            {
-            }
-        }
-    }
-
-    private static string CompileExpectingFailure(string source)
-    {
-        var tempDir = Directory.CreateTempSubdirectory("gs_issue1038_neg_").FullName;
-        try
-        {
-            var srcPath = Path.Combine(tempDir, "test.gs");
-            var outPath = Path.Combine(tempDir, "test.dll");
-            File.WriteAllText(srcPath, source);
-
-            using var compileOut = new StringWriter();
-            using var compileErr = new StringWriter();
-            var prevOut = Console.Out;
-            var prevErr = Console.Error;
-            Console.SetOut(compileOut);
-            Console.SetError(compileErr);
-            try
-            {
-                var compileExit = Program.Main(new[]
-                {
-                    "/out:" + outPath,
-                    "/target:exe",
-                    "/targetframework:net10.0",
-                    srcPath,
-                });
-                Assert.NotEqual(0, compileExit);
-            }
-            finally
-            {
-                Console.SetOut(prevOut);
-                Console.SetError(prevErr);
-            }
-
-            return compileOut.ToString() + compileErr.ToString();
         }
         finally
         {

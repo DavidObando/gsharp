@@ -17,7 +17,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// <item><description>a bare <c>a[^n]</c> single-element read (<c>length - n</c>).</description></item>
 /// <item><description>from-end bounds in ranges (<c>a[1..^1]</c>, <c>a[..^3]</c>, <c>a[^2..]</c>).</description></item>
 /// <item><description>arrays/slices, strings, and span-like (<c>ArraySegment</c>) targets.</description></item>
-/// <item><description>regression: one's-complement and XOR <c>^</c> are unchanged.</description></item>
+/// <item><description>regression: one's-complement (<c>~</c>) and XOR <c>^</c> are unchanged.</description></item>
 /// </list>
 /// </summary>
 public class Issue1022FromEndIndexEmitTests
@@ -160,14 +160,14 @@ public class Issue1022FromEndIndexEmitTests
     [Fact]
     public void OnesComplementAndXor_Unchanged()
     {
-        // Regression: prefix `^` (one's-complement) and infix `^` (XOR) keep
-        // their existing meanings outside the leading index-bound position.
+        // Regression: one's-complement (spelled `~` since ADR-0192) and infix
+        // `^` (XOR) keep their meanings.
         var source = """
             package P
             import System
 
             let a = []int32{10, 20, 30, 40, 50}
-            Console.WriteLine(^0)
+            Console.WriteLine(~0)
             Console.WriteLine(6 ^ 3)
             Console.WriteLine(a[1 ^ 2])
             """;

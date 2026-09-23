@@ -184,8 +184,7 @@ public sealed partial class CSharpToGSharpTranslator
                 if (this.context.GetDeclaredSymbol(designation) is not ILocalSymbol local
                     || local.Type == null
                     || local.Type.TypeKind == TypeKind.Error
-                    || local.Type.IsRefLikeType
-                    || CSharpTypeMapper.IsSystemIndexOrRange(local.Type))
+                    || local.Type.IsRefLikeType)
                 {
                     return false;
                 }

@@ -1,10 +1,12 @@
 # ADR-0123: From-end index operator (`^n`) for index and range bounds
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by [ADR-0192](0192-first-class-index-range-and-runtime-declarations.md)
 - **Date**: 2026-06-23
 - **Phase**: Phase 9 — language depth / collection ergonomics
 - **Related**: issue #1016 (the `..` range/slice operator), issue [#1022](https://github.com/DavidObando/gsharp/issues/1022)
 
+
+> **Amended by ADR-0192 (issue #4350).** ADR-0192 replaces its bracket-scoped `^n` marker and prefix-`^` one's-complement: prefix `^x` is a first-class `System.Index` expression in every expression context, a standalone range may begin with `^`, and unary one's-complement is spelled `~x`. Binary `^` remains XOR.
 ## Context
 
 Issue #1016 added the C#-style `..` range/slice operator inside an indexer

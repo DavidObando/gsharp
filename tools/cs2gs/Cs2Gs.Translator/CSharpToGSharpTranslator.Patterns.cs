@@ -156,32 +156,18 @@ public sealed partial class CSharpToGSharpTranslator
                             prefix.IsKind(SyntaxKind.PreIncrementExpression) ? "+=" : "-=");
                     }
 
-                    // Issue #1894: a C# from-end index `^n` (SyntaxKind.IndexExpression)
-                    // shares its `^` token with bitwise complement, and gsc's own G#
-                    // grammar only recognises a bare `^n` as "from-end" INSIDE an
-                    // index bracket (Parser.ParseIndexBound) — everywhere else `^n`
-                    // parses as the one's-complement operator. G# has no
-                    // `System.Index` value type, so a from-end index printed outside
-                    // a direct `[...]`/`?[...]` bracket (bound to a local, passed as
-                    // an argument, returned, used as a range bound, ...) would
-                    // silently re-bind to the wrong (complemented) integer instead of
-                    // gapping loudly. Only the direct bracket-argument position is
-                    // safe to emit as a bare `^n`; every other position reports a gap.
-                    if (prefix.IsKind(SyntaxKind.IndexExpression) && !IsDirectIndexBracketArgument(prefix))
+                    // ADR-0192: a C# from-end index `^n` is a first-class G#
+                    // `System.Index` expression in every position, so it
+                    // round-trips verbatim — as a bracket argument, a saved
+                    // local, an argument, or a range bound.
+                    if (prefix.IsKind(SyntaxKind.IndexExpression))
                     {
-                        this.context.Report(new TranslationDiagnostic(
-                            "IndexExpression",
-                            "a from-end index '^n' has no canonical G# form outside a direct '[...]' index bracket: G# has no 'System.Index' value type, so storing, returning, or otherwise reusing '^n' apart from the bracket it indexes cannot preserve from-end semantics (issue #1894).",
-                            prefix.GetLocation(),
-                            TranslationSeverity.Unsupported));
-                        return LiteralExpression.Int("0");
+                        return new FromEndIndexExpression(this.TranslateExpression(prefix.Operand));
                     }
 
-                    // G# uses the Go-style `^` for bitwise complement; C# spells it
-                    // `~`. Every other prefix operator token is identical.
-                    string prefixOp = prefix.IsKind(SyntaxKind.BitwiseNotExpression)
-                        ? "^"
-                        : prefix.OperatorToken.Text;
+                    // C# `~x` (one's-complement) and every other prefix
+                    // operator token are spelled identically in G# (ADR-0192).
+                    string prefixOp = prefix.OperatorToken.Text;
                     return new UnaryExpression(
                         prefixOp,
                         this.TranslateExpression(prefix.Operand));
@@ -209,6 +195,13 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case AnonymousObjectCreationExpressionSyntax anonymous:
                     return this.TranslateAnonymousObjectCreation(anonymous);
+
+                case RangeExpressionSyntax range:
+                    // ADR-0192: a reusable C# range value keeps its readable
+                    // `a..b` / `^a..^b` / `..` form as a G# System.Range value.
+                    return new RangeIndexExpression(
+                        range.LeftOperand != null ? this.TranslateExpression(range.LeftOperand) : null,
+                        range.RightOperand != null ? this.TranslateExpression(range.RightOperand) : null);
 
                 case ElementAccessExpressionSyntax elementAccess:
                     if (elementAccess.ArgumentList.Arguments.Count == 1 &&
@@ -839,12 +832,6 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return analyzerNullConditionalTypeTest;
             }
-
-            // Issue #1967: `x is Index i` (or any nested designation inside a
-            // recursive/positional pattern) declares `i` via a pattern designation,
-            // not a declarator — check the whole pattern tree here, the entry point
-            // for every non-loop-condition `is`-pattern.
-            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             // ADR-0166 / issue #3409: a binding pattern whose designations G#
             // scopes natively is emitted verbatim (`x is T t && t.M`), keeping
@@ -3006,10 +2993,7 @@ public sealed partial class CSharpToGSharpTranslator
             return new IndexExpression(receiver, new RangeIndexExpression(start, end));
         }
 
-        private GExpression TranslateRangeBound(ExpressionSyntax bound) =>
-            bound is PrefixUnaryExpressionSyntax fromEnd && fromEnd.IsKind(SyntaxKind.IndexExpression)
-                ? new FromEndIndexExpression(this.TranslateExpression(fromEnd.Operand))
-                : this.TranslateExpression(bound);
+        private GExpression TranslateRangeBound(ExpressionSyntax bound) => this.TranslateExpression(bound);
 
         private GTypeReference ResolveExpressionType(ExpressionSyntax expression)
         {

@@ -31,6 +31,12 @@ namespace Corpus.Grid05
 
             string sliced = "gsharp"[1..4];
             Console.WriteLine($"RangeExpression: sliced={sliced}");
+
+            // ADR-0192 / issue #4350: reusable System.Range values, including a
+            // leading from-end bound, round-trip as readable G# range values.
+            Range trimmed = ^4..^1;
+            int[] saved = a[trimmed];
+            Console.WriteLine($"RangeExpression: saved={string.Join(",", saved)} complement={~5}");
         }
     }
 }

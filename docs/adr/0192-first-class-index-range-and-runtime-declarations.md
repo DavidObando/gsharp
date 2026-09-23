@@ -1,6 +1,6 @@
 # ADR-0192: First-class Index/Range expressions and recognized runtime declarations
 
-- **Status**: Proposed
+- **Status**: Accepted (implemented for issue #4350)
 - **Date**: 2026-09-21
 - **Issue**: [#4350](https://github.com/DavidObando/gsharp/issues/4350)
 - **Related**: [ADR-0115](0115-csharp-to-gsharp-migration-tool.md),
@@ -19,9 +19,30 @@ The maintainer approved the declaration-view design and requested two changes:
    expressions. cs2gs preserves their readable syntax rather than lowering
    reusable values to explicit BCL factory calls.
 
-The ADR remains **Proposed** until the language/compiler work lands. The
-temporary corpus exclusion can merge independently and should be removed only
-after the re-entry criteria below pass.
+The ADR was **Proposed** until the language/compiler work landed. The
+temporary corpus exclusion merged independently (#4351) and is removed by the
+implementation PR once the re-entry criteria below pass.
+
+## Implementation notes
+
+- **Parser.** Prefix `^` produces `FromEndIndexExpressionSyntax` at unary
+  precedence in every expression context. The historical bracket-bound and
+  range-upper-bound positions keep reading the whole bound as the operand
+  (`a[^n + 1]` is `a[^(n + 1)]`); that only accepts programs C# rejects, so
+  no C#-valid program changes meaning. `~` is a new `TildeToken` for unary
+  one's-complement and for `operator ~()` declarations (`op_OnesComplement`).
+- **Binder.** A bare `^x` binds to `new System.Index(x, fromEnd: true)`.
+  Range bounds are bound once, left to right: an integer converts to a
+  from-start Index, a `^n` bound stays a from-end marker, and a bound that is
+  already a `System.Index` is used as-is. Direct array/string/span slicing
+  resolves saved Index bounds with `Index.GetOffset(length)`; native slices
+  switch to the runtime's `Subslice(Range)` overload for them. `GS0410` is
+  retired.
+- **cs2gs.** `System.Index`/`System.Range` map as ordinary imported types.
+  `^x`, all range forms, and `~x` print verbatim, and the #1894/#1967
+  loud-gap guards are gone. `CSharpTypeMapper.IsRecognizedRuntimeConsumerType`
+  keeps `Slice`/`ReadOnlySlice`/`ManagedRef`/`ReadOnlyManagedRef` nominal when
+  their original definition lives in the compilation being translated.
 
 ## Context
 

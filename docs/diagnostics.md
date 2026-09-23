@@ -1194,21 +1194,15 @@ parameter; `GS0394` requires that at least one of the source or target type is a
 owned struct and that the two types differ; `GS0395` rejects a second conversion
 (implicit or explicit) with the same source/target pair.
 
-## Standalone range from-end marker diagnostic (GS0410)
+## Standalone range from-end marker diagnostic (GS0410, retired)
 
 | ID | Severity | Description |
 |----|----------|-------------|
-| GS0410 | Error | A from-end index marker `^` is only valid inside index brackets (e.g. `arr[^1]` or `arr[a..^b]`) or after `..` in a standalone range upper bound (`a..^b`); a standalone range cannot start with `^`. Use an indexer, or parenthesise a one's-complement bound (`(^a)..b`).  | |
+| GS0410 | _Retired_ | Previously: a standalone range could not start with a from-end `^` marker. ADR-0192 (issue #4350) made prefix `^x` a first-class `System.Index` expression and moved one's-complement to `~x`, so `^a..^b` is valid; this diagnostic is no longer emitted. | — |
 
-GS0410 fires for the standalone range/slice value added in issue #1038
-(`let r = 1..3`). The lower bound of a standalone range may not begin with `^`,
-because a leading `^` is genuinely ambiguous with the one's-complement unary
-operator (`^a` parses as `~a`). The from-end marker is therefore restricted to
-the unambiguous positions: inside index brackets (the #1022 path —
-`arr[^1]`, `arr[^2..]`, `arr[a..^b]`) and the upper bound of a standalone range
-(`..^b`, `a..^b`). To slice from the end of a value, index it directly
-(`arr[^a..]`); to use a one's-complement value as a from-start lower bound,
-parenthesise it (`(^a)..b`).
+GS0410 was reported for a standalone range that began with `^` while prefix
+`^` still meant one's-complement. ADR-0192 retired it: `^x` is a
+`System.Index` expression in every position and `~x` is one's-complement.
 
 ## Stackalloc initializer diagnostics (GS0411–GS0412)
 
@@ -1384,7 +1378,7 @@ Issue #1912 adds explicit enum-member values (`Banana = 2`, `Unknown = -1`,
 `ReadWrite = Read | Write`, or an alias `DefaultError = ServerError`), constant-
 folded at bind time since G# has no general enum-member initializer semantics
 (a member's runtime value must be knowable without executing any code). The
-folder accepts int literals; unary `+`/`-`/`^` (ones-complement); the binary
+folder accepts int literals; unary `+`/`-`/`~` (ones-complement); the binary
 operators `+ - | & ^ << >>`; parenthesized sub-expressions; and references to
 already-declared sibling members by bare name. Anything else (a function call,
 a non-sibling identifier, a floating-point literal, …) is rejected with GS0467.

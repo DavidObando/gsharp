@@ -1,10 +1,12 @@
 # ADR-0127: Standalone `System.Range` value (`let r = 1..3`)
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by [ADR-0192](0192-first-class-index-range-and-runtime-declarations.md)
 - **Date**: 2026-06-24
 - **Phase**: Phase 9 — language depth / collection ergonomics
 - **Related**: issue #1016 (the `..` range/slice operator), issue #1022 (the from-end `^n` marker, [ADR-0123](0123-from-end-index-operator.md)), issue [#1038](https://github.com/DavidObando/gsharp/issues/1038)
 
+
+> **Amended by ADR-0192 (issue #4350).** ADR-0192 replaces its leading-`^` restriction (GS0410): prefix `^x` is a first-class `System.Index` expression in every expression context, a standalone range may begin with `^`, and unary one's-complement is spelled `~x`. Binary `^` remains XOR.
 ## Context
 
 Issue #1016 added the C#-style `..` range/slice operator **inside an indexer**

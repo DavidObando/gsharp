@@ -692,7 +692,8 @@ public static class GSharpPrinter
                 return $"{RenderExpression(index.Target, indent)}[{string.Join(", ", index.Indices.Select(i => RenderExpression(i, indent)))}]";
 
             case FromEndIndexExpression fromEnd:
-                return $"^{RenderExpression(fromEnd.Operand, indent)}";
+                // ADR-0192: `^x` is a unary-precedence System.Index expression.
+                return $"^{RenderExpression(fromEnd.Operand, indent, UnaryPrecedence)}";
 
             case RangeIndexExpression range:
                 var rangeStart = range.Start != null ? RenderExpression(range.Start, indent) : string.Empty;

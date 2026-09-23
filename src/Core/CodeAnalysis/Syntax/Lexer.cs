@@ -308,6 +308,11 @@ public sealed class Lexer
                 }
 
                 break;
+            case '~':
+                // ADR-0192: unary one's-complement uses C#'s `~` spelling.
+                kind = SyntaxKind.TildeToken;
+                position++;
+                break;
             case '&':
                 position++;
                 if (Current == '&')

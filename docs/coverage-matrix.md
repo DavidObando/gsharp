@@ -254,6 +254,7 @@ SwitchStatement
 ThrowExpression
 ThrowKeyword
 ThrowStatement
+TildeToken
 TrueKeyword
 TryKeyword
 TryStatement
@@ -632,16 +633,6 @@ UnsignedShiftRightToken UnsignedShiftRight (uint8,int32) -> uint8
 
 [BoundUnaryOperator]
 BangToken LogicalNegation (bool) -> bool
-HatToken OnesComplement (int16) -> int16
-HatToken OnesComplement (int32) -> int32
-HatToken OnesComplement (int64) -> int64
-HatToken OnesComplement (int8) -> int8
-HatToken OnesComplement (nint) -> nint
-HatToken OnesComplement (nuint) -> nuint
-HatToken OnesComplement (uint16) -> uint16
-HatToken OnesComplement (uint32) -> uint32
-HatToken OnesComplement (uint64) -> uint64
-HatToken OnesComplement (uint8) -> uint8
 MinusToken Negation (decimal) -> decimal
 MinusToken Negation (float32) -> float32
 MinusToken Negation (float64) -> float64
@@ -664,3 +655,13 @@ PlusToken Identity (uint16) -> uint16
 PlusToken Identity (uint32) -> uint32
 PlusToken Identity (uint64) -> uint64
 PlusToken Identity (uint8) -> uint8
+TildeToken OnesComplement (int16) -> int16
+TildeToken OnesComplement (int32) -> int32
+TildeToken OnesComplement (int64) -> int64
+TildeToken OnesComplement (int8) -> int8
+TildeToken OnesComplement (nint) -> nint
+TildeToken OnesComplement (nuint) -> nuint
+TildeToken OnesComplement (uint16) -> uint16
+TildeToken OnesComplement (uint32) -> uint32
+TildeToken OnesComplement (uint64) -> uint64
+TildeToken OnesComplement (uint8) -> uint8

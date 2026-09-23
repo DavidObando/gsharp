@@ -2672,14 +2672,6 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateIndexArgumentWithNullForgiveness(ArgumentSyntax argument)
         {
             GExpression translated = this.TranslateExpression(argument.Expression);
-            if (argument.Expression is PrefixUnaryExpressionSyntax bitwiseNot
-                && bitwiseNot.IsKind(SyntaxKind.BitwiseNotExpression))
-            {
-                // G# spells bitwise complement as `^x`, but a leading `^` in
-                // bracket position means from-end indexing. Parentheses retain
-                // the value-expression interpretation.
-                translated = new ParenthesizedExpression(translated);
-            }
 
             // Issue #3564: a TUPLE-typed key whose G#-side elements are
             // promoted-nullable while the indexer's key tuple elements are not

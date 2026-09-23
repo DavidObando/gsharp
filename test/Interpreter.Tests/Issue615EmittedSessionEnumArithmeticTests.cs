@@ -156,7 +156,7 @@ public class Issue615EmittedSessionEnumArithmeticTests
         // ~DayOfWeek.Sunday(0) = all bits set = -1 as int backed enum
         var output = RunSubmission(
             "import System\n" +
-            "var result = ^DayOfWeek.Sunday\n" +
+            "var result = ~DayOfWeek.Sunday\n" +
             "Console.WriteLine(result)\n");
         // -1 is not a named DayOfWeek member, so ToString() prints the numeric value
         Assert.Contains("-1", output);

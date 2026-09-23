@@ -12,8 +12,8 @@ namespace GSharp.Core.Tests.CodeAnalysis.Syntax;
 /// Issue #1022: parser-level coverage for the from-end index marker <c>^n</c>.
 /// In the leading position of an index/range bound the hat token introduces a
 /// <see cref="FromEndIndexExpressionSyntax"/> (<c>a[^1]</c>, <c>a[1..^1]</c>,
-/// <c>a[^2..]</c>); everywhere else <c>^</c> keeps its one's-complement /
-/// bitwise-XOR meaning.
+/// <c>a[^2..]</c>); since ADR-0192 prefix <c>^</c> is a from-end Index
+/// everywhere and binary <c>^</c> is XOR.
 /// </summary>
 public class Issue1022FromEndIndexParserTests
 {
@@ -90,14 +90,14 @@ public class Issue1022FromEndIndexParserTests
     }
 
     [Fact]
-    public void OnesComplement_OutsideBrackets_StillUnary()
+    public void PrefixHat_OutsideBrackets_IsFromEndIndex_Adr0192()
     {
-        // Prefix `^` outside an index bound remains one's-complement.
-        var unary = Assert.IsType<UnaryExpressionSyntax>(GetInitializer("""
+        // ADR-0192: prefix `^` is a first-class from-end Index everywhere.
+        var fromEnd = Assert.IsType<FromEndIndexExpressionSyntax>(GetInitializer("""
             package P
             let x = ^5
             """));
-        Assert.Equal(SyntaxKind.HatToken, unary.OperatorToken.Kind);
+        Assert.IsType<LiteralExpressionSyntax>(fromEnd.Operand);
     }
 
     [Fact]

@@ -355,11 +355,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return;
             }
 
-            // Issue #1967: a loop-condition `is`-pattern (`while (x is Index i)`)
-            // never reaches `TranslateIsPattern` — it is hoisted here instead — so
-            // its designations need the same guard applied at this entry point.
-            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
-
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             ITypeSymbol scrutineeType = this.context.GetTypeInfo(isPattern.Expression).Type;
 
@@ -1294,8 +1289,7 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             if (this.IsNativelyExpressiblePattern(positivePattern, topLevel: true)
                 && binder.Type.TypeKind != TypeKind.Error
-                && !binder.Type.IsRefLikeType
-                && !CSharpTypeMapper.IsSystemIndexOrRange(binder.Type))
+                && !binder.Type.IsRefLikeType)
             {
                 string mutableName = this.EmittedName(designation, designation.Identifier);
                 string matchName = FreshPatternMatchName(

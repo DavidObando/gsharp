@@ -44,7 +44,7 @@ public class Issue2544LiftedUnaryOperatorTests
             var noInt int32? = nil
             Console.WriteLine((-five) ?? 42)
             Console.WriteLine((-noInt) ?? 42)
-            Console.WriteLine((^five) ?? 0)
+            Console.WriteLine((~five) ?? 0)
             Console.WriteLine((+five) ?? 0)
             """;
 

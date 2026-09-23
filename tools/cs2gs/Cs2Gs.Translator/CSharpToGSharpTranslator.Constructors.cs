@@ -3415,10 +3415,6 @@ public sealed partial class CSharpToGSharpTranslator
                     return new[] { this.TranslateForStatement(forStatement) };
 
                 case ForEachStatementSyntax forEach:
-                    // Issue #1967: `foreach (Index i in xs)` declares `i` directly
-                    // on this node (no declarator, no designation) — check it here
-                    // before it can bypass the issue #1894 loud-gap guard.
-                    this.ReportIfIndexOrRangeTypedForEachVariable(forEach);
 
                     // The iterable receiver gets the same nullable-narrowing `!!`
                     // treatment as a member/element-access receiver: a declared-

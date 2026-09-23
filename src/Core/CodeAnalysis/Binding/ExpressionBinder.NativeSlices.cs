@@ -380,14 +380,28 @@ internal sealed partial class ExpressionBinder
         var length = new BoundClrPropertyAccessExpression(
             null, receiver, lengthProperty, TypeSymbol.Int32);
 
-        BoundExpression Bound(ExpressionSyntax? syntax, BoundExpression omitted)
-            => syntax == null ? omitted
-                : conversions.BindConversion(syntax is FromEndIndexExpressionSyntax fromEnd ? fromEnd.Operand : syntax, TypeSymbol.Int32);
+        var lowerBound = BindRangeBound(range.LowerBound);
+        var upperBound = BindRangeBound(range.UpperBound);
+        BoundImportedInstanceCallExpression call;
+        if (lowerBound is { IsIndexValue: true } || upperBound is { IsIndexValue: true })
+        {
+            // ADR-0192: a saved `System.Index` bound (`s[i..j]`, `s[(^2)..]`)
+            // resolves through the runtime's Range overload, exactly like a
+            // saved `System.Range` index.
+            var rangeMethod = clrType.GetMethods().Single(m => m.Name == "Subslice" && m.GetParameters().Length == 1);
+            call = new BoundImportedInstanceCallExpression(
+                range,
+                receiver,
+                rangeMethod,
+                target.Type,
+                ImmutableArray.Create(BuildSystemRangeValue(lowerBound, upperBound)));
+            return new BoundBlockExpression(range, statements.ToImmutable(), call);
+        }
 
-        var lower = Bound(range.LowerBound, new BoundLiteralExpression(null, 0));
-        var upper = Bound(range.UpperBound, length);
+        var lower = lowerBound?.Value ?? new BoundLiteralExpression(null, 0);
+        var upper = upperBound?.Value ?? length;
         var method = clrType.GetMethods().Single(m => m.Name == "Subslice" && m.GetParameters().Length == 4);
-        var call = new BoundImportedInstanceCallExpression(
+        call = new BoundImportedInstanceCallExpression(
             range,
             receiver,
             method,
@@ -395,8 +409,8 @@ internal sealed partial class ExpressionBinder
             ImmutableArray.Create(
                 lower,
                 upper,
-                new BoundLiteralExpression(null, range.LowerBound is FromEndIndexExpressionSyntax),
-                new BoundLiteralExpression(null, range.UpperBound is FromEndIndexExpressionSyntax)));
+                new BoundLiteralExpression(null, lowerBound?.FromEnd == true),
+                new BoundLiteralExpression(null, upperBound?.FromEnd == true)));
         return new BoundBlockExpression(range, statements.ToImmutable(), call);
     }
 }

@@ -39,7 +39,7 @@ public class Issue2616CharNumericPromotionTests
             package P
 
             func promoted(a char, b char, u uint32, d float64) float64 {
-                let unary int32 = +a - -b + ^a
+                let unary int32 = +a - -b + ~a
                 let chars int32 = a + b * a - b / a + b % a
                 let mixed uint32 = a + u
                 return d + a

@@ -865,7 +865,6 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    this.ReportIfIndexOrRangeTypedDesignation(single);
                     ILocalSymbol local = this.context.GetDeclaredSymbol(single) as ILocalSymbol;
                     targets.Add(new IdentifierExpression(name));
                     targetBindings.Add(local != null && this.IsLocalReassigned(local)
@@ -1013,7 +1012,6 @@ public sealed partial class CSharpToGSharpTranslator
                                 directLocal.Type,
                                 rhsTupleType.TupleElements[i].Type))))
                 {
-                    this.ReportIfIndexOrRangeTypedDesignation(directSingle);
                     temps.Add(this.EmittedName(directSingle, directSingle.Identifier));
                     directNames[i] = true;
                     continue;
@@ -1131,7 +1129,6 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (designation is SingleVariableDesignationSyntax single)
             {
-                this.ReportIfIndexOrRangeTypedDesignation(single);
                 string name = this.EmittedName(single, single.Identifier);
                 ILocalSymbol local = this.context.GetDeclaredSymbol(single) as ILocalSymbol;
                 statements.Add(new LocalDeclarationStatement(
@@ -1205,7 +1202,6 @@ public sealed partial class CSharpToGSharpTranslator
                     // designation, not a declarator.
                     if (designation is SingleVariableDesignationSyntax indexCheckSingle)
                     {
-                        this.ReportIfIndexOrRangeTypedDesignation(indexCheckSingle);
                         if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local
                             && this.IsLocalReassigned(local))
                         {
@@ -1236,7 +1232,6 @@ public sealed partial class CSharpToGSharpTranslator
                     // designation per tuple element.
                     if (declaration.Designation is SingleVariableDesignationSyntax indexCheckSingle)
                     {
-                        this.ReportIfIndexOrRangeTypedDesignation(indexCheckSingle);
                         if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local
                             && this.IsLocalReassigned(local))
                         {
@@ -1517,8 +1512,8 @@ public sealed partial class CSharpToGSharpTranslator
                         && elementAccess.ArgumentList.Arguments.Count == 1
                         && elementAccess.ArgumentList.Arguments[0].Expression.IsKind(SyntaxKind.IndexExpression);
                     GExpression safeIndex = isFromEnd
-                        && index.Index is UnaryExpression { Operator: "^" } fromEnd
-                        ? new UnaryExpression("^", this.SpillOperand(fromEnd.Operand, prologue))
+                        && index.Index is FromEndIndexExpression fromEnd
+                        ? new FromEndIndexExpression(this.SpillOperand(fromEnd.Operand, prologue))
                         : this.SpillOperand(index.Index, prologue);
                     return new IndexExpression(
                         safeTarget,
