@@ -1388,13 +1388,17 @@ public sealed class Lowerer : BoundTreeRewriter
             // returns a platform enumerator (`NumberEnumerator!`). The binder
             // (MemberLookup.TryGetUserPatternEnumerableElementType) reads its
             // shape through the wrapper, and so must the MoveNext/Current probe
-            // below, which recognises only a bare StructSymbol. The unwrap is
-            // representation-free (§1); the enumerator a GetEnumerator returns
-            // is dereferenced by the MoveNext call at once.
+            // below, which recognises only a bare StructSymbol. An oblivious
+            // GetEnumerator may legally return nil, and the loop dereferences
+            // the enumerator at once, so this is an ADR-0186 §4 coercion:
+            // checked and unwrapped in one step.
             if (enumeratorType is PlatformTypeSymbol platformEnumerator)
             {
                 enumeratorType = platformEnumerator.UnderlyingType;
-                getEnumeratorCall = new BoundConversionExpression(null, enumeratorType, getEnumeratorCall);
+                getEnumeratorCall = PlatformCoercion.InsertCheck(
+                    getEnumeratorCall,
+                    collection.Syntax?.Location,
+                    "a pattern enumerator returned by GetEnumerator");
             }
 
             return true;

@@ -880,6 +880,13 @@ internal sealed partial class ExpressionBinder
             return operand;
         }
 
+        // ADR-0186 §4: awaiting requires a non-null awaitable. A platform
+        // task (`Task[string]!`, routine from an ADR-0186 §9 oblivious scope)
+        // is checked and unwrapped here, so a nil one fails attributably
+        // instead of inside the awaiter machinery, and the shape probes below
+        // see the bare awaitable.
+        operand = PlatformCoercion.InsertCheck(operand, syntax.Expression.Location, "an awaited operand");
+
         // ADR-0174 D4: a call to a suspending function is already awaited
         // implicitly (CompleteSuspendingCall), so an explicit `await` on top
         // is redundant but legal — `await twice(ch)` is what a C# or Go

@@ -358,7 +358,7 @@ internal static class ObliviousScope
                 case FunctionDeclarationSyntax function:
                     foreach (var annotation in function.Annotations)
                     {
-                        if (HasName(annotation, "DllImport") || HasName(annotation, "LibraryImport"))
+                        if (HasSimpleName(annotation, "DllImport") || HasSimpleName(annotation, "LibraryImport"))
                         {
                             return true;
                         }
@@ -375,6 +375,30 @@ internal static class ObliviousScope
         }
 
         return false;
+    }
+
+    /// <summary>
+    /// Like <see cref="HasName"/>, but on the last segment of a qualified
+    /// spelling too: the P/Invoke binder recognises
+    /// <c>@System.Runtime.InteropServices.DllImport(…)</c> by CLR identity
+    /// (issue #1206), and the exemption has to reach the same declarations.
+    /// It is decided by spelling rather than by the bound attribute because a
+    /// declaration's type clauses are bound before, and independently of, its
+    /// attributes; a user attribute that shadows or aliases the BCL name is
+    /// not a supported P/Invoke spelling either way.
+    /// </summary>
+    private static bool HasSimpleName(AnnotationSyntax annotation, string name)
+    {
+        if (annotation.HasTypeArgumentList)
+        {
+            return false;
+        }
+
+        var text = annotation.GetNameText();
+        var dot = text.LastIndexOf('.');
+        var simple = dot < 0 ? text : text.Substring(dot + 1);
+        return string.Equals(simple, name, StringComparison.Ordinal)
+            || string.Equals(simple, name + "Attribute", StringComparison.Ordinal);
     }
 
     private static bool HasName(AnnotationSyntax annotation, string name)

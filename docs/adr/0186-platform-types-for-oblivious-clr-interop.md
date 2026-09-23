@@ -809,15 +809,20 @@ directives; ADR-0047/ADR-0175 established the annotation as the mechanism.
 > element-type tokens, emitter conversions, iterator / async / enumerator
 > shapes, delegate invocation and lambda target typing, channel operands,
 > constraint satisfaction, structural projection, `copy`/`with`, `adapt`,
-> interface-slot matching, event metadata). Measured by running the whole of
+> interface-slot and source signature matching, event metadata). Measured by running the whole of
 > `Core.Tests` with every fixture forced oblivious (`GSHARP_NULLABILITY=oblivious`
 > — every unadorned reference in every test program becomes `T!`): 796 of
-> 9,779 tests failed before those fixes and 502 after. The remainder is mostly
-> tests asserting a non-platform type or diagnostic, which is expected, plus
-> a residue step 6 must budget for: generic type inference from a `T!`
-> argument (`Cannot infer type argument`), extension lookup on a platform
-> receiver of a G# or slice type (`Cannot find function Select`), smart-cast
-> narrowing a platform value by a type test, and variadic `[]T` parameters.
+> 9,779 tests failed before those fixes and 447 of 9,772 after (the seven
+> tuple-return function-conversion tests are excluded: they crash the test
+> host through issue #4358, a pre-existing runtime crash reproducible on
+> `main` with `T?` in place of `T!`). The remainder is mostly tests asserting
+> a non-platform type or diagnostic, which is expected, plus a residue step 6
+> must budget for: generic type inference from a `T!` argument
+> (`Cannot infer type argument`), extension lookup on a platform receiver of
+> a G# or slice type (`Cannot find function Select`), smart-cast narrowing a
+> platform value by a type test, `??` over platform function types, variadic
+> `[]T` parameters, and one invalid-program shape (a destructured tuple
+> lambda parameter).
 > Expression trees reject oblivious values by design (issue #2130) and will
 > reject EF Core shapes cs2gs emits in an oblivious scope.
 >

@@ -775,6 +775,66 @@ public class Adr0186ObliviousScopeTests
         Assert.Equal("3\nTrue\n4\n", output.Replace("\r\n", "\n"));
     }
 
+    /// <summary>
+    /// Found in review (PR #4357): two more coercions to non-null that must
+    /// carry ADR-0186 §4's attributable check — a nil enumerator from an
+    /// oblivious <c>GetEnumerator</c>, and awaiting a nil oblivious task.
+    /// </summary>
+    /// <param name="body">The top-level statement that trips the check.</param>
+    /// <param name="boundary">The boundary the message must name.</param>
+    [Theory]
+    [InlineData("for n in Numbers{} { Console.WriteLine(n) }", "a pattern enumerator returned by GetEnumerator")]
+    [InlineData("Console.WriteLine(Numbers{}.Awaits().Result)", "an awaited operand")]
+    public void Nil_Enumerators_And_Nil_Awaited_Tasks_Are_Checked(string body, string boundary)
+    {
+        var failure = Assert.ThrowsAny<Exception>(() => Run(
+            $$"""
+            class Counter {
+                var Current int32
+                func MoveNext() bool { return false }
+            }
+
+            @Oblivious
+            class Numbers {
+                func GetEnumerator() Counter { return nil }
+                func Pending() Task[int32] { return nil }
+                async func Awaits() Task[int32] { return await this.Pending() }
+            }
+
+            {{body}}
+            """,
+            "import System.Threading.Tasks\n"));
+
+        var nre = failure as NullReferenceException ?? Assert.IsType<NullReferenceException>(failure.InnerException);
+        Assert.Contains(boundary, nre.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The native-interop exemption reaches a qualified
+    /// <c>@System.Runtime.InteropServices.DllImport</c> too (found in review,
+    /// PR #4357): the P/Invoke binder recognises it by CLR identity, and
+    /// without the exemption its <c>string</c> parameter became
+    /// <c>string!</c>, against which <c>@MarshalAs(UnmanagedType.LPWStr)</c>
+    /// is rejected (GS0358).
+    /// </summary>
+    [Fact]
+    public void A_Qualified_DllImport_Signature_Is_Exempt()
+    {
+        var compilation = Compile(
+            """
+            @System.Runtime.InteropServices.DllImport("libc")
+            func wcslen(@MarshalAs(UnmanagedType.LPWStr) s string) nint;
+            """,
+            NullabilityMode.Oblivious,
+            "import System.Runtime.InteropServices\n");
+        compilation.AssemblyName = "Adr0186NativeExemption";
+
+        // The marshalling classifier reports at emit, so emit.
+        using var pe = new MemoryStream();
+        var emit = compilation.Emit(pe, pdbStream: null, refStream: null, assemblyName: compilation.AssemblyName);
+        AssertNoErrors(emit.Diagnostics);
+    }
+
     // ---------------------------------------------------------------
     // GS9307.
     // ---------------------------------------------------------------
