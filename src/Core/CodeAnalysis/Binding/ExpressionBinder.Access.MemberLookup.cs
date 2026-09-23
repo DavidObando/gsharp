@@ -780,13 +780,14 @@ internal sealed partial class ExpressionBinder
                     // a CLR receiver (e.g. `lst.Count`, `sb.Length`,
                     // `kvp.Key`). Static members are reached through
                     // ImportedClassSymbol; this path covers instances. A
-                    // receiver typed `T?` — source-declared, or an
-                    // annotated-nullable imported member — never reaches this
-                    // arm (see CanBindClrInstanceMember) and still requires
-                    // narrowing or `?.`; an oblivious imported result arrives
-                    // as a platform type `T!` under the default mode (ADR-0186),
-                    // is checked and unwrapped by CheckPlatformReceiver before
-                    // this dispatch, and reaches it as plain `T`. Issue #3311: an open-generic
+                    // chained imported field or property read whose annotated
+                    // metadata made it `T?` still continues the chain here,
+                    // while a source-declared `T?` variable requires narrowing
+                    // or `?.` (see CanBindClrInstanceMember). An oblivious
+                    // imported result arrives as a platform type `T!` under
+                    // the default mode (ADR-0186), is checked and unwrapped by
+                    // CheckPlatformReceiver before this dispatch, and reaches
+                    // it as plain `T`. Issue #3311: an open-generic
                     // `map[K, V]` receiver (null ClrType) is normalized to its
                     // symbolic Dictionary view so `.Keys`/`.Count`/… resolve
                     // over the erased closed shape with symbolic [K, V]
@@ -1018,44 +1019,46 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// Returns whether CLR instance lookup may continue through a receiver:
-    /// the receiver has a loadable <see cref="TypeSymbol.ClrType"/> and its
-    /// type is not a <see cref="NullableTypeSymbol"/> — that is, nobody has
-    /// declared it <c>T?</c>. This predicate never sees a
-    /// <see cref="PlatformTypeSymbol"/>: both callers run
-    /// <c>PlatformCoercion.InsertCheck</c> on the receiver first (the read
-    /// path through <c>CheckPlatformReceiver</c>, the write path explicitly in
-    /// <c>BindMemberFieldAssignmentExpression</c>), which inserts ADR-0186 §4's
-    /// nil check and unwraps <c>T!</c> to its underlying <c>T</c>. That
-    /// coercion, not this test, is where the platform receiver's safety
-    /// question is answered.
+    /// the receiver has a loadable <see cref="TypeSymbol.ClrType"/>, and either
+    /// its type is not a <see cref="NullableTypeSymbol"/> or the receiver is
+    /// itself an imported field or property read
+    /// (<see cref="BoundClrPropertyAccessExpression"/>) — an intermediate link
+    /// in a member chain such as <c>e.InnerException.Message</c> or
+    /// <c>a.MaybeNumbers.Capacity = 4</c>.
     /// <para>
-    /// <b>ADR-0186 step 4.</b> Before this step the test carried a second
-    /// disjunct — <c>|| receiver is BoundClrPropertyAccessExpression</c> —
-    /// which let lookup continue through a <em>nullable</em> receiver as long
-    /// as the receiver was an imported field or property read. That carve-out
-    /// existed because ADR-0136 imported every nullability-<em>oblivious</em>
-    /// reference position as <c>T?</c>, so a read like
-    /// <c>Environment.Version.Major</c> would otherwise have dead-ended on a
-    /// receiver nobody had ever said could be nil. It could not distinguish
-    /// that case from an <em>annotated</em>-nullable member, which the library
-    /// author explicitly declared may be nil, so it waved both through.
+    /// This predicate never sees a <see cref="PlatformTypeSymbol"/>: both
+    /// callers run <c>PlatformCoercion.InsertCheck</c> on the receiver first
+    /// (the read path through <c>CheckPlatformReceiver</c>, the write path
+    /// explicitly in <c>BindMemberFieldAssignmentExpression</c>), which inserts
+    /// ADR-0186 §4's nil check and unwraps <c>T!</c> to its underlying
+    /// <c>T</c>. Under the default <c>--nullability=platform-types</c> an
+    /// oblivious imported position is <c>T!</c>, so it satisfies the first
+    /// disjunct after that coercion and never reaches the second: its safety
+    /// question is answered by §4's check, not here.
     /// </para>
     /// <para>
-    /// Step 3 made <c>--nullability=platform-types</c> the default, and an
-    /// oblivious position now arrives as <see cref="PlatformTypeSymbol"/>
-    /// (<c>T!</c>) rather than <see cref="NullableTypeSymbol"/>. The receiver
-    /// coercion above checks and unwraps it before lookup, so it arrives here
-    /// as its plain underlying <c>T</c> and never takes the nullable arm; its
-    /// safety question is answered by §4's check instead. The carve-out's
-    /// whole population therefore no longer takes the nullable arm at all, and
-    /// what it still reached was exactly the annotated-nullable member it
-    /// should never have admitted.
+    /// <b>The second disjunct is kept deliberately (ADR-0186 step 4).</b> The
+    /// ADR planned to delete it on the premise that its whole population was
+    /// oblivious members imported as <c>T?</c> under ADR-0136. That premise
+    /// missed a second, pre-existing population: <em>annotated</em>-nullable
+    /// imported members (<c>[Nullable(2)]</c>, e.g. the BCL's
+    /// <c>Exception.InnerException</c>, or a Roslyn API member declared
+    /// <c>T?</c>), which have always continued a member chain through this
+    /// disjunct. ADR-0186 leaves annotated members untouched, so deleting it
+    /// would have been a breaking change outside the ADR's scope. Under the
+    /// default mode the receivers it admits are exactly those annotated-nullable
+    /// reads; under <c>--nullability=enabled</c> it also admits oblivious
+    /// reads, which is ADR-0136's behaviour for that compatibility mode,
+    /// unchanged. The chained dereference through such a receiver is not
+    /// nil-checked by the compiler — a pre-existing property of annotated
+    /// members that this predicate neither introduces nor fixes.
     /// </para>
     /// </summary>
     private static bool CanBindClrInstanceMember(BoundExpression? receiver)
     {
         return receiver?.Type?.ClrType != null
-            && receiver.Type is not NullableTypeSymbol;
+            && (receiver.Type is not NullableTypeSymbol
+                || receiver is BoundClrPropertyAccessExpression);
     }
 
     private static bool TryGetUserInstanceMemberReceiverType(

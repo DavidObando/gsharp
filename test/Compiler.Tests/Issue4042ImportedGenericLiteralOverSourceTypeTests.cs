@@ -229,14 +229,6 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
         // symbolic argument that nonetheless has a faithful closed CLR type, so
         // each keeps taking the plain path. `[]T` is #4024's row, `[N]T` is
         // #3962's, the named tuple is ADR-0172's.
-        //
-        // The `!!` on the two reads is ADR-0186 step 4, not a change of
-        // subject: `Box<T>.Value` is declared `T?`, so the read is a
-        // dereference of an ANNOTATED-nullable imported member. Member lookup
-        // used to wave that through — the carve-out step 4 deletes could not
-        // tell it from an oblivious member — and now reports it like any other
-        // `T?`. What this row asserts is the literal SPELLING still binding,
-        // which it does; the reads are how the row observes the values.
         yield return new object[]
         {
             "control-the-three-lossy-but-real-spellings-still-bind",
@@ -246,10 +238,10 @@ public class Issue4042ImportedGenericLiteralOverSourceTypeTests
             import HelperLib2
 
             let slice = Box[[]int32]{ Value: []int32{1, 2, 3} }
-            Console.WriteLine(slice.Value!!.Length)
+            Console.WriteLine(slice.Value.Length)
 
             let fixedLen = Box[[3]int32]{ Value: [3]int32{1, 2, 3} }
-            Console.WriteLine(fixedLen.Value!!.Length)
+            Console.WriteLine(fixedLen.Value.Length)
 
             let named = Box[(a int32, b string)]{ Tag: "nt" }
             Console.WriteLine(named.Tag)

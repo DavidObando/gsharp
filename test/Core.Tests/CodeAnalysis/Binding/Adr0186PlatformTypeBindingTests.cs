@@ -80,6 +80,11 @@ public sealed class Adr0186PlatformTypeBindingTests
 
             public static string[] ArrField = new string[] { null };
 
+            // A nil oblivious FIELD, so a chained read through it reaches
+            // member lookup as an imported field-read receiver — the kind
+            // `CanBindClrInstanceMember`'s carve-out admits (step 4).
+            public static Nested NilNestField = null;
+
             public static string[] NilArr() => null;
 
             public static Dictionary<string, string> TableWithNil()
@@ -198,11 +203,11 @@ public sealed class Adr0186PlatformTypeBindingTests
 
         // ADR-0186 step 4's discriminating fixture: an ANNOTATED-nullable
         // property, i.e. a member the author explicitly declared may be nil.
-        // This is the population `CanBindClrInstanceMember`'s
-        // `BoundClrPropertyAccessExpression` carve-out used to wave through,
-        // and the only population whose behaviour the carve-out's deletion
-        // moves — the oblivious members above arrive as `T!` in the default
-        // mode and never reach the nullable arm at all.
+        // Under the default mode this is the only population
+        // `CanBindClrInstanceMember`'s `BoundClrPropertyAccessExpression`
+        // carve-out still admits — the oblivious members above arrive as `T!`
+        // and are checked and unwrapped before lookup — and it is why step 4
+        // keeps that carve-out rather than deleting it.
         public class Annotated
         {
             public List<int>? MaybeNumbers { get; set; } = new List<int> { 1, 2, 3 };
@@ -1565,17 +1570,17 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
-    /// <b>ADR-0186 step 4 — deleting the carve-out must not un-report a
-    /// receiver the author declared nilable.</b>
+    /// <b>ADR-0186 step 4 — the member-lookup carve-out must not un-report a
+    /// receiver the author declared nilable in G# source.</b>
     /// <para>
     /// Issue #4287's shape: a G#-declared <c>var name string?</c> field,
-    /// dereferenced with no guard. The carve-out step 4 deletes
+    /// dereferenced with no guard. The carve-out step 4 keeps
     /// (<c>|| receiver is BoundClrPropertyAccessExpression</c> in
-    /// <c>CanBindClrInstanceMember</c>) never applied here — a field read on a
-    /// G#-declared class is not a CLR property access — so the deletion must
-    /// leave this reporting exactly as it did. This is the "one condition, not
-    /// one block" trap the ADR names: it is the easiest way to reintroduce
-    /// #4287's defect while believing the work is cleanup.
+    /// <c>CanBindClrInstanceMember</c>) never applies here — a field read on a
+    /// G#-declared class is not a CLR property access — so this must report
+    /// exactly as it always has. This is the "one condition, not one block"
+    /// trap the ADR names: it is the easiest way to reintroduce #4287's defect
+    /// while believing the work is cleanup.
     /// </para>
     /// <para>
     /// The <b>read</b> is what is asserted, not a call. Member lookup is what
@@ -1626,13 +1631,13 @@ public sealed class Adr0186PlatformTypeBindingTests
     /// nullability.
     /// </para>
     /// <para>
-    /// <c>SelectedReverseDeclaringType</c> binds and so also requires the probe
-    /// to be error-free, which is incidental here and <b>not</b> an assertion
-    /// that a nilable receiver <em>should</em> call an instance method with no
-    /// diagnostic. That it does is #4287's still-open call-path half (see
+    /// <c>SelectedReverseDeclaringType</c> tolerates a <c>GS0159</c> on the
+    /// nilable probe, so this is <b>not</b> an assertion that a nilable
+    /// receiver <em>should</em> call an instance method with no diagnostic.
+    /// That it currently does is #4287's still-open call-path half (see
     /// <see cref="Step4_ASourceDeclaredNilableFieldReceiver_Still_Reports"/>);
     /// this test's subject is <em>which</em> method, not whether the access is
-    /// reported.
+    /// reported, and it keeps passing when that half is fixed.
     /// </para>
     /// </summary>
     [Fact]
@@ -1674,9 +1679,9 @@ public sealed class Adr0186PlatformTypeBindingTests
     /// two — running the probe would not, since both print the same text.
     /// </para>
     /// <para>
-    /// As with the <c>ListReverse</c> witness, <c>GlobalProbeType</c> requires
-    /// the probe to bind error-free; that is incidental, not an assertion that
-    /// an instance call on a nilable receiver <em>should</em> go unreported
+    /// As with the <c>ListReverse</c> witness, the nilable probe is bound with
+    /// <c>tolerateNilableReceiverReport</c>, so this is not an assertion that an
+    /// instance call on a nilable receiver <em>should</em> go unreported
     /// (#4287's open call-path half).
     /// </para>
     /// </summary>
@@ -1697,7 +1702,7 @@ public sealed class Adr0186PlatformTypeBindingTests
         foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
         {
             var expected = world.GlobalProbeType(baseline, mode);
-            var actual = world.GlobalProbeType(nilable, mode);
+            var actual = world.GlobalProbeType(nilable, mode, tolerateNilableReceiverReport: true);
 
             Assert.Equal(typeof(string), expected.ClrType);
             Assert.Equal(expected.ClrType, actual.ClrType);
@@ -1705,153 +1710,134 @@ public sealed class Adr0186PlatformTypeBindingTests
     }
 
     /// <summary>
-    /// <b>ADR-0186 step 4 — the population the deletion actually moves.</b>
+    /// <b>ADR-0186 step 4 — a member chain through an ANNOTATED-nullable
+    /// imported member still binds, reads and writes alike.</b>
     /// <para>
-    /// An <em>annotated</em>-nullable CLR property (<c>string?</c> under
-    /// <c>#nullable enable</c>) is the only receiver shape the deleted
-    /// carve-out still reached once step 3 flipped the default: an oblivious
-    /// member now arrives as <c>T!</c> and never takes the nullable arm at
-    /// all. The carve-out could not tell the two apart, so it waved through a
-    /// member the library author explicitly declared may be nil, and
-    /// <c>a.MaybeText.Length</c> bound with no diagnostic. The member
-    /// <em>read</em> now reports <c>GS0158</c>, exactly as it does on a
-    /// source-declared <c>T?</c>.
+    /// The ADR planned to delete <c>CanBindClrInstanceMember</c>'s
+    /// <c>|| receiver is BoundClrPropertyAccessExpression</c> disjunct on the
+    /// premise that, once step 3 made oblivious positions <c>T!</c>, nothing
+    /// took it any more. That premise missed a second population the disjunct
+    /// has always carried: a member the library author explicitly annotated
+    /// <c>T?</c> (<c>[Nullable(2)]</c>), used as an intermediate link in a
+    /// chain. Deleting it made <c>e.InnerException.Message</c> and
+    /// <c>a.MaybeNumbers.Capacity = 4</c> report <c>GS0158</c> — twenty
+    /// <c>Cs2Gs.Tests</c> failures on real Roslyn-analyzer source, and the
+    /// Oahu migration gate fell to 6/15 apps. ADR-0186 says annotated members are untouched, so the
+    /// disjunct is kept and this pins that it still serves them.
     /// </para>
     /// <para>
-    /// This is a statement about member lookup only. An instance
-    /// <em>call</em> through the same receiver (<c>a.MaybeText.ToUpper()</c>)
-    /// resolves through a different path and still binds with no diagnostic,
-    /// on an annotated-nullable imported receiver as on a source-declared one
-    /// — #4287's still-open call-path half (see
-    /// <see cref="Step4_ASourceDeclaredNilableFieldReceiver_Still_Reports"/>),
-    /// which this step neither closes nor widens.
+    /// Both call sites are covered — the read path and
+    /// <c>BindMemberFieldAssignmentExpression</c>'s CLR-receiver arm — in both
+    /// modes, against the purpose-built annotated fixture and against the
+    /// real annotated BCL. The programs are <em>run</em>, so a chain that bound
+    /// to the wrong member would show here too. The <c>!!</c> spelling is
+    /// checked alongside, because source migrated during the window the
+    /// deletion was live may carry it.
+    /// </para>
+    /// <para>
+    /// The receiver's static type is asserted to stay <c>T?</c> (not
+    /// <c>T!</c>), and no §4 check is inserted for it: the chain continues
+    /// through the carve-out, which is exactly the pre-ADR-0186 behaviour —
+    /// the dereference is not nil-checked by the compiler. That is a
+    /// pre-existing property of annotated members, out of ADR-0186's scope,
+    /// and it is recorded here so a future fix changes this test knowingly.
     /// </para>
     /// </summary>
     [Fact]
-    public void Step4_AnAnnotatedNullableClrPropertyReceiver_Is_Reported()
+    public void Step4_AChainThroughAnAnnotatedNullableClrMember_Still_Binds()
     {
-        const string body = """
+        const string read = """
                 let a = Annotated()
                 Console.WriteLine(a.MaybeText.Length)
-            """;
-
-        // The same shape in the BCL rather than in a purpose-built fixture.
-        // `Exception.InnerException` is declared `Exception?`, so this is what
-        // the change actually costs a reader of ordinary code — and it is the
-        // reason the claim is worth pinning against a real annotated assembly
-        // and not only against the library this file emits.
-        const string bcl = """
-                let e = Exception("m")
+                let e = Exception("outer", InvalidOperationException("inner"))
                 Console.WriteLine(e.InnerException.Message)
             """;
-        const string guarded = """
-                let e = Exception("m")
-                Console.WriteLine(e.InnerException!!.Message)
-            """;
-
-        using var world = new World();
-
-        foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
-        {
-            var compiled = world.Compile(body, mode);
-
-            Assert.False(compiled.Success, Describe(compiled));
-            Assert.Contains(compiled.Diagnostics, d => d.Id == "GS0158");
-
-            var bclCompiled = world.Compile(bcl, mode);
-
-            Assert.False(bclCompiled.Success, Describe(bclCompiled));
-            Assert.Contains(bclCompiled.Diagnostics, d => d.Id == "GS0158");
-
-            // And the remedy is the ordinary one, so the tightening asks for a
-            // proof rather than closing the door.
-            var guardedCompiled = world.Compile(guarded, mode);
-
-            Assert.True(guardedCompiled.Success, Describe(guardedCompiled));
-        }
-    }
-
-    /// <summary>
-    /// <b>ADR-0186 step 4 — the same tightening on the WRITE path.</b>
-    /// <para>
-    /// <c>CanBindClrInstanceMember</c> has two call sites, and the second is
-    /// <c>BindMemberFieldAssignmentExpression</c>'s CLR-receiver arm. A
-    /// <em>write</em> through an annotated-nullable member is therefore moved
-    /// by the deletion exactly as a read is — and a write is the stronger
-    /// case, since it dereferences a possibly-nil receiver to store into it.
-    /// Pinned separately because a witness that only covered reads would leave
-    /// half the predicate's reach unmeasured.
-    /// </para>
-    /// <para>
-    /// The <c>!!</c> control is the point: the remedy is the ordinary one, so
-    /// the write is asking for a proof, not refusing to compile.
-    /// </para>
-    /// </summary>
-    [Fact]
-    public void Step4_AWriteThroughAnAnnotatedNullableClrProperty_Is_Reported()
-    {
-        const string unguarded = """
+        const string write = """
                 let a = Annotated()
                 a.MaybeNumbers.Capacity = 4
+                let e = Exception("outer", InvalidOperationException("inner"))
+                e.InnerException.Source = "src"
+                Console.WriteLine(a.MaybeNumbers.Capacity)
+                Console.WriteLine(e.InnerException.Source)
             """;
-        const string guarded = """
+        const string asserted = """
                 let a = Annotated()
                 a.MaybeNumbers!!.Capacity = 4
+                Console.WriteLine(a.MaybeNumbers!!.Capacity)
             """;
 
         using var world = new World();
 
         foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
         {
-            var compiled = world.Compile(unguarded, mode);
+            Assert.Equal(
+                new[] { "1", "inner" },
+                world.Run(read, mode).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
+            Assert.Equal(
+                new[] { "4", "src" },
+                world.Run(write, mode).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
+            Assert.Equal("4", world.Run(asserted, mode).Trim());
 
-            Assert.False(compiled.Success, Describe(compiled));
-            Assert.Contains(compiled.Diagnostics, d => d.Id == "GS0158");
-
-            var guardedCompiled = world.Compile(guarded, mode);
-
-            Assert.True(guardedCompiled.Success, Describe(guardedCompiled));
+            Assert.IsType<NullableTypeSymbol>(world.GlobalProbeType("let probe = Annotated().MaybeText", mode));
         }
+
+        Assert.Equal(0, world.CountPlatformChecks(read));
+        Assert.Equal(0, world.CountPlatformChecks(write));
     }
 
     /// <summary>
-    /// <b>ADR-0186 step 4 — why the carve-out is dead code rather than a
-    /// safety net.</b>
+    /// <b>ADR-0186 step 4 — the discriminator: an OBLIVIOUS field-read
+    /// receiver never reaches the carve-out under the default mode.</b>
     /// <para>
-    /// The exact shape the carve-out existed for: <c>Ob.ArrField</c> is an
-    /// imported <em>field read</em> — a <c>BoundClrPropertyAccessExpression</c>
-    /// with no receiver of its own — over a nullability-oblivious
-    /// <c>string[]</c>. That is the only receiver kind the deleted disjunct
-    /// admitted, and it is deliberately not a local: a variable receiver never
-    /// reached the disjunct at all, so a probe written with one would pass
+    /// The kept disjunct must not become a way back to #4287's silent
+    /// dereference for the population ADR-0186 moved. <c>Ob.ArrField</c> and
+    /// <c>Ob.NilNestField</c> are imported <em>field reads</em> — the exact
+    /// receiver kind the disjunct admits — over nullability-oblivious
+    /// metadata, and deliberately not locals: a variable receiver never
+    /// reaches the disjunct at all, so a probe written with one would pass
     /// while witnessing nothing.
     /// </para>
     /// <para>
-    /// Under the default mode the field is <c>string[]!</c>, so the read binds
-    /// and runs with no diagnostic and no carve-out. Under
-    /// <c>--nullability=enabled</c> the very same field is still ADR-0136's
-    /// <c>string[]?</c>, so with the disjunct gone the read <em>is</em>
-    /// reported. Both halves together are the ADR's sequencing claim made
-    /// checkable — step 3 had to land first, or this deletion would have
-    /// reinstated failure mode 1 — and the Enabled half is deliberate:
-    /// <c>--nullability=enabled</c> is the compatibility mode for the flip, not
-    /// a supported way to keep the old member-lookup behaviour.
+    /// Under the default mode the receiver is <c>T!</c>, a §4 check is
+    /// inserted for it, and a nil one throws the attributed
+    /// <c>NullReferenceException</c> — so it went through the coercion, not
+    /// the carve-out, which would have inserted nothing. The annotated
+    /// counterpart in
+    /// <see cref="Step4_AChainThroughAnAnnotatedNullableClrMember_Still_Binds"/>
+    /// is the other half: <c>T?</c>, and zero checks. If the carve-out ever
+    /// started admitting an oblivious receiver ahead of the coercion, the
+    /// check count here drops to zero and the nil case stops being attributed.
+    /// </para>
+    /// <para>
+    /// Under <c>--nullability=enabled</c> the same field is ADR-0136's
+    /// <c>string[]?</c> and binds through the carve-out, exactly as before the
+    /// flip — that mode is the compatibility mode, and restoring ADR-0136's
+    /// behaviour in full is its job.
     /// </para>
     /// </summary>
     [Fact]
-    public void Step4_AnObliviousFieldReadReceiver_Still_Binds_Under_TheDefaultMode()
+    public void Step4_AnObliviousFieldReadReceiver_Is_Checked_Not_WavedThrough()
     {
         const string body = """
                 Console.WriteLine(Ob.ArrField.Length)
             """;
+        const string nilBody = """
+                Console.WriteLine(Ob.NilNestField.Prop)
+            """;
 
         using var world = new World();
 
+        Assert.IsType<PlatformTypeSymbol>(world.GlobalProbeType("let probe = Ob.ArrField", NullabilityMode.PlatformTypes));
+        Assert.Equal(1, world.CountPlatformChecks(body));
         Assert.Equal("1", world.Run(body, NullabilityMode.PlatformTypes).Trim());
 
-        var underAdr0136 = world.Compile(body, NullabilityMode.Enabled);
-        Assert.False(underAdr0136.Success, Describe(underAdr0136));
-        Assert.Contains(underAdr0136.Diagnostics, d => d.Id == "GS0158");
+        var thrown = Assert.Throws<NullReferenceException>(
+            () => world.Run(nilBody, NullabilityMode.PlatformTypes));
+        Assert.Contains("nullability-oblivious", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("coerced at", thrown.Message, StringComparison.Ordinal);
+
+        Assert.IsType<NullableTypeSymbol>(world.GlobalProbeType("let probe = Ob.ArrField", NullabilityMode.Enabled));
+        Assert.Equal("1", world.Run(body, NullabilityMode.Enabled).Trim());
     }
 
     /// <summary>Unwraps the reflection/target-invocation wrappers a run adds.</summary>
@@ -2015,8 +2001,12 @@ public sealed class Adr0186PlatformTypeBindingTests
         /// </summary>
         /// <param name="globals">Top-level G# statements declaring <c>probe</c>.</param>
         /// <param name="mode">The nullability mode.</param>
+        /// <param name="tolerateNilableReceiverReport">
+        /// Accept a <c>GS0159</c> in the probe — see
+        /// <see cref="IsToleratedNilableReceiverReport"/>.
+        /// </param>
         /// <returns>The bound type of <c>probe</c>.</returns>
-        internal TypeSymbol GlobalProbeType(string globals, NullabilityMode mode)
+        internal TypeSymbol GlobalProbeType(string globals, NullabilityMode mode, bool tolerateNilableReceiverReport = false)
         {
             using var resolver = ReferenceResolver.WithReferences(new[] { this.LibraryPath });
             resolver.CurrentAssemblyName = Consumer;
@@ -2040,7 +2030,9 @@ public sealed class Adr0186PlatformTypeBindingTests
             };
 
             var scope = compilation.GlobalScope;
-            Assert.DoesNotContain(scope.Diagnostics, d => d.IsError);
+            Assert.DoesNotContain(
+                scope.Diagnostics,
+                d => d.IsError && !(tolerateNilableReceiverReport && IsToleratedNilableReceiverReport(d)));
             return Assert.Single(scope.Variables, v => v.Name == "probe").Type;
         }
 
@@ -2111,8 +2103,13 @@ public sealed class Adr0186PlatformTypeBindingTests
                 Nullability = mode,
             };
 
+            // A nilable receiver's call is allowed to be REPORTED here: this
+            // helper's subject is which method was selected, and #4287's
+            // still-open call-path half would add exactly that report once
+            // fixed. The selection is still asserted below, so a call that
+            // failed to bind at all finds no `Reverse` and fails there.
             var program = compilation.BoundProgram;
-            Assert.DoesNotContain(program.Diagnostics, d => d.IsError);
+            Assert.DoesNotContain(program.Diagnostics, d => d.IsError && !IsToleratedNilableReceiverReport(d));
 
             var collector = new ReverseCallCollector();
             foreach (var function in program.Functions)
@@ -2122,6 +2119,19 @@ public sealed class Adr0186PlatformTypeBindingTests
 
             return Assert.Single(collector.Found);
         }
+
+        /// <summary>
+        /// Whether <paramref name="diagnostic"/> is the report an instance
+        /// call on a nilable receiver would carry once #4287's call-path half
+        /// is fixed (PR #4308 reported it as <c>GS0159</c>). The selection
+        /// witnesses tolerate it so they assert only which member was chosen,
+        /// not that the call goes unreported — pinning the latter would pin
+        /// the open defect.
+        /// </summary>
+        /// <param name="diagnostic">A binder diagnostic.</param>
+        /// <returns><see langword="true"/> for a <c>GS0159</c>.</returns>
+        private static bool IsToleratedNilableReceiverReport(GSharp.Core.CodeAnalysis.Diagnostic diagnostic)
+            => diagnostic.Id == "GS0159";
 
         /// <summary>
         /// Finds the declaring type of every <c>Reverse</c> call in a bound

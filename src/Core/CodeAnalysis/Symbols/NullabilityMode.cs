@@ -45,8 +45,12 @@ public enum NullabilityMode
     /// (step 1), taught conversions, lookup and the coercion check about it
     /// (step 2), and only then flipped the default (step 3) — in that order,
     /// never the reverse, because deleting the old carve-out while the flag
-    /// was still off would transiently reinstate failure mode 1. Step 4
-    /// deleted that carve-out once this reading became load-bearing.
+    /// was still off would transiently reinstate failure mode 1. Step 4 found
+    /// that carve-out was not dead once this reading became load-bearing: it
+    /// also carries member chains through <em>annotated</em>-nullable imported
+    /// members, which ADR-0186 leaves untouched, so it was kept
+    /// (see <c>ExpressionBinder.CanBindClrInstanceMember</c>). Under this mode
+    /// an oblivious receiver no longer reaches it.
     /// </para>
     /// </summary>
     PlatformTypes,

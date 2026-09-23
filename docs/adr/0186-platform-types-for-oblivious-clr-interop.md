@@ -937,6 +937,23 @@ requires a decision about how far the change should reach.
 | --- | --- |
 | `ExpressionBinder.Access.MemberLookup.cs:941–946` | The `\|\| receiver is BoundClrPropertyAccessExpression` disjunct of `CanBindClrInstanceMember`. It reverts to the plain non-nullable test, because a `PlatformTypeSymbol` receiver is not a `NullableTypeSymbol` and never enters the branch the disjunct exists to rescue. **That is the entire binder deletion on main: one disjunct.** |
 
+> **Implementation note (step 4, PR #4353): this row was not performed.** The
+> premise — that the disjunct's whole population is oblivious members imported
+> as `T?` — missed a second population it has always carried: *annotated*-
+> nullable imported members (`[Nullable(2)]`, e.g. `Exception.InnerException`,
+> or Roslyn API members declared `T?`) used as an intermediate link in a member
+> chain, read or write (`e.InnerException.Message`,
+> `a.MaybeNumbers.Capacity = 4`). Deleting it broke that code — 20
+> `Cs2Gs.Tests` failures on real Roslyn-analyzer source and the Oahu migration
+> gate — and this ADR leaves annotated members out of scope (*Explicitly out of
+> scope*). The disjunct is therefore **kept**. Under the default mode it cannot
+> re-admit an oblivious receiver: that receiver is `T!`, the §4 coercion checks
+> and unwraps it before lookup, and it satisfies the first disjunct as plain
+> `T`. What the second disjunct admits is exactly the annotated-nullable chain
+> it always admitted, with the same (unchecked) dereference as before this ADR.
+> Step 4's binder change is therefore documentation and tests pinning that
+> separation, not a deletion.
+
 **Binder — additionally, *if* PR #4308 lands first** (it is closed and unmerged;
 none of these symbols exists on `main`):
 
