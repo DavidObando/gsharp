@@ -887,9 +887,21 @@ the indexer round-trips with C# and other CLR consumers. The enclosing type may
 be generic; index parameter and element types are substituted through the
 receiver's type arguments. An indexer declared without index parameters reports
 `GS0370`; one declared without an accessor body (an "auto-indexer") reports
-`GS0371`. Element **access** (`obj[i]`) currently binds single-parameter
-indexers; multi-parameter and overloaded indexers are reserved for a future
-revision.
+`GS0371`.
+
+A type may declare several indexers, including multi-parameter ones, as long
+as their index-parameter signatures differ (ADR-0187 / issue #4350). Each is
+emitted as its own `Item` property, exactly as C# emits overloaded indexers.
+An element access (`obj[i]`, `obj[row, column]`) selects the indexer by
+ordinary overload resolution over the written arguments; an ambiguous access
+reports `GS0266` and an access no indexer accepts reports `GS0267`. A second
+indexer with the same signature still reports `GS0102`. A derived type's
+indexer hides only a base indexer with the same signature. A
+`System.Index` value (`obj[^1]`, `obj[saved]`) binds to a declared
+`this[System.Index]` indexer. Writes and compound assignments through a
+multi-parameter indexer evaluate the receiver and each argument once, then
+store through the setter, or through a writable `ref` getter when there is no
+setter.
 
 A property declared on a **generic** type whose type mentions a class type
 parameter (`prop Value T`, or a constructed form such as `prop Items []T`) is

@@ -3304,6 +3304,17 @@ internal sealed partial class ExpressionBinder
 
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
 
+        // ADR-0187 / issue #4350: a multi-parameter user indexer write.
+        if (rectangular == null
+            && TryBindMultiIndexUserAssignment(
+                target,
+                indexSyntaxes,
+                (elementType, _) => conversions.BindConversion(valueSyntax, elementType),
+                diagnosticLocation) is { } userIndexAssignment)
+        {
+            return userIndexAssignment;
+        }
+
         if (rectangular == null)
         {
             Diagnostics.ReportTypeNotIndexable(diagnosticLocation, target.Type);
@@ -3359,6 +3370,17 @@ internal sealed partial class ExpressionBinder
         {
             var target = BindExpression(syntax.Target.Target);
             var rectangular = GetRectangularArrayTypeForBinding(target.Type);
+
+            // ADR-0187 / issue #4350: a multi-parameter user indexer write.
+            if (rectangular == null
+                && TryBindMultiIndexUserAssignment(
+                    target,
+                    syntax.Target.Indices,
+                    (elementType, _) => conversions.BindConversion(syntax.Value, elementType),
+                    syntax.Target.Target.Location) is { } userIndexAssignment)
+            {
+                return userIndexAssignment;
+            }
 
             if (rectangular == null)
             {
@@ -3870,6 +3892,46 @@ internal sealed partial class ExpressionBinder
     {
         var target = BindExpression(syntax.Target.Target);
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
+
+        // ADR-0187 / issue #4350: `t[a, b] op= v` over a multi-parameter user
+        // indexer reads and writes the same selected indexer, evaluating the
+        // receiver and each index argument once. Postfix/user compound
+        // operators keep their array-only lowering below.
+        if (rectangular == null
+            && !syntax.ReturnsPreviousValue
+            && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var userBaseOperator))
+        {
+            var userAssignment = TryBindMultiIndexUserAssignment(
+                target,
+                syntax.Target.Indices,
+                (elementType, readCurrent) =>
+                {
+                    var current = readCurrent();
+                    var rhs = BindExpression(syntax.Value);
+                    if (rhs is BoundErrorExpression || rhs.Type == TypeSymbol.Error)
+                    {
+                        return new BoundErrorExpression(syntax);
+                    }
+
+                    var combined = TryBindCompoundBinaryOperation(userBaseOperator, current, rhs, syntax.Value.Location);
+                    if (combined == null)
+                    {
+                        Diagnostics.ReportUndefinedBinaryOperator(
+                            syntax.OperatorToken.Location,
+                            syntax.OperatorToken.Text,
+                            elementType,
+                            rhs.Type);
+                        return new BoundErrorExpression(syntax);
+                    }
+
+                    return combined;
+                },
+                syntax.Target.Target.Location);
+            if (userAssignment != null)
+            {
+                return userAssignment;
+            }
+        }
 
         if (rectangular == null)
         {

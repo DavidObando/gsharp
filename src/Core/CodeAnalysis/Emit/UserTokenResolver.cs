@@ -1858,6 +1858,70 @@ internal sealed class UserTokenResolver
         return memberRef;
     }
 
+    private static bool IndexParametersMatch(ParameterInfo[] clrParameters, ImmutableArray<ParameterSymbol> parameters)
+    {
+        if (clrParameters.Length != parameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < clrParameters.Length; i++)
+        {
+            var parameterClrType = parameters[i].Type.ClrType;
+            if (parameterClrType != null && !ClrTypeUtilities.AreSame(clrParameters[i].ParameterType, parameterClrType))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// ADR-0187 / issue #4350: maps a property of a constructed type (or the
+    /// definition's own property) to the definition's property. A type may
+    /// declare several overloaded <c>Item</c> indexers, so the mapping is by
+    /// identity, then by position in the substituted member list (which
+    /// preserves the definition's order), and only then by name.
+    /// </summary>
+    /// <param name="constructedProperties">The constructed type's properties.</param>
+    /// <param name="definitionProperties">The definition's properties.</param>
+    /// <param name="property">The property to map.</param>
+    /// <returns>The definition's property.</returns>
+    private static PropertySymbol MapToDefinitionProperty(
+        ImmutableArray<PropertySymbol> constructedProperties,
+        ImmutableArray<PropertySymbol> definitionProperties,
+        PropertySymbol property)
+    {
+        if (definitionProperties.IsDefaultOrEmpty)
+        {
+            return property;
+        }
+
+        if (definitionProperties.Contains(property))
+        {
+            return property;
+        }
+
+        var position = constructedProperties.IsDefault ? -1 : constructedProperties.IndexOf(property);
+        if (position >= 0 && position < definitionProperties.Length)
+        {
+            return definitionProperties[position];
+        }
+
+        foreach (var candidate in definitionProperties)
+        {
+            if (candidate.Name == property.Name
+                && candidate.IsIndexer == property.IsIndexer
+                && candidate.Parameters.Length == property.Parameters.Length)
+            {
+                return candidate;
+            }
+        }
+
+        return property;
+    }
+
     /// <summary>
     /// Issue #989: resolves the right token for a call to a user property's
     /// get/set accessor. For a non-generic containing type returns the bare
@@ -1879,14 +1943,10 @@ internal sealed class UserTokenResolver
         var defProp = property;
         if (!ReferenceEquals(defType, containingType))
         {
-            foreach (var candidate in property.IsStatic ? defType.StaticProperties : defType.Properties)
-            {
-                if (candidate.Name == property.Name && candidate.IsIndexer == property.IsIndexer)
-                {
-                    defProp = candidate;
-                    break;
-                }
-            }
+            defProp = MapToDefinitionProperty(
+                property.IsStatic ? containingType.StaticProperties : containingType.Properties,
+                property.IsStatic ? defType.StaticProperties : defType.Properties,
+                property);
         }
 
         if (!this.cache.PropertyAccessorHandles.TryGetValue(defProp, out var handles))
@@ -1894,7 +1954,12 @@ internal sealed class UserTokenResolver
             if (containingType.ClrType != null)
             {
                 var bindingFlags = (property.IsStatic ? BindingFlags.Static : BindingFlags.Instance) | BindingFlags.Public | BindingFlags.NonPublic;
-                var importedProperty = containingType.ClrType.GetProperty(defProp.Name, bindingFlags);
+                // ADR-0187: an overloaded indexer shares its `Item` name with
+                // its siblings, so match the index-parameter list as well.
+                var importedProperty = containingType.ClrType
+                    .GetProperties(bindingFlags)
+                    .FirstOrDefault(candidate => candidate.Name == defProp.Name
+                        && IndexParametersMatch(candidate.GetIndexParameters(), defProp.Parameters));
                 var importedAccessor = wantSetter ? importedProperty?.SetMethod : importedProperty?.GetMethod;
                 if (importedAccessor != null)
                 {
@@ -1945,15 +2010,10 @@ internal sealed class UserTokenResolver
         var definitionProperty = property;
         if (!ReferenceEquals(definition, containingInterface))
         {
-            foreach (var candidate in definition.Properties)
-            {
-                if (candidate.Name == property.Name
-                    && candidate.IsIndexer == property.IsIndexer)
-                {
-                    definitionProperty = candidate;
-                    break;
-                }
-            }
+            definitionProperty = MapToDefinitionProperty(
+                containingInterface.Properties,
+                definition.Properties,
+                property);
         }
 
         if (!this.cache.PropertyAccessorHandles.TryGetValue(

@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Lowering.Async;
@@ -2919,6 +2920,76 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     internal static bool TypeSignaturesEquivalent(TypeSymbol? a, TypeSymbol? b)
         => TypeSignaturesEquivalent(a, b, typeParamMap: null);
+
+    /// <summary>
+    /// ADR-0187 / issue #4350: finds the base-class property an
+    /// <c>override</c> targets. A named property is found by name; an indexer
+    /// is found by its index-parameter signature, because a type may declare
+    /// several overloaded <c>Item</c> indexers.
+    /// </summary>
+    /// <param name="baseClass">The overriding type's base class.</param>
+    /// <param name="propName">The property's CLR name.</param>
+    /// <param name="isIndexer">Whether the overriding property is an indexer.</param>
+    /// <param name="indexerParameters">The overriding indexer's index parameters.</param>
+    /// <param name="baseProperty">The matched base property.</param>
+    /// <returns><see langword="true"/> when a candidate was found.</returns>
+    internal static bool TryGetOverriddenPropertyCandidate(
+        StructSymbol baseClass,
+        string propName,
+        bool isIndexer,
+        ImmutableArray<ParameterSymbol> indexerParameters,
+        [NotNullWhen(true)] out PropertySymbol? baseProperty)
+    {
+        if (!isIndexer)
+        {
+            return TypeMemberModel.TryGetProperty(baseClass, propName, out baseProperty);
+        }
+
+        foreach (var level in baseClass.GetHierarchy())
+        {
+            foreach (var candidate in level.Properties)
+            {
+                if (candidate.IsIndexer && HaveSameIndexerSignature(candidate.Parameters, indexerParameters))
+                {
+                    baseProperty = candidate;
+                    return true;
+                }
+            }
+        }
+
+        // Keep the historical name-based answer so a signature mismatch still
+        // reports the override-signature diagnostic instead of "no base".
+        return TypeMemberModel.TryGetProperty(baseClass, propName, out baseProperty);
+    }
+
+    /// <summary>
+    /// ADR-0187 / issue #4350: whether two indexers declare the same
+    /// index-parameter signature (count, types, and ref-kinds). Indexers
+    /// overload by this signature, exactly as in C#.
+    /// </summary>
+    /// <param name="left">The first indexer's index parameters.</param>
+    /// <param name="right">The second indexer's index parameters.</param>
+    /// <returns><see langword="true"/> when the signatures are identical.</returns>
+    internal static bool HaveSameIndexerSignature(
+        ImmutableArray<ParameterSymbol> left,
+        ImmutableArray<ParameterSymbol> right)
+    {
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (left[i].RefKind != right[i].RefKind
+                || !TypeSignaturesEquivalent(left[i].Type, right[i].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
 
     [ThreadStatic]
     private static int conformanceMatchingDepth;

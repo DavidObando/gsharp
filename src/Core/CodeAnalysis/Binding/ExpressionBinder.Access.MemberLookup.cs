@@ -1269,6 +1269,48 @@ internal sealed partial class ExpressionBinder
     {
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
 
+        if (rectangular == null && target.Type is StructSymbol or InterfaceSymbol)
+        {
+            // ADR-0187 / issue #4350: a multi-parameter user indexer
+            // (`this[index int32, fromEnd bool]`) is read with the same
+            // comma-separated index list as a rectangular array.
+            ImmutableArray<BoundExpression> BindAll()
+            {
+                var bound = ImmutableArray.CreateBuilder<BoundExpression>(indexSyntaxes.Count);
+                foreach (var indexSyntax in indexSyntaxes)
+                {
+                    bound.Add(BindExpression(indexSyntax));
+                }
+
+                return bound.MoveToImmutable();
+            }
+
+            if (TryResolveUserIndexer(
+                target.Type,
+                indexSyntaxes.Count,
+                BindAll,
+                targetLocation,
+                out var multiIndexer,
+                out var multiSubstitution,
+                out var multiArguments,
+                out var multiReported))
+            {
+                return BindUserIndexerRead(
+                    target,
+                    multiIndexer,
+                    multiSubstitution,
+                    (i, parameterType) => multiArguments.IsDefault
+                        ? conversions.BindConversion(indexSyntaxes[i], parameterType)
+                        : conversions.BindConversion(indexSyntaxes[i].Location, multiArguments[i], parameterType),
+                    targetLocation);
+            }
+
+            if (multiReported)
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+
         if (rectangular == null)
         {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
@@ -1672,64 +1714,37 @@ internal sealed partial class ExpressionBinder
 
         // ADR-0118 / issue #944: index access on a user-defined type that
         // declares an indexer member (`prop this[i T] U`). Binds `obj[i]` to a
-        // call of the indexer getter (`obj.get_Item(i)`).
-        if (target.Type is StructSymbol userIndexTarget
-            && TryGetUserIndexer(userIndexTarget, out var readIndexer, out var readSubstitution)
-            && readIndexer.Parameters.Length == 1)
+        // call of the indexer getter (`obj.get_Item(i)`). ADR-0149 follow-up
+        // (issue #2370): an INTERFACE-typed receiver dispatches through the
+        // interface's own get_Item slot the same way. ADR-0187 / issue #4350:
+        // a type may declare several overloaded indexers; the one taking the
+        // written argument is selected by ordinary overload resolution.
+        if (target.Type is StructSymbol or InterfaceSymbol)
         {
-            if (readIndexer.GetterSymbol == null)
+            if (TryResolveUserIndexer(
+                target.Type,
+                argumentCount: 1,
+                () => ImmutableArray.Create(BoundIndexArg()),
+                indexSyntax.Location,
+                out var readIndexer,
+                out var readSubstitution,
+                out var readArguments,
+                out var readReported))
             {
-                Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
-                return new BoundErrorExpression(null);
+                return BindUserIndexerRead(
+                    target,
+                    readIndexer,
+                    readSubstitution,
+                    (_, parameterType) => readArguments.IsDefault
+                        ? ConvertIndex(parameterType)
+                        : conversions.BindConversion(indexSyntax.Location, readArguments[0], parameterType),
+                    targetLocation);
             }
 
-            var paramType = readSubstitution != null
-                ? Binder.SubstituteType(readIndexer.Parameters[0].Type, readSubstitution, scope.References.MapClrTypeToReferences)
-                : readIndexer.Parameters[0].Type;
-            var indexArg = ConvertIndex(paramType);
-            var elementType = readSubstitution != null
-                ? Binder.SubstituteType(readIndexer.Type, readSubstitution, scope.References.MapClrTypeToReferences)
-                : readIndexer.Type;
-            return new BoundUserInstanceCallExpression(
-                null,
-                target,
-                readIndexer.GetterSymbol,
-                ImmutableArray.Create(indexArg),
-                elementType);
-        }
-
-        // ADR-0149 follow-up (issue #2370): index access through an
-        // INTERFACE-typed receiver (`asIface[i]`, `b: IBox; b[0]`). Interfaces
-        // could not declare indexers at all before ADR-0149, so this branch
-        // never had a symbol to resolve; now that `prop this[...] T` is legal
-        // inside a G# interface body, dispatch it exactly like the concrete
-        // struct/class case above — `callvirt` through the interface's OWN
-        // get_Item slot (registered in `MethodHandles`/`ResolveUserInterfaceInstanceMethodToken`
-        // by the emitter regardless of whether the implementer satisfies the
-        // slot implicitly or via an explicit `(IFoo)` clause).
-        if (target.Type is InterfaceSymbol userIndexIface
-            && TryGetUserIndexer(userIndexIface, out var readIfaceIndexer, out var readIfaceSubstitution)
-            && readIfaceIndexer.Parameters.Length == 1)
-        {
-            if (readIfaceIndexer.GetterSymbol == null)
+            if (readReported)
             {
-                Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
                 return new BoundErrorExpression(null);
             }
-
-            var paramType = readIfaceSubstitution != null
-                ? Binder.SubstituteType(readIfaceIndexer.Parameters[0].Type, readIfaceSubstitution, scope.References.MapClrTypeToReferences)
-                : readIfaceIndexer.Parameters[0].Type;
-            var indexArg = ConvertIndex(paramType);
-            var elementType = readIfaceSubstitution != null
-                ? Binder.SubstituteType(readIfaceIndexer.Type, readIfaceSubstitution, scope.References.MapClrTypeToReferences)
-                : readIfaceIndexer.Type;
-            return new BoundUserInstanceCallExpression(
-                null,
-                target,
-                readIfaceIndexer.GetterSymbol,
-                ImmutableArray.Create(indexArg),
-                elementType);
         }
 
         if (!ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location)
@@ -2673,89 +2688,70 @@ internal sealed partial class ExpressionBinder
 
         // ADR-0118 / issue #944: index assignment on a user-defined type that
         // declares an indexer member. Binds `obj[i] = v` to a call of the
-        // indexer setter (`obj.set_Item(i, v)`).
-        if (targetType is StructSymbol userIndexTarget
-            && TryGetUserIndexer(userIndexTarget, out var writeIndexer, out var writeSubstitution)
-            && writeIndexer.Parameters.Length == 1)
+        // indexer setter (`obj.set_Item(i, v)`). ADR-0149 follow-up (issue
+        // #2370): an INTERFACE-typed receiver dispatches through the
+        // interface's own set_Item slot. ADR-0187 / issue #4350: overloaded
+        // indexers are selected by the written index argument first.
+        if (targetType is StructSymbol or InterfaceSymbol)
         {
-            if (writeIndexer.SetterSymbol == null)
+            if (TryResolveUserIndexer(
+                targetType,
+                argumentCount: 1,
+                () => ImmutableArray.Create(BindIndexValue()),
+                indexSyntax.Location,
+                out var writeIndexer,
+                out var writeSubstitution,
+                out var writeArguments,
+                out var writeReported))
             {
-                // Issue #4224: a writable-ref-returning indexer getter (no
-                // setter, but `ReturnRefKind == Ref`) stores through the
-                // getter instead of failing outright, mirroring the
-                // named-property write-through path (TryBindRefGetterWriteThrough)
-                // and the existing imported/CLR ref-indexer write-through
-                // below. A `ref readonly` getter stays protected.
-                if (writeIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref } refIndexerGetter)
+                var selectedIndexer = writeIndexer;
+                var paramType = SubstituteIndexerType(selectedIndexer.Parameters[0].Type, writeSubstitution);
+                BoundExpression ConvertWriteIndex() => writeArguments.IsDefault
+                    ? ConvertIndexValue(paramType)
+                    : conversions.BindConversion(indexSyntax.Location, writeArguments[0], paramType);
+
+                if (selectedIndexer.SetterSymbol == null)
                 {
-                    if (isReadOnlyReceiver)
+                    // Issue #4224: a writable-ref-returning indexer getter (no
+                    // setter, but `ReturnRefKind == Ref`) stores through the
+                    // getter instead of failing outright, mirroring the
+                    // named-property write-through path (TryBindRefGetterWriteThrough)
+                    // and the existing imported/CLR ref-indexer write-through
+                    // above. A `ref readonly` getter stays protected.
+                    if (targetType is StructSymbol
+                        && selectedIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref } refIndexerGetter)
                     {
-                        Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
-                        return new BoundErrorExpression(indexSyntax);
+                        if (isReadOnlyReceiver)
+                        {
+                            Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                            return new BoundErrorExpression(indexSyntax);
+                        }
+
+                        var refElementType = SubstituteIndexerType(refIndexerGetter.Type, writeSubstitution);
+                        var refIndexArg = ConvertWriteIndex();
+                        var refValue = BindValue(refElementType);
+                        var refGetCall = new BoundUserInstanceCallExpression(null, target, refIndexerGetter, ImmutableArray.Create(refIndexArg), refElementType);
+                        return new BoundIndirectAssignmentExpression(null, new BoundAddressOfExpression(null, refGetCall, unmanaged: false), refValue);
                     }
 
-                    var refParamType = writeSubstitution != null
-                        ? Binder.SubstituteType(writeIndexer.Parameters[0].Type, writeSubstitution, scope.References.MapClrTypeToReferences)
-                        : writeIndexer.Parameters[0].Type;
-                    var refElementType = writeSubstitution != null
-                        ? Binder.SubstituteType(refIndexerGetter.Type, writeSubstitution, scope.References.MapClrTypeToReferences)
-                        : refIndexerGetter.Type;
-                    var refIndexArg = ConvertIndexValue(refParamType);
-                    var refValue = BindValue(refElementType);
-                    var refGetCall = new BoundUserInstanceCallExpression(null, target, refIndexerGetter, ImmutableArray.Create(refIndexArg), refElementType);
-                    return new BoundIndirectAssignmentExpression(null, new BoundAddressOfExpression(null, refGetCall, unmanaged: false), refValue);
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
+                    return new BoundErrorExpression(null);
                 }
 
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
-                return new BoundErrorExpression(null);
+                var elementType = SubstituteIndexerType(selectedIndexer.SetterSymbol.Parameters[^1].Type, writeSubstitution);
+                var indexArg = ConvertWriteIndex();
+                var value = BindValue(elementType);
+                return MakeUserIndexAssignment(
+                    selectedIndexer.SetterSymbol,
+                    indexArg,
+                    value,
+                    elementType);
             }
 
-            var paramType = writeSubstitution != null
-                ? Binder.SubstituteType(writeIndexer.Parameters[0].Type, writeSubstitution, scope.References.MapClrTypeToReferences)
-                : writeIndexer.Parameters[0].Type;
-            var setterValueType = writeIndexer.SetterSymbol.Parameters[^1].Type;
-            var elementType = writeSubstitution != null
-                ? Binder.SubstituteType(setterValueType, writeSubstitution, scope.References.MapClrTypeToReferences)
-                : setterValueType;
-
-            var indexArg = ConvertIndexValue(paramType);
-            var value = BindValue(elementType);
-            return MakeUserIndexAssignment(
-                writeIndexer.SetterSymbol,
-                indexArg,
-                value,
-                elementType);
-        }
-
-        // ADR-0149 follow-up (issue #2370): index assignment through an
-        // INTERFACE-typed receiver — the write-side counterpart of the read
-        // branch above. Dispatches via `callvirt` through the interface's own
-        // set_Item slot.
-        if (targetType is InterfaceSymbol writeIndexIface
-            && TryGetUserIndexer(writeIndexIface, out var writeIfaceIndexer, out var writeIfaceSubstitution)
-            && writeIfaceIndexer.Parameters.Length == 1)
-        {
-            if (writeIfaceIndexer.SetterSymbol == null)
+            if (writeReported)
             {
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                 return new BoundErrorExpression(null);
             }
-
-            var paramType = writeIfaceSubstitution != null
-                ? Binder.SubstituteType(writeIfaceIndexer.Parameters[0].Type, writeIfaceSubstitution, scope.References.MapClrTypeToReferences)
-                : writeIfaceIndexer.Parameters[0].Type;
-            var setterValueType = writeIfaceIndexer.SetterSymbol.Parameters[^1].Type;
-            var elementType = writeIfaceSubstitution != null
-                ? Binder.SubstituteType(setterValueType, writeIfaceSubstitution, scope.References.MapClrTypeToReferences)
-                : setterValueType;
-
-            var indexArg = ConvertIndexValue(paramType);
-            var value = BindValue(elementType);
-            return MakeUserIndexAssignment(
-                writeIfaceIndexer.SetterSymbol,
-                indexArg,
-                value,
-                elementType);
         }
 
         if (!ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location)
@@ -3183,26 +3179,19 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        if (target.Type is StructSymbol userTarget
-            && TryGetUserIndexer(userTarget, out var userIndexer, out var substitution)
-            && userIndexer.Parameters.Length == 1
+        // ADR-0187 / issue #4350: a user type that declares a
+        // `this[System.Index]` indexer (among possibly several overloads)
+        // receives the Index value directly, as C# binds it.
+        if (target.Type is StructSymbol or InterfaceSymbol
+            && TryGetUserIndexerTaking(target.Type, typeof(System.Index), out var userIndexer, out var substitution)
             && userIndexer.GetterSymbol != null)
         {
-            var parameterType = substitution != null
-                ? Binder.SubstituteType(userIndexer.Parameters[0].Type, substitution, scope.References.MapClrTypeToReferences)
-                : userIndexer.Parameters[0].Type;
-            if (ClrTypeUtilities.AreSame(parameterType.ClrType, typeof(System.Index)))
-            {
-                var resultType = substitution != null
-                    ? Binder.SubstituteType(userIndexer.Type, substitution, scope.References.MapClrTypeToReferences)
-                    : userIndexer.Type;
-                return new BoundUserInstanceCallExpression(
-                    null,
-                    target,
-                    userIndexer.GetterSymbol,
-                    ImmutableArray.Create(conversions.BindConversion(targetLocation, indexValue, parameterType)),
-                    resultType);
-            }
+            return BindUserIndexerRead(
+                target,
+                userIndexer,
+                substitution,
+                (_, parameterType) => conversions.BindConversion(targetLocation, indexValue, parameterType),
+                targetLocation);
         }
 
         Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
@@ -3292,19 +3281,22 @@ internal sealed partial class ExpressionBinder
             return new BoundBlockExpression(null, statements.ToImmutable(), assignment);
         }
 
-        if (targetType is StructSymbol userTarget
-            && TryGetUserIndexer(userTarget, out var userIndexer, out var substitution)
-            && userIndexer.Parameters.Length == 1
-            && userIndexer.SetterSymbol != null)
+        // ADR-0187 / issue #4350: a user `this[System.Index]` indexer
+        // receives the Index value directly; a ref-returning getter with no
+        // setter stores through the returned reference.
+        if (targetType is StructSymbol or InterfaceSymbol
+            && TryGetUserIndexerTaking(targetType, typeof(System.Index), out var userIndexer, out var substitution))
         {
-            var parameterType = substitution != null
-                ? Binder.SubstituteType(userIndexer.Parameters[0].Type, substitution, scope.References.MapClrTypeToReferences)
-                : userIndexer.Parameters[0].Type;
-            if (ClrTypeUtilities.AreSame(parameterType.ClrType, typeof(System.Index)))
+            var parameterType = SubstituteIndexerType(userIndexer.Parameters[0].Type, substitution);
+            if (userIndexer.SetterSymbol != null)
             {
-                var valueType = substitution != null
-                    ? Binder.SubstituteType(userIndexer.Type, substitution, scope.References.MapClrTypeToReferences)
-                    : userIndexer.Type;
+                if (isReadOnlyReceiver)
+                {
+                    Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                    return new BoundErrorExpression(null);
+                }
+
+                var valueType = SubstituteIndexerType(userIndexer.Type, substitution);
                 return new BoundUserInstanceCallExpression(
                     null,
                     target,
@@ -3312,6 +3304,28 @@ internal sealed partial class ExpressionBinder
                     ImmutableArray.Create(
                         conversions.BindConversion(diagnosticLocation, indexValue, parameterType),
                         bindValue(valueType)));
+            }
+
+            if (targetType is StructSymbol
+                && userIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref } refGetter)
+            {
+                if (isReadOnlyReceiver)
+                {
+                    Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                    return new BoundErrorExpression(null);
+                }
+
+                var refElementType = SubstituteIndexerType(refGetter.Type, substitution);
+                var refGetCall = new BoundUserInstanceCallExpression(
+                    null,
+                    target,
+                    refGetter,
+                    ImmutableArray.Create(conversions.BindConversion(diagnosticLocation, indexValue, parameterType)),
+                    refElementType);
+                return new BoundIndirectAssignmentExpression(
+                    null,
+                    new BoundAddressOfExpression(null, refGetCall, unmanaged: false),
+                    bindValue(refElementType));
             }
         }
 

@@ -1746,6 +1746,12 @@ internal sealed partial class DeclarationBinder
                 }
             }
 
+            // ADR-0187 / issue #4350: indexers overload by index-parameter
+            // signature, exactly like C#. Track the plain (non-explicit)
+            // indexer signatures already declared on this type so a second
+            // `this[...]` with a different parameter list is accepted while an
+            // exact duplicate still reports GS0102.
+            var declaredIndexerSignatures = new List<ImmutableArray<ParameterSymbol>>();
             foreach (var propSyntax in syntax.Properties)
             {
                 // ADR-0118 / issue #944: an indexer member (`prop this[…] T`)
@@ -1806,6 +1812,17 @@ internal sealed partial class DeclarationBinder
                 // than one explicit-interface indexer implementation, closing
                 // a gap the old mangled-name convention only partially covered.
                 var propAlreadyDeclared = existingNames.Contains(propName);
+                if (isIndexer
+                    && propAlreadyDeclared
+                    && !propSyntax.HasExplicitInterfaceClause
+                    && declaredIndexerSignatures.Count > 0)
+                {
+                    // ADR-0187: an indexer only collides with another plain
+                    // indexer of the same index-parameter signature.
+                    propAlreadyDeclared = declaredIndexerSignatures.Any(
+                        declared => HaveSameIndexerSignature(declared, indexerParameters));
+                }
+
                 var propExemptCollision = propSyntax.HasExplicitInterfaceClause || explicitInterfaceClauseNames.Contains(propName);
                 if (methodNames.Contains(propName) || (propAlreadyDeclared && !propExemptCollision))
                 {
@@ -1814,6 +1831,11 @@ internal sealed partial class DeclarationBinder
                 }
 
                 existingNames.Add(propName);
+                if (isIndexer && !propSyntax.HasExplicitInterfaceClause)
+                {
+                    declaredIndexerSignatures.Add(indexerParameters);
+                }
+
                 if (propSyntax.HasExplicitInterfaceClause)
                 {
                     explicitInterfaceClauseNames.Add(propName);
@@ -1929,7 +1951,7 @@ internal sealed partial class DeclarationBinder
                 PropertySymbol? overriddenProperty = null;
                 if (isOverride)
                 {
-                    if (structSymbol.BaseClass != null && TypeMemberModel.TryGetProperty(structSymbol.BaseClass, propName, out var baseProp))
+                    if (structSymbol.BaseClass != null && TryGetOverriddenPropertyCandidate(structSymbol.BaseClass, propName, isIndexer, indexerParameters, out var baseProp))
                     {
                         if (!baseProp.IsVirtual && !baseProp.IsOverride)
                         {
