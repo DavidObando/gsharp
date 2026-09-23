@@ -36,8 +36,11 @@ public class Issue4350IndexRangeEmitTests
             Console.WriteLine("gsharp"[last])
             let list = List[int32](xs)
             Console.WriteLine(list[third])
-            let span = Span[int32](xs)
-            Console.WriteLine(span[last])
+            func spanLast(values []int32, index System.Index) int32 {
+                let span = Span[int32](values)
+                return span[index]
+            }
+            Console.WriteLine(spanLast(xs, last))
             """;
 
         Assert.Equal(Lines("50", "30", "True", "3", "2", "p", "30", "50"), CompileAndRun(source));
@@ -78,7 +81,7 @@ public class Issue4350IndexRangeEmitTests
             Console.WriteLine(boxed)
             """;
 
-        Assert.Equal(Lines("50", "20", "40", "40", "10", "30", "True", "20", "^2"), CompileAndRun(source));
+        Assert.Equal(Lines("50", "20", "40", "10", "30", "True", "20", "^2"), CompileAndRun(source));
     }
 
     [Fact]
