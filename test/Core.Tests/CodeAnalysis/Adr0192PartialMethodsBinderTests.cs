@@ -378,6 +378,44 @@ partial class Widget {
     }
 
     [Fact]
+    public void ParameterAnnotationArgumentResolvingDifferently_ReportsGS0611()
+    {
+        // Copilot review round 13: annotations were compared by attribute type
+        // only. `typeof(Timer)` is the same text in both files but names
+        // System.Timers.Timer in one and System.Threading.Timer in the other.
+        static SyntaxTree Part(string timerNamespace, string body, string file) => SyntaxTree.Parse(SourceText.From(
+            $"package App\nimport System.ComponentModel\nimport {timerNamespace}\n\npartial class A {{\n    partial func F(@TypeConverter(typeof(Timer)) x int32) int32{body}\n}}\n",
+            file));
+
+        var differs = EmitDiagnostics(new[]
+        {
+            Part("System.Timers", ";", "A.gs"),
+            Part("System.Threading", " { return 1 }", "A.g.gs"),
+        });
+        Assert.Contains(differs, d => d.Id == "GS0611" && d.Message.Contains("annotations", StringComparison.Ordinal));
+
+        var same = EmitDiagnostics(new[]
+        {
+            Part("System.Threading", ";", "A.gs"),
+            Part("System.Threading", " { return 1 }", "A.g.gs"),
+        });
+        Assert.DoesNotContain(same, d => d.IsError);
+    }
+
+    [Theory]
+    [InlineData("interface IFoo {\n    func Bar() int32;\n}\n\npartial class C : IFoo {\n    partial func (IFoo) Bar() int32;\n    partial func (IFoo) Bar() int32 { return 1 }\n}\n")]
+    [InlineData("partial class C {\n    partial func (c C) M() int32;\n    partial func (c C) M() int32 { return 1 }\n}\n")]
+    public void ExplicitInterfaceOrReceiverClausePartialMethod_ReportsGS0607(string members)
+    {
+        // Copilot review round 13: ADR-0192 §F lists these shapes as
+        // unsupported, but a matching pair used to merge and bind. Each part
+        // is now rejected, and nothing else cascades.
+        var diagnostics = Compile("package App\n\n" + members);
+        Assert.Equal(2, diagnostics.Count(d => d.Id == "GS0607"));
+        Assert.DoesNotContain(diagnostics, d => d.IsError && d.Id != "GS0607");
+    }
+
+    [Fact]
     public void ConversionOperatorPairedWithAnOrdinaryEscapedMethod_ReportsGS0611()
     {
         // Copilot review round 12: `operator implicit` and an escaped

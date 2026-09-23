@@ -137,6 +137,16 @@ internal static class PartialMethodMerger
         var groupByKey = new Dictionary<MethodKey, List<FunctionDeclarationSyntax>>();
         foreach (var method in methods.Where(m => m.IsPartial))
         {
+            // ADR-0192 §F: receiver-clause and explicit-interface partial
+            // methods are not a supported shape. Reject them rather than
+            // letting a matching pair merge (Copilot review round 13); the
+            // group still merges below so the rest of the member binds without
+            // a duplicate-member cascade.
+            if (method.Receiver != null || method.ExplicitInterfaceType != null)
+            {
+                diagnostics.ReportPartialModifierNotValidHere(method.PartialModifier!.Location);
+            }
+
             var key = MethodKey.For(method);
             if (!groupByKey.TryGetValue(key, out var group))
             {

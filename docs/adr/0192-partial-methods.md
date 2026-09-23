@@ -166,6 +166,7 @@ single any-order run. Canonical style places `partial` immediately before
 | `func` member of a **non-partial** type | no — `GS0608` | C# CS0751's analogue. |
 | Top-level `func` | no — `GS0607` | There is no type to be a part of. |
 | Interface method signature or interface `shared { }` slot | no — `GS0607` | See §F. |
+| `func` with a receiver clause or an explicit-interface qualifier | no — `GS0607` | See §F. |
 | `prop`, `event`, `init`, `deinit`, field | no — `GS0607` | See §F. |
 
 Parser touch points: a `PartialModifier` settable token + `IsPartial` on
@@ -284,7 +285,7 @@ differs from C#:
 | Parameters | Identical count, and each parameter identical as normalized text — name, `ref`/`out`/`in`/`scoped`/`params` modifiers, default value, **and annotations** — AND each parameter's resolved type identical | **Stricter than C#** on two counts: C# only *warns* (CS8826) on differing parameter names, and it *unions* parameter attributes rather than requiring them on both parts. A G# caller may pass an argument by name, and a parameter annotation such as `@AllowNull` is part of the contract callers see — so both belong to the signature the two parts must agree on. See §C for the mechanical half of the reason. The resolved-type check is the same round-7 fix as the return type's, above: the grouping key already rejects a TEXTUALLY different parameter type as an unmatched overload (GS0609/GS0610), so this only ever fires on an identically-SPELLED parameter type that resolves differently per file. |
 | `unsafe` | Union | Per-part in ADR-0144 §C, but the merged node carries ONE signature: if either part's signature was written in an unsafe context (raw `*T` parameters), the merged node must bind in one. |
 | Annotations | Union, declaring part first | §C. |
-| Explicit-interface qualifier, receiver clause | Identical | Prevents silent divergence; see §F for why neither is a supported partial shape. |
+| Explicit-interface qualifier, receiver clause | Identical | Both shapes are already `GS0607` (§F); the comparison only keeps a mismatched pair from merging silently during error recovery. |
 
 All mismatches report `GS0611` with a short description of the aspect, at the
 implementing part's identifier.
@@ -358,8 +359,9 @@ cannot be partial.
 `GS0607`.
 
 **Extension (receiver-clause) and explicit-interface-qualifier partial methods**
-are not a supported shape; the consistency check compares both clauses so the
-two parts cannot silently diverge if one is written anyway.
+are not a supported shape and are rejected with `GS0607` at each part. The pair
+still merges for error recovery, so the rest of the member binds without a
+duplicate-member cascade.
 
 **Incremental rebind** needs no new guard: ADR-0144 §G already forces any file
 containing a `partial` **type** onto the full-rebuild path, and a partial

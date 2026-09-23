@@ -1078,7 +1078,7 @@ internal sealed partial class DeclarationBinder
                         "a parameter declaration",
                         System.AttributeTargets.Parameter))
                     && (declaringAttributes.Length != implementingAttributes.Length
-                        || declaringAttributes.Zip(implementingAttributes).Any(pair => !TypeSignaturesEquivalent(pair.First.AttributeType, pair.Second.AttributeType))))
+                        || declaringAttributes.Zip(implementingAttributes).Any(pair => !BoundAttributesEquivalent(pair.First, pair.Second))))
                 {
                     Disagree($"parameter {parameterNumber}'s annotations ({ResolvesDifferently})");
                     return;
@@ -1110,6 +1110,63 @@ internal sealed partial class DeclarationBinder
             }
         }
     }
+
+    /// <summary>
+    /// ADR-0192: whether two bound attributes are the same application —
+    /// target, attribute type, and every positional and named argument's name,
+    /// type, and value. Identical annotation text can still bind differently
+    /// per file (<c>typeof(Timer)</c> under two different imports), so
+    /// comparing only the attribute type is not enough (Copilot review round 13).
+    /// </summary>
+    private static bool BoundAttributesEquivalent(BoundAttribute left, BoundAttribute right)
+        => left.Target == right.Target
+            && TypeSignaturesEquivalent(left.AttributeType, right.AttributeType)
+            && BoundAttributeArgumentsEquivalent(left.PositionalArguments, right.PositionalArguments)
+            && BoundAttributeArgumentsEquivalent(left.NamedArguments, right.NamedArguments);
+
+    private static bool BoundAttributeArgumentsEquivalent(
+        ImmutableArray<BoundAttributeArgument> left,
+        ImmutableArray<BoundAttributeArgument> right)
+    {
+        left = left.IsDefault ? ImmutableArray<BoundAttributeArgument>.Empty : left;
+        right = right.IsDefault ? ImmutableArray<BoundAttributeArgument>.Empty : right;
+        if (left.Length != right.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < left.Length; i++)
+        {
+            if (!string.Equals(left[i].Name, right[i].Name, StringComparison.Ordinal)
+                || !TypeSignaturesEquivalent(left[i].Type, right[i].Type)
+                || !BoundAttributeValuesEquivalent(left[i].Value, right[i].Value))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Compares attribute argument values: a <c>typeof</c> naming a source type
+    /// is carried as its <see cref="TypeSymbol"/>, an array as a CLR array whose
+    /// elements may themselves be nested arguments, and everything else as a
+    /// constant compared with <see cref="object.Equals(object, object)"/>.
+    /// </summary>
+    private static bool BoundAttributeValuesEquivalent(object? left, object? right)
+        => (left, right) switch
+        {
+            (null, null) => true,
+            (TypeSymbol leftType, TypeSymbol rightType) => TypeSignaturesEquivalent(leftType, rightType),
+            (BoundAttributeArgument leftArgument, BoundAttributeArgument rightArgument)
+                => TypeSignaturesEquivalent(leftArgument.Type, rightArgument.Type)
+                    && BoundAttributeValuesEquivalent(leftArgument.Value, rightArgument.Value),
+            (Array leftArray, Array rightArray)
+                => leftArray.Length == rightArray.Length
+                    && Enumerable.Range(0, leftArray.Length).All(i => BoundAttributeValuesEquivalent(leftArray.GetValue(i), rightArray.GetValue(i))),
+            _ => Equals(left, right),
+        };
 
     private void BindStructInstanceMethods(
         StructDeclarationSyntax syntax,
