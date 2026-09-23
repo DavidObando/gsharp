@@ -784,8 +784,9 @@ internal sealed partial class ExpressionBinder
                     // annotated-nullable imported member — never reaches this
                     // arm (see CanBindClrInstanceMember) and still requires
                     // narrowing or `?.`; an oblivious imported result arrives
-                    // as a platform type `T!` under the default mode (ADR-0186)
-                    // and does reach it. Issue #3311: an open-generic
+                    // as a platform type `T!` under the default mode (ADR-0186),
+                    // is checked and unwrapped by CheckPlatformReceiver before
+                    // this dispatch, and reaches it as plain `T`. Issue #3311: an open-generic
                     // `map[K, V]` receiver (null ClrType) is normalized to its
                     // symbolic Dictionary view so `.Keys`/`.Count`/… resolve
                     // over the erased closed shape with symbolic [K, V]
@@ -1019,10 +1020,14 @@ internal sealed partial class ExpressionBinder
     /// Returns whether CLR instance lookup may continue through a receiver:
     /// the receiver has a loadable <see cref="TypeSymbol.ClrType"/> and its
     /// type is not a <see cref="NullableTypeSymbol"/> — that is, nobody has
-    /// declared it <c>T?</c>. A <see cref="PlatformTypeSymbol"/> receiver
-    /// passes: <c>T!</c> does admit nil, but nothing has been <em>stated</em>
-    /// about it, and ADR-0186 §4 answers that question at the coercion point
-    /// rather than at lookup.
+    /// declared it <c>T?</c>. This predicate never sees a
+    /// <see cref="PlatformTypeSymbol"/>: both callers run
+    /// <c>PlatformCoercion.InsertCheck</c> on the receiver first (the read
+    /// path through <c>CheckPlatformReceiver</c>, the write path explicitly in
+    /// <c>BindMemberFieldAssignmentExpression</c>), which inserts ADR-0186 §4's
+    /// nil check and unwraps <c>T!</c> to its underlying <c>T</c>. That
+    /// coercion, not this test, is where the platform receiver's safety
+    /// question is answered.
     /// <para>
     /// <b>ADR-0186 step 4.</b> Before this step the test carried a second
     /// disjunct — <c>|| receiver is BoundClrPropertyAccessExpression</c> —
@@ -1038,10 +1043,10 @@ internal sealed partial class ExpressionBinder
     /// <para>
     /// Step 3 made <c>--nullability=platform-types</c> the default, and an
     /// oblivious position now arrives as <see cref="PlatformTypeSymbol"/>
-    /// (<c>T!</c>) rather than <see cref="NullableTypeSymbol"/> — a type that
-    /// still admits nil but is not a <see cref="NullableTypeSymbol"/>, so it
-    /// reaches this test as an ordinary receiver and carries
-    /// its safety question to §4's coercion check instead. The carve-out's
+    /// (<c>T!</c>) rather than <see cref="NullableTypeSymbol"/>. The receiver
+    /// coercion above checks and unwraps it before lookup, so it arrives here
+    /// as its plain underlying <c>T</c> and never takes the nullable arm; its
+    /// safety question is answered by §4's check instead. The carve-out's
     /// whole population therefore no longer takes the nullable arm at all, and
     /// what it still reached was exactly the annotated-nullable member it
     /// should never have admitted.
