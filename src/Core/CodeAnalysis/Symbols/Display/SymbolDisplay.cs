@@ -710,6 +710,18 @@ public static class SymbolDisplay
                     return $"[{new string(',', nullableRectangular.Rank - 1)}]?{FormatType(nullableRectangular.ElementType)}";
                 }
 
+                // Issue #4361 (review): an IMPORTED nullable array — an
+                // annotated/imported CLR `T[]` under the `?`, which the
+                // metadata reader produces for `string?[]`-shaped flags such
+                // as `[2, 0]` — is not a `SliceTypeSymbol`, so it fell through
+                // to the trailing-`?` form below and printed `[]string!?`
+                // (or `[]string?`), ADR-0132's spelling of a slice of nullable
+                // ELEMENTS. The positional form is `[]?string!`.
+                if (TryGetImportedArrayElement(nullable.UnderlyingType, out var nullableImportedElement))
+                {
+                    return $"[]?{FormatType(nullableImportedElement)}";
+                }
+
                 var underlying = FormatType(nullable.UnderlyingType);
                 return nullable.UnderlyingType is FunctionTypeSymbol
                     ? $"({underlying})?"
@@ -736,12 +748,25 @@ public static class SymbolDisplay
                     return $"[{new string(',', platformRectangular.Rank - 1)}]!{FormatType(platformRectangular.ElementType)}";
                 }
 
+                // Issue #4361: an IMPORTED platform array (`string[]` read from
+                // oblivious metadata) is not a `SliceTypeSymbol` — it is an
+                // imported/annotated CLR array — so it used to fall through to
+                // the trailing-`!` form and print `[]string!`, which is
+                // ADR-0132's spelling of a slice of platform ELEMENTS: the
+                // opposite type.
+                if (TryGetImportedArrayElement(platform.UnderlyingType, out var platformImportedElement))
+                {
+                    return $"[]!{FormatType(platformImportedElement)}";
+                }
+
                 var platformUnderlying = FormatType(platform.UnderlyingType);
                 return platform.UnderlyingType is FunctionTypeSymbol
                     ? $"({platformUnderlying})!"
                     : $"{platformUnderlying}!";
             case NullabilityAnnotatedTypeSymbol annotated:
-                return FormatType(annotated.BaseType);
+                return TryFormatWithPlatformArguments(annotated, out var withPlatformArguments)
+                    ? withPlatformArguments
+                    : FormatType(annotated.BaseType);
             case FunctionTypeSymbol function:
                 return FormatFunctionType(function);
             case FunctionPointerTypeSymbol functionPointer:
@@ -818,6 +843,163 @@ public static class SymbolDisplay
                 return FormatImportedType(imported);
             default:
                 return type.Name;
+        }
+    }
+
+    /// <summary>
+    /// Issue #4361: renders an annotated imported type from its
+    /// <b>nullability-applied</b> arguments when — and only when — one of them
+    /// is platform-typed.
+    /// <para>
+    /// The annotated wrapper's own name is its base type's, so a nested
+    /// argument's nullability never reached a diagnostic: <c>Arbitrary[Type!]</c>
+    /// and <c>Arbitrary[Type]</c> both printed <c>Arbitrary[Type]</c>, and a
+    /// conversion ADR-0186 §3 rule 3 correctly rejects read as
+    /// <i>"Cannot convert type 'X' to 'X'"</i>. Platform-ness is exactly the
+    /// case where the two sides can differ in nothing else, so it is the case
+    /// rendered here, consistently with how a top-level <c>T!</c> is already
+    /// displayed. (A nested <c>?</c> is left as before on purpose: surfacing
+    /// it everywhere is a separate display change with a much wider blast
+    /// radius, and nothing in the conversion rules turns on it alone.)
+    /// </para>
+    /// </summary>
+    /// <param name="annotated">The annotated type.</param>
+    /// <param name="formatted">The rendered name when this applies.</param>
+    /// <returns><see langword="true"/> when a nested argument is platform-typed.</returns>
+    private static bool TryFormatWithPlatformArguments(
+        NullabilityAnnotatedTypeSymbol annotated,
+        [NotNullWhen(true)] out string? formatted)
+    {
+        formatted = null;
+        var clr = annotated.ClrType;
+        if (TryGetImportedArrayElement(annotated, out var element))
+        {
+            if (!ContainsPlatformType(element))
+            {
+                return false;
+            }
+
+            formatted = $"[]{FormatType(element)}";
+            return true;
+        }
+
+        if (clr is not { IsGenericType: true, IsGenericTypeDefinition: false })
+        {
+            return false;
+        }
+
+        var count = clr.GetGenericArguments().Length;
+        var arguments = ImmutableArray.CreateBuilder<TypeSymbol>(count);
+        var anyPlatform = false;
+        for (var i = 0; i < count; i++)
+        {
+            var argument = annotated.GetTypeArgumentSymbol(i);
+            anyPlatform |= ContainsPlatformType(argument);
+            arguments.Add(argument);
+        }
+
+        if (!anyPlatform)
+        {
+            return false;
+        }
+
+        // Only the platform-bearing arguments change spelling. A sibling with
+        // no platform wrapper keeps the rendering it always had — its own
+        // reference `?` stays unshown — so this path widens the display by
+        // exactly the `!` it exists for and no more (review round 3).
+        var displayArguments = arguments.MoveToImmutable()
+            .Select(argument => ContainsPlatformType(argument) ? argument : StripReferenceNullable(argument))
+            .ToImmutableArray();
+        formatted = FormatImportedGenericTypeName(clr.GetGenericTypeDefinition(), displayArguments);
+        return true;
+    }
+
+    /// <summary>
+    /// Removes a top-level reference-type <c>?</c> (a nullable VALUE type is a
+    /// distinct CLR type and keeps its <c>?</c>), which is how a nested
+    /// argument rendered before issue #4361's display change.
+    /// </summary>
+    /// <param name="type">The argument type.</param>
+    /// <returns>The argument without a reference-nullability wrapper.</returns>
+    private static TypeSymbol StripReferenceNullable(TypeSymbol type)
+        => type is NullableTypeSymbol { UnderlyingType: { } underlying }
+            && underlying.ClrType?.IsValueType != true
+            && underlying is not (StructSymbol { IsClass: false } or EnumSymbol)
+            ? underlying
+            : type;
+
+    /// <summary>
+    /// The element of an imported single-dimension CLR array, with the
+    /// reader's nullability applied when the array is annotated.
+    /// </summary>
+    /// <param name="type">The candidate array type.</param>
+    /// <param name="element">The element type when it is one.</param>
+    /// <returns><see langword="true"/> for an imported rank-1 array.</returns>
+    private static bool TryGetImportedArrayElement(TypeSymbol type, [NotNullWhen(true)] out TypeSymbol? element)
+    {
+        element = null;
+        if (type.ClrType is not { IsArray: true } arrayClr
+            || arrayClr.GetArrayRank() != 1
+            || arrayClr.GetElementType() is not { } elementClr)
+        {
+            return false;
+        }
+
+        element = type switch
+        {
+            NullabilityAnnotatedTypeSymbol annotated => annotated.GetTypeArgumentSymbolForClrType(elementClr),
+            ImportedTypeSymbol => TypeSymbol.FromClrType(elementClr),
+            _ => null,
+        };
+        return element != null;
+    }
+
+    /// <summary>Whether a platform wrapper appears anywhere in a displayed type's argument structure.</summary>
+    /// <param name="type">The type to scan.</param>
+    /// <returns><see langword="true"/> when a <see cref="PlatformTypeSymbol"/> is present.</returns>
+    private static bool ContainsPlatformType(TypeSymbol? type)
+    {
+        switch (type)
+        {
+            case null:
+                return false;
+            case PlatformTypeSymbol:
+                return true;
+            case NullableTypeSymbol nullable:
+                return ContainsPlatformType(nullable.UnderlyingType);
+            case NullabilityAnnotatedTypeSymbol annotated:
+                if (TryGetImportedArrayElement(annotated, out var element))
+                {
+                    return ContainsPlatformType(element);
+                }
+
+                if (annotated.ClrType is { IsGenericType: true, IsGenericTypeDefinition: false } clr)
+                {
+                    var count = clr.GetGenericArguments().Length;
+                    for (var i = 0; i < count; i++)
+                    {
+                        if (ContainsPlatformType(annotated.GetTypeArgumentSymbol(i)))
+                        {
+                            return true;
+                        }
+                    }
+                }
+
+                return false;
+            case SliceTypeSymbol slice:
+                return ContainsPlatformType(slice.ElementType);
+            case ArrayTypeSymbol array:
+                return ContainsPlatformType(array.ElementType);
+            case RectangularArrayTypeSymbol rectangular:
+                return ContainsPlatformType(rectangular.ElementType);
+            case MapTypeSymbol map:
+                return ContainsPlatformType(map.KeyType) || ContainsPlatformType(map.ValueType);
+            case TupleTypeSymbol tuple:
+                return tuple.ElementTypes.Any(ContainsPlatformType);
+            case ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } imported:
+                return imported.TypeArguments.Any(ContainsPlatformType);
+            default:
+                return false;
         }
     }
 

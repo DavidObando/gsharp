@@ -414,11 +414,12 @@ internal sealed partial class OverloadResolver
         // types the element non-null `T` and loses the obliviousness the
         // container is carrying. That is §5b's hazard one level down: the
         // container reads as `[]T!` while its element reads as `T`, so the
-        // two disagree about the same declaration. Measured: it made a `nil`
-        // tuple element stop widening through an oblivious `params T[]`
-        // (`Issue4044NilTupleInferenceTests`, 2 tests), because the element
-        // came back `(string, bool)` where the declaration says nothing about
-        // the string and `nil -> string!` is legal by §3's last row.
+        // two disagree about the same declaration: an oblivious CONCRETE
+        // `params string[]` reads as `[]!string!`, so its element is
+        // `string!` and `nil -> string!` is legal by §3's last row. (An OPEN
+        // `params T[]` element is not oblivious at all — §2 gives it the
+        // substituted argument's own nullability, issue #4361 — so this peel
+        // exposes whatever `ClrNullability`'s projection decided for it.)
         var parameterType = ClrNullability.GetParameterTypeSymbol(parameter);
         parameterType = parameterType switch
         {

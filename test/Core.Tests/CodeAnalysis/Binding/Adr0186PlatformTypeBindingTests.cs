@@ -131,6 +131,23 @@ public sealed class Adr0186PlatformTypeBindingTests
             // Issue #4324's shape, as a value rather than a literal, so the
             // operand really is `string!` and not a constant.
             public static string Suffix() => "x";
+
+            // Issue #4361: OPEN type-parameter slots in an unannotated
+            // declaration — `Array.Empty<T>`, `Enumerable.Empty<T>`,
+            // `Array.FindAll<T>` and FsCheck's `Arb.From<T>` shapes. The
+            // element/argument nullability arrives with the type argument
+            // (ADR-0186 §2); only the concrete container position is oblivious.
+            public static T[] EmptyArr<T>() => new T[0];
+
+            public static IEnumerable<T> EmptySeq<T>() => new T[0];
+
+            public static T[] Same<T>(T[] values) => values;
+
+            public static Holder<T> Hold<T>(T value) => new Holder<T> { Value = value };        }
+
+        public class Holder<T>
+        {
+            public T Value;
         }
 
         public class Nested
@@ -393,7 +410,10 @@ public sealed class Adr0186PlatformTypeBindingTests
             """,
             NullabilityMode.PlatformTypes);
         Assert.False(toNonNull.Success, Describe(toNonNull));
-        Assert.Contains(toNonNull.Diagnostics, d => d.Message.Contains("List[string]!", StringComparison.Ordinal));
+        // Issue #4361: the diagnostic names the nested `!` — before, both
+        // sides printed as `List[string]` and the message read "Cannot convert
+        // X to X".
+        Assert.Contains(toNonNull.Diagnostics, d => d.Message.Contains("List[string!]!", StringComparison.Ordinal));
 
         // The one legal direction.
         var toNilable = world.Compile(
@@ -628,9 +648,13 @@ public sealed class Adr0186PlatformTypeBindingTests
         var compiled = world.Compile(body, NullabilityMode.PlatformTypes);
 
         Assert.False(compiled.Success, site + ": " + Describe(compiled));
+
+        // A platform array OF platform elements, in ADR-0132's positional
+        // spelling (issue #4361's display fix — it used to print `[]string!`,
+        // which is the spelling of a plain slice of platform elements).
         Assert.Contains(
             compiled.Diagnostics,
-            d => d.Message.Contains("[]string!", StringComparison.Ordinal));
+            d => d.Message.Contains("[]!string!", StringComparison.Ordinal));
     }
 
     /// <summary>
@@ -1169,6 +1193,116 @@ public sealed class Adr0186PlatformTypeBindingTests
         Assert.True(compiled.Success, Describe(compiled));
 
         Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// Issue #4324, the half the first fix missed: a <b>char</b> operand.
+    /// <para>
+    /// <c>string + char</c> is not in the operator table at all — the binder
+    /// adapts the char to a string first (issue #3463), and that adaptation
+    /// recognised its string side only as <c>string</c> or <c>string?</c>. So
+    /// <c>string! + "x"</c> bound while <c>string! + 'c'</c> and
+    /// <c>s += 'c'</c> on a <c>string!</c> local reported GS0129 — reached in
+    /// the nightly self-migration corpus by <c>Gsharp.NET.Sdk</c>, which
+    /// targets netstandard2.0 and so sees every BCL string as <c>string!</c>.
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    /// <param name="expected">The expected program output.</param>
+    [Theory]
+    [InlineData("    Console.WriteLine(Ob.Value() + 'c')", "Vc")]
+    [InlineData("    Console.WriteLine('c' + Ob.Value())", "cV")]
+    [InlineData("    var s = Ob.Value()\n    s += 'c'\n    Console.WriteLine(s)", "Vc")]
+    [InlineData("    var s = Ob.Value()\n    s += \"y\"\n    Console.WriteLine(s)", "Vy")]
+    [InlineData("    Console.WriteLine(\"[\" + Ob.Nil() + ']')", "[]")]
+    public void Section6_StringConcatenation_WithAChar_Accepts_APlatformOperand(string body, string expected)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes);
+        Assert.True(compiled.Success, Describe(compiled));
+
+        Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// Issue #4361: an <b>open type-parameter slot</b> of an unannotated
+    /// declaration takes its nullability from the type argument (ADR-0186
+    /// §2), so a generic call's result converts exactly as the same call to an
+    /// annotated declaration would — only the concrete container position is
+    /// platform-typed.
+    /// <para>
+    /// Each row is a shape that took <c>main</c>'s nightly self-migration
+    /// corpus red: the reader stamped the declaration's ABSENT nullability
+    /// byte onto the substituted argument, inventing a nested <c>T!</c> that
+    /// §3 rule 3 then correctly refused to convert (<c>[]string!</c> to
+    /// <c>[]?string</c>, <c>IEnumerable[string!]!</c> to
+    /// <c>IEnumerable[string]?</c>, <c>Arbitrary[Type!]</c> to
+    /// <c>Arbitrary[Type]</c>).
+    /// </para>
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    /// <param name="expected">The expected program output.</param>
+    [Theory]
+
+    // `Array.Empty[T]()` into a nullable array, and into a non-null one
+    // (the platform CONTAINER is checked; its elements are plain `string`).
+    [InlineData("    var a []?string = Ob.EmptyArr[string]()\n    Console.WriteLine(a!!.Length)", "0")]
+    [InlineData("    var a []string = Ob.EmptyArr[string]()\n    Console.WriteLine(a.Length)", "0")]
+
+    // `Enumerable.Empty[T]()` into a nullable interface, and as a `??` fallback.
+    // The `??` rows are BINDING witnesses for #4361's GS0129 ("'??' is not
+    // defined for 'IEnumerable[string]?' and 'IEnumerable[string!]!'"), not
+    // a claim about the fallback's nil safety: the result of `x ?? y` is
+    // the non-null underlying whatever `y`'s platform-ness (ADR-0186 §6,
+    // pinned by cs2gs's `Issue2579` contract), so the `!!` in the second row —
+    // kept because it is the migrated corpus's exact spelling — is redundant.
+    [InlineData("    var e IEnumerable[string]? = Ob.EmptySeq[string]()\n    Console.WriteLine(e!!.Count())", "0")]
+    [InlineData("    let x IEnumerable[string]? = nil\n    let p = x ?? Ob.EmptySeq[string]()\n    Console.WriteLine(p.Count())", "0")]
+    [InlineData("    let x IEnumerable[string]? = nil\n    let p = (x ?? Ob.EmptySeq[string]())!!\n    Console.WriteLine(p.Count())", "0")]
+
+    // `T` INFERRED from a fully-typed argument (`Array.FindAll(xs, …)`).
+    [InlineData("    let xs = []string{\"a\"}\n    let r []string = Ob.Same(xs)\n    Console.WriteLine(r[0])", "a")]
+
+    // A generic type argument (FsCheck's `Arb.From(gen)!!`).
+    [InlineData("    let h Holder[string] = Ob.Hold(\"x\")!!\n    Console.WriteLine(h.Value)", "x")]
+    public void Section2_AnOpenSlot_OfAnUnannotatedGeneric_Converts_Like_ItsArgument(string body, string expected)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes);
+        Assert.True(compiled.Success, Describe(compiled));
+
+        Assert.Equal(expected, world.Run(body, NullabilityMode.PlatformTypes).Trim());
+    }
+
+    /// <summary>
+    /// Issue #4361, at the reader: an open slot of an unannotated generic reads
+    /// the argument's nullability, the concrete container stays oblivious, and
+    /// a CONCRETE inner position is untouched. Observed through the display,
+    /// which is also issue #4361's diagnostic fix: an imported platform array
+    /// is spelled <c>[]!T</c> (ADR-0132's positional rule) and a nested
+    /// platform argument shows its <c>!</c>.
+    /// <para>
+    /// Uses the csc-emitted library rather than an in-assembly
+    /// <c>#nullable disable</c> fixture on purpose: the latter stops being
+    /// oblivious when <c>test/Core.Tests</c> is itself self-migrated to G#,
+    /// and the migrated suite's test parity would then fail it.
+    /// </para>
+    /// </summary>
+    /// <param name="globals">The probe.</param>
+    /// <param name="expected">The expected display of the probe's type.</param>
+    [Theory]
+    [InlineData("let probe = Ob.EmptyArr[string]()", "[]!string")]
+    [InlineData("let probe = Ob.EmptySeq[string]()", "System.Collections.Generic.IEnumerable[string]!")]
+    [InlineData("let probe = Ob.Hold(\"x\")", "Adr0186.Step2.Library.Holder[string]!")]
+    [InlineData("let probe = Ob.Strings()", "System.Collections.Generic.List[string!]!")]
+    public void Section2_AnOpenSlot_OfAnUnannotatedGeneric_Reads_ItsArgument(string globals, string expected)
+    {
+        using var world = new World();
+
+        Assert.IsType<PlatformTypeSymbol>(world.GlobalProbeType(globals, NullabilityMode.PlatformTypes));
+        Assert.Equal(expected, world.LastProbeDisplay);
     }
 
     /// <summary>
@@ -1951,6 +2085,9 @@ public sealed class Adr0186PlatformTypeBindingTests
 
         internal string LibraryPath { get; }
 
+        /// <summary>Gets the display string of the last <see cref="GlobalProbeType"/> result.</summary>
+        internal string LastProbeDisplay { get; private set; } = string.Empty;
+
         public void Dispose()
         {
             try
@@ -2089,7 +2226,13 @@ public sealed class Adr0186PlatformTypeBindingTests
             Assert.DoesNotContain(
                 scope.Diagnostics,
                 d => d.IsError && !(tolerateNilableReceiverReport && IsToleratedNilableReceiverReport(d)));
-            return Assert.Single(scope.Variables, v => v.Name == "probe").Type;
+            var type = Assert.Single(scope.Variables, v => v.Name == "probe").Type;
+
+            // Rendered while the metadata context is still alive: an imported
+            // type's display reads its CLR shape, which is gone once
+            // `resolver` is disposed.
+            this.LastProbeDisplay = GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplay.ToTypeDisplayString(type);
+            return type;
         }
 
         /// <summary>

@@ -11,6 +11,7 @@ using System.Linq;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Symbols.Display;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Symbols;
@@ -463,9 +464,9 @@ public class ClrNullabilityTests
     /// named one type twice because a nested argument's <c>!</c> does not
     /// reach the display — and it is what took the self-migration guard from
     /// 8/8 to 2/8. The absent case (a declaration with no nullable metadata
-    /// at all, where <c>0</c> IS obliviousness and the answer IS <c>T!</c>)
-    /// is pinned by <c>Issue4044NilTupleInferenceTests</c>; collapsing the
-    /// two re-breaks issue #4322.
+    /// at all) gets the same answer — issue #4361 — and is pinned against
+    /// csc-emitted oblivious metadata by
+    /// <c>Adr0186PlatformTypeBindingTests.Section2_AnOpenSlot_OfAnUnannotatedGeneric_Reads_ItsArgument</c>.
     /// </para>
     /// </summary>
     [Fact]
@@ -491,6 +492,37 @@ public class ClrNullabilityTests
         {
             Assert.IsNotType<PlatformTypeSymbol>(annotated.GetTypeArgumentSymbol(0));
         }
+    }
+
+    /// <summary>
+    /// Issue #4361 (review): an imported array's own nullability is displayed
+    /// in ADR-0132's positional spelling, whichever wrapper carries it. A
+    /// nullable array of platform elements — flags <c>[2, 0]</c>, which the
+    /// reader produces — printed as <c>[]string!?</c>, ADR-0132's spelling of
+    /// a slice of nullable elements; it is <c>[]?string!</c>.
+    /// </summary>
+    [Fact]
+    public void Adr0186_AnImportedArray_Displays_ItsOwnNullability_Positionally()
+    {
+        using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
+
+        var annotated = new NullabilityAnnotatedTypeSymbol(
+            TypeSymbol.FromClrType(typeof(string[])),
+            ImmutableArray.Create((byte)2, (byte)0));
+
+        Assert.Equal("[]?string!", SymbolDisplay.ToTypeDisplayString(NullableTypeSymbol.Get(annotated)));
+        Assert.Equal("[]!string!", SymbolDisplay.ToTypeDisplayString(PlatformTypeSymbol.Get(annotated)));
+
+        // Review round 3: rendering a platform argument must not start
+        // rendering a NULLABLE sibling. `Dictionary<string, string?>` with an
+        // oblivious key shows the key's `!` and keeps the value's `?` unshown,
+        // exactly as before the display change.
+        var dictionary = new NullabilityAnnotatedTypeSymbol(
+            TypeSymbol.FromClrType(typeof(Dictionary<string, string>)),
+            ImmutableArray.Create((byte)1, (byte)0, (byte)2));
+        Assert.Equal(
+            "System.Collections.Generic.Dictionary[string!, string]",
+            SymbolDisplay.ToTypeDisplayString(dictionary));
     }
 
     /// <summary>
