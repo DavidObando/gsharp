@@ -267,6 +267,56 @@ namespace Corpus.Issue4350
         Assert.Contains("readonly slice[string]", printed, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void StructObjectOverrides_StayVirtualOverrides()
+    {
+        string printed = Render(@"
+using System;
+using System.Collections.Generic;
+namespace Corpus.Issue4350
+{
+    public readonly struct Key : IEquatable<Key>
+    {
+        public Key(int id) => Id = id;
+
+        public int Id { get; }
+
+        public bool Equals(Key other) => Id % 10 == other.Id % 10;
+
+        public override bool Equals(object obj) => obj is Key other && Equals(other);
+
+        public override int GetHashCode() => Id % 10;
+
+        public override string ToString() => ""key"" + Id;
+    }
+
+    public class Probe
+    {
+        public static string Run()
+        {
+            object a = new Key(1);
+            object b = new Key(11);
+            var set = new HashSet<object> { a };
+            return a.Equals(b) + "","" + set.Contains(b) + "","" + a;
+        }
+    }
+}
+");
+
+        // Issue #4350: dropping `override` on a struct declared a new,
+        // non-virtual `Equals(object)` that hid the override, so boxed
+        // equality silently fell back to ValueType.Equals.
+        Assert.Contains("override func Equals(obj object) bool", printed, StringComparison.Ordinal);
+        Assert.Contains("override func GetHashCode() int32", printed, StringComparison.Ordinal);
+        Assert.Contains("override func ToString() string", printed, StringComparison.Ordinal);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+
+        var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("True,True,key1", result.Value);
+    }
+
     private static string Render(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Source.cs", source) });

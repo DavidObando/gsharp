@@ -1487,12 +1487,14 @@ public sealed partial class CSharpToGSharpTranslator
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
             // Receiver-clause methods have no `open`/`override`, and a value
-            // aggregate has no open members of its own. Issue #4350: a value
-            // aggregate's `override` of an inherited `object` member
-            // (`Equals`, `GetHashCode`, `ToString`) is KEPT — dropping it
-            // declared a new non-virtual method that hid the override, so boxed
-            // equality and hashing silently fell back to `ValueType`'s.
-            if (receiver != null)
+            // aggregate has no open members of its own. A `data struct`
+            // replaces its synthesized `ToString` with a plain `func` (ADR-0029
+            // / #2361). Issue #4350: a plain struct's `override` of an
+            // inherited `object` member (`Equals`, `GetHashCode`, `ToString`)
+            // is KEPT — dropping it declared a new non-virtual method that hid
+            // the override, so boxed equality and hashing silently fell back
+            // to `ValueType`'s.
+            if (receiver != null || ownerKind == TypeDeclarationKind.DataStruct)
             {
                 isOpen = false;
                 isOverride = false;
