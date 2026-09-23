@@ -61,4 +61,34 @@ partial class P {
         Assert.Contains(implementation.Modifiers, m => m.Text == "partial");
         Assert.NotNull(implementation.ExpressionBody ?? (SyntaxNode)implementation.Body);
     }
+
+    [Fact]
+    public void Pattern_WithBackslashesQuotesNonAsciiAndLineSeparators_ReachesTheGeneratorExactly()
+    {
+        // G# escapes: \\ backslash, \"" quote, \u code points. The emoji is a
+        // raw surrogate pair in the G# source because a G# \U escape stops at
+        // U+FFFF (ADR-0046). The pattern is meaningless as a regex on purpose;
+        // it only has to survive.
+        var stub = Project(@"
+package App
+import System.Text.RegularExpressions
+
+partial class P {
+    shared {
+        @GeneratedRegex(""a\\d\""q\"" é日本" + "\uD83D\uDE00" + @" \u2028\u2029\u0085\t!"")
+        private partial func Odd() Regex;
+    }
+}
+");
+        const string Expected = "a\\d\"q\" é日本\uD83D\uDE00 \u2028\u2029\u0085\t!";
+
+        var compilation = BindStub(stub);
+        var tree = compilation.SyntaxTrees.Single();
+        Assert.DoesNotContain(tree.GetDiagnostics(), d => d.Severity == DiagnosticSeverity.Error);
+        var node = tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Single(m => m.Identifier.Text == "Odd");
+        var attribute = Assert.Single(compilation.GetSemanticModel(tree).GetDeclaredSymbol(node).GetAttributes());
+        var pattern = Assert.IsType<string>(attribute.ConstructorArguments.Single().Value);
+        Assert.Equal(Expected, pattern);
+        Assert.Equal(Expected.ToCharArray(), pattern.ToCharArray());
+    }
 }

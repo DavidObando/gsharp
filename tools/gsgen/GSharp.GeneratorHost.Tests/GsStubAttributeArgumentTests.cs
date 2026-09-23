@@ -170,6 +170,26 @@ class Holder {
         Assert.Equal(1, method.Parameters.Single().ExplicitDefaultValue);
     }
 
+    [Fact]
+    public void StringArgument_WithEveryCSharpLineTerminator_ParsesAndRoundTripsExactly()
+    {
+        // C# ends a regular string literal at CR, LF, U+0085, U+2028 and
+        // U+2029. U+2028/U+2029 are not char.IsControl, so they used to be
+        // written raw and cut the stub's literal short.
+        var stub = Project(@"
+package App
+
+class Holder {
+    @Obsolete(""a\u2028b\u2029c\u0085d\re\nf"")
+    func F() {}
+}
+");
+
+        AssertParses(stub);
+        var argument = SingleAttribute(stub, "F").ConstructorArguments.Single();
+        Assert.Equal("a\u2028b\u2029c\u0085d\re\nf", argument.Value);
+    }
+
     private static AttributeData SingleAttribute(string stub, string methodName)
     {
         var compilation = BindStub(stub);
@@ -179,6 +199,7 @@ class Holder {
         var symbol = compilation.GetSemanticModel(tree).GetDeclaredSymbol(node);
         var attributes = symbol.GetAttributes();
         Assert.True(attributes.Length == 1, "expected one attribute on " + methodName + " in:\n" + stub);
+
         // CS8795 (a partial definition with accessibility but no
         // implementation) is the stub's intended shape: the generator supplies
         // the implementation.

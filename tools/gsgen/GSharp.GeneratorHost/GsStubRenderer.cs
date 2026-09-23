@@ -908,7 +908,13 @@ public sealed class GsStubRenderer
         '\r' => "\\r",
         '\t' => "\\t",
         '\v' => "\\v",
-        _ when char.IsControl(c) => "\\u" + ((int)c).ToString("x4", CultureInfo.InvariantCulture),
+
+        // C# ends a regular string or character literal at any of its
+        // new-line characters: CR and LF (above), U+0085 (a control character,
+        // so IsControl covers it), and U+2028/U+2029, which are separators
+        // rather than controls and so would otherwise be written raw.
+        _ when char.IsControl(c) || c is '\u2028' or '\u2029' =>
+            "\\u" + ((int)c).ToString("x4", CultureInfo.InvariantCulture),
         _ => c.ToString(),
     };
 }
