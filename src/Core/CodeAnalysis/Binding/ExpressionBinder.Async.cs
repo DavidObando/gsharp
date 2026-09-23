@@ -894,6 +894,15 @@ internal sealed partial class ExpressionBinder
             return operand;
         }
 
+        // ADR-0186 §4: awaiting requires a non-null awaitable. A platform
+        // task (`Task[string]!`, routine from an ADR-0186 §9 oblivious scope)
+        // is checked and unwrapped here, so a nil one fails attributably
+        // instead of inside the awaiter machinery. After the completed-
+        // suspending-call test, not before: that call's result is the
+        // function's logical result, which may itself be `T!`, and checking it
+        // would both hide the call from the test and assert a legitimate nil.
+        operand = PlatformCoercion.InsertCheck(operand, syntax.Expression.Location, "an awaited operand");
+
         if (!TryGetTaskElementType(operand.Type, out var element))
         {
             Diagnostics.ReportTypeIsNotAwaitable(syntax.Expression.Location, operand.Type);

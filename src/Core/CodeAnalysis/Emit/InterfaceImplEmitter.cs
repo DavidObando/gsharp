@@ -291,7 +291,7 @@ internal sealed class InterfaceImplEmitter
 
             foreach (var iface in structSymbol.Interfaces)
             {
-                if (!DeclarationBinder.TypeSignaturesEquivalent(
+                if (!DeclarationBinder.ConformanceSignaturesEquivalent(
                     Invariant.Required(prop.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"),
                     iface))
                 {
@@ -748,7 +748,7 @@ internal sealed class InterfaceImplEmitter
                 if (!candidate.HasExplicitInterfaceClause
                     && candidate.Name == name
                     && (ReferenceEquals(current, type) || candidate.Accessibility == Accessibility.Public)
-                    && DeclarationBinder.TypeSignaturesEquivalent(slotType, candidate.Type))
+                    && DeclarationBinder.ConformanceSignaturesEquivalent(slotType, candidate.Type))
                 {
                     implementation = candidate;
                     declaringType = current;
@@ -1127,7 +1127,7 @@ internal sealed class InterfaceImplEmitter
                 foreach (var explicitCandidate in structSymbol.StaticProperties)
                 {
                     if (ReferenceEquals(explicitCandidate.ExplicitInterfaceMember, slotProp)
-                        && DeclarationBinder.TypeSignaturesEquivalent(
+                        && DeclarationBinder.ConformanceSignaturesEquivalent(
                             Invariant.Required(explicitCandidate.ExplicitInterfaceClauseTarget, "an explicit property implementation has a target"),
                             iface))
                     {
@@ -1193,22 +1193,29 @@ internal sealed class InterfaceImplEmitter
 
         // FunctionSymbol.Type and parameter Type values are compiler symbols
         // canonicalized for this emit pass, not reflection Type instances.
-        if (!ReferenceEquals(a.Type, b.Type) && a.Type?.Name != b.Type?.Name)
+        if (!Same(a.Type, b.Type))
         {
             return false;
         }
 
         for (var i = 0; i < a.Parameters.Length; i++)
         {
-            var pa = a.Parameters[i].Type;
-            var pb = b.Parameters[i].Type;
-            if (!ReferenceEquals(pa, pb) && pa?.Name != pb?.Name)
+            if (!Same(a.Parameters[i].Type, b.Parameters[i].Type))
             {
                 return false;
             }
         }
 
         return true;
+
+        // ADR-0186: a platform position at any depth (a static member
+        // declared in an ADR-0186 §9 oblivious scope) conforms as its
+        // underlying type, as the binder's StaticVirtualSignaturesMatch
+        // already decided.
+        static bool Same(TypeSymbol? x, TypeSymbol? y)
+            => ReferenceEquals(x, y)
+                || x?.Name == y?.Name
+                || Binding.DeclarationBinder.ConformanceSignaturesEquivalent(x, y);
     }
 
     private sealed record InheritedEventBridge(

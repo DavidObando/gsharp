@@ -24,6 +24,10 @@ internal sealed partial class StatementBinder
 {
     private static TypeSymbol GetIteratorElementType(TypeSymbol type)
     {
+        // ADR-0186 §9: an iterator declared in an oblivious scope returns
+        // `IEnumerable[string!]!`; its shape is the underlying type's.
+        type = PlatformTypeSymbol.StripTopLevel(type);
+
         if (type is SequenceTypeSymbol seq)
         {
             return seq.ElementType;

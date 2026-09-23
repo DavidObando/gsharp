@@ -282,7 +282,7 @@ internal sealed partial class DeclarationBinder
                     foreach (var slot in target.ClrType.GetEvents(BindingFlags.Public | BindingFlags.Instance))
                     {
                         if (slot.Name != eventSymbol.Name
-                            || !TypeSignaturesEquivalent(
+                            || !ConformanceSignaturesEquivalent(
                                 eventSymbol.Type,
                                 MemberLookup.GetClrEventHandlerTypeSymbol(target, slot)))
                         {
@@ -345,7 +345,7 @@ internal sealed partial class DeclarationBinder
             || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot)
             || (slot.GetMethod != null) != property.HasGetter
             || (slot.SetMethod != null) != property.HasSetter
-            || !TypeSignaturesEquivalent(property.Type, slotType))
+            || !ConformanceSignaturesEquivalent(property.Type, slotType))
         {
             return false;
         }
@@ -770,6 +770,16 @@ internal sealed partial class DeclarationBinder
 
         var implementationIsNullable = implementationType is NullableTypeSymbol;
         var substitutedInterfaceType = SubstituteInterfacePropertyType(interfaceType, typeParameterMap);
+
+        // ADR-0186: a platform property (declared in an ADR-0186 §9 oblivious
+        // scope, or read from oblivious metadata) states nothing about nil, so
+        // it conforms to a slot written either way — including a settable
+        // `T?` slot, which the exact-nullability rule below would reject.
+        if (implementationType is PlatformTypeSymbol || substitutedInterfaceType is PlatformTypeSymbol)
+        {
+            return true;
+        }
+
         var interfaceIsNullable = substitutedInterfaceType is NullableTypeSymbol;
         return hasSetter
             ? interfaceIsNullable == implementationIsNullable
@@ -840,7 +850,7 @@ internal sealed partial class DeclarationBinder
                 var parametersMatch = true;
                 for (var i = 0; i < interfaceProperty.Parameters.Length; i++)
                 {
-                    if (!TypeSignaturesEquivalent(
+                    if (!ConformanceSignaturesEquivalent(
                         interfaceProperty.Parameters[i].Type,
                         candidate.Parameters[i].Type,
                         typeParameterMap))
@@ -906,7 +916,7 @@ internal sealed partial class DeclarationBinder
             var parametersMatch = true;
             for (var i = 0; i < interfaceProperty.Parameters.Length; i++)
             {
-                if (!TypeSignaturesEquivalent(
+                if (!ConformanceSignaturesEquivalent(
                     interfaceProperty.Parameters[i].Type,
                     MemberLookup.GetIndexerParameterTypeSymbol(importedBase, candidate, i),
                     typeParameterMap))
@@ -1578,12 +1588,19 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     private static bool StaticVirtualSignaturesMatch(FunctionSymbol iface, FunctionSymbol impl)
     {
+        // ADR-0186: exact identity, or conformance — which reads through a
+        // platform position at any depth (`List[Item!]?` against
+        // `List[Item]?`) and is otherwise the ordinary signature comparison.
+        static bool StaticVirtualTypesMatch(TypeSymbol a, TypeSymbol b)
+            => System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(a, b)
+                || ConformanceSignaturesEquivalent(a, b);
+
         if (iface.Parameters.Length != impl.Parameters.Length)
         {
             return false;
         }
 
-        if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(iface.Type, impl.Type))
+        if (!StaticVirtualTypesMatch(iface.Type, impl.Type))
         {
             return false;
         }
@@ -1595,7 +1612,7 @@ internal sealed partial class DeclarationBinder
 
         for (var i = 0; i < iface.Parameters.Length; i++)
         {
-            if (!System.Collections.Generic.EqualityComparer<TypeSymbol>.Default.Equals(iface.Parameters[i].Type, impl.Parameters[i].Type))
+            if (!StaticVirtualTypesMatch(iface.Parameters[i].Type, impl.Parameters[i].Type))
             {
                 return false;
             }

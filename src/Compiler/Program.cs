@@ -886,7 +886,7 @@ public class Program
           /lib:<path>                   Accepted for csc compatibility (currently a no-op).
           /implicitimports[+|-]         Enable/disable implicit System import (alias: /implicit-imports).
           /noimplicitimports            Disable implicit System import (alias: /no-implicit-imports).
-          /nullability:<mode>           How oblivious imported reference positions are read: platform-types (default, ADR-0186) or enabled (ADR-0136).
+          /nullability:<mode>           How oblivious imported reference positions are read: platform-types (default, ADR-0186) or enabled (ADR-0136); oblivious also makes this compilation's own declarations oblivious (ADR-0186 §9).
           /platform-nil-checks:<on|off> Insert the ADR-0186 nil check where a platform value is coerced to a non-null type (default: on; off is an escape hatch, not a supported mode).
           /nowarn:<ids>                 Suppress the given diagnostic IDs (comma/semicolon separated).
           /warnaserror[+|-][:<ids>]     Treat warnings as errors, globally or for specific IDs.
@@ -1112,8 +1112,16 @@ public class Program
                         {
                             "enabled" => NullabilityMode.Enabled,
                             "platform-types" or "platformtypes" => NullabilityMode.PlatformTypes,
+
+                            // ADR-0186 §9: an oblivious compilation — the
+                            // platform-types reading, plus every unadorned
+                            // reference position written in this
+                            // compilation's own source means `T!` unless an
+                            // enclosing `@NullabilityEnabled` says otherwise.
+                            // For cs2gs; hand-written G# never uses it.
+                            "oblivious" => NullabilityMode.Oblivious,
                             _ => throw new CommandLineException(
-                                $"/nullability: unknown mode '{value}'; expected enabled or platform-types."),
+                                $"/nullability: unknown mode '{value}'; expected enabled, platform-types or oblivious."),
                         };
                         break;
 
@@ -1501,7 +1509,10 @@ public class Program
         /// <see cref="NullabilityMode.PlatformTypes"/></b>: an oblivious
         /// imported reference position is the platform type <c>T!</c>.
         /// <c>/nullability:enabled</c> selects ADR-0136's older reading, in
-        /// which such a position is <c>T?</c>.
+        /// which such a position is <c>T?</c>. <c>/nullability:oblivious</c>
+        /// (ADR-0186 §9, step 5) reads imports as <c>platform-types</c> does
+        /// and additionally makes this compilation's own unadorned reference
+        /// declarations <c>T!</c>.
         /// <para>
         /// This property, not <c>NullabilityOptions.DefaultMode</c>, is what
         /// governs <c>gsc</c> — <c>Program</c> assigns it to

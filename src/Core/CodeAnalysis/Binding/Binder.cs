@@ -3891,6 +3891,11 @@ public sealed class Binder
             return new BoundErrorExpression(syntax);
         }
 
+        // ADR-0186 §9: `adapt[I]`'s argument names the interface to
+        // synthesize, not a slot, so an oblivious scope's platform wrapper on
+        // it is read through (its nested positions keep theirs).
+        target = PlatformTypeSymbol.StripTopLevel(target);
+
         var userTarget = target as InterfaceSymbol;
         var clrTarget = target.ClrType is { IsInterface: true } ? target : null;
         if (userTarget == null && clrTarget == null)
@@ -9330,6 +9335,14 @@ public sealed class Binder
         {
             element = NullableTypeSymbol.Get(element);
         }
+        else
+        {
+            // ADR-0186 §9: an array or slice element is always a position,
+            // whatever the array itself is written for, so `[]string` inside
+            // an oblivious scope is `[]string!`. The element of `[]T` is not a
+            // clause of its own, so BindTypeClause's hook cannot see it.
+            element = ObliviousScope.ApplyToElement(syntax, element);
+        }
 
         if (syntax.IsSlice)
         {
@@ -9448,7 +9461,15 @@ public sealed class Binder
                 bound = NullableTypeSymbol.Get(bound);
             }
 
-            return bound;
+            // ADR-0186 §9: inside an oblivious scope (`--nullability=oblivious`
+            // or an enclosing `@Oblivious`), an unadorned reference type
+            // written in a value position means `T!`. Every nested position
+            // of a written type is bound through this same method, so one
+            // hook reaches type arguments, elements and function-type
+            // signatures too; `ApplyArraySuffix` covers the one element that
+            // is not a clause of its own. A `?` already applied above wins —
+            // `ObliviousScope.Wrap` leaves a `T?` alone.
+            return ObliviousScope.ApplyToClause(syntax, bound);
         }
         finally
         {
@@ -11531,6 +11552,9 @@ public sealed class Binder
             return false;
         }
 
+        // ADR-0186 §9: see PlatformTypeSymbol.StripTopLevel.
+        type = PlatformTypeSymbol.StripTopLevel(type);
+
         if (type is SequenceTypeSymbol)
         {
             return true;
@@ -11592,6 +11616,9 @@ public sealed class Binder
     /// </summary>
     private static bool IsAsyncIteratorReturnType(TypeSymbol type)
     {
+        // ADR-0186 §9: see PlatformTypeSymbol.StripTopLevel.
+        type = PlatformTypeSymbol.StripTopLevel(type);
+
         // Issue #798: an open-T `async sequence[T]` carries a null ClrType
         // because AsyncSequenceTypeSymbol erases its element type via the
         // CLR projection. Honor the symbolic form so `await` + `yield`
@@ -12698,6 +12725,13 @@ public sealed class Binder
         TypeParameterSymbol tp,
         IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? substitution = null)
     {
+        // ADR-0186: a constraint is a statement about the argument's TYPE, and
+        // `T!` is `T` for every such question — whether a value of it may be
+        // nil says nothing about what it derives from or implements. A
+        // platform argument is routine inside an ADR-0186 §9 oblivious scope
+        // (`F[Derived]()` there, or inference from a `Derived!` argument).
+        typeArgument = PlatformTypeSymbol.StripTopLevel(typeArgument);
+
         // Issue #4043: the dependent bound, checked against the sibling's
         // resolved argument.
         if (tp.TypeParameterBound is { } dependentBound
@@ -13241,6 +13275,9 @@ public sealed class Binder
             // type; the constraint check fires on the *unannotated* T.
             return false;
         }
+
+        // ADR-0186: `T!` is a reference type exactly when `T` is.
+        type = PlatformTypeSymbol.StripTopLevel(type);
 
         if (type is TypeParameterSymbol tp)
         {

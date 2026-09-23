@@ -1809,6 +1809,13 @@ internal sealed partial class ExpressionBinder
     {
         element = null;
 
+        // ADR-0186: whether an awaitable may itself be nil (`Task[string!]!`,
+        // routine inside an ADR-0186 §9 oblivious scope) says nothing about
+        // what it yields. Read through the wrapper so the symbolic arm below
+        // sees the constructed awaitable instead of falling to the erased
+        // CLR one, which would drop the awaited `string!` to `string`.
+        type = PlatformTypeSymbol.StripTopLevel(type);
+
         // ADR-0172 / issue #4159: an imported awaitable whose signature
         // carries reference-nullability metadata arrives wrapped in a
         // NullabilityAnnotatedTypeSymbol, hiding the symbolic constructed

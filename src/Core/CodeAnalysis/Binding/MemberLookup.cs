@@ -3264,7 +3264,15 @@ internal sealed class MemberLookup
             return false;
         }
 
+        // ADR-0186 §9: a GetEnumerator declared in an oblivious scope returns
+        // a platform enumerator (`IEnumerator[Item]!`); its shape — and so the
+        // element type — is the underlying enumerator's.
         var effectiveEnumeratorType = type.SubstituteMemberType(getEnumerator.Type);
+        if (effectiveEnumeratorType is not null)
+        {
+            effectiveEnumeratorType = PlatformTypeSymbol.StripTopLevel(effectiveEnumeratorType);
+        }
+
         if (effectiveEnumeratorType is StructSymbol enumeratorType)
         {
             if (TypeMemberModel.TryGetMethodIncludingInherited(enumeratorType, "MoveNext", out var moveNext) &&
@@ -3311,6 +3319,12 @@ internal sealed class MemberLookup
                 return functionType != null;
             case NullableTypeSymbol nullable:
                 return TryGetDelegateFunctionTypeFromSymbol(nullable.UnderlyingType, out functionType);
+
+            // ADR-0186: a platform delegate slot (`((string) -> string)!`,
+            // `Action[string]!` — routine inside an ADR-0186 §9 oblivious
+            // scope) target-types a lambda exactly as its underlying does.
+            case PlatformTypeSymbol platform:
+                return TryGetDelegateFunctionTypeFromSymbol(platform.UnderlyingType, out functionType);
 
             // Issue #2375: a constructed `Func`/`Action`/named-delegate
             // `ImportedTypeSymbol` closed over a same-compilation class or
@@ -6618,6 +6632,16 @@ internal sealed class MemberLookup
         {
             return false;
         }
+
+        // ADR-0186: implementing an interface slot is a signature relation,
+        // and `T!` has `T`'s runtime signature (§1). A member declared in an
+        // ADR-0186 §9 oblivious scope (`func GetEnumerator() IEnumerator[Item]`
+        // there is `IEnumerator[Item]!`) must still be recognised as the
+        // implementation — declining it left the slot without a MethodImpl,
+        // which the binder did not diagnose and the runtime reported as a
+        // TypeLoadException. (That the relation performs no nil check is
+        // ADR-0186 open question 13, unchanged.)
+        candidate = PlatformTypeSymbol.StripTopLevel(candidate);
 
         if (openType.IsGenericParameter)
         {

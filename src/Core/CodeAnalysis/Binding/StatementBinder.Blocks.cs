@@ -1059,6 +1059,9 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, channel);
         }
 
+        // ADR-0186 §4: a send requires a non-null channel.
+        channel = PlatformCoercion.InsertCheck(channel, syntax.Channel.Location, "a channel send target");
+
         if (!ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var elementType, out var direction, out _))
         {
             Diagnostics.ReportSendTargetIsNotChannel(syntax.Channel.Location, channel.Type);
@@ -1154,6 +1157,9 @@ internal sealed partial class StatementBinder
             // channels.
             var channelSyntax = Invariant.Required(caseSyntax.Channel, "a non-default select case has a channel");
             var channelExpr = bindExpression(channelSyntax);
+
+            // ADR-0186 §4: a select case operates on a non-null channel.
+            channelExpr = PlatformCoercion.InsertCheck(channelExpr, channelSyntax.Location, "a select case channel");
             ChannelTypeSymbol? chan = null;
             TypeSymbol? selectableElement = null;
             if (channelExpr is not BoundErrorExpression
@@ -1306,6 +1312,10 @@ internal sealed partial class StatementBinder
     {
         var taskSyntax = Invariant.Required(caseSyntax.Channel, "an await select case has a task expression");
         var task = bindExpression(taskSyntax);
+
+        // ADR-0186 §4: awaiting a task in a select arm requires a non-null
+        // task, exactly as a plain `await` does (ExpressionBinder.BindAwaitExpression).
+        task = PlatformCoercion.InsertCheck(task, taskSyntax.Location, "an awaited select case task");
         var guard = BindSelectArmGuard(caseSyntax);
         TypeSymbol? result = null;
         var recognized = task is BoundErrorExpression;

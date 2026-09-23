@@ -964,10 +964,15 @@ internal sealed class ConversionClassifier
             // no-op both engines already lower. The planner itself only
             // understands concrete targets, so unwrap before planning and
             // re-wrap the projected value to keep the bound tree's type honest.
+            // ADR-0186: a platform target (`Person!`, routine for a slot
+            // declared in an ADR-0186 §9 oblivious scope) is unwrapped the
+            // same way — the projected value is never nil.
             TypeSymbol projectionTargetType = type is NullableTypeSymbol projectionNullableTarget
                 && Conversion.IsReferenceLikeTarget(projectionNullableTarget.UnderlyingType)
                 ? projectionNullableTarget.UnderlyingType
-                : Invariant.Required(type, "conversion targets are established before structural projection");
+                : type is PlatformTypeSymbol projectionPlatformTarget
+                    ? projectionPlatformTarget.UnderlyingType
+                    : Invariant.Required(type, "conversion targets are established before structural projection");
             var projected = BindStructuralProjectionCore(
                 diagnosticLocation,
                 expression,

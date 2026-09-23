@@ -1383,6 +1383,24 @@ public sealed class Lowerer : BoundTreeRewriter
                 collection,
                 userGetEnumerator,
                 ImmutableArray<BoundExpression>.Empty);
+
+            // ADR-0186 §9: a GetEnumerator declared in an oblivious scope
+            // returns a platform enumerator (`NumberEnumerator!`). The binder
+            // (MemberLookup.TryGetUserPatternEnumerableElementType) reads its
+            // shape through the wrapper, and so must the MoveNext/Current probe
+            // below, which recognises only a bare StructSymbol. An oblivious
+            // GetEnumerator may legally return nil, and the loop dereferences
+            // the enumerator at once, so this is an ADR-0186 §4 coercion:
+            // checked and unwrapped in one step.
+            if (enumeratorType is PlatformTypeSymbol platformEnumerator)
+            {
+                enumeratorType = platformEnumerator.UnderlyingType;
+                getEnumeratorCall = PlatformCoercion.InsertCheck(
+                    getEnumeratorCall,
+                    collection.Syntax?.Location,
+                    "a pattern enumerator returned by GetEnumerator");
+            }
+
             return true;
         }
 

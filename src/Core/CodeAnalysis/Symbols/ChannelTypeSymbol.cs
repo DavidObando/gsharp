@@ -111,6 +111,11 @@ public sealed class ChannelTypeSymbol : TypeSymbol
                 return false;
             case NullableTypeSymbol nullable:
                 return TryGetChannelShape(nullable.UnderlyingType, out elementType, out direction, out isConstructed);
+
+            // ADR-0186: a platform channel (`chan[int32]!`, routine inside an
+            // ADR-0186 §9 oblivious scope) has its underlying channel's shape.
+            case PlatformTypeSymbol platform:
+                return TryGetChannelShape(platform.UnderlyingType, out elementType, out direction, out isConstructed);
             case NullabilityAnnotatedTypeSymbol annotated:
                 return TryGetChannelShape(annotated.BaseType, out elementType, out direction, out isConstructed);
             case ChannelTypeSymbol channel:

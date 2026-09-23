@@ -111,6 +111,30 @@ public sealed class PlatformTypeSymbol : TypeSymbol
     internal static void ClearCache() => Cache.Clear();
 
     /// <summary>
+    /// Reads through a top-level platform wrapper: <paramref name="type"/>'s
+    /// underlying type when it is <c>T!</c>, and <paramref name="type"/>
+    /// itself otherwise.
+    /// <para>
+    /// For the <b>structural</b> questions the binder and lowerer ask of a
+    /// declared type — "is this an iterator return type, and of what?", "is
+    /// this a task, and what does it await?" — <c>T!</c> is <c>T</c>: whether
+    /// the value itself may be nil says nothing about its shape. ADR-0186 §9
+    /// is what makes this routine, because every unadorned reference a G#
+    /// declaration writes inside an oblivious scope is wrapped, including an
+    /// iterator's <c>IEnumerable[string]</c> and an async function's
+    /// <c>Task[string]</c>. Those helpers match on the symbolic shape first
+    /// (<c>is ImportedTypeSymbol</c>, <c>is SequenceTypeSymbol</c>) and fall
+    /// back to the erased <c>ClrType</c>, so without this a wrapped
+    /// <c>IEnumerable[string!]</c> silently answered <c>string</c> — and
+    /// every <c>yield</c> of an oblivious value was coerced to non-null.
+    /// </para>
+    /// </summary>
+    /// <param name="type">The type to read through.</param>
+    /// <returns>The type with any top-level platform wrapper removed.</returns>
+    internal static TypeSymbol StripTopLevel(TypeSymbol type)
+        => type is PlatformTypeSymbol platform ? platform.UnderlyingType : type;
+
+    /// <summary>
     /// ADR-0186 §1 / ADR-0132: the <c>!</c> follows the same <b>positional</b>
     /// rule as <see cref="NullableTypeSymbol"/>'s <c>?</c>, and it needs a
     /// parallel implementation rather than falling out for free.

@@ -50,6 +50,10 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        // ADR-0186 §4: copying reads every member of the receiver, so a
+        // platform receiver is a coercion to non-null (checked and unwrapped).
+        receiver = PlatformCoercion.InsertCheck(receiver, diagnosticLocation, "a copy/with receiver");
+
         // Issue #2228: G# unifies `class` and `struct` into one StructSymbol
         // (IsClass distinguishes reference vs. value semantics), so this check
         // already accepts a `data class` receiver (IsClass && IsData) exactly
@@ -1300,6 +1304,12 @@ internal sealed partial class ExpressionBinder
                     result = new BoundErrorExpression(syntax);
                     return true;
                 }
+
+                // ADR-0186 §9: `cast[T]`'s argument is a cast target, not a
+                // slot — its top level is left alone in an oblivious scope
+                // (nested positions keep their platform reading), so
+                // `cast[string](o)` still produces a non-null `string`.
+                targetType = PlatformTypeSymbol.StripTopLevel(targetType);
 
                 reportObsoleteUseIfApplicable(
                     syntax.TypeArgumentList.Arguments[0].Location,

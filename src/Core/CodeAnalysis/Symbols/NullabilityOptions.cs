@@ -96,7 +96,8 @@ internal static class NullabilityOptions
     /// <c>platform-types</c> as the no-op it names. That is not symmetry for
     /// its own sake — it is how the "before" half of a before/after
     /// measurement stays runnable on a branch that has already flipped, which
-    /// is exactly the use the variable was introduced for in step 2. An
+    /// is exactly the use the variable was introduced for in step 2. Step 5 adds
+    /// <c>oblivious</c> (see <see cref="ParseEnvironmentMode"/>). An
     /// unrecognised value selects the default rather than failing, because
     /// this is a measurement affordance and not a supported product switch;
     /// <c>/nullability:</c> is the supported one and it rejects an unknown
@@ -110,18 +111,26 @@ internal static class NullabilityOptions
     /// </para>
     /// </summary>
     internal static NullabilityMode DefaultMode { get; } =
-        string.Equals(
-            Environment.GetEnvironmentVariable("GSHARP_NULLABILITY")?.Replace("-", string.Empty, StringComparison.Ordinal),
-            "enabled",
-            StringComparison.OrdinalIgnoreCase)
-            ? NullabilityMode.Enabled
-            : NullabilityMode.PlatformTypes;
+        ParseEnvironmentMode(Environment.GetEnvironmentVariable("GSHARP_NULLABILITY"));
 
     /// <summary>
     /// Gets a value indicating whether oblivious imported reference positions
     /// read as the platform type <c>T!</c> rather than as <c>T?</c>.
+    /// <para>
+    /// ADR-0186 §9's <see cref="NullabilityMode.Oblivious"/> reads them that
+    /// way too: an oblivious compilation is a platform-types compilation whose
+    /// own source declarations are additionally oblivious by default.
+    /// </para>
     /// </summary>
-    internal static bool PlatformTypesEnabled => Mode == NullabilityMode.PlatformTypes;
+    internal static bool PlatformTypesEnabled => Mode is NullabilityMode.PlatformTypes or NullabilityMode.Oblivious;
+
+    /// <summary>
+    /// Gets a value indicating whether an unadorned reference position written
+    /// in G# source is oblivious (<c>T!</c>) when no enclosing
+    /// <c>@Oblivious</c> / <c>@NullabilityEnabled</c> says otherwise — ADR-0186
+    /// §9's compilation level, selected by <c>--nullability=oblivious</c>.
+    /// </summary>
+    internal static bool SourceObliviousByDefault => Mode == NullabilityMode.Oblivious;
 
     /// <summary>
     /// Gets a value indicating whether ADR-0186 §4's runtime nil check is
@@ -136,6 +145,32 @@ internal static class NullabilityOptions
     /// </para>
     /// </summary>
     internal static bool PlatformNilChecksEnabled => !ChecksSuppressed.Value;
+
+    /// <summary>
+    /// Reads <c>GSHARP_NULLABILITY</c>. Recognises <c>enabled</c> (ADR-0136's
+    /// reading) and, since ADR-0186 step 5, <c>oblivious</c> — so the whole
+    /// test suite can be run with every G# source declaration oblivious, which
+    /// is how step 5 stress-tested the platform wrapper's reach into
+    /// source-declared members. Anything else, including unset, is the
+    /// default.
+    /// </summary>
+    /// <param name="value">The raw environment value.</param>
+    /// <returns>The selected mode.</returns>
+    internal static NullabilityMode ParseEnvironmentMode(string? value)
+    {
+        var normalized = value?.Replace("-", string.Empty, StringComparison.Ordinal);
+        if (string.Equals(normalized, "enabled", StringComparison.OrdinalIgnoreCase))
+        {
+            return NullabilityMode.Enabled;
+        }
+
+        if (string.Equals(normalized, "oblivious", StringComparison.OrdinalIgnoreCase))
+        {
+            return NullabilityMode.Oblivious;
+        }
+
+        return NullabilityMode.PlatformTypes;
+    }
 
     /// <summary>
     /// Installs <paramref name="mode"/> for the current logical call and

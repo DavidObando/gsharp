@@ -69,6 +69,14 @@ internal static class AsyncReturnTypeNormalizer
             return false;
         }
 
+        // ADR-0186 §9: an async function declared in an oblivious scope has a
+        // platform-typed return (`Task[string!]!`). Whether the TASK itself
+        // may be nil says nothing about what it awaits, so read through the
+        // wrapper — and read the symbolic argument below, not the erased
+        // `ClrType`, or the awaited `string!` silently becomes `string` and
+        // every `return` of an oblivious value is coerced to non-null.
+        type = PlatformTypeSymbol.StripTopLevel(type);
+
         // #313 symbolic construction: a Task[T] / ValueTask[T] over an in-scope
         // generic type parameter is type-erased in its ClrType, so recover the
         // symbolic result argument from the open definition + type arguments.
