@@ -1172,6 +1172,28 @@ internal sealed partial class MethodBodyEmitter
             || string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Issue #4358: whether <paramref name="type"/> is one of the natural
+    /// structural delegate shapes a G# function type materialises as —
+    /// <c>System.Action</c>, <c>System.Action`N</c> or <c>System.Func`N</c>.
+    /// Name-based, like <c>UserTokenResolver.IsFuncOrActionDefinition</c>, so
+    /// it holds across a <c>MetadataLoadContext</c> projection.
+    /// </summary>
+    /// <param name="type">The (possibly constructed) target delegate type.</param>
+    /// <returns><see langword="true"/> for a natural Func/Action shape.</returns>
+    private static bool IsNaturalFuncOrActionDelegate(Type type)
+    {
+        if (type == null || !string.Equals(type.Namespace, "System", StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var name = type.Name;
+        return string.Equals(name, "Action", StringComparison.Ordinal)
+            || name.StartsWith("Action`", StringComparison.Ordinal)
+            || name.StartsWith("Func`", StringComparison.Ordinal);
+    }
+
     private static bool IsUnsignedOrChar(TypeSymbol t)
     {
         if (t == TypeSymbol.UInt8

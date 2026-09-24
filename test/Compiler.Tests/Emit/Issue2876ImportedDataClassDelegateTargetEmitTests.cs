@@ -241,12 +241,6 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
     [Fact]
     public void NullableTupleFunctionToImportedNonGenericNamedDelegate_Verifies()
     {
-        const string library = """
-            package i4358lib
-
-            public delegate Splitter(s string) (string?, int32);
-            """;
-
         const string source = """
             package i4358a
 
@@ -269,8 +263,121 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
 
         Assert.Equal(
             $"5{Environment.NewLine}6{Environment.NewLine}5{Environment.NewLine}",
-            CompileAndRun(source, library, "i4358lib"));
+            CompileAndRun(source, NullableTupleDelegatesLibrary, "i4358lib"));
     }
+
+    /// <summary>
+    /// Issue #4358, Copilot review follow-up: the named target being GENERIC
+    /// does not make it the natural <c>Func</c>/<c>Action</c> shape. A
+    /// concrete <c>GSplitter[string]</c> — written directly, or inferred
+    /// through a generic method's <c>SyncConv[T]</c> parameter — has no
+    /// substitutable type argument, so it reaches the same conversion path
+    /// as the non-generic <c>Splitter</c>. Keying the natural-shape
+    /// substitution on <c>IsGenericType</c> constructed a <c>Func&lt;…&gt;</c>
+    /// for the method group and function value there (ilverify
+    /// StackUnexpected); it now keys on the target actually being
+    /// <c>Func</c>/<c>Action</c>.
+    /// </summary>
+    [Fact]
+    public void NullableTupleFunctionToImportedGenericNamedDelegate_Verifies()
+    {
+        const string source = """
+            package i4358b
+
+            import System
+            import i4358lib
+
+            func split(s string) (string?, int32) { return (s, s.Length) }
+
+            func useG(c GSplitter[string]) int32 {
+                return c.Invoke("hello").Item2
+            }
+
+            func Main() {
+                var f (string) -> (string?, int32) = split
+                Console.WriteLine(useG(split))
+                Console.WriteLine(useG((s string) -> (s, s.Length + 1)))
+                Console.WriteLine(useG(f))
+                Console.WriteLine(Runner.RunSync("hello", split))
+                Console.WriteLine(Runner.RunSync("hello", (s string) -> (s, s.Length + 2)))
+            }
+            """;
+
+        Assert.Equal(
+            $"5{Environment.NewLine}6{Environment.NewLine}5{Environment.NewLine}5{Environment.NewLine}7{Environment.NewLine}",
+            CompileAndRun(source, NullableTupleDelegatesLibrary, "i4358lib"));
+    }
+
+    /// <summary>
+    /// Issue #4358, Copilot review follow-up: an async lambda whose result is
+    /// <c>(string?, int32)</c> converted to an imported named delegate —
+    /// non-generic <c>AsyncSplitter</c>, and generic <c>AsyncConv[T]</c>
+    /// through a generic method. The symbolic async ctor
+    /// (<c>TryGetSymbolicAsyncDelegateCtorRef</c>) is the natural
+    /// <c>Func&lt;…, Task&lt;…&gt;&gt;</c> shape and is now only consulted for a
+    /// natural target. NOTE: this is a guard, not a discrimination witness —
+    /// every position tried (argument, local, return, field, generic-method
+    /// argument) binds the async literal directly to the named delegate and
+    /// never reaches that branch, so it is green with and without the gate.
+    /// </summary>
+    [Fact]
+    public void NullableTupleAsyncLambdaToImportedNamedDelegate_Verifies()
+    {
+        const string source = """
+            package i4358c
+
+            import System
+            import System.Threading.Tasks
+            import i4358lib
+
+            func useA(c AsyncSplitter) int32 {
+                return c.Invoke("hello").Result.Item2
+            }
+
+            func Main() {
+                let a AsyncSplitter = async (s string) -> (s, s.Length + 1)
+                Console.WriteLine(useA(a))
+                Console.WriteLine(useA(async (s string) -> (s, s.Length + 2)))
+                Console.WriteLine(Runner.RunAsync("hello", async (s string) -> (s, s.Length + 3)))
+            }
+            """;
+
+        Assert.Equal(
+            $"6{Environment.NewLine}7{Environment.NewLine}8{Environment.NewLine}",
+            CompileAndRun(source, NullableTupleDelegatesLibrary, "i4358lib"));
+    }
+
+    /// <summary>
+    /// Issue #4358: imported named delegates whose signatures carry a
+    /// nullable-tuple element, non-generic and generic, sync and async.
+    /// </summary>
+    private const string NullableTupleDelegatesLibrary = """
+        package i4358lib
+
+        import System.Threading.Tasks
+
+        public delegate Splitter(s string) (string?, int32);
+
+        public delegate GSplitter[T](s T) (string?, int32);
+
+        public delegate AsyncSplitter(s string) Task[(string?, int32)];
+
+        public delegate SyncConv[T](s T) (string?, int32);
+
+        public delegate AsyncConv[T](s T) Task[(string?, int32)];
+
+        public class Runner {
+            shared {
+                func RunSync[T](x T, f SyncConv[T]) int32 {
+                    return f.Invoke(x).Item2
+                }
+
+                func RunAsync[T](x T, f AsyncConv[T]) int32 {
+                    return f.Invoke(x).Result.Item2
+                }
+            }
+        }
+        """;
 
     private static string CompileAndRun(string source, string library, string libraryAssemblyName)
     {

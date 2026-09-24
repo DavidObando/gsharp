@@ -78,17 +78,19 @@ internal sealed partial class MethodBodyEmitter
 
         // Issue #4358: `sourceNeedsSymbolic` says the SOURCE shape cannot be
         // reflected faithfully, which decides how the source `Invoke` is
-        // referenced. It says nothing about the TARGET. A real, non-generic
-        // named delegate (`delegate Splitter(s string) (string?, int32)`
-        // imported from another assembly) has its signature fixed in
-        // metadata, so there is no erased type argument to protect against
-        // and its own ctor is always the one to construct. Replacing it with
-        // the natural `Func`/`Action` shape pushed a `Func<…>` where a
-        // `Splitter` was expected (ilverify StackUnexpected). Only a generic
-        // target, or the `System.Delegate` base (materialised as the natural
-        // shape above), keeps taking the symbolic natural shape.
-        bool constructSymbolicNaturalShape = sourceNeedsSymbolic
-            && (targetIsDelegateBase || targetDelegateType.IsGenericType);
+        // referenced. It says nothing about the TARGET. The natural symbolic
+        // `Func`/`Action` shape is a valid thing to construct only when the
+        // target already IS that shape (whose reflected type arguments may be
+        // erased, which is what #1502 guards against) or the `System.Delegate`
+        // base (materialised as the natural shape above). Any other target is
+        // a NAMED delegate — generic or not, imported or constructed
+        // (`Splitter`, `GSplitter[string]`, `Predicate[T]`) — and only its
+        // own ctor is correct: substituting the natural shape pushed a
+        // `Func<…>` where the named delegate was expected (ilverify
+        // StackUnexpected). A named target that genuinely needs a symbolic
+        // ctor already arrives with `symbolicTargetCtorRef`.
+        bool targetIsNaturalShape = targetIsDelegateBase || IsNaturalFuncOrActionDelegate(targetDelegateType);
+        bool constructSymbolicNaturalShape = sourceNeedsSymbolic && targetIsNaturalShape;
 
         if (source is BoundFunctionLiteralExpression literal)
         {
@@ -108,7 +110,10 @@ internal sealed partial class MethodBodyEmitter
                     planKey = closureForAsync.InvokeMethod;
                 }
 
-                var asyncSymbolicCtor = planKey.StateMachineType != null
+                // Issue #4358: the symbolic async ctor is the NATURAL
+                // `Func<…, Task<…>>` shape, so it is only correct for a natural
+                // target; a named target keeps its own ctor (see above).
+                var asyncSymbolicCtor = planKey.StateMachineType != null && targetIsNaturalShape
                     ? this.outer.memberRefs.TryGetSymbolicAsyncDelegateCtorRef(literal.FunctionType, planKey)
                     : null;
                 if (asyncSymbolicCtor.HasValue)
