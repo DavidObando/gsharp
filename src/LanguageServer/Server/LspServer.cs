@@ -1830,15 +1830,11 @@ public sealed class LspServer
     private ProjectState FindOwningProject(string filePath)
     {
         var fileDir = Path.GetDirectoryName(Path.GetFullPath(filePath));
-        foreach (var project in this.workspaceState.Projects)
-        {
-            if (fileDir != null && IsWithinDirectory(fileDir, project.ProjectDirectory))
-            {
-                return project;
-            }
-        }
-
-        return this.workspaceState.GetOrCreateImplicitProject();
+        return this.workspaceState.Projects
+            .Where(project => fileDir != null && IsWithinDirectory(fileDir, project.ProjectDirectory))
+            .OrderByDescending(project => project.ProjectDirectory.Length)
+            .FirstOrDefault()
+            ?? this.workspaceState.GetOrCreateImplicitProject();
     }
 
     // A plain StartsWith check would let "/repo/Lib2" match project directory "/repo/Lib".

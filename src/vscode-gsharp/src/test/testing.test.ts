@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import {
   findTestAtPosition,
   populateTestItems,
+  sameDocumentUri,
   TestItem as DiscoveredTestItem,
 } from '../features/testing';
 
@@ -89,5 +90,18 @@ describe('findTestAtPosition', () => {
     );
 
     expect(selected?.id).toBe('project-test');
+  });
+});
+
+describe('sameDocumentUri', () => {
+  const upper = vscode.Uri.parse('file:///workspace/Foo.gs');
+  const lower = vscode.Uri.parse('file:///workspace/foo.gs');
+
+  it('ignores file path casing on Windows', () => {
+    expect(sameDocumentUri(upper, lower, 'win32')).toBe(true);
+  });
+
+  it('preserves file path casing on case-sensitive platforms', () => {
+    expect(sameDocumentUri(upper, lower, 'linux')).toBe(false);
   });
 });

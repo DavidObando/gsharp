@@ -186,10 +186,14 @@ function collectItemsForUri(
   });
 }
 
-function sameDocumentUri(left: vscode.Uri, right: vscode.Uri): boolean {
+export function sameDocumentUri(
+  left: vscode.Uri,
+  right: vscode.Uri,
+  platform: NodeJS.Platform = process.platform,
+): boolean {
   const leftValue = left.toString(true);
   const rightValue = right.toString(true);
-  return left.scheme === 'file' && right.scheme === 'file'
+  return platform === 'win32' && left.scheme === 'file' && right.scheme === 'file'
     ? leftValue.toLowerCase() === rightValue.toLowerCase()
     : leftValue === rightValue;
 }
