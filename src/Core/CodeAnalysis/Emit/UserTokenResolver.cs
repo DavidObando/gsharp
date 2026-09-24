@@ -1858,7 +1858,10 @@ internal sealed class UserTokenResolver
         return memberRef;
     }
 
-    private static bool IndexParametersMatch(ParameterInfo[] clrParameters, ImmutableArray<ParameterSymbol> parameters)
+    private static bool IndexParametersMatch(
+        ParameterInfo[] clrParameters,
+        ImmutableArray<ParameterSymbol> parameters,
+        ImmutableArray<TypeParameterSymbol> declaringTypeParameters)
     {
         if (clrParameters.Length != parameters.Length)
         {
@@ -1867,13 +1870,34 @@ internal sealed class UserTokenResolver
 
         for (var i = 0; i < clrParameters.Length; i++)
         {
-            if (!IndexParameterTypeMatches(clrParameters[i].ParameterType, parameters[i].Type))
+            if (!IndexParameterTypeMatches(clrParameters[i].ParameterType, parameters[i].Type, declaringTypeParameters))
             {
                 return false;
             }
         }
 
         return true;
+    }
+
+    // Review finding (#4350): a CLR nested type flattens its enclosing types'
+    // generic parameters before its own, so `Outer[T].Inner[U]`'s `U` is CLR
+    // generic position 1 even though its G# ordinal is 0. Returns the
+    // declaring type's parameters in that CLR order.
+    private static ImmutableArray<TypeParameterSymbol> FlattenedTypeParameters(Symbol? type)
+    {
+        if (type is null)
+        {
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var own = type switch
+        {
+            StructSymbol structSymbol => structSymbol.TypeParameters,
+            InterfaceSymbol interfaceSymbol => interfaceSymbol.TypeParameters,
+            _ => ImmutableArray<TypeParameterSymbol>.Empty,
+        };
+        var enclosing = FlattenedTypeParameters(type.ContainingType);
+        return enclosing.IsEmpty ? own : enclosing.AddRange(own.IsDefault ? ImmutableArray<TypeParameterSymbol>.Empty : own);
     }
 
     // Review finding (#4350): a symbolic index parameter has no reflected
@@ -1884,7 +1908,10 @@ internal sealed class UserTokenResolver
     // the same namespace, name and arity, with its type arguments matched the
     // same way; an array or slice matches element-wise. Any other symbolic
     // shape is not matched, so no overload is picked by accident.
-    private static bool IndexParameterTypeMatches(Type clrParameterType, TypeSymbol parameterType)
+    private static bool IndexParameterTypeMatches(
+        Type clrParameterType,
+        TypeSymbol parameterType,
+        ImmutableArray<TypeParameterSymbol> declaringTypeParameters)
     {
         if (parameterType.ClrType is { } parameterClrType)
         {
@@ -1894,22 +1921,23 @@ internal sealed class UserTokenResolver
         switch (parameterType)
         {
             case TypeParameterSymbol typeParameter:
+                var flattenedPosition = declaringTypeParameters.IsDefault ? -1 : declaringTypeParameters.IndexOf(typeParameter);
                 return clrParameterType.IsGenericParameter
-                    && clrParameterType.GenericParameterPosition == typeParameter.Ordinal;
+                    && clrParameterType.GenericParameterPosition == (flattenedPosition >= 0 ? flattenedPosition : typeParameter.Ordinal);
             case ArrayTypeSymbol array:
                 return clrParameterType.IsArray
                     && clrParameterType.GetElementType() is { } arrayElement
-                    && IndexParameterTypeMatches(arrayElement, array.ElementType);
+                    && IndexParameterTypeMatches(arrayElement, array.ElementType, declaringTypeParameters);
             case SliceTypeSymbol slice:
                 return clrParameterType.IsArray
                     && clrParameterType.GetElementType() is { } sliceElement
-                    && IndexParameterTypeMatches(sliceElement, slice.ElementType);
+                    && IndexParameterTypeMatches(sliceElement, slice.ElementType, declaringTypeParameters);
             case StructSymbol structSymbol:
-                return SourceTypeMatches(clrParameterType, structSymbol, structSymbol.PackageName, AllTypeArguments(structSymbol));
+                return SourceTypeMatches(clrParameterType, structSymbol, structSymbol.PackageName, AllTypeArguments(structSymbol), declaringTypeParameters);
             case InterfaceSymbol interfaceSymbol:
-                return SourceTypeMatches(clrParameterType, interfaceSymbol, interfaceSymbol.PackageName, interfaceSymbol.TypeArguments);
+                return SourceTypeMatches(clrParameterType, interfaceSymbol, interfaceSymbol.PackageName, interfaceSymbol.TypeArguments, declaringTypeParameters);
             case EnumSymbol enumSymbol:
-                return SourceTypeMatches(clrParameterType, enumSymbol, enumSymbol.PackageName, ImmutableArray<TypeSymbol>.Empty);
+                return SourceTypeMatches(clrParameterType, enumSymbol, enumSymbol.PackageName, ImmutableArray<TypeSymbol>.Empty, declaringTypeParameters);
             default:
                 return false;
         }
@@ -1919,7 +1947,8 @@ internal sealed class UserTokenResolver
         Type clrType,
         TypeSymbol symbol,
         string packageName,
-        ImmutableArray<TypeSymbol> typeArguments)
+        ImmutableArray<TypeSymbol> typeArguments,
+        ImmutableArray<TypeParameterSymbol> declaringTypeParameters)
     {
         // Review finding: `OuterA.Key` and `OuterB.Key` share a namespace and
         // simple name, so the declaring chain is part of the identity too.
@@ -1937,7 +1966,7 @@ internal sealed class UserTokenResolver
 
         for (var i = 0; i < clrArguments.Length; i++)
         {
-            if (!IndexParameterTypeMatches(clrArguments[i], symbolArguments[i]))
+            if (!IndexParameterTypeMatches(clrArguments[i], symbolArguments[i], declaringTypeParameters))
             {
                 return false;
             }
@@ -2058,7 +2087,7 @@ internal sealed class UserTokenResolver
                 var importedProperty = containingType.ClrType
                     .GetProperties(bindingFlags)
                     .FirstOrDefault(candidate => candidate.Name == defProp.Name
-                        && IndexParametersMatch(candidate.GetIndexParameters(), defProp.Parameters));
+                        && IndexParametersMatch(candidate.GetIndexParameters(), defProp.Parameters, FlattenedTypeParameters(defType)));
                 var importedAccessor = wantSetter ? importedProperty?.SetMethod : importedProperty?.GetMethod;
                 if (importedAccessor != null)
                 {

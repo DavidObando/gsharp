@@ -235,6 +235,39 @@ public class Issue4350IndexerOverloadEmitTests
     }
 
     [Fact]
+    public void NestedGenericIndexerOverloads_DispatchBySignature()
+    {
+        // Review finding: a nested type in a generic outer type flattens the
+        // outer generic parameters first, so `Inner[U]`'s `U` is CLR position
+        // 1; accessor matching must use that flattened position.
+        var source = """
+            package P
+            import System
+
+            class Outer[T] {
+                class Inner[U] {
+                    prop this[key U] string -> "key:" + key.ToString()
+                    prop this[index int32] string -> "index:" + index.ToString()
+                }
+
+                func Make() Inner[bool] -> Inner[bool]()
+
+                func Read(inner Inner[bool]) string -> inner[true] + "|" + inner[3]
+            }
+
+            let outer = Outer[string]()
+            let inner = outer.Make()
+            Console.WriteLine(inner[true])
+            Console.WriteLine(inner[3])
+            Console.WriteLine(outer.Read(inner))
+            """;
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, "key:True", "index:3", "key:True|index:3") + Environment.NewLine,
+            CompileAndRun(source));
+    }
+
+    [Fact]
     public void OverloadedIndexers_EmitOneItemPropertyPerSignature()
     {
         var libraryPath = EmitGSharpLibrary("Shape", Library);
