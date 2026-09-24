@@ -161,10 +161,20 @@ otherwise.
 `grep -rEo "(is|as) (not )?(NullableTypeSymbol|PlatformTypeSymbol|NullabilityAnnotatedTypeSymbol)\b" src/Core`:
 **503 open-coded wrapper-test occurrences on 482 lines in 80 files** (418
 `NullableTypeSymbol`, 53 `PlatformTypeSymbol`, 32
-`NullabilityAnnotatedTypeSymbol`; property patterns such as
-`{ UnderlyingType: … }` and `switch` arms add more). The audit's figure
-was ~385 in 78 files; the difference is the pattern, and Phase 3 re-censuses with
-the analyzer rather than with either grep. Not every one of these is a
+`NullabilityAnnotatedTypeSymbol`). That pattern only catches `is` and `as`.
+A broader grep also catches:
+- explicit casts, e.g. `((NullableTypeSymbol)existing).UnderlyingType` at
+  `MemberLookup.cs:8035` and `(PlatformTypeSymbol)from` at `Conversion.cs:3435`
+  (16 in total);
+- `case` labels (52);
+- switch-expression arms (25);
+- `or` / `and` pattern combinators (16);
+- nested property subpatterns.
+
+With those included, the census rises to **about 586 lines in 88 files**. The
+audit's figure was ~385 in 78 files; the difference comes from which forms were
+counted. No grep is authoritative here. Phase 3 re-censuses with GSA0008
+itself, which works on operations rather than on syntax (§3). Not every one of these is a
 *reference*-nullability query — `NullableTypeSymbol` also represents value-type
 optionality (`int32?` is `Nullable<int>`), and a large share of the emitter's
 tests (`MethodBodyEmitter.Conversions.cs`, 34; `MethodBodyEmitter.Operators.cs`,
@@ -332,7 +342,7 @@ internal static class NullabilityImportRule
   gsc's `ApplyConcrete`/`ApplyOpenSlot` map the decision onto `TypeSymbol`:
   `Unchanged` → the input symbol exactly as given (a `string?` argument stays
   `string?`), `NotNull` → the bare symbol, `Nullable` → `NullableTypeSymbol.Get`,
-  `Platform` → `PlatformTypeSymbol.Get`. cs2gs's applier (Phase 5) maps it onto
+  `Platform` → `PlatformTypeSymbol.Get`. cs2gs's applier (created by ADR-0186 step 6, completed in Phase 5) maps it onto
   `GTypeReference`, whose only nullable state is `IsNullable`:
   - `Unchanged` → the argument's `GTypeReference` with its **existing**
     `IsNullable` preserved — substituting `string?` into an oblivious open slot
@@ -343,7 +353,7 @@ internal static class NullabilityImportRule
     existing forgiveness/bridging logic as oblivious — the same meaning,
     expressed in the only form cs2gs's output language has for it.
 
-  The reader-agreement test (§4) and the Phase 5 cs2gs tests each include a
+  The reader-agreement test (§4) and the cs2gs applier's tests (with ADR-0186 step 6, and extended in Phase 5) each include a
   `string?` argument substituted into `Annotated`, `NotAnnotated` and
   `Oblivious` open slots, asserting `string?` in all three.
 - **Platform-types semantics only** (owner decision 2). There is no
@@ -508,10 +518,33 @@ in the IDE.
   the same types `ReflectionTypeComparisonAnalyzer` would handle with
   `IsInsideExemptType`. GSA0007 deliberately does not follow that part of its
   pattern.
-- **GSA0008 — consumer query.** An `is`/`as`/type-pattern/`switch` arm on
-  `NullableTypeSymbol`, `PlatformTypeSymbol` or `NullabilityAnnotatedTypeSymbol`
-  is reported, with a message naming the query member to use, unless it sits in
-  a member marked `[NullabilityRepresentation(reason)]`. As with GSA0007,
+- **GSA0008 — consumer query.** Any **operation** that tests for, converts
+  to, or names `NullableTypeSymbol`, `PlatformTypeSymbol` or
+  `NullabilityAnnotatedTypeSymbol` as a type is reported, with a message
+  naming the query member to use, unless it sits in a member marked
+  `[NullabilityRepresentation(reason)]`. The rule is written against Roslyn's
+  `IOperation` tree, not against syntax, so every source form that reaches a
+  wrapper type goes through the same few operation kinds and none needs its
+  own clause:
+  - `is` / `as`: `IIsTypeOperation`, and `IConversionOperation` with
+    `IsTryCast`;
+  - explicit casts such as `(PlatformTypeSymbol)from`:
+    `IConversionOperation`, explicit, whose target is a wrapper type;
+  - type, declaration and recursive patterns wherever they appear, including
+    `case` labels, switch-expression arms, `or` / `and` / `not` combinators,
+    and nested property, positional and list subpatterns. These are
+    `ITypePatternOperation`, `IDeclarationPatternOperation` and
+    `IRecursivePatternOperation`, checked by their matched type;
+  - `typeof(...)`: `ITypeOfOperation`;
+  - a wrapper type passed as a generic type argument, such as
+    `OfType<NullableTypeSymbol>()` or `Cast<…>()`: `IInvocationOperation`
+    whose method has a wrapper type argument;
+  - a wrapper type used as a generic constraint (a declaration, not an
+    operation), reported by a symbol action on type parameters.
+
+  None of the last three occur in `src/Core` today, but covering them costs
+  nothing and closes the obvious workarounds. The analyzer tests have one case
+  per form. As with GSA0007,
   exemption is **per member, never per type**. The members that get the
   attribute are those whose job *is* the representation:
   - the query API's own implementation;
@@ -622,12 +655,51 @@ ADR-0186 established with its seven single-PR steps. Each phase's PR updates thi
 ADR with an implementation note where reality differed from the plan, as
 ADR-0186's steps did.
 
+**Dependency check.** Each phase builds, and its tests pass, using only what
+the phases before it have landed. What each phase needs, and where it comes
+from:
+
+| Phase | Needs | Introduced by |
+|---|---|---|
+| 1 | Answer to Open question 1; nothing else | The repository owner |
+| 2 | `NullabilityImportRule` (walkers already routed through it) | Phase 1 |
+| 2 | `[NullabilityFunnel]`, `FromClrTypeWithoutNullability`, `NullabilityFreeReason` | Phase 2 itself |
+| 3 | `ReferenceNullability`, `GetElementPositions()` | Phase 1 |
+| 3 | Rest of the query API, `[NullabilityRepresentation]` | Phase 3 itself |
+| 4 | `ApplyOpenSlot` with decision 1 | Phase 1 |
+| 4 | The funnel attribute and the suppression it removes | Phase 2 |
+| 4 | Symbolic-projection consumers that read through a platform wrapper | Phase 3 |
+| ADR-0186 step 6 | `NullabilityImportRule`, `TypeArgumentKind`, the `InternalsVisibleTo` grant | Phase 1 |
+| 5 | The adapter and applier | ADR-0186 step 6 |
+| 5 | GSA0009 | Phase 5 itself |
+
+No phase uses anything a later phase introduces.
+
 ### Phase 1 — the rule function, the agreement test, and two Layer 0/6 fixes
 
-- Add `ImportedReferenceNullability` and `NullabilityImportRule` — the
-  representation-neutral `DecideConcrete`/`DecideOpenSlot` and gsc's
-  `ApplyConcrete`/`ApplyOpenSlot` appliers — with decision 1's open-slot
-  semantics.
+- **Entry condition:** Open question 1 (the `Annotated` × `Unknown` cell) has
+  been answered by the repository owner.
+- Add `ImportedReferenceNullability`, `TypeArgumentKind` and
+  `NullabilityImportRule`: the representation-neutral
+  `DecideConcrete`/`DecideOpenSlot`, and gsc's `ApplyConcrete`/`ApplyOpenSlot`
+  appliers, with decision 1's open-slot semantics.
+- Add the **two read-only query members the agreement test needs**:
+  `TypeSymbol.ReferenceNullability` and `TypeSymbol.GetElementPositions()`,
+  with their full §2 semantics, over both Layer 3 representations. No consumer
+  moves onto them in this phase. They exist so that §4's test compares the
+  readers through the same accessors every consumer will use after Phase 3,
+  rather than through a test-only reimplementation. The rest of the query API
+  stays in Phase 3.
+- Add `<InternalsVisibleTo Include="GSharp.Cs2Gs.Translator" />` to
+  `src/Core/Core.csproj`. It is the assembly name, not the project name:
+  `build/gsharp.build.props` sets
+  `<AssemblyName>GSharp.$(MSBuildProjectName)</AssemblyName>`, which
+  `tools/Directory.Build.props` inherits, and the translator project's own
+  existing entry is likewise `GSharp.Cs2Gs.Tests`. The grant lands here rather
+  than in Phase 5 because ADR-0186 step 6, which must call the rule, lands
+  before Phase 5. Granting internals is preferred over widening the rule to
+  `public`: the rule is compiler-internal policy, and gsc's public API surface
+  should not grow for a sibling tool.
 - Route the three walkers' per-position decisions through it:
   `ClrNullability.SymbolFromFlagsOffset`, `ClrNullability.ProjectNullableFlags`
   (its `layout.IsGenericParameter` arm, ~line 972, becomes a call to
@@ -672,6 +744,13 @@ ADR-0186's steps did.
   (`ExpressionBinder.Calls.Invocation.cs:452`) into the `MemberLookup.GetClr*`
   family as a receiver-projected return accessor, so every signature-position
   producer lives in one family.
+- Introduce the pieces GSA0007 relies on, in this same PR: the internal
+  `[NullabilityFunnel]` attribute, `TypeSymbol.FromClrTypeWithoutNullability`,
+  and the `NullabilityFreeReason` enum.
+- Put `ConversionClassifier.PreserveParameterTopLevelNullability` inside the
+  funnel. It is attributed, or routed through `GetClrMethodParameterTypeSymbol`.
+  Phase 1 left it calling `ClassifyPosition`, a door, from a member that is not
+  a funnel member.
 - Add GSA0007 and its tests. `MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs`
   is the one known violation that cannot be fixed in this phase (see Phase 4); it
   carries a `#pragma warning disable GSA0007` with a comment pointing at Phase 4,
@@ -679,10 +758,18 @@ ADR-0186's steps did.
 
 ### Phase 3 — the query API and the full consumer migration
 
-- Add `ReferenceNullability`, `AdmitsNil`, `IsStatedNullable`,
-  `StripReferenceNullability(deep)`, `GetElementPositions()` and
-  `JoinReferenceNullability` to `TypeSymbol`, implemented on
-  `NullableLifting.IsAnyValueTypeNullable`.
+- Add the rest of the query API to `TypeSymbol`, implemented on
+  `NullableLifting.IsAnyValueTypeNullable`:
+  - `AdmitsNil`;
+  - `IsStatedNullable`;
+  - `StripReferenceNullability(deep)`;
+  - `TryGetValueNullableUnderlying`;
+  - `JoinReferenceNullability`;
+  - `CoalesceReferenceNullability`.
+
+  `ReferenceNullability` and `GetElementPositions()` already exist from
+  Phase 1. Also add the `[NullabilityRepresentation(reason)]` attribute, and
+  apply it to the query API's own members, Phase 1's included.
 - Collapse the ten strip helpers (table above) onto
   `StripReferenceNullability`. Where a caller genuinely needs to see through
   `Nullable<V>` too (the variance check, `UnwrapPlatformAndNullable`'s callers),
@@ -699,10 +786,11 @@ ADR-0186's steps did.
   (`CanBindClrInstanceMember`, `TryGetUserInstanceMemberReceiverType`) with a
   type-level `IsStatedNullable` test; the bound-node kind stays only where it is
   answering a question about the node, not about nullability.
-- Migrate **every** Layer 4 site (503 wrapper-test occurrences in 80 files at
-  `7a44ca033`), the emitter's value-nullable tests included, and add GSA0008
-  with its per-member `[NullabilityRepresentation]` exemptions. The phase is done when GSA0008 reports nothing
-  and there is no per-site suppression.
+- Migrate **every** Layer 4 site, the emitter's value-nullable tests included.
+  That is about 586 lines in 88 files at `7a44ca033` by the broadened grep; the
+  analyzer's own census is authoritative. Add GSA0008 with its per-member
+  `[NullabilityRepresentation]` exemptions. The phase is done when GSA0008
+  reports nothing and there is no per-site suppression.
 - Make the symbolic-projection consumers named in `b0c76053d` — `TryProjectErasedClrType`,
   member lookup, method type inference, emit — read through a platform wrapper
   via the query API. This is what Phase 4 needs.
@@ -721,7 +809,8 @@ ADR-0186's steps did.
 - Make `MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs`
   (`MemberLookup.cs:1641`) merge the declaration's return nullability through the
   Phase 2 funnel, on **every** non-null return (including the
-  `Task`/`ValueTask`/`IAsyncEnumerable` arm), and remove the Phase 2 suppression.
+  `Task`/`ValueTask`/`IAsyncEnumerable` arm). The method becomes a
+  `[NullabilityFunnel]` member, and the Phase 2 suppression is removed.
 - It is gated on **both** earlier results, because `b0c76053d` failed for two
   independent reasons: decision 1's open-slot ruling (via Phase 1's
   `ApplyOpenSlot`) is what keeps `Min()`/`Max()` on an unconstrained `T` from
@@ -735,8 +824,11 @@ ADR-0186's steps did.
 
 ### Phase 5 — consolidate cs2gs onto `NullabilityImportRule`
 
-- Add the `NullableAnnotation` → `ClrNullabilityState` adapter in
-  `Cs2Gs.Translator` and replace cs2gs's import-rule decisions (the ~100
+- Complete the `NullableAnnotation` → `ClrNullabilityState` adapter
+  (`NullabilityImportAdapter`) and its `GTypeReference` applier in
+  `Cs2Gs.Translator`. ADR-0186 step 6 creates both, because it lands first (see
+  Sequencing). Phase 5 adds whatever members that step did not need, and
+  replaces cs2gs's import-rule decisions (the ~100
   `NullableAnnotation` comparisons that decide a G# spelling, including
   `CSharpTypeMapper.cs:443/564/613` and
   `CSharpToGSharpTranslator.Nullability.cs`'s `IsImportedObliviousNullableTarget`)
@@ -745,22 +837,23 @@ ADR-0186's steps did.
   usage-driven promotion logic in that file is not the import rule and keeps its
   behaviour, but it reads a position's declared state through the same adapter
   rather than through `NullableAnnotation` directly (see Enforcement).
-- **Access.** `NullabilityImportRule` and `ClrNullabilityState` are `internal` and
-  `src/Core/Core.csproj` has no `InternalsVisibleTo` for any `Cs2Gs.*` assembly.
-  This phase adds `<InternalsVisibleTo Include="GSharp.Cs2Gs.Translator" />`
-  (the assembly name, not the project name: `build/gsharp.build.props` sets
-  `<AssemblyName>GSharp.$(MSBuildProjectName)</AssemblyName>`, which
-  `tools/Directory.Build.props` inherits, and the project's own existing entry
-  is likewise `GSharp.Cs2Gs.Tests`) rather than
-  widening the rule to `public`: the rule is compiler-internal policy, and gsc's
-  public API surface should not grow for a sibling tool.
-- **Sequencing.** ADR-0186 step 6 (cs2gs: per-position Roslyn read, gutting
-  `ObliviousNullabilityAnalyzer.cs`'s fixpoint) has not landed. Phase 5 lands
-  **after** ADR-0186 step 6, and step 6's PR — whenever it is scheduled — writes
-  its new per-position read against `NullabilityImportRule` (available since
-  Phase 1) rather than against `NullableAnnotation` directly. Phase 5 then
-  migrates whatever import-rule decisions remain outside step 6's scope, so no
-  code is migrated onto the rule twice.
+- **Access.** `NullabilityImportRule`, `ClrNullabilityState` and
+  `TypeArgumentKind` are `internal`. The `GSharp.Cs2Gs.Translator` grant was
+  added in Phase 1, so neither ADR-0186 step 6 nor this phase changes
+  `Core.csproj`.
+- **Sequencing.** ADR-0186 step 6 (cs2gs: the per-position Roslyn read, and
+  gutting the fixpoint in `ObliviousNullabilityAnalyzer.cs`) has not landed.
+  The order is:
+  1. Phase 1 of this ADR;
+  2. ADR-0186 step 6, which may land before, between or after Phases 2–4,
+     since it touches only cs2gs and they touch only Core;
+  3. Phase 5.
+
+  Step 6's PR writes its new per-position read against `NullabilityImportRule`,
+  through the adapter and applier it creates, rather than against
+  `NullableAnnotation` directly. It needs nothing from Phases 2–4. Phase 5
+  then migrates whatever import-rule decisions remain outside step 6's scope,
+  so no code is migrated onto the rule twice.
 - **Enforcement.** GSA0007/GSA0008 police gsc's `TypeSymbol` wrappers and CLR
   signature positions; cs2gs works in Roslyn `ITypeSymbol` and they would fire
   on nothing there. This phase adds **GSA0009**: any read of Roslyn's
