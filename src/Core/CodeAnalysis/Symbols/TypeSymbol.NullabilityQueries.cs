@@ -137,6 +137,21 @@ public partial class TypeSymbol
                 // The delegate shape `Func<T1, …, TResult>` lays its
                 // parameters out before its return.
                 return function.ParameterTypes.Add(function.ReturnType);
+
+            // Constructed same-compilation types carry their arguments
+            // symbolically; their ClrType is commonly null before emit. A
+            // nested type's CLR arity puts the enclosing type's arguments
+            // first, and so do its positions.
+            case StructSymbol structure
+                when !structure.TypeArguments.IsDefaultOrEmpty || !structure.EnclosingTypeArguments.IsDefaultOrEmpty:
+                return structure.EnclosingTypeArguments.IsDefaultOrEmpty
+                    ? structure.TypeArguments
+                    : structure.EnclosingTypeArguments.AddRange(
+                        structure.TypeArguments.IsDefault ? ImmutableArray<TypeSymbol>.Empty : structure.TypeArguments);
+            case InterfaceSymbol constructedInterface when !constructedInterface.TypeArguments.IsDefaultOrEmpty:
+                return constructedInterface.TypeArguments;
+            case DelegateTypeSymbol constructedDelegate when !constructedDelegate.TypeArguments.IsDefaultOrEmpty:
+                return constructedDelegate.TypeArguments;
         }
 
         return GetClrElementPositions(ClrType);

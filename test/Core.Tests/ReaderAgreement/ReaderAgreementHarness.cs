@@ -76,6 +76,7 @@ internal sealed class ReaderAgreementHarness
     private int positionsCompared;
     private int readerCalls;
     private int closingsSkipped;
+    private int enumerationErrors;
 
     internal ReaderAgreementHarness(ReferenceResolver resolver, string corpusName)
     {
@@ -92,6 +93,17 @@ internal sealed class ReaderAgreementHarness
     /// the test requires this to be zero.
     /// </summary>
     internal int ReaderExceptionCount => this.readerExceptions.Values.Sum();
+
+    /// <summary>
+    /// Gets how many times enumerating the corpus itself failed — an assembly's
+    /// types, a type's members, a closed member's counterpart, or a signature
+    /// that names a type the corpus cannot resolve. Each one silently shrinks
+    /// the corpus, so the test requires this to be zero too.
+    /// </summary>
+    internal int EnumerationErrorCount => this.enumerationErrors;
+
+    /// <summary>Gets how many position closings were compared.</summary>
+    internal int PositionsCompared => this.positionsCompared;
 
     /// <summary>Runs the differential over every public generic declaration in <paramref name="assemblies"/>.</summary>
     /// <param name="assemblies">The corpus.</param>
@@ -116,7 +128,7 @@ internal sealed class ReaderAgreementHarness
             : string.Join(", ", this.readerExceptions.OrderBy(p => p.Key, StringComparer.Ordinal).Select(p => $"{p.Key}={p.Value}"));
         return $"{this.corpusName}: {this.typesVisited} types, {this.membersVisited} members, "
             + $"{this.positionsCompared} position closings compared, {this.readerCalls} reader calls, "
-            + $"{this.closingsSkipped} closings skipped (constraints), {this.disagreements.Count} disagreements, "
+            + $"{this.closingsSkipped} closings skipped (constraints), {this.enumerationErrors} enumeration errors, {this.disagreements.Count} disagreements, "
             + $"reader exceptions: {exceptions}; {stopwatch.Elapsed.TotalSeconds:F1}s";
     }
 
@@ -199,7 +211,7 @@ internal sealed class ReaderAgreementHarness
         return builder.ToImmutable();
     }
 
-    private static IEnumerable<Type> SafeGetExportedTypes(Assembly assembly)
+    private IEnumerable<Type> SafeGetExportedTypes(Assembly assembly)
     {
         Type[] types;
         try
@@ -208,10 +220,12 @@ internal sealed class ReaderAgreementHarness
         }
         catch (ReflectionTypeLoadException exception)
         {
+            this.enumerationErrors++;
             types = exception.Types.OfType<Type>().ToArray();
         }
         catch (Exception)
         {
+            this.enumerationErrors++;
             yield break;
         }
 
@@ -411,7 +425,7 @@ internal sealed class ReaderAgreementHarness
         }
     }
 
-    private static IEnumerable<MemberInfo> SafeGetMembers(Type type)
+    private IEnumerable<MemberInfo> SafeGetMembers(Type type)
     {
         MemberInfo[] members;
         try
@@ -420,6 +434,7 @@ internal sealed class ReaderAgreementHarness
         }
         catch (Exception)
         {
+            this.enumerationErrors++;
             yield break;
         }
 
@@ -438,7 +453,7 @@ internal sealed class ReaderAgreementHarness
         }
     }
 
-    private static IEnumerable<MethodInfo> SafeGetMethods(Type type)
+    private IEnumerable<MethodInfo> SafeGetMethods(Type type)
     {
         MethodInfo[] methods;
         try
@@ -447,6 +462,7 @@ internal sealed class ReaderAgreementHarness
         }
         catch (Exception)
         {
+            this.enumerationErrors++;
             yield break;
         }
 
@@ -468,9 +484,9 @@ internal sealed class ReaderAgreementHarness
             catch (Exception exception) when (exception is TypeLoadException or System.IO.FileNotFoundException or NotSupportedException)
             {
                 // A member whose signature names a type the corpus cannot
-                // resolve cannot be read by ANY reader; it is not a
-                // disagreement.
-                this.closingsSkipped++;
+                // resolve cannot be read by ANY reader. It is not a
+                // disagreement, but it is a hole in the corpus, so it counts.
+                this.enumerationErrors++;
             }
         }
     }
@@ -572,7 +588,7 @@ internal sealed class ReaderAgreementHarness
         }
     }
 
-    private static MemberInfo? FindClosedMember(Type closedType, MemberInfo openMember)
+    private MemberInfo? FindClosedMember(Type closedType, MemberInfo openMember)
     {
         if (ReferenceEquals(closedType, openMember.DeclaringType))
         {
@@ -592,6 +608,7 @@ internal sealed class ReaderAgreementHarness
         }
         catch (Exception)
         {
+            this.enumerationErrors++;
         }
 
         return null;
@@ -818,7 +835,7 @@ internal sealed class ReaderAgreementHarness
         }
     }
 
-    private static ImmutableArray<TypeSymbol> SafePositions(TypeSymbol type)
+    private ImmutableArray<TypeSymbol> SafePositions(TypeSymbol type)
     {
         try
         {
@@ -826,6 +843,7 @@ internal sealed class ReaderAgreementHarness
         }
         catch (Exception)
         {
+            this.enumerationErrors++;
             return ImmutableArray<TypeSymbol>.Empty;
         }
     }

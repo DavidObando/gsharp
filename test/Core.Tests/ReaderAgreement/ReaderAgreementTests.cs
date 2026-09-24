@@ -80,6 +80,10 @@ public abstract class ReaderAgreementTestBase
                     string.Join(" ; ", d.Results.Select(r => $"{r.Reader}={r.Shape} ({r.Display})")))));
         }
 
+        Assert.True(harness.PositionsCompared > 0, $"the corpus produced no positions: {summary}");
+        Assert.True(
+            harness.EnumerationErrorCount == 0,
+            $"{harness.EnumerationErrorCount} corpus enumeration error(s) shrank the corpus: {summary}");
         Assert.True(
             harness.ReaderExceptionCount == 0,
             $"{harness.ReaderExceptionCount} reader call(s) threw; see the summary line: {summary}");

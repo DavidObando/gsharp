@@ -215,6 +215,39 @@ public sealed class Adr0193NullabilityImportRuleTests
     }
 
     /// <summary>
+    /// A constructed same-compilation type carries its arguments symbolically,
+    /// with no CLR type before emit; its positions are those arguments.
+    /// </summary>
+    [Fact]
+    public void GetElementPositions_Reads_A_Constructed_Source_Types_Arguments()
+    {
+        const string source = """
+            package adr0193positions
+
+            class Box[T] {
+                var Value T
+            }
+
+            func Take(b Box[string?]) {
+            }
+            """;
+        var compilation = new GSharp.Core.CodeAnalysis.Compilation.Compilation(
+            GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(GSharp.Core.CodeAnalysis.Text.SourceText.From(source)))
+        {
+            IsLibrary = true,
+            Nullability = NullabilityMode.PlatformTypes,
+        };
+
+        Assert.DoesNotContain(compilation.BoundProgram.Diagnostics, d => d.IsError);
+        var take = compilation.BoundProgram.Functions.Keys.Single(f => f.Name == "Take");
+        var box = Assert.Single(take.Parameters).Type;
+        Assert.Equal(ReferenceNullabilityKind.NotNull, box.ReferenceNullability);
+        Assert.Equal(
+            ReferenceNullabilityKind.Nullable,
+            Assert.Single(box.GetElementPositions()).ReferenceNullability);
+    }
+
+    /// <summary>
     /// ADR-0193 §1, the projection reader's open-slot arm: an explicit
     /// <c>[Nullable(2)]</c> annotates the substituted argument's ROOT only.
     /// It used to expand <c>2</c> over every position of the argument, so
