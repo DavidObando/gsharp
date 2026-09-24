@@ -1562,11 +1562,9 @@ public sealed partial class CSharpToGSharpTranslator
             // value's own type, and a target that is itself `T?` in G# needs nothing.
             if (this.IsGSharpNullableAnalyzerExpression(value)
                 && translated is not NonNullAssertionExpression
-                && targetType != null
                 && !IsInitializerOfInferredLocal(value, targetSymbol)
                 && !this.IsGSharpNullableAnalyzerApiMember(targetSymbol)
-                && targetType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
-                && !(targetType.IsReferenceType && targetType.NullableAnnotation == NullableAnnotation.Annotated))
+                && AnalyzerBridgeTargetIsNonNull(targetType, targetSymbol))
             {
                 return EnsureNonNullAssertion(translated);
             }
@@ -2815,14 +2813,47 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => null,
             };
 
+            // Issue #4356: an async LAMBDA's target is its delegate's Invoke, which
+            // is never itself `async`; the effective result is the envelope's
+            // `T`, exactly as for an async method.
+            bool asyncLambdaBody = current.Parent is AnonymousFunctionExpressionSyntax asyncLambda
+                && asyncLambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
             ITypeSymbol targetType = target switch
             {
-                IMethodSymbol method => GetEffectiveReturnType(method.ReturnType, method.IsAsync),
+                IMethodSymbol method => GetEffectiveReturnType(method.ReturnType, method.IsAsync || asyncLambdaBody),
                 IPropertySymbol property => property.Type,
                 _ => this.context.GetTypeInfo(value).ConvertedType,
             };
             return (targetType, target);
         }
+
+        /// <summary>
+        /// Issue #4356: whether a target (an EFFECTIVE type — the <c>T</c> of an
+        /// async <c>Task&lt;T&gt;</c>, never the envelope) is certainly non-null in
+        /// G#, so a <c>T?</c>-only-in-G# analyzer value flowing into it must be
+        /// asserted. Anything that may accept nil answers false: an unknown
+        /// target, a <c>Nullable&lt;T&gt;</c>, any annotated <c>T?</c> (reference or
+        /// generic), and an unannotated type parameter, whose instantiation may
+        /// itself be nullable. The assertion is only fail-safe where the target
+        /// really is non-null; anywhere else it turns a legal nil into a throw.
+        /// Every analyzer-value bridge (value, argument, cast, lambda result)
+        /// asks this one predicate.
+        /// </summary>
+        /// <param name="targetType">The effective target type, if known.</param>
+        /// <param name="targetSymbol">
+        /// The target parameter/member, if any. A parameter DECLARED as a type
+        /// parameter (<c>Identity&lt;T&gt;(T value)</c>) is generic even when Roslyn
+        /// substituted a non-null argument type: G# infers <c>T</c> from the
+        /// argument it is actually given, which may be <c>T?</c>.
+        /// </param>
+        /// <returns>True when the target is certainly non-null in G#.</returns>
+        private static bool AnalyzerBridgeTargetIsNonNull(ITypeSymbol targetType, ISymbol targetSymbol = null) =>
+            targetType != null
+            && targetType is not ITypeParameterSymbol
+            && targetType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
+            && targetType.NullableAnnotation != NullableAnnotation.Annotated
+            && !(targetSymbol is IParameterSymbol parameter
+                && parameter.OriginalDefinition.Type is ITypeParameterSymbol);
 
         private static ITypeSymbol GetEffectiveReturnType(ITypeSymbol returnType, bool isAsync) =>
             isAsync && returnType is INamedTypeSymbol taskLike && IsTaskLikeEnvelope(taskLike)

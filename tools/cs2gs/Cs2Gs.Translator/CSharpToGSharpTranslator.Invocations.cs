@@ -1855,9 +1855,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // non-null reference) on both sides, so the reference-type test
                 // above cannot tell; ForgiveNullableReferenceValue bridges it.
                 || (this.IsGSharpNullableAnalyzerExpression(argument.Expression)
-                    && targetParameter.Type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
-                    && !(targetParameter.Type.IsReferenceType
-                        && targetParameter.Type.NullableAnnotation == NullableAnnotation.Annotated));
+                    && AnalyzerBridgeTargetIsNonNull(targetParameter.Type, targetParameter));
             if (!IsNameOfArgument(argument)
                 && !isXunitNullAssertion
                 && targetRequiresNonNull
@@ -3995,7 +3993,7 @@ public sealed partial class CSharpToGSharpTranslator
             // G# sees `T?` converted to a non-null type, so assert the operand —
             // the same bridge every other value position takes.
             if (cast.Type is not NullableTypeSyntax
-                && targetSymbol?.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
+                && AnalyzerBridgeTargetIsNonNull(targetSymbol)
                 && this.IsGSharpNullableAnalyzerExpression(cast.Expression))
             {
                 operand = EnsureNonNullAssertion(operand);
