@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Microsoft.CodeAnalysis;
@@ -39,6 +40,20 @@ namespace Cs2Gs.Translator;
 /// </remarks>
 public sealed partial class CSharpToGSharpTranslator
 {
+    /// <summary>
+    /// Issue #4370: warning id for a <c>[LibraryImport]</c> <c>string</c>
+    /// return, whose native buffer C# frees but gsc treats as non-owning.
+    /// Forwarded by the pipeline's Translate stage; never fails the app.
+    /// </summary>
+    public const string LibraryImportStringReturnDiagnosticId = "CS2GS-LIBRARYIMPORT-STRING-RETURN";
+
+    /// <summary>
+    /// Issue #4370: warning id for a cdecl-only <c>[UnmanagedCallConv]</c>,
+    /// which gsc's platform-default convention matches everywhere except
+    /// 32-bit Windows. Forwarded by the pipeline; never fails the app.
+    /// </summary>
+    public const string LibraryImportCallConvDiagnosticId = "CS2GS-LIBRARYIMPORT-CALLCONV";
+
     private const string LibraryImportAttributeName = "System.Runtime.InteropServices.LibraryImportAttribute";
 
     private const string GeneratedRegexAttributeName = "System.Text.RegularExpressions.GeneratedRegexAttribute";
@@ -326,11 +341,20 @@ public sealed partial class CSharpToGSharpTranslator
                 bool hasStringMarshalling = false;
                 foreach (AttributeArgument argument in attribute.Arguments)
                 {
-                    GExpression constant = argument.Name == "StringMarshalling" && foldedStringMarshalling != null
-                        ? foldedStringMarshalling
-                        : this.MapLibraryImportArgumentConstant(data, argument.Name, node);
+                    // C# `[LibraryImport(libraryName: Lib)]` names a CONSTRUCTOR
+                    // parameter; G# binds every `name:` argument as a property,
+                    // so a constructor-bound argument is emitted positionally.
+                    int constructorIndex = ConstructorParameterIndex(data, argument.Name);
+                    string emittedName = constructorIndex >= 0 ? null : argument.Name;
+                    GExpression constant = constructorIndex >= 0
+                        ? MapConstructorArgumentConstant(data, constructorIndex)
+                        : argument.Name == "StringMarshalling" && foldedStringMarshalling != null
+                            ? foldedStringMarshalling
+                            : this.MapLibraryImportArgumentConstant(data, argument.Name, node);
                     hasStringMarshalling |= argument.Name == "StringMarshalling";
-                    arguments.Add(constant == null ? argument : new AttributeArgument(constant, argument.Name));
+                    arguments.Add(constant == null
+                        ? new AttributeArgument(argument.Value, emittedName)
+                        : new AttributeArgument(constant, emittedName));
                 }
 
                 if (!hasStringMarshalling && foldedStringMarshalling != null)
@@ -344,14 +368,45 @@ public sealed partial class CSharpToGSharpTranslator
             return result;
         }
 
+        /// <summary>
+        /// The index of the attribute-constructor parameter a named argument
+        /// (<c>libraryName: ...</c>) binds to, or -1 for a positional argument
+        /// or a property assignment. Decided from the bound constructor's
+        /// parameters, not the spelling alone: a property of the same name
+        /// (the argument appears in <see cref="AttributeData.NamedArguments"/>)
+        /// is not constructor-bound.
+        /// </summary>
+        private static int ConstructorParameterIndex(AttributeData data, string name)
+        {
+            if (name == null
+                || data.AttributeConstructor == null
+                || data.NamedArguments.Any(named => named.Key == name))
+            {
+                return -1;
+            }
+
+            ImmutableArray<IParameterSymbol> parameters = data.AttributeConstructor.Parameters;
+            for (int i = 0; i < parameters.Length; i++)
+            {
+                if (parameters[i].Name == name)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
+        }
+
+        private static GExpression MapConstructorArgumentConstant(AttributeData data, int index) =>
+            index < data.ConstructorArguments.Length && data.ConstructorArguments[index].Value is string text
+                ? LiteralExpression.String(text)
+                : null;
+
         private GExpression MapLibraryImportArgumentConstant(AttributeData data, string name, SyntaxNode node)
         {
             if (name == null)
             {
-                return data.ConstructorArguments.Length == 1
-                    && data.ConstructorArguments[0].Value is string libraryName
-                        ? LiteralExpression.String(libraryName)
-                        : null;
+                return MapConstructorArgumentConstant(data, 0);
             }
 
             if (name != "EntryPoint" && name != "SetLastError" && name != "StringMarshalling")
@@ -428,7 +483,10 @@ public sealed partial class CSharpToGSharpTranslator
                     nameof(SyntaxKind.MethodDeclaration),
                     message,
                     node.GetLocation(),
-                    TranslationSeverity.Warning));
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = LibraryImportStringReturnDiagnosticId,
+                });
             }
         }
 
@@ -466,7 +524,10 @@ public sealed partial class CSharpToGSharpTranslator
                     nameof(SyntaxKind.MethodDeclaration),
                     warning,
                     node.GetLocation(),
-                    TranslationSeverity.Warning));
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = LibraryImportCallConvDiagnosticId,
+                });
                 return;
             }
 

@@ -618,6 +618,21 @@ public sealed class TranslateStage : IMigrationStage
                             + $"[{document.FilePath}]");
                     }
 
+                    // Issue #4370: a [LibraryImport] translated with a caveat
+                    // (a string return's buffer ownership, a cdecl calling
+                    // convention that differs on 32-bit Windows) still PASSES,
+                    // but the caveat reaches the run: stderr and the per-app
+                    // translate.log. No triage artifact, so the app's result,
+                    // fingerprint and gap ledger are unchanged.
+                    foreach (TranslationDiagnostic diagnostic in translationContext.Diagnostics
+                        .Where(d => d.Severity == TranslationSeverity.Warning
+                            && IsForwardedLibraryImportWarning(d.DiagnosticId)))
+                    {
+                        string line = $"{diagnostic.DiagnosticId}: {diagnostic.Message} [{document.FilePath}]";
+                        Note(context, "warning (non-fatal): " + line);
+                        Console.Error.WriteLine($"cs2gs: warning: {context.App.Id}: {line}");
+                    }
+
                     RoundTripResult roundTrip = GSharpRoundTrip.Validate(printed);
                     if (!roundTrip.Success)
                     {
@@ -880,6 +895,10 @@ public sealed class TranslateStage : IMigrationStage
     /// workspace-load failure, <c>CS2GS0003</c> NuGet audit advisory) and are
     /// already handled by their own gates, so they are excluded here.
     /// </summary>
+    private static bool IsForwardedLibraryImportWarning(string diagnosticId) =>
+        diagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
+        || diagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId;
+
     private static bool IsCSharpCompilerError(Diagnostic diagnostic) =>
         diagnostic.Severity == DiagnosticSeverity.Error
         && diagnostic.Id.StartsWith("CS", StringComparison.Ordinal)
