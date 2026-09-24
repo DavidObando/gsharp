@@ -3018,6 +3018,44 @@ internal sealed partial class ExpressionBinder
         => classSymbol.WithFamilyAccessBase(GetFamilyAccessBase());
 
     /// <summary>
+    /// Requires a callable getter for a static property read through an
+    /// imported class receiver: public, a friend assembly's internal, or
+    /// protected when the receiver carries family access to the declaring
+    /// type. Reports the member as inaccessible otherwise.
+    /// </summary>
+    /// <param name="classSymbol">The imported class receiver.</param>
+    /// <param name="property">The static property being read.</param>
+    /// <param name="location">Where to report.</param>
+    /// <returns><see langword="true"/> when the getter may be called.</returns>
+    private bool TryRequireVisibleStaticGetter(ImportedClassSymbol classSymbol, PropertyInfo property, TextLocation location)
+    {
+        if (GetVisibleGetter(property, fromDerivedType: classSymbol.IsFamilyAccessible(property.DeclaringType)) != null)
+        {
+            return true;
+        }
+
+        Diagnostics.ReportMemberInaccessible(
+            location,
+            property.Name,
+            property.DeclaringType?.Name ?? classSymbol.ClassType.Name,
+            AccessorAccessibility(property.GetMethod));
+        return false;
+    }
+
+    /// <summary>The G# accessibility that best describes a CLR accessor, for diagnostics.</summary>
+    /// <param name="accessor">The accessor, or <see langword="null"/> when there is none.</param>
+    /// <returns>The accessibility.</returns>
+    private static Accessibility AccessorAccessibility(MethodBase? accessor)
+        => accessor switch
+        {
+            null => Accessibility.Private,
+            { IsPublic: true } => Accessibility.Public,
+            { IsFamily: true } or { IsFamilyOrAssembly: true } => Accessibility.Protected,
+            { IsAssembly: true } or { IsFamilyAndAssembly: true } => Accessibility.Internal,
+            _ => Accessibility.Private,
+        };
+
+    /// <summary>
     /// Issue #1582: resolves the CLR/metadata base type that a user-defined G#
     /// class (transitively) derives from, so inherited CLR members can be
     /// surfaced on instances of the derived type. Walks the user

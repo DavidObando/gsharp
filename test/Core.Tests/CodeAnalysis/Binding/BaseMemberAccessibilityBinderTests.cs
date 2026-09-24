@@ -74,6 +74,13 @@ public sealed class BaseMemberAccessibilityBinderTests
 
             public new string Label { get; set; } = "a";
         }
+
+        public class StaticHolder
+        {
+            protected static int ReadHidden { private get; set; } = 1;
+
+            protected static int WriteHidden { get; private set; } = 2;
+        }
         }
 
         namespace BaseAccess.Named
@@ -270,6 +277,79 @@ public sealed class BaseMemberAccessibilityBinderTests
             StrangerName);
 
         Assert.True(result.Success, Describe(result));
+    }
+
+    [Theory]
+    [InlineData("StaticHolder.ReadHidden = 3")]
+    [InlineData("let w = StaticHolder.WriteHidden")]
+    public void ImportedProtectedStaticProperty_VisibleAccessor_Binds(string statement)
+    {
+        var result = CompileAgainstLibrary(
+            $$"""
+            import BaseAccess.Library
+
+            class Derived : StaticHolder {
+                func Go() {
+                    {{statement}}
+                }
+            }
+            """,
+            StrangerName);
+
+        Assert.True(result.Success, Describe(result));
+    }
+
+    [Theory]
+    [InlineData("let r = StaticHolder.ReadHidden")]
+    [InlineData("StaticHolder.WriteHidden = 3")]
+    [InlineData("StaticHolder.ReadHidden += 1")]
+    [InlineData("StaticHolder.WriteHidden += 1")]
+    [InlineData("Derived.ReadHidden++")]
+    public void ImportedProtectedStaticProperty_HiddenAccessor_IsRejected(string statement)
+    {
+        // A read calls the getter and a write the setter; a compound
+        // assignment needs both. A private accessor is not callable from the
+        // derived class even though the property as a whole is protected.
+        var result = CompileAgainstLibrary(
+            $$"""
+            import BaseAccess.Library
+
+            class Derived : StaticHolder {
+                func Go() {
+                    {{statement}}
+                }
+            }
+            """,
+            StrangerName);
+
+        Assert.False(result.Success);
+    }
+
+    [Fact]
+    public void SourceProtectedStaticProperty_CompoundNeedsBothAccessors()
+    {
+        const string source = """
+            open class Holder {
+                shared {
+                    var r int32 = 1
+                    protected prop ReadHidden int32 {
+                        private get -> r
+                        set { r = value }
+                    }
+                }
+            }
+
+            class Derived : Holder {
+                func Go() {
+                    Holder.ReadHidden = 3
+                    Holder.ReadHidden += 1
+                }
+            }
+            """;
+
+        var errors = EmittedOracle.Evaluate(source).Diagnostics.Where(d => d.IsError).ToArray();
+        var inaccessible = Assert.Single(errors);
+        Assert.Equal("GS0472", inaccessible.Id);
     }
 
     private static string Describe(CompileResult result)

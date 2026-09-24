@@ -1905,6 +1905,13 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportMemberInaccessible(memberNameSyntax.Location, prop.Name, propertyOwner.Name, prop.SetterAccessibility);
             }
 
+            // A compound assignment also reads the property, so its getter
+            // must be reachable as well as its setter.
+            if (prop.HasGetter && !AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propertyOwner, function))
+            {
+                Diagnostics.ReportMemberInaccessible(memberNameSyntax.Location, prop.Name, propertyOwner.Name, prop.GetterAccessibility);
+            }
+
             if (!prop.HasGetter || !prop.HasSetter)
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
@@ -2590,6 +2597,14 @@ internal sealed partial class ExpressionBinder
                 fromDerivedType: importedClass.IsFamilyAccessible(staticMember.DeclaringType)))
         {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+            return new BoundErrorExpression(null);
+        }
+
+        // A compound assignment also reads the property: its getter must be
+        // callable as well as its setter.
+        if (staticMember is PropertyInfo compoundProperty
+            && !TryRequireVisibleStaticGetter(importedClass, compoundProperty, memberNameSyntax.IdentifierToken.Location))
+        {
             return new BoundErrorExpression(null);
         }
 

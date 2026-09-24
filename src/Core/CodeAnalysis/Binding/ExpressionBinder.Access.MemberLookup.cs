@@ -441,6 +441,16 @@ internal sealed partial class ExpressionBinder
                         return BindExtensionMethodGroupOrError(receiver, ne);
                     }
 
+                    // Lookup admits a property when either accessor is
+                    // visible, but a read calls the getter: it must be the
+                    // visible one (`protected static P { private get; set; }`
+                    // is writable from a derived class, not readable).
+                    if (staticMember is PropertyInfo readProperty
+                        && !TryRequireVisibleStaticGetter(classSymbol, readProperty, ne.IdentifierToken.Location))
+                    {
+                        return new BoundErrorExpression(null);
+                    }
+
                     var staticType = staticMember switch
                     {
                         PropertyInfo sp => ClrNullability.GetPropertyTypeSymbol(sp),
