@@ -378,22 +378,18 @@ namespace Demo
     }
 
     /// <summary>
-    /// Issue #4371 / ADR-0125 ("Deferred: fixed-size buffers"): the ORIGINAL
-    /// reported repro, <c>fixed (sbyte* p = Name) return p[0];</c>. gsc's
-    /// <c>fixed</c> statement pins a managed array/string/span source
-    /// (GS0401 otherwise); a fixed-size-buffer field already decays to a raw
-    /// <c>*T</c> (ADR-0122 §10), so pinning it hits GS0401 regardless of how
-    /// faithfully the FIELD itself translates. Since G# has no lowering for
-    /// this specific shape today, the translator must report the gap loudly
-    /// (<see cref="TranslationSeverity.Unsupported"/>) instead of silently
-    /// emitting G# that fails to compile and reporting a false PASS.
+    /// Issue #4371 / #4378 (ADR-0125 amendment): the ORIGINAL reported repro,
+    /// <c>fixed (sbyte* p = Name) return p[0];</c>. gsc's <c>fixed</c>
+    /// statement now accepts a fixed-size buffer field as its pinning source
+    /// (C# parity: the buffer's containing storage stays pinned for the
+    /// block), so the translator emits the faithful G# <c>fixed</c> statement
+    /// over the buffer instead of the interim Unsupported gap report, and the
+    /// output binds through the real gsc front-end.
     /// </summary>
     [Fact]
-    public void FixedStatementPinningFixedSizeBufferField_ReportsUnsupportedGap()
+    public void FixedStatementPinningFixedSizeBufferField_TranslatesToFixedStatement()
     {
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
-        {
-            ("Snippet.cs", @"
+        (string printed, TranslationContext context) = Translate(@"
 namespace Demo
 {
     public unsafe struct NativeName
@@ -405,17 +401,10 @@ namespace Demo
             fixed (sbyte* p = Name) return p[0];
         }
     }
-}"),
-        });
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+}");
 
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(
-            context.Diagnostics,
-            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("fixed-size-buffer"));
+        Assert.Contains("fixed p *int8 = this.Name {", printed);
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
     }
 
     private static string TranslateUnit(string source)

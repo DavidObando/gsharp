@@ -1850,11 +1850,42 @@ internal sealed partial class StatementBinder
         {
             var pointerType = bindTypeClause(syntax.TypeClause);
             var source = bindExpression(syntax.PinnedSource);
+            string? fixedBufferSourceName = null;
 
             FixedPinKind pinKind;
             TypeSymbol elementType;
             TypeSymbol pinnedUnderlying;
-            if (source.Type is SliceTypeSymbol sliceType)
+            if (ExpressionBinder.TryGetFixedBufferFieldAccess(source, out var bufferAccess))
+            {
+                // ADR-0125 amendment / issue #4378: a fixed-size buffer field
+                // (ADR-0122 §10). Every reference to the field decays to a `*T`,
+                // so recover the field access and pin its first element through
+                // a `T& pinned` local — `ref recv.name.FixedElementField`, the
+                // exact shape C# emits for `fixed (T* p = recv.name)` — which
+                // keeps the containing storage pinned for the whole block.
+                pinKind = FixedPinKind.FixedBuffer;
+                elementType = Invariant.Required(
+                    bufferAccess.Field.FixedBufferElementType,
+                    "a fixed-size buffer field records its element type");
+                pinnedUnderlying = ByRefTypeSymbol.Get(elementType);
+                fixedBufferSourceName = PointerTypeSymbol.Get(elementType).Name;
+
+                if (!ExpressionBinder.IsLvalue(bufferAccess))
+                {
+                    // C# CS1708: the buffer belongs to a value (e.g. a call
+                    // result), not a variable; there is no storage to pin.
+                    Diagnostics.ReportFixedSourceNotPinnable(syntax.PinnedSource.Location, fixedBufferSourceName);
+                }
+                else if (IsFixedVariable(bufferAccess))
+                {
+                    // C# CS0213: the storage cannot move, so there is nothing
+                    // to pin; the buffer is already usable as a pointer.
+                    Diagnostics.ReportFixedBufferAlreadyFixed(syntax.PinnedSource.Location, bufferAccess.Field.Name);
+                }
+
+                source = MakeFixedBufferElementReference(bufferAccess);
+            }
+            else if (source.Type is SliceTypeSymbol sliceType)
             {
                 // Slice-pin form (`[]T`, the cs2gs mapping of C# `T[]`): the
                 // CLR backing is a single-dimensional array `T[]`, so we pin
@@ -1934,7 +1965,7 @@ internal sealed partial class StatementBinder
                 else
                 {
                     Diagnostics.ReportFixedSourceNotPinnable(
-                        syntax.PinnedSource.Location, source.Type?.Name ?? "?");
+                        syntax.PinnedSource.Location, fixedBufferSourceName ?? source.Type?.Name ?? "?");
                 }
             }
 
@@ -1966,6 +1997,44 @@ internal sealed partial class StatementBinder
             scope = scope.Pop();
         }
     }
+
+    // ADR-0125 amendment / issue #4378: builds the managed reference
+    // `ref recv.name.FixedElementField` to a fixed-size buffer's first element
+    // (the backing struct's single element field sits at offset 0). The emitter
+    // stores it into the `T& pinned` local, which pins the buffer's containing
+    // object for the duration of the `fixed` body.
+    private static BoundExpression MakeFixedBufferElementReference(BoundFieldAccessExpression bufferAccess)
+    {
+        var backing = Invariant.Required(
+            bufferAccess.Type as StructSymbol,
+            "a fixed-size buffer field is typed as its synthesized backing struct");
+        var elementField = backing.Fields.Single(f => f.Name == "FixedElementField");
+        var elementAccess = new BoundFieldAccessExpression(null, bufferAccess, backing, elementField);
+        return new BoundAddressOfExpression(bufferAccess.Syntax, elementAccess, unmanaged: false);
+    }
+
+    // ADR-0125 amendment / issue #4378: C#'s "fixed variable" classification
+    // (C# spec §23.4), used to reject pinning a fixed-size buffer whose storage
+    // cannot move (C# CS0213). Fixed: a by-value local or parameter, a
+    // pointer dereference, and a field of a value-typed fixed variable.
+    // Movable (and therefore pinnable): a struct receiver `this` (passed by
+    // reference), a `ref`/`out`/`in` parameter or ref local, a field of a
+    // reference-type object, an array element, and a static field. Applied to
+    // the buffer field access itself, so a buffer declared directly on a class
+    // instance classifies as movable through the reference-type receiver arm. Anything
+    // not recognised is treated as movable — an unnecessary pin is sound,
+    // whereas wrongly rejecting a movable variable would leave no way to pin it.
+    private static bool IsFixedVariable(BoundExpression? expression)
+        => expression switch
+        {
+            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } } => false,
+            BoundVariableExpression { Variable: LocalVariableSymbol local } =>
+                local.RefKind == RefKind.None && local.Type is not ByRefTypeSymbol,
+            BoundFieldAccessExpression { Receiver: { } receiver }
+                when !Binder.IsReferenceTypeForConstraint(receiver.Type) => IsFixedVariable(receiver),
+            BoundDereferenceExpression dereference => dereference.Operand.Type is PointerTypeSymbol,
+            _ => false,
+        };
 
     private void ReportSuspensionPointsInFixedBody(SyntaxNode node)
     {

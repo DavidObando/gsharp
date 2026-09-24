@@ -116,15 +116,28 @@ public sealed partial class DiagnosticBag
     /// <summary>
     /// GS0401: the source of a <c>fixed</c> (pinning) statement (ADR-0125 /
     /// issues #1026, #1043) is not a pinnable managed buffer. A managed array
-    /// (<c>[]T</c>), a <c>string</c>, or a span-like type exposing a public
+    /// (<c>[]T</c>), a <c>string</c>, a span-like type exposing a public
     /// instance <c>ref T GetPinnableReference()</c> (e.g. <c>System.Span[T]</c> /
-    /// <c>System.ReadOnlySpan[T]</c>) can be pinned; the pointer's element type
-    /// must also match the buffer's.
+    /// <c>System.ReadOnlySpan[T]</c>), or a fixed-size buffer field of a
+    /// variable (issue #4378) can be pinned; the pointer's element type must
+    /// also match the buffer's.
     /// </summary>
     /// <param name="location">The text location of the pinned source expression.</param>
     /// <param name="typeName">The unpinnable source type name.</param>
     public void ReportFixedSourceNotPinnable(TextLocation location, string typeName)
     => Report(location, DiagnosticDescriptors.FixedSourceNotPinnable, typeName);
+
+    /// <summary>
+    /// GS0507 (ADR-0125 amendment, issue #4378): a <c>fixed</c> statement pins a
+    /// fixed-size buffer field reached through an already-fixed variable (a
+    /// local, a by-value parameter, or a pointer dereference). Such storage
+    /// cannot move, so there is nothing to pin — the buffer is used directly as
+    /// a pointer. Mirrors C#'s CS0213.
+    /// </summary>
+    /// <param name="location">The text location of the pinned source expression.</param>
+    /// <param name="bufferName">The fixed-size buffer field name.</param>
+    public void ReportFixedBufferAlreadyFixed(TextLocation location, string bufferName)
+    => Report(location, DiagnosticDescriptors.FixedBufferAlreadyFixed, bufferName);
 
     /// <summary>
     /// GS0506: an <c>await</c> or <c>yield</c> suspension point appears in a

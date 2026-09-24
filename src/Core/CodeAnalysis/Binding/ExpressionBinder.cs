@@ -781,6 +781,18 @@ internal sealed partial class ExpressionBinder
                 implicitField.Field,
                 $"{implicitField.StructType.Name}.{implicitField.Field.Name}");
 
+            // Issue #4377 (ADR-0122 §10): a bare (implicit-`this`) fixed-size
+            // buffer field decays to a `*T` to its first element exactly as the
+            // explicit `this.name` member access does, so `name[i]` indexes and
+            // `fixed p *T = name { … }` pins it (issue #4378).
+            if (implicitField.Field.IsFixedBuffer)
+            {
+                return MakeFixedBufferPointer(
+                    new BoundVariableExpression(null, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field);
+            }
+
             // Issue #208: apply any [MemberNotNull] post-call narrowing so that
             // `field.Member` accesses after a [MemberNotNull] helper call are
             // accepted without a nil-guard.

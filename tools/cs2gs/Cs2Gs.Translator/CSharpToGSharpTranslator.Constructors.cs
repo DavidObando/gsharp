@@ -3145,27 +3145,11 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 VariableDeclaratorSyntax declarator = declaration.Variables[i];
 
-                // Issue #4371 / ADR-0125 ("Deferred: fixed-size buffers"):
-                // gsc's `fixed` statement pins a managed array/string/span
-                // source (GS0401 otherwise) — it does not accept a C#
-                // fixed-size-buffer field as a source. Such a field already
-                // decays to a raw `*T` (ADR-0122 §10), and pinning an
-                // already-raw pointer is exactly the shape GS0401 correctly
-                // rejects; there is no faithful G# lowering of `fixed (T* p =
-                // buf)` for a fixed-size-buffer `buf` today. Rather than
-                // silently emit G# that fails to compile, report the gap
-                // loudly so a translate-time PASS actually means the output
-                // compiles.
-                if (declarator.Initializer != null &&
-                    this.context.GetSymbolInfo(declarator.Initializer.Value).Symbol is IFieldSymbol { IsFixedSizeBuffer: true })
-                {
-                    string fixedBufferPinMessage =
-                        "a 'fixed' statement pinning a C# fixed-size-buffer field has no G# lowering: " +
-                        "gsc's 'fixed' statement does not accept a fixed-size-buffer source " +
-                        "(ADR-0125 'Deferred: fixed-size buffers'; issue #4371).";
-                    this.context.ReportUnsupported(node, fixedBufferPinMessage);
-                }
-
+                // Issue #4378 (ADR-0125 amendment): a C# fixed-size buffer
+                // source (`fixed (sbyte* p = Name)`) translates to the same
+                // G# `fixed p *int8 = this.Name { … }` form as any other pin
+                // source — gsc pins the buffer's containing storage for the
+                // block, exactly as C# does.
                 GExpression source = declarator.Initializer != null
                     ? this.TranslateExpression(declarator.Initializer.Value)
                     : new IdentifierExpression("nil");

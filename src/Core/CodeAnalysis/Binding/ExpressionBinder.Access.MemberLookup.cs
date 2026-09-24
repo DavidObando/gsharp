@@ -4769,4 +4769,39 @@ internal sealed partial class ExpressionBinder
         var elementPointer = PointerTypeSymbol.Get(elementType);
         return new BoundConversionExpression(null, elementPointer, addressOf);
     }
+
+    /// <summary>
+    /// ADR-0125 amendment (issue #4378): recognises the <c>*T</c> decay that
+    /// <see cref="MakeFixedBufferPointer"/> builds for a fixed-size buffer field
+    /// and recovers the underlying buffer field access, so the <c>fixed</c>
+    /// statement can pin the buffer's containing storage instead of rejecting
+    /// the already-decayed raw pointer. <see cref="MakeFixedBufferPointer"/> is
+    /// the only producer of this exact shape: source code cannot spell an
+    /// address-of over an undecayed buffer field, because every reference to
+    /// the field decays first.
+    /// </summary>
+    /// <param name="expression">A bound <c>fixed</c> statement source.</param>
+    /// <param name="bufferAccess">The fixed-size buffer field access, on success.</param>
+    /// <returns><see langword="true"/> when <paramref name="expression"/> is a decayed fixed-size buffer field.</returns>
+    internal static bool TryGetFixedBufferFieldAccess(
+        BoundExpression expression,
+        [NotNullWhen(true)] out BoundFieldAccessExpression? bufferAccess)
+    {
+        if (expression is BoundConversionExpression
+            {
+                Type: PointerTypeSymbol,
+                Expression: BoundAddressOfExpression
+                {
+                    IsUnmanaged: true,
+                    Operand: BoundFieldAccessExpression { Field.IsFixedBuffer: true } access,
+                },
+            })
+        {
+            bufferAccess = access;
+            return true;
+        }
+
+        bufferAccess = null;
+        return false;
+    }
 }

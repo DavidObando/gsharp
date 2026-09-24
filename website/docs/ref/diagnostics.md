@@ -330,7 +330,7 @@ func firstElement(scoped s ReadOnlySpan[int32]) int32 {
 | GS0398 | Error | Unmanaged pointer to a non-blittable pointee. | An `unsafe`-context `*T` whose pointee `T` is a managed reference type or otherwise non-blittable (e.g. `*string`, or a struct with a managed field); only blittable primitives, pointers-to-pointers, and blittable user/value structs are legal pointees. |
 | GS0399 | Error | `stackalloc` element type must be a blittable (unmanaged) type. | A `stackalloc [n]T` whose element type `T` is a managed reference type or otherwise non-blittable (e.g. `stackalloc [4]string`); only blittable primitives and pointers are legal `stackalloc` element types. |
 | GS0400 | Error | A `fixed` statement requires an `unsafe` context. | A `fixed <name> *T = <source> {... }` statement used outside an `unsafe` context (function, `unsafe {... }` block, or unsafe type). Because it binds a raw unmanaged pointer, `fixed` is legal only inside `unsafe`, consistent with `*T` pointer gating. |
-| GS0401 | Error | A `fixed` statement source is not pinnable, or the pointer's element type does not match. | The source of a `fixed` statement must be a managed array/slice (`[]T`), a `string`, or a span-like type exposing a public instance `ref T GetPinnableReference()` (e.g. `System.Span[T]` / `System.ReadOnlySpan[T]`), and the bound pointer's pointee type must match the buffer's element type (`uint16`/`char` interchangeable for `string`). Reported for a non-pinnable source (e.g. a scalar, or a type without `GetPinnableReference`) or a pointee/element-type mismatch. |
+| GS0401 | Error | A `fixed` statement source is not pinnable, or the pointer's element type does not match. | The source of a `fixed` statement must be a managed array/slice (`[]T`), a `string`, a span-like type exposing a public instance `ref T GetPinnableReference()` (e.g. `System.Span[T]` / `System.ReadOnlySpan[T]`), or a fixed-size buffer field of a variable (issue #4378), and the bound pointer's pointee type must match the buffer's element type (`uint16`/`char` interchangeable for `string`). Reported for a non-pinnable source (e.g. a scalar, a type without `GetPinnableReference`, or a fixed-size buffer of a call result) or a pointee/element-type mismatch. A fixed-size buffer reached through an already-fixed variable reports GS0507 instead. |
 | GS0402 | Error | The operand of an increment/decrement operator must be writable storage or a writable ref-returning call. | A prefix or postfix `++`/`--` applied to something that is not writable storage, e.g. `5++`, `(a + b)--`, or a by-value function-call result. Mutable variables, fields, properties, indexed elements, pointers, and writable `ref`-returning calls are valid targets. |
 | GS0403 | Error | Cannot dereference, index, or perform arithmetic on a void pointer `*void`. | A true void-element pointer `*void` (C# `void*`) carries no element type, so `*p`, `p[i]`, `p + i`, `p - i`, and `p - q` are rejected; cast it to a typed pointer `*T` (e.g. `*int32(p)`) first. Casts to/from typed pointers and `nint`, and comparison/equality, are allowed. |
 | GS0404 | Error | A managed function-pointer type `*func(...) R` requires an `unsafe` context. | A managed function-pointer type clause `*func(T1, T2) R` used outside an `unsafe` context; like the raw pointer `*T`, a function pointer is only legal inside `unsafe`. |
@@ -2056,6 +2056,21 @@ generated state machine would have to resume by branching into the protected
 region. Move the suspension point outside the `fixed` statement. Suspension in
 a lambda declared inside `fixed` remains valid because the lambda runs in a
 different method.
+
+## Fixed statement over an already-fixed buffer (GS0507)
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS0507 | Error | A `fixed` statement pins a fixed-size buffer field reached through an already-fixed variable. |
+
+A `fixed` statement may pin a fixed-size buffer field (`fixed p *int8 = h.B.Name { … }`,
+ADR-0125 amendment, issue #4378) only when the buffer lives in *movable*
+storage: a field of a class instance, an array or slice element, a `ref`/`out`/`in`
+parameter, or the receiver `this` of a struct method. When the buffer is reached
+through storage that cannot move — a local variable, a by-value parameter, or a
+pointer dereference (`p->Name`), or a struct field of one of those — there is
+nothing to pin; use the buffer directly as a `*T` pointer instead
+(`var q = local.Name`). This mirrors C#'s CS0213.
 
 ## Unconstrained nullable sequence element (GS0508)
 

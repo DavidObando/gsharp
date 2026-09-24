@@ -3145,11 +3145,19 @@ internal sealed partial class ExpressionBinder
         // emitter can load.
         if (variable is ImplicitFieldVariableSymbol implicitField)
         {
-            var fieldAccess = new BoundFieldAccessExpression(
-                null,
-                new BoundVariableExpression(null, implicitField.Receiver),
-                implicitField.StructType,
-                implicitField.Field);
+            // Issue #4377 (ADR-0122 §10): a bare fixed-size buffer field decays
+            // to its `*T` first-element pointer, as on the read path, so the
+            // indexed write goes through the pointer into the inline buffer.
+            BoundExpression fieldAccess = implicitField.Field.IsFixedBuffer
+                ? MakeFixedBufferPointer(
+                    new BoundVariableExpression(null, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field)
+                : new BoundFieldAccessExpression(
+                    null,
+                    new BoundVariableExpression(null, implicitField.Receiver),
+                    implicitField.StructType,
+                    implicitField.Field);
 
             var tempName = $"<idxAsn{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
             var tempVar = new LocalVariableSymbol(tempName, isReadOnly: true, fieldAccess.Type);
