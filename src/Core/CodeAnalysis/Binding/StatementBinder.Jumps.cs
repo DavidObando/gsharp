@@ -1486,10 +1486,127 @@ internal sealed partial class StatementBinder
                 return (read, write);
             }
 
+            // `base.P ??= v` on a source property: the read is the base
+            // getter call; the write is the base setter, also non-virtual.
+            // The receiver is the enclosing member's `this`, which needs no
+            // capture.
+            case BoundBaseClassCallExpression { IsSetterAccessor: false, Arguments.IsEmpty: true } baseRead
+                when (baseRead.Property ?? FindPropertyByGetter(baseRead.BaseClass, baseRead.Method)) is { } baseProperty:
+            {
+                if (!baseProperty.HasSetter)
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, baseProperty.Name);
+                    return (null, null);
+                }
+
+                if (!AccessibilityChecker.IsAccessible(baseProperty.SetterAccessibility, baseRead.BaseClass, function))
+                {
+                    Diagnostics.ReportMemberInaccessible(syntax.OperatorToken.Location, baseProperty.Name, baseRead.BaseClass.Name, baseProperty.SetterAccessibility);
+                }
+
+                BoundExpression baseWrite = baseProperty.SetterSymbol == null
+                    ? new BoundBaseClassCallExpression(
+                        syntax,
+                        baseRead.Receiver,
+                        baseRead.BaseClass,
+                        method: null,
+                        ImmutableArray.Create(boundRhs),
+                        TypeSymbol.Void,
+                        property: baseProperty,
+                        isSetterAccessor: true)
+                    : new BoundBaseClassCallExpression(
+                        syntax,
+                        baseRead.Receiver,
+                        baseRead.BaseClass,
+                        baseProperty.SetterSymbol,
+                        ImmutableArray.Create(boundRhs));
+                return (baseRead, baseWrite);
+            }
+
+            // `base.P ??= v` on an imported property: non-virtual getter and
+            // setter calls on the imported base.
+            case BoundImportedInstanceCallExpression { IsNonVirtualBaseCall: true, Arguments.IsEmpty: true } clrBaseRead
+                when FindPropertyByGetter(clrBaseRead.Method) is { } clrBaseProperty:
+            {
+                var setter = clrBaseProperty.SetMethod;
+                if (setter == null
+                    || setter.IsAbstract
+                    || !(setter.IsPublic || setter.IsFamily || setter.IsFamilyOrAssembly))
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, clrBaseProperty.Name);
+                    return (null, null);
+                }
+
+                var clrBaseWrite = new BoundImportedInstanceCallExpression(
+                    syntax,
+                    clrBaseRead.Receiver,
+                    setter,
+                    TypeSymbol.Void,
+                    ImmutableArray.Create(boundRhs),
+                    isNonVirtualBaseCall: true);
+                return (clrBaseRead, clrBaseWrite);
+            }
+
             default:
                 Diagnostics.ReportNullCoalescingAssignmentInvalidTarget(syntax.OperatorToken.Location);
                 return (null, null);
         }
+    }
+
+    /// <summary>
+    /// The source property whose getter is <paramref name="getter"/>, found
+    /// on <paramref name="declaringType"/>: a base property read bound to its
+    /// getter call carries only the accessor.
+    /// </summary>
+    /// <param name="declaringType">The base class the getter was called on.</param>
+    /// <param name="getter">The getter, or <see langword="null"/>.</param>
+    /// <returns>The property, or <see langword="null"/> when the call is not a getter.</returns>
+    private static PropertySymbol? FindPropertyByGetter(StructSymbol declaringType, FunctionSymbol? getter)
+    {
+        if (getter == null)
+        {
+            return null;
+        }
+
+        foreach (var type in declaringType.GetHierarchy())
+        {
+            foreach (var property in type.Properties)
+            {
+                if (ReferenceEquals(property.GetterSymbol, getter))
+                {
+                    return property;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// The imported property whose getter is <paramref name="getter"/>.
+    /// </summary>
+    /// <param name="getter">The called method.</param>
+    /// <returns>The property, or <see langword="null"/> when the method is not a property getter.</returns>
+    private static PropertyInfo? FindPropertyByGetter(MethodInfo getter)
+    {
+        if (!getter.IsSpecialName || getter.DeclaringType is not { } declaringType)
+        {
+            return null;
+        }
+
+        foreach (var property in ClrTypeUtilities.SafeGetProperties(
+            declaringType,
+            BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly))
+        {
+            if (property.GetMethod is { } candidate
+                && candidate.MetadataToken == getter.MetadataToken
+                && candidate.Module == getter.Module)
+            {
+                return property;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

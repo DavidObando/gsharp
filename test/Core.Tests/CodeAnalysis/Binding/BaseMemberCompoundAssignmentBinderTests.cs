@@ -248,6 +248,59 @@ public class BaseMemberCompoundAssignmentBinderTests
     }
 
     [Fact]
+    public void NullCoalescingAssignment_OnBaseProperty_UsesBaseAccessors()
+    {
+        // `base.P ??= v` reads and writes through the base accessors, like
+        // `base.f ??= v` on a field already did. The overrides return "d" and
+        // ignore writes, so a virtual call on either side would show.
+        const string source = """
+            import System
+
+            open class Base {
+                var store string?
+                open prop Q string? {
+                    get -> store
+                    set { store = value }
+                }
+                open prop Auto string? { get; set; }
+            }
+
+            class Derived : Base {
+                override prop Q string? {
+                    get -> "d"
+                    set { }
+                }
+                override prop Auto string? {
+                    get -> "d"
+                    set { }
+                }
+
+                func Go() string {
+                    base.Q ??= "q1"
+                    base.Q ??= "q2"
+                    let f = func () { base.Auto ??= "a1" }
+                    f()
+                    base.Auto ??= "a2"
+                    return "${base.Q} ${base.Auto}"
+                }
+            }
+
+            class Err : Exception {
+                func Go() string? {
+                    base.HelpLink ??= "h1"
+                    base.HelpLink ??= "h2"
+                    return base.HelpLink
+                }
+            }
+
+            Console.WriteLine(Derived().Go())
+            Console.WriteLine(Err().Go())
+            """;
+
+        AssertRuns(source, "q1 a1" + Environment.NewLine + "h1");
+    }
+
+    [Fact]
     public void BaseEventSubscription_VirtualEvent_KeepsPreviousDiagnostic()
     {
         // A virtual event would need its base accessors called non-virtually;

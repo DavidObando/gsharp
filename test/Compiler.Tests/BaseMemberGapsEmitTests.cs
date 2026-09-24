@@ -506,6 +506,58 @@ Part().Go()
             new[] { "handler", "disposed" },
         };
 
+        // `base.P ??= v` on source and imported properties, directly and in a
+        // function literal.
+        yield return new object[]
+        {
+            "base-property-null-coalescing-assignment",
+            @"
+package P
+import System
+
+open class Base {
+    var store string?
+    open prop Q string? {
+        get -> store
+        set { store = value }
+    }
+    open prop Auto string? { get; set; }
+}
+
+class Derived : Base {
+    override prop Q string? {
+        get -> ""d""
+        set { }
+    }
+    override prop Auto string? {
+        get -> ""d""
+        set { }
+    }
+
+    func Go() string {
+        base.Q ??= ""q1""
+        base.Q ??= ""q2""
+        let f = func () { base.Auto ??= ""a1"" }
+        f()
+        base.Auto ??= ""a2""
+        return ""${base.Q} ${base.Auto}""
+    }
+}
+
+class Err : Exception {
+    func Go() string? {
+        base.HelpLink ??= ""h1""
+        base.HelpLink ??= ""h2""
+        return base.HelpLink
+    }
+}
+
+Console.WriteLine(Derived().Go())
+Console.WriteLine(Err().Go())
+",
+            new[] { "q1 a1", "h1" },
+        };
+
         // All three gaps in the shape the [GeneratedRegex] output takes after
         // cs2gs: a Regex subclass validating its timeout through the
         // protected static Regex.ValidateMatchTimeout, and a RegexRunner
