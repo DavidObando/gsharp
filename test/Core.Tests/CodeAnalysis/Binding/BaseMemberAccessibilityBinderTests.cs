@@ -85,6 +85,12 @@ public sealed class BaseMemberAccessibilityBinderTests
             protected static int ReadHidden { private get; set; } = 1;
 
             protected static int WriteHidden { get; private set; } = 2;
+
+            protected static string? NullableWriteHidden { get; private set; }
+
+            protected string? InstanceWriteHidden { get; private set; }
+
+            public static string? FriendSettable { get; internal set; }
         }
         }
 
@@ -376,6 +382,87 @@ public sealed class BaseMemberAccessibilityBinderTests
             StrangerName);
 
         Assert.False(result.Success);
+    }
+
+    [Theory]
+    [InlineData("StaticHolder.NullableWriteHidden ??= \"x\"")]
+    [InlineData("this.InstanceWriteHidden ??= \"x\"")]
+    [InlineData("InstanceWriteHidden ??= \"x\"")]
+    public void NullCoalescingAssignment_PrivateClrSetter_IsRejected(string statement)
+    {
+        // `??=` writes through the setter, which the derived class cannot
+        // call when it is private, even though the getter is visible.
+        var result = CompileAgainstLibrary(
+            $$"""
+            import BaseAccess.Library
+
+            class Derived : StaticHolder {
+                func Go() {
+                    {{statement}}
+                }
+            }
+            """,
+            FriendName);
+
+        Assert.False(result.Success);
+    }
+
+    [Theory]
+    [InlineData(FriendName, true)]
+    [InlineData(StrangerName, false)]
+    public void NullCoalescingAssignment_InternalClrSetter_FollowsFriendship(string assemblyName, bool expectSuccess)
+    {
+        var result = CompileAgainstLibrary(
+            """
+            import BaseAccess.Library
+
+            class Derived : StaticHolder {
+                func Go() {
+                    StaticHolder.FriendSettable ??= "x"
+                }
+            }
+            """,
+            assemblyName);
+
+        Assert.True(result.Success == expectSuccess, Describe(result));
+    }
+
+    [Fact]
+    public void NullCoalescingAssignment_PrivateSourceSetter_IsRejectedOutsideTheDeclaringType()
+    {
+        const string source = """
+            open class Holder {
+                var s string?
+                protected prop P string? {
+                    get -> s
+                    private set { s = value }
+                }
+
+                func Own() {
+                    P ??= "own"
+                }
+
+                shared {
+                    var t string?
+                    protected prop Q string? {
+                        get -> t
+                        private set { t = value }
+                    }
+                }
+            }
+
+            class Derived : Holder {
+                func Go() {
+                    this.P ??= "x"
+                    P ??= "y"
+                    Holder.Q ??= "z"
+                }
+            }
+            """;
+
+        var errors = EmittedOracle.Evaluate(source).Diagnostics.Where(d => d.IsError).ToArray();
+        Assert.Equal(3, errors.Length);
+        Assert.All(errors, error => Assert.Equal("GS0472", error.Id));
     }
 
     private static string Describe(CompileResult result)

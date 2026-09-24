@@ -1365,6 +1365,22 @@ internal sealed partial class StatementBinder
                     return (null, null);
                 }
 
+                // The write goes through the setter: enforce its own
+                // accessibility (a `private set` on a protected property), as
+                // the plain and compound writes do, against the type that
+                // declares the property.
+                if (propAccess.StructType is { } propertyReceiverType
+                    && FindPropertyDeclaringType(propertyReceiverType, propAccess.Property) is { } propertyOwner
+                    && !AccessibilityChecker.IsAccessible(propAccess.Property.SetterAccessibility, propertyOwner, function))
+                {
+                    Diagnostics.ReportMemberInaccessible(
+                        syntax.OperatorToken.Location,
+                        propAccess.Property.Name,
+                        propertyOwner.Name,
+                        propAccess.Property.SetterAccessibility);
+                    return (null, null);
+                }
+
                 // Issue #946: a compound assignment (`+=` / `??=`) to an
                 // init-only property is only legal during object initialization.
                 if (propAccess.Property.IsInitOnly)
@@ -1412,6 +1428,18 @@ internal sealed partial class StatementBinder
                 if (clrPropAccess.Member is System.Reflection.PropertyInfo propInfo && !propInfo.CanWrite)
                 {
                     Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, propInfo.Name);
+                    return (null, null);
+                }
+
+                // The write goes through the setter, which must be callable
+                // here: public, a friend assembly's internal, or protected
+                // from a class deriving from the declaring type. The same
+                // visibility the plain write uses, rather than `CanWrite`
+                // alone, which admits a private setter.
+                if (clrPropAccess.Member is System.Reflection.PropertyInfo writeProperty
+                    && !HasCallableClrSetter(writeProperty))
+                {
+                    Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, writeProperty.Name);
                     return (null, null);
                 }
 
@@ -1555,6 +1583,84 @@ internal sealed partial class StatementBinder
                 Diagnostics.ReportNullCoalescingAssignmentInvalidTarget(syntax.OperatorToken.Location);
                 return (null, null);
         }
+    }
+
+    /// <summary>
+    /// The class in <paramref name="receiverType"/>'s hierarchy that declares
+    /// <paramref name="property"/> (instance or static).
+    /// </summary>
+    /// <param name="receiverType">The type the property was read through.</param>
+    /// <param name="property">The property.</param>
+    /// <returns>The declaring type, or <see langword="null"/> when it is not found.</returns>
+    private static StructSymbol? FindPropertyDeclaringType(StructSymbol receiverType, PropertySymbol property)
+    {
+        foreach (var level in receiverType.GetHierarchy())
+        {
+            foreach (var candidate in level.Properties)
+            {
+                if (ReferenceEquals(candidate, property)
+                    || (candidate.Name == property.Name && ReferenceEquals(candidate.GetterSymbol, property.GetterSymbol) && candidate.GetterSymbol != null))
+                {
+                    return level;
+                }
+            }
+
+            foreach (var candidate in level.StaticProperties)
+            {
+                if (ReferenceEquals(candidate, property))
+                {
+                    return level;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Whether <paramref name="property"/>'s setter can be called from the
+    /// current member: public, internal in a friend assembly, or protected
+    /// when the enclosing class derives from the declaring type.
+    /// </summary>
+    /// <param name="property">The imported property.</param>
+    /// <returns><see langword="true"/> when the setter is callable here.</returns>
+    private bool HasCallableClrSetter(PropertyInfo property)
+    {
+        var friendInternals = property.DeclaringType?.Assembly is { } declaringAssembly
+            && scope.References.CanAccessInternalMembers(declaringAssembly);
+        var visible = DerivesFromClrType(property.DeclaringType)
+            ? ClrMemberVisibility.GetDerivedVisibleSetter(property, friendInternals)
+            : ClrMemberVisibility.GetVisibleSetter(property, friendInternals);
+        return visible != null;
+    }
+
+    /// <summary>
+    /// Whether the class enclosing the current member (the member's own, or
+    /// the one a function literal is nested in) inherits from
+    /// <paramref name="declaringType"/> through its imported base chain.
+    /// </summary>
+    /// <param name="declaringType">The CLR declaring type.</param>
+    /// <returns><see langword="true"/> when the enclosing class derives from it.</returns>
+    private bool DerivesFromClrType(Type? declaringType)
+    {
+        var current = function;
+        if (declaringType == null
+            || (current?.ReceiverType ?? current?.StaticOwnerType ?? current?.LexicalEnclosingType) is not StructSymbol enclosing)
+        {
+            return false;
+        }
+
+        var declaringDefinition = declaringType.IsGenericType ? declaringType.GetGenericTypeDefinition() : declaringType;
+        for (var level = ExpressionBinder.GetInheritedClrBaseType(enclosing); level != null; level = level.BaseType)
+        {
+            var levelDefinition = level.IsGenericType ? level.GetGenericTypeDefinition() : level;
+            if (level.IsSameAs(declaringType) || levelDefinition.IsSameAs(declaringDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
