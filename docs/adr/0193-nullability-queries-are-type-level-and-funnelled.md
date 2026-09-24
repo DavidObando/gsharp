@@ -256,19 +256,27 @@ decision; the decision itself exists once.
 ```csharp
 internal enum ImportedReferenceNullability
 {
-    Unchanged,   // value type, or an open slot whose argument speaks for itself
+    Unchanged,   // keep the input exactly as it is, including any `?` it already carries
     NotNull,     // T
     Nullable,    // T?
     Platform,    // T!
+}
+
+// What is known about a type argument's kind at the point the rule runs.
+internal enum TypeArgumentKind
+{
+    Reference,   // a reference type, or a type parameter constrained to one (`class`, a class type)
+    Value,       // a value type, or a type parameter constrained `struct` / `unmanaged`
+    Unknown,     // an unconstrained (or interface-only-constrained) type parameter
 }
 
 internal static class NullabilityImportRule
 {
     // The shared decision — no type model in the signature.
     internal static ImportedReferenceNullability DecideConcrete(
-        ClrNullabilityState state, bool isValueType);
+        ClrNullabilityState state, TypeArgumentKind kind);
     internal static ImportedReferenceNullability DecideOpenSlot(
-        ClrNullabilityState declaredState, bool argumentIsValueType);
+        ClrNullabilityState declaredState, TypeArgumentKind argumentKind);
 
     // gsc's applier over TypeSymbol (Core).
     internal static TypeSymbol ApplyConcrete(TypeSymbol baseSymbol, ClrNullabilityState state);
@@ -283,19 +291,61 @@ internal static class NullabilityImportRule
   (`None` → `Oblivious`, `NotAnnotated` → `NotAnnotated`, `Annotated` →
   `Annotated`). Each side owns only its input adapter and its applier; the
   decision is shared.
+- **The argument's kind is three-valued, not a boolean.** "Is this a value
+  type?" has a third answer for an unconstrained type parameter: *not known*.
+  Roslyn says so explicitly — an unconstrained (or interface-constrained)
+  `ITypeParameterSymbol` reports both `IsReferenceType` and `IsValueType` as
+  false, which `CSharpTypeMapper.cs` (~435–442) already has to special-case —
+  and a boolean would silently fold that into one side; folded into
+  "reference" (as `!isValueType` would), `DecideOpenSlot`
+  means `Nullable` and recreates exactly the `Min()`/`Max()`-on-unconstrained-`T`
+  regression PR #4362 round 1 hit. Each side's adapter classifies its argument
+  into `TypeArgumentKind`; `Unknown` is never coerced to either neighbour.
 - `DecideConcrete` is ADR-0186 §2's table: `NotAnnotated` → `NotNull`,
-  `Annotated` → `Nullable`, `Oblivious` → `Platform`; a value type is
-  `Unchanged` in every row.
-- `DecideOpenSlot` is ADR-0186 §2's carve-out plus owner decision 1 below: an
-  open slot's argument speaks for itself (`Unchanged`) unless the declaration
-  says `Annotated` **and** the argument is a reference type (`Nullable`).
-- gsc's `ApplyConcrete`/`ApplyOpenSlot` map the decision onto `TypeSymbol`
-  (`Nullable` → `NullableTypeSymbol.Get`, `Platform` → `PlatformTypeSymbol.Get`).
-  cs2gs's applier (Phase 5) maps it onto `GTypeReference`: `Nullable` →
-  `IsNullable = true`; `NotNull` and `Unchanged` → the plain spelling;
-  `Platform` → the plain spelling, with the position reported to cs2gs's
-  existing forgiveness/bridging logic as oblivious — the same meaning, expressed
-  in the only form cs2gs's output language has for it.
+  `Annotated` → `Nullable`, `Oblivious` → `Platform`; a `Value` position is
+  `Unchanged` in every row. (A concrete position's kind is always `Reference` or
+  `Value` — it is a closed type, not a parameter.)
+- `DecideOpenSlot` is ADR-0186 §2's carve-out plus owner decision 1 below:
+
+  | Declared state at the open slot | `Reference` argument | `Value` argument | `Unknown` argument |
+  |---|---|---|---|
+  | `Annotated` (`[Nullable(2)]T`) | `Nullable` | `Unchanged` | `Unchanged` |
+  | `NotAnnotated` | `Unchanged` | `Unchanged` | `Unchanged` |
+  | `Oblivious` / absent | `Unchanged` | `Unchanged` | `Unchanged` |
+
+  The `Unknown` column is `Unchanged`: the argument (a G# type parameter `T`)
+  keeps whatever it already says. That is what `main` does today — PR #4362
+  round 2 (`4d6001c08`, *"unconstrained T is not widened"*) — and it is the only
+  choice in the column that does not reintroduce the round-1 regression. It
+  carries a known soundness cost, stated rather than hidden: an `Annotated`
+  open slot (`TSource? Min<TSource>`) substituted with an unconstrained G# `T`
+  that is later instantiated with a reference type can yield nil into a
+  position typed `T`. The alternative — `Platform` for that one cell, i.e.
+  "nullability not known here" — is ADR-0186's own answer for unknown
+  nullability and would be checked at the coercion point, but it depends on a
+  platform wrapper over a type parameter that may be instantiated with a value
+  type, which Phase 1's `PlatformTypeSymbol.Get` normalisation does not yet
+  define. This cell is therefore the one entry in the rule that needs the
+  repository owner's explicit confirmation **before Phase 1 starts** (Open
+  question 1); `Unchanged` is the default if it is confirmed as written.
+- **`Unchanged` preserves the input's own nullability, on both type models.**
+  gsc's `ApplyConcrete`/`ApplyOpenSlot` map the decision onto `TypeSymbol`:
+  `Unchanged` → the input symbol exactly as given (a `string?` argument stays
+  `string?`), `NotNull` → the bare symbol, `Nullable` → `NullableTypeSymbol.Get`,
+  `Platform` → `PlatformTypeSymbol.Get`. cs2gs's applier (Phase 5) maps it onto
+  `GTypeReference`, whose only nullable state is `IsNullable`:
+  - `Unchanged` → the argument's `GTypeReference` with its **existing**
+    `IsNullable` preserved — substituting `string?` into an oblivious open slot
+    emits `string?`, not `string`;
+  - `NotNull` → `IsNullable = false` (the only arm that clears it);
+  - `Nullable` → `IsNullable = true`;
+  - `Platform` → `IsNullable = false`, with the position reported to cs2gs's
+    existing forgiveness/bridging logic as oblivious — the same meaning,
+    expressed in the only form cs2gs's output language has for it.
+
+  The reader-agreement test (§4) and the Phase 5 cs2gs tests each include a
+  `string?` argument substituted into `Annotated`, `NotAnnotated` and
+  `Oblivious` open slots, asserting `string?` in all three.
 - **Platform-types semantics only** (owner decision 2). There is no
   `NullabilityOptions` branch in this class, and none may be added.
   `ClrNullability.SymbolForState`'s existing dual-mode branch is left for #4372 to
@@ -678,9 +728,12 @@ ADR-0186's steps did.
 
 ## Open questions for the implementer
 
-1. **A symbolic G# type parameter at an open slot.** Decision 1 rules on
-   reference and value-type arguments. An argument that is itself an in-scope,
-   unconstrained G# type parameter is neither yet. Phase 1 decides it — inside
-   `ApplyOpenSlot`, in one place — and records the answer here.
+1. **The `Annotated` × `Unknown` cell of `DecideOpenSlot` — owner confirmation
+   needed before Phase 1.** Decision 1 rules on reference and value-type
+   arguments; an unconstrained G# type parameter is neither. §1 sets the cell to
+   `Unchanged` (today's behaviour on `main`, and the only value that does not
+   reintroduce PR #4362 round 1's `Min()` regression) and states its soundness
+   cost; `Platform` is the alternative. Phase 1 implements whichever is
+   confirmed, in that one cell, and records it here.
 2. **The audit's third Layer 5 predicate** was not located. Phase 3 either finds
    it (GSA0008 will) or records that there were two.
