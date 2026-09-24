@@ -78,17 +78,18 @@ public class WorkspaceState
             return project;
         }
 
-        // Fallback: search all projects
-        foreach (var p in projects.Values)
+        // Fallback: prefer the nearest containing project when nested projects both
+        // include the same file through recursive default globs.
+        var found = projects.Values
+            .Where(p => p.ContainsFile(normalized))
+            .OrderByDescending(p => ProjectSpecificity(normalized, p.ProjectFilePath))
+            .FirstOrDefault();
+        if (found != null)
         {
-            if (p.ContainsFile(normalized))
-            {
-                fileToProject[normalized] = p.ProjectFilePath;
-                return p;
-            }
+            fileToProject[normalized] = found.ProjectFilePath;
         }
 
-        return null;
+        return found;
     }
 
     /// <summary>
@@ -110,7 +111,13 @@ public class WorkspaceState
     public void RegisterFile(string filePath, ProjectState project)
     {
         var normalized = Path.GetFullPath(filePath);
-        fileToProject[normalized] = project.ProjectFilePath;
+        fileToProject.AddOrUpdate(
+            normalized,
+            project.ProjectFilePath,
+            (_, existing) => ProjectSpecificity(normalized, project.ProjectFilePath) >
+                ProjectSpecificity(normalized, existing)
+                    ? project.ProjectFilePath
+                    : existing);
     }
 
     /// <summary>
@@ -257,5 +264,21 @@ public class WorkspaceState
         }
 
         return false;
+    }
+
+    private static int ProjectSpecificity(string filePath, string projectFilePath)
+    {
+        var projectDirectory = Path.GetDirectoryName(projectFilePath);
+        if (string.IsNullOrEmpty(projectDirectory))
+        {
+            return -1;
+        }
+
+        var relative = Path.GetRelativePath(projectDirectory, filePath);
+        return relative == ".."
+            || relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal)
+            || Path.IsPathRooted(relative)
+                ? -1
+                : projectDirectory.Length;
     }
 }

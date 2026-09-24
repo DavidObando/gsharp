@@ -26,6 +26,15 @@ module.exports = {
     openExternal: async () => true,
   },
   Uri: {
-    parse: (value) => ({ toString: () => value }),
+    parse: (value) => ({
+      scheme: value.slice(0, value.indexOf(':')),
+      toString: (skipEncoding) => (skipEncoding ? decodeURIComponent(value) : value),
+    }),
+  },
+  Range: class Range {
+    constructor(startLine, startCharacter, endLine, endCharacter) {
+      this.start = { line: startLine, character: startCharacter };
+      this.end = { line: endLine, character: endCharacter };
+    }
   },
 };
