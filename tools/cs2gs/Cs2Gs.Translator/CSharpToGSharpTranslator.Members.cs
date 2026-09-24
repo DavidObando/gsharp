@@ -1037,6 +1037,36 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                // Issue #4371: a C# fixed-size buffer field
+                // (`public fixed sbyte Name[32];`) maps to G#'s own
+                // fixed-size buffer field form (ADR-0122 §10):
+                // `fixed Name [32]int8`. Roslyn exposes such a field's
+                // `Type` as a POINTER to the element type (`sbyte*`), with
+                // `IsFixedSizeBuffer`/`FixedSize` separately carrying the
+                // true element type and element count; translating it
+                // through the ordinary `symbol.Type` path below emits a bare
+                // `var Name *int8` raw-pointer field instead — one gsc's
+                // `fixed` statement then rejects with GS0401 when the
+                // (already-mistranslated) field is pinned.
+                if (symbol is { IsFixedSizeBuffer: true } && symbol.Type is IPointerTypeSymbol fixedBufferPointerType)
+                {
+                    GTypeReference fixedBufferElementType = this.typeMapper.Map(
+                        fixedBufferPointerType.PointedAtType,
+                        this.context,
+                        declarator.GetLocation());
+
+                    yield return (
+                        new FieldDeclaration(
+                            BindingKind.FixedBuffer,
+                            this.EmittedName(symbol, declarator.Identifier.ValueText),
+                            fixedBufferElementType,
+                            visibility: MapVisibility(symbol, this.context, field),
+                            attributes: this.MapAttributes(field.AttributeLists),
+                            fixedBufferLength: symbol.FixedSize),
+                        false);
+                    continue;
+                }
+
                 BindingKind binding = symbol switch
                 {
                     { IsConst: true } => BindingKind.Const,

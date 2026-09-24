@@ -30,13 +30,21 @@ public sealed class FieldDeclaration : GMember
     /// <param name="initializer">The optional initializer expression.</param>
     /// <param name="visibility">The accessibility.</param>
     /// <param name="attributes">The field attributes.</param>
+    /// <param name="fixedBufferLength">
+    /// The element count for a <see cref="BindingKind.FixedBuffer"/> field
+    /// (ADR-0122 §10); <see langword="null"/> for every other binding.
+    /// <paramref name="type"/> carries the buffer's ELEMENT type in that case
+    /// (e.g. <c>int8</c>, not <c>[32]int8</c>) — the printer renders the
+    /// bracketed count itself.
+    /// </param>
     public FieldDeclaration(
         BindingKind binding,
         string name,
         GTypeReference type = null,
         GExpression initializer = null,
         Visibility visibility = Visibility.Default,
-        IReadOnlyList<AttributeUse> attributes = null)
+        IReadOnlyList<AttributeUse> attributes = null,
+        int? fixedBufferLength = null)
     {
         Binding = binding;
         Name = name;
@@ -44,6 +52,7 @@ public sealed class FieldDeclaration : GMember
         Initializer = initializer;
         Visibility = visibility;
         Attributes = attributes ?? new List<AttributeUse>();
+        FixedBufferLength = fixedBufferLength;
     }
 
     /// <summary>Gets the binding keyword.</summary>
@@ -63,6 +72,12 @@ public sealed class FieldDeclaration : GMember
 
     /// <summary>Gets the field attributes.</summary>
     public IReadOnlyList<AttributeUse> Attributes { get; }
+
+    /// <summary>
+    /// Gets the element count for a <see cref="BindingKind.FixedBuffer"/>
+    /// field, or <see langword="null"/> for every other binding.
+    /// </summary>
+    public int? FixedBufferLength { get; }
 }
 
 /// <summary>
