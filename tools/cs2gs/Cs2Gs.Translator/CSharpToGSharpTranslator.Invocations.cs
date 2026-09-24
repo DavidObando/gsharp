@@ -1848,7 +1848,16 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.ShouldPromoteToNullableReference(siblingParameter);
             bool targetRequiresNonNull = argumentOperation?.Parameter is not { } targetParameter
                 || (this.TargetWillRemainNonNullableReference(targetParameter.Type, targetParameter)
-                    && !targetIsPromotedMigratedSibling);
+                    && !targetIsPromotedMigratedSibling)
+
+                // Issue #4356: a `T?`-only-in-G# analyzer value passed to a
+                // parameter whose type is non-null. Roslyn sees a struct (or a
+                // non-null reference) on both sides, so the reference-type test
+                // above cannot tell; ForgiveNullableReferenceValue bridges it.
+                || (this.IsGSharpNullableAnalyzerExpression(argument.Expression)
+                    && targetParameter.Type.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
+                    && !(targetParameter.Type.IsReferenceType
+                        && targetParameter.Type.NullableAnnotation == NullableAnnotation.Annotated));
             if (!IsNameOfArgument(argument)
                 && !isXunitNullAssertion
                 && targetRequiresNonNull
@@ -3976,6 +3985,18 @@ public sealed partial class CSharpToGSharpTranslator
             if (cast.Type is not NullableTypeSyntax
                 && this.CastUsesCheckedReferenceConversion(cast)
                 && this.IsFlowNarrowedAnnotatedReference(cast.Expression))
+            {
+                operand = EnsureNonNullAssertion(operand);
+            }
+
+            // Issue #4356: an operand that is `T?` only on the G# analyzer API
+            // (`(SyntaxToken)parameter.Identifier`, `(object)operation.Syntax`).
+            // Roslyn sees an identity/reference conversion from a non-null value;
+            // G# sees `T?` converted to a non-null type, so assert the operand —
+            // the same bridge every other value position takes.
+            if (cast.Type is not NullableTypeSyntax
+                && targetSymbol?.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
+                && this.IsGSharpNullableAnalyzerExpression(cast.Expression))
             {
                 operand = EnsureNonNullAssertion(operand);
             }

@@ -261,6 +261,17 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         expressionBody = new NonNullAssertionExpression(expressionBody);
                     }
+                    else if (this.IsGSharpNullableAnalyzerExpression(bodyExpression)
+                        && this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod?.ReturnType is { } lambdaReturn
+                        && lambdaReturn.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
+                        && !(lambdaReturn.IsReferenceType && lambdaReturn.NullableAnnotation == NullableAnnotation.Annotated))
+                    {
+                        // Issue #4356: a `T?`-only-in-G# analyzer value returned
+                        // where the delegate's G# result is non-null — the same
+                        // bridge a `return` statement takes. (gsc erases the
+                        // reference `!!` inside an expression tree.)
+                        expressionBody = EnsureNonNullAssertion(expressionBody);
+                    }
                 }
                 finally
                 {

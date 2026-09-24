@@ -855,6 +855,64 @@ public sealed class BindingShapesAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void RetargetedNullableMember_AtEveryNonNullSink_BindsWithoutCarveOut()
+    {
+        // Issue #4356: every position that consumes a value as non-null must
+        // bridge a `T?`-only-in-G# analyzer value: a cast operand, an argument
+        // to a non-null parameter, a return, a conditional branch, a tuple
+        // element, a lambda result, a string concatenation and an
+        // interpolation. Receivers and local initializers are covered above.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class SinkAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static string Use(SyntaxToken token) => token.Text;
+
+    private static SyntaxToken Cast(MethodDeclarationSyntax d) => (SyntaxToken)d.ParameterList.Parameters[0].Identifier;
+
+    private static string Argument(MethodDeclarationSyntax d) => Use(d.ParameterList.Parameters[0].Identifier);
+
+    private static SyntaxToken Returned(MethodDeclarationSyntax d)
+    {
+        return d.ParameterList.Parameters[0].Identifier;
+    }
+
+    private static SyntaxToken Branch(MethodDeclarationSyntax d, bool first)
+        => first ? d.ParameterList.Parameters[0].Identifier : d.ParameterList.Parameters[1].Identifier;
+
+    private static (SyntaxToken Token, int Index) Tupled(MethodDeclarationSyntax d)
+        => (d.ParameterList.Parameters[0].Identifier, 0);
+
+    private static Func<MethodDeclarationSyntax, SyntaxToken> Lambda()
+        => d => d.ParameterList.Parameters[0].Identifier;
+
+    private static string Concatenated(MethodDeclarationSyntax d)
+        => ""p:"" + d.ParameterList.Parameters[0].Identifier;
+
+    private static string Interpolated(MethodDeclarationSyntax d)
+        => $""p:{d.ParameterList.Parameters[0].Identifier}"";
+}
+");
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
     {
         // Issue #4356: SingleVariableDesignationSyntax.Identifier (a Roslyn
