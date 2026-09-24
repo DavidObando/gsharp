@@ -58,6 +58,10 @@ internal sealed partial class MethodBodyEmitter
         {
             this.EmitFixedPinnableReferencePin(node, pinnedSlot, pointerSlot);
         }
+        else if (node.PinKind == FixedPinKind.FixedBuffer)
+        {
+            this.EmitFixedBufferPin(node, pinnedSlot, pointerSlot);
+        }
         else
         {
             this.EmitFixedStringPin(node, pinnedSlot, pointerSlot);
@@ -74,11 +78,11 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(finallyStart);
 
         // Release the pin on normal, branch, return, and exceptional exits.
-        if (node.PinKind == FixedPinKind.PinnableReference)
+        if (node.PinKind is FixedPinKind.PinnableReference or FixedPinKind.FixedBuffer)
         {
             // The pinned local is a managed by-ref (`T& pinned`); release it by
             // storing a null managed pointer (`ldc.i4.0; conv.u`), exactly as the
-            // C# compiler does for `fixed (T* p = span)`.
+            // C# compiler does for `fixed (T* p = span)` / `fixed (T* p = buf)`.
             this.il.LoadConstantI4(0);
             this.il.OpCode(ILOpCode.Conv_u);
             this.il.StoreLocal(pinnedSlot);
@@ -223,6 +227,32 @@ internal sealed partial class MethodBodyEmitter
         // MemberRef when the container is non-generic or fully closed.
         this.il.Token(this.outer.memberRefs.GetMethodEntityHandle(getPinnableReference, node.PinnedSource.Type)); // -> T&
         this.il.StoreLocal(pinnedSlot);          // T& pinned = ref
+        this.il.LoadLocal(pinnedSlot);
+        this.EmitManagedPointerAsUnmanagedPointer(
+            ((Symbols.PointerTypeSymbol)node.PointerVariable.Type).PointeeType,
+            node.Syntax);
+        this.il.StoreLocal(pointerSlot);         // p = (T*)ref
+    }
+
+    // Fixed-size buffer pin form (ADR-0125 amendment / issue #4378): the binder
+    // lowered the source to the managed reference
+    // `ref recv.name.FixedElementField`, which emits as the `ldflda` chain C#
+    // produces for `fixed (T* p = recv.name)`. Store it into the `T& pinned`
+    // local (pinning the buffer's containing object), then derive `*T` via
+    // `Unsafe.AsPointer<T>`. A buffer is never null or empty, so no guard.
+    private void EmitFixedBufferPin(BoundFixedStatement node, int pinnedSlot, int pointerSlot)
+    {
+        // Address the buffer field exactly as its `*T` decay does (so every
+        // receiver shape the decay supports pins the same storage), then step
+        // to the element field at offset 0.
+        var elementAccess = (BoundFieldAccessExpression)((BoundAddressOfExpression)node.PinnedSource).Operand;
+        var bufferAccess = Invariant.Required(
+            elementAccess.Receiver as BoundFieldAccessExpression,
+            "the binder roots a fixed-buffer pin at the buffer field access");
+        this.EmitFieldAddress(bufferAccess);     // &recv.name
+        this.il.OpCode(ILOpCode.Ldflda);
+        this.il.Token(this.ResolveFieldAddressHandle(elementAccess)); // &recv.name.FixedElementField
+        this.il.StoreLocal(pinnedSlot);          // T& pinned = ref recv.name.FixedElementField
         this.il.LoadLocal(pinnedSlot);
         this.EmitManagedPointerAsUnmanagedPointer(
             ((Symbols.PointerTypeSymbol)node.PointerVariable.Type).PointeeType,

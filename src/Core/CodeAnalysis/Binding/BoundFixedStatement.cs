@@ -27,6 +27,16 @@ public enum FixedPinKind
     /// <c>*T</c> via <c>conv.u</c>, mirroring C# <c>fixed (T* p = span)</c>.
     /// </summary>
     PinnableReference,
+
+    /// <summary>
+    /// ADR-0125 amendment (issue #4378): a fixed-size buffer field (ADR-0122 §10,
+    /// <c>fixed name [N]T</c>) reached through a movable variable. The pinned
+    /// source is the managed reference <c>ref recv.name.FixedElementField</c>;
+    /// pin it into a <c>T&amp; pinned</c> local (keeping the containing storage
+    /// pinned for the block) and derive <c>*T</c> from it, mirroring C#
+    /// <c>fixed (T* p = recv.name)</c>.
+    /// </summary>
+    FixedBuffer,
 }
 
 /// <summary>
@@ -85,7 +95,11 @@ public sealed class BoundFixedStatement : BoundStatement
     /// <summary>Gets the user-visible <c>*T</c> pointer local.</summary>
     public VariableSymbol PointerVariable { get; }
 
-    /// <summary>Gets the managed array/string source to pin.</summary>
+    /// <summary>
+    /// Gets the managed source to pin: the array/string/span-like value, or — for
+    /// <see cref="FixedPinKind.FixedBuffer"/> — the managed address-of
+    /// <c>ref recv.name.FixedElementField</c> of the buffer's first element.
+    /// </summary>
     public BoundExpression PinnedSource { get; }
 
     /// <summary>

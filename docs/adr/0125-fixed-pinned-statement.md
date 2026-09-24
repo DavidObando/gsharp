@@ -3,7 +3,8 @@
 - **Status**: Accepted
 - **Date**: 2026-06-27
 - **Phase**: Phase 9 — low-level / interop depth
-- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0056 (ref-returning members / `modreq(InAttribute)` ref-returns), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), ADR-0153 (interpreter compiled-only storage boundary), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026), issue [#1043](https://github.com/DavidObando/gsharp/issues/1043), issue [#2900](https://github.com/DavidObando/gsharp/issues/2900)
+- **Amended**: 2026-09-23 — a fixed-size buffer field (ADR-0122 §10) is now a pin source, with C#'s movable/fixed-variable rules; closes the "Deferred: fixed-size buffers" item. See [Amendment 2026-09-23](#amendment-2026-09-23-fixed-size-buffer-pin-source-4378).
+- **Related**: ADR-0039 (managed by-ref pointers / address-of / dereference), ADR-0056 (ref-returning members / `modreq(InAttribute)` ref-returns), ADR-0122 (unsafe context and unmanaged raw pointers `*T`, issue [#1014](https://github.com/DavidObando/gsharp/issues/1014)), ADR-0124 (`stackalloc`/`localloc`, issue [#1024](https://github.com/DavidObando/gsharp/issues/1024)), ADR-0153 (interpreter compiled-only storage boundary), issue [#1026](https://github.com/DavidObando/gsharp/issues/1026), issue [#1043](https://github.com/DavidObando/gsharp/issues/1043), issue [#2900](https://github.com/DavidObando/gsharp/issues/2900), issue [#4378](https://github.com/DavidObando/gsharp/issues/4378)
 
 ## Context
 
@@ -80,6 +81,8 @@ The **source** must be a pinnable managed buffer:
   `fixed (T* p = span)`. `ReadOnlySpan[T].GetPinnableReference()` returns
   `ref readonly T` — a `modreq(System.Runtime.InteropServices.InAttribute)`
   ref-return — which the method-reference encoder now reproduces (see §4).
+- A **fixed-size buffer field** (ADR-0122 §10) reached through a movable
+  variable — added by the [2026-09-23 amendment](#amendment-2026-09-23-fixed-size-buffer-pin-source-4378).
 
 The bound pointer's pointee type must match the buffer's element type;
 `uint16`/`char` are accepted interchangeably for `string` (a `string`'s
@@ -199,7 +202,8 @@ kind: it gets a real `case` in `MethodBodyEmitter.EmitStatement` and in
   pinned-local emit path; it did not attempt to emulate pinning without a
   storage and address model. Every default driver executed the emitted
   pinned-local path. ADR-0156 Phase 3c removed the evaluator.
-- Deferred: fixed-size buffers.
+- ~~Deferred: fixed-size buffers.~~ Resolved by the
+  [2026-09-23 amendment](#amendment-2026-09-23-fixed-size-buffer-pin-source-4378).
 
 ## Diagnostics
 
@@ -207,3 +211,117 @@ kind: it gets a real `case` in `MethodBodyEmitter.EmitStatement` and in
 - **`GS0401`** — a `fixed` statement source is not a pinnable array/slice or
   string, or the pointer's pointee does not match the buffer's element type.
 - **`GS0506`** — `await` or `yield` appears directly inside a `fixed` body.
+- **`GS0507`** — a `fixed` statement pins a fixed-size buffer reached through an
+  already-fixed variable (C# CS0213); see the 2026-09-23 amendment.
+
+## Amendment 2026-09-23: fixed-size buffer pin source (#4378)
+
+**Decision (repo owner): C# parity.** A `fixed` statement accepts a fixed-size
+buffer field (ADR-0122 §10, `fixed Name [32]int8`) directly as its source,
+binds the pointer to the buffer's first element, and keeps the buffer's
+containing storage pinned for the whole block — exactly what C#'s
+`fixed (sbyte* p = Name) { … }` does. This closes the "Deferred: fixed-size
+buffers" item above. The alternative of lowering the C# pattern in cs2gs to a
+plain pointer local (`let p *T = buf`) was rejected: it drops the GC pin
+whenever the struct lives inside a heap object, which is a real semantic
+difference from the C# source.
+
+```gsharp
+unsafe struct BoneInfo {
+    fixed Name [32]int8
+    var Parent int32
+
+    func First() int8 {
+        fixed p *int8 = Name {      // bare name: receiver is `this`
+            return p[0]
+        }
+    }
+}
+
+unsafe func label(h Holder) {
+    fixed p *int8 = h.Bone.Name {   // buffer inside a class instance
+        …
+    }
+}
+```
+
+**Recognising the source.** Every reference to a fixed-size buffer field
+decays to a `*T` (ADR-0122 §10), so the binder recognises the decay's bound
+shape — a pointer reinterpret of the unmanaged address of the buffer field
+access — and recovers the field access from it. No other source construct
+produces that shape (source code cannot address an undecayed buffer field), so
+the recognition cannot capture an arbitrary raw pointer: pinning a plain `*T`
+remains `GS0401`. A new `FixedPinKind.FixedBuffer` is added; no new bound-node
+kind, so the coverage matrix is unchanged.
+
+**Accept/reject rules — C#'s movable/fixed variable classification** (C# spec
+§23.4). The buffer is pinnable when its receiver is *movable*:
+
+| Receiver of the buffer | C# | G# |
+|---|---|---|
+| struct method receiver `this` (bare `Name` or `this.Name`) | accepted | accepted |
+| `ref` / `out` / `in` parameter, ref local | accepted | accepted |
+| field of a class instance (`h.B.Name`) | accepted | accepted |
+| buffer declared directly on a class (`c.Data`) | n/a (CS1642) | accepted |
+| array / slice element (`bones[i].Name`) | accepted | accepted |
+| static field | accepted | accepted |
+| by-value local or parameter (`b.Name`), incl. nested struct fields | CS0213 | **GS0507** |
+| pointer dereference (`p->Name`, `(*p).Name`) | CS0213 | **GS0507** |
+| value that is not a variable (`make().Name`) | CS1708 | GS0401 |
+| pointee mismatch (`*uint8` over an `int8` buffer) | CS0266 | GS0401 |
+
+Anything the classifier does not recognise is treated as movable: an extra pin
+is sound, whereas wrongly rejecting a movable variable would leave no way to
+pin it. A local captured by a lambda is classified as a local (fixed), as C#
+does — C# also reports CS0213 there — even though G# hoists it into a closure
+object; such a buffer can still be addressed through its decayed `*T`.
+
+Two C# rules are **deliberately not ported**:
+
+- **CS1666** ("fixed size buffers contained in unfixed expressions") rejects
+  *taking the pointer value* of a movable buffer outside `fixed`
+  (`sbyte* q = this.Name;`), while still allowing indexing (`Name[i]`) since
+  C# 7.3. G#'s pre-existing decay makes both forms bind through the same
+  `*T`, and adopting CS1666 would reject G# code accepted today; it is left as a
+  possible follow-up rather than folded into this change.
+- **`void*` targets.** C# accepts `fixed (void* p = Name)` through the implicit
+  `T* → void*` conversion. The G# `fixed` statement keeps its existing rule
+  that the pointee must equal the buffer's element type for every source kind.
+
+**Lowering.** The binder rewrites the source to the managed reference
+`ref recv.Name.FixedElementField` (the backing struct's single element field
+sits at offset 0). The emitter addresses the buffer field exactly as the decay
+does, then steps to the element field, and stores the reference into a
+`T& pinned` local — byte-for-byte the IL csc emits:
+
+```
+<address of recv>                       // ldarg.0 / ldflda chain / ldelema …
+ldflda  valuetype S/'<Name>e__FixedBuffer' S::Name
+ldflda  T S/'<Name>e__FixedBuffer'::FixedElementField
+stloc   pinned                          // T& pinned
+ldloc   pinned
+call    void* Unsafe.AsPointer<T>(ref T); stloc ptr
+try { <body> } finally {
+    ldc.i4.0; conv.u; stloc pinned      // release on every exit
+}
+```
+
+A buffer is never null or empty, so no guard is needed. As for the other
+by-ref pin forms, `Unsafe.AsPointer<T>` replaces csc's `conv.u` (§4), and the
+release sits in the protected-cleanup `finally` rather than csc's straight-line
+store.
+
+**Bare-name decay (issue #4377).** A bare (implicit-`this`) reference to a
+buffer field inside the declaring struct now decays exactly like `this.Name`
+on both the read and the indexed-write paths, so `Name[i]`, `Name[i] = v`, and
+`fixed p *T = Name { … }` all bind. cs2gs still emits an explicit `this.`
+qualifier (issue #4371); both spellings are equivalent.
+
+**cs2gs.** `fixed (T* p = buf) { … }` over a C# fixed-size buffer translates to
+`fixed p *T = <buf> { … }`, replacing the interim Unsupported translation gap
+report from issue #4371. C# already rejects the fixed-variable cases, so every
+translated pin lands in the accepted rows above.
+
+**Diagnostics.** New **`GS0507`** (C# CS0213). **`GS0401`**'s description now
+lists the fixed-size buffer source.
+
