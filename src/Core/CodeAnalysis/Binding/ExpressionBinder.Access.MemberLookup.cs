@@ -3261,11 +3261,11 @@ internal sealed partial class ExpressionBinder
         // `this[System.Index]` indexer (among possibly several overloads)
         // receives the Index value directly, as C# binds it.
         if (target.Type is StructSymbol or InterfaceSymbol
-            && TryGetUserIndexerTaking(target.Type, typeof(System.Index), out var userIndexer, out var substitution)
+            && TryGetUserIndexerTaking(target.Type, typeof(System.Index), out var userIndexer, out var substitution, out var indexView)
             && userIndexer.GetterSymbol != null)
         {
             return BindUserIndexerRead(
-                target,
+                ViewIndexerReceiver(target, indexView, targetLocation),
                 userIndexer,
                 substitution,
                 (_, parameterType) => conversions.BindConversion(targetLocation, indexValue, parameterType),
@@ -3363,8 +3363,9 @@ internal sealed partial class ExpressionBinder
         // receives the Index value directly; a ref-returning getter with no
         // setter stores through the returned reference.
         if (targetType is StructSymbol or InterfaceSymbol
-            && TryGetUserIndexerTaking(targetType, typeof(System.Index), out var userIndexer, out var substitution))
+            && TryGetUserIndexerTaking(targetType, typeof(System.Index), out var userIndexer, out var substitution, out var indexView))
         {
+            target = ViewIndexerReceiver(target, indexView, diagnosticLocation);
             var parameterType = SubstituteIndexerType(userIndexer.Parameters[0].Type, substitution);
             if (userIndexer.SetterSymbol != null)
             {

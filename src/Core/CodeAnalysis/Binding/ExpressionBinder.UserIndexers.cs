@@ -322,23 +322,26 @@ internal sealed partial class ExpressionBinder
     /// <param name="parameterClrType">The required index-parameter CLR type.</param>
     /// <param name="indexer">The matching OPEN indexer.</param>
     /// <param name="substitution">The receiver's type-parameter substitution, if any.</param>
+    /// <param name="view">The constructed base type to view the receiver as, when the indexer is inherited from one.</param>
     /// <returns><see langword="true"/> when such an indexer is declared.</returns>
     private bool TryGetUserIndexerTaking(
         TypeSymbol receiverType,
         Type parameterClrType,
         [NotNullWhen(true)] out PropertySymbol? indexer,
-        out Dictionary<TypeParameterSymbol, TypeSymbol>? substitution)
+        out Dictionary<TypeParameterSymbol, TypeSymbol>? substitution,
+        out TypeSymbol? view)
     {
         indexer = null;
         substitution = null;
+        view = null;
         foreach (var candidate in GetVisibleUserIndexers(receiverType))
         {
-            if (candidate.View == null
-                && candidate.Indexer.Parameters.Length == 1
+            if (candidate.Indexer.Parameters.Length == 1
                 && ClrTypeUtilities.AreSame(SubstituteIndexerType(candidate.Indexer.Parameters[0].Type, candidate.Substitution).ClrType, parameterClrType))
             {
                 indexer = candidate.Indexer;
                 substitution = candidate.Substitution;
+                view = candidate.View;
                 return true;
             }
         }

@@ -355,6 +355,39 @@ public class Issue4350IndexerOverloadEmitTests
     }
 
     [Fact]
+    public void InheritedSystemIndexIndexer_FromConstructedBase()
+    {
+        // Review note: a `this[System.Index]` indexer inherited from a
+        // constructed base (`Words : Base[string]`) receives `^n` and saved
+        // Index values, called on the receiver viewed as `Base<string>`.
+        var source = """
+            package P
+            import System
+
+            open class Base[T] {
+                var items []T
+                init(items []T) {
+                    this.items = items
+                }
+                prop this[index int32] T -> items[index]
+                prop this[index Index] T -> items[index.GetOffset(items.Length)]
+            }
+
+            class Words : Base[string] {
+                init(items []string) : base(items) {
+                }
+            }
+
+            let w = Words([]string{"a", "b", "c"})
+            Console.WriteLine(w[^1] + w[0] + w[(^2)])
+            let last = ^3
+            Console.WriteLine(w[last])
+            """;
+
+        Assert.Equal(string.Join(Environment.NewLine, "cab", "a") + Environment.NewLine, CompileAndRun(source));
+    }
+
+    [Fact]
     public void OverloadedIndexers_EmitOneItemPropertyPerSignature()
     {
         var libraryPath = EmitGSharpLibrary("Shape", Library);
