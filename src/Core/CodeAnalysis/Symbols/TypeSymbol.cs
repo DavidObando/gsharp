@@ -13,7 +13,7 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// <summary>
 /// Represents a type symbol in the language.
 /// </summary>
-public class TypeSymbol : Symbol
+public partial class TypeSymbol : Symbol
 {
     /// <summary>
     /// The type error symbol.

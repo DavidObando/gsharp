@@ -138,8 +138,6 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
             return GetTypeArgumentSymbol(targetClrType.GenericParameterPosition);
         }
 
-        int offset = 1; // byte 0 = outer type
-
         // Issue #4159 (Copilot review finding on this PR): matching by
         // CLOSED CLR type alone is ambiguous for a custom awaitable — this
         // method is reached from ANY type with a conforming duck-typed
@@ -156,7 +154,6 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
         // ever return a nullability annotation that might belong to a
         // different type parameter.
         var matchIndex = -1;
-        var matchOffset = 0;
         var ambiguous = false;
 
         for (int i = 0; i < args.Length; i++)
@@ -173,31 +170,54 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
                 else
                 {
                     matchIndex = i;
-                    matchOffset = offset;
                 }
             }
-
-            offset += ClrNullability.CountNullabilityBytes(arg);
         }
 
         if (matchIndex >= 0 && !ambiguous)
         {
-            var arg = args[matchIndex];
-            var flagged = ClrNullability.SymbolFromFlagsOffset(arg, NullableFlags, matchOffset);
-
-            // ADR-0172: transfer tuple element names from the wrapped
-            // symbolic base's matching argument (the flags-derived symbol
-            // is rebuilt from the CLR shape and cannot carry them).
-            if (BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicBase
-                && (uint)matchIndex < (uint)symbolicBase.TypeArguments.Length)
-            {
-                flagged = TransferTupleNames(symbolicBase.TypeArguments[matchIndex], flagged);
-            }
-
-            return flagged;
+            // ADR-0193 §4: one lazy accessor, reached by index or by CLR
+            // type. This arm used to decode the flags itself and, over a
+            // symbolic base, only transferred tuple names — so it never
+            // merged the base's own argument, and `IEnumerable[string?]`'s
+            // element read `string` here and `string?` through
+            // `GetTypeArgumentSymbol`. The reader-agreement test found the
+            // two disagreeing. Over a non-symbolic base the two computed the
+            // same thing, so delegating changes nothing there.
+            return GetTypeArgumentSymbol(matchIndex);
         }
 
         return TypeSymbol.FromClrType(targetClrType);
+    }
+
+    /// <summary>
+    /// ADR-0193 §2: this representation's half of
+    /// <see cref="TypeSymbol.GetElementPositions"/> — every position decoded
+    /// through the same lazy accessors an element read uses, so a query and a
+    /// read cannot disagree.
+    /// </summary>
+    /// <returns>The element / type-argument positions.</returns>
+    internal ImmutableArray<TypeSymbol> GetAnnotatedElementPositions()
+    {
+        var clr = ClrType;
+        if (clr?.IsArray == true && clr.GetElementType() is { } element)
+        {
+            return ImmutableArray.Create(GetTypeArgumentSymbolForClrType(element));
+        }
+
+        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
+        {
+            return BaseType.GetElementPositions();
+        }
+
+        var count = clr.GetGenericArguments().Length;
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(count);
+        for (var i = 0; i < count; i++)
+        {
+            builder.Add(GetTypeArgumentSymbol(i));
+        }
+
+        return builder.MoveToImmutable();
     }
 
     /// <summary>

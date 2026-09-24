@@ -19,6 +19,10 @@
     <InternalsVisibleTo Include="GSharp.LanguageServer" />
     <InternalsVisibleTo Include="gsc" />
     <InternalsVisibleTo Include="gsi" />
+    <!-- ADR-0193 Phase 1: cs2gs calls NullabilityImportRule directly (ADR-0186
+         step 6, ADR-0193 Phase 5). The assembly name, not the project name:
+         build/gsharp.build.props prefixes every assembly with `GSharp.`. -->
+    <InternalsVisibleTo Include="GSharp.Cs2Gs.Translator" />
   </ItemGroup>
 
   <ItemGroup>

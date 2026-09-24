@@ -143,7 +143,33 @@ internal static class NullableFlagsBuilder
                 // is no `K!` for the same reason there is no `K?` here — the
                 // answer arrives with the type argument. Routed through the
                 // classifier only so no byte comparison survives outside it.
+                //
+                // ADR-0193 §1: under platform types the decision is
+                // `NullabilityImportRule.ApplyOpenSlot`'s. That differs from
+                // the legacy arm below in one cell: an explicit `2` over an
+                // argument whose kind is not known (an unconstrained G# type
+                // parameter) now leaves it alone rather than widening it to
+                // `K?` — the owner's ruling on ADR-0193 Open question 1, and
+                // the hazard the paragraph above names.
+                //
+                // Only a SUBSTITUTED slot is an open slot. When the projection
+                // left the declaration's own generic parameter in place (a
+                // method-level `T` with no method type arguments to map it
+                // through), nothing arrived to speak for the slot, and it reads
+                // as the declaration spells it — exactly as the direct reader
+                // reads the same open definition. `adapt[I](...)` compares
+                // `T? Echo<T>` with `T Echo<T>` this way.
                 var parameterFlag = literalFlags[position++];
+                var unsubstituted = projected is not TypeParameterSymbol
+                    && projected.ClrType is { } self
+                    && NullabilityImportRule.IsUnsubstitutedSlot(self, layout);
+                if (NullabilityOptions.PlatformTypesEnabled && !unsubstituted)
+                {
+                    return NullabilityImportRule.ApplyOpenSlot(
+                        projected,
+                        ClrNullability.ClassifyFlag(parameterFlag));
+                }
+
                 return ClrNullability.ClassifyFlag(parameterFlag) == ClrNullabilityState.Annotated
                     ? ApplyRootAnnotation(projected, parameterFlag)
                     : projected;

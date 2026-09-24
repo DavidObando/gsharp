@@ -329,9 +329,15 @@ internal static class NullabilityImportRule
   | `Oblivious` / absent | `Unchanged` | `Unchanged` | `Unchanged` |
 
   The `Unknown` column is `Unchanged`: the argument (a G# type parameter `T`)
-  keeps whatever it already says. That is what `main` does today — PR #4362
-  round 2 (`4d6001c08`, *"unconstrained T is not widened"*) — and it is the only
-  choice in the column that does not reintroduce the round-1 regression. It
+  keeps whatever it already says. That is what PR #4362 round 2 did
+  (`4d6001c08`, *"unconstrained T is not widened"*), and it is the only choice
+  in the column that does not reintroduce the round-1 regression. (*Phase 1
+  correction:* round 3, `b0c76053d`, reverted round 2's `NullableFlagsBuilder`
+  guard along with the symbolic-return merge. So on `main` before Phase 1 the
+  merge reader *did* widen an unconstrained `T` at an `Annotated` open slot:
+  `List[T].Find` through `GetClrMethodReturnTypeSymbol` read `T?`. Phase 1
+  implements the owner's `Unchanged`, which is a behaviour change on that
+  path. See the Phase 1 implementation note.) It
   carries a known soundness cost, stated rather than hidden: an `Annotated`
   open slot (`TSource? Min<TSource>`) substituted with an unconstrained G# `T`
   that is later instantiated with a reference type can yield nil into a
@@ -609,6 +615,44 @@ from member kinds to readers.
   filters in the same change.
 - **Wall-clock time:** *to be measured and recorded here by Phase 1 — `TBD
   (measured on CI, Phase 1 PR #____)`.* It is not estimated in this ADR.
+- **As built (Phase 1).** The test is `test/Core.Tests/ReaderAgreement/`, with
+  one test class per corpus so the four corpora run in parallel. It is
+  registered as the `core-reader-agreement` band in
+  `build/generate-ci-test-matrix.py`, and `core-remainder` excludes it.
+  - **Corpora:**
+    - the `Microsoft.NETCore.App.Ref` targeting pack;
+    - `netstandard.dll` 2.0 (no nullable metadata at all);
+    - FsCheck;
+    - a C# fixture emitted by `csc` at test time.
+  - **Walk:** every public method, constructor, property, field and event
+    of every public generic type, and every public generic method.
+  - **Closings:** each declaration is closed over `string`, `string?`,
+    `int32`, `List[string]` and an in-scope unconstrained `T`. A closing
+    that violates a constraint is skipped. The harness checks constraints
+    itself, because a `MetadataLoadContext` does not.
+  - **Readers:** direct, projection at the erased closing, merge at the
+    symbolic closing, `MemberLookup.GetClr*TypeSymbol`, the lazy accessor
+    over the symbolic projection (the projection at a symbolic closing), and
+    `ResolveCallReturnTypeFromSymbolicTypeArgs`.
+    - A CLR closing cannot express `string?` or a G# `T`. For those two
+      arguments only the symbolic readers run.
+  - **Lazy-accessor cross-check:** every `NullabilityAnnotatedTypeSymbol`
+    any reader returns is also checked. Its two lazy accessors must agree.
+  - **Scale:** about 87,000 position closings, compared through about
+    265,000 reader calls, with zero reader exceptions (the test fails on any).
+  - **Allowlist:** each entry names the readers it excuses, the position fact
+    it is limited to, and an issue:
+    - `ResolveCallReturnTypeFromSymbolicTypeArgs` (#4363, closed by
+      Phase 4);
+    - #4401;
+    - #4402;
+    - #4403.
+
+    An entry excuses a disagreement only when the remaining readers still
+    agree.
+  - **Local cost:** the harness itself takes about 5 s over all four
+    corpora on a developer machine. The CI figure above is the shard's full
+    job time, including its build.
 
 ### 5. Owner decisions (settled)
 
@@ -729,6 +773,113 @@ No phase uses anything a later phase introduces.
   `test-partition` registration. Record the measured wall-clock time in §4.
 - No analyzer yet: this phase makes the funnel exist and proves the readers
   agree through it.
+
+#### Phase 1 implementation note
+
+Where the implementation differed from the plan above, or had to decide
+something the plan left open:
+
+- **The rule and its appliers** are in
+  `src/Core/CodeAnalysis/Symbols/NullabilityImportRule.cs`, as specified.
+  - The argument classifier, `NullabilityImportRule.ClassifyArgument`, has
+    overloads for both `TypeSymbol` and CLR `Type`. It is the one classifier
+    shared by the appliers and by `PlatformTypeSymbol.Get`'s value-type
+    normalisation.
+  - A `TupleTypeSymbol` is `Value`. A `TypeParameterSymbol` is `Value` for
+    `struct`/`unmanaged`, `Reference` for `class`, a class constraint, or a
+    dependent bound that proves a reference type, and `Unknown` otherwise.
+  - `DecideConcrete` reads an `Unknown` kind as `Reference`. A concrete
+    position whose kind is unknown is a CLR generic parameter read directly
+    off an open definition. It is read the way the declaration spells it, as
+    the direct reader always has.
+- **The projection reader is byte-valued**, so its open-slot arm cannot call
+  the `TypeSymbol` applier.
+  - Under platform types it calls `NullabilityImportRule.ApplyOpenSlotToFlags`.
+    That is a third, byte-domain applier over the same `DecideOpenSlot`.
+  - This fixed a drift from the merge. An explicit `2` used to be expanded
+    over *every* position of the substituted argument, so
+    `[Nullable(2)] TSource` at `TSource := List<string>` read
+    `List<string?>?` here and `List<string>?` through the merge.
+  - The slot's `?` now lands on the argument's root only, and a value-type
+    argument takes none: `KeyValuePair<string, string>` no longer gets
+    `string?` elements.
+- **`Annotated` × `Unknown` is a behaviour change** (see §1's correction).
+  The merge's open-slot arm now calls `ApplyOpenSlot`, so an unconstrained G#
+  `T` at an explicit `[Nullable(2)]` slot stays `T`. It used to become `T?`,
+  for example `List[T].Find` inside a generic function.
+- **An unsubstituted slot is not an open slot.** Sometimes the projection
+  leaves the declaration's *own* generic parameter at the slot. For example,
+  a method-level `T` read with no method type arguments. The adapter contract
+  check (`adapt[I](…)`) compares `T? Echo<T>` with `T Echo<T>` this way.
+  - Nothing arrived to speak for such a slot, so it is not an `Unknown`
+    argument. Classifying it as one erased the `?` and let
+    `InterfaceAdaptationReviewTests` accept a nullability-mismatched adapter.
+  - `NullabilityImportRule.IsUnsubstitutedSlot` identifies the case. The
+    merge and the projection then read it as the declaration spells it, as
+    the direct reader reads the open definition, and as both did before.
+  - `DecideOpenSlot` is **not consulted** for such a position, so its table
+    has no contradicted cell. The `Annotated` × `Unknown` → `Unchanged` cell
+    applies only when a real argument, an in-scope G# type parameter, was
+    substituted into the slot.
+- **Legacy mode.** `--nullability=enabled` keeps its own arm in all three
+  places that branch on the mode: `SymbolForState`, `ProjectNullableFlags`
+  and the merge. The rule has no mode branch.
+- **The query members.**
+  - `ReferenceNullability` returns a new enum, `ReferenceNullabilityKind`
+    (`NotApplicable`, `NotNull`, `Nullable`, `Platform`), not
+    `ImportedReferenceNullability`. That enum is the rule's *decision*, and
+    its fourth value means "leave the input alone", which is not a query
+    answer.
+  - `GetElementPositions()` treats a top-level `?`, `!`, `Nullable<V>` or
+    by-ref as transparent, as metadata lays it out.
+  - It splices a canonical eight-argument tuple's `TRest` into the element
+    list, so every representation of a tuple lists its elements, as
+    `TupleTypeSymbol` already does (issue #2750).
+  - Both members are `internal`. No consumer uses them yet.
+- **`PlatformTypeSymbol.Get`.** There were four non-test callers at this
+  phase, not five. All four already stored the result as `TypeSymbol`, so the
+  widening needed no caller changes.
+  - Normalising value types also removes one representable-but-meaningless
+    shape. `FromClrType` maps the *reference* type `System.Tuple<…>` onto a
+    value `TupleTypeSymbol` (#1922), so an oblivious `System.Tuple` position
+    used to read as `(T1, T2)!`. It now reads as `(T1, T2)`.
+  - The #1922 split itself is #4401 (below).
+- **`InternalsVisibleTo`** was added for `GSharp.Cs2Gs.Translator`, as
+  planned.
+- **What the reader-agreement test found (§4), and what was done:**
+  - *Fixed here (small, clear bugs):*
+    - `ClrNullability.GetFieldTypeSymbol`, `GetPropertyTypeSymbol` and
+      `GetPropertyElementTypeSymbol` read an open declaration's bytes against
+      the *closed* type. That misaligned them and stamped an oblivious open
+      slot's byte onto the argument, the #4361 defect on the one path its fix
+      did not reach. Like the method and parameter readers, they now project
+      through the open declaration.
+    - `NullabilityAnnotatedTypeSymbol.GetTypeArgumentSymbolForClrType` never
+      merged a symbolic base's argument, so it disagreed with
+      `GetTypeArgumentSymbol`. It now delegates to it once it finds the
+      argument.
+    - `MemberLookup.FindOpenIndexerDefinition` searched instance properties
+      only, so a static property of a generic type (`Comparer[string?].Default`)
+      fell back to the erased read and lost the receiver's `?`.
+    - `MemberLookup.GetClrMethodReturnTypeSymbol` merged a `ref T` return
+      against the by-ref type itself and produced a platform-wrapped by-ref.
+      It now peels and re-wraps the by-ref, as the parameter branch does.
+    - `MemberLookup.GetClrEventHandlerTypeSymbol(EventInfo)` returned a
+      constructed generic's handler with no declared nullability at all. It
+      now projects through the open event.
+  - *Allowlisted, each against a newly filed issue:*
+    - #4401: the `System.Tuple` representation split above.
+    - #4402: the merge does not descend into a concrete (parameter-free)
+      array or value tuple, so it drops that position's inner nullability
+      through a symbolic receiver. Fixing it changes the bound type of every
+      such position, which needs its own corpus run.
+    - #4403: only `ClrNullability.GetParameterTypeSymbol` lifts a
+      `null`-default reference parameter to `T?`.
+- **One planned reader was dropped from the test: the merge over
+  `FromClrType` of an *erased* closing.** gsc never calls the merge on that
+  input at the top level; it merges symbolic projections. Its only
+  disagreements were #4402's, reached through a representation no producer
+  hands it.
 
 ### Phase 2 — producer triage and the funnel analyzer
 

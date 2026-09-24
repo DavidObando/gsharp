@@ -380,12 +380,23 @@ public class Adr0186PlatformTypeSymbolTests
         var sliceOfPlatform = SliceTypeSymbol.Get(PlatformTypeSymbol.Get(parameter));
         Assert.True(TypeSymbol.TrySubstituteCompositeType(
             sliceOfPlatform,
-            inner => SubstituteRecursively(inner, parameter, TypeSymbol.Int32),
+            inner => SubstituteRecursively(inner, parameter, TypeSymbol.String),
             out var nested));
         var nestedSlice = Assert.IsType<SliceTypeSymbol>(nested);
         Assert.Same(
-            PlatformTypeSymbol.Get(TypeSymbol.Int32),
+            PlatformTypeSymbol.Get(TypeSymbol.String),
             Assert.IsType<PlatformTypeSymbol>(nestedSlice.ElementType));
+
+        // ADR-0193 §2: substituting a VALUE type rebuilds through
+        // `PlatformTypeSymbol.Get`, which normalises `int32!` to `int32` —
+        // there is no reference nullability to leave unstated.
+        Assert.True(TypeSymbol.TrySubstituteCompositeType(
+            sliceOfPlatform,
+            inner => SubstituteRecursively(inner, parameter, TypeSymbol.Int32),
+            out var nestedValue));
+        Assert.Same(
+            TypeSymbol.Int32,
+            Assert.IsType<SliceTypeSymbol>(nestedValue).ElementType);
 
         // An identity substitution must return the very same symbol, not an
         // equal copy — the cache is what makes `T!` one type.

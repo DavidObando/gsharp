@@ -3153,8 +3153,10 @@ internal sealed class ConversionClassifier
         return mapped != null
             && mapped is not NullableTypeSymbol
             && ClrTypeUtilities.IsDelegateType(parameter.ParameterType)
-            && !flags.IsDefaultOrEmpty
-            && flags[0] == NullableFlagsBuilder.Annotated
+
+            // ADR-0193 Phase 1: classify, never compare bytes by hand. An
+            // empty array classifies as Oblivious, so this is the same test.
+            && ClrNullability.ClassifyPosition(flags, 0) == ClrNullabilityState.Annotated
                 ? NullableTypeSymbol.Get(mapped)
                 : mapped;
     }
