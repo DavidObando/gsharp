@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Emit;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -199,6 +200,13 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
     /// <returns>The element / type-argument positions.</returns>
     internal ImmutableArray<TypeSymbol> GetAnnotatedElementPositions()
     {
+        // A symbolic array shape (a slice over `T`, say) has an erased or no
+        // CLR type, so its element is the symbolic one, not the CLR one.
+        if (BaseType is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol)
+        {
+            return DecodeSymbolicPositions();
+        }
+
         var clr = ClrType;
         if (clr?.IsArray == true && clr.GetElementType() is { } element)
         {
@@ -207,7 +215,7 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
 
         if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
         {
-            return BaseType.GetElementPositions();
+            return DecodeSymbolicPositions();
         }
 
         var count = clr.GetGenericArguments().Length;
@@ -218,6 +226,56 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
         }
 
         return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Decodes <see cref="NullableFlags"/> against the base's SYMBOLIC
+    /// positions, for a base with no CLR shape to lay the bytes out against. The
+    /// layout is the one <see cref="NullableFlagsBuilder.Build"/> writes for
+    /// that same base, so each position's slice of the flags is found by the
+    /// byte count the builder gives it; a position whose declared state says
+    /// <c>?</c> or <c>!</c> gets it through the import rule
+    /// (<see cref="ClrNullability.SymbolForState"/>), and one with further
+    /// positions of its own keeps its slice lazily, like a CLR-decoded one.
+    /// </summary>
+    /// <returns>The decoded positions.</returns>
+    private ImmutableArray<TypeSymbol> DecodeSymbolicPositions()
+    {
+        var positions = BaseType.GetElementPositions();
+        if (positions.IsDefaultOrEmpty || NullableFlags.IsDefaultOrEmpty)
+        {
+            return positions;
+        }
+
+        var widths = positions.Select(p => NullableFlagsBuilder.Build(p).Length).ToImmutableArray();
+        var offset = NullableFlagsBuilder.Build(BaseType).Length - widths.Sum();
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(positions.Length);
+        for (var i = 0; i < positions.Length; i++)
+        {
+            var position = positions[i];
+            var width = widths[i];
+            if (width == 0 || position is NullableTypeSymbol or PlatformTypeSymbol)
+            {
+                // A value position has no byte; a stated `?`/`!` already speaks.
+                builder.Add(position);
+            }
+            else
+            {
+                var core = width > 1
+                    ? new NullabilityAnnotatedTypeSymbol(position, Slice(offset, width))
+                    : position;
+                builder.Add(ClrNullability.SymbolForState(core, ClrNullability.ClassifyPosition(NullableFlags, offset)));
+            }
+
+            offset += width;
+        }
+
+        return builder.MoveToImmutable();
+
+        ImmutableArray<byte> Slice(int start, int length)
+            => NullableFlags.Length <= 1
+                ? NullableFlags
+                : ImmutableArray.CreateRange(NullableFlags.Skip(start).Take(length));
     }
 
     /// <summary>

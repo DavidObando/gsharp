@@ -215,6 +215,32 @@ public sealed class Adr0193NullabilityImportRuleTests
     }
 
     /// <summary>
+    /// A lazily-annotated SYMBOLIC base (no CLR shape to decode against, as
+    /// substitution and adapter remapping produce) still reads its flags: a
+    /// slice of a reference-constrained <c>T</c> carrying <c>[1, 2]</c> has a
+    /// <c>T?</c> element, not a bare <c>T</c>.
+    /// </summary>
+    [Fact]
+    public void GetElementPositions_Decodes_Flags_Over_A_Symbolic_Base()
+    {
+        using var scope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
+        var parameter = TypeParameter();
+        parameter.HasReferenceTypeConstraint = true;
+        var annotated = new NullabilityAnnotatedTypeSymbol(
+            SliceTypeSymbol.Get(parameter),
+            ImmutableArray.Create((byte)1, (byte)2));
+
+        Assert.Equal(ReferenceNullabilityKind.NotNull, annotated.ReferenceNullability);
+        var element = Assert.Single(annotated.GetElementPositions());
+        Assert.Same(NullableTypeSymbol.Get(parameter), element);
+
+        var nonNull = new NullabilityAnnotatedTypeSymbol(
+            SliceTypeSymbol.Get(parameter),
+            ImmutableArray.Create((byte)1, (byte)1));
+        Assert.Same(parameter, Assert.Single(nonNull.GetElementPositions()));
+    }
+
+    /// <summary>
     /// A constructed same-compilation type carries its arguments symbolically,
     /// with no CLR type before emit; its positions are those arguments.
     /// </summary>
