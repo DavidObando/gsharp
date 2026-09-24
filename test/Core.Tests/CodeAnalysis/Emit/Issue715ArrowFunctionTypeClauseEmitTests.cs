@@ -334,20 +334,25 @@ func main() int32 {
     }
 
     /// <summary>
-    /// Issue #4358 follow-up: the same nullable-tuple-element shape, but with
-    /// the source function's OWN declared return type already
-    /// <c>(string?, int32)</c> — an identity conversion, not a
-    /// representation-preserving widening. This exercises the delegate
-    /// CONSTRUCTION site (<c>EmitFunctionToDelegateConversion</c> /
-    /// <c>GetFunctionDelegateCtorRef</c> vs. the reflection-based
-    /// <c>ResolveDelegateClrType</c>) directly, rather than the
-    /// no-op/representation-preserving path in
-    /// <c>IsRepresentationPreservingFunctionConversion</c> that
+    /// Issue #4358 follow-up: a native-source INVOCATION witness. The same
+    /// nullable-tuple-element shape, but with the source function's OWN
+    /// declared return type already <c>(string?, int32)</c> — an identity
+    /// conversion rather than the representation-preserving widening that
     /// <see cref="ArrowFunctionType_NullableTupleElementReturn_DoesNotSegfault"/>
-    /// goes through. Both the ctor site and the <c>Invoke</c> call site are
-    /// gated by the same <c>FunctionTypeNeedsSymbolicDelegate</c> predicate,
-    /// so the same fix covers both, but a discriminating test should exercise
-    /// each shape it claims to cover rather than assume symmetry.
+    /// goes through.
+    ///
+    /// <para>
+    /// This does NOT independently cover the delegate-construction site:
+    /// <c>FunctionTypeSymbol.BuildClrType</c> already returns
+    /// <see langword="null"/> for this function type (its tuple return's
+    /// <c>ClrType</c> is null), so <c>EmitMethodGroup</c>'s own
+    /// <c>functionType.ClrType != null</c> guard sent the construction through
+    /// <c>GetFunctionDelegateCtorRef</c> even before the fix. What goes red on
+    /// the pre-fix commit is the later <c>Invoke</c> call site, as in the first
+    /// test. Construction-site coverage for a real named-delegate target lives
+    /// in <c>Issue2876ImportedDataClassDelegateTargetEmitTests
+    /// .NullableTupleFunctionToImportedNonGenericNamedDelegate_Verifies</c>.
+    /// </para>
     /// </summary>
     [Fact]
     public void ArrowFunctionType_SourceNativelyReturnsNullableTupleElement_DoesNotSegfault()

@@ -71,9 +71,24 @@ internal sealed partial class MethodBodyEmitter
         // to instantiate. Materialize the function value as its natural
         // delegate type (Func/Action) instead; the resulting reference is
         // already a System.Delegate, so the widening is a no-op upcast.
-        var targetDelegateType = IsSystemDelegateHostType(targetDelegateHostType)
+        var targetIsDelegateBase = IsSystemDelegateHostType(targetDelegateHostType);
+        var targetDelegateType = targetIsDelegateBase
             ? this.outer.signatures.ResolveDelegateClrType(sourceFn)
             : this.outer.signatures.ResolveTargetDelegateClrType(targetDelegateHostType);
+
+        // Issue #4358: `sourceNeedsSymbolic` says the SOURCE shape cannot be
+        // reflected faithfully, which decides how the source `Invoke` is
+        // referenced. It says nothing about the TARGET. A real, non-generic
+        // named delegate (`delegate Splitter(s string) (string?, int32)`
+        // imported from another assembly) has its signature fixed in
+        // metadata, so there is no erased type argument to protect against
+        // and its own ctor is always the one to construct. Replacing it with
+        // the natural `Func`/`Action` shape pushed a `Func<…>` where a
+        // `Splitter` was expected (ilverify StackUnexpected). Only a generic
+        // target, or the `System.Delegate` base (materialised as the natural
+        // shape above), keeps taking the symbolic natural shape.
+        bool constructSymbolicNaturalShape = sourceNeedsSymbolic
+            && (targetIsDelegateBase || targetDelegateType.IsGenericType);
 
         if (source is BoundFunctionLiteralExpression literal)
         {
@@ -106,7 +121,7 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            this.EmitFunctionLiteral(literal, overrideDelegateType: sourceNeedsSymbolic ? null : targetDelegateType);
+            this.EmitFunctionLiteral(literal, overrideDelegateType: constructSymbolicNaturalShape ? null : targetDelegateType);
             return;
         }
 
@@ -122,7 +137,7 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            this.EmitMethodGroup(methodGroup, overrideDelegateType: sourceNeedsSymbolic ? null : targetDelegateType);
+            this.EmitMethodGroup(methodGroup, overrideDelegateType: constructSymbolicNaturalShape ? null : targetDelegateType);
             return;
         }
 
@@ -169,7 +184,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         var ctorRef = symbolicTargetCtorRef
-            ?? (sourceNeedsSymbolic
+            ?? (constructSymbolicNaturalShape
             ? this.outer.memberRefs.GetFunctionDelegateCtorRef(sourceFn)
             : (EntityHandle)this.outer.memberRefs.GetDelegateCtorReference(targetDelegateType));
 

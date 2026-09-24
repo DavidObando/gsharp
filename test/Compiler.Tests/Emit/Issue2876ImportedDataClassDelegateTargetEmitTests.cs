@@ -225,6 +225,53 @@ public class Issue2876ImportedDataClassDelegateTargetEmitTests
         Assert.Equal($"1{Environment.NewLine}", CompileAndRun(source, HelpersLibrary, "i2876lib"));
     }
 
+    /// <summary>
+    /// Issue #4358: a function type whose tuple return carries a
+    /// reference-nullable element (<c>(string?, int32)</c>) is symbolic — its
+    /// tuple's <c>ClrType</c> is null — so the SOURCE <c>Invoke</c> must be
+    /// referenced through the symbolic <c>Func&lt;…&gt;</c> TypeSpec. That must
+    /// not also replace a real, non-generic imported named delegate TARGET
+    /// with the natural <c>Func&lt;…&gt;</c> shape: the method-group and
+    /// function-value cases then constructed a <c>Func&lt;…&gt;</c> and passed
+    /// it where <c>Splitter</c> was expected (ilverify StackUnexpected). The
+    /// lambda is the control that stayed correct. <c>main</c> before the
+    /// #4358 fix got the ctor right but referenced the variable's
+    /// <c>Invoke</c> as the erased <c>Func&lt;string, object&gt;</c>.
+    /// </summary>
+    [Fact]
+    public void NullableTupleFunctionToImportedNonGenericNamedDelegate_Verifies()
+    {
+        const string library = """
+            package i4358lib
+
+            public delegate Splitter(s string) (string?, int32);
+            """;
+
+        const string source = """
+            package i4358a
+
+            import System
+            import i4358lib
+
+            func split(s string) (string?, int32) { return (s, s.Length) }
+
+            func useSplitter(c Splitter) int32 {
+                return c.Invoke("hello").Item2
+            }
+
+            func Main() {
+                var f (string) -> (string?, int32) = split
+                Console.WriteLine(useSplitter(split))
+                Console.WriteLine(useSplitter((s string) -> (s, s.Length + 1)))
+                Console.WriteLine(useSplitter(f))
+            }
+            """;
+
+        Assert.Equal(
+            $"5{Environment.NewLine}6{Environment.NewLine}5{Environment.NewLine}",
+            CompileAndRun(source, library, "i4358lib"));
+    }
+
     private static string CompileAndRun(string source, string library, string libraryAssemblyName)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_2876_").FullName;
