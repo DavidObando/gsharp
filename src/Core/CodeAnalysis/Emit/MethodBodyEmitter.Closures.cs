@@ -89,7 +89,7 @@ internal sealed partial class MethodBodyEmitter
         // `Func<…>` where the named delegate was expected (ilverify
         // StackUnexpected). A named target that genuinely needs a symbolic
         // ctor already arrives with `symbolicTargetCtorRef`.
-        bool targetIsNaturalShape = targetIsDelegateBase || IsNaturalFuncOrActionDelegate(targetDelegateType);
+        bool targetIsNaturalShape = targetIsDelegateBase || this.IsNaturalDelegateShapeOf(targetDelegateType, sourceFn);
         bool constructSymbolicNaturalShape = sourceNeedsSymbolic && targetIsNaturalShape;
 
         if (source is BoundFunctionLiteralExpression literal)
