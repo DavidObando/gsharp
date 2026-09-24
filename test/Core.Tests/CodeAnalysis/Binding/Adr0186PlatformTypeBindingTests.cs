@@ -1973,6 +1973,16 @@ public sealed class Adr0186PlatformTypeBindingTests
                 Console.WriteLine(b.Value!!.Capacity)
                 Console.WriteLine(b.Field?.Count)
             """;
+        const string entryRead = """
+                let b = Box[Entry?]()
+                b.Value = Entry{Id: 7}
+                Console.WriteLine(b.Value.Id)
+            """;
+        const string entryRemedy = """
+                let b = Box[Entry?]()
+                b.Value = Entry{Id: 7}
+                Console.WriteLine(b.Value!!.Id)
+            """;
 
         using var world = new World();
 
@@ -1991,8 +2001,29 @@ public sealed class Adr0186PlatformTypeBindingTests
                 new[] { "4", "0" },
                 world.Run(remedies, mode).Split('\n', StringSplitOptions.TrimEntries | StringSplitOptions.RemoveEmptyEntries));
             Assert.IsType<NullableTypeSymbol>(world.GlobalProbeType("let b = Box[List[int32]?]()\nlet probe = b.Value", mode));
+
+            // The same substitution over a SAME-COMPILATION G# class: the
+            // imported read `b.Value` projects to the G# `Entry?`, and member
+            // lookup then goes through TryGetUserInstanceMemberReceiverType, not
+            // CanBindClrInstanceMember. Its twin arm (#4121) accepted a
+            // nullable receiver when it was a BoundClrPropertyAccessExpression;
+            // #4356 deleted it too, so this reports like the CLR case.
+            var projected = world.Compile(entryRead, mode, extraDeclarations: EntryDeclaration);
+            Assert.False(projected.Success, Describe(projected));
+            Assert.Contains(
+                projected.Diagnostics,
+                d => d.Id == "GS0158" && d.Message.Contains("Id", StringComparison.Ordinal));
+            Assert.Equal(
+                "7",
+                world.Run(entryRemedy, mode, extraDeclarations: EntryDeclaration).Trim());
         }
     }
+
+    private const string EntryDeclaration = """
+        class Entry {
+            var Id int32
+        }
+        """;
 
     /// <summary>
     /// <b>ADR-0186 step 4 — the discriminator: an OBLIVIOUS field-read
