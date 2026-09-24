@@ -232,6 +232,40 @@ Console.WriteLine(Derived().GoAsync().Result)
             new[] { "base 42 base derived", "base" },
         };
 
+        // The forwarder pass now also forwards base auto-property accessors
+        // in async and iterator bodies, where `this` is a hoisted state
+        // machine field; before, they were left as non-virtual calls there.
+        yield return new object[]
+        {
+            "base-auto-property-in-async-body",
+            @"
+package P
+import System
+import System.Threading.Tasks
+
+open class Base {
+    open prop Auto int32 { get; set; }
+}
+
+class Derived : Base {
+    override prop Auto int32 {
+        get -> 1000
+        set { }
+    }
+
+    async func GoAsync(n int32) Task[int32] {
+        await Task.Yield()
+        base.Auto = n
+        base.Auto++
+        return base.Auto
+    }
+}
+
+Console.WriteLine(Derived().GoAsync(6).Result.ToString())
+",
+            new[] { "7" },
+        };
+
         // All three gaps in the shape the [GeneratedRegex] output takes after
         // cs2gs: a Regex subclass validating its timeout through the
         // protected static Regex.ValidateMatchTimeout, and a RegexRunner
