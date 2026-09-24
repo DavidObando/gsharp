@@ -855,7 +855,8 @@ inaccessible from unrelated external code. It mirrors C# `protected`:
   overridden by a `protected override func` in a derived `open class`, and the
   call dispatches virtually.
 - A derived class reaches an inherited `protected` (or `protected internal`)
-  **static** member of a source or imported base through the base type's name
+  **static** field, property or method of a source or imported base (not yet
+  a `protected static` event of an imported base) through the base type's name
   (`Regex.ValidateMatchTimeout(timeout)` inside a class deriving from
   `System.Text.RegularExpressions.Regex`) or through its own name. A static
   method inherited from a base class — public or `protected` — can also be
