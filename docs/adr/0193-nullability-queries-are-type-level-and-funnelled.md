@@ -482,22 +482,50 @@ in the IDE.
   explicit, reviewable exception #4363 asked for, instead of the silent
   bypass that exists today. Inside the funnel members, correctness rests on
   `NullabilityImportRule`, the walker clause above and the reader-agreement
-  test (§4). The types that define the doors are exempt by definition.
+  test (§4).
+
+  **No type-level exemptions.** The doors' own implementations are exempt
+  **member by member**. Each door's body (`TypeSymbol.FromClrType`, which
+  recurses on its own element and underlying types; the
+  `MapOpenClrTypeToSymbolic` overloads; `ReadNullableFlags`, `ClassifyFlag` and
+  `ClassifyPosition`) carries `[NullabilityFunnel]` like any other funnel
+  member. No declaring type is exempt as a whole. This matters because the
+  doors live in large, general-purpose types. `TypeSymbol` itself calls
+  `FromClrType` from members that have nothing to do with the funnel:
+  `ConstructedTypeArguments` (`TypeSymbol.cs:163`), `ConstructedFrom` (177),
+  `BaseType` (200) and the tuple element projection (~1790, ~1802).
+  `ClrNullability` has eight `FromClrType` calls of its own. A type-level
+  exemption would let a future call anywhere in `TypeSymbol` or
+  `ClrNullability` skip GSA0007 without a reason or an attribute. These are
+  the same types `ReflectionTypeComparisonAnalyzer` would handle with
+  `IsInsideExemptType`. GSA0007 deliberately does not follow that part of its
+  pattern.
 - **GSA0008 — consumer query.** An `is`/`as`/type-pattern/`switch` arm on
   `NullableTypeSymbol`, `PlatformTypeSymbol` or `NullabilityAnnotatedTypeSymbol`
-  outside the exempt types is reported, with a message naming the query member
-  to use. The exempt set is the query API's implementation, the two factories'
-  own types, the Layer 1 walkers, `NullableLifting` (the value-nullable seam),
-  `SymbolDisplay`, and signature/metadata encoding (`NullableFlagsBuilder`,
-  `ReflectionMetadataEmitter`) — each named in the analyzer with a one-line
-  reason. `MethodBodyEmitter` and `SlotPlanner` are **not** exempt, although
+  is reported, with a message naming the query member to use, unless it sits in
+  a member marked `[NullabilityRepresentation(reason)]`. As with GSA0007,
+  exemption is **per member, never per type**. The members that get the
+  attribute are those whose job *is* the representation:
+  - the query API's own implementation;
+  - the two wrapper factories;
+  - the Layer 1 walkers' structure reads;
+  - `NullableLifting`'s value-nullable checks;
+  - `SymbolDisplay`'s nullability rendering;
+  - signature and metadata encoding in `NullableFlagsBuilder` and
+    `ReflectionMetadataEmitter`.
+
+  Each attribute carries a one-line reason. Other members of those same types
+  are checked like any other code. `MethodBodyEmitter` and `SlotPlanner` are **not** exempt, although
   most of their wrapper tests are value-nullable questions: those migrate too,
   onto `NullableLifting.IsAnyValueTypeNullable` or a
   `TypeSymbol.TryGetValueNullableUnderlying(out TypeSymbol)` query. Exempting the
   emitter by type would exempt its ~80 sites wholesale, which is an allowlist by
   another name. There is **no** per-site allowlist file: Phase 3 migrates every
-  site (owner decision 4), so the exempt set is a short list of types that *are*
-  the representation, not a ledger of debt.
+  site (owner decision 4), so the exempt set is a short list of attributed
+  members that *are* the representation, not a ledger of debt. The analyzer's
+  tests list every attributed member, for both GSA0007 and GSA0008, so a new
+  exemption fails a test until it is added to that list, and so shows up in
+  review.
 - Both rules are added to `AnalyzerReleases.Unshipped.md` (next free IDs after
   GSA0006) at warning severity, as GSA0001–GSA0006 are. The repository builds
   with `TreatWarningsAsErrors` (`build/gsharp.build.props`, imported by the root
@@ -622,7 +650,16 @@ ADR-0186's steps did.
   it was missing), or moves to `FromClrTypeWithoutNullability` with its
   `NullabilityFreeReason`. Private forwarding wrappers such as
   `StatementBinder.Loops.cs:592`'s `MapOpenClrTypeToSymbolic` are removed, not
-  attributed. Record the final counts in this ADR.
+  attributed. The triage explicitly covers the calls **inside the door-defining
+  types**, which a type-level exemption would have hidden:
+  - `TypeSymbol.ConstructedTypeArguments` (`TypeSymbol.cs:163`);
+  - `ConstructedFrom` (177);
+  - `BaseType` (200);
+  - the tuple element projection (~1790, ~1802);
+  - `ClrNullability`'s eight `FromClrType` calls.
+
+  Only the door bodies themselves get `[NullabilityFunnel]`. Record the final
+  counts in this ADR.
 - Move `ExpressionBinder.ResolveInstanceReturnTypeFromReceiver`
   (`ExpressionBinder.Calls.Invocation.cs:452`) into the `MemberLookup.GetClr*`
   family as a receiver-projected return accessor, so every signature-position
@@ -656,7 +693,7 @@ ADR-0186's steps did.
   answering a question about the node, not about nullability.
 - Migrate **every** Layer 4 site (503 wrapper-test occurrences in 80 files at
   `7a44ca033`), the emitter's value-nullable tests included, and add GSA0008
-  with its type-level exempt set. The phase is done when GSA0008 reports nothing
+  with its per-member `[NullabilityRepresentation]` exemptions. The phase is done when GSA0008 reports nothing
   and there is no per-site suppression.
 - Make the symbolic-projection consumers named in `b0c76053d` — `TryProjectErasedClrType`,
   member lookup, method type inference, emit — read through a platform wrapper
@@ -752,8 +789,9 @@ ADR-0186's steps did.
   Phase 5 inventories the ~100 reads, maps each onto one of these members (or
   a new, equally narrow predicate added to the adapter with its own test), and
   records the final list in this ADR. Because nothing outside the adapter can
-  see a state value, GSA0009 needs no exemptions beyond the adapter and the
-  rule class. The translator project gains an analyzer reference to
+  see a state value, GSA0009 needs no exemptions beyond the adapter's own
+  members and the rule's members. Those are marked per member, like GSA0007 and
+  GSA0008, and the analyzer's tests list them. The translator project gains an analyzer reference to
   `InternalAnalyzers` (today only `Cs2Gs.Tests` has one). Verify with the full
   self-migration gate.
 
@@ -782,9 +820,11 @@ ADR-0186's steps did.
 - `NullableTypeSymbol` still represents both reference and value optionality. The
   query API hides that from consumers but does not remove it; a future ADR may
   split the representation, and this one deliberately does not.
-- The analyzers' exempt sets are a judgement about which types *are* the
-  representation. A wrong exemption silently re-opens a hole; each exemption
-  therefore carries a stated reason in the analyzer source, reviewed like code.
+- The analyzers' exemptions are a judgement about which members *are* the
+  funnel or the representation. A wrong exemption re-opens a hole. Every
+  exemption is therefore a per-member attribute with a stated reason, pinned by
+  the analyzer's tests, and reviewed like code. There are no type-level
+  exemptions.
 - The agreement test adds a CI shard and its runtime. The cost is recorded, not
   estimated.
 - cs2gs gains an `InternalsVisibleTo` dependency on Core internals.
