@@ -248,8 +248,28 @@ internal sealed partial class ExpressionBinder
                         return new BoundErrorExpression(null);
                     }
 
-                    var clrHandler = BindEventSubscriptionHandler(syntax.Value, MemberLookup.GetClrEventHandlerTypeSymbol(baseClrEvent));
-                    return new BoundClrEventSubscriptionExpression(null, baseEventReceiver, baseClrEvent, clrHandler, isAdd);
+                    // The imported base as the derived class names it
+                    // (`Source[Item]` over a same-compilation `Item`), not
+                    // the erased CLR construction reflection sees: it
+                    // supplies the handler type and the add/remove MemberRef
+                    // parent, as for an ordinary imported event receiver.
+                    var inheritedImportedBase = GetEffectiveThisParameter()?.Type is StructSymbol eventEnclosing
+                        ? TypeMemberModel.GetNearestImportedBase(eventEnclosing)
+                        : null;
+                    var clrHandlerType = inheritedImportedBase != null
+                        ? MemberLookup.GetClrEventHandlerTypeSymbol(inheritedImportedBase, baseClrEvent)
+                        : MemberLookup.GetClrEventHandlerTypeSymbol(baseClrEvent);
+                    var clrHandler = BindEventSubscriptionHandler(syntax.Value, clrHandlerType);
+                    var clrEventContainingType = inheritedImportedBase == null
+                        ? null
+                        : MemberLookup.GetClrMemberDeclaringTypeSymbol(inheritedImportedBase, baseClrEvent);
+                    return new BoundClrEventSubscriptionExpression(
+                        null,
+                        baseEventReceiver,
+                        baseClrEvent,
+                        clrHandler,
+                        isAdd,
+                        eventContainingType: clrEventContainingType);
                 }
             }
         }

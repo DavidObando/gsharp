@@ -1200,6 +1200,112 @@ class Unrelated {
     }
 
     /// <summary>
+    /// Two imported-base shapes against an in-process C# contract:
+    /// <list type="bullet">
+    ///   <item>a protected static property with one private accessor is read
+    ///   or written only through its visible accessor (the read used to emit
+    ///   a call to the private getter: MethodAccessException);</item>
+    ///   <item><c>base.Changed += h</c> on <c>Source[Item]</c> over a
+    ///   same-compilation <c>Item</c> uses the constructed
+    ///   <c>EventHandler[Item]</c> and add/remove parent, directly and in a
+    ///   function literal (the erased <c>EventHandler[object]</c> was
+    ///   rejected, GS0155).</item>
+    /// </list>
+    /// </summary>
+    [Fact]
+    public void ImportedStaticAccessorVisibilityAndConstructedBaseEvent_CompileVerifyAndRun()
+    {
+        const string csSource = """
+            using System;
+
+            namespace BaseGaps.Accessors
+            {
+                public class Holder
+                {
+                    protected static int ReadHidden { private get; set; } = 1;
+                    protected static int WriteHidden { get; private set; } = 2;
+                    public static int Peek() => ReadHidden * 10 + WriteHidden;
+                }
+
+                public class Source<T>
+                {
+                    public event EventHandler<T>? Changed;
+                    public void Raise(T value) => Changed?.Invoke(this, value);
+                }
+            }
+            """;
+
+        const string source = @"
+package P
+import System
+import BaseGaps.Accessors
+
+class D : Holder {
+    func Go() string {
+        Holder.ReadHidden = 7
+        let w = Holder.WriteHidden
+        return w.ToString() + "" "" + Holder.Peek().ToString()
+    }
+}
+
+class Item {
+    var Name string = ""item""
+}
+
+class Derived : Source[Item] {
+    func Go() {
+        base.Changed += func (s object?, e Item) { Console.WriteLine(""direct ${e.Name}"") }
+        let subscribe = func () {
+            base.Changed += func (s object?, e Item) { Console.WriteLine(""lambda ${e.Name}"") }
+        }
+        subscribe()
+        this.Raise(Item())
+    }
+}
+
+Console.WriteLine(D().Go())
+Derived().Go()
+";
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_basegaps_acc_").FullName;
+        try
+        {
+            var library = BuildCsLibrary(tempDir, csSource, "BaseGaps.Accessors");
+            var (exit, stdout, stderr) = Compile(tempDir, "imported-accessors", source, library);
+            Assert.True(exit == 0, $"gsc failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            var outPath = Path.Combine(tempDir, "imported-accessors.dll");
+            IlVerifier.Verify(outPath, new[] { library });
+            File.Copy(library, Path.Combine(tempDir, Path.GetFileName(library)), overwrite: true);
+
+            var (runExit, output) = RunDotnet(outPath);
+            Assert.True(runExit == 0, $"program must run to completion. Exit {runExit}:\n{output}");
+            var lines = output
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0)
+                .ToArray();
+            Assert.Equal(new[] { "2 72", "direct item", "lambda item" }, lines);
+
+            const string rejected = @"
+package P
+import BaseGaps.Accessors
+
+class D : Holder {
+    func Go() int32 -> Holder.ReadHidden
+}
+";
+            var (rejectedExit, rejectedStdout, rejectedStderr) = Compile(tempDir, "imported-accessors-rejected", rejected, library);
+            Assert.True(
+                rejectedExit != 0,
+                $"reading a property through its private getter must not compile.\nstdout:\n{rejectedStdout}\nstderr:\n{rejectedStderr}");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// An imported base whose nearer level declares a delegate FIELD named
     /// like a farther level's event: <c>base.E += h</c> combines into the
     /// field, and the farther event stays unsubscribed.
