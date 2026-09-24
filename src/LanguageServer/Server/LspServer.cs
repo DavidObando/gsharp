@@ -820,6 +820,10 @@ public sealed class LspServer
             if (waitForWorkspaceDiscovery)
             {
                 await this.workspaceDiscoveryCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
+                if (this.shutdownRequested)
+                {
+                    return missing;
+                }
             }
 
             await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);

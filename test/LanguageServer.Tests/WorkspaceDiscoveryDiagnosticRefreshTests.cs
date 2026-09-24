@@ -33,6 +33,7 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
     // Bound alone (project-less) both are unresolved; bound with the project they resolve.
     private const string BarSource = "class Bar {\n  func hello() int -> 42\n}\n";
     private const string FooSource = "class Foo {\n  func run() int -> Bar().hello()\n}\n";
+    private const string SameFileDefinitionSource = "class Foo {\n  func helper() int -> 42\n  func run() int -> helper()\n}\n";
 
     [Fact]
     public async Task PullClient_DiscoveryAfterOpen_RequestsRefreshAndSubsequentPullIsClean()
@@ -172,7 +173,7 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
             await server.InitializeAsync(new InitializeParams { RootPath = rootDir });
             await server.DidOpenAsync(new DidOpenTextDocumentParams
             {
-                TextDocument = new TextDocumentItem { Uri = uri, Text = FooSource },
+                TextDocument = new TextDocumentItem { Uri = uri, Text = SameFileDefinitionSource },
             });
 
             using var doc = JsonDocument.Parse("{}");
@@ -183,7 +184,7 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
                 new DefinitionParams
                 {
                     TextDocument = new TextDocumentIdentifier { Uri = uri },
-                    Position = LanguageServerTestHelpers.PositionOf(FooSource, "Bar"),
+                    Position = LanguageServerTestHelpers.PositionOf(SameFileDefinitionSource, "helper", occurrence: 1),
                 });
 
             await Task.Delay(100);
