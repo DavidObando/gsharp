@@ -544,6 +544,10 @@ public static partial class Env
         "[MarshalAs(UnmanagedType.LPStr)] string a",
         "string a",
         "UnmanagedType.LPStr")]
+    [InlineData(
+        "[MarshalAs(UnmanagedType.LPUTF8Str)] string a, string b",
+        "string a, string b",
+        "others have no encoding")]
     public void StringMarshalAs_GscCannotExpress_IsReported(string parameters, string implementationParameters, string expectedFragment)
     {
         string source = @"

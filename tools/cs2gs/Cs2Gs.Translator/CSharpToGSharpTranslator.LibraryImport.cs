@@ -114,6 +114,7 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         var encodings = new HashSet<int>();
+        bool hasUnresolvedString = false;
         for (int i = 0; i < stringAttributes.Count; i++)
         {
             string position = stringPositions[i];
@@ -124,6 +125,10 @@ public sealed partial class CSharpToGSharpTranslator
                 if (attributeEncoding == 1 || attributeEncoding == 2)
                 {
                     encodings.Add(attributeEncoding);
+                }
+                else
+                {
+                    hasUnresolvedString = true;
                 }
 
                 continue;
@@ -147,6 +152,15 @@ public sealed partial class CSharpToGSharpTranslator
                     $"{(System.Runtime.InteropServices.UnmanagedType)unmanagedType})], which gsc's @LibraryImport " +
                     "cannot express (only UTF-8 and UTF-16 via StringMarshalling)";
             }
+        }
+
+        // A string with neither [MarshalAs] nor a method-wide Utf8/Utf16 has
+        // no known encoding; folding a sibling's [MarshalAs] into the import
+        // would silently change it.
+        if (problem == null && usesMarshalAs && hasUnresolvedString)
+        {
+            problem = "some strings carry [MarshalAs] and others have no encoding, but gsc applies one " +
+                "StringMarshalling to every string of an @LibraryImport";
         }
 
         if (problem == null && encodings.Count > 1)
