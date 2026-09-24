@@ -331,7 +331,11 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                if (attribute.Target != null || !this.IsWellKnownAttribute(attributeType, LibraryImportAttributeName))
+                // `[method: LibraryImport(...)]` is the default target spelled
+                // out; it gets the same argument rewrite, and the redundant
+                // target is dropped.
+                bool methodTarget = attribute.Target == null || attribute.Target == "method";
+                if (!methodTarget || !this.IsWellKnownAttribute(attributeType, LibraryImportAttributeName))
                 {
                     result.Add(attribute);
                     continue;
@@ -362,7 +366,7 @@ public sealed partial class CSharpToGSharpTranslator
                     arguments.Add(new AttributeArgument(foldedStringMarshalling, "StringMarshalling"));
                 }
 
-                result.Add(new AttributeUse(attribute.Name, arguments, attribute.Target));
+                result.Add(new AttributeUse(attribute.Name, arguments, null));
             }
 
             return result;
