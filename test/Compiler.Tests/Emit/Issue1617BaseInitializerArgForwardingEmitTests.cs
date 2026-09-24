@@ -53,7 +53,15 @@ public class Issue1617BaseInitializerArgForwardingEmitTests
                 var root = System.InvalidOperationException("root-1617")
                 var w = Wrapped1617("outer-1617", root)
                 System.Console.WriteLine(w.Message)
-                System.Console.WriteLine(w.InnerException.Message)
+                // Issue #4356: `Exception.InnerException` is declared
+                // `Exception?` by the annotated BCL, so reading through it is a
+                // dereference of a member its author said may be nil. Member
+                // lookup used to wave that through — the carve-out #4356
+                // deleted could not tell an annotated-nullable member from an
+                // oblivious one — and now asks for the proof, exactly as it
+                // always has for a source-declared `T?`. What this test is
+                // about is base-argument forwarding, which is unaffected.
+                System.Console.WriteLine(w.InnerException!!.Message)
             }
             """;
 

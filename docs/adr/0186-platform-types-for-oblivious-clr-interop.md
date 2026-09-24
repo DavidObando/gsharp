@@ -144,13 +144,15 @@ and silently wrong for every other node kind that carries the same fact. PR
 metadata-origin nullability exactly as a property read does, and the one-arm
 predicate could not see it.
 
-> *Step 4 note (PR #4353):* read as "this `?` came from oblivious metadata", the
-> disjunct is a proxy, and under this ADR an oblivious receiver no longer depends
-> on it. But the same disjunct has always had a second, legitimate job: it
-> continues member chains through *stated*-nullable imported reads
+> *Step 4 note (PR #4353), resolved by #4356:* read as "this `?` came from
+> oblivious metadata", the disjunct is a proxy, and under this ADR an oblivious
+> receiver no longer depends on it. But the same proxy also admitted a second
+> population: member chains through *stated*-nullable imported reads
 > (annotated-nullable members, and generic `T` members read through an
-> explicitly nullable type argument). That job is out of this ADR's scope, so
-> the disjunct is kept. See the implementation note under *Implementation
+> explicitly nullable type argument), dereferenced unchecked. That population
+> is out of this ADR's scope, and step 4 kept the disjunct because deleting it
+> broke cs2gs output that relied on it. Issue #4356 fixed cs2gs and then
+> deleted the disjunct. See the implementation note under *Implementation
 > impact → Deleted*.
 
 That is the shape of the whole problem: the predicate is wrong whenever a new
@@ -290,9 +292,10 @@ caller may collapse. An implementer meets this on day one.
 `[NullableContext(1)]`, so their reference members stay non-null `T`, and a
 genuinely annotated nullable member stays `T?` and still requires narrowing
 wherever it flows into a non-null destination. *(Step 4 note: a member chain
-through such a member, such as `e.InnerException.Message`, continues via `main`'s
-member-lookup carve-out without narrowing, exactly as before this ADR. That
-carve-out is kept; see the implementation note under Deleted.)*
+through such a member, such as `e.InnerException.Message`, used to continue via
+`main`'s member-lookup carve-out without narrowing. Step 4 kept that carve-out;
+#4356 deleted it, so such a chain now needs narrowing, `!!` or `?.`, like any
+`T?` receiver. See the implementation note under Deleted.)*
 `System.Object.ToString()` still returns `string?` and still must be coalesced or
 bound. This pivot does not un-annotate the BCL; it changes only the answer for
 positions that say nothing.
@@ -598,8 +601,8 @@ cannot influence which member is chosen, because the lookup never sees it. An in
 extension by the ordinary priority rule; `List[int32]!.Reverse()` binds
 `List<T>.Reverse` because `List[int32].Reverse()` does; `string!.Trim()` binds
 `string.Trim` because `string.Trim()` does. (Step 4 kept `main`'s member-lookup
-disjunct for stated-nullable chains; an oblivious receiver no longer reaches it.
-See the implementation note under Deleted.)
+disjunct for stated-nullable chains, which an oblivious receiver no longer
+reached; #4356 deleted it. See the implementation note under Deleted.)
 
 **5b** is the clause an implementer will get wrong by default, and it has a
 named hazard. `GetImportedTypeSymbol` is a *closed switch* over receiver type
@@ -1109,8 +1112,28 @@ requires a decision about how far the change should reach.
 > (`Box[string?].Value`, whose `T?` `NullableFlagsBuilder.MergeDeclarationNullability`
 > keeps from the receiver). Both keep the same (unchecked) dereference as
 > before this ADR.
-> Step 4's binder change is therefore documentation and tests pinning that
+> Step 4's binder change was therefore documentation and tests pinning that
 > separation, not a deletion.
+>
+> **Follow-up (#4356): the row is now performed.** Keeping the disjunct was a
+> regression-avoidance decision, not a design one: it admitted stated-nullable
+> chains because it tested the kind of bound node, not where the nullability
+> came from, and those chains then dereferenced a `T?` with no check. What
+> broke when step 4 first deleted it was cs2gs output that relied on it, in
+> four narrow places: analyzer-API members that are `T?` in G# but non-null in
+> Roslyn, analyzer rewrites that skipped the receiver forgiveness, a stale
+> expression-tree `!!` suppression (gsc erases a reference-type assertion in a
+> tree since #3349), and nested property patterns over an unstable imported
+> chain. PR #4365 fixed those, and the disjunct and its twin in
+> `TryGetUserInstanceMemberReceiverType` (#4121) were then deleted, with the
+> Oahu gate and the hot-core self-migration guard green. Annotated members stay
+> out of this ADR's scope in every other respect: they are still `T?`, and a
+> chain through one now reports exactly as a source-declared `T?` receiver
+> always has. The deletion is unconditional, `--nullability=enabled` included:
+> in that mode an oblivious chain (`Environment.Version.Major`) is ADR-0136's
+> `T?` again and needs `!!`, which is what ADR-0136 always said. Gating the
+> deletion on the mode would have meant adding a mode check to a node-shape
+> test, which is the pattern this ADR removes.
 
 **Binder — additionally, *if* PR #4308 lands first** (it is closed and unmerged;
 none of these symbols exists on `main`):
@@ -1194,10 +1217,9 @@ So the accurate claim is: **the bug class is eliminated** — no site anywhere
 reconstructs metadata origin from a bound-node shape, because the type carries it
 — and the large line-count win is on the cs2gs side, provisionally ~7,000–7,300
 lines pending the telemetry measurement (§10). The binder's win is structural
-rather than numeric: on `main`'s baseline it is **one disjunct**. *(Superseded
-in part: that disjunct is kept, not deleted — see the implementation note under
-Deleted. The structural claim stands: an oblivious receiver no longer depends
-on it.)*
+rather than numeric: on `main`'s baseline it is **one disjunct**. *(Step 4
+kept that disjunct; #4356 deleted it once cs2gs no longer relied on it — see
+the implementation note under Deleted.)*
 
 ### Cost the implementer must budget for
 
@@ -1523,8 +1545,8 @@ Ordered by how much a wrong answer would cost.
 
 11. **The binder change is one condition, not one block — and only if that block
     exists.** On `main` the deletion is a single disjunct
-    (`|| receiver is BoundClrPropertyAccessExpression`) — *superseded: that
-    disjunct is kept (see the implementation note under Deleted)*; PR #4308's
+    (`|| receiver is BoundClrPropertyAccessExpression`) — *step 4 kept it;
+    #4356 deleted it (see the implementation note under Deleted)*; PR #4308's
     `nullableInnerVt is { IsValueType: false }` block is **branch-only** and not
     on `main` at all, so this item applies only in the world where that branch
     lands first. In that world the block **must not be deleted** — it is the only
@@ -1606,16 +1628,19 @@ Suggested sequencing, each step independently landable and green:
    property-read carve-out removed and nothing replacing it). The flip is the
    point at which the new model becomes load-bearing and the old carve-out becomes
    dead code — in that order, never the reverse. *(Superseded in part: the
-   carve-out does not become dead code; see step 4.)*
+   carve-out did not become dead code, because stated-nullable chains still
+   used it; see step 4.)*
 4. ~~Delete the old carve-out — on `main`'s baseline, the
-   `|| receiver is BoundClrPropertyAccessExpression` disjunct~~ **Superseded
-   (PR #4353): keep that disjunct.** It also carries member chains through
-   stated-nullable imported reads (annotated-nullable members, and generic `T`
-   members read through an explicitly nullable type argument), which this ADR
-   leaves out of scope; deleting it broke real code. See the implementation
-   note under *Implementation impact → Deleted*. Step 4 instead pins, by test,
-   that an oblivious field-read receiver never reaches the disjunct under the
-   default mode (it is `T!`, checked and unwrapped first). The rest of the
+   `|| receiver is BoundClrPropertyAccessExpression` disjunct~~ **Deferred by
+   PR #4353, then done by #4356.** The disjunct also carried member chains
+   through stated-nullable imported reads (annotated-nullable members, and
+   generic `T` members read through an explicitly nullable type argument), and
+   deleting it at step 4 broke cs2gs output that relied on it, so step 4 kept
+   it and pinned, by test, that an oblivious field-read receiver never reaches
+   it under the default mode (it is `T!`, checked and unwrapped first). #4356
+   fixed cs2gs (PR #4365) and then deleted the disjunct; those chains now
+   report like any `T?`. See the implementation note under *Implementation
+   impact → Deleted*. The rest of the
    original step still applies: remove `IsImportedClrChainReceiver` and the
    `CanBindClrInstanceMember` conjunct only if PR #4308 lands first,
    **keeping that block's body**. Verify the #4287 regression suite still

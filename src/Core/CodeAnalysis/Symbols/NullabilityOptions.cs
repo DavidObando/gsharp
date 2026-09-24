@@ -42,11 +42,11 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// columns off one piece of real csc-emitted metadata — that differential is
 /// the standing uniformity gate, and it cannot express "the other reading"
 /// without a switch. And <c>--nullability=enabled</c> is the escape hatch the
-/// release note points at for source the flip breaks. Under it an oblivious
-/// member chain still binds through the old member-lookup carve-out exactly as
-/// before the flip — step 4 kept that carve-out, because it also serves
-/// annotated-nullable members — so the escape hatch restores ADR-0136's
-/// behaviour in full. Retiring the mode is a separate decision.
+/// release note points at for source the flip breaks. Issue #4356 deleted the
+/// old member-lookup carve-out, so under this mode an oblivious member chain
+/// (<c>Environment.Version.Major</c>) reports on its <c>T?</c> link exactly as
+/// ADR-0136 always said it should, and needs <c>!!</c>, narrowing or
+/// <c>?.</c>. Retiring the mode is a separate decision.
 /// </para>
 /// </summary>
 internal static class NullabilityOptions

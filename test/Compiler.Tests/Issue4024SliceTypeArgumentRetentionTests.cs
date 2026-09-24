@@ -1114,7 +1114,7 @@ public class Issue4024SliceTypeArgumentRetentionTests
 
             func main2() {
                 var b = Box[[]int32]{ Value: []int32{1, 2, 3} }
-                Console.WriteLine(b.Value.Length.ToString())
+                Console.WriteLine(b.Value!!.Length.ToString())
             }
 
             main2()
@@ -1139,7 +1139,7 @@ public class Issue4024SliceTypeArgumentRetentionTests
 
             func main2() {
                 var b = Box[[3]int32]{ Value: [3]int32{1, 2, 3} }
-                Console.WriteLine(b.Value.Length.ToString())
+                Console.WriteLine(b.Value!!.Length.ToString())
             }
 
             main2()

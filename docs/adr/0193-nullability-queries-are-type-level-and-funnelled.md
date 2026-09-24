@@ -206,12 +206,16 @@ exist — the conditional, the switch expression, the lambda common type, and
 
 **Layer 5 — bound-node-kind predicates.** `CanBindClrInstanceMember`
 (`ExpressionBinder.Access.MemberLookup.cs:1062`) and
-`TryGetUserInstanceMemberReceiverType` (same file, ~1069) repeat the same
+`TryGetUserInstanceMemberReceiverType` (same file, ~1069) repeated the same
 `receiver is BoundClrPropertyAccessExpression && receiver.Type is NullableTypeSymbol`
 disjunct — the "chain through a stated-nullable property read" fact, answered by
 node kind. The audit counted three such predicates; this ADR located two. The
-first one's documentation also records a dual-mode behaviour (*"under
-`--nullability=enabled` it also admits oblivious reads"*).
+first one's documentation also recorded a dual-mode behaviour (*"under
+`--nullability=enabled` it also admits oblivious reads"*). *(Resolved by #4356:
+both disjuncts are deleted, not replaced. A stated-nullable receiver now simply
+fails the plain non-nullable test and requires narrowing, `!!` or `?.`, like any
+`T?`; cs2gs was taught to emit those first (#4365). Both helpers are now plain
+type tests with no node-kind arm, so this layer has nothing left to migrate.)*
 
 **Layer 6 — non-metadata producers of `T!`.** Oblivious-scope binding
 (ADR-0186 §9) and the joins above construct `PlatformTypeSymbol`s without any
@@ -788,10 +792,13 @@ No phase uses anything a later phase introduces.
   today's behaviour and leaving #4364 open.
   Before changing the lambda join, reduce its missing platform arm to a failing
   program and add it as a regression test.
-- Replace the Layer 5 node-kind predicates' nullability disjunct
+- ~~Replace the Layer 5 node-kind predicates' nullability disjunct
   (`CanBindClrInstanceMember`, `TryGetUserInstanceMemberReceiverType`) with a
-  type-level `IsStatedNullable` test; the bound-node kind stays only where it is
-  answering a question about the node, not about nullability.
+  type-level `IsStatedNullable` test.~~ *Done differently by #4356:* both
+  disjuncts were deleted outright rather than replaced, so no `IsStatedNullable`
+  call is needed there. What remains for this phase is only that their plain
+  `is not NullableTypeSymbol` test reads through the query API like any other
+  Layer 4 site.
 - Migrate **every** Layer 4 site, the emitter's value-nullable tests included.
   That is about 586 lines in 88 files at `7a44ca033` by the broadened grep; the
   analyzer's own census is authoritative. Add GSA0008 with its per-member
