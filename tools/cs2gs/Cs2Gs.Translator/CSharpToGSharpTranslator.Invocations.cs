@@ -1865,7 +1865,7 @@ public sealed partial class CSharpToGSharpTranslator
                         && !targetIsPromotedMigratedSibling)
                     || (analyzerNullableArgument
                         && !targetIsPromotedMigratedSibling
-                        && this.AnalyzerBridgeTargetIsNonNull(targetParameter.Type, targetParameter));
+                        && this.AnalyzerBridgeTargetIsNonNull(targetParameter.Type, targetParameter, argument.Expression));
             }
             else if (analyzerNullableArgument)
             {
@@ -1873,7 +1873,7 @@ public sealed partial class CSharpToGSharpTranslator
                         argument,
                         out ITypeSymbol analyzerParamsElementType,
                         out IParameterSymbol analyzerParamsParameter)
-                    && this.AnalyzerBridgeTargetIsNonNull(analyzerParamsElementType, analyzerParamsParameter);
+                    && this.AnalyzerBridgeTargetIsNonNull(analyzerParamsElementType, analyzerParamsParameter, argument.Expression);
             }
             else
             {

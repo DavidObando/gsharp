@@ -1010,6 +1010,51 @@ public sealed class ArgumentTargetsAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void RetargetedNullableMember_IntoGenericTargets_AssertsOnlyExplicitNonNull()
+    {
+        // Issue #4356: a generic target G# RE-INFERS from the emitted argument
+        // (inferred `Identity(x)`, inferred `params T[]`) takes the value's own
+        // `T?`, so asserting would be wrong. With EXPLICIT type arguments
+        // (`Identity<SyntaxNode>(x)`) the substituted non-null parameter is the
+        // real target, so the value IS asserted.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class GenericTargetsAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static T Identity<T>(T value) => value;
+
+    private static int Count<T>(params T[] values) => values.Length;
+
+    private static SyntaxNode Explicit(IOperation operation) => Identity<SyntaxNode>(operation.Syntax);
+
+    private static SyntaxNode? Inferred(IOperation operation) => Identity(operation.Syntax);
+
+    private static int InferredParams(IOperation operation) => Count(operation.Syntax, operation.Syntax);
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("Identity[SyntaxNode](operation.Syntax!!)", flat, StringComparison.Ordinal);
+        Assert.Contains("-> Identity(operation.Syntax)", flat, StringComparison.Ordinal);
+        Assert.Contains("Count(operation.Syntax, operation.Syntax)", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
     {
         // Issue #4356: SingleVariableDesignationSyntax.Identifier (a Roslyn

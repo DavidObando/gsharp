@@ -1564,7 +1564,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && translated is not NonNullAssertionExpression
                 && !IsInitializerOfInferredLocal(value, targetSymbol)
                 && !this.IsGSharpNullableAnalyzerApiMember(targetSymbol)
-                && this.AnalyzerBridgeTargetIsNonNull(targetType, targetSymbol))
+                && this.AnalyzerBridgeTargetIsNonNull(targetType, targetSymbol, value))
             {
                 return EnsureNonNullAssertion(translated);
             }
@@ -2840,20 +2840,23 @@ public sealed partial class CSharpToGSharpTranslator
         /// asks this one predicate, and when unsure it answers false.
         /// </summary>
         /// <param name="targetType">The effective target type, if known.</param>
-        /// <param name="targetSymbol">
-        /// The target parameter/member, if any. A parameter DECLARED as a type
-        /// parameter (<c>Identity&lt;T&gt;(T value)</c>) is generic even when Roslyn
-        /// substituted a non-null argument type: G# infers <c>T</c> from the
-        /// argument it is actually given, which may be <c>T?</c>.
+        /// <param name="targetSymbol">The target parameter/member, if any.</param>
+        /// <param name="callSite">
+        /// For a parameter target, the argument expression — used to tell an
+        /// INFERRED generic target from an EXPLICIT one (see
+        /// <see cref="IsInferredGenericParameterTarget"/>).
         /// </param>
         /// <returns>True when the target is certainly non-null in G#.</returns>
-        private bool AnalyzerBridgeTargetIsNonNull(ITypeSymbol targetType, ISymbol targetSymbol = null) =>
+        private bool AnalyzerBridgeTargetIsNonNull(
+            ITypeSymbol targetType,
+            ISymbol targetSymbol = null,
+            ExpressionSyntax callSite = null) =>
             targetType != null
             && targetType is not ITypeParameterSymbol
             && targetType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
             && targetType.NullableAnnotation != NullableAnnotation.Annotated
             && !(targetSymbol is IParameterSymbol parameter
-                && parameter.OriginalDefinition.Type is ITypeParameterSymbol)
+                && IsInferredGenericParameterTarget(parameter, callSite))
 
             // A REFERENCE target's emitted type is what cs2gs emits for it, not
             // Roslyn's: a parameter/member promoted to `T?`
@@ -2863,6 +2866,51 @@ public sealed partial class CSharpToGSharpTranslator
             // SyntaxToken) is emitted as-is.
             && (!targetType.IsReferenceType
                 || this.TargetWillRemainNonNullableReference(targetType, targetSymbol));
+
+        /// <summary>
+        /// Issue #4356: whether an argument's target parameter is generic in a way
+        /// G# will RE-INFER from the emitted argument — a parameter declared
+        /// <c>T</c> or <c>params T[]</c> on a call whose type arguments are
+        /// inferred. Then the emitted argument's own type decides <c>T</c>, so a
+        /// <c>T?</c> value makes <c>T</c> nullable and must not be asserted.
+        /// With EXPLICIT type arguments (<c>Identity&lt;SyntaxNode&gt;(x)</c>) the
+        /// substituted parameter type is the real target, so this answers false
+        /// and the ordinary nullability of that type decides. When the call site
+        /// cannot be found, the target is treated as inferred (no assertion).
+        /// </summary>
+        /// <param name="parameter">The (constructed) target parameter.</param>
+        /// <param name="callSite">The argument expression, if known.</param>
+        /// <returns>True when the target is an inferred generic parameter.</returns>
+        private static bool IsInferredGenericParameterTarget(IParameterSymbol parameter, ExpressionSyntax callSite)
+        {
+            ITypeSymbol declared = parameter.OriginalDefinition.Type;
+            bool generic = declared is ITypeParameterSymbol
+                || (parameter.IsParams && declared is IArrayTypeSymbol { ElementType: ITypeParameterSymbol });
+            return generic && !CallHasExplicitTypeArguments(callSite);
+        }
+
+        // Issue #4356: whether the invocation an argument belongs to spells its
+        // type arguments (`M<T>(…)`, `x.M<T>(…)`, `x?.M<T>(…)`).
+        private static bool CallHasExplicitTypeArguments(ExpressionSyntax argumentExpression)
+        {
+            if (argumentExpression?.Parent is not ArgumentSyntax argument
+                || argument.Parent?.Parent is not InvocationExpressionSyntax invocation)
+            {
+                return false;
+            }
+
+            ExpressionSyntax callee = invocation.Expression;
+            if (callee is MemberAccessExpressionSyntax memberAccess)
+            {
+                callee = memberAccess.Name;
+            }
+            else if (callee is MemberBindingExpressionSyntax memberBinding)
+            {
+                callee = memberBinding.Name;
+            }
+
+            return callee is GenericNameSyntax;
+        }
 
         private static ITypeSymbol GetEffectiveReturnType(ITypeSymbol returnType, bool isAsync) =>
             isAsync && returnType is INamedTypeSymbol taskLike && IsTaskLikeEnvelope(taskLike)
