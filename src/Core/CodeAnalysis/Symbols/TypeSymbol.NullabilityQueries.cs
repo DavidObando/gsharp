@@ -135,8 +135,11 @@ public partial class TypeSymbol
                 return ImmutableArray.Create(channel.ElementType);
             case FunctionTypeSymbol function:
                 // The delegate shape `Func<T1, …, TResult>` lays its
-                // parameters out before its return.
-                return function.ParameterTypes.Add(function.ReturnType);
+                // parameters out before its return; an `Action<…>` has no
+                // return position at all.
+                return ReferenceEquals(function.ReturnType, Void)
+                    ? function.ParameterTypes
+                    : function.ParameterTypes.Add(function.ReturnType);
 
             // Constructed same-compilation types carry their arguments
             // symbolically; their ClrType is commonly null before emit. A

@@ -215,7 +215,12 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
 
         if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
         {
-            return DecodeSymbolicPositions();
+            // Only the array shapes above have a layout this type can decode
+            // symbolically without re-deriving NullableFlagsBuilder's (a
+            // tuple's interleaved TRest placeholders, a nested type's
+            // enclosing arguments). Other symbolic bases keep their own
+            // positions; ADR-0193 Phase 3's query API owns the general case.
+            return BaseType.GetElementPositions();
         }
 
         var count = clr.GetGenericArguments().Length;
@@ -247,8 +252,15 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
             return positions;
         }
 
+        // Called only for a slice/array/rectangular base: one element, laid
+        // out after the array's own byte.
         var widths = positions.Select(p => NullableFlagsBuilder.Build(p).Length).ToImmutableArray();
         var offset = NullableFlagsBuilder.Build(BaseType).Length - widths.Sum();
+        if (offset < 0)
+        {
+            return positions;
+        }
+
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>(positions.Length);
         for (var i = 0; i < positions.Length; i++)
         {
