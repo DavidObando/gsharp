@@ -236,6 +236,72 @@ public class Adr0174SuspendCrossAssemblyTests
         }
     }
 
+    [Fact]
+    public void SuspendMethod_OfAnImportedBase_CalledThroughBase_IsAwaitedAndVerifies()
+    {
+        // Issue #4392: `base.M()` on a suspending method of a base class in
+        // another assembly. The imported base call was never completed, so it
+        // stayed typed ValueTask[string] and `"(" + base.M(x)` did not bind.
+        // It is awaited now, from the suspending member, from a function
+        // literal in it (through a forwarder) and from a plain member (the
+        // blocking bridge), and the result verifies.
+        const string BaseLibrary = """
+            package Lib
+
+            public open class Greeter {
+                public open suspend func Greet(x int32) string {
+                    return "Greeter$x"
+                }
+            }
+            """;
+
+        const string AppSource = """
+            package App
+            import System
+            import Lib
+
+            class Loud : Greeter {
+                suspend func Twice(x int32) string {
+                    let f = () -> base.Greet(x + 1)
+                    return "(" + base.Greet(x) + "," + f() + "," + Greet(x + 2) + ")"
+                }
+
+                func Plain() string {
+                    return base.Greet(9)
+                }
+            }
+
+            suspend func run() string {
+                let g = Loud()
+                return g.Twice(1) + " " + g.Plain()
+            }
+
+            Console.WriteLine(run())
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4392_xasm_").FullName;
+        try
+        {
+            var libPath = Path.Combine(tempDir, "Lib.dll");
+            var libLog = Compile(tempDir, "Lib.gs", BaseLibrary, libPath, "/target:library");
+            Assert.True(File.Exists(libPath), "library compile failed:\n" + libLog);
+
+            var appPath = Path.Combine(tempDir, "App.dll");
+            var appLog = Compile(tempDir, "App.gs", AppSource, appPath, "/target:exe", "/reference:" + libPath);
+            Assert.True(File.Exists(appPath), "app compile failed:\n" + appLog);
+
+            IlVerifier.Verify(appPath, new[] { libPath, Path.Combine(tempDir, "Gsharp.Runtime.Channels.dll") });
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, output);
+            Assert.Equal("(Greeter1,Greeter2,Greeter3) Greeter9", output.Trim());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static (int Exit, string Output, string CompileLog) CompileAndRun(string appSource)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_0174_xasm_").FullName;

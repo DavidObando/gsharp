@@ -1152,6 +1152,201 @@ Console.WriteLine(GeneratedRunner().Scan(10))
 ",
             new[] { "15 3" },
         };
+
+        // Issue #4392: a suspend override calling `base.M()` on a suspend
+        // base method. The call came back from overload resolution already
+        // completed (an implicit await around the instance call), so it was
+        // never marked as a base call: it dispatched virtually, re-entered
+        // the override and overflowed the stack.
+        yield return new object[]
+        {
+            "suspend-base-call",
+            @"
+package P
+import System
+
+open class A {
+    open suspend func M() string {
+        return ""A""
+    }
+}
+
+class B : A {
+    override suspend func M() string {
+        return ""B>"" + base.M()
+    }
+}
+
+suspend func run() string {
+    let b A = B()
+    return b.M()
+}
+
+Console.WriteLine(run())
+",
+            new[] { "B>A" },
+        };
+
+        // Issue #4392: A -> B -> C. C's `base` reaches B's implementation (not
+        // A's, not C's own), from the suspend body itself and from a function
+        // literal inside it; generic and void suspend methods too.
+        yield return new object[]
+        {
+            "suspend-base-call-three-levels",
+            @"
+package P
+import System
+
+open class A {
+    open suspend func M(x int32) string {
+        return ""A$x""
+    }
+
+    open suspend func G[T](v T) string {
+        return ""A.G:${v}""
+    }
+
+    open suspend func V() {
+        Console.WriteLine(""A.V"")
+    }
+}
+
+open class B : A {
+    open override suspend func M(x int32) string {
+        return ""B("" + base.M(x + 1) + "")""
+    }
+
+    open override suspend func G[T](v T) string {
+        return ""B.G("" + base.G[T](v) + "")""
+    }
+
+    open override suspend func V() {
+        base.V()
+        Console.WriteLine(""B.V"")
+    }
+}
+
+class C : B {
+    override suspend func M(x int32) string {
+        let f = () -> base.M(x * 10)
+        return ""C["" + base.M(x) + ""|"" + f() + ""]""
+    }
+
+    override suspend func G[T](v T) string {
+        return ""C.G("" + base.G[T](v) + "")""
+    }
+
+    override suspend func V() {
+        base.V()
+        Console.WriteLine(""C.V"")
+    }
+}
+
+suspend func run() {
+    let a A = C()
+    Console.WriteLine(a.M(1))
+    Console.WriteLine(a.G[int32](5))
+    a.V()
+}
+
+run()
+",
+            new[] { "C[B(A2)|B(A11)]", "C.G(B.G(A.G:5))", "A.V", "B.V", "C.V" },
+        };
+
+        // Issue #4392: the other places a base call to a suspending method can
+        // sit: a plain method (the blocking bridge), an `async func`, a nested
+        // function literal, a `go` operand and an `async let` initializer (both
+        // run in a goroutine closure), and a non-virtual base method that
+        // inference colours suspending, which colours its base caller too.
+        yield return new object[]
+        {
+            "suspend-base-call-other-shapes",
+            @"
+package P
+import System
+import System.Threading.Tasks
+
+open class A {
+    open suspend func M(x int32) string {
+        return ""A$x""
+    }
+
+    open suspend func Send(ch chan[string], x int32) {
+        ch <- ""A.Send$x""
+    }
+
+    func Receive(ch chan[int32]) int32 {
+        return <-ch
+    }
+
+    func Put(ch chan[string], s string) {
+        ch <- s
+    }
+}
+
+class B : A {
+    override suspend func M(x int32) string {
+        return ""B("" + base.M(x) + "")""
+    }
+
+    override suspend func Send(ch chan[string], x int32) {
+        go base.Send(ch, x + 1)
+    }
+
+    func Blocking() string {
+        return base.M(2)
+    }
+
+    async func ViaAsync() Task[string] {
+        return base.M(3)
+    }
+
+    suspend func Nested() string {
+        let outer = () -> {
+            let inner = () -> base.M(4)
+            return inner()
+        }
+        return outer()
+    }
+
+    suspend func Later(x int32) string {
+        scope {
+            async let v = base.M(x)
+            return ""later:"" + await v
+        }
+    }
+
+    func ViaInferred(ch chan[int32]) int32 {
+        return base.Receive(ch)
+    }
+
+    suspend func GoPlain(ch chan[string]) {
+        go base.Put(ch, ""put"")
+    }
+}
+
+suspend func run() {
+    let b = B()
+    Console.WriteLine(b.M(1))
+    Console.WriteLine(b.Blocking())
+    Console.WriteLine(await b.ViaAsync())
+    Console.WriteLine(b.Nested())
+    Console.WriteLine(b.Later(5))
+    let ch = chan[string](1)
+    b.Send(ch, 6)
+    Console.WriteLine(<-ch)
+    b.GoPlain(ch)
+    Console.WriteLine(<-ch)
+    let ints = chan[int32](1)
+    ints <- 42
+    Console.WriteLine(b.ViaInferred(ints))
+}
+
+run()
+",
+            new[] { "B(A1)", "A2", "A3", "A4", "later:A5", "A.Send7", "put", "42" },
+        };
     }
 
     /// <summary>

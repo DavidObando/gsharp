@@ -402,6 +402,41 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
         return Complete(retyped, logicalType, call.Method.Name);
     }
 
+    /// <inheritdoc/>
+    protected override BoundExpression RewriteBaseClassCallExpression(BoundBaseClassCallExpression node)
+    {
+        // Issue #4392: `base.M()` is a non-virtual instance call, and a
+        // suspending base method owes it the hidden context exactly like an
+        // ordinary instance call. A base auto-property accessor has no method.
+        var rewritten = base.RewriteBaseClassCallExpression(node);
+        if (rewritten is not BoundBaseClassCallExpression { Method: { } method } call)
+        {
+            return rewritten;
+        }
+
+        var arguments = WithContextArgument(method, call.Arguments);
+        var retype = newlySuspending.Contains(method);
+        if (!retype && arguments.Length == call.Arguments.Length)
+        {
+            return rewritten;
+        }
+
+        var logicalType = call.Type;
+        var result = new BoundBaseClassCallExpression(
+            call.Syntax ?? node.Syntax,
+            call.Receiver,
+            call.BaseClass,
+            method,
+            arguments,
+            retype ? runtime.ValueTaskOf(logicalType) : call.Type,
+            call.Property,
+            call.IsSetterAccessor)
+        {
+            MethodTypeArguments = call.MethodTypeArguments,
+        };
+        return retype ? Complete(result, logicalType, method.Name) : result;
+    }
+
     private static bool IsContextLocal(VariableSymbol variable)
         => variable.Type.ClrType?.FullName == "Gsharp.Concurrency.Context";
 
@@ -457,6 +492,7 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
             BoundUserInstanceCallExpression u => u.Method.Name,
             BoundImportedCallExpression i => i.Function.Name,
             BoundImportedInstanceCallExpression ii => ii.Method.Name,
+            BoundBaseClassCallExpression { Method: { } baseMethod } => baseMethod.Name,
             _ => "call",
         };
         diagnostics.ReportSuspendingCallBlocks(syntax.Location, name);

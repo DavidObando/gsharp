@@ -1676,6 +1676,11 @@ internal sealed partial class ExpressionBinder
                 }
 
                 BoundExpression inheritedCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedInstanceCallExpression(null, inheritedCallReceiver, best, returnType, inheritedArguments, refKinds, inheritedTypeArgSymbolsForCall, isNonVirtualBaseCall: nonVirtualBaseCall));
+
+                // Issue #4392: a suspending method of an imported base, reached
+                // through `base.M()` or unqualified, is completed like any other
+                // imported suspending call (ADR-0174 D4).
+                inheritedCall = CompleteImportedSuspendingCall(inheritedCall, best, ce.Location);
                 result = WrapWithHandlerPrelude(inheritedCall, inheritedHandlerPrelude, ce);
                 return true;
             case ClrOverloadResolution.ResolutionOutcome.Ambiguous:
@@ -3177,7 +3182,15 @@ internal sealed partial class ExpressionBinder
         var receiver = new BoundVariableExpression(null, thisParameter);
 
         var bound = overloads.BindUserInstanceCall(receiver, method, arguments, ce, argumentNames);
-        if (bound is not BoundUserInstanceCallExpression uic)
+
+        // Issue #4392: a call to a suspending method comes back already
+        // completed (ADR-0174 D4): an implicit await, or the blocking bridge,
+        // around the instance call. Wrap the inner call, not the completed
+        // one, and complete the base call again; returning the completed
+        // call as it was left a virtual call, so a suspend override calling
+        // `base.M()` re-entered itself.
+        var completedSuspendingCall = method.IsSuspending ? TryGetCompletedSuspendingInstanceCall(bound) : null;
+        if ((completedSuspendingCall ?? bound) is not BoundUserInstanceCallExpression uic)
         {
             return bound;
         }
@@ -3188,7 +3201,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        return new BoundBaseClassCallExpression(
+        var baseCall = new BoundBaseClassCallExpression(
             ce,
             uic.Receiver,
             declaringType,
@@ -3198,7 +3211,26 @@ internal sealed partial class ExpressionBinder
         {
             MethodTypeArguments = uic.MethodTypeArguments,
         };
+        return completedSuspendingCall != null
+            ? CompleteSuspendingCall(baseCall, bound.Type, ce.Location, method.Name)
+            : baseCall;
     }
+
+    /// <summary>
+    /// Issue #4392: the instance call inside a completed suspending call, the
+    /// operand of the implicit await or the argument of the blocking bridge
+    /// that <see cref="CompleteSuspendingCall"/> produced.
+    /// </summary>
+    /// <param name="completed">The bound call as overload resolution returned it.</param>
+    /// <returns>The inner instance call, or <see langword="null"/> when <paramref name="completed"/> is not a completed suspending instance call.</returns>
+    private static BoundUserInstanceCallExpression? TryGetCompletedSuspendingInstanceCall(BoundExpression completed)
+        => completed switch
+        {
+            BoundAwaitExpression { Expression: BoundUserInstanceCallExpression awaited } => awaited,
+            BoundImportedCallExpression bridge when Suspension.LockRegions.IsBlockingBridge(bridge)
+                && bridge.Arguments[0] is BoundUserInstanceCallExpression bridged => bridged,
+            _ => null,
+        };
 
     /// <summary>
     /// Issue #3724: binds the argument list of a <c>base.M(args)</c> call.

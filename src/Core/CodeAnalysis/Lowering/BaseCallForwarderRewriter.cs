@@ -12,9 +12,9 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 
 /// <summary>
 /// Issues #1467 and #2667: routes <c>base.M(args)</c> calls that appear inside
-/// async / iterator method bodies, or inside a function literal nested in any
-/// instance member, through a synthesized non-virtual forwarder method on the
-/// containing class.
+/// async / iterator / suspending method bodies, or inside a function literal
+/// or a <c>go</c> operand nested in any instance member, through a synthesized
+/// non-virtual forwarder method on the containing class.
 /// </summary>
 /// <remarks>
 /// A base-class call lowers to a non-virtual <c>call instance R Base::M(...)</c>.
@@ -227,6 +227,22 @@ public static class BaseCallForwarderRewriter
             }
         }
 
+        protected override BoundStatement RewriteGoStatement(BoundGoStatement node)
+        {
+            // A `go` operand (and an `async let` initializer, which binds to
+            // one) runs in a synthesized goroutine closure that holds `this`
+            // in a field, exactly like a function literal (issue #4392).
+            this.functionLiteralDepth++;
+            try
+            {
+                return base.RewriteGoStatement(node);
+            }
+            finally
+            {
+                this.functionLiteralDepth--;
+            }
+        }
+
         protected override BoundExpression RewriteBaseClassCallExpression(BoundBaseClassCallExpression node)
         {
             // Recurse into arguments first.
@@ -376,9 +392,12 @@ public static class BaseCallForwarderRewriter
             // Fresh parameters so the forwarder body can read them without
             // aliasing the base method's parameter symbols. A `ref`, `out` or
             // `in` parameter stays by-reference, so the forwarder passes the
-            // caller's storage through instead of a copy.
-            var paramBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(method.Parameters.Length);
-            foreach (var p in method.Parameters)
+            // caller's storage through instead of a copy. A suspending base
+            // method's hidden context is one of them (issue #4392): the call
+            // being forwarded already carries it, and the forwarder passes it
+            // on.
+            var paramBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(method.EmittedParameters.Length);
+            foreach (var p in method.EmittedParameters)
             {
                 paramBuilder.Add(new ParameterSymbol(p.Name, Substitute(p.Type), refKind: p.RefKind));
             }
