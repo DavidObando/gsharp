@@ -36,7 +36,10 @@ internal sealed partial class ExpressionBinder
         {
             foreach (var property in properties)
             {
-                if (!property.IsIndexer)
+                // Review finding (#4350): an explicit-interface indexer
+                // (`prop (IRepo) this[...]`) is reachable only through its
+                // interface, never by indexing the implementing type.
+                if (!property.IsIndexer || property.HasExplicitInterfaceClause)
                 {
                     continue;
                 }

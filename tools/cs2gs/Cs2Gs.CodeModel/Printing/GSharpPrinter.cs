@@ -556,6 +556,15 @@ public static class GSharpPrinter
     private static string RenderExpression(GExpression expression, int indent) =>
         RenderExpression(expression, indent, 0);
 
+    // Issue #4350 (review): a first-class Index/Range expression used as the
+    // target of member access, a call, or an index keeps its grouping —
+    // `(^i).Value` would otherwise print `^i.Value` (parsed `^(i.Value)`), and
+    // `(1..3).Start` would print `1..3.Start`.
+    private static string RenderPostfixTarget(GExpression target, int indent) =>
+        target is FromEndIndexExpression or RangeIndexExpression
+            ? $"({RenderExpression(target, indent)})"
+            : RenderExpression(target, indent);
+
     // Issue #4350 (review): C#'s range operator binds tighter than every binary
     // operator (`saved ?? 1..2` is `saved ?? (1..2)`), but a G# standalone range
     // binds LOOSER than all of them, so a range operand of any binary operator
@@ -638,7 +647,7 @@ public static class GSharpPrinter
 
         if (expression is InvocationExpression { Arguments.Count: > 0 } invocation)
         {
-            string target = RenderExpression(invocation.Target, indent);
+            string target = RenderPostfixTarget(invocation.Target, indent);
             string typeArgs = invocation.TypeArguments.Count == 0
                 ? string.Empty
                 : $"[{string.Join(", ", invocation.TypeArguments.Select(RenderType))}]";
@@ -685,20 +694,20 @@ public static class GSharpPrinter
                 return "this";
 
             case MemberAccessExpression member:
-                return $"{RenderExpression(member.Target, indent)}{(member.IsArrow ? "->" : ".")}{member.MemberName}";
+                return $"{RenderPostfixTarget(member.Target, indent)}{(member.IsArrow ? "->" : ".")}{member.MemberName}";
 
             case InvocationExpression invocation:
                 var typeArgs = invocation.TypeArguments.Count == 0
                     ? string.Empty
                     : $"[{string.Join(", ", invocation.TypeArguments.Select(RenderType))}]";
                 var args = string.Join(", ", invocation.Arguments.Select(a => RenderExpression(a, indent)));
-                return $"{RenderExpression(invocation.Target, indent)}{typeArgs}({args})";
+                return $"{RenderPostfixTarget(invocation.Target, indent)}{typeArgs}({args})";
 
             case NamedArgumentExpression namedArgument:
                 return $"{namedArgument.Name}: {RenderExpression(namedArgument.Value, indent)}";
 
             case IndexExpression index:
-                return $"{RenderExpression(index.Target, indent)}[{string.Join(", ", index.Indices.Select(i => RenderExpression(i, indent)))}]";
+                return $"{RenderPostfixTarget(index.Target, indent)}[{string.Join(", ", index.Indices.Select(i => RenderExpression(i, indent)))}]";
 
             case FromEndIndexExpression fromEnd:
                 // ADR-0187: `^x` is a unary-precedence System.Index expression.
@@ -1004,7 +1013,7 @@ public static class GSharpPrinter
             && !collection.Elements.Any(element => element.Value is SpreadElementExpression))
         {
             var typeArgs = $"[{string.Join(", ", invocation.TypeArguments.Select(RenderType))}]";
-            target = $"{RenderExpression(invocation.Target, indent)}{typeArgs}";
+            target = $"{RenderPostfixTarget(invocation.Target, indent)}{typeArgs}";
         }
         else
         {

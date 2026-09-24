@@ -144,6 +144,46 @@ public class Issue4350IndexerOverloadBindingTests
     }
 
     [Fact]
+    public void DuplicatePlainIndexerAfterExplicitImplementation_IsStillRejected()
+    {
+        // Review finding: an explicit-interface indexer earlier in the type
+        // must not exempt two plain indexers with the same signature.
+        var result = EmittedOracle.Evaluate("""
+            interface IRepo {
+                prop this[key int32] string { get; }
+            }
+
+            class Store : IRepo {
+                private prop (IRepo) this[key int32] string -> "explicit"
+                prop this[index int32] string -> "a"
+                prop this[other int32] string -> "b"
+            }
+            0
+            """);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0102");
+    }
+
+    [Fact]
+    public void PlainIndexerBesideExplicitImplementation_IsAccepted()
+    {
+        var result = EmittedOracle.Evaluate("""
+            interface IRepo {
+                prop this[key int32] string { get; }
+            }
+
+            class Store : IRepo {
+                private prop (IRepo) this[key int32] string -> "explicit"
+                prop this[index int32] string -> "plain"
+            }
+            let store = Store()
+            let repo IRepo = store
+            store[0] + "," + repo[0]
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("plain,explicit", result.Value);
+    }
+
+    [Fact]
     public void AmbiguousIndexerCall_ReportsGs0266()
     {
         var result = EmittedOracle.Evaluate("""

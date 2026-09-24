@@ -349,6 +349,35 @@ namespace Corpus.Issue4350
         Assert.Equal("20|30", result.Value);
     }
 
+    [Fact]
+    public void IndexAndRangePostfixTargets_KeepGrouping()
+    {
+        // Review finding: `(^i).Value` and `(1..3).Start` must keep their
+        // grouping, or G# re-parses them as `^(i.Value)` / `1..(3.Start)`.
+        string printed = Render(@"
+using System;
+namespace Corpus.Issue4350
+{
+    public class Probe
+    {
+        public static string Run(int i)
+        {
+            return (^i).Value + "","" + (^i).IsFromEnd + "","" + (1..3).Start.Value + "","" + (^i).ToString();
+        }
+    }
+}
+");
+
+        Assert.Contains("(^i).Value", printed, StringComparison.Ordinal);
+        Assert.Contains("(1..3).Start", printed, StringComparison.Ordinal);
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+
+        var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe.Run(2)");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("2,True,1,^2", result.Value);
+    }
+
     private static string Render(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Source.cs", source) });

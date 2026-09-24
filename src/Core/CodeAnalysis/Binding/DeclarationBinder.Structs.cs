@@ -1823,7 +1823,15 @@ internal sealed partial class DeclarationBinder
                         declared => HaveSameIndexerSignature(declared, indexerParameters));
                 }
 
-                var propExemptCollision = propSyntax.HasExplicitInterfaceClause || explicitInterfaceClauseNames.Contains(propName);
+                // Review finding (#4350): the explicit-interface exemption lets a
+                // plain indexer share `Item` with explicit implementations, but it
+                // never excuses a plain indexer that duplicates another plain
+                // indexer's signature.
+                var duplicatesPlainIndexer = isIndexer
+                    && !propSyntax.HasExplicitInterfaceClause
+                    && declaredIndexerSignatures.Any(declared => HaveSameIndexerSignature(declared, indexerParameters));
+                var propExemptCollision = !duplicatesPlainIndexer
+                    && (propSyntax.HasExplicitInterfaceClause || explicitInterfaceClauseNames.Contains(propName));
                 if (methodNames.Contains(propName) || (propAlreadyDeclared && !propExemptCollision))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
