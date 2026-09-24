@@ -2261,7 +2261,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Issue #4356: whether any intermediate link of an extended property path
         // (`Clause.Items` in `Clause.Items.Count`) is nullable in the emitted G#
-        // — Roslyn-annotated, or `T?` only on the ADR-0169 analyzer API.
+        // (see IsNullablePatternLink).
         private bool ExtendedPathHasNullableLink(ExpressionSyntax path)
         {
             for (ExpressionSyntax link = (path as MemberAccessExpressionSyntax)?.Expression;
@@ -2269,8 +2269,7 @@ public sealed partial class CSharpToGSharpTranslator
                 link = (link as MemberAccessExpressionSyntax)?.Expression)
             {
                 ITypeSymbol declared = this.ResolveDeclaredReceiverType(this.context.GetTypeInfo(link).Type, link);
-                if ((declared is { IsReferenceType: true } && declared.NullableAnnotation == NullableAnnotation.Annotated)
-                    || this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(link).Symbol))
+                if (this.IsNullablePatternLink(declared, link))
                 {
                     return true;
                 }

@@ -326,6 +326,98 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
         Assert.Equal("-1,5;-1,7", CompileAndRun(printed, "C.Run()").Trim());
     }
 
+    /// <summary>
+    /// A <c>Nullable&lt;T&gt;</c> VALUE intermediate (<c>P</c> is <c>Point?</c>)
+    /// is nullable too: C# does not match <c>{ P.X: 0 }</c>, <c>{ P.X: _ }</c> or
+    /// <c>{ P.X: var x }</c> when <c>P</c> has no value. The extended path used
+    /// to treat it as non-nullable and dereference it unguarded, and the typed
+    /// arm's discard form dropped the subpattern and matched a nil <c>P</c>.
+    /// Run in both the <c>is</c>-expression and the typed-switch-arm lowering.
+    /// </summary>
+    [Fact]
+    public void NullableValueIntermediate_IsGuarded_InEveryLeafForm()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System;
+
+            namespace Sample;
+
+            public struct Point
+            {
+                public int X;
+            }
+
+            public abstract class Node
+            {
+            }
+
+            public sealed class Rec : Node
+            {
+                public Point? P;
+            }
+
+            public static class C
+            {
+                public static bool IsTest(Rec r) => r is { P.X: 0 };
+
+                public static bool IsDiscard(Rec r) => r is { P.X: _ };
+
+                public static int IsVar(Rec r)
+                {
+                    if (r is { P.X: var x })
+                    {
+                        x = x + 1;
+                        return x;
+                    }
+
+                    return -1;
+                }
+
+                public static string Arm(Node n) => n switch
+                {
+                    Rec { P.X: 0 } => "test",
+                    _ => "other",
+                };
+
+                public static string ArmDiscard(Node n) => n switch
+                {
+                    Rec { P.X: _ } => "discard",
+                    _ => "other",
+                };
+
+                public static int ArmVar(Node n)
+                {
+                    switch (n)
+                    {
+                        case Rec { P.X: var x }:
+                            x = x + 2;
+                            return x;
+                        default:
+                            return -1;
+                    }
+                }
+
+                public static void Run()
+                {
+                    var nil = new Rec();
+                    var zero = new Rec { P = new Point() };
+                    Console.WriteLine(
+                        IsTest(nil) + "," + IsTest(zero) + ";" +
+                        IsDiscard(nil) + "," + IsDiscard(zero) + ";" +
+                        IsVar(nil) + "," + IsVar(zero) + ";" +
+                        Arm(nil) + "," + Arm(zero) + ";" +
+                        ArmDiscard(nil) + "," + ArmDiscard(zero) + ";" +
+                        ArmVar(nil) + "," + ArmVar(zero));
+                }
+            }
+            """);
+
+        Assert.Equal(
+            "False,True;False,True;-1,1;other,test;other,discard;-1,2",
+            CompileAndRun(printed, "C.Run()").Trim());
+    }
+
     private static string CompileAndRun(string printed, string callExpression)
     {
         string? compiler = FindCompiler();
@@ -378,9 +470,14 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
         // reuses an existing process; psi sets UseShellExecute = false above, so
         // a process is always started (or Start throws).
         using var process = System.Diagnostics.Process.Start(psi)!;
-        string output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
+
+        // Drain stdout and stderr concurrently: reading one to EOF first can
+        // deadlock once the child fills the other stream's pipe buffer.
+        System.Threading.Tasks.Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        System.Threading.Tasks.Task<string> stderr = process.StandardError.ReadToEndAsync();
+        System.Threading.Tasks.Task.WaitAll(stdout, stderr);
         process.WaitForExit();
-        return (process.ExitCode, output);
+        return (process.ExitCode, stdout.Result + stderr.Result);
     }
 
     private static string? FindCompiler()

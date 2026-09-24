@@ -1337,6 +1337,27 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// Issue #4356: THE test for whether an extended-property-path link is
+        /// nullable in the emitted G# — a Roslyn-annotated nullable reference, a
+        /// <c>Nullable&lt;T&gt;</c> value, or a member that is <c>T?</c> only on
+        /// the ADR-0169 analyzer API. Every lowering that walks such a path
+        /// (the <c>is</c>-expression lowering and the typed switch arm) asks
+        /// this one predicate, so a link cannot be nullable to one and not the
+        /// other.
+        /// </summary>
+        /// <param name="declaredType">The link's declared C# type.</param>
+        /// <param name="link">The link's syntax.</param>
+        /// <returns>True when the link needs a nil guard and a single read.</returns>
+        private bool IsNullablePatternLink(ITypeSymbol declaredType, ExpressionSyntax link) =>
+            (declaredType is { IsReferenceType: true }
+                && declaredType.NullableAnnotation == NullableAnnotation.Annotated)
+            || IsNullableValueType(declaredType)
+            || this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(link).Symbol);
+
+        private static bool IsNullableValueType(ITypeSymbol type) =>
+            type?.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T;
+
+        /// <summary>
         /// Issue #4356: whether a pattern-lowering receiver's EMITTED G# type is a
         /// nullable reference although its Roslyn type is not (an ADR-0169
         /// analyzer-API member such as <c>ParameterSyntax.Identifier</c>, or a
@@ -2336,8 +2357,14 @@ public sealed partial class CSharpToGSharpTranslator
             // such as `Identifier` (a Roslyn struct) is `SyntaxToken?` in G#.
             bool gsharpNullableLink = this.IsGSharpNullableAnalyzerApiMember(
                 this.context.GetSymbolInfo(intermediateExprs[index]).Symbol);
-            if (gsharpNullableLink
-                || (declaredType is { IsReferenceType: true } && declaredType.NullableAnnotation == NullableAnnotation.Annotated))
+
+            // A `Nullable<T>` value link (`P` in `P.X` for a `Point?` P) is
+            // nullable too. gsc's `&&` guard narrows a nullable REFERENCE local
+            // but not a nullable VALUE one (unwrapping `Nullable<T>` is a real
+            // conversion, #1943), so the next link reads it through `!!` —
+            // safe, the guard just proved it has a value.
+            bool nullableValueLink = IsNullableValueType(declaredType);
+            if (this.IsNullablePatternLink(declaredType, intermediateExprs[index]))
             {
                 if (gsharpNullableLink)
                 {
@@ -2347,7 +2374,13 @@ public sealed partial class CSharpToGSharpTranslator
                 Func<GExpression, GExpression> rest = local => new BinaryExpression(
                     new BinaryExpression(local, "!=", LiteralExpression.Null()),
                     "&&",
-                    this.TranslateExtendedPropertyLink(names, intermediateExprs, index + 1, local, memberPath, leafPattern));
+                    this.TranslateExtendedPropertyLink(
+                        names,
+                        intermediateExprs,
+                        index + 1,
+                        nullableValueLink ? new NonNullAssertionExpression(local) : local,
+                        memberPath,
+                        leafPattern));
 
                 // A leaf that declares a designation (`Identifier.Text: var t`)
                 // leaves its binder's replacement reading through this local
