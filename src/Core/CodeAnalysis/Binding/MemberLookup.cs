@@ -4317,8 +4317,20 @@ internal sealed class MemberLookup
             // a `GetResult` returning `(object, bool)`, which is why the
             // identical declaration over concrete element types
             // (`(string, bool)`) has always worked.
+            //
+            // Issue #4358: `tuple.ClrType` is ALSO null whenever an element
+            // merely carries a reference-nullable annotation (`(string?,
+            // bool)`) — `TupleTypeSymbol.BuildClrType` keeps such a tuple
+            // symbolic even though no element is itself a same-compilation
+            // user type or type parameter. The per-element recursion above
+            // does not see this (a `NullableTypeSymbol`/`PlatformTypeSymbol`
+            // element unwraps to its non-symbolic underlying type before
+            // recursing here, same as its emitter counterpart did before the
+            // matching fix). Checking `tuple.ClrType == null` directly keeps
+            // this predicate in agreement with
+            // `ReflectionMetadataEmitter.ArgIsSymbolicUserDefined`.
             case TupleTypeSymbol tuple:
-                return tuple.ElementTypes.Any(IsSymbolicTypeArgument);
+                return tuple.ClrType == null || tuple.ElementTypes.Any(IsSymbolicTypeArgument);
             default:
                 return false;
         }
