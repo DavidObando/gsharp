@@ -558,6 +558,90 @@ Console.WriteLine(Err().Go())
             new[] { "q1 a1", "h1" },
         };
 
+        // A constructor with managed-reference work moves into an
+        // initialization plan before the forwarder pass runs; a base call in a
+        // function literal there must still be forwarded.
+        yield return new object[]
+        {
+            "base-call-in-initialization-plan-constructor",
+            @"
+package P
+import System
+
+open class Base {
+    open func Name() string { return ""base"" }
+}
+
+class Derived : Base {
+    var Other readonly managed[int32]
+    var Result string = """"
+    init(value int32) {
+        this.Other = readonly managed(value)
+        let f = () -> base.Name()
+        this.Result = f()
+    }
+    override func Name() string { return ""derived"" }
+}
+
+Console.WriteLine(Derived(3).Result)
+",
+            new[] { "base" },
+        };
+
+        // An async base method converted to a delegate inside a function
+        // literal: the forwarder returns the Task the delegate observes, not
+        // the declared `void`/`int32` result.
+        yield return new object[]
+        {
+            "async-base-method-group-in-function-literal",
+            @"
+package P
+import System
+import System.Threading.Tasks
+
+open class Base {
+    open async func Count() int32 {
+        await Task.Yield()
+        return 7
+    }
+    open async func Run() {
+        await Task.Yield()
+        Console.WriteLine(""base run"")
+    }
+    open async func Echo[T](x T) T {
+        await Task.Yield()
+        return x
+    }
+}
+
+class Derived : Base {
+    override async func Count() int32 { return -1 }
+    override async func Run() { Console.WriteLine(""derived run"") }
+    override async func Echo[T](x T) T { return x }
+
+    func Go() string {
+        let f = func () Task[int32] {
+            let h () -> Task[int32] = base.Count
+            return h()
+        }
+        let g = func () Task {
+            let r () -> Task = base.Run
+            return r()
+        }
+        let e = func () Task[string] {
+            let echo (string) -> Task[string] = base.Echo
+            return echo(""e"")
+        }
+        g().Wait()
+        return f().Result.ToString() + "" "" + e().Result
+    }
+}
+
+Console.WriteLine(Derived().Go())
+",
+            new[] { "base run", "7 e" },
+        };
+
         // `base.E += h` / `-=` when the derived class declares a same-named
         // event: the subscription must reach the base event's accessors.
         yield return new object[]

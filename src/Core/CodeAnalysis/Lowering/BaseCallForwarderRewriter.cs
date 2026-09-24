@@ -81,6 +81,30 @@ public static class BaseCallForwarderRewriter
             }
         }
 
+        // Constructors whose bodies moved into an initialization plan (the
+        // InitializationPlanner runs first and takes constructors with
+        // managed-reference work out of `Functions`) get the same treatment:
+        // a function literal in the plan's body, prologue or base-initializer
+        // arguments can call `base.M()` and needs the forwarder just as much.
+        // Static plans have no `base`.
+        var rewrittenPlans = new Dictionary<(Symbol Owner, bool Static), BoundInitializationPlan>();
+        foreach (var pair in program.Initializers)
+        {
+            var plan = pair.Value;
+            if (plan.Function.ReceiverType is not StructSymbol planType)
+            {
+                continue;
+            }
+
+            var planClass = planType.Definition ?? planType;
+            var planRewriter = new Rewriter(planClass, plan.Function, forwarders, forwarderBodies, ordinalByClass, isStateMachine: false);
+            var rewrittenPlan = planRewriter.RewritePlan(plan);
+            if (!ReferenceEquals(rewrittenPlan, plan))
+            {
+                rewrittenPlans[pair.Key] = rewrittenPlan;
+            }
+        }
+
         if (forwarderBodies.Count == 0)
         {
             return program;
@@ -129,7 +153,7 @@ public static class BaseCallForwarderRewriter
             program.Globals,
             program.Delegates)
         {
-            Initializers = program.Initializers,
+            Initializers = rewrittenPlans.Count == 0 ? program.Initializers : program.Initializers.SetItems(rewrittenPlans),
             Imports = program.Imports,
             FriendAssemblies = program.FriendAssemblies,
             AssemblyAttributes = program.AssemblyAttributes,
@@ -164,6 +188,12 @@ public static class BaseCallForwarderRewriter
         }
 
         private bool ForwardsBaseCalls => this.isStateMachine || this.functionLiteralDepth > 0;
+
+        /// <summary>Rewrites an initialization plan's arguments, prologue and body.</summary>
+        /// <param name="plan">The plan.</param>
+        /// <returns>The rewritten plan, or <paramref name="plan"/> when nothing changed.</returns>
+        internal BoundInitializationPlan RewritePlan(BoundInitializationPlan plan)
+            => plan.Rewrite(this.RewriteExpression, this.RewriteStatement);
 
         protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
         {
@@ -238,8 +268,10 @@ public static class BaseCallForwarderRewriter
             }
 
             // A generic base method's forwarder is generic in the same type
-            // parameters, so the group's type arguments carry over.
-            var forwarder = this.GetOrCreateForwarder(baseClass, method, method.Type);
+            // parameters, so the group's type arguments carry over. The
+            // forwarder returns what the delegate observes (for an async
+            // method, the Task the method emits), not the declared result.
+            var forwarder = this.GetOrCreateForwarder(baseClass, method, functionType.ReturnType);
             return new BoundMethodGroupExpression(
                 rewritten.Syntax,
                 rewritten.Receiver,
