@@ -358,11 +358,15 @@ public sealed partial class CSharpToGSharpTranslator
                 // claims (`List[string](x)` beside `import
                 // System.Collections.Generic`) would bind as that type in gsc,
                 // so it keeps its owner qualifier, as the non-generic branch
-                // below does.
+                // below does. That includes a `using static` INTERFACE owner:
+                // C# imports its concrete static methods, and G# spells them
+                // as `shared` interface members.
                 if (genericSymbol is IMethodSymbol genericMethod
                     && genericMethod.IsStatic
                     && genericMethod.ContainingType is INamedTypeSymbol genericOwner
-                    && (genericOwner.TypeKind == TypeKind.Class || genericOwner.TypeKind == TypeKind.Struct)
+                    && (genericOwner.TypeKind == TypeKind.Class
+                        || genericOwner.TypeKind == TypeKind.Struct
+                        || (genericOwner.TypeKind == TypeKind.Interface && this.IsStaticUsingTarget(genericOwner)))
                     && (RequiresQualifiedImportedContextualCall(
                             genericMethod,
                             includeGenericPrefix: true)
@@ -417,7 +421,9 @@ public sealed partial class CSharpToGSharpTranslator
                 staticMethod.IsStatic &&
                 staticMethod.MethodKind != MethodKind.LocalFunction &&
                 staticMethod.ContainingType is INamedTypeSymbol owner &&
-                (owner.TypeKind == TypeKind.Class || owner.TypeKind == TypeKind.Struct) &&
+                (owner.TypeKind == TypeKind.Class
+                    || owner.TypeKind == TypeKind.Struct
+                    || (owner.TypeKind == TypeKind.Interface && this.IsStaticUsingTarget(owner))) &&
                 !owner.IsImplicitlyDeclared &&
                 (!this.IsStaticUsingTarget(owner)
                     || RequiresQualifiedImportedContextualCall(staticMethod)

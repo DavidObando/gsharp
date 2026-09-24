@@ -149,6 +149,55 @@ namespace Corpus.Main
         Assert.DoesNotContain("StubSupport.Keep", rendered, StringComparison.Ordinal);
     }
 
+    private const string CollidingInterfaceAuxSource = @"
+namespace Corpus.Aux
+{
+    public interface IStubHelpers
+    {
+        static string File(string source) => source + ""!"";
+
+        static T[] List<T>(T value) => new T[] { value };
+
+        static string Keep(string source) => source;
+    }
+}
+";
+
+    private const string CollidingInterfaceCallerSource = @"
+using System.Collections.Generic;
+using System.IO;
+using static Corpus.Aux.IStubHelpers;
+
+namespace Corpus.Main
+{
+    public class Consumer
+    {
+        public string F() => File(Path.GetFileName(""a/b""));
+
+        public string[] G() => List<string>(new List<string> { ""y"" }[0]);
+
+        public string H() => Keep(""x"");
+    }
+}
+";
+
+    /// <summary>
+    /// The same rule for a <c>using static</c> INTERFACE owner: C# imports an
+    /// interface's concrete static methods, and G# spells them as
+    /// <c>shared</c> interface members, so a colliding call keeps its
+    /// qualifier in both the plain and the explicit-generic form.
+    /// </summary>
+    [Fact]
+    public void UsingStaticInterfaceMember_WhoseNameIsAnImportedType_IsQualified()
+    {
+        string rendered = Translate(CollidingInterfaceAuxSource, CollidingInterfaceCallerSource);
+
+        Assert.Contains("IStubHelpers.File(", rendered, StringComparison.Ordinal);
+        Assert.Contains("IStubHelpers.List[string](", rendered, StringComparison.Ordinal);
+        Assert.Contains("Keep(\"x\")", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("IStubHelpers.Keep", rendered, StringComparison.Ordinal);
+    }
+
     private static string TranslateCaller() => Translate(AuxSource, CallerSource);
 
     private static string Translate(string auxSource, string callerSource)
