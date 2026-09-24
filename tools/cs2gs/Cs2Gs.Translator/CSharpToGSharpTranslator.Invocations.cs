@@ -410,7 +410,10 @@ public sealed partial class CSharpToGSharpTranslator
                 (owner.TypeKind == TypeKind.Class || owner.TypeKind == TypeKind.Struct) &&
                 !owner.IsImplicitlyDeclared &&
                 (!this.IsStaticUsingTarget(owner)
-                    || RequiresQualifiedImportedContextualCall(staticMethod)) &&
+                    || RequiresQualifiedImportedContextualCall(staticMethod)
+                    || this.typeMapper.ClaimsDocumentScopeName(
+                        this.EmittedName(staticMethod, staticMethod.Name),
+                        this.context)) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition) &&
                 !this.IsBareSiblingStaticScope(
                     owner,
@@ -424,7 +427,14 @@ public sealed partial class CSharpToGSharpTranslator
                 // owning type (`Geometry.Round(value, 2)`); see ADR-0115 §B.18.
                 // A bare call to a `using static` member is the exception
                 // (ADR-0134): gsc brings it into scope through `import Owner`,
-                // so it is left unqualified above.
+                // so it is left unqualified above — UNLESS its name is also
+                // claimed at file scope by an imported or source type (or an
+                // alias). gsc resolves that name to the type first, so a bare
+                // `Project(src)` beside `import Microsoft.CodeAnalysis` binds as
+                // a conversion to `Microsoft.CodeAnalysis.Project` (GS0155),
+                // where C# chose the `using static` method. Such a call keeps
+                // its owner qualifier (`StubTestSupport.Project(src)`), exactly
+                // as a colliding sibling static does (issue #3471).
                 // Issue #1886: a `static` LOCAL function is NOT a sibling type
                 // member — Roslyn still reports its enclosing TYPE as
                 // `ContainingType`, but cs2gs already lowers it to a local `let`

@@ -87,13 +87,69 @@ namespace Corpus.Main
         Assert.DoesNotContain("EnumUtil.Answer", rendered, StringComparison.Ordinal);
     }
 
-    private static string TranslateCaller()
+    private const string CollidingAuxSource = @"
+namespace Corpus.Aux
+{
+    public static class StubSupport
+    {
+        public static string File(string source) => source + ""!"";
+
+        public static string Keep(string source) => source;
+    }
+}
+";
+
+    // `System.IO` is used for real (`Path.GetFileName`), so its import survives
+    // and `File` names an imported TYPE at file scope — the shape of
+    // GSharp.GeneratorHost.Tests' `using static StubTestSupport` beside
+    // `using Microsoft.CodeAnalysis`, whose `Project` type collided with the
+    // imported `Project(...)` helper.
+    private const string CollidingCallerSource = @"
+using System.IO;
+using static Corpus.Aux.StubSupport;
+
+namespace Corpus.Main
+{
+    public class Consumer
+    {
+        public string F() => File(Path.GetFileName(""a/b""));
+
+        public string H() => Keep(""x"");
+    }
+}
+";
+
+    /// <summary>
+    /// A <c>using static</c> member whose name is also an imported type keeps
+    /// its owner qualifier: gsc resolves the bare name to the TYPE, so a bare
+    /// <c>File(x)</c> would bind as a conversion to <c>System.IO.File</c>
+    /// (GS0155). C# picks the member in an invocation, so the translation must
+    /// spell it out. (A non-invoked reference has no such case: C# itself
+    /// reports CS0229 for a member-vs-type ambiguity there.) This is the nightly
+    /// self-migration regression in
+    /// <c>GSharp.GeneratorHost.Tests/GeneratedRegexStubTests.cs</c>.
+    /// </summary>
+    [Fact]
+    public void UsingStaticMember_WhoseNameIsAnImportedType_IsQualified()
+    {
+        string rendered = Translate(CollidingAuxSource, CollidingCallerSource);
+
+        Assert.Contains("StubSupport.File(", rendered, StringComparison.Ordinal);
+
+        // No collision, no qualifier: the ADR-0134 bare form is unchanged.
+        Assert.Contains("Keep(\"x\")", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("StubSupport.Keep", rendered, StringComparison.Ordinal);
+    }
+
+    private static string TranslateCaller() => Translate(AuxSource, CallerSource);
+
+    private static string Translate(string auxSource, string callerSource)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[]
             {
-                ("EnumUtil.cs", AuxSource),
-                ("Caller.cs", CallerSource),
+                ("EnumUtil.cs", auxSource),
+                ("Caller.cs", callerSource),
             });
 
         Assert.True(
