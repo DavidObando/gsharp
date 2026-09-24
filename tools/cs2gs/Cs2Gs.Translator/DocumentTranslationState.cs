@@ -226,6 +226,14 @@ internal sealed class DocumentTranslationState
     public HashSet<Cs2Gs.CodeModel.Ast.GExpression> GSharpNullablePatternReceivers { get; } =
         new HashSet<Cs2Gs.CodeModel.Ast.GExpression>(ReferenceEqualityComparer.Instance);
 
+    // Issue #4356: `var` locals a nested nullable pattern member is STORED in
+    // (so a designation's binding can read it after the test). A binding is
+    // materialized after the test's block expression has finished, outside
+    // the `!= nil` guard that narrowed the local, so every read BELOW the guard
+    // — member tests and descendant bindings alike — goes through `local!!`.
+    public HashSet<Cs2Gs.CodeModel.Ast.GExpression> StoredPatternCaptures { get; } =
+        new HashSet<Cs2Gs.CodeModel.Ast.GExpression>(ReferenceEqualityComparer.Instance);
+
     // Outermost short-circuit operand currently redirecting fallback pattern
     // spills. Nested lambdas/local functions must not reuse its declaration seam.
     public SyntaxNode ShortCircuitSpillScope { get; set; }

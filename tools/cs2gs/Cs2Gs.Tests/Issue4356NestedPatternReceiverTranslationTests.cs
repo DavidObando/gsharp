@@ -459,6 +459,90 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
         Assert.Equal("False,True,False;False,True,True", CompileAndRun(printed, "C.Run()").Trim());
     }
 
+    /// <summary>
+    /// A reassigned binder forces the fallback lowering, which stores the
+    /// nullable member in a `var` capture and materializes the binder AFTER the
+    /// test — outside the `!= nil` guard that narrowed the capture. Every read
+    /// under that guard (member tests and descendant bindings alike) must go
+    /// through a non-null read. Property, list and nested-property forms, each
+    /// against a nil and a present member, compiled with gsc and run.
+    /// </summary>
+    [Fact]
+    public void ReassignedDescendantBinder_UnderNullableCapture_ReadsNonNull()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System;
+
+            namespace Sample;
+
+            public sealed class Inner
+            {
+                public int X;
+                public Inner? Q;
+            }
+
+            public sealed class Holder
+            {
+                public Inner? P;
+                public int[]? A;
+            }
+
+            public static class C
+            {
+                public static int Property(Holder h)
+                {
+                    if (h is { P: { X: var x } })
+                    {
+                        x = x + 1;
+                        return x;
+                    }
+
+                    return -1;
+                }
+
+                public static int List(Holder h)
+                {
+                    if (h is { A: [var x] })
+                    {
+                        x = x + 2;
+                        return x;
+                    }
+
+                    return -1;
+                }
+
+                public static int Nested(Holder h)
+                {
+                    if (h is { P: { Q: { X: var x } } })
+                    {
+                        x = x + 3;
+                        return x;
+                    }
+
+                    return -1;
+                }
+
+                public static void Run()
+                {
+                    var empty = new Holder();
+                    var full = new Holder
+                    {
+                        P = new Inner { X = 10, Q = new Inner { X = 20 } },
+                        A = new[] { 30 },
+                    };
+                    var partial = new Holder { P = new Inner { X = 10 } };
+                    Console.WriteLine(
+                        Property(empty) + "," + Property(full) + ";" +
+                        List(empty) + "," + List(full) + ";" +
+                        Nested(empty) + "," + Nested(partial) + "," + Nested(full));
+                }
+            }
+            """);
+
+        Assert.Equal("-1,11;-1,32;-1,-1,23", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
     private static string CompileAndRun(string printed, string callExpression)
     {
         string? compiler = FindCompiler();

@@ -1417,6 +1417,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             string temp = $"__spill{this.state.SpillCounter++}";
             var local = new IdentifierExpression(temp);
+            this.state.StoredPatternCaptures.Add(local);
             if (gsharpNullable)
             {
                 this.state.GSharpNullablePatternReceivers.Add(local);
@@ -1657,6 +1658,14 @@ public sealed partial class CSharpToGSharpTranslator
             SeparatedSyntaxList<PatternSyntax> elements = listPattern.Patterns;
             int sliceIndex = FindSlicePatternIndex(elements);
             ITypeSymbol elementType = GetEnumerableElementType(receiverType);
+
+            // Issue #4356: the nil guard below tests `receiver`; every read under
+            // it goes through `receiver!!` when it is a stored `var` capture,
+            // whose element bindings are materialized outside the guard.
+            GExpression guardedReceiver = receiver;
+            receiver = this.state.StoredPatternCaptures.Contains(receiver)
+                ? new NonNullAssertionExpression(receiver)
+                : receiver;
             var lengthAccess = new MemberAccessExpression(receiver, "Length");
 
             GExpression test = sliceIndex < 0
@@ -1693,12 +1702,12 @@ public sealed partial class CSharpToGSharpTranslator
             // makes the pattern fall through on nil, as C# does, and smart-casts
             // the local for the `.Length` / index reads.
             if (isNestedPatternMember
-                && (this.IsGSharpNullablePatternReceiver(receiver)
+                && (this.IsGSharpNullablePatternReceiver(guardedReceiver)
                     || (receiverType is { IsReferenceType: true }
                         && receiverType.NullableAnnotation == NullableAnnotation.Annotated)))
             {
                 test = new BinaryExpression(
-                    new BinaryExpression(receiver, "!=", LiteralExpression.Null()),
+                    new BinaryExpression(guardedReceiver, "!=", LiteralExpression.Null()),
                     "&&",
                     test);
             }
@@ -2090,8 +2099,12 @@ public sealed partial class CSharpToGSharpTranslator
                 && recursive.Type == null
                 && !receiverIsValueType
                 && isNestedPatternMember
-                && receiver is not IdentifierExpression)
+                && (receiver is not IdentifierExpression
+                    || this.state.StoredPatternCaptures.Contains(receiver)))
             {
+                // A stored `var` capture (StorePatternMemberOnce) is read by
+                // descendant bindings AFTER the test, outside the guard that
+                // narrows it, so its reads below the guard assert too.
                 memberReceiver = EnsureNonNullAssertion(receiver);
             }
 
