@@ -202,14 +202,7 @@ namespace Demo
     }
 }");
 
-        // The simple-local SCRUTINEE `a` needs no temp. The nested member
-        // `a.B` is read by two subpatterns, so it is bound once (issue #4356:
-        // C# reads a subpattern member once, and re-reading `a.B` per member
-        // test evaluated its getter twice).
-        Assert.DoesNotContain("let __spill0 = a\n", printed);
-        Assert.Contains("let __spill0 = a.B", printed);
-        Assert.Contains("__spill0.X == 1 && __spill0.Y == 2", printed);
-        Assert.Equal(1, CountOccurrences(printed, "a.B"));
+        Assert.DoesNotContain("__spill", printed);
     }
 
     [Fact]

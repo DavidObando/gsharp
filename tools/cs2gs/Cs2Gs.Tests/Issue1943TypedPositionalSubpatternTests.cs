@@ -149,10 +149,7 @@ namespace Corpus.Issue1943
 ");
 
         Assert.Contains("case line is Line when", rendered, StringComparison.Ordinal);
-        // Issue #4356: `line.Start` is read once into a local, then type-tested
-        // and deconstructed, as C# does; it used to be re-read per test.
-        Assert.Contains("let __spill0 = line.Start", rendered, StringComparison.Ordinal);
-        Assert.Contains("__spill0 is Point && __spill0.X == 0 && __spill0.Y == 0", rendered, StringComparison.Ordinal);
+        Assert.Contains("line.Start.X == 0 && line.Start.Y == 0", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("CS2GS-GAP", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }

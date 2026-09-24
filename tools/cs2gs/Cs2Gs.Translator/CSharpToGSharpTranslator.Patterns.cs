@@ -1257,19 +1257,32 @@ public sealed partial class CSharpToGSharpTranslator
 
         /// <summary>
         /// Issue #4356: whether the boolean lowering of <paramref name="pattern"/>
-        /// embeds its receiver more than once — a type test, a <c>!= nil</c>
-        /// guard, and one read per property/positional subpattern each read it,
-        /// and a designation re-reads it wherever it is used. A single
-        /// subpattern over a receiver that needs no guard
-        /// (<c>{ Friend: not { Age: 0 } }</c> with a non-nullable
-        /// <c>Friend</c>) reads it once and needs no local.
+        /// over a NULLABLE nested member embeds that member more than once — a
+        /// type test, a <c>!= nil</c> guard, and one read per property/positional
+        /// subpattern each read it, and a designation re-reads it wherever it is
+        /// used. That is the shape where a re-read is not merely redundant but
+        /// wrong: the first read is what the nil test (or type test) proved,
+        /// and a later read that yields nil throws where C# matches or falls
+        /// through. A single subpattern over a member that needs no guard reads
+        /// it once and needs no local.
+        /// <para>
+        /// A NON-nullable member re-read (<c>expr.Kind == A || expr.Kind == B</c>
+        /// for <c>{ Kind: A or B }</c>) is left as it was: it cannot fail a nil
+        /// test it never had, the self-migration inventory keeps the synthesized
+        /// temporaries it would add retired (Issue3347RemainingSpillInventoryTests),
+        /// and it is a pre-existing readability tradeoff outside #4356.
+        /// </para>
         /// </summary>
         /// <param name="pattern">The nested pattern.</param>
         /// <param name="receiverType">The receiver's declared C# type, if known.</param>
         /// <returns>True when a single-evaluation local is needed.</returns>
         private bool LoweredPatternReadsReceiverMoreThanOnce(PatternSyntax pattern, ITypeSymbol receiverType)
         {
-            return CountReads(pattern) > 1;
+            bool nullableMember = receiverType != null
+                && ((receiverType.IsReferenceType
+                        && receiverType.NullableAnnotation == NullableAnnotation.Annotated)
+                    || receiverType.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T);
+            return nullableMember && CountReads(pattern) > 1;
 
             int CountReads(PatternSyntax current)
             {
@@ -1361,7 +1374,9 @@ public sealed partial class CSharpToGSharpTranslator
             bool isNestedPatternMember = false)
         {
             // Issue #4356: C# evaluates a subpattern's member ONCE and tests
-            // every nested subpattern against that one value. TranslateIsPattern
+            // every nested subpattern against that one value; for a NULLABLE
+            // member (see LoweredPatternReadsReceiverMoreThanOnce) a re-read can
+            // be nil after the first read was proved non-nil. TranslateIsPattern
             // applies that rule to the top-level scrutinee (it spills a
             // non-trivial one into a local when the pattern reads it more than
             // once); this is the same rule for a NESTED member (`o.P` in

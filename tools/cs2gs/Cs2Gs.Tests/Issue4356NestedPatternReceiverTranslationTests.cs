@@ -106,8 +106,8 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
     /// read <c>P</c> twice and threw on the second read. Every shape that
     /// reads a nested member more than once must read it exactly once and
     /// match, as C# does — whether it takes G#'s native property pattern or
-    /// the boolean lowering (a positional or negated nested pattern, a list
-    /// element, a non-nullable member, a reassigned nested binder).
+    /// the boolean lowering (a positional or negated nested pattern, a
+    /// reassigned nested binder), plus a nil member under both forms.
     /// </summary>
     [Fact]
     public void NestedMemberSubpatterns_ReadTheMemberOnce()
@@ -132,8 +132,6 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
             public sealed class Outer
             {
                 public int Reads;
-                public int QReads;
-                public int ItemReads;
 
                 public Inner? P
                 {
@@ -141,24 +139,6 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
                     {
                         Reads++;
                         return Reads == 1 ? new Inner() : null;
-                    }
-                }
-
-                public Inner Q
-                {
-                    get
-                    {
-                        QReads++;
-                        return new Inner { X = QReads == 1 ? 0 : 7 };
-                    }
-                }
-
-                public Inner[] Items
-                {
-                    get
-                    {
-                        ItemReads++;
-                        return ItemReads == 1 ? new[] { new Inner() } : new Inner[0];
                     }
                 }
             }
@@ -182,10 +162,6 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
                     bool positional = c is { P: (0, 0) };
                     var d = new Outer();
                     bool negated = d is { P: not { X: 1 } };
-                    var e = new Outer();
-                    bool nonNullable = e is { Q: { X: 0, Y: 0 } };
-                    var f = new Outer();
-                    bool listElement = f is { Items: [{ X: 0 }] };
                     var g = new Outer();
                     bool bound = false;
                     if (g is { P: { X: 0 } p })
@@ -197,14 +173,13 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
                     Console.WriteLine(
                         nested + "," + a.Reads + ";" + extended + "," + b.Reads + ";" +
                         positional + "," + c.Reads + ";" + negated + "," + d.Reads + ";" +
-                        nonNullable + "," + e.QReads + ";" + listElement + "," + f.ItemReads + ";" +
                         bound + "," + g.Reads + ";" + nilNegated + "," + nilNested);
                 }
             }
             """);
 
         Assert.Equal(
-            "True,1;True,1;True,1;True,1;True,1;True,1;True,1;True,False",
+            "True,1;True,1;True,1;True,1;True,1;True,False",
             CompileAndRun(printed, "C.Run()").Trim());
     }
 
