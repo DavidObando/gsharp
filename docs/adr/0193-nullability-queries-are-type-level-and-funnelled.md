@@ -12,7 +12,8 @@
   `[]?T` — the positional rule the element-position API must preserve),
   [ADR-0115](0115-csharp-to-gsharp-migration-tool.md) (cs2gs); issues #4363 (the
   problem statement), #4361 (the latest instance), #4372 (retiring
-  `--nullability=enabled`), #4287 (the carve-out saga ADR-0186 grew out of);
+  `--nullability=enabled`), #4287 (the carve-out saga ADR-0186 grew out of),
+  #4385 (revisiting `T!` for Open question 1's cell after Phase 3);
   PR #4362 (whose round 3, commit `b0c76053d`, deferred the symbolic-return gap
   here)
 
@@ -335,9 +336,11 @@ internal static class NullabilityImportRule
   nullability and would be checked at the coercion point, but it depends on a
   platform wrapper over a type parameter that may be instantiated with a value
   type, which Phase 1's `PlatformTypeSymbol.Get` normalisation does not yet
-  define. This cell is therefore the one entry in the rule that needs the
-  repository owner's explicit confirmation **before Phase 1 starts** (Open
-  question 1); `Unchanged` is the default if it is confirmed as written.
+  define. This cell was the one entry in the rule that needed the repository
+  owner's explicit confirmation before Phase 1 (Open question 1). **Resolved
+  2026-09-24: the owner confirmed `Unchanged` as written.** Revisiting
+  `Platform` for this cell is deferred until Phase 3 lands and is tracked in
+  #4385, which is a Phase 3 exit criterion.
 - **`Unchanged` preserves the input's own nullability, on both type models.**
   gsc's `ApplyConcrete`/`ApplyOpenSlot` map the decision onto `TypeSymbol`:
   `Unchanged` → the input symbol exactly as given (a `string?` argument stays
@@ -661,7 +664,7 @@ from:
 
 | Phase | Needs | Introduced by |
 |---|---|---|
-| 1 | Answer to Open question 1; nothing else | The repository owner |
+| 1 | Answer to Open question 1; nothing else (**met** 2026-09-24: `Unchanged`) | The repository owner |
 | 2 | `NullabilityImportRule` (walkers already routed through it) | Phase 1 |
 | 2 | `[NullabilityFunnel]`, `FromClrTypeWithoutNullability`, `NullabilityFreeReason` | Phase 2 itself |
 | 3 | `ReferenceNullability`, `GetElementPositions()` | Phase 1 |
@@ -678,7 +681,8 @@ No phase uses anything a later phase introduces.
 ### Phase 1 — the rule function, the agreement test, and two Layer 0/6 fixes
 
 - **Entry condition:** Open question 1 (the `Annotated` × `Unknown` cell) has
-  been answered by the repository owner.
+  been answered by the repository owner. **Met 2026-09-24:** the cell is
+  `Unchanged`, as §1 proposes. Phase 1 is unblocked.
 - Add `ImportedReferenceNullability`, `TypeArgumentKind` and
   `NullabilityImportRule`: the representation-neutral
   `DecideConcrete`/`DecideOpenSlot`, and gsc's `ApplyConcrete`/`ApplyOpenSlot`
@@ -793,7 +797,16 @@ No phase uses anything a later phase introduces.
   reports nothing and there is no per-site suppression.
 - Make the symbolic-projection consumers named in `b0c76053d` — `TryProjectErasedClrType`,
   member lookup, method type inference, emit — read through a platform wrapper
-  via the query API. This is what Phase 4 needs.
+  via the query API. This is what Phase 4 needs, and what #4385 needs.
+- **Exit criterion: #4385 is picked up.** Phase 3 is not complete until the
+  deferred revisit of the `Annotated` × `Unknown` cell (`Unchanged` → `Platform`,
+  i.e. `T!`; see Open question 1) is unblocked and someone owns it. The cell
+  change itself may be a follow-up PR, but before Phase 3 is called done:
+  - its prerequisite is in place: the symbolic-projection consumers above peel
+    `PlatformTypeSymbol` over symbolic generics, so a `T!` there no longer
+    degrades the projection (the GS0159 / ILVerify `StackUnexpected` failures
+    PR #4362 hit);
+  - #4385 is updated to say it is unblocked, with a link to the Phase 3 PR.
 - **This phase is one PR, and it is atomic.** Once Core references GSA0008 the
   rule analyzes the whole compilation, so landing it "for the files already
   migrated" would need a path filter, suppressions or an unfinished-file list —
@@ -821,6 +834,10 @@ No phase uses anything a later phase introduces.
   ilverify reproductions) become this phase's regression tests.
 - This implements, for this path, ADR-0186 §5b's requirement that unwrapping
   `T!` not degrade a symbolic projection.
+- #4385 shares this phase's Phase 3 prerequisite (consumers that peel the
+  platform wrapper over symbolic generics) but not its gate: it is unblocked by
+  Phase 3, not by Phase 4, and neither waits for the other. Its exit criterion
+  is in Phase 3.
 
 ### Phase 5 — consolidate cs2gs onto `NullabilityImportRule`
 
@@ -962,12 +979,14 @@ No phase uses anything a later phase introduces.
 
 ## Open questions for the implementer
 
-1. **The `Annotated` × `Unknown` cell of `DecideOpenSlot` — owner confirmation
-   needed before Phase 1.** Decision 1 rules on reference and value-type
-   arguments; an unconstrained G# type parameter is neither. §1 sets the cell to
-   `Unchanged` (today's behaviour on `main`, and the only value that does not
-   reintroduce PR #4362 round 1's `Min()` regression) and states its soundness
-   cost; `Platform` is the alternative. Phase 1 implements whichever is
-   confirmed, in that one cell, and records it here.
+1. **The `Annotated` × `Unknown` cell of `DecideOpenSlot` — resolved
+   2026-09-24.** Decision 1 rules on reference and value-type arguments; an
+   unconstrained G# type parameter is neither. The repository owner confirmed
+   §1's `Unchanged` (today's behaviour on `main`, and the only value that does
+   not reintroduce PR #4362 round 1's `Min()` regression), accepting the
+   soundness cost §1 states. `Platform` (`T!`) is deferred, not rejected: it
+   needs Phase 3's peeling consumers and a definition of `T!` over a type
+   parameter that may be a value type. The revisit is tracked in #4385 and is a
+   Phase 3 exit criterion. Phase 1 implements `Unchanged` in that one cell.
 2. **The audit's third Layer 5 predicate** was not located. Phase 3 either finds
    it (GSA0008 will) or records that there were two.
