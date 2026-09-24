@@ -1134,6 +1134,17 @@ public sealed partial class CSharpToGSharpTranslator
                 ? this.MapAttributes(parameterSyntax.AttributeLists)
                 : null;
 
+            // Issue #4370: gsc takes a [LibraryImport] string's encoding from
+            // the import's StringMarshalling (a string @MarshalAs is GS0360);
+            // MapLibraryImportMethodAttributes folds it in there.
+            if (attributes != null
+                && symbol.Type.SpecialType == SpecialType.System_String
+                && symbol.ContainingSymbol is IMethodSymbol importMethod
+                && IsLibraryImportDefinition(importMethod))
+            {
+                attributes = attributes.Where(attribute => !IsMarshalAsAttributeName(attribute.Name)).ToList();
+            }
+
             // C# emits no FieldMarshal row for the default P/Invoke bool
             // contract, but the CLR marshaler still treats bool as a four-byte
             // Win32 BOOL. G# intentionally requires that ABI to be explicit for

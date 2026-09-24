@@ -41,6 +41,11 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private const string LibraryImportAttributeName = "System.Runtime.InteropServices.LibraryImportAttribute";
 
+    private const string GeneratedRegexAttributeName = "System.Text.RegularExpressions.GeneratedRegexAttribute";
+
+    private static bool HasAttribute(ISymbol symbol, string attributeName) =>
+        symbol.GetAttributes().Any(attribute => attribute.AttributeClass?.ToDisplayString() == attributeName);
+
     /// <summary>
     /// Whether <paramref name="method"/> is the definition part of a C#
     /// <c>[LibraryImport]</c> partial method.
@@ -55,6 +60,103 @@ public sealed partial class CSharpToGSharpTranslator
     private static AttributeData FindLibraryImportAttribute(IMethodSymbol method) =>
         method.GetAttributes().FirstOrDefault(attribute =>
             attribute.AttributeClass?.ToDisplayString() == LibraryImportAttributeName);
+
+    private static bool IsMarshalAsAttributeName(string name)
+    {
+        string simpleName = name.Substring(name.LastIndexOf('.') + 1);
+        return simpleName == "MarshalAs" || simpleName == "MarshalAsAttribute";
+    }
+
+    /// <summary>
+    /// The StringMarshalling (1 = Utf8, 2 = Utf16) every string parameter and
+    /// a string return of <paramref name="method"/> use, folding a per-string
+    /// <c>[MarshalAs(LPUTF8Str)]</c> / <c>[MarshalAs(LPWStr)]</c> into it.
+    /// gsc has no per-string encoding under <c>@LibraryImport</c> (GS0360),
+    /// so a string <c>[MarshalAs]</c> it cannot express, or strings that
+    /// disagree, set <paramref name="problem"/>.
+    /// </summary>
+    /// <param name="method">The <c>[LibraryImport]</c> definition.</param>
+    /// <param name="usesMarshalAs">Whether any string position carries <c>[MarshalAs]</c>.</param>
+    /// <param name="problem">Why no single encoding exists, or <see langword="null"/>.</param>
+    /// <returns>The shared encoding, or 0 when none is known.</returns>
+    private static int ResolveLibraryImportStringMarshalling(
+        IMethodSymbol method,
+        out bool usesMarshalAs,
+        out string problem)
+    {
+        usesMarshalAs = false;
+        problem = null;
+        int attributeEncoding = 0;
+        AttributeData libraryImport = FindLibraryImportAttribute(method);
+        foreach (KeyValuePair<string, TypedConstant> named in libraryImport.NamedArguments)
+        {
+            if (named.Key == "StringMarshalling" && named.Value.Value is int value)
+            {
+                attributeEncoding = value;
+            }
+        }
+
+        var stringAttributes = new List<IEnumerable<AttributeData>>();
+        var stringPositions = new List<string>();
+        foreach (IParameterSymbol parameter in method.Parameters)
+        {
+            if (parameter.Type.SpecialType == SpecialType.System_String)
+            {
+                stringAttributes.Add(parameter.GetAttributes());
+                stringPositions.Add($"parameter '{parameter.Name}'");
+            }
+        }
+
+        if (method.ReturnType.SpecialType == SpecialType.System_String)
+        {
+            stringAttributes.Add(method.GetReturnTypeAttributes());
+            stringPositions.Add("the return value");
+        }
+
+        var encodings = new HashSet<int>();
+        for (int i = 0; i < stringAttributes.Count; i++)
+        {
+            string position = stringPositions[i];
+            AttributeData marshalAs = stringAttributes[i].FirstOrDefault(attribute =>
+                attribute.AttributeClass?.ToDisplayString() == "System.Runtime.InteropServices.MarshalAsAttribute");
+            if (marshalAs == null)
+            {
+                if (attributeEncoding == 1 || attributeEncoding == 2)
+                {
+                    encodings.Add(attributeEncoding);
+                }
+
+                continue;
+            }
+
+            usesMarshalAs = true;
+            int unmanagedType = marshalAs.ConstructorArguments.Length == 1 && marshalAs.ConstructorArguments[0].Value is int raw
+                ? raw
+                : -1;
+            if (unmanagedType == (int)System.Runtime.InteropServices.UnmanagedType.LPUTF8Str)
+            {
+                encodings.Add(1);
+            }
+            else if (unmanagedType == (int)System.Runtime.InteropServices.UnmanagedType.LPWStr)
+            {
+                encodings.Add(2);
+            }
+            else if (problem == null)
+            {
+                problem = $"{position} is a string with [MarshalAs(UnmanagedType." +
+                    $"{(System.Runtime.InteropServices.UnmanagedType)unmanagedType})], which gsc's @LibraryImport " +
+                    "cannot express (only UTF-8 and UTF-16 via StringMarshalling)";
+            }
+        }
+
+        if (problem == null && encodings.Count > 1)
+        {
+            problem = "its string parameters/return use different encodings, but gsc applies one " +
+                "StringMarshalling to every string of an @LibraryImport";
+        }
+
+        return problem == null && encodings.Count == 1 ? encodings.First() : 0;
+    }
 
     private static bool IsLibraryImportAttributeName(string name)
     {
@@ -104,9 +206,26 @@ public sealed partial class CSharpToGSharpTranslator
                 return mapped;
             }
 
+            // A per-string [MarshalAs(LPUTF8Str/LPWStr)] becomes the import's
+            // StringMarshalling (gsc has no per-string encoding).
+            int foldedEncoding = ResolveLibraryImportStringMarshalling(symbol, out bool usesMarshalAs, out _);
+            GExpression foldedStringMarshalling = usesMarshalAs && foldedEncoding != 0
+                ? this.MapConstantValue(
+                    foldedEncoding,
+                    this.context.Compilation.GetTypeByMetadataName("System.Runtime.InteropServices.StringMarshalling"),
+                    node,
+                    "LibraryImport StringMarshalling")
+                : null;
+            bool stringReturn = symbol.ReturnType.SpecialType == SpecialType.System_String;
+
             var result = new List<AttributeUse>(mapped.Count);
             foreach (AttributeUse attribute in mapped)
             {
+                if (attribute.Target == "return" && stringReturn && IsMarshalAsAttributeName(attribute.Name))
+                {
+                    continue;
+                }
+
                 if (attribute.Target != null || !IsLibraryImportAttributeName(attribute.Name))
                 {
                     result.Add(attribute);
@@ -114,10 +233,19 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 var arguments = new List<AttributeArgument>(attribute.Arguments.Count);
+                bool hasStringMarshalling = false;
                 foreach (AttributeArgument argument in attribute.Arguments)
                 {
-                    GExpression constant = this.MapLibraryImportArgumentConstant(data, argument.Name, node);
+                    GExpression constant = argument.Name == "StringMarshalling" && foldedStringMarshalling != null
+                        ? foldedStringMarshalling
+                        : this.MapLibraryImportArgumentConstant(data, argument.Name, node);
+                    hasStringMarshalling |= argument.Name == "StringMarshalling";
                     arguments.Add(constant == null ? argument : new AttributeArgument(constant, argument.Name));
+                }
+
+                if (!hasStringMarshalling && foldedStringMarshalling != null)
+                {
+                    arguments.Add(new AttributeArgument(foldedStringMarshalling, "StringMarshalling"));
                 }
 
                 result.Add(new AttributeUse(attribute.Name, arguments, attribute.Target));
@@ -168,6 +296,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             this.ReportUnmanagedCallConv(node, symbol);
 
+            ResolveLibraryImportStringMarshalling(symbol, out _, out string stringProblem);
+            if (stringProblem != null)
+            {
+                string stringMessage = $"[LibraryImport] method '{name}': {stringProblem}.";
+                this.context.ReportUnsupported(node, stringMessage);
+            }
+
             foreach (IParameterSymbol parameter in symbol.Parameters)
             {
                 string subject = $"parameter '{parameter.Name}' of [LibraryImport] method '{name}'";
@@ -181,6 +316,7 @@ public sealed partial class CSharpToGSharpTranslator
             AttributeData returnMarshalAs = returnAttributes.FirstOrDefault(attribute =>
                 attribute.AttributeClass?.ToDisplayString() == "System.Runtime.InteropServices.MarshalAsAttribute");
             if (returnMarshalAs != null
+                && symbol.ReturnType.SpecialType != SpecialType.System_String
                 && !(returnMarshalAs.ConstructorArguments.Length == 1
                     && returnMarshalAs.ConstructorArguments[0].Value is int unmanagedType
                     && unmanagedType == (int)System.Runtime.InteropServices.UnmanagedType.Bool))
@@ -280,6 +416,17 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// Whether this run emits <paramref name="tree"/>: membership in the
+        /// caller's translated-file set when it supplied one (a repository
+        /// migration translates git-tracked <c>&lt;auto-generated&gt;</c>
+        /// files too), otherwise the loader's own generated-source rule.
+        /// </summary>
+        private bool IsTranslatedByThisRun(Microsoft.CodeAnalysis.SyntaxTree tree) =>
+            this.translatedFilePaths != null
+                ? this.translatedFilePaths.Contains(tree.FilePath)
+                : this.IsHandAuthoredTranslatedTree(tree);
+
+        /// <summary>
         /// Issue #4370 safety net: reports a partial member whose definition
         /// this run translates but whose implementation is generated code
         /// that cs2gs does not translate (a source generator other than the
@@ -300,22 +447,27 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (implementation == null
                 || implementation.DeclaringSyntaxReferences.Length == 0
-                || !this.IsHandAuthoredTranslatedTree(node.SyntaxTree)
+                || !this.IsTranslatedByThisRun(node.SyntaxTree)
                 || implementation.DeclaringSyntaxReferences.Any(reference =>
-                    this.IsHandAuthoredTranslatedTree(reference.SyntaxTree))
-                || definition.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.ToDisplayString() ==
-                        "System.Text.RegularExpressions.GeneratedRegexAttribute"))
+                    this.IsTranslatedByThisRun(reference.SyntaxTree))
+                || (definition is IMethodSymbol && HasAttribute(definition, GeneratedRegexAttributeName)))
             {
                 return;
             }
 
             string generatedFile = implementation.DeclaringSyntaxReferences[0].SyntaxTree.FilePath;
+            string remedy = HasAttribute(definition, GeneratedRegexAttributeName)
+                ? "cs2gs rewrites [GeneratedRegex] only on partial METHODS; declare it as a partial method, or " +
+                    "write the cached Regex by hand in G#."
+                : HasAttribute(definition, "CommunityToolkit.Mvvm.ComponentModel.ObservablePropertyAttribute")
+                    ? "use the field form of [ObservableProperty], which gsgen regenerates for G#, or implement " +
+                        "the property by hand in G#."
+                    : "cs2gs rewrites only [GeneratedRegex] and [LibraryImport] partial methods; implement this " +
+                        "member by hand in G#.";
             string message =
                 $"partial member '{definition.ContainingType?.Name}.{definition.Name}' is implemented by " +
                 $"generated code ('{generatedFile}') that cs2gs does not translate; the member is omitted from " +
-                "the G# type, so every use of it fails to compile. cs2gs rewrites only [GeneratedRegex] and " +
-                "[LibraryImport] partials; implement this member by hand in G#.";
+                "the G# type, so every use of it fails to compile. " + remedy;
             this.context.ReportUnsupported(node, message);
         }
     }
