@@ -425,27 +425,64 @@ Both choke points are enforced by live diagnostics in
 analyzer (`OutputItemType="Analyzer"`), so the rules fire in every Core build and
 in the IDE.
 
-- **GSA0007 — producer funnel.** Two clauses.
-  1. *Inside the Layer 1 walkers' types* (`ClrNullability`,
-     `NullableFlagsBuilder`, `NullabilityAnnotatedTypeSymbol`), **any** direct
-     `NullableTypeSymbol.Get` / `PlatformTypeSymbol.Get` call is reported. The
-     walkers are where `c478e44ab`, `ea81a944f` and #4361 happened, so they are
-     the code the funnel exists to police, not code it exempts; each classified
-     position they resolve goes through `NullabilityImportRule`. (A walker that
-     needs a wrapper for a reason other than a classified position — rebuilding
-     a structure it has already decided — calls a named `NullabilityImportRule`
-     member for that too.)
-  2. *Everywhere else in Core*, a `NullableTypeSymbol.Get` /
-     `PlatformTypeSymbol.Get` whose argument derives from a CLR signature
-     position (`ReturnType`, `ParameterType`, `PropertyType`, `FieldType`,
-     `EventHandlerType`, `GetGenericArguments()`), and a `FromClrType` /
-     `MapOpenClrTypeToSymbolic` on such a position whose result is not passed to
-     a funnel member, are reported.
+- **GSA0007 — producer funnel.** The rule polices the **conversion doors**, not
+  the arguments passed to them. An argument-shape rule — "a `FromClrType` whose
+  argument is a `ReturnType`" — cannot hold across a helper boundary:
+  `Read(Type t) => TypeSymbol.FromClrType(t)` has no signature accessor in it,
+  and `Read(method.ReturnType)` has no conversion call in it, so both pass while
+  the result bypasses the funnel. That shape already exists on `main`:
+  `StatementBinder.Loops.cs:592` is a private `MapOpenClrTypeToSymbolic`
+  forwarding wrapper. Following values through calls would need an
+  interprocedural dataflow analysis, which an incremental Roslyn analyzer
+  cannot do soundly. So the rule does not try. It reports every *call* to a
+  door, whatever the argument, outside members that are declared to be the
+  funnel.
 
-  The only exempt types are `NullabilityImportRule` itself and the two wrapper
-  types whose factories are being called — exemption by containing type, exactly
-  as `ReflectionTypeComparisonAnalyzer.IsInsideExemptType` exempts
-  `ClrTypeUtilities`.
+  1. **The doors.** Every Core path from a CLR `Type` (or its nullability
+     metadata) to a `TypeSymbol` is one of: `TypeSymbol.FromClrType`, the
+     `MemberLookup.MapOpenClrTypeToSymbolic` overloads,
+     and `ClrNullability.ReadNullableFlags` / `ClassifyFlag` /
+     `ClassifyPosition`. A call to any of them is reported unless one of the
+     next two points applies. The wrapper factories `NullableTypeSymbol.Get` and
+     `PlatformTypeSymbol.Get` are *not* doors in general, because the language
+     legitimately wraps types it already has (the `?.` result, a nil arm, a
+     lifted operator). But the round-1 walker clause stays: **inside** a
+     `[NullabilityFunnel]` member other than `NullabilityImportRule`, a direct
+     wrapper-factory call is reported, so the walkers resolve every classified
+     position through the rule.
+  2. **The funnel is declared per member, not per type.** An internal
+     `[NullabilityFunnel]` attribute marks the members allowed to call the
+     doors: `NullabilityImportRule`, the Layer 1 walkers, the `MemberLookup.GetClr*`
+     family (with `ResolveInstanceReturnTypeFromReceiver` moved into it in
+     Phase 2), and the symbolic projection itself. Exempting whole types would
+     not work. `MemberLookup` is over 8,000 lines, and exempting it would also
+     exempt `ResolveCallReturnTypeFromSymbolicTypeArgs`, the known gap. Adding
+     the attribute to a member is the reviewed exception #4363 asks for: it
+     shows up in the diff, and the analyzer's tests list every attributed
+     member, so a new one fails a test until that list is updated.
+  3. **A named door for audited nullability-free conversions.** Most of the
+     337 `FromClrType` calls on `main` convert a type that has no declaration
+     nullability to lose, such as a `typeof` target, a primitive, or a type
+     compared only for identity in overload resolution or emit. They move to
+     `TypeSymbol.FromClrTypeWithoutNullability(Type, NullabilityFreeReason)`.
+     The reason is a required enum argument (e.g. `TypeLiteral`,
+     `IdentityComparison`, `EmitLowering`, `KnownPrimitive`), so every such
+     call states why nullability doesn't apply, in a form the analyzer can
+     see. GSA0007 allows this door anywhere, with one exception. It still
+     reports a call whose argument is, *within the same method*, a signature
+     accessor (`ReturnType`, `ReturnParameter`, `ParameterType`,
+     `PropertyType`, `FieldType`, `EventHandlerType`, or
+     `GetGenericArguments()` of one of those).
+
+  **What this leaves open, stated honestly.** Someone can still pass a
+  signature `Type` through a helper into `FromClrTypeWithoutNullability` with
+  a false reason. That can't be detected without interprocedural analysis. But
+  the escape is now a call that says in its own name that it drops
+  nullability, and it names a reason a reviewer can check. That is the
+  explicit, reviewable exception #4363 asked for, instead of the silent
+  bypass that exists today. Inside the funnel members, correctness rests on
+  `NullabilityImportRule`, the walker clause above and the reader-agreement
+  test (§4). The types that define the doors are exempt by definition.
 - **GSA0008 — consumer query.** An `is`/`as`/type-pattern/`switch` arm on
   `NullableTypeSymbol`, `PlatformTypeSymbol` or `NullabilityAnnotatedTypeSymbol`
   outside the exempt types is reported, with a message naming the query member
@@ -577,10 +614,15 @@ ADR-0186's steps did.
 
 ### Phase 2 — producer triage and the funnel analyzer
 
-- Triage every signature-position `FromClrType` call (43 at `7a44ca033`) and
-  every `MapOpenClrTypeToSymbolic` call (63) in `src/Core`: already funnelled,
-  needs a merge, or not a nullability-bearing position (with the reason). Record
-  the final counts in this ADR.
+- Triage **every** door call in `src/Core`, not only the signature-position
+  ones: all 337 `FromClrType` calls at `7a44ca033` (43 of them on a signature
+  accessor), all 63 `MapOpenClrTypeToSymbolic` calls, and the
+  `ReadNullableFlags` / wrapper-factory calls. Each one either moves inside a
+  `[NullabilityFunnel]` member, gets routed through one (adding a merge where
+  it was missing), or moves to `FromClrTypeWithoutNullability` with its
+  `NullabilityFreeReason`. Private forwarding wrappers such as
+  `StatementBinder.Loops.cs:592`'s `MapOpenClrTypeToSymbolic` are removed, not
+  attributed. Record the final counts in this ADR.
 - Move `ExpressionBinder.ResolveInstanceReturnTypeFromReceiver`
   (`ExpressionBinder.Calls.Invocation.cs:452`) into the `MemberLookup.GetClr*`
   family as a receiver-projected return accessor, so every signature-position
@@ -660,7 +702,11 @@ ADR-0186's steps did.
   rather than through `NullableAnnotation` directly (see Enforcement).
 - **Access.** `NullabilityImportRule` and `ClrNullabilityState` are `internal` and
   `src/Core/Core.csproj` has no `InternalsVisibleTo` for any `Cs2Gs.*` assembly.
-  This phase adds `<InternalsVisibleTo Include="Cs2Gs.Translator" />` rather than
+  This phase adds `<InternalsVisibleTo Include="GSharp.Cs2Gs.Translator" />`
+  (the assembly name, not the project name: `build/gsharp.build.props` sets
+  `<AssemblyName>GSharp.$(MSBuildProjectName)</AssemblyName>`, which
+  `tools/Directory.Build.props` inherits, and the project's own existing entry
+  is likewise `GSharp.Cs2Gs.Tests`) rather than
   widening the rule to `public`: the rule is compiler-internal policy, and gsc's
   public API surface should not grow for a sibling tool.
 - **Sequencing.** ADR-0186 step 6 (cs2gs: per-position Roslyn read, gutting
