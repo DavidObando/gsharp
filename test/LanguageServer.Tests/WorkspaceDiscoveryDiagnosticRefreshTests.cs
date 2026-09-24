@@ -90,7 +90,7 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
     }
 
     [Fact]
-    public async Task DefinitionRequestedDuringDiscovery_WaitsForProjectAwareContent()
+    public async Task ProjectAwareRequestsDuringDiscovery_WaitForProjectAwareContent()
     {
         var rootDir = CreateSampleWorkspace();
         var continueDiscovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
@@ -125,11 +125,18 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
                     TextDocument = new TextDocumentIdentifier { Uri = uri },
                     Position = LanguageServerTestHelpers.PositionOf(FooSource, "Bar"),
                 });
+            var hoverTask = server.HoverAsync(
+                new HoverParams
+                {
+                    TextDocument = new TextDocumentIdentifier { Uri = uri },
+                    Position = LanguageServerTestHelpers.PositionOf(FooSource, "Bar"),
+                });
 
             try
             {
                 await Task.Delay(100);
                 Assert.False(definitionTask.IsCompleted);
+                Assert.False(hoverTask.IsCompleted);
             }
             finally
             {
@@ -138,6 +145,7 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
 
             var definition = Assert.Single(await definitionTask);
             Assert.EndsWith("Bar.gs", definition.Uri.GetFileSystemPath());
+            Assert.NotNull(await hoverTask);
         }
         finally
         {

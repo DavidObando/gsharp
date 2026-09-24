@@ -470,8 +470,7 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) => DefinitionComputer.ComputeDefinitions(request.TextDocument.Uri, content, request.Position, ct).ToArray(),
             Array.Empty<Location>(),
-            cancellationToken,
-            waitForWorkspaceDiscovery: true);
+            cancellationToken);
 
     [JsonRpcMethod("textDocument/references", UseSingleObjectParameterDeserialization = true)]
     public Task<Location[]> ReferencesAsync(ReferenceParams request, CancellationToken cancellationToken = default)
@@ -503,7 +502,8 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) => DocumentSymbolComputer.ComputeDocumentSymbols(content, ct).ToArray(),
             Array.Empty<SymbolInformationOrDocumentSymbol>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("workspace/symbol", UseSingleObjectParameterDeserialization = true)]
     public Task<WorkspaceSymbol[]> WorkspaceSymbolAsync(WorkspaceSymbolParams request, CancellationToken cancellationToken = default)
@@ -660,7 +660,8 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) => FoldingComputer.ComputeFoldings(content, ct).ToArray(),
             Array.Empty<FoldingRange>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/selectionRange", UseSingleObjectParameterDeserialization = true)]
     public Task<SelectionRange[]> SelectionRangeAsync(SelectionRangeParams request, CancellationToken cancellationToken = default)
@@ -676,7 +677,8 @@ public sealed class LspServer
                     return SelectionRangeComputer.ComputeSelectionRange(content, p);
                 }).ToArray(),
             Array.Empty<SelectionRange>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/semanticTokens/full", UseSingleObjectParameterDeserialization = true)]
     public Task<SemanticTokens> SemanticTokensFullAsync(SemanticTokensParams request, CancellationToken cancellationToken = default)
@@ -700,7 +702,8 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) => this.FormatDocument(content),
             Array.Empty<TextEdit>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/rangeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> RangeFormattingAsync(DocumentRangeFormattingParams request, CancellationToken cancellationToken = default)
@@ -713,7 +716,8 @@ public sealed class LspServer
                 return this.FormatDocument(content, TextSpan.FromBounds(Math.Min(start, end), Math.Max(start, end)));
             },
             Array.Empty<TextEdit>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/onTypeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> OnTypeFormattingAsync(DocumentOnTypeFormattingParams request, CancellationToken cancellationToken = default)
@@ -725,7 +729,8 @@ public sealed class LspServer
                 return this.FormatDocument(content, new TextSpan(position, 0));
             },
             Array.Empty<TextEdit>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/implementation", UseSingleObjectParameterDeserialization = true)]
     public Task<Location[]> ImplementationAsync(ImplementationParams request, CancellationToken cancellationToken = default)
@@ -811,7 +816,7 @@ public sealed class LspServer
         Func<DocumentContent, CancellationToken, T> compute,
         T missing,
         CancellationToken cancellationToken,
-        bool waitForWorkspaceDiscovery = false,
+        bool waitForWorkspaceDiscovery = true,
         [System.Runtime.CompilerServices.CallerMemberName] string caller = null)
     {
         DocumentContent content;
