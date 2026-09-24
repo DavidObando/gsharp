@@ -418,6 +418,47 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
             CompileAndRun(printed, "C.Run()").Trim());
     }
 
+    /// <summary>
+    /// A nullable nested member tested with a LIST pattern
+    /// (<c>{ P: [1] }</c>, <c>P</c> an <c>int[]?</c>): C# does not match a nil
+    /// <c>P</c>. The member is read once into a local, which the list lowering
+    /// now guards before its <c>.Length</c> and index reads.
+    /// </summary>
+    [Fact]
+    public void NullableNestedMember_ListPattern_IsGuarded()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System;
+
+            namespace Sample;
+
+            public sealed class Holder
+            {
+                public int[]? P;
+            }
+
+            public static class C
+            {
+                public static bool F(Holder o) => o is { P: [1] };
+
+                public static bool G(Holder o) => o is { P: [1, ..] };
+
+                public static void Run()
+                {
+                    var nil = new Holder();
+                    var one = new Holder { P = new[] { 1 } };
+                    var two = new Holder { P = new[] { 1, 2 } };
+                    Console.WriteLine(
+                        F(nil) + "," + F(one) + "," + F(two) + ";" +
+                        G(nil) + "," + G(one) + "," + G(two));
+                }
+            }
+            """);
+
+        Assert.Equal("False,True,False;False,True,True", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
     private static string CompileAndRun(string printed, string callExpression)
     {
         string? compiler = FindCompiler();

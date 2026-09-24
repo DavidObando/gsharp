@@ -1687,6 +1687,22 @@ public sealed partial class CSharpToGSharpTranslator
                 test = new BinaryExpression(test, "&&", elementTest);
             }
 
+            // Issue #4356: a list pattern never matches nil, and a NESTED member
+            // tested with one (`{ P: [1] }`, `P` an `int[]?`) arrives here bound
+            // to a `let` local that is `T?` in G#. Guard it first: the guard both
+            // makes the pattern fall through on nil, as C# does, and smart-casts
+            // the local for the `.Length` / index reads.
+            if (isNestedPatternMember
+                && (this.IsGSharpNullablePatternReceiver(receiver)
+                    || (receiverType is { IsReferenceType: true }
+                        && receiverType.NullableAnnotation == NullableAnnotation.Annotated)))
+            {
+                test = new BinaryExpression(
+                    new BinaryExpression(receiver, "!=", LiteralExpression.Null()),
+                    "&&",
+                    test);
+            }
+
             return test;
         }
 

@@ -1261,15 +1261,59 @@ public sealed partial class CSharpToGSharpTranslator
         /// (see <c>RoslynAnalyzerApiMap.IsGSharpNullableMember</c>). The C#
         /// symbol's own nullability cannot say so — for a <c>SyntaxToken</c>
         /// it is a struct — so the forgiveness predicates ask here.
+        /// <para>
+        /// A local whose type G# INFERS from such a read (<c>var token =
+        /// parameter.Identifier</c>, emitted as an untyped <c>let</c>) is
+        /// <c>SyntaxToken?</c> in G# too, although Roslyn types it as the
+        /// struct; it answers the same, followed through a chain of such
+        /// locals. This is the one place every forgiveness and expression-tree
+        /// predicate asks, so locals, receivers and values all agree.
+        /// </para>
         /// </summary>
         /// <param name="symbol">The bound C# symbol of the read.</param>
         /// <returns>True when the translated read is <c>T?</c> in G#.</returns>
         private bool IsGSharpNullableAnalyzerApiMember(ISymbol symbol) =>
-            this.InAnalyzerApiMode
-            && symbol is IPropertySymbol or IFieldSymbol
-            && Analyzers.RoslynAnalyzerApiMap.IsGSharpNullableMember(
-                RoslynTypeMetadataName(symbol.OriginalDefinition.ContainingType),
-                symbol.Name);
+            this.InAnalyzerApiMode && this.IsGSharpNullableAnalyzerApiValue(symbol, depth: 0);
+
+        private bool IsGSharpNullableAnalyzerApiValue(ISymbol symbol, int depth)
+        {
+            if (symbol is IPropertySymbol or IFieldSymbol)
+            {
+                return Analyzers.RoslynAnalyzerApiMap.IsGSharpNullableMember(
+                    RoslynTypeMetadataName(symbol.OriginalDefinition.ContainingType),
+                    symbol.Name);
+            }
+
+            if (symbol is not ILocalSymbol local || depth > 8)
+            {
+                return false;
+            }
+
+            foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
+            {
+                // Written without nested nullable property patterns so this
+                // translator's own self-translation needs no synthesized
+                // temporary (Issue3347RemainingSpillInventoryTests).
+                if (reference.GetSyntax() is VariableDeclaratorSyntax declarator
+                    && declarator.Parent is VariableDeclarationSyntax declaration
+                    && declaration.Type.IsVar
+                    && declarator.Initializer != null)
+                {
+                    ExpressionSyntax initializer = declarator.Initializer.Value;
+                    while (initializer is ParenthesizedExpressionSyntax parenthesized)
+                    {
+                        initializer = parenthesized.Expression;
+                    }
+
+                    if (this.IsGSharpNullableAnalyzerApiValue(this.context.GetSymbolInfo(initializer).Symbol, depth + 1))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
 
         // Issue #2113: true for a nullable-oblivious compilation
         // (NullableContextOptions.Disable) — the only mode in which the

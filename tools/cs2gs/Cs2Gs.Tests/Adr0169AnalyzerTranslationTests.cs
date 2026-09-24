@@ -664,6 +664,55 @@ public sealed class FallbackShapesAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void RetargetedNullableMember_ThroughInferredLocal_IsAsserted()
+    {
+        // Issue #4356: `var token = parameter.Identifier` emits an untyped
+        // `let`, which G# infers as `SyntaxToken?` although Roslyn types the
+        // local as the SyntaxToken struct. The local's later dereference,
+        // plain and inside a quoted lambda, must assert it like the direct read.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Linq.Expressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class InferredLocalAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static string FirstName(MethodDeclarationSyntax declaration)
+    {
+        var token = declaration.ParameterList.Parameters[0].Identifier;
+        var alias = token;
+        return alias.Text;
+    }
+
+    // A captured inferred local read inside a quoted lambda.
+    private static Expression<Func<string>> QuotedFirstName(MethodDeclarationSyntax declaration)
+    {
+        var token = declaration.ParameterList.Parameters[0].Identifier;
+        return () => token.Text;
+    }
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("return alias!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("-> token!!.Text", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
     {
         // Issue #4356: SingleVariableDesignationSyntax.Identifier (a Roslyn
