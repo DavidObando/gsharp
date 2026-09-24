@@ -170,10 +170,18 @@ public static class ClrNullability
         var parameterType = parameter.ParameterType.IsByRef
             ? parameter.ParameterType.GetElementType()
             : parameter.ParameterType;
-        var definition = parameter.Member is MethodBase method
-            ? GetMetadataDefinition(method)
-            : null;
-        var definitionParameters = definition?.GetParameters();
+
+        // ADR-0193 §4: an indexer's parameter needs its open declaration as
+        // the layout too, exactly as a method's does — without one an
+        // oblivious `TKey` index parameter read through a closed
+        // `ConcurrentDictionary<string, …>` stamped the slot's byte onto the
+        // argument (`string!`).
+        var definitionParameters = parameter.Member switch
+        {
+            MethodBase method => GetMetadataDefinition(method)?.GetParameters(),
+            PropertyInfo indexer => GetOpenDefinition(indexer)?.GetIndexParameters(),
+            _ => null,
+        };
         var layoutType = definitionParameters != null
             && (uint)parameter.Position < (uint)definitionParameters.Length
                 ? definitionParameters[parameter.Position].ParameterType

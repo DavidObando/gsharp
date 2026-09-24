@@ -433,6 +433,55 @@ public sealed class Adr0193NullabilityImportRuleTests
             openConvertAll.GetGenericArguments()[0]));
     }
 
+    /// <summary>
+    /// The CLR classifier follows a dependent bound transitively, as the
+    /// <see cref="TypeSymbol"/> classifier does through
+    /// <see cref="TypeParameterSymbol.DependentBoundProvesReferenceType"/>:
+    /// in <c>where U : class where T : U</c>, <c>T</c> is a reference, and a
+    /// cyclic or interface-only chain is <c>Unknown</c>.
+    /// </summary>
+    [Fact]
+    public void ClassifyArgument_Follows_A_Clr_Dependent_Bound()
+    {
+        var compilation = Microsoft.CodeAnalysis.CSharp.CSharpCompilation.Create(
+            "Adr0193DependentBounds",
+            new[]
+            {
+                Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText("""
+                    public class Chain<U, T> where U : class where T : U { }
+                    public class Longer<A, B, C> where A : class where B : A where C : B { }
+                    public class Open<U, T> where T : U { }
+                    """),
+            },
+            new[] { Microsoft.CodeAnalysis.MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
+            new Microsoft.CodeAnalysis.CSharp.CSharpCompilationOptions(Microsoft.CodeAnalysis.OutputKind.DynamicallyLinkedLibrary));
+        using var stream = new MemoryStream();
+        var emit = compilation.Emit(stream);
+        Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+        var assembly = Assembly.Load(stream.ToArray());
+
+        Type Parameter(string type, int index)
+            => (assembly.GetType(type) ?? throw new Xunit.Sdk.XunitException(type + " not emitted")).GetGenericArguments()[index];
+
+        Assert.Equal(TypeArgumentKind.Reference, NullabilityImportRule.ClassifyArgument(Parameter("Chain`2", 1)));
+        Assert.Equal(TypeArgumentKind.Reference, NullabilityImportRule.ClassifyArgument(Parameter("Longer`3", 2)));
+        Assert.Equal(TypeArgumentKind.Unknown, NullabilityImportRule.ClassifyArgument(Parameter("Open`2", 1)));
+
+        // The symbol overload answers the same chain the same way.
+        var bound = TypeParameter();
+        bound.HasReferenceTypeConstraint = true;
+        var dependent = new TypeParameterSymbol("T", ordinal: 1, TypeParameterConstraint.Any, TypeParameterVariance.None)
+        {
+            TypeParameterBound = bound,
+        };
+        Assert.Equal(TypeArgumentKind.Reference, NullabilityImportRule.ClassifyArgument(dependent));
+        var unboundedDependent = new TypeParameterSymbol("T", ordinal: 1, TypeParameterConstraint.Any, TypeParameterVariance.None)
+        {
+            TypeParameterBound = TypeParameter(),
+        };
+        Assert.Equal(TypeArgumentKind.Unknown, NullabilityImportRule.ClassifyArgument(unboundedDependent));
+    }
+
     private static TypeParameterSymbol TypeParameter()
         => new("T", ordinal: 0, TypeParameterConstraint.Any, TypeParameterVariance.None);
 

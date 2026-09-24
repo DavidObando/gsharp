@@ -510,6 +510,9 @@ internal sealed class ReaderAgreementHarness
         var closedMember = FindClosedMember(closedType, openMember);
         if (closedMember == null)
         {
+            // Every public member of an open definition has a counterpart on
+            // its closing; not finding one means the corpus shrank.
+            this.enumerationErrors++;
             return;
         }
 
@@ -559,7 +562,18 @@ internal sealed class ReaderAgreementHarness
                 this.CompareParameters(context, open.GetParameters(), ((MethodBase)closedMember).GetParameters(), open);
                 break;
             case PropertyInfo open:
-                this.ComparePosition(context, "property", Position.Property(open, (PropertyInfo)closedMember));
+                var closedProperty = (PropertyInfo)closedMember;
+                this.ComparePosition(context, "property", Position.Property(open, closedProperty));
+                var openIndexParameters = open.GetIndexParameters();
+                var closedIndexParameters = closedProperty.GetIndexParameters();
+                for (var i = 0; i < openIndexParameters.Length && i < closedIndexParameters.Length; i++)
+                {
+                    this.ComparePosition(
+                        context,
+                        $"index parameter {i} ({openIndexParameters[i].Name})",
+                        Position.IndexParameter(openIndexParameters[i], closedIndexParameters[i], open, closedProperty, i));
+                }
+
                 break;
             case FieldInfo open:
                 this.ComparePosition(context, "field", Position.Field(open, (FieldInfo)closedMember));
@@ -685,7 +699,7 @@ internal sealed class ReaderAgreementHarness
                 context.Argument.Name,
                 shapes.Select(s => new ReaderResult(s.Reader, s.Shape, s.Display)).ToImmutableArray(),
                 openType,
-                Tags(openType, position)));
+                Tags(openType, position, shapes.Select(r => r.Shape).ToList())));
         }
     }
 
@@ -701,16 +715,19 @@ internal sealed class ReaderAgreementHarness
     /// with a <c>null</c> default.</description></item>
     /// </list>
     /// </summary>
-    private static ImmutableArray<string> Tags(Type openType, Position position)
+    private static ImmutableArray<string> Tags(Type openType, Position position, IReadOnlyList<string> shapes)
     {
+        // A structural tag applies only when EVERY place the readers differ
+        // lies inside a node of that kind, so a known cause in one subtree
+        // cannot excuse an unrelated drift elsewhere in the same position.
+        var differing = DifferingPaths(shapes);
         var tags = ImmutableArray.CreateBuilder<string>();
-        if (Any(openType, t => t.IsGenericType && GenericDefinitionName(t).StartsWith("System.Tuple`", StringComparison.Ordinal)))
+        if (AllWithin(differing, NodePaths(openType, IsSystemTuple)))
         {
             tags.Add("system-tuple");
         }
 
-        if (Any(openType, t => !t.ContainsGenericParameters
-            && (t.IsArray || (t.IsGenericType && GenericDefinitionName(t).StartsWith("System.ValueTuple`", StringComparison.Ordinal)))))
+        if (AllWithin(differing, NodePaths(openType, IsConcreteArrayOrValueTuple)))
         {
             tags.Add("concrete-array-or-tuple");
         }
@@ -722,24 +739,133 @@ internal sealed class ReaderAgreementHarness
 
         return tags.ToImmutable();
 
-        static string GenericDefinitionName(Type type)
-            => (type.IsGenericTypeDefinition ? type : type.GetGenericTypeDefinition()).FullName ?? string.Empty;
+        static bool IsSystemTuple(Type type)
+            => type.IsGenericType && GenericDefinitionName(type).StartsWith("System.Tuple`", StringComparison.Ordinal);
 
-        static bool Any(Type type, Func<Type, bool> match)
+        static bool IsConcreteArrayOrValueTuple(Type type)
+            => !type.ContainsGenericParameters
+                && (type.IsArray
+                    || (type.IsGenericType && GenericDefinitionName(type).StartsWith("System.ValueTuple`", StringComparison.Ordinal)));
+
+        static bool AllWithin(List<string> differing, List<string> nodes)
+            => differing.Count > 0
+                && nodes.Count > 0
+                && differing.All(path => nodes.Any(node => node.Length == 0
+                    || path == node
+                    || path.StartsWith(node + "/", StringComparison.Ordinal)));
+    }
+
+    private static string GenericDefinitionName(Type type)
+        => (type.IsGenericTypeDefinition ? type : type.GetGenericTypeDefinition()).FullName ?? string.Empty;
+
+    /// <summary>
+    /// The paths (child indices joined by <c>/</c>, the root being empty) of
+    /// every node of <paramref name="type"/> that <paramref name="match"/>
+    /// selects, laid out exactly as <see cref="TypeSymbol.GetElementPositions"/>
+    /// lays positions out: <c>Nullable&lt;V&gt;</c> and by-ref are transparent,
+    /// an array's one child is its element, and a canonical eight-argument
+    /// tuple's rest is spliced in. A generic parameter is a leaf: whatever
+    /// substitutes it hangs below the same path.
+    /// </summary>
+    private static List<string> NodePaths(Type type, Func<Type, bool> match)
+    {
+        var paths = new List<string>();
+        Walk(type, string.Empty);
+        return paths;
+
+        void Walk(Type current, string path)
         {
-            if (match(type))
+            if (current.IsByRef && current.GetElementType() is { } referent)
             {
-                return true;
+                Walk(referent, path);
+                return;
             }
 
-            if (type.HasElementType && type.GetElementType() is { } element)
+            if (NullableLifting.GetValueTypeNullableUnderlyingClr(current) is { } underlying)
             {
-                return Any(element, match);
+                Walk(underlying, path);
+                return;
             }
 
-            return type.IsGenericType && type.GetGenericArguments().Any(argument => Any(argument, match));
+            if (match(current))
+            {
+                paths.Add(path);
+                return;
+            }
+
+            var children = Children(current);
+            for (var i = 0; i < children.Count; i++)
+            {
+                Walk(children[i], path.Length == 0 ? i.ToString(System.Globalization.CultureInfo.InvariantCulture) : path + "/" + i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+
+        static List<Type> Children(Type current)
+        {
+            if (current.IsGenericParameter)
+            {
+                return new List<Type>();
+            }
+
+            if (current.IsArray && current.GetElementType() is { } element)
+            {
+                return new List<Type> { element };
+            }
+
+            if (!current.IsGenericType)
+            {
+                return new List<Type>();
+            }
+
+            var arguments = current.GetGenericArguments().ToList();
+            var name = GenericDefinitionName(current);
+            if (arguments.Count == 8
+                && name is "System.ValueTuple`8" or "System.Tuple`8"
+                && arguments[7].IsGenericType
+                && (GenericDefinitionName(arguments[7]).StartsWith("System.ValueTuple`", StringComparison.Ordinal)
+                    || GenericDefinitionName(arguments[7]).StartsWith("System.Tuple`", StringComparison.Ordinal)))
+            {
+                var rest = arguments[7];
+                arguments.RemoveAt(7);
+                arguments.AddRange(Children(rest));
+            }
+
+            return arguments;
         }
     }
+
+    /// <summary>
+    /// The minimal paths at which the readers' shapes differ: a node whose own
+    /// nullability or child count differs between any two shapes is recorded
+    /// and not descended into.
+    /// </summary>
+    private static List<string> DifferingPaths(IReadOnlyList<string> shapes)
+    {
+        var trees = shapes.Select(ShapeNode.Parse).ToList();
+        var differing = new List<string>();
+        Compare(trees, string.Empty);
+        return differing;
+
+        void Compare(List<ShapeNode> nodes, string path)
+        {
+            if (nodes.Select(n => n.Root).Distinct().Count() > 1
+                || nodes.Select(n => n.Children.Count).Distinct().Count() > 1)
+            {
+                differing.Add(path);
+                return;
+            }
+
+            for (var i = 0; i < nodes[0].Children.Count; i++)
+            {
+                var index = i;
+                Compare(
+                    nodes.Select(n => n.Children[index]).ToList(),
+                    path.Length == 0 ? i.ToString(System.Globalization.CultureInfo.InvariantCulture) : path + "/" + i.ToString(System.Globalization.CultureInfo.InvariantCulture));
+            }
+        }
+    }
+
+
 
     private TypeSymbol MapSymbolic(ClosingContext context, Type openType)
         => MemberLookup.MapOpenClrTypeToSymbolic(
@@ -866,6 +992,51 @@ internal sealed class ReaderAgreementHarness
         }
     }
 
+    /// <summary>A parsed <see cref="Shape(TypeSymbol)"/> string.</summary>
+    private sealed class ShapeNode
+    {
+        private ShapeNode(char root, List<ShapeNode> children)
+        {
+            this.Root = root;
+            this.Children = children;
+        }
+
+        internal char Root { get; }
+
+        internal List<ShapeNode> Children { get; }
+
+        internal static ShapeNode Parse(string shape)
+        {
+            var index = 0;
+            return Read();
+
+            ShapeNode Read()
+            {
+                var root = shape[index++];
+                var children = new List<ShapeNode>();
+                if (index < shape.Length && shape[index] == '<')
+                {
+                    index++;
+                    while (true)
+                    {
+                        children.Add(Read());
+                        var separator = shape[index++];
+                        if (separator == '>')
+                        {
+                            break;
+                        }
+                    }
+                }
+                else if (index < shape.Length && shape[index] == '\u2026')
+                {
+                    index++;
+                }
+
+                return new ShapeNode(root, children);
+            }
+        }
+    }
+
     internal sealed record ArgumentSpec(string Name, Type Erased, TypeSymbol Symbolic, bool ErasureFaithful);
 
     internal sealed record ReaderResult(string Reader, string Shape, string Display);
@@ -985,6 +1156,21 @@ internal sealed class ReaderAgreementHarness
                 return false;
             }
         }
+
+        internal static Position IndexParameter(
+            ParameterInfo open,
+            ParameterInfo closed,
+            PropertyInfo openIndexer,
+            PropertyInfo closedIndexer,
+            int index)
+            => new(
+                open.ParameterType,
+                closed.ParameterType,
+                open,
+                openIndexer,
+                () => ClrNullability.GetParameterTypeSymbol(closed),
+                receiver => MemberLookup.GetIndexerParameterTypeSymbol(receiver, closedIndexer, index),
+                HasOptionalNullDefault(closed));
 
         internal static Position Property(PropertyInfo open, PropertyInfo closed)
             => new(

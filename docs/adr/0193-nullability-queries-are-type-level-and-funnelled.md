@@ -874,6 +874,23 @@ something the plan left open:
     - `MemberLookup.GetClrEventHandlerTypeSymbol(EventInfo)` returned a
       constructed generic's handler with no declared nullability at all. It
       now projects through the open event.
+    - A static event of a generic type was read without its symbolic
+      container. `ClrNullability.GetParameterTypeSymbol` read an indexer's
+      parameter against the closed type, with no open layout. Both now
+      project like their method siblings.
+  - *The CLR argument classifier* follows a dependent bound
+    (`where U : class where T : U`) transitively, as the `TypeSymbol`
+    overload does. Without that, the two overloads disagreed on the same
+    chain.
+  - *The harness's own guards.* Two conditions fail the test:
+    - any corpus-enumeration error, such as an unreadable type, a missing
+      closed counterpart, or an unresolvable signature;
+    - an empty corpus.
+
+    A structural allowlist tag applies only when *every* path at which the
+    readers differ lies inside a node of that kind. A known cause in one
+    subtree therefore cannot excuse a new drift in another. An excusal must
+    leave at least one reader standing.
   - *Allowlisted, each against a newly filed issue:*
     - #4401: the `System.Tuple` representation split above.
     - #4402: the merge does not descend into a concrete (parameter-free)

@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Reflection;
 
@@ -298,33 +299,58 @@ internal static class NullabilityImportRule
     {
         if (type.IsGenericParameter)
         {
-            var attributes = type.GenericParameterAttributes;
-            if ((attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0)
-            {
-                return TypeArgumentKind.Value;
-            }
-
-            if ((attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
-            {
-                return TypeArgumentKind.Reference;
-            }
-
-            foreach (var constraint in type.GetGenericParameterConstraints())
-            {
-                if (constraint.IsClass
-                    && !constraint.IsGenericParameter
-                    && constraint.FullName is not ("System.Object" or "System.ValueType" or "System.Enum"))
-                {
-                    return TypeArgumentKind.Reference;
-                }
-            }
-
-            return TypeArgumentKind.Unknown;
+            return ClassifyGenericParameter(type, visited: null);
         }
 
         return type.IsValueType || type.IsPointer || type.IsFunctionPointer
             ? TypeArgumentKind.Value
             : TypeArgumentKind.Reference;
+    }
+
+    /// <summary>
+    /// Classifies a reflected generic parameter from its constraints, following
+    /// a dependent bound (<c>where T : U</c>) transitively. C# propagates a
+    /// bounding parameter's <c>class</c>/<c>struct</c> constraint to the
+    /// bounded one, which is exactly what
+    /// <see cref="TypeParameterSymbol.DependentBoundProvesReferenceType"/>
+    /// answers for the <see cref="TypeSymbol"/> overload; the two must agree.
+    /// A cycle is broken by visited-set, answering <c>Unknown</c>.
+    /// </summary>
+    private static TypeArgumentKind ClassifyGenericParameter(Type parameter, HashSet<Type>? visited)
+    {
+        var attributes = parameter.GenericParameterAttributes;
+        if ((attributes & GenericParameterAttributes.NotNullableValueTypeConstraint) != 0)
+        {
+            return TypeArgumentKind.Value;
+        }
+
+        if ((attributes & GenericParameterAttributes.ReferenceTypeConstraint) != 0)
+        {
+            return TypeArgumentKind.Reference;
+        }
+
+        foreach (var constraint in parameter.GetGenericParameterConstraints())
+        {
+            if (constraint.IsGenericParameter)
+            {
+                visited ??= new HashSet<Type>(ReferenceEqualityComparer.Instance) { parameter };
+                if (visited.Add(constraint)
+                    && ClassifyGenericParameter(constraint, visited) == TypeArgumentKind.Reference)
+                {
+                    return TypeArgumentKind.Reference;
+                }
+
+                continue;
+            }
+
+            if (constraint.IsClass
+                && constraint.FullName is not ("System.Object" or "System.ValueType" or "System.Enum"))
+            {
+                return TypeArgumentKind.Reference;
+            }
+        }
+
+        return TypeArgumentKind.Unknown;
     }
 
     private static TypeSymbol Apply(TypeSymbol symbol, ImportedReferenceNullability decision) => decision switch
