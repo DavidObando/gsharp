@@ -798,6 +798,20 @@ public partial class Parser
                         : ParseGenericCallExpression());
                     current = new BaseClassCallExpressionSyntax(syntaxTree, baseName.IdentifierToken, dotToken, baseCall);
                 }
+                else if (dotToken.Kind == SyntaxKind.DotToken
+                    && current is NameExpressionSyntax { IdentifierToken.Text: "base" }
+                    && Current.Kind == SyntaxKind.IdentifierToken)
+                {
+                    // Issue #4331: `base.f` takes only the member name, so a
+                    // following postfix chain applies to the base member
+                    // (`base.f.ToString()`, `base.arr[0]`, `base.obj.Field = v`).
+                    // A generic member continuation would take `f.ToString()`
+                    // as the right side, leaving `base` to bind alone as a
+                    // type name (GS0157). A real value named `base` binds the
+                    // same left-associated chain as an ordinary receiver.
+                    var memberName = new NameExpressionSyntax(syntaxTree, NextToken());
+                    current = new AccessorExpressionSyntax(syntaxTree, current, dotToken, memberName);
+                }
                 else
                 {
                     var rightSide = dotToken.Kind == SyntaxKind.QuestionDotToken

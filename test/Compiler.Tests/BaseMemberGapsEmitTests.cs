@@ -558,6 +558,68 @@ Console.WriteLine(Err().Go())
             new[] { "q1 a1", "h1" },
         };
 
+        // Issue #4331: postfix chains after a base member, read and write,
+        // on source and imported bases, directly and in a function literal.
+        yield return new object[]
+        {
+            "base-member-postfix-chains",
+            @"
+package P
+import System
+import System.Text
+import System.Text.RegularExpressions
+
+class Box {
+    var Field int32
+    func M() StringBuilder -> StringBuilder(""sb"")
+}
+
+open class Base {
+    protected var f int32 = 1
+    protected var arr []int32 = []int32{4, 5}
+    protected var obj Box = Box()
+    var p string = ""hello""
+    open prop P string {
+        get -> p
+        set { p = value }
+    }
+}
+
+class Derived : Base {
+    override prop P string {
+        get -> ""overridden!""
+        set { }
+    }
+
+    func Go() string {
+        base.arr[0] = 9
+        base.obj.Field = 7
+        base.obj.Field += 1
+        let direct = ""${base.f.ToString()} ${base.P.Length} ${base.obj.M().Length} ${base.arr[0]} ${base.obj.Field}""
+        let inLiteral = func () string {
+            base.arr[1] = 6
+            base.obj.Field = 3
+            return ""${base.f.ToString()} ${base.P.Length} ${base.obj.M().Length} ${base.arr[1]} ${base.obj.Field}""
+        }
+        return direct + "" | "" + inLiteral()
+    }
+}
+
+class Pattern : Regex {
+    init() : base(""abcd"") { }
+
+    func Go() string {
+        let inLiteral = () -> base.pattern?.Length ?? -1
+        return ""${base.pattern?.Length ?? -1} ${inLiteral()}""
+    }
+}
+
+Console.WriteLine(Derived().Go())
+Console.WriteLine(Pattern().Go())
+",
+            new[] { "1 5 2 9 8 | 1 5 2 6 3", "4 4" },
+        };
+
         // All three gaps in the shape the [GeneratedRegex] output takes after
         // cs2gs: a Regex subclass validating its timeout through the
         // protected static Regex.ValidateMatchTimeout, and a RegexRunner
