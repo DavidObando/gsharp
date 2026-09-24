@@ -140,11 +140,13 @@ public sealed class ManagedReferenceRuntimeContractTests
         }
     }
 
+    // Review finding (#4350): resolve both roots from the repository root
+    // rather than a fixed number of `..` hops from the test output directory.
     private static string LiveRuntimeSourceRoot()
-        => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../src/Sdk/Gsharp.Runtime.Values"));
+        => Path.Combine(IlVerifier.FindRepoRoot(), "src", "Sdk", "Gsharp.Runtime.Values");
 
     private static string SnapshotRuntimeSourceRoot()
-        => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../test/Compiler.Tests/TestData/RuntimeValuesSource"));
+        => Path.Combine(IlVerifier.FindRepoRoot(), "test", "Compiler.Tests", "TestData", "RuntimeValuesSource");
 
     private static string ReadRuntimeSource(string file)
     {

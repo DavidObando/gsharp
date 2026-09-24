@@ -380,6 +380,47 @@ namespace Corpus.Issue4350
         Assert.Equal("2,True,1,^2", result.Value);
     }
 
+    [Fact]
+    public void IndexAndRangeKeyedIndexers_ResolveOrdinaryIndexers()
+    {
+        // Review finding: an `Index`/`Range` argument to an imported
+        // dictionary or a user indexer keyed by those types calls that indexer
+        // rather than being treated as a from-end/slice access.
+        string printed = Render(@"
+using System;
+using System.Collections.Generic;
+namespace Corpus.Issue4350
+{
+    public class ByIndex
+    {
+        public string this[Index key] => ""user:"" + key.ToString();
+    }
+
+    public class Probe
+    {
+        public static string Run(Index i)
+        {
+            var d = new Dictionary<Index, int>();
+            IDictionary<Range, string> r = new Dictionary<Range, string>();
+            var list = new List<int> { 1, 2, 3 };
+            d[i] = 3;
+            d[^2] = 5;
+            d[i] += 1;
+            r[1..2] = ""y"";
+            return d[i] + "","" + d[^2] + "","" + r[1..2] + "","" + new ByIndex()[i] + "","" + list[i];
+        }
+    }
+}
+");
+
+        Assert.True(TranslationTestValidation.AssertBinds(printed).Success);
+
+        var result = EmittedOracle.Evaluate(printed + Environment.NewLine + "Probe.Run(^1)");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal("4,5,y,user:^1,3", result.Value);
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
