@@ -75,6 +75,11 @@ public sealed class BaseMemberAccessibilityBinderTests
             public new string Label { get; set; } = "a";
         }
 
+        public class ReadOnlyHolder
+        {
+            protected readonly int Fixed = 1;
+        }
+
         public class StaticHolder
         {
             protected static int ReadHidden { private get; set; } = 1;
@@ -350,6 +355,27 @@ public sealed class BaseMemberAccessibilityBinderTests
         var errors = EmittedOracle.Evaluate(source).Diagnostics.Where(d => d.IsError).ToArray();
         var inaccessible = Assert.Single(errors);
         Assert.Equal("GS0472", inaccessible.Id);
+    }
+
+    [Theory]
+    [InlineData("base.Fixed += 1")]
+    [InlineData("base.Fixed++")]
+    [InlineData("--base.Fixed")]
+    public void ImportedReadOnlyBaseField_CompoundIsRejected(string statement)
+    {
+        var result = CompileAgainstLibrary(
+            $$"""
+            import BaseAccess.Library
+
+            class Derived : ReadOnlyHolder {
+                func Go() {
+                    {{statement}}
+                }
+            }
+            """,
+            StrangerName);
+
+        Assert.False(result.Success);
     }
 
     private static string Describe(CompileResult result)

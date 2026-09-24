@@ -2804,6 +2804,26 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        // A read-only field is not a compound-assignment target even when the
+        // operator mutates in place, exactly as for `this.f op= v`: `base.f`
+        // always names a base class's field, which a derived member (even a
+        // constructor) may not write.
+        var readOnlyField = read switch
+        {
+            BoundFieldAccessExpression { Field: { IsReadOnly: true } sourceField } sourceRead
+                when sourceRead.StructType is not { } fieldOwner
+                    || !IsReadOnlyFieldAssignmentAllowed(sourceField, fieldOwner, receiverIsThis: true) => sourceField.Name,
+            BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo { IsInitOnly: true } or System.Reflection.FieldInfo { IsLiteral: true } } clrRead
+                => clrRead.Member.Name,
+            _ => null,
+        };
+        if (readOnlyField != null)
+        {
+            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, readOnlyField);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
         if (!scope.TryDeclareVariable(target))
         {
             throw new System.InvalidOperationException(

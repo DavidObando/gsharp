@@ -449,6 +449,53 @@ public class BaseMemberCompoundAssignmentBinderTests
                 "old 4 updated 6", "2 6 4 6 3"));
     }
 
+    [Theory]
+    [InlineData("base.bag += 1")]
+    [InlineData("base.bag++")]
+    [InlineData("--base.bag")]
+    [InlineData("base.meter += 1")]
+    [InlineData("base.n += 1")]
+    [InlineData("base.n++")]
+    public void ReadOnlyBaseField_CompoundIsRejected(string statement)
+    {
+        // A `let` base field is not a compound target, whether the member's
+        // type mutates in place (`Bag`, a class with `operator +=`), is a
+        // struct with one, or has only a binary `+`. `base.f` names a base
+        // class's field, so even a derived constructor may not write it.
+        var source = $$"""
+            class Bag {
+                var total int32
+                func operator +=(amount int32) { total = total + amount }
+                func operator -=(amount int32) { total = total - amount }
+            }
+
+            struct Meter {
+                var Total int32
+                func operator +=(amount int32) { Total = Total + amount }
+            }
+
+            open class Base {
+                protected let bag Bag = Bag()
+                protected let meter Meter
+                protected let n int32 = 1
+            }
+
+            class Derived : Base {
+                init() {
+                    {{statement}}
+                }
+
+                func Go() {
+                    {{statement}}
+                }
+            }
+            """;
+
+        var errors = EmittedOracle.Evaluate(source).Diagnostics.Where(d => d.IsError).ToArray();
+        Assert.Equal(2, errors.Length);
+        Assert.All(errors, error => Assert.Equal("GS0127", error.Id));
+    }
+
     [Fact]
     public void BaseEventSubscription_VirtualEvent_KeepsPreviousDiagnostic()
     {
