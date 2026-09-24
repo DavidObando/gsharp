@@ -1313,6 +1313,77 @@ Console.WriteLine(D().GoAsync(9).Result)
     }
 
     /// <summary>
+    /// Only a DEPENDENT type parameter reaches the imported base call
+    /// (`TDerived TBase`, or the chain `A`, `B A`, `C B` using only `C`). The
+    /// forwarder must clone the whole constraint closure; cloning `TDerived`
+    /// alone left its bound naming an MVAR the forwarder does not declare
+    /// (TypeLoadException, ILVerify crash). Async bodies are used because a
+    /// function literal capturing a dependent-bound value fails independently
+    /// of base calls (closure-class reification, reproducible on main).
+    /// </summary>
+    [Fact]
+    public void ImportedGenericBaseCall_WithDependentEnclosingTypeParameter_CompileVerifyAndRun()
+    {
+        const string csSource = """
+            namespace BaseGaps.Dependent
+            {
+                public class GBase
+                {
+                    public virtual string Echo<U>(U x) => "base " + x;
+                }
+            }
+            """;
+
+        const string source = @"
+package P
+import System
+import System.Threading.Tasks
+import BaseGaps.Dependent
+
+class D : GBase {
+    override func Echo[U](x U) string -> ""derived""
+
+    async func GoAsync[TBase, TDerived TBase](x TDerived) Task[string] {
+        await Task.Yield()
+        return base.Echo(x)
+    }
+
+    async func Chain[A, B A, C B](x C) Task[string] {
+        await Task.Yield()
+        return base.Echo(x)
+    }
+}
+
+Console.WriteLine(D().GoAsync[object, string](""a"").Result)
+Console.WriteLine(D().Chain[object, Exception, ArgumentException](ArgumentException(""c"")).Result)
+";
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_basegaps_dep_").FullName;
+        try
+        {
+            var library = BuildCsLibrary(tempDir, csSource, "BaseGaps.Dependent");
+            var (exit, stdout, stderr) = Compile(tempDir, "imported-dependent-mvar", source, library);
+            Assert.True(exit == 0, $"gsc failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            var outPath = Path.Combine(tempDir, "imported-dependent-mvar.dll");
+            IlVerifier.Verify(outPath, new[] { library });
+            File.Copy(library, Path.Combine(tempDir, Path.GetFileName(library)), overwrite: true);
+
+            var (runExit, output) = RunDotnet(outPath);
+            Assert.True(runExit == 0, $"program must run to completion. Exit {runExit}:\n{output}");
+            var lines = output
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0)
+                .ToArray();
+            Assert.Equal(new[] { "base a", "base System.ArgumentException: c" }, lines);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// Two imported-base shapes against an in-process C# contract:
     /// <list type="bullet">
     ///   <item>a protected static property with one private accessor is read

@@ -488,16 +488,7 @@ public static class BaseCallForwarderRewriter
                 }
             }
 
-            var methodTypeParameters = ImmutableArray.CreateBuilder<TypeParameterSymbol>();
-            foreach (var referenced in SynthesizedClosureReifier.CollectOrdered(mentioned))
-            {
-                if (referenced.IsMethodTypeParameter)
-                {
-                    methodTypeParameters.Add(referenced);
-                }
-            }
-
-            enclosingMethodTypeParameters = methodTypeParameters.ToImmutable();
+            enclosingMethodTypeParameters = CollectMethodTypeParameterClosure(mentioned);
             var clones = SynthesizedClosureReifier.CloneWithRemappedConstraints(enclosingMethodTypeParameters, preserveVariance: false);
             var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
             for (var i = 0; i < clones.Length; i++)
@@ -647,6 +638,54 @@ public static class BaseCallForwarderRewriter
             }
 
             return callType;
+        }
+
+        /// <summary>
+        /// The enclosing method type parameters <paramref name="mentioned"/>
+        /// refers to, plus every method type parameter their constraints
+        /// reach, transitively (a dependent bound such as `TDerived TBase`, or
+        /// a type parameter inside a class or interface constraint such as
+        /// `IComparable[TBase]`), in declaration order. The forwarder clones
+        /// exactly this set, so no cloned constraint is left naming an
+        /// original parameter the forwarder does not declare.
+        /// </summary>
+        private static ImmutableArray<TypeParameterSymbol> CollectMethodTypeParameterClosure(List<TypeSymbol> mentioned)
+        {
+            var found = new List<TypeParameterSymbol>();
+            var pending = new Queue<TypeParameterSymbol>();
+            foreach (var referenced in SynthesizedClosureReifier.CollectOrdered(mentioned))
+            {
+                if (referenced.IsMethodTypeParameter && !found.Contains(referenced))
+                {
+                    found.Add(referenced);
+                    pending.Enqueue(referenced);
+                }
+            }
+
+            while (pending.Count > 0)
+            {
+                var current = pending.Dequeue();
+                var dependencies = new List<TypeParameterSymbol>();
+                if (current.TypeParameterBound is { } bound)
+                {
+                    dependencies.Add(bound);
+                }
+
+                TypeSymbol.CollectReferencedTypeParameters(current.ClassConstraint, dependencies);
+                TypeSymbol.CollectReferencedTypeParameters(current.InterfaceConstraint, dependencies);
+                TypeSymbol.CollectReferencedTypeParameters(current.ClrInterfaceConstraint, dependencies);
+                foreach (var dependency in dependencies)
+                {
+                    if (dependency.IsMethodTypeParameter && !found.Contains(dependency))
+                    {
+                        found.Add(dependency);
+                        pending.Enqueue(dependency);
+                    }
+                }
+            }
+
+            found.Sort(static (a, b) => a.Ordinal - b.Ordinal);
+            return found.ToImmutableArray();
         }
 
         /// <summary>
