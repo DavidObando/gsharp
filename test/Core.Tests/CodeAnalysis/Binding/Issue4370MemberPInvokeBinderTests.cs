@@ -40,6 +40,9 @@ class Native {{
         Assert.Equal("GS0326", diagnostic.Id);
         Assert.Contains("instance methods are not supported", diagnostic.Message);
         Assert.Contains("shared", diagnostic.Message);
+
+        // The message names the attribute actually written.
+        Assert.StartsWith($"'@{attribute}' is not valid on 'GetPid'", diagnostic.Message);
     }
 
     [Fact]
@@ -83,6 +86,7 @@ class Native[T] {{
         var diagnostic = Assert.Single(scope.Diagnostics);
         Assert.Equal("GS0326", diagnostic.Id);
         Assert.Contains("members of generic types are not supported", diagnostic.Message);
+        Assert.StartsWith($"'@{attribute}' is not valid on 'GetPid'", diagnostic.Message);
     }
 
     [Fact]

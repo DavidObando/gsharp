@@ -58,6 +58,7 @@ internal static class PInvokeBinder
 
         var isLibraryImport = libraryImport != null && dllImport == null;
         var attribute = isLibraryImport ? libraryImport : (dllImport ?? libraryImport);
+        var attributeName = isLibraryImport ? "LibraryImport" : "DllImport";
 
         // Validate function shape: no body, no instance/static-receiver,
         // no async, no generic, no extension, no ref-return. These rules
@@ -70,22 +71,22 @@ internal static class PInvokeBinder
 
         if (function.IsAsync)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "async functions are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "async functions are not supported");
         }
 
         if (function.IsGeneric)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "generic functions are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "generic functions are not supported");
         }
 
         if (function.IsExtension)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "extension functions are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "extension functions are not supported");
         }
 
         if (function.IsInstanceMethod)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "instance methods are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "instance methods are not supported");
         }
 
         // ADR-0086 / issue #1203: a P/Invoke declared inside a class's
@@ -95,7 +96,7 @@ internal static class PInvokeBinder
         // the supported shape — it is no longer rejected here.
         if (function.ReturnRefKind != RefKind.None)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "ref-returning functions are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "ref-returning functions are not supported");
         }
 
         // ADR-0094 / issue #760: parameter ref-kinds (`ref`/`out`/`in`) are now
@@ -1090,14 +1091,15 @@ internal static class PInvokeBinder
         FunctionDeclarationSyntax syntax,
         DiagnosticBag diagnostics)
     {
-        if (KnownAttributes.FindDllImport(method.Attributes) == null
-            && KnownAttributes.FindLibraryImport(method.Attributes) == null)
+        var isDllImport = KnownAttributes.FindDllImport(method.Attributes) != null;
+        if (!isDllImport && KnownAttributes.FindLibraryImport(method.Attributes) == null)
         {
             return false;
         }
 
         diagnostics.ReportDllImportInvalidFunctionShape(
             syntax.Identifier.Location,
+            isDllImport ? "DllImport" : "LibraryImport",
             method.Name,
             "instance methods are not supported; P/Invoke methods are static, so declare it inside the type's 'shared { }' block");
         return true;
@@ -1129,6 +1131,7 @@ internal static class PInvokeBinder
 
         diagnostics.ReportDllImportInvalidFunctionShape(
             syntax.Identifier.Location,
+            function.PInvokeMetadata is { IsLibraryImport: true } ? "LibraryImport" : "DllImport",
             function.Name,
             "members of generic types are not supported");
     }
