@@ -49,7 +49,7 @@ public static class BaseCallForwarderRewriter
     {
         // Forwarders shared across the whole program, keyed by (containing class
         // definition, base method) so repeated base calls reuse one forwarder.
-        var forwarders = new Dictionary<(StructSymbol Class, FunctionSymbol Method), FunctionSymbol>();
+        var forwarders = new Dictionary<(StructSymbol Class, FunctionSymbol Method, TypeSymbol ReturnType), FunctionSymbol>();
         var forwarderBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
         var ordinalByClass = new Dictionary<StructSymbol, int>();
         var rewrittenBodies = new Dictionary<FunctionSymbol, BoundBlockStatement>();
@@ -165,7 +165,7 @@ public static class BaseCallForwarderRewriter
     {
         private readonly StructSymbol classDef;
         private readonly FunctionSymbol containingFunction;
-        private readonly Dictionary<(StructSymbol Class, FunctionSymbol Method), FunctionSymbol> forwarders;
+        private readonly Dictionary<(StructSymbol Class, FunctionSymbol Method, TypeSymbol ReturnType), FunctionSymbol> forwarders;
         private readonly Dictionary<FunctionSymbol, BoundBlockStatement> forwarderBodies;
         private readonly Dictionary<StructSymbol, int> ordinalByClass;
         private readonly bool isStateMachine;
@@ -174,7 +174,7 @@ public static class BaseCallForwarderRewriter
         public Rewriter(
             StructSymbol classDef,
             FunctionSymbol containingFunction,
-            Dictionary<(StructSymbol Class, FunctionSymbol Method), FunctionSymbol> forwarders,
+            Dictionary<(StructSymbol Class, FunctionSymbol Method, TypeSymbol ReturnType), FunctionSymbol> forwarders,
             Dictionary<FunctionSymbol, BoundBlockStatement> forwarderBodies,
             Dictionary<StructSymbol, int> ordinalByClass,
             bool isStateMachine)
@@ -303,7 +303,15 @@ public static class BaseCallForwarderRewriter
 
         private FunctionSymbol GetOrCreateForwarder(StructSymbol baseClass, FunctionSymbol method, TypeSymbol returnType)
         {
-            var key = (this.classDef, method);
+            // The return type is part of the key: a direct call and a method
+            // group of the same base method can observe different return
+            // types (`() -> object = base.Name` over a `string` method, or
+            // `() -> Task = base.Count` over a `Task<int32>` one). One shared
+            // forwarder would hand one of them a value of the wrong type.
+            // Everything else in the signature (type parameters, by-ref
+            // kinds, the base class's type arguments for this derived class)
+            // is fixed by the method and the forwarder's class.
+            var key = (this.classDef, method, returnType);
             if (this.forwarders.TryGetValue(key, out var existing))
             {
                 return existing;

@@ -8,6 +8,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Compiler.Tests;
@@ -558,6 +560,53 @@ Console.WriteLine(Err().Go())
             new[] { "q1 a1", "h1" },
         };
 
+        // A direct call and a method group of the same base method can observe
+        // different return types (a `() -> object` group over a `string`
+        // method, a `() -> Task` group over a `Task<int32>` one). Each gets
+        // its own forwarder; one shared forwarder handed one of them a value
+        // of the wrong type (StackUnexpected, DelegateCtor).
+        yield return new object[]
+        {
+            "forwarder-per-observed-return-type",
+            @"
+package P
+import System
+import System.Threading.Tasks
+
+open class Base {
+    open func Name() string { return ""base"" }
+    open async func Count() int32 {
+        await Task.Yield()
+        return 7
+    }
+}
+
+class Derived : Base {
+    override func Name() string { return ""derived"" }
+    override async func Count() int32 { return -1 }
+
+    func Go() string {
+        let f = func () string {
+            let h () -> object = base.Name
+            let direct = base.Name()
+            return direct + "" "" + h().ToString()
+        }
+        let g = func () string {
+            let t () -> Task = base.Count
+            t().Wait()
+            let direct = base.Count().Result
+            let group () -> Task[int32] = base.Count
+            return direct.ToString() + "" "" + group().Result.ToString()
+        }
+        return f() + "" | "" + g()
+    }
+}
+
+Console.WriteLine(Derived().Go())
+",
+            new[] { "base base | 7 7" },
+        };
+
         // A constructor with managed-reference work moves into an
         // initialization plan before the forwarder pass runs; a base call in a
         // function literal there must still be forwarded.
@@ -1086,52 +1135,31 @@ Derived().Go()
         }
     }
 
+    /// <summary>
+    /// Compiles an imported C# contract in-process with Roslyn and returns the
+    /// assembly path, to be passed explicitly to gsc (docs/self-migration-policy.md,
+    /// "Preserve compiler-test fixture provenance"; the same pattern as
+    /// ConstantNarrowingCoverageTests).
+    /// </summary>
     private static string BuildCsLibrary(string workDir, string source, string assemblyName)
     {
-        var csDir = Path.Combine(workDir, "csref");
-        Directory.CreateDirectory(csDir);
-        File.WriteAllText(Path.Combine(csDir, "Lib.cs"), source);
-        File.WriteAllText(Path.Combine(csDir, "Lib.csproj"), $"""
-            <Project Sdk="Microsoft.NET.Sdk">
-              <PropertyGroup>
-                <OutputType>Library</OutputType>
-                <TargetFramework>net10.0</TargetFramework>
-                <Nullable>enable</Nullable>
-                <RunAnalyzers>false</RunAnalyzers>
-                <NoWarn>1591</NoWarn>
-                <AssemblyName>{assemblyName}</AssemblyName>
-              </PropertyGroup>
-            </Project>
-            """);
-
-        var outDir = Path.Combine(csDir, "out");
-        var (exit, output) = RunProcess(csDir, "dotnet", "build", "-c", "Release", "--nologo", "-o", outDir);
-        Assert.True(exit == 0, $"building the C# library failed:\n{output}");
-        var dll = Path.Combine(outDir, assemblyName + ".dll");
-        Assert.True(File.Exists(dll), $"C# library not found at {dll}");
-        return dll;
-    }
-
-    private static (int Exit, string Output) RunProcess(string workingDir, string fileName, params string[] args)
-    {
-        var psi = new ProcessStartInfo(fileName)
+        var references = TrustedPlatformAssemblies()
+            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path));
+        var contracts = CSharpCompilation.Create(
+            assemblyName,
+            new[] { CSharpSyntaxTree.ParseText(source, new CSharpParseOptions(LanguageVersion.Latest)) },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary, nullableContextOptions: NullableContextOptions.Enable));
+        var libraryDir = Path.Combine(workDir, "csref");
+        Directory.CreateDirectory(libraryDir);
+        var dll = Path.Combine(libraryDir, assemblyName + ".dll");
+        using (var output = File.Create(dll))
         {
-            RedirectStandardOutput = true,
-            RedirectStandardError = true,
-            UseShellExecute = false,
-            WorkingDirectory = workingDir,
-        };
-        foreach (var arg in args)
-        {
-            psi.ArgumentList.Add(arg);
+            var emitted = contracts.Emit(output);
+            Assert.True(emitted.Success, string.Join(Environment.NewLine, emitted.Diagnostics));
         }
 
-        using var process = Process.Start(psi)
-            ?? throw new InvalidOperationException($"could not start {fileName}");
-        var stdoutTask = process.StandardOutput.ReadToEndAsync();
-        var stderr = process.StandardError.ReadToEnd();
-        process.WaitForExit();
-        return (process.ExitCode, stdoutTask.Result + stderr);
+        return dll;
     }
 
     private static (int Exit, string Stdout, string Stderr) Compile(string tempDir, string name, string source, params string[] extraReferences)
