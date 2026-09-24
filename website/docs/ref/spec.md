@@ -863,9 +863,11 @@ inaccessible from unrelated external code. It mirrors C# `protected`:
   That lookup is a last resort: it runs only when nothing else in scope
   matches the name (the class's own members, an enclosing type's statics,
   imports, package functions), so it never changes what a call that already
-  bound resolves to. Where C# overload resolution would prefer the inherited
-  static over, say, the derived class's own `M(object)`, G# keeps the
-  derived class's method. `base.StaticMember(...)` is not a valid spelling (C# rejects it
+  bound resolves to. This differs from C# in two places, where C# finds the
+  inherited static first: a nested class `Inner : Base` inside `Outer`
+  calling `H()` binds `Outer`'s static `H` in G# but `Base.H` in C#, and a
+  package-level function `H` wins over an inherited static `H` in G#.
+  `base.StaticMember(...)` is not a valid spelling (C# rejects it
   too). Bare, unqualified names of inherited static fields and properties
   are not yet in scope; qualify them with the base type's name.
 - Emit: `protected` maps to `MethodAttributes.Family` / `FieldAttributes.Family`
