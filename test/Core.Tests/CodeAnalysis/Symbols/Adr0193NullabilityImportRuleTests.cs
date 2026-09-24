@@ -320,20 +320,20 @@ public sealed class Adr0193NullabilityImportRuleTests
         var refDirectory = typeof(Adr0193NullabilityImportRuleTests).Assembly
             .GetCustomAttributes<AssemblyMetadataAttribute>()
             .Single(attribute => attribute.Key == "NetStandard20ReferenceDirectory")
-            .Value;
+            .Value ?? throw new Xunit.Sdk.XunitException("prerequisite missing: NetStandard20ReferenceDirectory");
         Assert.True(Directory.Exists(refDirectory), $"prerequisite missing: '{refDirectory}'");
-        using var resolver = ReferenceResolver.WithReferences(Directory.EnumerateFiles(refDirectory!, "*.dll"));
+        using var resolver = ReferenceResolver.WithReferences(Directory.EnumerateFiles(refDirectory, "*.dll"));
         Assert.True(resolver.TryResolveType("System.Tuple`1", out var tupleDefinition));
         Assert.True(resolver.TryResolveType("System.String", out var stringType));
-        var item1 = tupleDefinition.MakeGenericType(stringType).GetProperty("Item1");
-        Assert.NotNull(item1);
+        var item1 = tupleDefinition.MakeGenericType(stringType).GetProperty("Item1")
+            ?? throw new Xunit.Sdk.XunitException("Tuple<T1>.Item1 not found");
 
-        Assert.Same(TypeSymbol.String, ClrNullability.GetPropertyTypeSymbol(item1!));
+        Assert.Same(TypeSymbol.String, ClrNullability.GetPropertyTypeSymbol(item1));
 
         // …while a concrete oblivious position is still `T!`.
-        var toString = tupleDefinition.MakeGenericType(stringType).GetMethod("ToString", Type.EmptyTypes);
-        Assert.NotNull(toString);
-        Assert.Equal(ReferenceNullabilityKind.Platform, ClrNullability.GetReturnTypeSymbol(toString!).ReferenceNullability);
+        var toString = tupleDefinition.MakeGenericType(stringType).GetMethod("ToString", Type.EmptyTypes)
+            ?? throw new Xunit.Sdk.XunitException("Tuple<T1>.ToString not found");
+        Assert.Equal(ReferenceNullabilityKind.Platform, ClrNullability.GetReturnTypeSymbol(toString).ReferenceNullability);
     }
 
     /// <summary>
@@ -368,6 +368,36 @@ public sealed class Adr0193NullabilityImportRuleTests
         var finder = new FindCallFinder();
         finder.Visit(compilation.BoundProgram.Functions[function]);
         Assert.IsType<TypeParameterSymbol>(Assert.Single(finder.Types));
+    }
+
+    /// <summary>
+    /// A slot is "unsubstituted" only when the argument is the slot's OWN
+    /// generic parameter. For a type-level parameter that means the same owner,
+    /// not merely the same name and ordinal: <c>Collection&lt;T&gt;</c>'s
+    /// <c>T</c> seen through <c>ObservableCollection&lt;T&gt;</c> is a
+    /// substitution by a different parameter. A method's parameter is the same
+    /// slot whether it is reached through the open or a closed declaring type.
+    /// </summary>
+    [Fact]
+    public void IsUnsubstitutedSlot_Compares_The_Owner_Not_The_Name()
+    {
+        var baseT = typeof(System.Collections.ObjectModel.Collection<>).GetGenericArguments()[0];
+        var derivedT = typeof(System.Collections.ObjectModel.ObservableCollection<>).GetGenericArguments()[0];
+        Assert.Equal(baseT.Name, derivedT.Name);
+        Assert.True(NullabilityImportRule.IsUnsubstitutedSlot(baseT, baseT));
+        Assert.False(NullabilityImportRule.IsUnsubstitutedSlot(derivedT, baseT));
+
+        var openConvertAll = typeof(System.Collections.Generic.List<>).GetMethod("ConvertAll")
+            ?? throw new Xunit.Sdk.XunitException("List<T>.ConvertAll not found");
+        var closedConvertAll = typeof(System.Collections.Generic.List<string>).GetMethod("ConvertAll")
+            ?? throw new Xunit.Sdk.XunitException("List<string>.ConvertAll not found");
+        Assert.True(NullabilityImportRule.IsUnsubstitutedSlot(
+            closedConvertAll.GetGenericArguments()[0],
+            openConvertAll.GetGenericArguments()[0]));
+        var select = typeof(Enumerable).GetMethods().First(m => m.Name == "Select");
+        Assert.False(NullabilityImportRule.IsUnsubstitutedSlot(
+            select.GetGenericArguments()[0],
+            openConvertAll.GetGenericArguments()[0]));
     }
 
     private static TypeParameterSymbol TypeParameter()

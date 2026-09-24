@@ -613,8 +613,15 @@ from member kinds to readers.
   unless the shard filters partition every test exactly, so the new shard's
   filter must be registered there and excluded from the `Core.Tests` shards'
   filters in the same change.
-- **Wall-clock time:** *to be measured and recorded here by Phase 1 — `TBD
-  (measured on CI, Phase 1 PR #____)`.* It is not estimated in this ADR.
+- **Wall-clock time (measured on CI, Phase 1 PR #4406):**
+  - The `tests (core-reader-agreement)` job took **3 m 18 s** end to end.
+  - The **Test step took 10 s**: all four corpora, run in parallel.
+  - Most of the job is the shard's fixed cost: checkout, restore, and a
+    2 m 38 s solution build, the same as every other `tests` shard.
+  - For comparison, `core-remainder` took 6 m 33 s and `core-binding` took
+    13 m 37 s in the same run.
+  - So full scope costs one extra runner, and about 10 s of it is the test
+    itself.
 - **As built (Phase 1).** The test is `test/Core.Tests/ReaderAgreement/`, with
   one test class per corpus so the four corpora run in parallel. It is
   registered as the `core-reader-agreement` band in

@@ -202,11 +202,39 @@ internal static class NullabilityImportRule
     /// <param name="slot">The open slot's generic parameter.</param>
     /// <returns><see langword="true"/> when no substitution happened.</returns>
     internal static bool IsUnsubstitutedSlot(Type argument, Type slot)
-        => argument.IsGenericParameter
-            && slot.IsGenericParameter
-            && argument.GenericParameterPosition == slot.GenericParameterPosition
-            && (argument.DeclaringMethod != null) == (slot.DeclaringMethod != null)
-            && string.Equals(argument.Name, slot.Name, StringComparison.Ordinal);
+    {
+        if (!argument.IsGenericParameter
+            || !slot.IsGenericParameter
+            || argument.GenericParameterPosition != slot.GenericParameterPosition)
+        {
+            return false;
+        }
+
+        // A TYPE's parameter is the same slot only when the declaring types
+        // share a generic definition: `Base<T>` and `Derived<T>` both declare
+        // a type-level `T` at ordinal 0, and an inherited `Base<T>` member
+        // read through `Derived<T>` IS a substitution.
+        //
+        // A METHOD's parameter cannot be compared by owner here. The argument
+        // reaches the walkers as `ImportedTypeSymbol.Get(parameter).ClrType`,
+        // and that cache keys generic parameters structurally, so the Type it
+        // hands back may be a different method's same-named parameter. A
+        // method-level parameter is never substituted by another method's
+        // parameter (method substitution supplies symbols), so the name and
+        // ordinal are the identity that survives.
+        if (argument.DeclaringMethod != null || slot.DeclaringMethod != null)
+        {
+            return argument.DeclaringMethod != null
+                && slot.DeclaringMethod != null
+                && string.Equals(argument.Name, slot.Name, StringComparison.Ordinal);
+        }
+
+        return argument.DeclaringType is { } argumentOwner
+            && slot.DeclaringType is { } slotOwner
+            && ClrTypeUtilities.AreSame(
+                argumentOwner.IsGenericType ? argumentOwner.GetGenericTypeDefinition() : argumentOwner,
+                slotOwner.IsGenericType ? slotOwner.GetGenericTypeDefinition() : slotOwner);
+    }
 
     /// <summary>
     /// Classifies a <see cref="TypeSymbol"/> into <see cref="TypeArgumentKind"/>.
@@ -252,7 +280,7 @@ internal static class NullabilityImportRule
             case FunctionPointerTypeSymbol:
                 // Pointers are not reference types (issue #2176).
                 return TypeArgumentKind.Value;
-            case ImportedTypeSymbol { OpenDefinition.IsValueType: true }:
+            case ImportedTypeSymbol imported when imported.OpenDefinition?.IsValueType == true:
                 return TypeArgumentKind.Value;
             case StructSymbol or EnumSymbol:
                 return type.IsValueType ? TypeArgumentKind.Value : TypeArgumentKind.Reference;

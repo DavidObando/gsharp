@@ -5047,9 +5047,11 @@ internal sealed class MemberLookup
             && openDefinition != null)
         {
             EventInfo? openEvent = null;
+
+            // ADR-0193 §4: static events too, as for static properties.
             foreach (var candidate in ClrTypeUtilities.SafeGetEvents(
                          openDefinition,
-                         BindingFlags.Public | BindingFlags.Instance))
+                         BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
             {
                 if (candidate.Name == closedEvent.Name)
                 {

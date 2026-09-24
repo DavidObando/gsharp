@@ -721,8 +721,13 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var handlerTypeSymbol = importedEventTarget != null
-            ? MemberLookup.GetClrEventHandlerTypeSymbol(importedEventTarget, eventInfo)
+        // ADR-0193 §4: a static event reached through a symbolic container
+        // (`Base[string?].Changed`) reads its handler through that container,
+        // so the receiver's argument nullability survives, exactly as an
+        // instance event's does through its receiver.
+        var handlerReceiver = importedEventTarget ?? staticSymbolicContainer;
+        var handlerTypeSymbol = handlerReceiver != null
+            ? MemberLookup.GetClrEventHandlerTypeSymbol(handlerReceiver, eventInfo)
             : MemberLookup.GetClrEventHandlerTypeSymbol(eventInfo);
 
         // BindEventSubscriptionHandler is the single conversion seam. In

@@ -208,7 +208,7 @@ internal sealed class ReaderAgreementHarness
         }
         catch (ReflectionTypeLoadException exception)
         {
-            types = exception.Types.Where(t => t != null).Select(t => t!).ToArray();
+            types = exception.Types.OfType<Type>().ToArray();
         }
         catch (Exception)
         {

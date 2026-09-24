@@ -168,9 +168,9 @@ public sealed class NetStandardReaderAgreementTests : ReaderAgreementTestBase
         var refDirectory = typeof(NetStandardReaderAgreementTests).Assembly
             .GetCustomAttributes<AssemblyMetadataAttribute>()
             .Single(attribute => attribute.Key == "NetStandard20ReferenceDirectory")
-            .Value;
+            .Value ?? throw new Xunit.Sdk.XunitException("prerequisite missing: NetStandard20ReferenceDirectory");
         Assert.True(Directory.Exists(refDirectory), $"prerequisite missing: '{refDirectory}'");
-        var paths = Directory.EnumerateFiles(refDirectory!, "*.dll").ToList();
+        var paths = Directory.EnumerateFiles(refDirectory, "*.dll").ToList();
         using var resolver = ReferenceResolver.WithReferences(paths);
         this.AssertReadersAgree(
             "netstandard2.0",
@@ -222,7 +222,7 @@ public sealed class CscFixtureReaderAgreementTests : ReaderAgreementTestBase, ID
             public class Annotated<T>
             {
                 public T? MaybeDefault() => default;
-                public T Get() => default!;
+                public T Get() => default;
                 public void Set(T value) { }
                 public void SetMaybe(T? value) { }
                 public List<T?> Nulls = new();
@@ -234,13 +234,16 @@ public sealed class CscFixtureReaderAgreementTests : ReaderAgreementTestBase, ID
                 public (T, string?) Tuple;
                 public KeyValuePair<T, string?> Pair;
                 public Func<T?, string> Projection = _ => "";
-                public T this[int index] => default!;
+                public T this[int index] => default;
                 public List<List<T>> Nested = new();
                 public U? Convert<U>(T value) where U : class => null;
                 public U? Pick<U>(IEnumerable<U> source) => default;
                 public IEnumerable<U> Many<U>(Func<T, U> selector) => System.Array.Empty<U>();
                 public void Out(out T? value) { value = default; }
-                public ref T Ref() => throw null!;
+                public ref T Ref() => throw new InvalidOperationException();
+                public event Action<T?>? Changed;
+                public static event Action<T>? StaticChanged;
+                internal void Raise() { Changed?.Invoke(default); StaticChanged?.Invoke(default); }
             }
 
             public class Constrained<TClass, TStruct>
@@ -261,7 +264,7 @@ public sealed class CscFixtureReaderAgreementTests : ReaderAgreementTestBase, ID
                 public string ObliviousString;
                 public T ObliviousMethod(List<T> items) => default;
         #nullable enable
-                public T NonNullField = default!;
+                public T NonNullField = default;
                 public T? AnnotatedField;
             }
 
@@ -286,6 +289,13 @@ public sealed class CscFixtureReaderAgreementTests : ReaderAgreementTestBase, ID
                 public Dictionary<string, T> Map;
                 public string Name;
                 public (T, string) Tuple;
+                public static event Action<T> StaticChanged;
+                internal static void Raise() { StaticChanged?.Invoke(default); }
+            }
+
+            public class DerivedBox<T> : Box<T>
+            {
+                public T Other;
             }
 
             public static class Statics

@@ -30,12 +30,12 @@ internal static class ReaderAgreementAllowlist
                 + "MapOpenClrTypeToSymbolic and applies no declaration-nullability merge (PR #4362 round 3, "
                 + "b0c76053d, deferred it). ADR-0193 Phase 4 closes it."),
         new Entry(
-            Readers: ImmutableArray.Create("direct", "projection", "merge-symbolic", "member-symbolic", "lazy-symbolic"),
+            Readers: ImmutableArray.Create("direct", "projection"),
             Tag: "system-tuple",
             Issue: "https://github.com/DavidObando/gsharp/issues/4401",
             Reason: "FromClrType maps the reference type System.Tuple<...> onto a (value) TupleTypeSymbol "
-                + "(#1922); the symbolic projection keeps it an ImportedTypeSymbol reference. A representation "
-                + "split, not a nullability-rule one: every reader is excused at such a position."),
+                + "(#1922); the symbolic projection keeps it an ImportedTypeSymbol reference. Only the CLR "
+                + "readers' side of the split is excused, so the symbolic readers must still agree."),
         new Entry(
             Readers: ImmutableArray.Create("merge-symbolic", "member-symbolic", "lazy-symbolic"),
             Tag: "concrete-array-or-tuple",
