@@ -4323,11 +4323,14 @@ internal sealed class MemberLookup
             // bool)`) — `TupleTypeSymbol.BuildClrType` keeps such a tuple
             // symbolic even though no element is itself a same-compilation
             // user type or type parameter. The per-element recursion above
-            // does not see this (a `NullableTypeSymbol`/`PlatformTypeSymbol`
-            // element unwraps to its non-symbolic underlying type before
-            // recursing here, same as its emitter counterpart did before the
-            // matching fix). Checking `tuple.ClrType == null` directly keeps
-            // this predicate in agreement with
+            // does not see this: a `NullableTypeSymbol` element is unwrapped
+            // to its underlying type before recursing (correct for a bare
+            // nullable type argument, since erasure keeps that type's own
+            // `ClrType` non-null), and a `PlatformTypeSymbol` (`T!`) element
+            // has no case here at all, so it falls straight through to
+            // "not symbolic" — same gap its emitter counterpart had before
+            // the matching fix. Checking `tuple.ClrType == null` directly
+            // keeps this predicate in agreement with
             // `ReflectionMetadataEmitter.ArgIsSymbolicUserDefined`.
             case TupleTypeSymbol tuple:
                 return tuple.ClrType == null || tuple.ElementTypes.Any(IsSymbolicTypeArgument);

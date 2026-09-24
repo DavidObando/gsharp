@@ -273,10 +273,14 @@ func main() int32 {
     /// (<c>TupleTypeSymbol.BuildClrType</c> deliberately keeps such a tuple
     /// symbolic). <c>ReflectionMetadataEmitter.ArgIsSymbolicUserDefined</c>
     /// did not see this for a tuple whose poisoned element was a bare
-    /// <c>NullableTypeSymbol</c>/<c>PlatformTypeSymbol</c> (it unwraps those
-    /// before recursing, which is correct for a bare nullable return but
-    /// hides exactly the condition that nulls out a *containing tuple's*
-    /// <c>ClrType</c>). <c>UserTokenResolver.FunctionTypeNeedsSymbolicDelegate</c>
+    /// reference-nullable wrapper: a <c>NullableTypeSymbol</c> element is
+    /// unwrapped to its underlying type before recursing (correct for a bare
+    /// nullable return, since erasure keeps that type's own <c>ClrType</c>
+    /// non-null), and a <c>PlatformTypeSymbol</c> (<c>T!</c>) element has no
+    /// case at all and falls straight through to "not symbolic". Either way
+    /// the per-element recursion never asks the one question that matters
+    /// for a *containing tuple*: whether the tuple's own <c>ClrType</c> came
+    /// back <see langword="null"/>. <c>UserTokenResolver.FunctionTypeNeedsSymbolicDelegate</c>
     /// therefore answered <see langword="false"/> for
     /// <c>(string) -&gt; (string?, int32)</c>, so
     /// <c>MethodBodyEmitter.EmitIndirectCall</c> resolved the call's
