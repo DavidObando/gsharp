@@ -560,6 +560,88 @@ Console.WriteLine(Err().Go())
             new[] { "q1 a1", "h1" },
         };
 
+        // Issue #2834 on base-qualified targets: a user-defined compound
+        // operator on the member's type runs (not GS0129, and not the binary
+        // `+` when both are declared). A property is read once and a
+        // value-type result is written back through the base setter.
+        yield return new object[]
+        {
+            "base-member-user-compound-operators",
+            @"
+package P
+import System
+
+class Bag {
+    var total int32
+    prop Total int32 { get { return total } }
+    func operator +=(amount int32) {
+        Console.WriteLine(""Bag.+= $amount"")
+        total = total + amount
+    }
+}
+
+struct Meter {
+    var Total int32
+    func operator +=(amount int32) {
+        Console.WriteLine(""Meter.+= $amount"")
+        Total = Total + amount
+    }
+}
+
+struct Both {
+    var Total int32
+    func operator +=(amount int32) {
+        Console.WriteLine(""Both.+= $amount"")
+        Total = Total + amount
+    }
+}
+
+func (a Both) operator +(amount int32) Both {
+    Console.WriteLine(""Both.+ $amount"")
+    return Both{Total: a.Total + amount}
+}
+
+open class Base {
+    protected var bag Bag = Bag()
+    protected var meter Meter
+    protected var both Both
+    var backing Meter
+    var reads int32
+    prop Value Meter {
+        get {
+            reads = reads + 1
+            return backing
+        }
+        set { backing = value }
+    }
+    prop Reads int32 { get { return reads } }
+}
+
+class Derived : Base {
+    func Go() string {
+        base.bag += 2
+        base.meter += 3
+        base.both += 4
+        base.Value += 5
+        base.Value++
+        let f = func () { base.meter++ }
+        f()
+        let old = base.meter++
+        let updated = ++base.meter
+        Console.WriteLine(""old ${old.Total} updated ${updated.Total}"")
+        return ""${base.bag.Total} ${base.meter.Total} ${base.both.Total} ${base.Value.Total} ${base.Reads}""
+    }
+}
+
+Console.WriteLine(Derived().Go())
+",
+            new[]
+            {
+                "Bag.+= 2", "Meter.+= 3", "Both.+= 4", "Meter.+= 5", "Meter.+= 1", "Meter.+= 1", "Meter.+= 1", "Meter.+= 1",
+                "old 4 updated 6", "2 6 4 6 3",
+            },
+        };
+
         // A generic base method whose type parameter is bounded by the base
         // class's own type parameter (`M[U T1, V T2]` on `Base2[T1, T2]`).
         // When the derived class closes `T1`, the forwarder's clone must carry

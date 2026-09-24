@@ -368,6 +368,88 @@ public class BaseMemberCompoundAssignmentBinderTests
     }
 
     [Fact]
+    public void UserCompoundOperator_OnBaseMembers_RunsInPlace()
+    {
+        // Issue #2834 on base-qualified targets: the member type's own `+=`
+        // runs (GS0129 before), including over a declared binary `+`, and a
+        // property is read once with a value-type result written back.
+        const string source = """
+            import System
+
+            class Bag {
+                var total int32
+                prop Total int32 { get { return total } }
+                func operator +=(amount int32) {
+                    Console.WriteLine("Bag.+= $amount")
+                    total = total + amount
+                }
+            }
+
+            struct Meter {
+                var Total int32
+                func operator +=(amount int32) {
+                    Console.WriteLine("Meter.+= $amount")
+                    Total = Total + amount
+                }
+            }
+
+            struct Both {
+                var Total int32
+                func operator +=(amount int32) {
+                    Console.WriteLine("Both.+= $amount")
+                    Total = Total + amount
+                }
+            }
+
+            func (a Both) operator +(amount int32) Both {
+                Console.WriteLine("Both.+ $amount")
+                return Both{Total: a.Total + amount}
+            }
+
+            open class Base {
+                protected var bag Bag = Bag()
+                protected var meter Meter
+                protected var both Both
+                var backing Meter
+                var reads int32
+                prop Value Meter {
+                    get {
+                        reads = reads + 1
+                        return backing
+                    }
+                    set { backing = value }
+                }
+                prop Reads int32 { get { return reads } }
+            }
+
+            class Derived : Base {
+                func Go() string {
+                    base.bag += 2
+                    base.meter += 3
+                    base.both += 4
+                    base.Value += 5
+                    base.Value++
+                    let f = func () { base.meter++ }
+                    f()
+                    let old = base.meter++
+                    let updated = ++base.meter
+                    Console.WriteLine("old ${old.Total} updated ${updated.Total}")
+                    return "${base.bag.Total} ${base.meter.Total} ${base.both.Total} ${base.Value.Total} ${base.Reads}"
+                }
+            }
+
+            Console.WriteLine(Derived().Go())
+            """;
+
+        AssertRuns(
+            source,
+            string.Join(
+                Environment.NewLine,
+                "Bag.+= 2", "Meter.+= 3", "Both.+= 4", "Meter.+= 5", "Meter.+= 1", "Meter.+= 1", "Meter.+= 1", "Meter.+= 1",
+                "old 4 updated 6", "2 6 4 6 3"));
+    }
+
+    [Fact]
     public void BaseEventSubscription_VirtualEvent_KeepsPreviousDiagnostic()
     {
         // A virtual event would need its base accessors called non-virtually;

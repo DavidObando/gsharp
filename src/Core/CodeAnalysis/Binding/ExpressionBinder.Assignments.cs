@@ -2681,6 +2681,15 @@ internal sealed partial class ExpressionBinder
         }
 
         var targetType = leftRead.Type;
+
+        // Issue #2834: a user-defined compound-assignment operator on the
+        // member's type runs in place, ahead of the `lhs op rhs` rewrite,
+        // exactly as for an ordinary member target.
+        if (TryBindBaseMemberUserCompoundAssignment(baseName, memberNameSyntax, syntax, leftRead, boundRhs, out var userCompoundResult))
+        {
+            return userCompoundResult;
+        }
+
         var previousValue = CapturePostfixCompoundValue(
             syntax.ReturnsPreviousValue,
             syntax,
@@ -2734,6 +2743,95 @@ internal sealed partial class ExpressionBinder
         statements.Add(new BoundExpressionStatement(syntax, write));
         BoundExpression result = previousValue ?? new BoundVariableExpression(null, newValue);
         return new BoundBlockExpression(syntax, statements.ToImmutable(), result);
+    }
+
+    /// <summary>
+    /// Issue #2834 for a base-qualified target: <c>base.M op= v</c> and
+    /// <c>base.M++</c> when <c>M</c>'s type declares the compound operator.
+    /// The base member is read once into a local, the operator runs on that
+    /// local, and a value-type result is written back through the base
+    /// member's own write (a base setter call for a property), so the getter
+    /// runs once and the write is non-virtual, like the read. A reference-type
+    /// value is mutated in place and needs no write-back.
+    /// </summary>
+    /// <param name="baseName">The <c>base</c> receiver name.</param>
+    /// <param name="memberNameSyntax">The member name.</param>
+    /// <param name="syntax">The compound-assignment syntax.</param>
+    /// <param name="read">The bound base read of the member.</param>
+    /// <param name="boundRhs">The bound right-hand side.</param>
+    /// <param name="result">The bound compound assignment when the type declares the operator.</param>
+    /// <returns><see langword="true"/> when a user-defined compound operator applies.</returns>
+    private bool TryBindBaseMemberUserCompoundAssignment(
+        NameExpressionSyntax baseName,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        BoundExpression read,
+        BoundExpression boundRhs,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result)
+    {
+        result = null;
+        if (read.Type is not StructSymbol memberType)
+        {
+            return false;
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var name = $"<compound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var target = new LocalVariableSymbol(name, isReadOnly: false, read.Type);
+        var targetExpression = new BoundVariableExpression(null, target);
+        var userCompound = TryBindUserCompoundAssignmentOperator(
+            syntax.OperatorToken.Kind,
+            targetExpression,
+            boundRhs,
+            syntax.Value.Location);
+        if (userCompound == null)
+        {
+            return false;
+        }
+
+        if (!scope.TryDeclareVariable(target))
+        {
+            throw new System.InvalidOperationException(
+                $"Failed to declare synthesized compound target local '{name}'.");
+        }
+
+        statements.Add(new BoundVariableDeclaration(syntax, target, read));
+
+        BoundExpression previousRead = targetExpression;
+        var previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            ref previousRead,
+            out var previousDeclaration);
+        if (previousDeclaration != null)
+        {
+            statements.Add(previousDeclaration);
+        }
+
+        statements.Add(new BoundExpressionStatement(syntax, userCompound));
+        if (!memberType.IsClass)
+        {
+            var baseLocation = baseName.Location;
+            var writeBack = BindBaseClassPropertyWrite(
+                memberNameSyntax.IdentifierToken.ValueText,
+                memberNameSyntax.IdentifierToken.Location,
+                baseLocation,
+                targetExpression,
+                syntax.Value.Location,
+                syntax.OperatorToken.Location,
+                explicitBaseType: null,
+                selectorLocation: baseLocation);
+            if (writeBack is BoundErrorExpression)
+            {
+                result = writeBack;
+                return true;
+            }
+
+            statements.Add(new BoundExpressionStatement(syntax, writeBack));
+        }
+
+        result = new BoundBlockExpression(syntax, statements.ToImmutable(), previousValue ?? targetExpression);
+        return true;
     }
 
     /// <summary>
