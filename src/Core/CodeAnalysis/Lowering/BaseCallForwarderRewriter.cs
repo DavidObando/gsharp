@@ -292,13 +292,21 @@ public static class BaseCallForwarderRewriter
                 return rewritten;
             }
 
-            var forwarder = this.CreateImportedForwarder(rewritten);
+            var forwarder = this.CreateImportedForwarder(rewritten, out var enclosingMethodTypeParameters);
             return new BoundUserInstanceCallExpression(
                 rewritten.Syntax,
                 rewritten.Receiver,
                 forwarder,
                 rewritten.Arguments,
-                rewritten.Type);
+                rewritten.Type)
+            {
+                // The forwarder is generic in the enclosing method's type
+                // parameters the call mentions; the caller instantiates it
+                // with those same parameters, which flow in from the closure.
+                MethodTypeArguments = enclosingMethodTypeParameters.IsDefaultOrEmpty
+                    ? default
+                    : enclosingMethodTypeParameters.CastArray<TypeSymbol>(),
+            };
         }
 
         private FunctionSymbol GetOrCreateForwarder(StructSymbol baseClass, FunctionSymbol method, TypeSymbol returnType)
@@ -440,10 +448,58 @@ public static class BaseCallForwarderRewriter
             return forwarder;
         }
 
-        private FunctionSymbol CreateImportedForwarder(BoundImportedInstanceCallExpression node)
+        private FunctionSymbol CreateImportedForwarder(
+            BoundImportedInstanceCallExpression node,
+            out ImmutableArray<TypeParameterSymbol> enclosingMethodTypeParameters)
         {
             this.ordinalByClass.TryGetValue(this.classDef, out var ordinal);
             this.ordinalByClass[this.classDef] = ordinal + 1;
+
+            // A function literal inside a generic member can pass that
+            // member's type parameter to the base call (`base.Echo[T](x)` in
+            // `Go[T]`), so the call's types mention an MVAR of the enclosing
+            // method. The forwarder is a separate method of the class, so it
+            // declares its own clone of each such parameter (constraints
+            // remapped) and names the clones in its signature and inner call;
+            // a class type parameter is the forwarder's class's own and needs
+            // nothing.
+            var mentioned = new List<TypeSymbol> { node.Type };
+            foreach (var argument in node.Arguments)
+            {
+                mentioned.Add(argument.Type);
+            }
+
+            if (!node.TypeArgumentSymbols.IsDefaultOrEmpty)
+            {
+                foreach (var typeArgument in node.TypeArgumentSymbols)
+                {
+                    if (typeArgument != null)
+                    {
+                        mentioned.Add(typeArgument);
+                    }
+                }
+            }
+
+            var methodTypeParameters = ImmutableArray.CreateBuilder<TypeParameterSymbol>();
+            foreach (var referenced in SynthesizedClosureReifier.CollectOrdered(mentioned))
+            {
+                if (referenced.IsMethodTypeParameter)
+                {
+                    methodTypeParameters.Add(referenced);
+                }
+            }
+
+            enclosingMethodTypeParameters = methodTypeParameters.ToImmutable();
+            var clones = SynthesizedClosureReifier.CloneWithRemappedConstraints(enclosingMethodTypeParameters, preserveVariance: false);
+            var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            for (var i = 0; i < clones.Length; i++)
+            {
+                substitution[enclosingMethodTypeParameters[i]] = clones[i];
+            }
+
+            TypeSymbol Substitute(TypeSymbol type) =>
+                substitution.Count == 0 ? type : Binder.SubstituteType(type, substitution);
+            var returnType = Substitute(node.Type);
 
             var methodParameters = node.Method.GetParameters();
             var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(node.Arguments.Length);
@@ -455,9 +511,9 @@ public static class BaseCallForwarderRewriter
                 // rather than a parameter typed as the address itself.
                 var argument = node.Arguments[i];
                 var refKind = node.ArgumentRefKinds.IsDefault ? RefKind.None : node.ArgumentRefKinds[i];
-                var parameterType = argument.Type;
+                var parameterType = Substitute(argument.Type);
                 var clrParameter = i < methodParameters.Length ? methodParameters[i] : null;
-                if (argument.Type is ByRefTypeSymbol byRef)
+                if (parameterType is ByRefTypeSymbol byRef)
                 {
                     parameterType = byRef.PointeeType;
                     if (refKind == RefKind.None)
@@ -478,7 +534,7 @@ public static class BaseCallForwarderRewriter
             var forwarder = new FunctionSymbol(
                 "<>n__" + ordinal,
                 parameterArray,
-                node.Type,
+                returnType,
                 declaration: null,
                 this.containingFunction.Package,
                 Accessibility.Private,
@@ -487,6 +543,22 @@ public static class BaseCallForwarderRewriter
             {
                 ReturnRefKind = RefCapabilities.GetReturnRefKind(node.Method),
             };
+            if (!clones.IsDefaultOrEmpty)
+            {
+                forwarder.TypeParameters = clones;
+            }
+
+            var typeArgumentSymbols = node.TypeArgumentSymbols;
+            if (substitution.Count > 0 && !typeArgumentSymbols.IsDefaultOrEmpty)
+            {
+                var remapped = ImmutableArray.CreateBuilder<TypeSymbol?>(typeArgumentSymbols.Length);
+                foreach (var typeArgument in typeArgumentSymbols)
+                {
+                    remapped.Add(typeArgument == null ? null : Substitute(typeArgument));
+                }
+
+                typeArgumentSymbols = remapped.MoveToImmutable();
+            }
 
             var arguments = ImmutableArray.CreateBuilder<BoundExpression>(parameterArray.Length);
             for (var i = 0; i < parameterArray.Length; i++)
@@ -505,13 +577,13 @@ public static class BaseCallForwarderRewriter
                 null,
                 new BoundVariableExpression(null, Invariant.Required(forwarder.ThisParameter, "a synthesized forwarder has an instance receiver")),
                 node.Method,
-                node.Type,
+                returnType,
                 arguments.ToImmutable(),
                 node.ArgumentRefKinds,
-                node.TypeArgumentSymbols,
+                typeArgumentSymbols,
                 isNonVirtualBaseCall: true);
 
-            this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, node.Type);
+            this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, returnType);
             return forwarder;
         }
 

@@ -692,6 +692,41 @@ Console.WriteLine(Zoo().Go())
             new[] { "base2 P.Dog s", "base2 P.Dog P.Animal | base2 P.Dog P.Dog" },
         };
 
+        // The source-base counterpart: an enclosing method's type parameter
+        // flows into a generic source base method and a generic base class's
+        // method from function literals, as a call and a method group.
+        yield return new object[]
+        {
+            "forwarded-source-base-call-with-enclosing-method-type-parameter",
+            @"
+package P
+import System
+
+open class SBase[V] {
+    open func Echo[U](x U) string { return ""sbase "" + x.ToString() }
+    open func M(v V) string { return ""sbase.M "" + v.ToString() }
+}
+
+class S[V] : SBase[V] {
+    override func Echo[U](x U) string -> ""derived""
+    override func M(v V) string -> ""derived.M""
+    func Go[T](x T, v V) string {
+        let f = () -> base.Echo[T](x)
+        let g = () -> base.Echo(x)
+        let m = () -> base.M(v)
+        let h = func () string {
+            let e (T) -> string = base.Echo
+            return e(x)
+        }
+        return f() + "" | "" + g() + "" | "" + m() + "" | "" + h()
+    }
+}
+
+Console.WriteLine(S[int32]().Go(""s"", 3))
+",
+            new[] { "sbase s | sbase s | sbase.M 3 | sbase s" },
+        };
+
         // A direct call and a method group of the same base method can observe
         // different return types (a `() -> object` group over a `string`
         // method, a `() -> Task` group over a `Task<int32>` one). Each gets
@@ -1192,6 +1227,84 @@ class Unrelated {
             Assert.True(
                 rejectedExit != 0,
                 $"an unrelated class must not reach a protected static field.\nstdout:\n{rejectedStdout}\nstderr:\n{rejectedStderr}");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// A function literal (or async body) inside a generic member passes the
+    /// member's type parameter to a generic IMPORTED base method. The
+    /// forwarder must declare its own clone of that parameter (constraints
+    /// remapped) instead of naming the enclosing method's MVAR while
+    /// declaring none (BadImageFormatException, StackUnexpected).
+    /// </summary>
+    [Fact]
+    public void ImportedGenericBaseCall_WithEnclosingMethodTypeParameter_CompileVerifyAndRun()
+    {
+        const string csSource = """
+            using System;
+
+            namespace BaseGaps.Enclosing
+            {
+                public class GBase
+                {
+                    public virtual string Echo<U>(U x) => "base " + x;
+                    public virtual U Id<U>(U x) => x;
+                    public virtual string Max<U>(U a, U b) where U : IComparable<U> => a.CompareTo(b) >= 0 ? "max " + a : "max " + b;
+                }
+            }
+            """;
+
+        const string source = @"
+package P
+import System
+import System.Threading.Tasks
+import BaseGaps.Enclosing
+
+class D : GBase {
+    override func Echo[U](x U) string -> ""derived""
+    override func Id[U](x U) U -> x
+    override func Max[U IComparable[U]](a U, b U) string -> ""derived""
+
+    func Go[T IComparable[T]](x T, y T) string {
+        let f = () -> base.Echo[T](x)
+        let g = () -> base.Id(x)
+        let m = () -> base.Max(x, y)
+        return f() + "" | "" + g().ToString() + "" | "" + m()
+    }
+
+    async func GoAsync[T](x T) Task[string] {
+        await Task.Yield()
+        return base.Echo(x)
+    }
+}
+
+Console.WriteLine(D().Go(""a"", ""b""))
+Console.WriteLine(D().Go(4, 2))
+Console.WriteLine(D().GoAsync(9).Result)
+";
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_basegaps_mvar_").FullName;
+        try
+        {
+            var library = BuildCsLibrary(tempDir, csSource, "BaseGaps.Enclosing");
+            var (exit, stdout, stderr) = Compile(tempDir, "imported-enclosing-mvar", source, library);
+            Assert.True(exit == 0, $"gsc failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            var outPath = Path.Combine(tempDir, "imported-enclosing-mvar.dll");
+            IlVerifier.Verify(outPath, new[] { library });
+            File.Copy(library, Path.Combine(tempDir, Path.GetFileName(library)), overwrite: true);
+
+            var (runExit, output) = RunDotnet(outPath);
+            Assert.True(runExit == 0, $"program must run to completion. Exit {runExit}:\n{output}");
+            var lines = output
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0)
+                .ToArray();
+            Assert.Equal(new[] { "base a | a | max b", "base 4 | 4 | max 4", "base 9" }, lines);
         }
         finally
         {
