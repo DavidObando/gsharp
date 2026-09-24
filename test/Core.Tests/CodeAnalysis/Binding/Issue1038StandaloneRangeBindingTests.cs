@@ -94,7 +94,7 @@ public class Issue1038StandaloneRangeBindingTests
     }
 
     [Fact]
-    public void LeadingFromEndMarker_BindsReusableRange_Adr0192()
+    public void LeadingFromEndMarker_BindsReusableRange_Adr0187()
     {
         // ADR-0187 retired GS0410: `^3..^1` over five elements is {30, 40}.
         var result = Evaluate("var xs = [5]int32{10, 20, 30, 40, 50}\nlet r = ^3..^1\nlet ys = xs[r]\nys.Length * 1000 + ys[0] + ys[1]");

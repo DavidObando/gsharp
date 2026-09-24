@@ -90,7 +90,7 @@ public class Issue1022FromEndIndexParserTests
     }
 
     [Fact]
-    public void PrefixHat_OutsideBrackets_IsFromEndIndex_Adr0192()
+    public void PrefixHat_OutsideBrackets_IsFromEndIndex_Adr0187()
     {
         // ADR-0187: prefix `^` is a first-class from-end Index everywhere.
         var fromEnd = Assert.IsType<FromEndIndexExpressionSyntax>(GetInitializer("""

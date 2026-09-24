@@ -148,6 +148,55 @@ public class Issue4350IndexerOverloadEmitTests
     }
 
     [Fact]
+    public void MultiParameterIndexers_SupportPrefixAndPostfixIncrementDecrement()
+    {
+        // Review finding (#4350): `t[a, b]++` / `--` bind against the
+        // multi-parameter indexer, evaluate the receiver and arguments once,
+        // and a postfix form yields the element's previous value.
+        var source = """
+            package P
+            import System
+            import System.Collections.Generic
+
+            class Grid {
+                var cells []int32 = []int32{0, 0, 0, 0}
+                prop this[row int32, column int32] int32 {
+                    get { return cells[row * 2 + column] }
+                    set { cells[row * 2 + column] = value }
+                }
+            }
+
+            struct Buffer[T](items []T) {
+                prop this[index int32, fromEnd bool] ref T -> items[if fromEnd { items.Length - index } else { index }]
+            }
+
+            func next(log List[string], name string, value int32) int32 {
+                log.Add(name)
+                return value
+            }
+
+            let log = List[string]()
+            let g = Grid()
+            g[1, 1]++
+            g[next(log, "row", 1), next(log, "column", 1)]++
+            let before = g[1, 1]--
+            let pre = ++g[0, 1]
+            Console.WriteLine(String.Join(",", g.cells))
+            Console.WriteLine(before)
+            Console.WriteLine(pre)
+            Console.WriteLine(String.Join(",", log))
+            var buffer = Buffer[int32]([]int32{1, 2, 3})
+            let old = buffer[1, true]++
+            --buffer[0, false]
+            Console.WriteLine(old)
+            Console.WriteLine(String.Join(",", buffer[0, false], buffer[1, false], buffer[2, false]))
+            """;
+
+        var nl = Environment.NewLine;
+        Assert.Equal($"0,1,0,1{nl}2{nl}1{nl}row,column{nl}3{nl}0,2,4{nl}", CompileAndRun(source));
+    }
+
+    [Fact]
     public void GenericParameterAndConcreteIndexerOverloads_DispatchBySignature()
     {
         // Review finding: a `this[key T]` parameter has no reflected CLR type,

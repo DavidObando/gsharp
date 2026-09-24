@@ -206,6 +206,22 @@ public class Issue4350IndexerOverloadBindingTests
     }
 
     [Fact]
+    public void MultiParameterImportedIndexer_SupportsPostfixIncrement()
+    {
+        // Review finding: `slice[i, fromEnd]++` writes through the runtime's
+        // `ref T this[int, bool]` and yields the previous element.
+        var runtime = new[] { typeof(Gsharp.Values.Slice<>).Assembly.Location };
+        var result = EmittedOracle.Evaluate("""
+            let values = slice[int32]{1, 2, 3}
+            let old = values[1, true]++
+            --values[0, false]
+            old * 100 + values[0] * 10 + values[2]
+            """, runtime);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(300 + 0 + 4, result.Value);
+    }
+
+    [Fact]
     public void AmbiguousIndexerCall_ReportsGs0266()
     {
         var result = EmittedOracle.Evaluate("""

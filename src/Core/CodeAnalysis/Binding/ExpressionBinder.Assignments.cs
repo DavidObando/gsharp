@@ -3968,10 +3968,9 @@ internal sealed partial class ExpressionBinder
 
         // ADR-0187 / issue #4350: `t[a, b] op= v` over a multi-parameter user
         // indexer reads and writes the same selected indexer, evaluating the
-        // receiver and each index argument once. Postfix/user compound
-        // operators keep their array-only lowering below.
+        // receiver and each index argument once; a postfix `t[a, b]++`
+        // yields the element's previous value.
         if (rectangular == null
-            && !syntax.ReturnsPreviousValue
             && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var userBaseOperator))
         {
             var userAssignment = TryBindMultiIndexUserAssignment(
@@ -3999,7 +3998,8 @@ internal sealed partial class ExpressionBinder
 
                     return combined;
                 },
-                syntax.Target.Target.Location);
+                syntax.Target.Target.Location,
+                syntax.ReturnsPreviousValue);
             if (userAssignment != null)
             {
                 return userAssignment;

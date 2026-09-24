@@ -404,18 +404,20 @@ internal sealed partial class ExpressionBinder
     /// <param name="bindValue">Binds the stored value given the element type
     /// and a read of the current element (for compound assignment).</param>
     /// <param name="location">The location for diagnostics.</param>
+    /// <param name="returnsPreviousValue">Whether the result is the element's previous value (postfix increment/decrement).</param>
     /// <returns>The bound assignment, or <see langword="null"/> when the target
     /// declares no user indexer (the caller keeps its rectangular-array path).</returns>
     private BoundExpression? TryBindMultiIndexUserAssignment(
         BoundExpression target,
         SeparatedSyntaxList<ExpressionSyntax> indexSyntaxes,
         Func<TypeSymbol, Func<BoundExpression>, BoundExpression> bindValue,
-        TextLocation location)
+        TextLocation location,
+        bool returnsPreviousValue = false)
     {
         if (target.Type is ImportedTypeSymbol or NullabilityAnnotatedTypeSymbol
             && target.Type.ClrType is { } clrTarget)
         {
-            return TryBindMultiIndexClrAssignment(target, clrTarget, indexSyntaxes, bindValue, location);
+            return TryBindMultiIndexClrAssignment(target, clrTarget, indexSyntaxes, bindValue, location, returnsPreviousValue);
         }
 
         if (target.Type is not (StructSymbol or InterfaceSymbol))
@@ -507,10 +509,13 @@ internal sealed partial class ExpressionBinder
             referenceTemp = DeclareRangeTemp("ref", reference.Type, reference, statements);
         }
 
-        BoundExpression ReadCurrent()
+        BoundExpression ReadElement()
             => referenceTemp != null
                 ? new BoundDereferenceExpression(null, new BoundVariableExpression(null, referenceTemp))
                 : BindUserIndexerRead(receiver, indexer, substitution, (i, _) => capturedArguments[i], location);
+
+        var previous = CaptureMultiIndexPreviousValue(returnsPreviousValue, elementType, ReadElement, statements);
+        BoundExpression ReadCurrent() => previous ?? ReadElement();
 
         var value = conversions.BindConversion(location, bindValue(elementType, ReadCurrent), elementType);
         if (value is BoundErrorExpression)
@@ -530,10 +535,10 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            return new BoundBlockExpression(
-                null,
-                statements.ToImmutable(),
-                new BoundIndirectAssignmentExpression(null, new BoundVariableExpression(null, referenceTemp), value));
+            return FinishMultiIndexWrite(
+                statements,
+                new BoundIndirectAssignmentExpression(null, new BoundVariableExpression(null, referenceTemp), value),
+                previous);
         }
 
         var valueLocal = DeclareRangeTemp("value", elementType, value, statements);
@@ -545,7 +550,34 @@ internal sealed partial class ExpressionBinder
                 receiver,
                 Invariant.Required(setter, "without a hoisted reference the indexer has a setter"),
                 capturedArguments.Add(valueRead))));
-        return new BoundBlockExpression(null, statements.ToImmutable(), valueRead);
+        return new BoundBlockExpression(null, statements.ToImmutable(), previous ?? valueRead);
+    }
+
+    // Issue #4350 (review): a postfix `t[a, b]++` reads the element once into
+    // a temporary that both feeds the incremented value and is the result.
+    private BoundVariableExpression? CaptureMultiIndexPreviousValue(
+        bool returnsPreviousValue,
+        TypeSymbol elementType,
+        Func<BoundExpression> readElement,
+        ImmutableArray<BoundStatement>.Builder statements)
+        => returnsPreviousValue
+            ? new BoundVariableExpression(null, DeclareRangeTemp("previous", elementType, readElement(), statements))
+            : null;
+
+    // A write through a hoisted reference yields the stored value, or the
+    // captured previous value for a postfix increment/decrement.
+    private static BoundExpression FinishMultiIndexWrite(
+        ImmutableArray<BoundStatement>.Builder statements,
+        BoundExpression write,
+        BoundVariableExpression? previous)
+    {
+        if (previous == null)
+        {
+            return new BoundBlockExpression(null, statements.ToImmutable(), write);
+        }
+
+        statements.Add(new BoundExpressionStatement(null, write));
+        return new BoundBlockExpression(null, statements.ToImmutable(), previous);
     }
 
     /// <summary>
@@ -561,13 +593,15 @@ internal sealed partial class ExpressionBinder
     /// <param name="indexSyntaxes">The written index arguments.</param>
     /// <param name="bindValue">Binds the stored value given the element type and a read of the current element.</param>
     /// <param name="location">The location for diagnostics.</param>
+    /// <param name="returnsPreviousValue">Whether the result is the element's previous value (postfix increment/decrement).</param>
     /// <returns>The bound assignment, or <see langword="null"/> when no imported indexer applies.</returns>
     private BoundExpression? TryBindMultiIndexClrAssignment(
         BoundExpression target,
         Type clrTarget,
         SeparatedSyntaxList<ExpressionSyntax> indexSyntaxes,
         Func<TypeSymbol, Func<BoundExpression>, BoundExpression> bindValue,
-        TextLocation location)
+        TextLocation location,
+        bool returnsPreviousValue)
     {
         var bound = ImmutableArray.CreateBuilder<BoundExpression>(indexSyntaxes.Count);
         foreach (var indexSyntax in indexSyntaxes)
@@ -626,7 +660,10 @@ internal sealed partial class ExpressionBinder
             BoundExpression ReadThroughReference()
                 => new BoundDereferenceExpression(null, new BoundVariableExpression(null, referenceTemp));
 
-            var refValue = conversions.BindConversion(location, bindValue(byRef.PointeeType, ReadThroughReference), byRef.PointeeType);
+            var previousThroughReference = CaptureMultiIndexPreviousValue(returnsPreviousValue, byRef.PointeeType, ReadThroughReference, statements);
+            BoundExpression ReadCurrentThroughReference() => previousThroughReference ?? ReadThroughReference();
+
+            var refValue = conversions.BindConversion(location, bindValue(byRef.PointeeType, ReadCurrentThroughReference), byRef.PointeeType);
             if (refValue is BoundErrorExpression)
             {
                 return refValue;
@@ -640,14 +677,17 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            return new BoundBlockExpression(
-                null,
-                statements.ToImmutable(),
-                new BoundIndirectAssignmentExpression(null, new BoundVariableExpression(null, referenceTemp), refValue));
+            return FinishMultiIndexWrite(
+                statements,
+                new BoundIndirectAssignmentExpression(null, new BoundVariableExpression(null, referenceTemp), refValue),
+                previousThroughReference);
         }
 
-        BoundExpression ReadCurrent()
+        BoundExpression ReadElement()
             => new BoundClrIndexExpression(null, receiver, indexer, capturedArguments, elementType);
+
+        var previous = CaptureMultiIndexPreviousValue(returnsPreviousValue, elementType, ReadElement, statements);
+        BoundExpression ReadCurrent() => previous ?? ReadElement();
 
         var value = conversions.BindConversion(location, bindValue(elementType, ReadCurrent), elementType);
         if (value is BoundErrorExpression)
@@ -660,7 +700,7 @@ internal sealed partial class ExpressionBinder
         statements.Add(new BoundExpressionStatement(
             null,
             BoundClrIndexAssignmentExpression.WithExpressionTarget(null, receiver, indexer, capturedArguments, valueRead, elementType)));
-        return new BoundBlockExpression(null, statements.ToImmutable(), valueRead);
+        return new BoundBlockExpression(null, statements.ToImmutable(), previous ?? valueRead);
     }
 
     // Issue #4350 (review): an indexer inherited from a constructed base is
