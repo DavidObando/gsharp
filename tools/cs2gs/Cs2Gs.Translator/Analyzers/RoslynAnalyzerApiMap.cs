@@ -464,6 +464,19 @@ internal static class RoslynAnalyzerApiMap
     };
 
     /// <summary>
+    /// Issue #4356: the Roslyn declared types of the <see cref="GSharpNullableMembers"/>
+    /// rows — the types a value can have while being <c>T?</c> only on the G#
+    /// side. A local of one of these types whose emitted G# nullability was not
+    /// recorded is treated as nullable (fail-safe: at worst a redundant
+    /// <c>!!</c>). Keep in step with <see cref="GSharpNullableMembers"/>.
+    /// </summary>
+    private static readonly HashSet<string> GSharpNullableCapableTypes = new(StringComparer.Ordinal)
+    {
+        "Microsoft.CodeAnalysis.SyntaxToken",
+        "Microsoft.CodeAnalysis.SyntaxNode",
+    };
+
+    /// <summary>
     /// Whether the Roslyn member <paramref name="memberName"/> declared on
     /// <paramref name="typeMetadataName"/> is non-null in Roslyn but <c>T?</c>
     /// on the G# analyzer API (see <see cref="GSharpNullableMembers"/>).
@@ -473,6 +486,12 @@ internal static class RoslynAnalyzerApiMap
     /// <returns>True when the G# counterpart is declared nullable.</returns>
     public static bool IsGSharpNullableMember(string typeMetadataName, string memberName)
         => typeMetadataName != null && GSharpNullableMembers.Contains((typeMetadataName, memberName));
+
+    /// <summary>Whether a value of this Roslyn type can be <c>T?</c> only on the G# side.</summary>
+    /// <param name="typeMetadataName">The Roslyn type's metadata name.</param>
+    /// <returns>True for a type some G#-nullable analyzer-API member has.</returns>
+    public static bool IsGSharpNullableCapableType(string typeMetadataName)
+        => typeMetadataName != null && GSharpNullableCapableTypes.Contains(typeMetadataName);
 
     /// <summary>
     /// Determines whether <paramref name="namespaceName"/> belongs to the

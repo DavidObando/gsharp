@@ -984,6 +984,12 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (iteratorForeachReceiverRequiresAssertion
                 || importedGenericTupleElementRequiresAssertion
+
+                // Issue #4356: `T?` only on the G# analyzer API. Asked outside
+                // the pattern-binding gate below: a `var` designation
+                // (`x is var t`) binds `t` at the scrutinee's G# type unnarrowed,
+                // and gsc erases a reference `!!` in an expression tree.
+                || this.IsGSharpNullableAnalyzerExpression(recv)
                 || (!this.IsActivePatternBinding(recv)
                 && !this.ExpressionTreeForbidsReceiverAssertion(recv)
                 && !this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(recv)
@@ -1262,24 +1268,25 @@ public sealed partial class CSharpToGSharpTranslator
         /// symbol's own nullability cannot say so — for a <c>SyntaxToken</c>
         /// it is a struct — so the forgiveness predicates ask here.
         /// <para>
-        /// A local whose type G# INFERS from such a read (<c>var token =
-        /// parameter.Identifier</c>, emitted as an untyped <c>let</c>) is
-        /// <c>SyntaxToken?</c> in G# too, although Roslyn types it as the
-        /// struct; it answers the same, followed through a chain of such
-        /// locals. This is the one place every forgiveness and expression-tree
-        /// predicate asks, so locals, receivers and values all agree.
+        /// For a LOCAL the answer is what cs2gs recorded when it emitted the
+        /// local (<c>DocumentTranslationState.EmittedLocalGSharpNullability</c>),
+        /// never a walk over Roslyn declarator syntax. A local with no record —
+        /// a binding shape that is not hooked — is nullable when its Roslyn
+        /// type could be <c>T?</c> on the G# side, so a miss is a redundant
+        /// <c>!!</c> (legal; the polish pass strips GS0536), never a bare
+        /// dereference of a <c>T?</c>. This is the one place every forgiveness
+        /// and expression-tree predicate asks.
         /// </para>
         /// </summary>
         /// <param name="symbol">The bound C# symbol of the read.</param>
         /// <returns>True when the translated read is <c>T?</c> in G#.</returns>
-        private bool IsGSharpNullableAnalyzerApiMember(ISymbol symbol) =>
-            this.InAnalyzerApiMode && this.IsGSharpNullableAnalyzerApiValue(symbol, visited: null);
-
-        // `visited` holds the locals already on the initializer walk: it ends a
-        // cycle without capping how long a chain of aliases may be, so
-        // `a9 = a8; …; a0 = parameter.Identifier` answers like `a0` does.
-        private bool IsGSharpNullableAnalyzerApiValue(ISymbol symbol, HashSet<ILocalSymbol> visited)
+        private bool IsGSharpNullableAnalyzerApiMember(ISymbol symbol)
         {
+            if (!this.InAnalyzerApiMode)
+            {
+                return false;
+            }
+
             if (symbol is IPropertySymbol or IFieldSymbol)
             {
                 return Analyzers.RoslynAnalyzerApiMap.IsGSharpNullableMember(
@@ -1292,38 +1299,53 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            visited ??= new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
-            if (!visited.Add(local))
+            if (this.state.EmittedLocalGSharpNullability.TryGetValue(local, out bool recorded))
             {
-                return false;
+                return recorded;
             }
 
-            // An untyped `var` local's G# type is inferred from its initializer,
-            // so it is `T?` exactly when the initializer's EMITTED type is.
-            foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
+            return Analyzers.RoslynAnalyzerApiMap.IsGSharpNullableCapableType(
+                RoslynTypeMetadataName(local.Type as INamedTypeSymbol));
+        }
+
+        /// <summary>
+        /// Issue #4356: records whether a local cs2gs just emitted is <c>T?</c> in
+        /// G# because of the analyzer map, per
+        /// <see cref="IsGSharpNullableAnalyzerApiMember"/>. With an emitted type
+        /// clause it is not (the clause is the Roslyn type); without one, G#
+        /// infers the local from the emitted initializer, which is <c>T?</c>
+        /// exactly when the initializer's emitted type is (never after a <c>!!</c>).
+        /// </summary>
+        /// <param name="local">The local's symbol.</param>
+        /// <param name="emittedType">The emitted type clause, if any.</param>
+        /// <param name="initializerSyntax">The C# initializer, if any.</param>
+        /// <param name="emittedInitializer">The emitted initializer, if any.</param>
+        private void RecordEmittedLocalNullability(
+            ILocalSymbol local,
+            GTypeReference emittedType,
+            ExpressionSyntax initializerSyntax,
+            GExpression emittedInitializer)
+        {
+            if (!this.InAnalyzerApiMode || local == null)
             {
-                // Written without nested nullable property patterns so this
-                // translator's own self-translation needs no synthesized
-                // temporary (Issue3347RemainingSpillInventoryTests).
-                if (reference.GetSyntax() is VariableDeclaratorSyntax declarator
-                    && declarator.Parent is VariableDeclarationSyntax declaration
-                    && declaration.Type.IsVar
-                    && declarator.Initializer != null
-                    && this.IsGSharpNullableAnalyzerExpression(declarator.Initializer.Value, visited))
-                {
-                    return true;
-                }
+                return;
             }
 
-            return false;
+            // A type clause comes from the Roslyn type (plus the ordinary
+            // nullable promotions, which the ordinary predicates already see),
+            // so no analyzer-map nullability hides behind it.
+            this.state.EmittedLocalGSharpNullability[local] = emittedType == null
+                && emittedInitializer is not NonNullAssertionExpression
+                && this.IsGSharpNullableAnalyzerExpression(initializerSyntax);
         }
 
         /// <summary>
         /// Issue #4356: whether <paramref name="expression"/>'s EMITTED G# type is
         /// <c>T?</c> because of the ADR-0169 analyzer map, although its Roslyn
         /// type is non-null. This is the one classifier for that question: a
-        /// mapped member read, a <c>var</c> local inferred from such an
-        /// expression, and the value-preserving shapes that carry one through —
+        /// mapped member read, a local (its recorded emitted nullability, see
+        /// IsGSharpNullableAnalyzerApiMember), and the value-preserving shapes
+        /// that carry one through —
         /// parentheses, a conditional (either arm), <c>??</c> (its fallback), a
         /// switch expression (any arm) and an assignment (its value). Every
         /// forgiveness, static-non-null and expression-tree check asks it, and
@@ -1332,9 +1354,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// cannot disagree. A null-forgiving <c>x!</c> is non-null.
         /// </summary>
         /// <param name="expression">The C# expression.</param>
-        /// <param name="visited">Locals already on this initializer walk (cycle guard).</param>
         /// <returns>True when the emitted G# type is nullable per the analyzer map.</returns>
-        private bool IsGSharpNullableAnalyzerExpression(ExpressionSyntax expression, HashSet<ILocalSymbol> visited = null)
+        private bool IsGSharpNullableAnalyzerExpression(ExpressionSyntax expression)
         {
             if (!this.InAnalyzerApiMode || expression == null)
             {
@@ -1344,23 +1365,23 @@ public sealed partial class CSharpToGSharpTranslator
             switch (expression)
             {
                 case ParenthesizedExpressionSyntax parenthesized:
-                    return this.IsGSharpNullableAnalyzerExpression(parenthesized.Expression, visited);
+                    return this.IsGSharpNullableAnalyzerExpression(parenthesized.Expression);
 
                 case PostfixUnaryExpressionSyntax suppression
                     when suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
                     return false;
 
                 case ConditionalExpressionSyntax conditional:
-                    return this.IsGSharpNullableAnalyzerExpression(conditional.WhenTrue, visited)
-                        || this.IsGSharpNullableAnalyzerExpression(conditional.WhenFalse, visited);
+                    return this.IsGSharpNullableAnalyzerExpression(conditional.WhenTrue)
+                        || this.IsGSharpNullableAnalyzerExpression(conditional.WhenFalse);
 
                 case BinaryExpressionSyntax coalesce when coalesce.IsKind(SyntaxKind.CoalesceExpression):
-                    return this.IsGSharpNullableAnalyzerExpression(coalesce.Right, visited);
+                    return this.IsGSharpNullableAnalyzerExpression(coalesce.Right);
 
                 case SwitchExpressionSyntax switchExpression:
                     foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
                     {
-                        if (this.IsGSharpNullableAnalyzerExpression(arm.Expression, visited))
+                        if (this.IsGSharpNullableAnalyzerExpression(arm.Expression))
                         {
                             return true;
                         }
@@ -1369,10 +1390,10 @@ public sealed partial class CSharpToGSharpTranslator
                     return false;
 
                 case AssignmentExpressionSyntax assignment when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
-                    return this.IsGSharpNullableAnalyzerExpression(assignment.Right, visited);
+                    return this.IsGSharpNullableAnalyzerExpression(assignment.Right);
 
                 default:
-                    return this.IsGSharpNullableAnalyzerApiValue(this.context.GetSymbolInfo(expression).Symbol, visited);
+                    return this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(expression).Symbol);
             }
         }
 
@@ -1531,6 +1552,23 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.GSharpExpressionIsStaticallyNonNull(value, translated))
             {
                 return translated;
+            }
+
+            // Issue #4356: a value that is `T?` only on the G# analyzer API (a
+            // mapped member, or a local recorded as such) flowing into a target
+            // whose G# type is non-null. Roslyn cannot see the mismatch — for a
+            // SyntaxToken it is a struct on both sides — so the checks below
+            // would pass it through; assert it here. An inferred local takes the
+            // value's own type, and a target that is itself `T?` in G# needs nothing.
+            if (this.IsGSharpNullableAnalyzerExpression(value)
+                && translated is not NonNullAssertionExpression
+                && targetType != null
+                && !IsInitializerOfInferredLocal(value, targetSymbol)
+                && !this.IsGSharpNullableAnalyzerApiMember(targetSymbol)
+                && targetType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
+                && !(targetType.IsReferenceType && targetType.NullableAnnotation == NullableAnnotation.Annotated))
+            {
+                return EnsureNonNullAssertion(translated);
             }
 
             if (value is ConditionalExpressionSyntax
@@ -1799,6 +1837,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #4356: a Roslyn member that is non-null in C# — even a
+            // SyntaxToken struct — but `T?` on the G# analyzer API it is
+            // retargeted onto is never statically non-null in the output, nor
+            // is a local whose emitted G# type is `T?` because of one. Asked
+            // before the pattern-binding shortcuts: `x is var t` binds `t` at
+            // the scrutinee's G# type, which a `var` pattern does not narrow.
+            if (this.IsGSharpNullableAnalyzerExpression(expression))
+            {
+                return false;
+            }
+
             if (this.PatternLocalUsesNullableStorage(expression))
             {
                 return false;
@@ -1935,15 +1984,6 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
-
-            // Issue #4356: a Roslyn member that is non-null in C# — even a
-            // SyntaxToken struct — but `T?` on the G# analyzer API it is
-            // retargeted onto is never statically non-null in the output, nor
-            // is a local whose type G# infers from one.
-            if (this.IsGSharpNullableAnalyzerExpression(expression))
-            {
-                return false;
-            }
 
             if (symbol is ILocalSymbol inferredLocal)
             {

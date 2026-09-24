@@ -234,6 +234,17 @@ internal sealed class DocumentTranslationState
     public HashSet<Cs2Gs.CodeModel.Ast.GExpression> StoredPatternCaptures { get; } =
         new HashSet<Cs2Gs.CodeModel.Ast.GExpression>(ReferenceEqualityComparer.Instance);
 
+    // Issue #4356: for each local cs2gs EMITTED, whether its G# type is `T?`
+    // because of the ADR-0169 analyzer map (an untyped `let` inferred from
+    // `parameter.Identifier` is `SyntaxToken?` although Roslyn types it as the
+    // struct). Recorded where the local is emitted, from the initializer that
+    // was actually emitted. A local with NO entry — a binding shape not hooked
+    // here — is treated as nullable when its Roslyn type could be `T?` on the G#
+    // side (RoslynAnalyzerApiMap.IsGSharpNullableCapableType), so a miss costs a
+    // redundant `!!`, never a bare dereference of a `T?`.
+    public Dictionary<Microsoft.CodeAnalysis.ILocalSymbol, bool> EmittedLocalGSharpNullability { get; } =
+        new Dictionary<Microsoft.CodeAnalysis.ILocalSymbol, bool>(Microsoft.CodeAnalysis.SymbolEqualityComparer.Default);
+
     // Outermost short-circuit operand currently redirecting fallback pattern
     // spills. Nested lambdas/local functions must not reuse its declaration seam.
     public SyntaxNode ShortCircuitSpillScope { get; set; }

@@ -793,6 +793,68 @@ public sealed class ComposedInitializerAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void RetargetedNullableMember_ThroughEveryBindingShape_BindsWithoutCarveOut()
+    {
+        // Issue #4356: a local's emitted G# nullability is recorded where cs2gs
+        // emits it, and an unhooked binding shape of a type that can be `T?`
+        // on the G# side defaults to nullable. Every shape below binds a
+        // SyntaxToken that is `SyntaxToken?` in G#, so each dereference must
+        // assert — deconstruction, `out var`, `foreach` and a pattern designation.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BindingShapesAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static string Deconstructed(MethodDeclarationSyntax declaration)
+    {
+        (var token, var count) = (declaration.ParameterList.Parameters[0].Identifier, 0);
+        return token.Text + count;
+    }
+
+    private static bool TryFirst(MethodDeclarationSyntax declaration, out SyntaxToken first)
+    {
+        first = declaration.ParameterList.Parameters[0].Identifier;
+        return true;
+    }
+
+    private static string OutVar(MethodDeclarationSyntax declaration)
+        => TryFirst(declaration, out var first) ? first.Text : """";
+
+    private static string Each(MethodDeclarationSyntax declaration)
+    {
+        var names = new List<string>();
+        foreach (var token in new[] { declaration.ParameterList.Parameters[0].Identifier })
+        {
+            names.Add(token.Text);
+        }
+
+        return string.Join("","", names);
+    }
+
+    private static string Designated(MethodDeclarationSyntax declaration)
+        => declaration.ParameterList.Parameters[0].Identifier is var token ? token.Text : """";
+}
+");
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
     {
         // Issue #4356: SingleVariableDesignationSyntax.Identifier (a Roslyn
