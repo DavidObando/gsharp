@@ -550,21 +550,16 @@ public class ClrNullabilityTests
     public void Adr0186_TheSameReaders_Under_ThePlatformTypesDefault()
     {
         using var nullabilityScope = NullabilityOptions.Enter(NullabilityMode.PlatformTypes);
+        using var fixture = ObliviousFixture();
 
-        // `!` on both lookups: `ObliviousContainer` is a fixture type declared
-        // in this file and `nameof` is checked by the compiler, so a null here
-        // would mean the fixture itself had been deleted — a broken test, not
-        // a runtime condition worth branching on.
         var obliviousReturn = ClrNullability.GetReturnTypeSymbol(
-            typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetString))!);
+            ObliviousMethod(fixture, "GetString"));
         Assert.Same(
             TypeSymbol.String,
             Assert.IsType<PlatformTypeSymbol>(obliviousReturn).UnderlyingType);
 
-        // `!` for the same reason as `GetString` above: a fixture method that
-        // `nameof` resolved cannot be absent at run time.
         var obliviousList = ClrNullability.GetReturnTypeSymbol(
-            typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetList))!);
+            ObliviousMethod(fixture, "GetList"));
         Assert.IsType<PlatformTypeSymbol>(obliviousList);
 
         Assert.Same(
@@ -612,8 +607,8 @@ public class ClrNullabilityTests
         // imported reference type carries no [Nullable]/[NullableContext] anywhere.
         // Post-#1354 the Kotlin "unannotated/platform type is nullable" rule makes
         // the binder surface it as NullableTypeSymbol (was: flat non-null pre-#1354).
-        var method = typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetString));
-        var sym = ClrNullability.GetReturnTypeSymbol(method!);
+        using var fixture = ObliviousFixture();
+        var sym = ClrNullability.GetReturnTypeSymbol(ObliviousMethod(fixture, "GetString"));
 
         var nullable = Assert.IsType<NullableTypeSymbol>(sym);
         Assert.Same(TypeSymbol.String, nullable.UnderlyingType);
@@ -634,8 +629,8 @@ public class ClrNullabilityTests
         // Post-#1354 the outer List<string> reference position is nullable.
         // There are no inner per-position bytes, so the symbol is a plain
         // NullableTypeSymbol (not a NullabilityAnnotatedTypeSymbol).
-        var method = typeof(ObliviousContainer).GetMethod(nameof(ObliviousContainer.GetList));
-        var sym = ClrNullability.GetReturnTypeSymbol(method!);
+        using var fixture = ObliviousFixture();
+        var sym = ClrNullability.GetReturnTypeSymbol(ObliviousMethod(fixture, "GetList"));
 
         Assert.IsNotType<NullabilityAnnotatedTypeSymbol>(sym);
         Assert.IsType<NullableTypeSymbol>(sym);
@@ -1039,18 +1034,49 @@ public class ClrNullabilityTests
         }
     }
 
-    /// <summary>Simulates a pre-nullable-annotation (oblivious) type.</summary>
-#nullable disable
-    public class ObliviousContainer
+    /// <summary>
+    /// Compiles a pre-nullable-annotation (oblivious) type,
+    /// <c>ObliviousContainer</c>, with csc.
+    /// <para>
+    /// Genuinely oblivious: the <c>#nullable disable</c> source makes the C#
+    /// compiler emit NO <c>NullableContextAttribute</c> /
+    /// <c>NullableAttribute</c> on these members or their type, so the
+    /// metadata importer finds no nullability information at all (issue
+    /// #1354). The fixture is compiled at test time on purpose rather than
+    /// declared in this file: an in-assembly <c>#nullable disable</c> class
+    /// stops being oblivious when <c>test/Core.Tests</c> is itself
+    /// self-migrated to G# — cs2gs spells its members <c>T?</c>, and even an
+    /// <c>@Oblivious</c> G# declaration is emitted with explicit <c>0</c>
+    /// bytes, not with no metadata (ADR-0186 §8) — so the absent-metadata
+    /// reader these tests pin would silently stop being exercised, and the
+    /// platform-types assertions would fail the migrated suite's test parity.
+    /// </para>
+    /// </summary>
+    /// <returns>The compiled fixture; the caller disposes it.</returns>
+    private static CSharpFixture ObliviousFixture() => new("""
+        #nullable disable
+        using System.Collections.Generic;
+
+        public class ObliviousContainer
+        {
+            public List<string> GetList() => null;
+
+            public string GetString() => null;
+        }
+        """);
+
+    /// <summary>Loads <paramref name="fixture"/> and returns one of <c>ObliviousContainer</c>'s methods.</summary>
+    /// <param name="fixture">A fixture made by <see cref="ObliviousFixture"/>.</param>
+    /// <param name="methodName">The method to return: <c>GetList</c> or <c>GetString</c>.</param>
+    /// <returns>The oblivious method.</returns>
+    private static System.Reflection.MethodInfo ObliviousMethod(CSharpFixture fixture, string methodName)
     {
-        // Genuinely oblivious: the `#nullable disable` region makes the C#
-        // compiler emit NO NullableContextAttribute / NullableAttribute on
-        // these members or this type — so the metadata importer finds no
-        // nullability information at all (issue #1354: → nullable).
-        public List<string> GetList() => null;
-
-        public string GetString() => null;
+        // throwOnError guarantees the fixture type is returned or the lookup
+        // throws, and the fixture source declares both methods.
+        var method = fixture.Load()
+            .GetType("ObliviousContainer", throwOnError: true)!
+            .GetMethod(methodName);
+        Assert.NotNull(method);
+        return method;
     }
-#nullable restore
-
 }
