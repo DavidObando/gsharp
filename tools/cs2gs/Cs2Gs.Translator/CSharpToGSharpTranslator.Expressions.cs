@@ -121,6 +121,23 @@ public sealed partial class CSharpToGSharpTranslator
                     this.EmittedName(staticMember, identifier.Identifier.ValueText));
             }
 
+            // Issue #4371: a bare (implicit-`this`) reference to a fixed-size
+            // buffer field (ADR-0122 §10) needs an explicit `this.` receiver.
+            // gsc's fixed-buffer-to-pointer decay (`MakeFixedBufferPointer`)
+            // only fires on the explicit-receiver member-access binding path;
+            // a bare `Name` inside the declaring struct's own methods binds
+            // through plain identifier lookup instead, which does not decay
+            // the buffer and so cannot be indexed or passed as a pointer
+            // (gsc reports "is not indexable"). C# itself allows the bare
+            // form, so a faithful translation must supply the qualifier C#
+            // leaves implicit.
+            if (this.context.GetSymbolInfo(identifier).Symbol is IFieldSymbol { IsFixedSizeBuffer: true } fixedBufferField)
+            {
+                return new MemberAccessExpression(
+                    new ThisExpression(),
+                    this.EmittedName(fixedBufferField, identifier.Identifier.ValueText));
+            }
+
             // A bare type used as an expression receiver (Path.Combine,
             // Task.FromResult, Console.WriteLine, ...) does not pass through
             // type-syntax translation. Map it here so SDK implicit/global

@@ -293,6 +293,131 @@ namespace Demo
         Assert.DoesNotContain("init(", printed);
     }
 
+    /// <summary>
+    /// Issue #4371: a C# fixed-size buffer field (<c>public fixed sbyte
+    /// Name[32];</c>) maps to G#'s own fixed-size buffer field form (ADR-0122
+    /// §10, issue #1035): <c>fixed Name [32]int8</c>. Pre-fix, the translator
+    /// read the field's C#-exposed <c>sbyte*</c> pointer type at face value
+    /// and emitted a bare <c>var Name *int8</c> raw-pointer field — losing the
+    /// buffer's storage/length entirely and producing G# that gsc's <c>fixed</c>
+    /// statement then rejected with GS0401 when pinned (Raylib-cs
+    /// <c>BoneInfo.Name</c>/<c>ModelAnimation</c> interop pattern).
+    /// </summary>
+    [Fact]
+    public void FixedSizeBufferField_TranslatesToFaithfulFixedBufferDeclaration()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public unsafe struct NativeName
+    {
+        public fixed sbyte Name[32];
+    }
+}");
+
+        Assert.Contains("fixed Name [32]int8", printed);
+        Assert.DoesNotContain("var Name", printed);
+    }
+
+    /// <summary>
+    /// Issue #4371: <c>fixed</c>-size buffer fields of other blittable element
+    /// types map through the same C#-to-G# element-type mapper as every other
+    /// field (<c>byte</c> -&gt; <c>uint8</c>, <c>int</c> -&gt; <c>int32</c>),
+    /// with each declarator's own element count preserved.
+    /// </summary>
+    [Fact]
+    public void FixedSizeBufferField_OtherElementTypes_MapElementTypeAndLength()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    public unsafe struct NativeBuffers
+    {
+        public fixed byte Raw[8];
+        public fixed int Numbers[4];
+    }
+}");
+
+        Assert.Contains("fixed Raw [8]uint8", printed);
+        Assert.Contains("fixed Numbers [4]int32", printed);
+    }
+
+    /// <summary>
+    /// Issue #4371: C# allows indexing a fixed-size buffer field directly
+    /// (read or write), without a <c>fixed</c> statement, from inside the
+    /// declaring struct's own methods — the identifier <c>Name</c> carries an
+    /// implicit <c>this.</c> receiver. gsc's fixed-buffer-to-pointer decay
+    /// only fires through the explicit-receiver member-access binding path,
+    /// so the translator must supply the qualifier C# leaves implicit; the
+    /// naive bare <c>Name[0]</c> gsc rejects with "is not indexable".
+    /// </summary>
+    [Fact]
+    public void FixedSizeBufferField_BareIndexAccess_EmitsExplicitThisQualifier()
+    {
+        (string printed, TranslationContext context) = Translate(@"
+namespace Demo
+{
+    public unsafe struct NativeName
+    {
+        public fixed sbyte Name[32];
+
+        public sbyte First()
+        {
+            return Name[0];
+        }
+
+        public void SetFirst(sbyte value)
+        {
+            Name[0] = value;
+        }
+    }
+}");
+
+        Assert.Contains("this.Name[0]", printed);
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+    }
+
+    /// <summary>
+    /// Issue #4371 / ADR-0125 ("Deferred: fixed-size buffers"): the ORIGINAL
+    /// reported repro, <c>fixed (sbyte* p = Name) return p[0];</c>. gsc's
+    /// <c>fixed</c> statement pins a managed array/string/span source
+    /// (GS0401 otherwise); a fixed-size-buffer field already decays to a raw
+    /// <c>*T</c> (ADR-0122 §10), so pinning it hits GS0401 regardless of how
+    /// faithfully the FIELD itself translates. Since G# has no lowering for
+    /// this specific shape today, the translator must report the gap loudly
+    /// (<see cref="TranslationSeverity.Unsupported"/>) instead of silently
+    /// emitting G# that fails to compile and reporting a false PASS.
+    /// </summary>
+    [Fact]
+    public void FixedStatementPinningFixedSizeBufferField_ReportsUnsupportedGap()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[]
+        {
+            ("Snippet.cs", @"
+namespace Demo
+{
+    public unsafe struct NativeName
+    {
+        public fixed sbyte Name[32];
+
+        public sbyte First()
+        {
+            fixed (sbyte* p = Name) return p[0];
+        }
+    }
+}"),
+        });
+        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
+
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Contains(
+            context.Diagnostics,
+            d => d.Severity == TranslationSeverity.Unsupported && d.Message.Contains("fixed-size-buffer"));
+    }
+
     private static string TranslateUnit(string source)
     {
         (string printed, _) = Translate(source);

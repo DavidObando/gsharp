@@ -137,6 +137,8 @@ public static class GSharpPrinter
                 return "let";
             case BindingKind.Const:
                 return "const";
+            case BindingKind.FixedBuffer:
+                return "fixed";
             default:
                 return "var";
         }
@@ -2226,7 +2228,16 @@ public static class GSharpPrinter
     private static string RenderField(FieldDeclaration field, int indent)
     {
         var pad = Indent(indent);
-        var typeClause = field.Type == null ? string.Empty : $" {RenderType(field.Type)}";
+
+        // ADR-0122 §10: a fixed-size buffer field has no `var`/`let`
+        // binding keyword and no initializer — its "type" clause is the
+        // bracketed element count followed by the element type
+        // (`fixed Name [32]int8`), not the bare element type.
+        var typeClause = field.Type == null
+            ? string.Empty
+            : field.FixedBufferLength is int fixedBufferLength
+                ? $" [{fixedBufferLength}]{RenderType(field.Type)}"
+                : $" {RenderType(field.Type)}";
         var initClause = field.Initializer == null
             ? string.Empty
             : $" = {RenderExpression(field.Initializer, indent)}";
