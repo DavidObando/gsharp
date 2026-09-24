@@ -589,7 +589,12 @@ internal sealed partial class ExpressionBinder
         var elementType = target.Type is ImportedTypeSymbol importedTarget
             ? MapErasedIndexerElementType(importedTarget, indexer)
             : MemberLookup.GetClrPropertyTypeSymbol(target.Type, indexer);
-        var isRefIndexer = elementType is ByRefTypeSymbol;
+
+        // Review finding (#4350): only a writable `ref` return is written
+        // through; a `ref readonly` indexer (`ReadOnlySlice<T>.this[int, bool]`)
+        // is read-only exactly as on the single-index path.
+        var isRefIndexer = elementType is ByRefTypeSymbol
+            && RefCapabilities.GetReturnRefKind(indexer) == RefKind.Ref;
         var visibleSetter = ClrMemberVisibility.GetVisibleSetter(indexer, CanAccessInternalsOf(indexer.DeclaringType));
         if (!isRefIndexer && visibleSetter == null)
         {
@@ -614,7 +619,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var capturedArguments = arguments.MoveToImmutable();
-        if (elementType is ByRefTypeSymbol byRef)
+        if (isRefIndexer && elementType is ByRefTypeSymbol byRef)
         {
             var reference = new BoundClrIndexExpression(null, receiver, indexer, capturedArguments, elementType);
             var referenceTemp = DeclareRangeTemp("ref", reference.Type, reference, statements);

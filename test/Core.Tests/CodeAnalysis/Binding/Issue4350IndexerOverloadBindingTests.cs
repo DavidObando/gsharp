@@ -184,6 +184,28 @@ public class Issue4350IndexerOverloadBindingTests
     }
 
     [Fact]
+    public void ReadOnlyRefMultiParameterImportedIndexer_RejectsWrites()
+    {
+        // Review finding: `ReadOnlySlice<T>.this[int, bool]` returns
+        // `ref readonly T`, so a multi-index write through it is rejected
+        // while reads still bind.
+        var runtime = new[] { typeof(Gsharp.Values.Slice<>).Assembly.Location };
+        var write = EmittedOracle.Evaluate("""
+            let values = readonly slice[int32]{1, 2, 3}
+            values[0, false] = 9
+            0
+            """, runtime);
+        Assert.Contains(write.Diagnostics, d => d.IsError);
+
+        var read = EmittedOracle.Evaluate("""
+            let values = readonly slice[int32]{1, 2, 3}
+            values[1, true] + values[0, false]
+            """, runtime);
+        Assert.Empty(read.Diagnostics);
+        Assert.Equal(4, read.Value);
+    }
+
+    [Fact]
     public void AmbiguousIndexerCall_ReportsGs0266()
     {
         var result = EmittedOracle.Evaluate("""
