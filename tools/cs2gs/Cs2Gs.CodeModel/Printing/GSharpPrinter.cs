@@ -635,7 +635,7 @@ public static class GSharpPrinter
         if (TryFlattenAccessChain(expression, out GExpression chainHead, out List<string> chainLinks)
             && chainLinks.Count >= 2)
         {
-            string headText = RenderExpression(chainHead, indent);
+            string headText = RenderPostfixTarget(chainHead, indent);
             var chain = new StringBuilder(headText);
             foreach (string link in chainLinks)
             {

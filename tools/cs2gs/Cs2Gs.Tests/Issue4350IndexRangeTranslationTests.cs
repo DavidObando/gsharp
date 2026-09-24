@@ -4,7 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
+using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using GSharp.Tests;
@@ -376,6 +378,44 @@ namespace Corpus.Issue4350
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal("2,True,1,^2", result.Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void WrappedChainsOnIndexAndRangeHeads_KeepGrouping(bool rangeHead)
+    {
+        // Review finding: when the printer wraps a long access chain (2+
+        // links, over the line width) it renders the flattened head directly;
+        // an unparenthesized from-end or range head must still be grouped, or
+        // G# re-parses the first link inside the prefix/range operand.
+        GExpression head = rangeHead
+            ? new RangeIndexExpression(Cs2Gs.CodeModel.Ast.LiteralExpression.Int("1"), Cs2Gs.CodeModel.Ast.LiteralExpression.Int("3"))
+            : new FromEndIndexExpression(new IdentifierExpression("index"));
+        var longArgument = new IdentifierExpression("someConsiderablyLongLengthValueNameThatForcesTheChainToWrapAcrossLines");
+        GExpression chain = new InvocationExpression(
+            new MemberAccessExpression(
+                new InvocationExpression(new MemberAccessExpression(head, "GetOffset"), new[] { longArgument }),
+                "PadLeftToAConsiderablyLongWidthName"),
+            new[] { longArgument });
+        var unit = new CompilationUnit(
+            "Demo",
+            members: new List<GNode>
+            {
+                new MethodDeclaration(
+                    "Run",
+                    body: new BlockStatement(new List<GStatement>
+                    {
+                        new LocalDeclarationStatement(BindingKind.Let, "x", initializer: chain),
+                    })),
+            });
+
+        string printed = GSharpPrinter.Print(unit);
+        Assert.Contains(rangeHead ? "(1..3)\n" : "(^index)\n", printed, StringComparison.Ordinal);
+        RoundTripResult result = TranslationTestValidation.ValidateRoundTripOnly(
+            printed,
+            "Printer-only expression fixture deliberately uses undefined placeholder identifiers.");
+        Assert.True(result.Success, string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
     }
 
     private static string Render(string source)
