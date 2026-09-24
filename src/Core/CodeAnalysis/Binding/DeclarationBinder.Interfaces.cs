@@ -499,6 +499,7 @@ internal sealed partial class DeclarationBinder
                         // Issue #1913: indexer parameters can carry `@Attr`
                         // annotations same as any other parameter list.
                         BindAndAttachParameterAttributes(indexParamSyntax, indexerParam);
+                        conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam);
                         indexerParamBuilder.Add(indexerParam);
                     }
 

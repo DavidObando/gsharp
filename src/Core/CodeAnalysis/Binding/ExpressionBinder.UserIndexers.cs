@@ -128,7 +128,7 @@ internal sealed partial class ExpressionBinder
         var arityMatches = ImmutableArray.CreateBuilder<PropertySymbol>();
         foreach (var candidate in visible)
         {
-            if (candidate.Parameters.Length == argumentCount)
+            if (AcceptsIndexArgumentCount(candidate, argumentCount))
             {
                 arityMatches.Add(candidate);
             }
@@ -172,10 +172,16 @@ internal sealed partial class ExpressionBinder
             var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(candidate.Parameters.Length);
             foreach (var parameter in candidate.Parameters)
             {
-                parameters.Add(new ParameterSymbol(
+                var syntheticParameter = new ParameterSymbol(
                     parameter.Name,
                     SubstituteIndexerType(parameter.Type, substitution),
-                    refKind: parameter.RefKind));
+                    refKind: parameter.RefKind);
+                if (parameter.HasExplicitDefaultValue)
+                {
+                    syntheticParameter.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);
+                }
+
+                parameters.Add(syntheticParameter);
             }
 
             var function = new FunctionSymbol("this[]", parameters.MoveToImmutable(), SubstituteIndexerType(candidate.Type, substitution));
@@ -255,14 +261,18 @@ internal sealed partial class ExpressionBinder
     /// <param name="substitution">The receiver's type-parameter substitution.</param>
     /// <param name="convert">Converts argument <c>i</c> to the given parameter type.</param>
     /// <param name="targetLocation">The receiver location for diagnostics.</param>
+    /// <param name="writtenArgumentCount">How many index arguments were written;
+    /// trailing optional parameters beyond them take their declared defaults.</param>
     /// <returns>The bound getter call, or an error when the indexer has no getter.</returns>
     private BoundExpression BindUserIndexerRead(
         BoundExpression target,
         PropertySymbol indexer,
         Dictionary<TypeParameterSymbol, TypeSymbol>? substitution,
         Func<int, TypeSymbol, BoundExpression> convert,
-        TextLocation targetLocation)
+        TextLocation targetLocation,
+        int? writtenArgumentCount = null)
     {
+        var argumentCount = writtenArgumentCount ?? indexer.Parameters.Length;
         if (indexer.GetterSymbol == null)
         {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
@@ -272,7 +282,10 @@ internal sealed partial class ExpressionBinder
         var arguments = ImmutableArray.CreateBuilder<BoundExpression>(indexer.Parameters.Length);
         for (var i = 0; i < indexer.Parameters.Length; i++)
         {
-            arguments.Add(convert(i, SubstituteIndexerType(indexer.Parameters[i].Type, substitution)));
+            var parameterType = SubstituteIndexerType(indexer.Parameters[i].Type, substitution);
+            arguments.Add(i < argumentCount
+                ? convert(i, parameterType)
+                : IndexerDefaultArgument(indexer.Parameters[i], parameterType));
         }
 
         return new BoundUserInstanceCallExpression(
@@ -369,9 +382,11 @@ internal sealed partial class ExpressionBinder
         for (var i = 0; i < indexer.Parameters.Length; i++)
         {
             var parameterType = SubstituteIndexerType(indexer.Parameters[i].Type, substitution);
-            var converted = preBound.IsDefault
-                ? conversions.BindConversion(indexSyntaxes[i], parameterType)
-                : conversions.BindConversion(indexSyntaxes[i].Location, preBound[i], parameterType);
+            var converted = i >= indexSyntaxes.Count
+                ? IndexerDefaultArgument(indexer.Parameters[i], parameterType)
+                : preBound.IsDefault
+                    ? conversions.BindConversion(indexSyntaxes[i], parameterType)
+                    : conversions.BindConversion(indexSyntaxes[i].Location, preBound[i], parameterType);
             var argumentLocal = DeclareRangeTemp("index", parameterType, converted, statements);
             arguments.Add(new BoundVariableExpression(null, argumentLocal));
         }
@@ -542,6 +557,50 @@ internal sealed partial class ExpressionBinder
             BoundClrIndexAssignmentExpression.WithExpressionTarget(null, receiver, indexer, capturedArguments, valueRead, elementType)));
         return new BoundBlockExpression(null, statements.ToImmutable(), valueRead);
     }
+
+    // Issue #4350 (review): an indexer accepts `argumentCount` written
+    // arguments when its extra trailing parameters all declare defaults,
+    // exactly as a C# optional indexer parameter does.
+    private static bool AcceptsIndexArgumentCount(PropertySymbol candidate, int argumentCount)
+    {
+        if (candidate.Parameters.Length < argumentCount)
+        {
+            return false;
+        }
+
+        for (var i = argumentCount; i < candidate.Parameters.Length; i++)
+        {
+            if (!candidate.Parameters[i].HasExplicitDefaultValue)
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Issue #4350 (review): the declared defaults of an indexer's trailing
+    // optional parameters beyond the `writtenCount` written arguments.
+    private ImmutableArray<BoundExpression> TrailingIndexerDefaults(
+        PropertySymbol indexer,
+        int writtenCount,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution)
+    {
+        var defaults = ImmutableArray.CreateBuilder<BoundExpression>();
+        for (var i = writtenCount; i < indexer.Parameters.Length; i++)
+        {
+            defaults.Add(IndexerDefaultArgument(
+                indexer.Parameters[i],
+                SubstituteIndexerType(indexer.Parameters[i].Type, substitution)));
+        }
+
+        return defaults.ToImmutable();
+    }
+
+    private static BoundExpression IndexerDefaultArgument(ParameterSymbol parameter, TypeSymbol parameterType)
+        => parameter.ExplicitDefaultValue == null
+            ? new BoundDefaultExpression(null, parameterType)
+            : new BoundLiteralExpression(null, parameter.ExplicitDefaultValue, parameterType);
 
     private TypeSymbol SubstituteIndexerType(TypeSymbol type, Dictionary<TypeParameterSymbol, TypeSymbol>? substitution)
         => substitution != null

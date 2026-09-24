@@ -1302,7 +1302,8 @@ internal sealed partial class ExpressionBinder
                     (i, parameterType) => multiArguments.IsDefault
                         ? conversions.BindConversion(indexSyntaxes[i], parameterType)
                         : conversions.BindConversion(indexSyntaxes[i].Location, multiArguments[i], parameterType),
-                    targetLocation);
+                    targetLocation,
+                    indexSyntaxes.Count);
             }
 
             if (multiReported)
@@ -1776,7 +1777,8 @@ internal sealed partial class ExpressionBinder
                     (_, parameterType) => readArguments.IsDefault
                         ? ConvertIndex(parameterType)
                         : conversions.BindConversion(indexSyntax.Location, readArguments[0], parameterType),
-                    targetLocation);
+                    targetLocation,
+                    writtenArgumentCount: 1);
             }
 
             if (readReported)
@@ -2468,7 +2470,8 @@ internal sealed partial class ExpressionBinder
             FunctionSymbol setter,
             BoundExpression index,
             BoundExpression value,
-            TypeSymbol elementType)
+            TypeSymbol elementType,
+            ImmutableArray<BoundExpression> trailingDefaults)
         {
             if (isReadOnlyReceiver)
             {
@@ -2490,7 +2493,7 @@ internal sealed partial class ExpressionBinder
                 null,
                 target,
                 setter,
-                ImmutableArray.Create<BoundExpression>(indexRead, resultRead));
+                trailingDefaults.Insert(0, indexRead).Add(resultRead));
             return new BoundBlockExpression(
                 null,
                 ImmutableArray.Create<BoundStatement>(
@@ -2795,7 +2798,12 @@ internal sealed partial class ExpressionBinder
                         var refElementType = SubstituteIndexerType(refIndexerGetter.Type, writeSubstitution);
                         var refIndexArg = ConvertWriteIndex();
                         var refValue = BindValue(refElementType);
-                        var refGetCall = new BoundUserInstanceCallExpression(null, target, refIndexerGetter, ImmutableArray.Create(refIndexArg), refElementType);
+                        var refGetCall = new BoundUserInstanceCallExpression(
+                            null,
+                            target,
+                            refIndexerGetter,
+                            TrailingIndexerDefaults(selectedIndexer, 1, writeSubstitution).Insert(0, refIndexArg),
+                            refElementType);
                         return new BoundIndirectAssignmentExpression(null, new BoundAddressOfExpression(null, refGetCall, unmanaged: false), refValue);
                     }
 
@@ -2810,7 +2818,8 @@ internal sealed partial class ExpressionBinder
                     selectedIndexer.SetterSymbol,
                     indexArg,
                     value,
-                    elementType);
+                    elementType,
+                    TrailingIndexerDefaults(selectedIndexer, 1, writeSubstitution));
             }
 
             if (writeReported)

@@ -268,6 +268,40 @@ public class Issue4350IndexerOverloadEmitTests
     }
 
     [Fact]
+    public void OptionalIndexerParameters_TakeDeclaredDefaults()
+    {
+        // Review note: an indexer parameter may be optional, as in C#. The
+        // default used to be dropped silently; it now binds, fills omitted
+        // arguments for reads and writes, and is emitted to metadata.
+        var source = """
+            package P
+            import System
+
+            class Table {
+                var cells []string = []string{"", "", "", "", "", ""}
+
+                prop this[row int32, column int32 = 1] string {
+                    get { return row.ToString() + ":" + column.ToString() + "=" + cells[row * 3 + column] }
+                    set { cells[row * 3 + column] = value }
+                }
+            }
+
+            let t = Table()
+            t[1] = "a"
+            t[0, 2] = "b"
+            t[1] += "!"
+            Console.WriteLine(t[1])
+            Console.WriteLine(t[0, 2])
+            let column = typeof(Table).GetProperty("Item")!!.GetIndexParameters()[1]
+            Console.WriteLine(column.IsOptional.ToString() + " " + column.DefaultValue!!.ToString())
+            """;
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, "1:1=1:1=a!", "0:2=b", "True 1") + Environment.NewLine,
+            CompileAndRun(source));
+    }
+
+    [Fact]
     public void OverloadedIndexers_EmitOneItemPropertyPerSignature()
     {
         var libraryPath = EmitGSharpLibrary("Shape", Library);

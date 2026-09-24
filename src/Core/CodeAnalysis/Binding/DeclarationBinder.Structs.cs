@@ -1787,6 +1787,11 @@ internal sealed partial class DeclarationBinder
                         // Issue #1913: indexer parameters can carry `@Attr`
                         // annotations same as any other parameter list.
                         BindAndAttachParameterAttributes(indexParamSyntax, indexerParam);
+
+                        // Issue #4350 (review): an indexer parameter may declare
+                        // a default (`this[row int32, column int32 = 0]`), which
+                        // was previously dropped silently.
+                        conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam);
                         indexerParamBuilder.Add(indexerParam);
                     }
 
