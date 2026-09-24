@@ -95,6 +95,8 @@ namespace Corpus.Aux
         public static string File(string source) => source + ""!"";
 
         public static string Keep(string source) => source;
+
+        public static T[] List<T>(T value) => new T[] { value };
     }
 }
 ";
@@ -105,6 +107,7 @@ namespace Corpus.Aux
     // `using Microsoft.CodeAnalysis`, whose `Project` type collided with the
     // imported `Project(...)` helper.
     private const string CollidingCallerSource = @"
+using System.Collections.Generic;
 using System.IO;
 using static Corpus.Aux.StubSupport;
 
@@ -115,6 +118,8 @@ namespace Corpus.Main
         public string F() => File(Path.GetFileName(""a/b""));
 
         public string H() => Keep(""x"");
+
+        public string[] G() => List<string>(new List<string> { ""y"" }[0]);
     }
 }
 ";
@@ -135,6 +140,9 @@ namespace Corpus.Main
         string rendered = Translate(CollidingAuxSource, CollidingCallerSource);
 
         Assert.Contains("StubSupport.File(", rendered, StringComparison.Ordinal);
+
+        // The explicit-generic form collides with `List[T]` the same way.
+        Assert.Contains("StubSupport.List[string](", rendered, StringComparison.Ordinal);
 
         // No collision, no qualifier: the ADR-0134 bare form is unchanged.
         Assert.Contains("Keep(\"x\")", rendered, StringComparison.Ordinal);

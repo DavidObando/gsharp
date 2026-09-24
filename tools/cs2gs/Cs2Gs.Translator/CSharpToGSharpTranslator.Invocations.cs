@@ -353,13 +353,23 @@ public sealed partial class CSharpToGSharpTranslator
             else if (invocation.Expression is GenericNameSyntax generic)
             {
                 ISymbol genericSymbol = this.context.GetSymbolInfo(invocation).Symbol;
+
+                // A `using static` generic call whose name a file-scope type
+                // claims (`List[string](x)` beside `import
+                // System.Collections.Generic`) would bind as that type in gsc,
+                // so it keeps its owner qualifier, as the non-generic branch
+                // below does.
                 if (genericSymbol is IMethodSymbol genericMethod
                     && genericMethod.IsStatic
                     && genericMethod.ContainingType is INamedTypeSymbol genericOwner
                     && (genericOwner.TypeKind == TypeKind.Class || genericOwner.TypeKind == TypeKind.Struct)
-                    && RequiresQualifiedImportedContextualCall(
-                        genericMethod,
-                        includeGenericPrefix: true))
+                    && (RequiresQualifiedImportedContextualCall(
+                            genericMethod,
+                            includeGenericPrefix: true)
+                        || (this.IsStaticUsingTarget(genericOwner)
+                            && this.typeMapper.ClaimsDocumentScopeName(
+                                this.EmittedName(genericMethod, generic.Identifier.ValueText),
+                                this.context))))
                 {
                     target = new MemberAccessExpression(
                         this.StaticQualifierReceiver(
