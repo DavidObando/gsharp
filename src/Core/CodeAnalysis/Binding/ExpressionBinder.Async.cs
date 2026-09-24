@@ -62,6 +62,11 @@ internal sealed partial class ExpressionBinder
             return BaseEventKind.None;
         }
 
+        // Level by level, nearest first: an event at a level wins, but a field
+        // or property of the same name at a nearer level hides every farther
+        // event (the same precedence as SourceValueMemberPrecedesInheritedEvent
+        // for ordinary member access), so `base.E += v` then binds the value
+        // member as a compound assignment.
         if (enclosing.BaseClass is { } sourceBase)
         {
             foreach (var level in sourceBase.GetHierarchy())
@@ -79,14 +84,19 @@ internal sealed partial class ExpressionBinder
                         ? BaseEventKind.Virtual
                         : BaseEventKind.NonVirtual;
                 }
+
+                if (level.TryGetField(name, out _)
+                    || level.Properties.Any(candidate => !candidate.IsIndexer && candidate.Name == name))
+                {
+                    return BaseEventKind.None;
+                }
             }
         }
 
-        if (GetInheritedClrBaseType(enclosing) is { } clrBase)
+        const BindingFlags DeclaredInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        for (var level = GetInheritedClrBaseType(enclosing); level != null; level = level.BaseType)
         {
-            foreach (var candidate in ClrTypeUtilities.SafeGetEvents(
-                clrBase,
-                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            foreach (var candidate in ClrTypeUtilities.SafeGetEvents(level, DeclaredInstance))
             {
                 if (!string.Equals(candidate.Name, name, System.StringComparison.Ordinal))
                 {
@@ -98,6 +108,22 @@ internal sealed partial class ExpressionBinder
                 return add != null && add.IsVirtual && !add.IsFinal
                     ? BaseEventKind.Virtual
                     : BaseEventKind.NonVirtual;
+            }
+
+            // A value member the derived class can reach hides farther
+            // events; one it cannot reach (e.g. private) does not take part
+            // in lookup at all.
+            var includeInternal = CanAccessInternalsOf(level);
+            if (ClrTypeUtilities.SafeGetFields(level, DeclaredInstance).Any(field =>
+                    string.Equals(field.Name, name, System.StringComparison.Ordinal)
+                    && ClrMemberVisibility.IsVisibleFromDerived(field, includeInternal))
+                || ClrTypeUtilities.SafeGetProperties(level, DeclaredInstance).Any(property =>
+                    string.Equals(property.Name, name, System.StringComparison.Ordinal)
+                    && property.GetIndexParameters().Length == 0
+                    && (ClrMemberVisibility.IsVisibleFromDerived(property.GetMethod, includeInternal)
+                        || ClrMemberVisibility.IsVisibleFromDerived(property.SetMethod, includeInternal))))
+            {
+                return BaseEventKind.None;
             }
         }
 

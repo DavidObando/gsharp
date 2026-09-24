@@ -689,6 +689,50 @@ Comp().Go()
             new[] { "base handler", "base handler", "component disposed" },
         };
 
+        // A field or property at a nearer base level hides a farther event of
+        // the same name: `base.E += h` combines into the nearer delegate
+        // member rather than subscribing to the farther event.
+        yield return new object[]
+        {
+            "nearer-value-member-hides-farther-base-event",
+            @"
+package P
+import System
+
+open class Far {
+    event E EventHandler?
+    event Q EventHandler?
+    func FireFar() {
+        E?.Invoke(this, EventArgs.Empty)
+        Q?.Invoke(this, EventArgs.Empty)
+    }
+}
+
+open class Mid : Far {
+    var E EventHandler?
+    var qStore EventHandler?
+    prop Q EventHandler? {
+        get -> qStore
+        set { qStore = value }
+    }
+}
+
+class Derived : Mid {
+    func Go() {
+        base.E += func (s object?, e EventArgs) { Console.WriteLine(""E handler"") }
+        base.Q += func (s object?, e EventArgs) { Console.WriteLine(""Q handler"") }
+        this.FireFar()
+        Console.WriteLine(""far fired"")
+        base.E?.Invoke(this, EventArgs.Empty)
+        base.Q?.Invoke(this, EventArgs.Empty)
+    }
+}
+
+Derived().Go()
+",
+            new[] { "far fired", "E handler", "Q handler" },
+        };
+
         // Forwarded calls to async and iterator base methods of a generic base
         // class: the forwarder returns what the base method returns as
         // emitted (Task, Task<T>, the sequence), not the G#-declared result.
@@ -967,6 +1011,74 @@ class Unrelated {
             Assert.True(
                 rejectedExit != 0,
                 $"an unrelated class must not reach a protected static field.\nstdout:\n{rejectedStdout}\nstderr:\n{rejectedStderr}");
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// An imported base whose nearer level declares a delegate FIELD named
+    /// like a farther level's event: <c>base.E += h</c> combines into the
+    /// field, and the farther event stays unsubscribed.
+    /// </summary>
+    [Fact]
+    public void ImportedNearerValueMember_HidesFartherBaseEvent_CompileVerifyAndRun()
+    {
+        const string csSource = """
+            using System;
+
+            namespace BaseGaps.Hiding
+            {
+                public class Far
+                {
+                    public event EventHandler? E;
+                    public void FireFar() => E?.Invoke(this, EventArgs.Empty);
+                }
+
+                public class Mid : Far
+                {
+                    public new EventHandler? E;
+                }
+            }
+            """;
+
+        const string source = @"
+package P
+import System
+import BaseGaps.Hiding
+
+class Derived : Mid {
+    func Go() {
+        base.E += func (s object?, e EventArgs) { Console.WriteLine(""field handler"") }
+        this.FireFar()
+        Console.WriteLine(""far fired"")
+        base.E?.Invoke(this, EventArgs.Empty)
+    }
+}
+
+Derived().Go()
+";
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_basegaps_hiding_").FullName;
+        try
+        {
+            var library = BuildCsLibrary(tempDir, csSource, "BaseGaps.Hiding");
+            var (exit, stdout, stderr) = Compile(tempDir, "imported-hiding", source, library);
+            Assert.True(exit == 0, $"gsc failed:\nstdout:\n{stdout}\nstderr:\n{stderr}");
+            var outPath = Path.Combine(tempDir, "imported-hiding.dll");
+            IlVerifier.Verify(outPath, new[] { library });
+            File.Copy(library, Path.Combine(tempDir, Path.GetFileName(library)), overwrite: true);
+
+            var (runExit, output) = RunDotnet(outPath);
+            Assert.True(runExit == 0, $"program must run to completion. Exit {runExit}:\n{output}");
+            var lines = output
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0)
+                .ToArray();
+            Assert.Equal(new[] { "far fired", "field handler" }, lines);
         }
         finally
         {

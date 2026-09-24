@@ -54,6 +54,25 @@ public sealed class BaseMemberAccessibilityBinderTests
                 PrivateChanged?.Invoke(this, EventArgs.Empty);
             }
         }
+
+        public class HidingFar
+        {
+            public event EventHandler? Count;
+            public event EventHandler? Label;
+
+            public void Fire()
+            {
+                Count?.Invoke(this, EventArgs.Empty);
+                Label?.Invoke(this, EventArgs.Empty);
+            }
+        }
+
+        public class HidingMid : HidingFar
+        {
+            public new int Count = 1;
+
+            public new string Label { get; set; } = "a";
+        }
         """;
 
     [Fact]
@@ -162,6 +181,64 @@ public sealed class BaseMemberAccessibilityBinderTests
             assemblyName);
 
         Assert.False(result.Success);
+    }
+
+    [Fact]
+    public void NearerSourceValueMember_HidesFartherBaseEvent()
+    {
+        // `Mid` declares value members named like `Far`'s events. The nearer
+        // member hides the event, so `base.Count += 1` is integer compound
+        // assignment and `base.Label += "!"` string concatenation.
+        const string source = """
+            import System
+
+            open class Far {
+                event Count EventHandler?
+                event Label EventHandler?
+            }
+
+            open class Mid : Far {
+                var Count int32 = 1
+                var label string = "a"
+                prop Label string {
+                    get -> label
+                    set { label = value }
+                }
+            }
+
+            class Derived : Mid {
+                func Go() string {
+                    base.Count += 1
+                    base.Label += "!"
+                    return "${base.Count} ${base.Label}"
+                }
+            }
+
+            Console.WriteLine(Derived().Go())
+            """;
+
+        var result = EmittedOracle.Evaluate(source);
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal("2 a!" + Environment.NewLine, result.Output);
+    }
+
+    [Fact]
+    public void NearerImportedValueMember_HidesFartherBaseEvent()
+    {
+        var result = CompileAgainstLibrary(
+            """
+            import BaseAccess.Library
+
+            class Derived : HidingMid {
+                func Go() {
+                    base.Count += 1
+                    base.Label += "!"
+                }
+            }
+            """,
+            StrangerName);
+
+        Assert.True(result.Success, Describe(result));
     }
 
     private static string Describe(CompileResult result)
