@@ -468,7 +468,8 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) => DefinitionComputer.ComputeDefinitions(request.TextDocument.Uri, content, request.Position, ct).ToArray(),
             Array.Empty<Location>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: true);
 
     [JsonRpcMethod("textDocument/references", UseSingleObjectParameterDeserialization = true)]
     public Task<Location[]> ReferencesAsync(ReferenceParams request, CancellationToken cancellationToken = default)
@@ -808,12 +809,17 @@ public sealed class LspServer
         Func<DocumentContent, CancellationToken, T> compute,
         T missing,
         CancellationToken cancellationToken,
+        bool waitForWorkspaceDiscovery = false,
         [System.Runtime.CompilerServices.CallerMemberName] string caller = null)
     {
         DocumentContent content;
         try
         {
-            await this.workspaceDiscoveryCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (waitForWorkspaceDiscovery)
+            {
+                await this.workspaceDiscoveryCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
+            }
+
             await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
