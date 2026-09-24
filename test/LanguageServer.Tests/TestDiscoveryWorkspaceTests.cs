@@ -99,6 +99,31 @@ public class TestDiscoveryWorkspaceTests : IDisposable
     }
 
     [Fact]
+    public async Task DiscoverTests_NestedProjectOwnsFilesAlsoMatchedByParentGlob()
+    {
+        var nestedDir = Directory.CreateDirectory(Path.Combine(this.root, "Nested")).FullName;
+        var file = WriteTo(nestedDir, "NestedTests.gs", "@Fact\nfunc NestedTest() {\n}\n");
+
+        var workspace = new WorkspaceState();
+        var nested = workspace.AddProject(Path.Combine(nestedDir, "Nested.gsproj"));
+        nested.AddFileFromDisk(file);
+        workspace.RegisterFile(file, nested);
+
+        var parent = workspace.AddProject(Path.Combine(this.root, "Parent.gsproj"));
+        parent.AddFileFromDisk(file);
+        workspace.RegisterFile(file, parent);
+
+        var server = new LspServer(new DocumentContentService(), workspace);
+
+        var tests = await server.DiscoverTestsAsync();
+
+        var group = Assert.Single(tests);
+        Assert.Equal("Nested", group.Label);
+        Assert.Equal(nested.ProjectFilePath, group.ProjectFile);
+        Assert.Contains(group.Children, test => test.Label == "NestedTest");
+    }
+
+    [Fact]
     public async Task DiscoverTests_OpenBufferEditsOverrideDiskContent()
     {
         var file = this.WriteFile("EditableTests.gs", "class EditableTests {\n  @Fact\n  func Original() {\n  }\n}\n");

@@ -263,6 +263,53 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
     }
 
     [Fact]
+    public async Task TestDiscoveryRequestedDuringWorkspaceDiscovery_WaitsForProjectGrouping()
+    {
+        var rootDir = CreateSampleWorkspace();
+        var continueDiscovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var discoveryStopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        try
+        {
+            File.WriteAllText(Path.Combine(rootDir, "Demo", "Foo.gs"), "@Fact\nfunc Passes() {\n}\n");
+
+            var server = new LspServer(new DocumentContentService(), new WorkspaceState());
+            var discoveryStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            server.TestBeforeWorkspaceDiscovery = () =>
+            {
+                discoveryStarted.TrySetResult(true);
+                continueDiscovery.Task.GetAwaiter().GetResult();
+            };
+            server.TestAfterWorkspaceDiscovery = () => discoveryStopped.TrySetResult(true);
+
+            await server.InitializeAsync(new InitializeParams { RootPath = rootDir });
+            using var doc = JsonDocument.Parse("{}");
+            server.Initialized(doc.RootElement.Clone());
+            await discoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var testsTask = server.DiscoverTestsAsync();
+            await Task.Delay(100);
+            Assert.False(testsTask.IsCompleted);
+
+            continueDiscovery.TrySetResult(true);
+
+            var project = Assert.Single(await testsTask);
+            Assert.Equal("Demo (net10.0)", project.Label);
+            Assert.Equal(Path.Combine(rootDir, "Demo", "Demo.gsproj"), project.ProjectFile);
+            Assert.Contains(project.Children, test => test.Label == "Passes");
+        }
+        finally
+        {
+            continueDiscovery.TrySetResult(true);
+            if (!discoveryStopped.Task.IsCompleted)
+            {
+                await discoveryStopped.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
+            Directory.Delete(rootDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task PullClient_DiscoveryFailure_RestoresSemanticDiagnostics()
     {
         var rootDir = CreateSampleWorkspace();

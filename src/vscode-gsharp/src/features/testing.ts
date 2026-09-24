@@ -8,7 +8,7 @@ import { Logger } from '../utils/logger';
 import { aggregateTrxResults, matchTrxResults, parseTrx, TrxTestResult } from './trx';
 import { killProcessTree } from './processKill';
 
-interface TestItem {
+export interface TestItem {
   id: string;
   label: string;
   uri: string;
@@ -128,10 +128,9 @@ async function runTestAtCursor(
     return;
   }
 
-  // Ensure tests have been discovered before searching for one at the cursor.
-  if (countItems(controller.items) === 0) {
-    await discoverTests(controller, getClient, logger);
-  }
+  // Refresh before selecting so a stale loose-file item cannot win after workspace
+  // discovery has associated the open file with its project.
+  await discoverTests(controller, getClient, logger);
 
   const target = findTestAtPosition(controller.items, editor.document.uri, editor.selection.active);
   if (!target) {
@@ -145,15 +144,7 @@ async function runTestAtCursor(
   await runTests(request, controller, logger, debug, token);
 }
 
-function countItems(items: vscode.TestItemCollection): number {
-  let count = 0;
-  items.forEach((item) => {
-    count += 1 + countItems(item.children);
-  });
-  return count;
-}
-
-function findTestAtPosition(
+export function findTestAtPosition(
   items: vscode.TestItemCollection,
   uri: vscode.Uri,
   position: vscode.Position,
@@ -166,7 +157,13 @@ function findTestAtPosition(
   for (const item of candidates) {
     const startLine = item.range!.start.line;
     // Prefer the closest declaration on or above the cursor line.
-    if (startLine <= position.line && startLine > bestLine) {
+    if (
+      startLine <= position.line &&
+      (startLine > bestLine ||
+        (startLine === bestLine &&
+          projectFileForItem(item) !== undefined &&
+          (best === undefined || projectFileForItem(best) === undefined)))
+    ) {
       best = item;
       bestLine = startLine;
     }
@@ -181,12 +178,20 @@ function collectItemsForUri(
   out: vscode.TestItem[],
 ) {
   items.forEach((item) => {
-    if (item.uri?.toString() === uri.toString() && item.range) {
+    if (item.uri && sameDocumentUri(item.uri, uri) && item.range) {
       out.push(item);
     }
 
     collectItemsForUri(item.children, uri, out);
   });
+}
+
+function sameDocumentUri(left: vscode.Uri, right: vscode.Uri): boolean {
+  const leftValue = left.toString(true);
+  const rightValue = right.toString(true);
+  return left.scheme === 'file' && right.scheme === 'file'
+    ? leftValue.toLowerCase() === rightValue.toLowerCase()
+    : leftValue === rightValue;
 }
 
 async function discoverTests(
@@ -211,7 +216,7 @@ async function discoverTests(
   }
 }
 
-function populateTestItems(controller: vscode.TestController, tests: TestItem[]) {
+export function populateTestItems(controller: vscode.TestController, tests: TestItem[]) {
   controller.items.replace([]);
   testFilters.clear();
   itemProjects.clear();

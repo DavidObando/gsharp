@@ -946,6 +946,12 @@ public sealed class LspServer
         IReadOnlyList<TestSource> sources;
         try
         {
+            await this.workspaceDiscoveryCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
+            if (this.shutdownRequested)
+            {
+                return missing;
+            }
+
             await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
@@ -1001,7 +1007,9 @@ public sealed class LspServer
             var projectLabel = ProjectLabel(project);
             foreach (var file in project.SourceFiles)
             {
-                if (project.TryGetSyntaxTree(file, out var tree) && tree != null)
+                if (ReferenceEquals(this.workspaceState.GetProjectForFile(file), project)
+                    && project.TryGetSyntaxTree(file, out var tree)
+                    && tree != null)
                 {
                     var path = PathKeyFor(tree, file);
                     byPath[path] = new TestSource(DocumentUri.FromFileSystemPath(file).ToString(), tree, projectFile, projectLabel);
