@@ -713,6 +713,75 @@ public sealed class InferredLocalAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void RetargetedNullableMember_ThroughComposedInitializers_IsAsserted()
+    {
+        // Issue #4356: a local's G# type is inferred from its whole initializer,
+        // so a conditional, `??` or switch expression over analyzer-mapped
+        // `SyntaxToken?` members yields a `SyntaxToken?` local too — including
+        // one captured by a quoted lambda.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Linq.Expressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ComposedInitializerAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static string Conditional(MethodDeclarationSyntax declaration, bool first)
+    {
+        var chosen = first
+            ? declaration.ParameterList.Parameters[0].Identifier
+            : declaration.ParameterList.Parameters[1].Identifier;
+        return chosen.Text;
+    }
+
+    private static string Coalesced(MethodDeclarationSyntax declaration, SyntaxToken? preferred)
+    {
+        var picked = preferred ?? declaration.ParameterList.Parameters[0].Identifier;
+        return picked.Text;
+    }
+
+    private static string Switched(MethodDeclarationSyntax declaration, int which)
+    {
+        var selected = which switch
+        {
+            0 => declaration.ParameterList.Parameters[0].Identifier,
+            _ => declaration.ParameterList.Parameters[1].Identifier,
+        };
+        return selected.Text;
+    }
+
+    private static Expression<Func<string>> Quoted(MethodDeclarationSyntax declaration, bool first)
+    {
+        var chosen = first
+            ? declaration.ParameterList.Parameters[0].Identifier
+            : declaration.ParameterList.Parameters[1].Identifier;
+        return () => chosen.Text;
+    }
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("return chosen!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("return picked!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("return selected!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("-> chosen!!.Text", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
     {
         // Issue #4356: SingleVariableDesignationSyntax.Identifier (a Roslyn

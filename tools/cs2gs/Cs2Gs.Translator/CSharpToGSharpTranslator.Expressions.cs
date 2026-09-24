@@ -1201,8 +1201,8 @@ public sealed partial class CSharpToGSharpTranslator
             // onto the G# analyzer API, whose counterpart of some Roslyn
             // members is declared `T?` although Roslyn's is non-null — often a
             // SyntaxToken STRUCT, which the reference-type test below would
-            // reject outright. The C# symbol cannot say so, so ask the map.
-            if (this.IsGSharpNullableAnalyzerApiMember(symbol))
+            // reject outright. The C# type cannot say so, so ask the map.
+            if (this.IsGSharpNullableAnalyzerExpression(recv))
             {
                 return true;
             }
@@ -1289,6 +1289,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // An untyped `var` local's G# type is inferred from its initializer,
+            // so it is `T?` exactly when the initializer's EMITTED type is.
             foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
             {
                 // Written without nested nullable property patterns so this
@@ -1297,22 +1299,72 @@ public sealed partial class CSharpToGSharpTranslator
                 if (reference.GetSyntax() is VariableDeclaratorSyntax declarator
                     && declarator.Parent is VariableDeclarationSyntax declaration
                     && declaration.Type.IsVar
-                    && declarator.Initializer != null)
+                    && declarator.Initializer != null
+                    && this.IsGSharpNullableAnalyzerExpression(declarator.Initializer.Value, depth + 1))
                 {
-                    ExpressionSyntax initializer = declarator.Initializer.Value;
-                    while (initializer is ParenthesizedExpressionSyntax parenthesized)
-                    {
-                        initializer = parenthesized.Expression;
-                    }
-
-                    if (this.IsGSharpNullableAnalyzerApiValue(this.context.GetSymbolInfo(initializer).Symbol, depth + 1))
-                    {
-                        return true;
-                    }
+                    return true;
                 }
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Issue #4356: whether <paramref name="expression"/>'s EMITTED G# type is
+        /// <c>T?</c> because of the ADR-0169 analyzer map, although its Roslyn
+        /// type is non-null. This is the one classifier for that question: a
+        /// mapped member read, a <c>var</c> local inferred from such an
+        /// expression, and the value-preserving shapes that carry one through —
+        /// parentheses, a conditional (either arm), <c>??</c> (its fallback), a
+        /// switch expression (any arm) and an assignment (its value). Every
+        /// forgiveness, static-non-null and expression-tree check asks it, and
+        /// a local's provenance is this same question asked of its initializer,
+        /// so the direct read, an inferred local and a composed initializer
+        /// cannot disagree. A null-forgiving <c>x!</c> is non-null.
+        /// </summary>
+        /// <param name="expression">The C# expression.</param>
+        /// <param name="depth">Recursion guard through local initializers.</param>
+        /// <returns>True when the emitted G# type is nullable per the analyzer map.</returns>
+        private bool IsGSharpNullableAnalyzerExpression(ExpressionSyntax expression, int depth = 0)
+        {
+            if (!this.InAnalyzerApiMode || expression == null || depth > 8)
+            {
+                return false;
+            }
+
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return this.IsGSharpNullableAnalyzerExpression(parenthesized.Expression, depth);
+
+                case PostfixUnaryExpressionSyntax suppression
+                    when suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    return false;
+
+                case ConditionalExpressionSyntax conditional:
+                    return this.IsGSharpNullableAnalyzerExpression(conditional.WhenTrue, depth)
+                        || this.IsGSharpNullableAnalyzerExpression(conditional.WhenFalse, depth);
+
+                case BinaryExpressionSyntax coalesce when coalesce.IsKind(SyntaxKind.CoalesceExpression):
+                    return this.IsGSharpNullableAnalyzerExpression(coalesce.Right, depth);
+
+                case SwitchExpressionSyntax switchExpression:
+                    foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+                    {
+                        if (this.IsGSharpNullableAnalyzerExpression(arm.Expression, depth))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+
+                case AssignmentExpressionSyntax assignment when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
+                    return this.IsGSharpNullableAnalyzerExpression(assignment.Right, depth);
+
+                default:
+                    return this.IsGSharpNullableAnalyzerApiValue(this.context.GetSymbolInfo(expression).Symbol, depth);
+            }
         }
 
         // Issue #2113: true for a nullable-oblivious compilation
@@ -1877,8 +1929,9 @@ public sealed partial class CSharpToGSharpTranslator
 
             // Issue #4356: a Roslyn member that is non-null in C# — even a
             // SyntaxToken struct — but `T?` on the G# analyzer API it is
-            // retargeted onto is never statically non-null in the output.
-            if (this.IsGSharpNullableAnalyzerApiMember(symbol))
+            // retargeted onto is never statically non-null in the output, nor
+            // is a local whose type G# infers from one.
+            if (this.IsGSharpNullableAnalyzerExpression(expression))
             {
                 return false;
             }
@@ -4507,7 +4560,7 @@ public sealed partial class CSharpToGSharpTranslator
             // Roslyn member such as `ParameterSyntax.Identifier` is a C# struct
             // but a G# nullable REFERENCE (`SyntaxToken?`), whose assertion gsc
             // erases in a tree like any other reference-type `!!`.
-            && !this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(recv).Symbol);
+            && !this.IsGSharpNullableAnalyzerExpression(recv);
 
         private bool IsWithinExpressionTreeLambda(SyntaxNode node) =>
             node.AncestorsAndSelf()
