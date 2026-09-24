@@ -6,7 +6,8 @@
 - **Related**: issue #1016 (the `..` range/slice operator), issue #1022 (the from-end `^n` marker, [ADR-0123](0123-from-end-index-operator.md)), issue [#1038](https://github.com/DavidObando/gsharp/issues/1038)
 
 
-> **Amended by ADR-0187 (issue #4350).** ADR-0187 replaces its leading-`^` restriction (GS0410): prefix `^x` is a first-class `System.Index` expression in every expression context, a standalone range may begin with `^`, and unary one's-complement is spelled `~x`. Binary `^` remains XOR.
+> **Amended by ADR-0187 (issue #4350).** ADR-0187 replaces its leading-`^` restriction (GS0410): prefix `^x` is a first-class `System.Index` expression in every expression context, a standalone range may begin with `^`, and unary one's-complement is spelled `~x`. Binary `^` remains XOR. The sections below are kept as the historical record of the original decision; the passages marked **Historical** no longer describe the language.
+
 ## Context
 
 Issue #1016 added the C#-style `..` range/slice operator **inside an indexer**
@@ -46,7 +47,9 @@ and allowing a `System.Range`-typed value to be used as an index argument.
    parenthesised or argument-position range nested in an index bound
    (`a[(1..3)]`, `a[f(1..3)]`) is still recognised as a standalone value.
 
-3. **From-end `^` restriction.** A from-end `^n` marker is supported in the
+3. **From-end `^` restriction.** (**Historical** — superseded by ADR-0187 §2:
+   either bound may be a from-end Index, `^a..^b` is valid, GS0410 is retired,
+   and a one's-complement bound is written `(~a)..b`.) A from-end `^n` marker is supported in the
    **upper** bound of a standalone range (`lo..^hi`, `..^hi`), where it is
    unambiguous because it immediately follows `..`. A **leading** `^` at the very
    start of a standalone range (`^a..b`) is **not** supported: the parser reads
@@ -59,7 +62,8 @@ and allowing a `System.Range`-typed value to be used as an index argument.
 4. **Binding / lowering.** A standalone range binds to `new System.Range(start,
    end)`, where each bound is a `System.Index`: a plain value `v` → `Index(v)`
    (from-start), a `^n` marker → `Index(n, fromEnd: true)`, an open lower → the
-   start, an open upper → the end. This mirrors how C# lowers a range expression
+   start, an open upper → the end. (ADR-0187 adds: a bound that is already a
+   `System.Index` value is used as-is.) This mirrors how C# lowers a range expression
    and reuses the same `BuildSystemRangeValue` helper as the #1016
    `this[System.Range]` indexer path. The value is typed `System.Range`. No new
    `BoundNodeKind` is introduced.
@@ -84,7 +88,11 @@ and allowing a `System.Range`-typed value to be used as an index argument.
   one's-complement/XOR uses of `^` keep their meaning.
 - The one genuinely ambiguous position — a leading `^` in a standalone range —
   is rejected with a clear, actionable diagnostic (GS0410) rather than silently
-  misinterpreted.
+  misinterpreted. **Historical** — ADR-0187 removed the ambiguity (`~` is
+  one's-complement), so a leading `^` is now a from-end bound and GS0410 is
+  retired.
+- **Historical** (ADR-0187): the "one's-complement uses of `^`" in the bullet
+  above now use `~`; XOR is unchanged.
 
 ## Deferred
 

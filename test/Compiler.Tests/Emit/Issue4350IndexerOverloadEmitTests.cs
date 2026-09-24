@@ -388,6 +388,35 @@ public class Issue4350IndexerOverloadEmitTests
     }
 
     [Fact]
+    public void NullableIndexerParameters_ResolveTheirOwnAccessors()
+    {
+        // Review finding: a nullable value-type index parameter reflects as
+        // `Nullable<X>` while its symbol's CLR type is the underlying `X`;
+        // accessor matching must unwrap it rather than miss the accessor.
+        var source = """
+            package P
+            import System
+
+            class Table {
+                prop this[key int32?] string -> if key == nil { "nil-int" } else { "int:" + key!!.ToString() }
+                prop this[key string?] string -> if key == nil { "nil-string" } else { "string:" + key!! }
+                prop this[key int32?, scale int32] string -> "scaled:" + (key ?? 0 * scale).ToString()
+            }
+
+            let t = Table()
+            let none int32? = nil
+            Console.WriteLine(t[none])
+            Console.WriteLine(t[3])
+            Console.WriteLine(t["x"])
+            Console.WriteLine(t[none, 2])
+            """;
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, "nil-int", "int:3", "string:x", "scaled:0") + Environment.NewLine,
+            CompileAndRun(source));
+    }
+
+    [Fact]
     public void OverloadedIndexers_EmitOneItemPropertyPerSignature()
     {
         var libraryPath = EmitGSharpLibrary("Shape", Library);

@@ -1913,6 +1913,23 @@ internal sealed class UserTokenResolver
         TypeSymbol parameterType,
         ImmutableArray<TypeParameterSymbol> declaringTypeParameters)
     {
+        // Review finding (#4350): a nullable parameter's `ClrType` is its
+        // UNDERLYING type, but a nullable value type reflects as `Nullable<X>`.
+        // Match the wrapper structurally: `Nullable<X>` against the underlying
+        // type, and a nullable reference type or unconstrained `T?` (which
+        // reflect as the bare type) against the underlying type directly.
+        if (parameterType is NullableTypeSymbol nullable)
+        {
+            if (!clrParameterType.IsGenericParameter
+                && clrParameterType.IsGenericType
+                && clrParameterType.GetGenericTypeDefinition().FullName == "System.Nullable`1")
+            {
+                return IndexParameterTypeMatches(clrParameterType.GetGenericArguments()[0], nullable.UnderlyingType, declaringTypeParameters);
+            }
+
+            return IndexParameterTypeMatches(clrParameterType, nullable.UnderlyingType, declaringTypeParameters);
+        }
+
         if (parameterType.ClrType is { } parameterClrType)
         {
             return ClrTypeUtilities.AreSame(clrParameterType, parameterClrType);
