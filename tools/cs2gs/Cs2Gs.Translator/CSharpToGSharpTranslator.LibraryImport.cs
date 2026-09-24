@@ -444,6 +444,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             this.ReportUnmanagedCallConv(node, symbol);
+            this.ReportForwardedInteropAttributes(node, symbol);
 
             ResolveLibraryImportStringMarshalling(symbol, out _, out string stringProblem);
             if (stringProblem != null)
@@ -502,6 +503,36 @@ public sealed partial class CSharpToGSharpTranslator
         /// on every platform except 32-bit Windows, so it translates with a
         /// warning; any other calling convention or modifier is a gap.
         /// </summary>
+        /// <summary>
+        /// The C# LibraryImportGenerator forwards <c>[SuppressGCTransition]</c>
+        /// and a method-level <c>[DefaultDllImportSearchPaths]</c> onto the
+        /// native P/Invoke it generates. gsc's <c>@LibraryImport</c> emits method
+        /// attributes on the managed stub only, so the native call would lose
+        /// the GC-transition or library-search behaviour: report it as a gap.
+        /// </summary>
+        private void ReportForwardedInteropAttributes(MethodDeclarationSyntax node, IMethodSymbol symbol)
+        {
+            foreach (AttributeData attribute in symbol.GetAttributes())
+            {
+                string attributeName =
+                    IsAttributeOfType(attribute, "System.Runtime.InteropServices.SuppressGCTransitionAttribute")
+                        ? "[SuppressGCTransition]"
+                        : IsAttributeOfType(attribute, "System.Runtime.InteropServices.DefaultDllImportSearchPathsAttribute")
+                            ? "[DefaultDllImportSearchPaths]"
+                            : null;
+                if (attributeName == null)
+                {
+                    continue;
+                }
+
+                string message =
+                    $"[LibraryImport] method '{symbol.Name}' carries {attributeName}; gsc's native @LibraryImport " +
+                    "applies method attributes to the managed stub, not the inner P/Invoke, so the native call " +
+                    "would silently lose it.";
+                this.context.ReportUnsupported(node, message);
+            }
+        }
+
         private void ReportUnmanagedCallConv(MethodDeclarationSyntax node, IMethodSymbol symbol)
         {
             AttributeData callConv = symbol.GetAttributes().FirstOrDefault(attribute =>

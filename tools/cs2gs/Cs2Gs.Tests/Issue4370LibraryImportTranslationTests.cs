@@ -218,6 +218,12 @@ public static partial class Native
         "[LibraryImport(\"libc\")] [return: MarshalAs(UnmanagedType.U1)] public static partial bool F(int x);",
         "[return: MarshalAs]")]
     [InlineData(
+        "[LibraryImport(\"libc\")] [SuppressGCTransition] public static partial int F(int x);",
+        "[SuppressGCTransition]")]
+    [InlineData(
+        "[LibraryImport(\"libc\")] [DefaultDllImportSearchPaths(DllImportSearchPath.System32)] public static partial int F(int x);",
+        "[DefaultDllImportSearchPaths]")]
+    [InlineData(
         "[LibraryImport(\"libc\")] public static partial int F(Handle x);",
         "[NativeMarshalling]")]
     public void UnsupportedMarshallingSurface_IsReported(string declaration, string expectedFragment)
