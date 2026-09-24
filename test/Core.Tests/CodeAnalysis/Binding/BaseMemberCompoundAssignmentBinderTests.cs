@@ -301,6 +301,73 @@ public class BaseMemberCompoundAssignmentBinderTests
     }
 
     [Fact]
+    public void BaseEventSubscription_ShadowedByDerivedEvent_SubscribesToBaseEvent()
+    {
+        // The derived class declares its own event of the same name. The
+        // subscription must reach the BASE event, not the derived one.
+        const string source = """
+            import System
+            import System.ComponentModel
+
+            open class Base {
+                event Changed EventHandler?
+                func FireBase() { Changed?.Invoke(this, EventArgs.Empty) }
+            }
+
+            class Derived : Base {
+                event Changed EventHandler?
+                func FireDerived() { Changed?.Invoke(this, EventArgs.Empty) }
+
+                func Go() {
+                    let h EventHandler = func (s object?, e EventArgs) { Console.WriteLine("base handler") }
+                    base.Changed += h
+                    this.FireDerived()
+                    this.FireBase()
+                    let unsubscribe = func () { base.Changed -= h }
+                    unsubscribe()
+                    this.FireBase()
+                    let subscribe = func () { base.Changed += h }
+                    subscribe()
+                    this.FireBase()
+                }
+            }
+
+            class Comp : Component {
+                event Disposed EventHandler?
+                func Go() {
+                    base.Disposed += func (s object?, e EventArgs) { Console.WriteLine("component disposed") }
+                    this.Dispose()
+                }
+            }
+
+            Derived().Go()
+            Comp().Go()
+            """;
+
+        AssertRuns(source, "base handler" + Environment.NewLine + "base handler" + Environment.NewLine + "component disposed");
+    }
+
+    [Fact]
+    public void ClassNamedBase_MemberAccess_KeepsTypeMeaning()
+    {
+        // `base` is contextual: a type named `base` keeps its ordinary
+        // meaning, so `base.count` is that type's static field.
+        const string source = """
+            import System
+
+            class base {
+                shared { var count int32 = 4 }
+            }
+
+            Console.WriteLine(base.count.ToString())
+            base.count = 5
+            Console.WriteLine(base.count.ToString())
+            """;
+
+        AssertRuns(source, "4" + Environment.NewLine + "5");
+    }
+
+    [Fact]
     public void BaseEventSubscription_VirtualEvent_KeepsPreviousDiagnostic()
     {
         // A virtual event would need its base accessors called non-virtually;

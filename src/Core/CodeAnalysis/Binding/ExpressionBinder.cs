@@ -2958,6 +2958,28 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Whether <paramref name="name"/> is the contextual keyword <c>base</c>:
+    /// spelled <c>base</c>, with nothing else of that name in scope. A local,
+    /// parameter, field, function, source type or imported type named
+    /// <c>base</c> keeps its ordinary meaning (<c>base.count</c> on a class
+    /// named <c>base</c> is a static field read).
+    /// </summary>
+    /// <param name="name">The receiver name.</param>
+    /// <returns><see langword="true"/> when the name means the base class.</returns>
+    private bool IsContextualBaseKeyword(NameExpressionSyntax name)
+    {
+        const string BaseText = "base";
+        if (!string.Equals(name.IdentifierToken.ValueText, BaseText, StringComparison.Ordinal)
+            || scope.TryLookupSymbol(BaseText) != null)
+        {
+            return false;
+        }
+
+        return !binderCtx.TryLookupSourceType(scope, BaseText, preferredArity: 0, function, out _, out _)
+            && !scope.TryLookupImportedClass(BaseText, declaration: null, out _);
+    }
+
+    /// <summary>
     /// The CLR base type whose <c>protected</c> static members the current
     /// binding site may reach: the imported base of the enclosing source
     /// class, or of a class that lexically contains it. Function literals use

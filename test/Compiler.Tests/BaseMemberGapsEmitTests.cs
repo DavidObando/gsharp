@@ -558,6 +558,53 @@ Console.WriteLine(Err().Go())
             new[] { "q1 a1", "h1" },
         };
 
+        // `base.E += h` / `-=` when the derived class declares a same-named
+        // event: the subscription must reach the base event's accessors.
+        yield return new object[]
+        {
+            "base-event-shadowed-by-derived-event",
+            @"
+package P
+import System
+import System.ComponentModel
+
+open class Base {
+    event Changed EventHandler?
+    func FireBase() { Changed?.Invoke(this, EventArgs.Empty) }
+}
+
+class Derived : Base {
+    event Changed EventHandler?
+    func FireDerived() { Changed?.Invoke(this, EventArgs.Empty) }
+
+    func Go() {
+        let h EventHandler = func (s object?, e EventArgs) { Console.WriteLine(""base handler"") }
+        base.Changed += h
+        this.FireDerived()
+        this.FireBase()
+        let unsubscribe = func () { base.Changed -= h }
+        unsubscribe()
+        this.FireBase()
+        let subscribe = func () { base.Changed += h }
+        subscribe()
+        this.FireBase()
+    }
+}
+
+class Comp : Component {
+    event Disposed EventHandler?
+    func Go() {
+        base.Disposed += func (s object?, e EventArgs) { Console.WriteLine(""component disposed"") }
+        this.Dispose()
+    }
+}
+
+Derived().Go()
+Comp().Go()
+",
+            new[] { "base handler", "base handler", "component disposed" },
+        };
+
         // Forwarded calls to async and iterator base methods of a generic base
         // class: the forwarder returns what the base method returns as
         // emitted (Task, Task<T>, the sequence), not the G#-declared result.

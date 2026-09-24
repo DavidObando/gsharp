@@ -39,37 +39,62 @@ internal sealed partial class ExpressionBinder
 
     /// <summary>
     /// Classifies <paramref name="name"/> on the enclosing class's base: a
-    /// source event (walking the base chain) or an imported one.
+    /// source event (walking the base chain) or an imported one, and returns
+    /// the base's own event so the subscription binds to its accessors
+    /// rather than to whatever the name means on the derived class.
     /// </summary>
     /// <param name="name">The member name after <c>base.</c>.</param>
+    /// <param name="sourceEvent">The base's source event, when it declares one.</param>
+    /// <param name="sourceOwner">The base class (in the hierarchy seen from the derived class) that declares <paramref name="sourceEvent"/>.</param>
+    /// <param name="clrEvent">The imported base's event, when the name resolves there.</param>
     /// <returns>Whether the base declares an event of that name, and whether it is virtual.</returns>
-    private BaseEventKind ClassifyBaseEvent(string name)
+    private BaseEventKind ClassifyBaseEvent(
+        string name,
+        out EventSymbol? sourceEvent,
+        out StructSymbol? sourceOwner,
+        out EventInfo? clrEvent)
     {
+        sourceEvent = null;
+        sourceOwner = null;
+        clrEvent = null;
         if (GetEffectiveThisParameter()?.Type is not StructSymbol { IsClass: true } enclosing)
         {
             return BaseEventKind.None;
         }
 
-        if (enclosing.BaseClass is { } sourceBase
-            && TypeMemberModel.TryGetEvent(sourceBase, name, out var sourceEvent))
+        if (enclosing.BaseClass is { } sourceBase)
         {
-            return sourceEvent.IsVirtual || sourceEvent.IsOverride
-                ? BaseEventKind.Virtual
-                : BaseEventKind.NonVirtual;
+            foreach (var level in sourceBase.GetHierarchy())
+            {
+                foreach (var candidate in level.Events)
+                {
+                    if (!string.Equals(candidate.Name, name, System.StringComparison.Ordinal) || candidate.IsStatic)
+                    {
+                        continue;
+                    }
+
+                    sourceEvent = candidate;
+                    sourceOwner = level;
+                    return candidate.IsVirtual || candidate.IsOverride
+                        ? BaseEventKind.Virtual
+                        : BaseEventKind.NonVirtual;
+                }
+            }
         }
 
         if (GetInheritedClrBaseType(enclosing) is { } clrBase)
         {
-            foreach (var clrEvent in ClrTypeUtilities.SafeGetEvents(
+            foreach (var candidate in ClrTypeUtilities.SafeGetEvents(
                 clrBase,
                 BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
             {
-                if (!string.Equals(clrEvent.Name, name, System.StringComparison.Ordinal))
+                if (!string.Equals(candidate.Name, name, System.StringComparison.Ordinal))
                 {
                     continue;
                 }
 
-                var add = clrEvent.AddMethod;
+                clrEvent = candidate;
+                var add = candidate.AddMethod;
                 return add != null && add.IsVirtual && !add.IsFinal
                     ? BaseEventKind.Virtual
                     : BaseEventKind.NonVirtual;
@@ -134,18 +159,21 @@ internal sealed partial class ExpressionBinder
         // (nearest base first, field before property, non-virtual accessor
         // calls). A real value named `base` keeps its ordinary meaning.
         //
-        // `base.E += handler` / `base.E -= handler` on an event the base
-        // declares binds as the same subscription through `this`: a
-        // non-virtual event has exactly one pair of accessors, so calling
-        // them through `this` is the base's own add/remove, as in C#. A
-        // virtual or overridden event is not intercepted here and keeps the
-        // diagnostic it reported before.
-        BoundExpression? baseEventReceiver = null;
+        // `base.E += handler` / `base.E -= handler` on a non-virtual event the
+        // base declares binds straight to that event's own add/remove
+        // accessors, called on `this`: a non-virtual accessor has one
+        // implementation, and naming the base's event symbol (not the name,
+        // looked up again on `this`) keeps a same-named event the derived
+        // class declares out of it, as in C#. A virtual or overridden event is
+        // not intercepted here and keeps the diagnostic it reported before.
         if (accessor.LeftPart is NameExpressionSyntax { IdentifierToken.ValueText: "base" } baseName
-            && scope.TryLookupSymbol("base") is not VariableSymbol)
+            && IsContextualBaseKeyword(baseName))
         {
+            EventSymbol? baseSourceEvent = null;
+            StructSymbol? baseSourceOwner = null;
+            EventInfo? baseClrEvent = null;
             var baseEventKind = isEventCapableOperator
-                ? ClassifyBaseEvent(eventName)
+                ? ClassifyBaseEvent(eventName, out baseSourceEvent, out baseSourceOwner, out baseClrEvent)
                 : BaseEventKind.None;
             if (baseEventKind == BaseEventKind.None)
             {
@@ -155,7 +183,19 @@ internal sealed partial class ExpressionBinder
             if (baseEventKind == BaseEventKind.NonVirtual
                 && GetEffectiveThisParameter() is { } baseEventThis)
             {
-                baseEventReceiver = new BoundVariableExpression(null, baseEventThis);
+                var baseEventReceiver = new BoundVariableExpression(null, baseEventThis);
+                if (baseSourceEvent != null && baseSourceOwner != null)
+                {
+                    var sourceEventType = baseSourceOwner.SubstituteMemberType(baseSourceEvent.Type) ?? baseSourceEvent.Type;
+                    var sourceHandler = BindEventSubscriptionHandler(syntax.Value, sourceEventType);
+                    return new BoundEventSubscriptionExpression(null, baseEventReceiver, baseSourceOwner, baseSourceEvent, sourceHandler, isAdd, sourceEventType);
+                }
+
+                if (baseClrEvent != null)
+                {
+                    var clrHandler = BindEventSubscriptionHandler(syntax.Value, MemberLookup.GetClrEventHandlerTypeSymbol(baseClrEvent));
+                    return new BoundClrEventSubscriptionExpression(null, baseEventReceiver, baseClrEvent, clrHandler, isAdd);
+                }
             }
         }
 
@@ -358,7 +398,7 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            boundReceiver = baseEventReceiver ?? BindExpression(accessor.LeftPart);
+            boundReceiver = BindExpression(accessor.LeftPart);
             if (boundReceiver.Type == TypeSymbol.Error)
             {
                 return new BoundErrorExpression(null);

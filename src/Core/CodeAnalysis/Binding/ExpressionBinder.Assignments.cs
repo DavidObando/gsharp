@@ -783,7 +783,7 @@ internal sealed partial class ExpressionBinder
         // base class implementation of property `Prop`, mirroring C#
         // `base.Prop = value`. `base` is a contextual keyword: only intercepted
         // when it is not a real value in scope.
-        if (receiverName == "base" && !(scope.TryLookupSymbol(receiverName) is VariableSymbol))
+        if (IsContextualBaseKeyword(new NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver)))
         {
             var baseValue = BindExpression(syntax.Value);
             return BindBaseClassPropertyWrite(
