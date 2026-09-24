@@ -205,6 +205,72 @@ public class BaseMemberCompoundAssignmentBinderTests
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0125");
     }
 
+    [Fact]
+    public void BaseEventSubscription_NonVirtualEvent_BindsAndRuns()
+    {
+        // `base.E += h` / `base.E -= h` on a non-virtual event calls the
+        // base's own add/remove accessors, as in C#, directly and from a
+        // function literal. Component.Disposed is an imported event.
+        const string source = """
+            import System
+            import System.ComponentModel
+
+            open class Base {
+                event Changed EventHandler?
+                func Fire() {
+                    Changed?.Invoke(this, EventArgs.Empty)
+                }
+            }
+
+            class Derived : Base {
+                func Go() {
+                    let h EventHandler = func (s object?, e EventArgs) { Console.WriteLine("handler") }
+                    let subscribe = func () { base.Changed += h }
+                    subscribe()
+                    this.Fire()
+                    base.Changed -= h
+                    this.Fire()
+                }
+            }
+
+            class Part : Component {
+                func Go() {
+                    base.Disposed += func (s object?, e EventArgs) { Console.WriteLine("disposed") }
+                    this.Dispose()
+                }
+            }
+
+            Derived().Go()
+            Part().Go()
+            """;
+
+        AssertRuns(source, "handler" + Environment.NewLine + "disposed");
+    }
+
+    [Fact]
+    public void BaseEventSubscription_VirtualEvent_KeepsPreviousDiagnostic()
+    {
+        // A virtual event would need its base accessors called non-virtually;
+        // that is not supported, so the shape is not intercepted and reports
+        // what it reported before.
+        const string source = """
+            import System
+
+            open class Base {
+                open event Changed EventHandler?
+            }
+
+            class Derived : Base {
+                func Go() {
+                    base.Changed += func (s object?, e EventArgs) { }
+                }
+            }
+            """;
+
+        var result = EmittedOracle.Evaluate(source);
+        Assert.Contains(result.Diagnostics, d => d.Id == "GS0125");
+    }
+
     private static void AssertRuns(string source, string expected)
     {
         var result = EmittedOracle.Evaluate(source);

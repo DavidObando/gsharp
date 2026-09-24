@@ -24,6 +24,61 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
 {
+    /// <summary>What a base class declares under an event-shaped name.</summary>
+    private enum BaseEventKind
+    {
+        /// <summary>No event: the name is a field, property or nothing.</summary>
+        None,
+
+        /// <summary>An event whose accessors are not virtual.</summary>
+        NonVirtual,
+
+        /// <summary>A virtual or overridden event, whose base accessors would need a non-virtual call.</summary>
+        Virtual,
+    }
+
+    /// <summary>
+    /// Classifies <paramref name="name"/> on the enclosing class's base: a
+    /// source event (walking the base chain) or an imported one.
+    /// </summary>
+    /// <param name="name">The member name after <c>base.</c>.</param>
+    /// <returns>Whether the base declares an event of that name, and whether it is virtual.</returns>
+    private BaseEventKind ClassifyBaseEvent(string name)
+    {
+        if (GetEffectiveThisParameter()?.Type is not StructSymbol { IsClass: true } enclosing)
+        {
+            return BaseEventKind.None;
+        }
+
+        if (enclosing.BaseClass is { } sourceBase
+            && TypeMemberModel.TryGetEvent(sourceBase, name, out var sourceEvent))
+        {
+            return sourceEvent.IsVirtual || sourceEvent.IsOverride
+                ? BaseEventKind.Virtual
+                : BaseEventKind.NonVirtual;
+        }
+
+        if (GetInheritedClrBaseType(enclosing) is { } clrBase)
+        {
+            foreach (var clrEvent in ClrTypeUtilities.SafeGetEvents(
+                clrBase,
+                BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic))
+            {
+                if (!string.Equals(clrEvent.Name, name, System.StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var add = clrEvent.AddMethod;
+                return add != null && add.IsVirtual && !add.IsFinal
+                    ? BaseEventKind.Virtual
+                    : BaseEventKind.NonVirtual;
+            }
+        }
+
+        return BaseEventKind.None;
+    }
+
     private BoundExpression BindEventSubscriptionExpression(EventSubscriptionExpressionSyntax syntax)
     {
         // Bare identifier `EventName += handler` / `EventName -= handler`:
@@ -78,10 +133,30 @@ internal sealed partial class ExpressionBinder
         // two paths so the read and the write resolve the member identically
         // (nearest base first, field before property, non-virtual accessor
         // calls). A real value named `base` keeps its ordinary meaning.
+        //
+        // `base.E += handler` / `base.E -= handler` on an event the base
+        // declares binds as the same subscription through `this`: a
+        // non-virtual event has exactly one pair of accessors, so calling
+        // them through `this` is the base's own add/remove, as in C#. A
+        // virtual or overridden event is not intercepted here and keeps the
+        // diagnostic it reported before.
+        BoundExpression? baseEventReceiver = null;
         if (accessor.LeftPart is NameExpressionSyntax { IdentifierToken.ValueText: "base" } baseName
             && scope.TryLookupSymbol("base") is not VariableSymbol)
         {
-            return BindBaseMemberCompoundAssignment(baseName, eventNameSyntax, syntax, baseOpSyntaxKind);
+            var baseEventKind = isEventCapableOperator
+                ? ClassifyBaseEvent(eventName)
+                : BaseEventKind.None;
+            if (baseEventKind == BaseEventKind.None)
+            {
+                return BindBaseMemberCompoundAssignment(baseName, eventNameSyntax, syntax, baseOpSyntaxKind);
+            }
+
+            if (baseEventKind == BaseEventKind.NonVirtual
+                && GetEffectiveThisParameter() is { } baseEventThis)
+            {
+                baseEventReceiver = new BoundVariableExpression(null, baseEventThis);
+            }
         }
 
         // Resolve receiver: either an ImportedClassSymbol (static event) or
@@ -283,7 +358,7 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            boundReceiver = BindExpression(accessor.LeftPart);
+            boundReceiver = baseEventReceiver ?? BindExpression(accessor.LeftPart);
             if (boundReceiver.Type == TypeSymbol.Error)
             {
                 return new BoundErrorExpression(null);

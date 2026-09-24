@@ -465,6 +465,47 @@ Console.WriteLine(d.GoAsync().Result)
             new[] { "base 3 baseG 4u", "base s", "True 5", "True 5" },
         };
 
+        // `base.E += h` / `base.E -= h` on non-virtual source and imported
+        // events, including from a function literal.
+        yield return new object[]
+        {
+            "base-event-subscription",
+            @"
+package P
+import System
+import System.ComponentModel
+
+open class Base {
+    event Changed EventHandler?
+    func Fire() {
+        Changed?.Invoke(this, EventArgs.Empty)
+    }
+}
+
+class Derived : Base {
+    func Go() {
+        let h EventHandler = func (s object?, e EventArgs) { Console.WriteLine(""handler"") }
+        let subscribe = func () { base.Changed += h }
+        subscribe()
+        this.Fire()
+        base.Changed -= h
+        this.Fire()
+    }
+}
+
+class Part : Component {
+    func Go() {
+        base.Disposed += func (s object?, e EventArgs) { Console.WriteLine(""disposed"") }
+        this.Dispose()
+    }
+}
+
+Derived().Go()
+Part().Go()
+",
+            new[] { "handler", "disposed" },
+        };
+
         // All three gaps in the shape the [GeneratedRegex] output takes after
         // cs2gs: a Regex subclass validating its timeout through the
         // protected static Regex.ValidateMatchTimeout, and a RegexRunner
