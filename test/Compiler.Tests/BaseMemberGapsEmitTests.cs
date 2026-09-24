@@ -727,6 +727,43 @@ Console.WriteLine(S[int32]().Go(""s"", 3))
             new[] { "sbase s | sbase s | sbase.M 3 | sbase s" },
         };
 
+        // A dependent bound closed over a VALUE type (`M[U T]` reached through
+        // `Derived : Base[int32]`) gives the forwarder's clone the constraint
+        // `U : System.Int32`. C# source cannot spell that, but ECMA-335
+        // allows any type as a generic-parameter constraint, and Roslyn emits
+        // the same `<>n__0<U> where U : System.Int32` for the equivalent C#
+        // lambda / async base call. Pinned so it stays verifiable and runs.
+        yield return new object[]
+        {
+            "forwarded-dependent-bound-closed-over-value-type",
+            @"
+package P
+import System
+import System.Threading.Tasks
+
+open class Base[T] {
+    open func M[U T](u U) string { return ""base "" + u.ToString() }
+}
+
+class Derived : Base[int32] {
+    func Go() string {
+        let f = () -> base.M[int32](5)
+        let g = () -> base.M(6)
+        return f() + "" | "" + g()
+    }
+
+    async func GoAsync() Task[string] {
+        await Task.Yield()
+        return base.M(7)
+    }
+}
+
+Console.WriteLine(Derived().Go())
+Console.WriteLine(Derived().GoAsync().Result)
+",
+            new[] { "base 5 | base 6", "base 7" },
+        };
+
         // A direct call and a method group of the same base method can observe
         // different return types (a `() -> object` group over a `string`
         // method, a `() -> Task` group over a `Task<int32>` one). Each gets
