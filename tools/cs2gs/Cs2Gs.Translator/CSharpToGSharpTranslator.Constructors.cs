@@ -1130,20 +1130,18 @@ public sealed partial class CSharpToGSharpTranslator
                 .Select(syntaxReference => syntaxReference.GetSyntax())
                 .OfType<ParameterSyntax>()
                 .FirstOrDefault();
-            List<AttributeUse> attributes = parameterSyntax != null
-                ? this.MapAttributes(parameterSyntax.AttributeLists)
-                : null;
 
             // Issue #4370: gsc takes a [LibraryImport] string's encoding from
             // the import's StringMarshalling (a string @MarshalAs is GS0360);
             // MapLibraryImportMethodAttributes folds it in there.
-            if (attributes != null
-                && symbol.Type.SpecialType == SpecialType.System_String
+            bool isLibraryImportString = symbol.Type.SpecialType == SpecialType.System_String
                 && symbol.ContainingSymbol is IMethodSymbol importMethod
-                && IsLibraryImportDefinition(importMethod))
-            {
-                attributes = attributes.Where(attribute => !IsMarshalAsAttributeName(attribute.Name)).ToList();
-            }
+                && IsLibraryImportDefinition(importMethod);
+            List<AttributeUse> attributes = parameterSyntax == null
+                ? null
+                : isLibraryImportString
+                    ? this.MapAttributesWithoutMarshalAs(parameterSyntax.AttributeLists)
+                    : this.MapAttributes(parameterSyntax.AttributeLists);
 
             // C# emits no FieldMarshal row for the default P/Invoke bool
             // contract, but the CLR marshaler still treats bool as a four-byte

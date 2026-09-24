@@ -43,8 +43,21 @@ public sealed partial class CSharpToGSharpTranslator
 
     private const string GeneratedRegexAttributeName = "System.Text.RegularExpressions.GeneratedRegexAttribute";
 
+    private const string MarshalAsAttributeName = "System.Runtime.InteropServices.MarshalAsAttribute";
+
     private static bool HasAttribute(ISymbol symbol, string attributeName) =>
-        symbol.GetAttributes().Any(attribute => attribute.AttributeClass?.ToDisplayString() == attributeName);
+        symbol.GetAttributes().Any(attribute => IsAttributeOfType(attribute, attributeName));
+
+    // AttributeData carries the RESOLVED attribute class, so its fully
+    // qualified name identifies the type independent of how the source spelled
+    // it (an alias, or a same-named attribute in another namespace).
+    private static bool IsAttributeOfType(AttributeData attribute, string metadataName)
+    {
+        INamedTypeSymbol attributeClass = attribute.AttributeClass;
+        return attributeClass != null
+            && attributeClass.TypeKind != TypeKind.Error
+            && attributeClass.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == "global::" + metadataName;
+    }
 
     /// <summary>
     /// Whether <paramref name="method"/> is the definition part of a C#
@@ -59,13 +72,7 @@ public sealed partial class CSharpToGSharpTranslator
 
     private static AttributeData FindLibraryImportAttribute(IMethodSymbol method) =>
         method.GetAttributes().FirstOrDefault(attribute =>
-            attribute.AttributeClass?.ToDisplayString() == LibraryImportAttributeName);
-
-    private static bool IsMarshalAsAttributeName(string name)
-    {
-        string simpleName = name.Substring(name.LastIndexOf('.') + 1);
-        return simpleName == "MarshalAs" || simpleName == "MarshalAsAttribute";
-    }
+            IsAttributeOfType(attribute, LibraryImportAttributeName));
 
     /// <summary>
     /// The StringMarshalling (1 = Utf8, 2 = Utf16) every string parameter and
@@ -119,7 +126,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             string position = stringPositions[i];
             AttributeData marshalAs = stringAttributes[i].FirstOrDefault(attribute =>
-                attribute.AttributeClass?.ToDisplayString() == "System.Runtime.InteropServices.MarshalAsAttribute");
+                IsAttributeOfType(attribute, MarshalAsAttributeName));
             if (marshalAs == null)
             {
                 if (attributeEncoding == 1 || attributeEncoding == 2)
@@ -172,14 +179,78 @@ public sealed partial class CSharpToGSharpTranslator
         return problem == null && encodings.Count == 1 ? encodings.First() : 0;
     }
 
-    private static bool IsLibraryImportAttributeName(string name)
-    {
-        string simpleName = name.Substring(name.LastIndexOf('.') + 1);
-        return simpleName == "LibraryImport" || simpleName == "LibraryImportAttribute";
-    }
-
     private sealed partial class DeclarationVisitor
     {
+        /// <summary>
+        /// Maps <paramref name="attributeLists"/> exactly as
+        /// <c>MapAttributes</c> does and records, for each mapped attribute,
+        /// the attribute class it RESOLVES to in C# (null when unresolved).
+        /// P/Invoke rewrites decide by that type, never by the rendered name,
+        /// which an alias (<c>using MA = ...MarshalAsAttribute;</c>) or an
+        /// unrelated same-named attribute would fool.
+        /// </summary>
+        /// <param name="attributeLists">The C# attribute lists.</param>
+        /// <param name="resolvedTypes">Receives one entry per returned attribute.</param>
+        /// <returns>The mapped attributes.</returns>
+        private List<AttributeUse> MapAttributesWithTypes(
+            IEnumerable<AttributeListSyntax> attributeLists,
+            List<INamedTypeSymbol> resolvedTypes)
+        {
+            var mapped = new List<AttributeUse>();
+            foreach (AttributeListSyntax list in attributeLists)
+            {
+                List<AttributeUse> listMapped = this.MapAttributes(new[] { list });
+                var listTypes = new List<INamedTypeSymbol>();
+                foreach (AttributeSyntax attribute in list.Attributes)
+                {
+                    using IDisposable modelScope = this.context.UseSemanticModelFor(attribute.SyntaxTree);
+                    this.ResolveAttributeType(attribute, out INamedTypeSymbol attributeType, out _);
+                    listTypes.Add(attributeType);
+                }
+
+                for (int i = 0; i < listMapped.Count; i++)
+                {
+                    mapped.Add(listMapped[i]);
+                    resolvedTypes.Add(listMapped.Count == listTypes.Count ? listTypes[i] : null);
+                }
+            }
+
+            return mapped;
+        }
+
+        private bool IsWellKnownAttribute(INamedTypeSymbol attributeType, string metadataName)
+        {
+            INamedTypeSymbol wellKnown = this.context.Compilation.GetTypeByMetadataName(metadataName);
+            return attributeType != null
+                && wellKnown != null
+                && SymbolEqualityComparer.Default.Equals(attributeType.OriginalDefinition, wellKnown);
+        }
+
+        /// <summary>
+        /// Issue #4370: a <c>[LibraryImport]</c> string parameter's attributes
+        /// without its <c>[MarshalAs]</c> (identified by type), which
+        /// <c>MapLibraryImportMethodAttributes</c> folds into the import's
+        /// <c>StringMarshalling</c> — gsc rejects a string <c>@MarshalAs</c>
+        /// under <c>@LibraryImport</c> (GS0360).
+        /// </summary>
+        /// <param name="attributeLists">The parameter's attribute lists.</param>
+        /// <returns>The mapped attributes, <c>[MarshalAs]</c> removed.</returns>
+        private List<AttributeUse> MapAttributesWithoutMarshalAs(IEnumerable<AttributeListSyntax> attributeLists)
+        {
+            var types = new List<INamedTypeSymbol>();
+            List<AttributeUse> mapped = this.MapAttributesWithTypes(attributeLists, types);
+            var result = new List<AttributeUse>(mapped.Count);
+            for (int i = 0; i < mapped.Count; i++)
+            {
+                if (!this.IsWellKnownAttribute(types[i], MarshalAsAttributeName))
+                {
+                    result.Add(mapped[i]);
+                }
+            }
+
+            return result;
+        }
+
         /// <summary>
         /// Translates a C# <c>[LibraryImport]</c> partial definition to the
         /// native body-less G# <c>@LibraryImport</c> declaration, after
@@ -213,7 +284,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>The mapped attributes.</returns>
         private List<AttributeUse> MapLibraryImportMethodAttributes(MethodDeclarationSyntax node, IMethodSymbol symbol)
         {
-            List<AttributeUse> mapped = this.MapAttributes(node.AttributeLists);
+            var mappedTypes = new List<INamedTypeSymbol>();
+            List<AttributeUse> mapped = this.MapAttributesWithTypes(node.AttributeLists, mappedTypes);
             AttributeData data = FindLibraryImportAttribute(symbol);
             if (data == null)
             {
@@ -233,14 +305,18 @@ public sealed partial class CSharpToGSharpTranslator
             bool stringReturn = symbol.ReturnType.SpecialType == SpecialType.System_String;
 
             var result = new List<AttributeUse>(mapped.Count);
-            foreach (AttributeUse attribute in mapped)
+            for (int index = 0; index < mapped.Count; index++)
             {
-                if (attribute.Target == "return" && stringReturn && IsMarshalAsAttributeName(attribute.Name))
+                AttributeUse attribute = mapped[index];
+                INamedTypeSymbol attributeType = mappedTypes[index];
+                if (attribute.Target == "return"
+                    && stringReturn
+                    && this.IsWellKnownAttribute(attributeType, MarshalAsAttributeName))
                 {
                     continue;
                 }
 
-                if (attribute.Target != null || !IsLibraryImportAttributeName(attribute.Name))
+                if (attribute.Target != null || !this.IsWellKnownAttribute(attributeType, LibraryImportAttributeName))
                 {
                     result.Add(attribute);
                     continue;
@@ -328,7 +404,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.ReportCustomMarshaller(node, returnSubject, returnAttributes, symbol.ReturnType);
 
             AttributeData returnMarshalAs = returnAttributes.FirstOrDefault(attribute =>
-                attribute.AttributeClass?.ToDisplayString() == "System.Runtime.InteropServices.MarshalAsAttribute");
+                IsAttributeOfType(attribute, MarshalAsAttributeName));
             if (returnMarshalAs != null
                 && symbol.ReturnType.SpecialType != SpecialType.System_String
                 && !(returnMarshalAs.ConstructorArguments.Length == 1
@@ -367,8 +443,7 @@ public sealed partial class CSharpToGSharpTranslator
         private void ReportUnmanagedCallConv(MethodDeclarationSyntax node, IMethodSymbol symbol)
         {
             AttributeData callConv = symbol.GetAttributes().FirstOrDefault(attribute =>
-                attribute.AttributeClass?.ToDisplayString() ==
-                    "System.Runtime.InteropServices.UnmanagedCallConvAttribute");
+                IsAttributeOfType(attribute, "System.Runtime.InteropServices.UnmanagedCallConvAttribute"));
             if (callConv == null)
             {
                 return;
@@ -379,7 +454,8 @@ public sealed partial class CSharpToGSharpTranslator
                 && named.Value.Kind == TypedConstantKind.Array
                 && named.Value.Values.All(value =>
                     value.Value is ITypeSymbol type
-                    && type.ToDisplayString() == "System.Runtime.CompilerServices.CallConvCdecl"));
+                    && type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat)
+                        == "global::System.Runtime.CompilerServices.CallConvCdecl"));
             if (cdeclOnly)
             {
                 string warning =
@@ -408,8 +484,7 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol type)
         {
             if (attributes.Any(attribute =>
-                attribute.AttributeClass?.ToDisplayString() ==
-                    "System.Runtime.InteropServices.Marshalling.MarshalUsingAttribute"))
+                IsAttributeOfType(attribute, "System.Runtime.InteropServices.Marshalling.MarshalUsingAttribute")))
             {
                 string message =
                     $"{subject} carries [MarshalUsing]; gsc's native @LibraryImport has no custom marshallers " +
@@ -419,8 +494,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol marshalledType = type is IArrayTypeSymbol array ? array.ElementType : type;
             if (marshalledType != null && marshalledType.GetAttributes().Any(attribute =>
-                attribute.AttributeClass?.ToDisplayString() ==
-                    "System.Runtime.InteropServices.Marshalling.NativeMarshallingAttribute"))
+                IsAttributeOfType(attribute, "System.Runtime.InteropServices.Marshalling.NativeMarshallingAttribute")))
             {
                 string message =
                     $"{subject} has type '{marshalledType.Name}', which declares a [NativeMarshalling] custom " +
