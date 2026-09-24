@@ -507,6 +507,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return;
             }
 
+            // An omitted or empty `CallConvs` selects the platform default,
+            // exactly what gsc's @LibraryImport uses, so it needs no warning.
+            bool hasCallConvs = callConv.NamedArguments.Any(named =>
+                named.Key == "CallConvs"
+                && !(named.Value.Kind == TypedConstantKind.Array && named.Value.Values.IsDefaultOrEmpty));
+            if (!hasCallConvs)
+            {
+                return;
+            }
+
             bool cdeclOnly = callConv.NamedArguments.All(named =>
                 named.Key == "CallConvs"
                 && named.Value.Kind == TypedConstantKind.Array
