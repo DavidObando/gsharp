@@ -251,14 +251,7 @@ internal sealed class ReaderAgreementHarness
         }
         catch (ArgumentException)
         {
-            return false;
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
-        catch (TypeLoadException)
-        {
+            // The one genuine skip: the argument violates a constraint.
             return false;
         }
     }
@@ -279,14 +272,7 @@ internal sealed class ReaderAgreementHarness
         }
         catch (ArgumentException)
         {
-            return false;
-        }
-        catch (NotSupportedException)
-        {
-            return false;
-        }
-        catch (TypeLoadException)
-        {
+            // The one genuine skip: the argument violates a constraint.
             return false;
         }
     }
@@ -345,8 +331,13 @@ internal sealed class ReaderAgreementHarness
 
             return true;
         }
-        catch (Exception exception) when (exception is ArgumentException or NotSupportedException or TypeLoadException or System.IO.FileNotFoundException or InvalidOperationException)
+        catch (Exception exception) when (exception is ArgumentException or InvalidOperationException)
         {
+            // A constraint the argument cannot satisfy (MakeGenericType
+            // rejecting the substituted constraint). Anything else — an
+            // unresolvable constraint type, say — is not a constraint answer
+            // but a hole in the corpus, and propagates to VisitMember, which
+            // counts it as an enumeration error.
             return false;
         }
 

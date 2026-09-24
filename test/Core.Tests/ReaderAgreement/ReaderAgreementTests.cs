@@ -370,3 +370,84 @@ public sealed class CscFixtureReaderAgreementTests : ReaderAgreementTestBase, ID
         return path;
     }
 }
+
+/// <summary>
+/// The harness's own guard: a corpus hole is an error, not a skip. A generic
+/// whose constraint names a type from an assembly the resolver was not given
+/// cannot be closed or read by any reader; that must surface as an
+/// enumeration error rather than a silently skipped closing.
+/// </summary>
+public sealed class ReaderAgreementHarnessGuardTests : IDisposable
+{
+    private readonly string directory;
+
+    /// <summary>Initializes a new instance of the <see cref="ReaderAgreementHarnessGuardTests"/> class.</summary>
+    public ReaderAgreementHarnessGuardTests()
+    {
+        this.directory = Path.Combine(
+            AppContext.BaseDirectory,
+            nameof(ReaderAgreementHarnessGuardTests),
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(this.directory);
+    }
+
+    /// <inheritdoc/>
+    public void Dispose()
+    {
+        try
+        {
+            Directory.Delete(this.directory, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
+    }
+
+    /// <summary>An unresolvable constraint type trips the enumeration-error guard.</summary>
+    [Fact]
+    public void An_Unresolvable_Constraint_Type_Is_An_Enumeration_Error()
+    {
+        var basePath = this.Emit("GuardBase", "namespace Guard { public class Base { } }", Array.Empty<string>());
+        var genericPath = this.Emit(
+            "GuardGeneric",
+            "namespace Guard { public class Gen<T> where T : Base { public T Value; public T Get() => Value; } }",
+            new[] { basePath });
+
+        // Only the generic's own assembly: `Base` cannot be resolved.
+        using var resolver = ReferenceResolver.WithReferences(new[] { genericPath });
+        var corpus = resolver.Assemblies
+            .Where(a => a.GetName().Name == "GuardGeneric")
+            .ToList();
+        Assert.NotEmpty(corpus);
+
+        var harness = new ReaderAgreementHarness(resolver, "guard");
+        harness.Run(corpus);
+
+        Assert.True(harness.EnumerationErrorCount > 0, "an unresolvable constraint must count as an enumeration error");
+    }
+
+    private string Emit(string assemblyName, string source, string[] extraReferences)
+    {
+        var references = ((AppContext.GetData("TRUSTED_PLATFORM_ASSEMBLIES") as string)
+                ?.Split(Path.PathSeparator) ?? Array.Empty<string>())
+            .Where(File.Exists)
+            .Concat(extraReferences)
+            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            assemblyName,
+            new[] { CSharpSyntaxTree.ParseText(source) },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var path = Path.Combine(this.directory, assemblyName + ".dll");
+        using (var stream = File.Create(path))
+        {
+            var emit = compilation.Emit(stream);
+            Assert.True(emit.Success, string.Join(Environment.NewLine, emit.Diagnostics));
+        }
+
+        return path;
+    }
+}
