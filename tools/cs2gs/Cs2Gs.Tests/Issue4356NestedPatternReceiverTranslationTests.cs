@@ -261,6 +261,71 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
         Assert.Equal("False,True;False,True;-1,10", CompileAndRun(printed, "C.Run()").Trim());
     }
 
+    /// <summary>
+    /// A typed switch arm whose nested subpattern declares a designation the
+    /// arm body REASSIGNS (<c>case Rec { P: { X: 0 } p }: p = …</c>). A
+    /// reassigned binder needs a mutable capture of its matched value; the
+    /// nested-subpattern path used to record it as an ordinary binding, and
+    /// since a direct write does not go through the binding replacement, the
+    /// emitted assignment named an undeclared <c>p</c>.
+    /// </summary>
+    [Fact]
+    public void TypedSwitchArm_ReassignedNestedDesignation_IsMutableCapture()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System;
+
+            namespace Sample;
+
+            public sealed class Inner
+            {
+                public int X;
+            }
+
+            public abstract class Node
+            {
+            }
+
+            public sealed class Rec : Node
+            {
+                public Inner? P;
+            }
+
+            public static class C
+            {
+                public static int F(Node n)
+                {
+                    switch (n)
+                    {
+                        case Rec { P: { X: 0 } p }:
+                            object matched = p;
+                            p = new Inner { X = 5 };
+                            return matched != null ? p.X : 0;
+                        default:
+                            return -1;
+                    }
+                }
+
+                // The switch-EXPRESSION arm form of the same shape.
+                public static int G(Node n) => n switch
+                {
+                    Rec { P: { X: 0 } p } => (p = new Inner { X = 7 }).X,
+                    _ => -1,
+                };
+
+                public static void Run()
+                {
+                    Console.WriteLine(
+                        F(new Rec()) + "," + F(new Rec { P = new Inner() }) + ";" +
+                        G(new Rec()) + "," + G(new Rec { P = new Inner() }));
+                }
+            }
+            """);
+
+        Assert.Equal("-1,5;-1,7", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
     private static string CompileAndRun(string printed, string callExpression)
     {
         string? compiler = FindCompiler();

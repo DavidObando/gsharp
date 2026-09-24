@@ -2318,7 +2318,8 @@ public sealed partial class CSharpToGSharpTranslator
                     memberType,
                     isNestedPatternMember: true),
                 bindings,
-                guards);
+                guards,
+                mutableBindings);
         }
 
         private static string LowerCamel(string name)
