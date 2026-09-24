@@ -243,15 +243,35 @@ the readers to each other.
 A new internal static class, `NullabilityImportRule`
 (`src/Core/CodeAnalysis/Symbols/NullabilityImportRule.cs`), owns the single
 decision *"a position whose declaration is classified as S, substituted (or not)
-with argument A, becomes which type?"*.
+with argument A, gets which reference nullability?"*.
+
+The rule is **representation-neutral**: its core neither accepts nor returns a
+`TypeSymbol`, because its two consumers use unrelated type models — gsc's
+`TypeSymbol` hierarchy, and cs2gs's `GTypeReference` AST
+(`tools/cs2gs/Cs2Gs.CodeModel/Ast/GTypeReference.cs`), whose printer represents
+only `IsNullable` and has no platform wrapper, since `T!` is unspellable in
+ordinary G# source. Each type model gets a thin *applier* over the shared
+decision; the decision itself exists once.
 
 ```csharp
+internal enum ImportedReferenceNullability
+{
+    Unchanged,   // value type, or an open slot whose argument speaks for itself
+    NotNull,     // T
+    Nullable,    // T?
+    Platform,    // T!
+}
+
 internal static class NullabilityImportRule
 {
-    // A concrete (non-generic-parameter) reference position.
-    internal static TypeSymbol ApplyConcrete(TypeSymbol baseSymbol, ClrNullabilityState state);
+    // The shared decision — no type model in the signature.
+    internal static ImportedReferenceNullability DecideConcrete(
+        ClrNullabilityState state, bool isValueType);
+    internal static ImportedReferenceNullability DecideOpenSlot(
+        ClrNullabilityState declaredState, bool argumentIsValueType);
 
-    // An open type-parameter slot of the declaration, substituted with `argument`.
+    // gsc's applier over TypeSymbol (Core).
+    internal static TypeSymbol ApplyConcrete(TypeSymbol baseSymbol, ClrNullabilityState state);
     internal static TypeSymbol ApplyOpenSlot(TypeSymbol argument, ClrNullabilityState declaredState);
 }
 ```
@@ -261,11 +281,21 @@ internal static class NullabilityImportRule
   `ClrNullability.ClassifyFlag`/`ClassifyPosition` (unchanged, Layer 0); cs2gs
   reaches one through a thin `NullableAnnotation` → `ClrNullabilityState` adapter
   (`None` → `Oblivious`, `NotAnnotated` → `NotAnnotated`, `Annotated` →
-  `Annotated`). Each side owns only its adapter; the rule is shared.
-- `ApplyConcrete` is ADR-0186 §2's table: `NotAnnotated` → `T`, `Annotated` →
-  `T?`, `Oblivious` → `T!` (value types unchanged in every row).
-- `ApplyOpenSlot` is ADR-0186 §2's carve-out plus owner decision 1 below: an open
-  slot's argument speaks for itself unless the declaration says `Annotated`.
+  `Annotated`). Each side owns only its input adapter and its applier; the
+  decision is shared.
+- `DecideConcrete` is ADR-0186 §2's table: `NotAnnotated` → `NotNull`,
+  `Annotated` → `Nullable`, `Oblivious` → `Platform`; a value type is
+  `Unchanged` in every row.
+- `DecideOpenSlot` is ADR-0186 §2's carve-out plus owner decision 1 below: an
+  open slot's argument speaks for itself (`Unchanged`) unless the declaration
+  says `Annotated` **and** the argument is a reference type (`Nullable`).
+- gsc's `ApplyConcrete`/`ApplyOpenSlot` map the decision onto `TypeSymbol`
+  (`Nullable` → `NullableTypeSymbol.Get`, `Platform` → `PlatformTypeSymbol.Get`).
+  cs2gs's applier (Phase 5) maps it onto `GTypeReference`: `Nullable` →
+  `IsNullable = true`; `NotNull` and `Unchanged` → the plain spelling;
+  `Platform` → the plain spelling, with the position reported to cs2gs's
+  existing forgiveness/bridging logic as oblivious — the same meaning, expressed
+  in the only form cs2gs's output language has for it.
 - **Platform-types semantics only** (owner decision 2). There is no
   `NullabilityOptions` branch in this class, and none may be added.
   `ClrNullability.SymbolForState`'s existing dual-mode branch is left for #4372 to
@@ -309,9 +339,8 @@ reference nullability?"*. New members on `TypeSymbol`
   After this, `T?!` and `T!?` are both unconstructible.
 - The wrapper classes remain the *representation*; they stop being the
   *interface*. Outside the query API's own implementation, the two factories, the
-  Layer 1 walkers, and code whose job is the representation itself (display,
-  signature encoding, the emitter's `Nullable<V>` lowering), code does not test
-  for them.
+  Layer 1 walkers' structure reads, and code whose job is the representation
+  itself (display, signature/metadata encoding), code does not test for them.
 
 ### 3. Enforcement: analyzers, not reviews
 
@@ -321,14 +350,26 @@ Both choke points are enforced by live diagnostics in
 analyzer (`OutputItemType="Analyzer"`), so the rules fire in every Core build and
 in the IDE.
 
-- **GSA0007 — producer funnel.** Outside `NullabilityImportRule`, the Layer 1
-  walkers and the two factories' own types, a `NullableTypeSymbol.Get` /
-  `PlatformTypeSymbol.Get` whose argument derives from a CLR signature position
-  (`ReturnType`, `ParameterType`, `PropertyType`, `FieldType`,
-  `EventHandlerType`, `GetGenericArguments()`), and a `FromClrType` /
-  `MapOpenClrTypeToSymbolic` on such a position whose result is not passed to a
-  funnel member, are reported. Exemption is by containing type, exactly as
-  `ReflectionTypeComparisonAnalyzer.IsInsideExemptType` exempts
+- **GSA0007 — producer funnel.** Two clauses.
+  1. *Inside the Layer 1 walkers' types* (`ClrNullability`,
+     `NullableFlagsBuilder`, `NullabilityAnnotatedTypeSymbol`), **any** direct
+     `NullableTypeSymbol.Get` / `PlatformTypeSymbol.Get` call is reported. The
+     walkers are where `c478e44ab`, `ea81a944f` and #4361 happened, so they are
+     the code the funnel exists to police, not code it exempts; each classified
+     position they resolve goes through `NullabilityImportRule`. (A walker that
+     needs a wrapper for a reason other than a classified position — rebuilding
+     a structure it has already decided — calls a named `NullabilityImportRule`
+     member for that too.)
+  2. *Everywhere else in Core*, a `NullableTypeSymbol.Get` /
+     `PlatformTypeSymbol.Get` whose argument derives from a CLR signature
+     position (`ReturnType`, `ParameterType`, `PropertyType`, `FieldType`,
+     `EventHandlerType`, `GetGenericArguments()`), and a `FromClrType` /
+     `MapOpenClrTypeToSymbolic` on such a position whose result is not passed to
+     a funnel member, are reported.
+
+  The only exempt types are `NullabilityImportRule` itself and the two wrapper
+  types whose factories are being called — exemption by containing type, exactly
+  as `ReflectionTypeComparisonAnalyzer.IsInsideExemptType` exempts
   `ClrTypeUtilities`.
 - **GSA0008 — consumer query.** An `is`/`as`/type-pattern/`switch` arm on
   `NullableTypeSymbol`, `PlatformTypeSymbol` or `NullabilityAnnotatedTypeSymbol`
@@ -435,8 +476,10 @@ ADR-0186's steps did.
 
 ### Phase 1 — the rule function, the agreement test, and two Layer 0/6 fixes
 
-- Add `NullabilityImportRule` (`ApplyConcrete`, `ApplyOpenSlot`) with decision
-  1's open-slot semantics.
+- Add `ImportedReferenceNullability` and `NullabilityImportRule` — the
+  representation-neutral `DecideConcrete`/`DecideOpenSlot` and gsc's
+  `ApplyConcrete`/`ApplyOpenSlot` appliers — with decision 1's open-slot
+  semantics.
 - Route the three walkers' per-position decisions through it:
   `ClrNullability.SymbolFromFlagsOffset`, `ClrNullability.ProjectNullableFlags`
   (its `layout.IsGenericParameter` arm, ~line 972, becomes a call to
@@ -493,14 +536,21 @@ ADR-0186's steps did.
   type-level `IsStatedNullable` test; the bound-node kind stays only where it is
   answering a question about the node, not about nullability.
 - Migrate **every** Layer 4 site (503 wrapper-test occurrences in 80 files at
-  `7a44ca033`), the emitter's value-nullable tests included, and add GSA0008 with its type-level exempt set. The phase is done when GSA0008
-  reports nothing and there is no per-site suppression.
+  `7a44ca033`), the emitter's value-nullable tests included, and add GSA0008
+  with its type-level exempt set. The phase is done when GSA0008 reports nothing
+  and there is no per-site suppression.
 - Make the symbolic-projection consumers named in `b0c76053d` — `TryProjectErasedClrType`,
   member lookup, method type inference, emit — read through a platform wrapper
   via the query API. This is what Phase 4 needs.
-- This is the largest phase. If it cannot land as one reviewable PR, it splits
-  along file ownership (binding / emit / lowering+display), each part landing
-  with GSA0008 enabled for the files it finished — never with an allowlist.
+- **This phase is one PR, and it is atomic.** Once Core references GSA0008 the
+  rule analyzes the whole compilation, so landing it "for the files already
+  migrated" would need a path filter, suppressions or an unfinished-file list —
+  the allowlist mechanism owner decision 4 rules out. The migration and the
+  analyzer therefore land together. It is the largest PR in the plan (about 80
+  files); the review burden is budgeted rather than split away, and the PR's
+  description groups the diff by file ownership (binding / emit /
+  lowering+display) so it can be reviewed in those slices without being landed
+  in them.
 
 ### Phase 4 — close the symbolic-return gap
 
@@ -526,8 +576,11 @@ ADR-0186's steps did.
   `NullableAnnotation` comparisons that decide a G# spelling, including
   `CSharpTypeMapper.cs:443/564/613` and
   `CSharpToGSharpTranslator.Nullability.cs`'s `IsImportedObliviousNullableTarget`)
-  with calls to `NullabilityImportRule`. The usage-driven promotion logic in
-  that file is not the import rule and is out of this phase's scope.
+  with calls to `NullabilityImportRule.DecideConcrete`/`DecideOpenSlot` through a
+  cs2gs applier that maps the neutral result onto `GTypeReference` (§1). The
+  usage-driven promotion logic in that file is not the import rule and keeps its
+  behaviour, but it reads a position's declared state through the same adapter
+  rather than through `NullableAnnotation` directly (see Enforcement).
 - **Access.** `NullabilityImportRule` and `ClrNullabilityState` are `internal` and
   `src/Core/Core.csproj` has no `InternalsVisibleTo` for any `Cs2Gs.*` assembly.
   This phase adds `<InternalsVisibleTo Include="Cs2Gs.Translator" />` rather than
@@ -542,13 +595,24 @@ ADR-0186's steps did.
   code is migrated onto the rule twice.
 - **Enforcement.** GSA0007/GSA0008 police gsc's `TypeSymbol` wrappers and CLR
   signature positions; cs2gs works in Roslyn `ITypeSymbol` and they would fire
-  on nothing there. This phase adds **GSA0009**: a comparison against
-  `NullableAnnotation` in `Cs2Gs.Translator`, outside the adapter type, inside a
-  member that produces a `GTypeReference`, is reported. The usage-inference code
-  that legitimately reads `NullableAnnotation` without producing a spelling is
-  not in that shape and is not reported. The translator project gains an
-  analyzer reference to `InternalAnalyzers` (today only `Cs2Gs.Tests` has one).
-  Verify with the full self-migration gate.
+  on nothing there. This phase adds **GSA0009**: any read of Roslyn's
+  `NullableAnnotation` (the `ITypeSymbol.NullableAnnotation`,
+  `ElementNullableAnnotation` and `TypeInfo.Nullability.Annotation` accessors,
+  and comparisons against the enum) in `Cs2Gs.Translator` outside the one
+  adapter type is reported — **regardless of the enclosing member's return
+  type**. A shape-based rule (e.g. "only in members that produce a
+  `GTypeReference`") would miss `bool`-returning deciders such as
+  `IsImportedObliviousNullableTarget` and could be evaded by extracting any
+  comparison into a helper, so it is not used. The adapter exposes the
+  classified `ClrNullabilityState` for usage inference and the shared decision
+  for spelling; every one of the ~100 current reads migrates onto it, which is
+  what makes the rule reportable with no exemptions beyond the adapter. The
+  residual risk is code that hand-decides a spelling from a
+  `ClrNullabilityState` it got from the adapter; GSA0009 also reports a
+  `ClrNullabilityState` comparison outside the adapter and the rule class, which
+  closes that route too. The translator project gains an analyzer reference to
+  `InternalAnalyzers` (today only `Cs2Gs.Tests` has one). Verify with the full
+  self-migration gate.
 
 ## Consequences
 
