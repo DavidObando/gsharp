@@ -113,17 +113,57 @@ public sealed class ManagedReferenceRuntimeContractTests
         => ReferenceResolver.HostTrustedPlatformAssemblyPaths()
             .Where(path => Path.GetFileNameWithoutExtension(path) != "Gsharp.Runtime.Values");
 
+    private static readonly string[] RuntimeSourceFiles =
+        { "ManagedLocationKey.cs", "ManagedLocation.cs", "ManagedRef.cs", "ReadOnlyManagedRef.cs", "Slice.cs", "ReadOnlySlice.cs" };
+
+    [Fact]
+    public void RuntimeSourceSnapshots_MatchTheLiveRuntimeSources()
+    {
+        // Issue #4350: the mutation fixtures below read the runtime's C# source.
+        // Gsharp.Runtime.Values now self-migrates to G#, so the migrated
+        // repository has no C# runtime sources; the tests fall back to these
+        // verbatim snapshots. Whenever the live C# sources exist, the snapshots
+        // must match them exactly so the fixtures never drift.
+        var liveRoot = LiveRuntimeSourceRoot();
+        foreach (var file in RuntimeSourceFiles)
+        {
+            var snapshot = File.ReadAllText(Path.Combine(SnapshotRuntimeSourceRoot(), file + ".txt"));
+            var live = Path.Combine(liveRoot, file);
+            if (File.Exists(live))
+            {
+                Assert.Equal(File.ReadAllText(live), snapshot);
+            }
+            else
+            {
+                Assert.Contains("namespace Gsharp.Values;", snapshot, StringComparison.Ordinal);
+            }
+        }
+    }
+
+    private static string LiveRuntimeSourceRoot()
+        => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../src/Sdk/Gsharp.Runtime.Values"));
+
+    private static string SnapshotRuntimeSourceRoot()
+        => Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../test/Compiler.Tests/TestData/RuntimeValuesSource"));
+
+    private static string ReadRuntimeSource(string file)
+    {
+        var live = Path.Combine(LiveRuntimeSourceRoot(), file);
+        return File.Exists(live)
+            ? File.ReadAllText(live)
+            : File.ReadAllText(Path.Combine(SnapshotRuntimeSourceRoot(), file + ".txt"));
+    }
+
     private static string CompileRuntime(string directory, string mutation)
     {
-        var root = Path.GetFullPath(Path.Combine(AppContext.BaseDirectory, "../../../../src/Sdk/Gsharp.Runtime.Values"));
         var version = typeof(Gsharp.Values.ManagedRef<>).Assembly.GetName().Version;
         var sources = new List<SyntaxTree>
         {
             CSharpSyntaxTree.ParseText($"global using System;\nglobal using System.Collections.Generic;\n[assembly: System.Reflection.AssemblyVersion(\"{version}\")]"),
         };
-        foreach (var file in new[] { "ManagedLocationKey.cs", "ManagedLocation.cs", "ManagedRef.cs", "ReadOnlyManagedRef.cs", "Slice.cs", "ReadOnlySlice.cs" })
+        foreach (var file in RuntimeSourceFiles)
         {
-            var text = File.ReadAllText(Path.Combine(root, file));
+            var text = ReadRuntimeSource(file);
             text = mutation switch
             {
                 "borrow" => text.Replace("Borrow", "MissingBorrow", StringComparison.Ordinal),
