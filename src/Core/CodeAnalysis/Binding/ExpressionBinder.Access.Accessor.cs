@@ -294,7 +294,7 @@ internal sealed partial class ExpressionBinder
             // `base` is a contextual keyword: only intercepted when it is not a
             // real value in scope (so a hypothetical local named `base` still
             // wins).
-            if (name == "base" && variableHit == null && rightPart is NameExpressionSyntax basePropName)
+            if (IsContextualBaseKeyword(leftName) && rightPart is NameExpressionSyntax basePropName)
             {
                 return BindBaseClassPropertyRead(basePropName, leftName.Location, explicitBaseType: null, selectorLocation: leftName.Location);
             }

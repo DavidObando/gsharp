@@ -740,6 +740,25 @@ internal sealed partial class MethodBodyEmitter
             ? this.outer.userTokens.ResolveUserPropertyAccessorToken(baseClass, call.Property, call.IsSetterAccessor)
             : this.outer.userTokens.ResolveUserInstanceMethodToken(baseClass, call.Method);
 
+        // A generic base method is called through a MethodSpec carrying the
+        // call's type arguments, exactly like an ordinary generic instance
+        // call. Without it the call named the open method and pushed an
+        // argument where `!!0` was expected (ILVerify StackUnexpected,
+        // InvalidProgramException at run time).
+        if (!call.IsPropertyAccessor && call.Method.IsGeneric)
+        {
+            var asInstanceCall = new BoundUserInstanceCallExpression(
+                call.Syntax,
+                call.Receiver,
+                call.Method,
+                call.Arguments,
+                call.Type)
+            {
+                MethodTypeArguments = call.MethodTypeArguments,
+            };
+            methodToken = this.outer.userTokens.BuildMethodSpecForGenericInstanceCall(methodToken, asInstanceCall);
+        }
+
         // Issue #986: non-virtual `call`, NOT `callvirt`. callvirt would
         // re-dispatch through the v-table and re-enter the derived override.
         this.il.OpCode(ILOpCode.Call);

@@ -1976,7 +1976,10 @@ public abstract class BoundTreeRewriter
             builder?.ToImmutable() ?? node.Arguments,
             node.Type,
             node.Property,
-            node.IsSetterAccessor);
+            node.IsSetterAccessor)
+        {
+            MethodTypeArguments = node.MethodTypeArguments,
+        };
     }
 
     /// <summary>Rewrites a field read.</summary>

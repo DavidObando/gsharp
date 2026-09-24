@@ -96,4 +96,12 @@ public sealed class BoundBaseClassCallExpression : BoundExpression
 
     /// <summary>Gets the bound argument expressions in declared order.</summary>
     public ImmutableArray<BoundExpression> Arguments { get; }
+
+    /// <summary>
+    /// Gets the method type arguments of a call to a generic base method
+    /// (<c>base.Id[int32](7)</c>), explicit or inferred, as the binder
+    /// resolved them. Default when the method is not generic, or when the
+    /// binder left them to structural inference at emit time.
+    /// </summary>
+    public ImmutableArray<TypeSymbol> MethodTypeArguments { get; init; }
 }

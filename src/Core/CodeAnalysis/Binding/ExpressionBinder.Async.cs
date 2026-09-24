@@ -24,6 +24,112 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class ExpressionBinder
 {
+    /// <summary>What a base class declares under an event-shaped name.</summary>
+    private enum BaseEventKind
+    {
+        /// <summary>No event: the name is a field, property or nothing.</summary>
+        None,
+
+        /// <summary>An event whose accessors are not virtual.</summary>
+        NonVirtual,
+
+        /// <summary>A virtual or overridden event, whose base accessors would need a non-virtual call.</summary>
+        Virtual,
+    }
+
+    /// <summary>
+    /// Classifies <paramref name="name"/> on the enclosing class's base: a
+    /// source event (walking the base chain) or an imported one, and returns
+    /// the base's own event so the subscription binds to its accessors
+    /// rather than to whatever the name means on the derived class.
+    /// </summary>
+    /// <param name="name">The member name after <c>base.</c>.</param>
+    /// <param name="sourceEvent">The base's source event, when it declares one.</param>
+    /// <param name="sourceOwner">The base class (in the hierarchy seen from the derived class) that declares <paramref name="sourceEvent"/>.</param>
+    /// <param name="clrEvent">The imported base's event, when the name resolves there.</param>
+    /// <returns>Whether the base declares an event of that name, and whether it is virtual.</returns>
+    private BaseEventKind ClassifyBaseEvent(
+        string name,
+        out EventSymbol? sourceEvent,
+        out StructSymbol? sourceOwner,
+        out EventInfo? clrEvent)
+    {
+        sourceEvent = null;
+        sourceOwner = null;
+        clrEvent = null;
+        if (GetEffectiveThisParameter()?.Type is not StructSymbol { IsClass: true } enclosing)
+        {
+            return BaseEventKind.None;
+        }
+
+        // Level by level, nearest first: an event at a level wins, but a field
+        // or property of the same name at a nearer level hides every farther
+        // event (the same precedence as SourceValueMemberPrecedesInheritedEvent
+        // for ordinary member access), so `base.E += v` then binds the value
+        // member as a compound assignment.
+        if (enclosing.BaseClass is { } sourceBase)
+        {
+            foreach (var level in sourceBase.GetHierarchy())
+            {
+                foreach (var candidate in level.Events)
+                {
+                    if (!string.Equals(candidate.Name, name, System.StringComparison.Ordinal) || candidate.IsStatic)
+                    {
+                        continue;
+                    }
+
+                    sourceEvent = candidate;
+                    sourceOwner = level;
+                    return candidate.IsVirtual || candidate.IsOverride
+                        ? BaseEventKind.Virtual
+                        : BaseEventKind.NonVirtual;
+                }
+
+                if (level.TryGetField(name, out _)
+                    || level.Properties.Any(candidate => !candidate.IsIndexer && candidate.Name == name))
+                {
+                    return BaseEventKind.None;
+                }
+            }
+        }
+
+        const BindingFlags DeclaredInstance = BindingFlags.Instance | BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly;
+        for (var level = GetInheritedClrBaseType(enclosing); level != null; level = level.BaseType)
+        {
+            foreach (var candidate in ClrTypeUtilities.SafeGetEvents(level, DeclaredInstance))
+            {
+                if (!string.Equals(candidate.Name, name, System.StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                clrEvent = candidate;
+                var add = candidate.AddMethod;
+                return add != null && add.IsVirtual && !add.IsFinal
+                    ? BaseEventKind.Virtual
+                    : BaseEventKind.NonVirtual;
+            }
+
+            // A value member the derived class can reach hides farther
+            // events; one it cannot reach (e.g. private) does not take part
+            // in lookup at all.
+            var includeInternal = CanAccessInternalsOf(level);
+            if (ClrTypeUtilities.SafeGetFields(level, DeclaredInstance).Any(field =>
+                    string.Equals(field.Name, name, System.StringComparison.Ordinal)
+                    && ClrMemberVisibility.IsVisibleFromDerived(field, includeInternal))
+                || ClrTypeUtilities.SafeGetProperties(level, DeclaredInstance).Any(property =>
+                    string.Equals(property.Name, name, System.StringComparison.Ordinal)
+                    && property.GetIndexParameters().Length == 0
+                    && (ClrMemberVisibility.IsVisibleFromDerived(property.GetMethod, includeInternal)
+                        || ClrMemberVisibility.IsVisibleFromDerived(property.SetMethod, includeInternal))))
+            {
+                return BaseEventKind.None;
+            }
+        }
+
+        return BaseEventKind.None;
+    }
+
     private BoundExpression BindEventSubscriptionExpression(EventSubscriptionExpressionSyntax syntax)
     {
         // Bare identifier `EventName += handler` / `EventName -= handler`:
@@ -68,6 +174,105 @@ internal sealed partial class ExpressionBinder
         var isEventCapableOperator = syntax.OperatorToken.Kind == SyntaxKind.PlusEqualsToken
             || syntax.OperatorToken.Kind == SyntaxKind.MinusEqualsToken;
         SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var baseOpSyntaxKind);
+
+        // `base.Member op= rhs` and `base.Member++` / `++base.Member`: the
+        // parser desugars every compound form of a member target to this node,
+        // but `base` is a contextual keyword with no value of its own — binding
+        // it as the receiver below reported GS0125 "Variable 'base' doesn't
+        // exist" even though the plain read (`base.Member`) and write
+        // (`base.Member = v`) both bind. Compose the compound from those same
+        // two paths so the read and the write resolve the member identically
+        // (nearest base first, field before property, non-virtual accessor
+        // calls). A real value named `base` keeps its ordinary meaning.
+        //
+        // `base.E += handler` / `base.E -= handler` on a non-virtual event the
+        // base declares binds straight to that event's own add/remove
+        // accessors, called on `this`: a non-virtual accessor has one
+        // implementation, and naming the base's event symbol (not the name,
+        // looked up again on `this`) keeps a same-named event the derived
+        // class declares out of it, as in C#. A virtual or overridden event is
+        // not intercepted here and keeps the diagnostic it reported before.
+        if (accessor.LeftPart is NameExpressionSyntax { IdentifierToken.ValueText: "base" } baseName
+            && IsContextualBaseKeyword(baseName))
+        {
+            EventSymbol? baseSourceEvent = null;
+            StructSymbol? baseSourceOwner = null;
+            EventInfo? baseClrEvent = null;
+            var baseEventKind = isEventCapableOperator
+                ? ClassifyBaseEvent(eventName, out baseSourceEvent, out baseSourceOwner, out baseClrEvent)
+                : BaseEventKind.None;
+            if (baseEventKind == BaseEventKind.None)
+            {
+                return BindBaseMemberCompoundAssignment(baseName, eventNameSyntax, syntax, baseOpSyntaxKind);
+            }
+
+            if (baseEventKind == BaseEventKind.NonVirtual
+                && GetEffectiveThisParameter() is { } baseEventThis)
+            {
+                var baseEventReceiver = new BoundVariableExpression(null, baseEventThis);
+                if (baseSourceEvent != null && baseSourceOwner != null)
+                {
+                    // The nearest event of that name hides any farther one,
+                    // even when the derived class cannot reach it (a
+                    // `private` base event): report it instead of binding its
+                    // accessors.
+                    if (!AccessibilityChecker.IsAccessible(baseSourceEvent.Accessibility, baseSourceOwner, function))
+                    {
+                        Diagnostics.ReportMemberInaccessible(eventNameSyntax.Location, baseSourceEvent.Name, baseSourceOwner.Name, baseSourceEvent.Accessibility);
+                        _ = BindExpression(syntax.Value);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    var sourceEventType = baseSourceOwner.SubstituteMemberType(baseSourceEvent.Type) ?? baseSourceEvent.Type;
+                    var sourceHandler = BindEventSubscriptionHandler(syntax.Value, sourceEventType);
+                    return new BoundEventSubscriptionExpression(null, baseEventReceiver, baseSourceOwner, baseSourceEvent, sourceHandler, isAdd, sourceEventType);
+                }
+
+                if (baseClrEvent != null)
+                {
+                    // The reflected scan sees non-public events too, and the
+                    // nearest one hides farther ones; but its accessors must be
+                    // callable from the derived class (public, protected, or a
+                    // friend assembly's internal), or the call would fail at
+                    // run time with MethodAccessException.
+                    var eventAccessor = isAdd ? baseClrEvent.AddMethod : baseClrEvent.RemoveMethod;
+                    if (!ClrMemberVisibility.IsVisibleFromDerived(eventAccessor, CanAccessInternalsOf(baseClrEvent.DeclaringType)))
+                    {
+                        var hidden = eventAccessor == null || eventAccessor.IsPrivate ? Accessibility.Private : Accessibility.Internal;
+                        Diagnostics.ReportMemberInaccessible(
+                            eventNameSyntax.Location,
+                            baseClrEvent.Name,
+                            baseClrEvent.DeclaringType?.Name ?? eventName,
+                            hidden);
+                        _ = BindExpression(syntax.Value);
+                        return new BoundErrorExpression(null);
+                    }
+
+                    // The imported base as the derived class names it
+                    // (`Source[Item]` over a same-compilation `Item`), not
+                    // the erased CLR construction reflection sees: it
+                    // supplies the handler type and the add/remove MemberRef
+                    // parent, as for an ordinary imported event receiver.
+                    var inheritedImportedBase = GetEffectiveThisParameter()?.Type is StructSymbol eventEnclosing
+                        ? TypeMemberModel.GetNearestImportedBase(eventEnclosing)
+                        : null;
+                    var clrHandlerType = inheritedImportedBase != null
+                        ? MemberLookup.GetClrEventHandlerTypeSymbol(inheritedImportedBase, baseClrEvent)
+                        : MemberLookup.GetClrEventHandlerTypeSymbol(baseClrEvent);
+                    var clrHandler = BindEventSubscriptionHandler(syntax.Value, clrHandlerType);
+                    var clrEventContainingType = inheritedImportedBase == null
+                        ? null
+                        : MemberLookup.GetClrMemberDeclaringTypeSymbol(inheritedImportedBase, baseClrEvent);
+                    return new BoundClrEventSubscriptionExpression(
+                        null,
+                        baseEventReceiver,
+                        baseClrEvent,
+                        clrHandler,
+                        isAdd,
+                        eventContainingType: clrEventContainingType);
+                }
+            }
+        }
 
         // Resolve receiver: either an ImportedClassSymbol (static event) or
         // any value-producing expression with a CLR-backed type (instance event).

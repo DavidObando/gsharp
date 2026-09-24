@@ -854,7 +854,7 @@ internal sealed partial class ExpressionBinder
         // base class implementation of property `Prop`, mirroring C#
         // `base.Prop = value`. `base` is a contextual keyword: only intercepted
         // when it is not a real value in scope.
-        if (receiverName == "base" && !(scope.TryLookupSymbol(receiverName) is VariableSymbol))
+        if (IsContextualBaseKeyword(new NameExpressionSyntax(syntax.SyntaxTree, syntax.Receiver)))
         {
             var baseValue = BindExpression(syntax.Value);
             return BindBaseClassPropertyWrite(
@@ -930,7 +930,7 @@ internal sealed partial class ExpressionBinder
 
             if (TypeMemberModel.GetNearestImportedBase(userStruct)?.ClrType is Type importedBaseClr)
             {
-                var importedBase = new ImportedClassSymbol(importedBaseClr, syntax, references: scope.References);
+                var importedBase = WithFamilyAccess(new ImportedClassSymbol(importedBaseClr, syntax, references: scope.References));
                 if (importedBase.TryLookupMember(fieldName, ne: null, out var inheritedStaticMember)
                     && TryGetWritableClrMember(inheritedStaticMember, out _, out var inheritedTarget, out _, fromDerivedType: true))
                 {
@@ -996,13 +996,21 @@ internal sealed partial class ExpressionBinder
         if (importedClass != null
             || scope.TryLookupImportedClass(receiverName, declaration: null, out importedClass))
         {
+            // A derived class may write an inherited `protected` static member
+            // through the declaring type's name, as in C#.
+            importedClass = WithFamilyAccess(importedClass);
             if (!importedClass.TryLookupMember(syntax.FieldIdentifier.ValueText, ne: null, out var staticMember))
             {
                 Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, syntax.FieldIdentifier.ValueText);
                 return new BoundErrorExpression(null);
             }
 
-            if (!TryGetWritableClrMember(staticMember, out var staticTargetType, out var staticTargetSymbol, out var staticWritable))
+            if (!TryGetWritableClrMember(
+                    staticMember,
+                    out var staticTargetType,
+                    out var staticTargetSymbol,
+                    out var staticWritable,
+                    fromDerivedType: importedClass.IsFamilyAccessible(staticMember.DeclaringType)))
             {
                 Diagnostics.ReportCannotAssign(syntax.EqualsToken.Location, syntax.FieldIdentifier.ValueText);
                 return new BoundErrorExpression(null);
@@ -1969,6 +1977,13 @@ internal sealed partial class ExpressionBinder
                 Diagnostics.ReportMemberInaccessible(memberNameSyntax.Location, prop.Name, propertyOwner.Name, prop.SetterAccessibility);
             }
 
+            // A compound assignment also reads the property, so its getter
+            // must be reachable as well as its setter.
+            if (prop.HasGetter && !AccessibilityChecker.IsAccessible(prop.GetterAccessibility, propertyOwner, function))
+            {
+                Diagnostics.ReportMemberInaccessible(memberNameSyntax.Location, prop.Name, propertyOwner.Name, prop.GetterAccessibility);
+            }
+
             if (!prop.HasGetter || !prop.HasSetter)
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
@@ -2637,19 +2652,32 @@ internal sealed partial class ExpressionBinder
         SyntaxKind baseOpSyntaxKind,
         ImportedTypeSymbol? symbolicContainerType = null)
     {
-        var importedClass = new ImportedClassSymbol(
+        var importedClass = WithFamilyAccess(new ImportedClassSymbol(
             clrReceiverType,
             memberNameSyntax,
             symbolicContainerType,
-            scope.References);
+            scope.References));
         if (!importedClass.TryLookupMember(memberName, ne: null, out var staticMember))
         {
             return null;
         }
 
-        if (!TryGetWritableClrMember(staticMember, out _, out var targetSymbol, out _))
+        if (!TryGetWritableClrMember(
+                staticMember,
+                out _,
+                out var targetSymbol,
+                out _,
+                fromDerivedType: importedClass.IsFamilyAccessible(staticMember.DeclaringType)))
         {
             Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
+            return new BoundErrorExpression(null);
+        }
+
+        // A compound assignment also reads the property: its getter must be
+        // callable as well as its setter.
+        if (staticMember is PropertyInfo compoundProperty
+            && !TryRequireVisibleStaticGetter(importedClass, compoundProperty, memberNameSyntax.IdentifierToken.Location))
+        {
             return new BoundErrorExpression(null);
         }
 
@@ -2696,6 +2724,222 @@ internal sealed partial class ExpressionBinder
             targetSymbol,
             staticContainerType: symbolicContainerType);
         return FinishPostfixCompoundAssignment(syntax, previousDeclaration, previousValue, assignment);
+    }
+
+    /// <summary>
+    /// Binds a compound assignment or increment/decrement whose target is a
+    /// base-qualified member: <c>base.M op= rhs</c>, <c>base.M++</c>,
+    /// <c>--base.M</c>, and so on. The member is read with
+    /// <see cref="BindBaseClassPropertyRead"/> and written with
+    /// <see cref="BindBaseClassPropertyWrite"/>, so every member shape either
+    /// path accepts (a same-compilation field or property, an imported
+    /// property, an imported field such as <c>RegexRunner.runtextpos</c>)
+    /// takes part, and a property is read and written through its base
+    /// accessors non-virtually, as C# does.
+    /// </summary>
+    /// <remarks>
+    /// The receiver is always the enclosing member's <c>this</c>, which has no
+    /// side effects, so reading the member and then writing it evaluates the
+    /// receiver twice without observable difference. The written value is
+    /// held in a local so the expression's own value (the old value for a
+    /// postfix form, the new value otherwise) never depends on the write
+    /// node's type: a base property setter call is <c>void</c>.
+    /// </remarks>
+    /// <param name="baseName">The <c>base</c> receiver name.</param>
+    /// <param name="memberNameSyntax">The member name.</param>
+    /// <param name="syntax">The compound-assignment syntax.</param>
+    /// <param name="baseOpSyntaxKind">The binary operator the compound operator applies.</param>
+    /// <returns>The bound compound assignment, or an error expression.</returns>
+    private BoundExpression BindBaseMemberCompoundAssignment(
+        NameExpressionSyntax baseName,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        SyntaxKind baseOpSyntaxKind)
+    {
+        var baseLocation = baseName.Location;
+        BoundExpression leftRead = BindBaseClassPropertyRead(
+            memberNameSyntax,
+            baseLocation,
+            explicitBaseType: null,
+            selectorLocation: baseLocation);
+        var boundRhs = BindExpression(syntax.Value);
+        if (leftRead is BoundErrorExpression || boundRhs.Type == TypeSymbol.Error)
+        {
+            return new BoundErrorExpression(null);
+        }
+
+        var targetType = leftRead.Type;
+
+        // Issue #2834: a user-defined compound-assignment operator on the
+        // member's type runs in place, ahead of the `lhs op rhs` rewrite,
+        // exactly as for an ordinary member target.
+        if (TryBindBaseMemberUserCompoundAssignment(baseName, memberNameSyntax, syntax, leftRead, boundRhs, out var userCompoundResult))
+        {
+            return userCompoundResult;
+        }
+
+        var previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            ref leftRead,
+            out var previousDeclaration);
+        var binary = TryBindCompoundBinaryOperation(
+            baseOpSyntaxKind,
+            leftRead,
+            boundRhs,
+            syntax.Value.Location);
+        if (binary == null)
+        {
+            Diagnostics.ReportUndefinedBinaryOperator(
+                syntax.OperatorToken.Location,
+                syntax.OperatorToken.Text,
+                targetType,
+                boundRhs.Type);
+            return new BoundErrorExpression(null);
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        if (previousDeclaration != null)
+        {
+            statements.Add(previousDeclaration);
+        }
+
+        var converted = conversions.BindConversion(syntax.Value.Location, binary, targetType);
+        var name = $"<compound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var newValue = new LocalVariableSymbol(name, isReadOnly: true, targetType);
+        if (!scope.TryDeclareVariable(newValue))
+        {
+            throw new System.InvalidOperationException(
+                $"Failed to declare synthesized compound value local '{name}'.");
+        }
+
+        statements.Add(new BoundVariableDeclaration(syntax, newValue, converted));
+        var write = BindBaseClassPropertyWrite(
+            memberNameSyntax.IdentifierToken.ValueText,
+            memberNameSyntax.IdentifierToken.Location,
+            baseLocation,
+            new BoundVariableExpression(null, newValue),
+            syntax.Value.Location,
+            syntax.OperatorToken.Location,
+            explicitBaseType: null,
+            selectorLocation: baseLocation);
+        if (write is BoundErrorExpression)
+        {
+            return write;
+        }
+
+        statements.Add(new BoundExpressionStatement(syntax, write));
+        BoundExpression result = previousValue ?? new BoundVariableExpression(null, newValue);
+        return new BoundBlockExpression(syntax, statements.ToImmutable(), result);
+    }
+
+    /// <summary>
+    /// Issue #2834 for a base-qualified target: <c>base.M op= v</c> and
+    /// <c>base.M++</c> when <c>M</c>'s type declares the compound operator.
+    /// The base member is read once into a local, the operator runs on that
+    /// local, and a value-type result is written back through the base
+    /// member's own write (a base setter call for a property), so the getter
+    /// runs once and the write is non-virtual, like the read. A reference-type
+    /// value is mutated in place and needs no write-back.
+    /// </summary>
+    /// <param name="baseName">The <c>base</c> receiver name.</param>
+    /// <param name="memberNameSyntax">The member name.</param>
+    /// <param name="syntax">The compound-assignment syntax.</param>
+    /// <param name="read">The bound base read of the member.</param>
+    /// <param name="boundRhs">The bound right-hand side.</param>
+    /// <param name="result">The bound compound assignment when the type declares the operator.</param>
+    /// <returns><see langword="true"/> when a user-defined compound operator applies.</returns>
+    private bool TryBindBaseMemberUserCompoundAssignment(
+        NameExpressionSyntax baseName,
+        NameExpressionSyntax memberNameSyntax,
+        EventSubscriptionExpressionSyntax syntax,
+        BoundExpression read,
+        BoundExpression boundRhs,
+        [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundExpression? result)
+    {
+        result = null;
+        if (read.Type is not StructSymbol memberType)
+        {
+            return false;
+        }
+
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var name = $"<compound{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>";
+        var target = new LocalVariableSymbol(name, isReadOnly: false, read.Type);
+        var targetExpression = new BoundVariableExpression(null, target);
+        var userCompound = TryBindUserCompoundAssignmentOperator(
+            syntax.OperatorToken.Kind,
+            targetExpression,
+            boundRhs,
+            syntax.Value.Location);
+        if (userCompound == null)
+        {
+            return false;
+        }
+
+        // A read-only field is not a compound-assignment target even when the
+        // operator mutates in place, exactly as for `this.f op= v`: `base.f`
+        // always names a base class's field, which a derived member (even a
+        // constructor) may not write.
+        var readOnlyField = read switch
+        {
+            BoundFieldAccessExpression { Field: { IsReadOnly: true } sourceField } sourceRead
+                when sourceRead.StructType is not { } fieldOwner
+                    || !IsReadOnlyFieldAssignmentAllowed(sourceField, fieldOwner, receiverIsThis: true) => sourceField.Name,
+            BoundClrPropertyAccessExpression { Member: System.Reflection.FieldInfo { IsInitOnly: true } or System.Reflection.FieldInfo { IsLiteral: true } } clrRead
+                => clrRead.Member.Name,
+            _ => null,
+        };
+        if (readOnlyField != null)
+        {
+            Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, readOnlyField);
+            result = new BoundErrorExpression(null);
+            return true;
+        }
+
+        if (!scope.TryDeclareVariable(target))
+        {
+            throw new System.InvalidOperationException(
+                $"Failed to declare synthesized compound target local '{name}'.");
+        }
+
+        statements.Add(new BoundVariableDeclaration(syntax, target, read));
+
+        BoundExpression previousRead = targetExpression;
+        var previousValue = CapturePostfixCompoundValue(
+            syntax.ReturnsPreviousValue,
+            syntax,
+            ref previousRead,
+            out var previousDeclaration);
+        if (previousDeclaration != null)
+        {
+            statements.Add(previousDeclaration);
+        }
+
+        statements.Add(new BoundExpressionStatement(syntax, userCompound));
+        if (!memberType.IsClass)
+        {
+            var baseLocation = baseName.Location;
+            var writeBack = BindBaseClassPropertyWrite(
+                memberNameSyntax.IdentifierToken.ValueText,
+                memberNameSyntax.IdentifierToken.Location,
+                baseLocation,
+                targetExpression,
+                syntax.Value.Location,
+                syntax.OperatorToken.Location,
+                explicitBaseType: null,
+                selectorLocation: baseLocation);
+            if (writeBack is BoundErrorExpression)
+            {
+                result = writeBack;
+                return true;
+            }
+
+            statements.Add(new BoundExpressionStatement(syntax, writeBack));
+        }
+
+        result = new BoundBlockExpression(syntax, statements.ToImmutable(), previousValue ?? targetExpression);
+        return true;
     }
 
     /// <summary>

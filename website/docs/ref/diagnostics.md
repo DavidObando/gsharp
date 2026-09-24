@@ -1498,8 +1498,9 @@ matching C#'s CS0205.
 Cause/fix:
 
 - **GS0383** — `base.Member(...)` is only valid inside an instance member
-  of a class. It fires for top-level functions, `shared` statics, and
-  structs (no base class). A class deriving only from `System.Object` (or
+  of a class, including a function literal nested in one. It fires for
+  top-level functions, `shared` statics, and structs (no base class), and
+  for a function literal nested in any of those. A class deriving only from `System.Object` (or
   any imported/BCL base) *does* have a base, so `base.ToString()` and other
   inherited members are reachable — a missing member there reports GS0384.
   Move the call into an instance member of a class, or call the member

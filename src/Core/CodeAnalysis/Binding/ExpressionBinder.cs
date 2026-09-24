@@ -2966,6 +2966,104 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Whether <paramref name="name"/> is the contextual keyword <c>base</c>:
+    /// spelled <c>base</c>, with nothing else of that name in scope. A local,
+    /// parameter, field, function, source type or imported type named
+    /// <c>base</c> keeps its ordinary meaning (<c>base.count</c> on a class
+    /// named <c>base</c> is a static field read).
+    /// </summary>
+    /// <param name="name">The receiver name.</param>
+    /// <returns><see langword="true"/> when the name means the base class.</returns>
+    private bool IsContextualBaseKeyword(NameExpressionSyntax name)
+    {
+        const string BaseText = "base";
+        if (!string.Equals(name.IdentifierToken.ValueText, BaseText, StringComparison.Ordinal)
+            || scope.TryLookupSymbol(BaseText) != null)
+        {
+            return false;
+        }
+
+        return !binderCtx.TryLookupSourceType(scope, BaseText, preferredArity: 0, function, out _, out _)
+            && !scope.TryLookupImportedClass(BaseText, declaration: null, out _);
+    }
+
+    /// <summary>
+    /// The CLR base type whose <c>protected</c> static members the current
+    /// binding site may reach: the imported base of the enclosing source
+    /// class, or of a class that lexically contains it. Function literals use
+    /// the member they are nested in. <see langword="null"/> when no enclosing
+    /// class derives from an imported type.
+    /// </summary>
+    /// <returns>The imported CLR base, or <see langword="null"/>.</returns>
+    internal Type? GetFamilyAccessBase()
+    {
+        var current = function;
+        TypeSymbol? enclosing = current?.ReceiverType
+            ?? current?.StaticOwnerType
+            ?? current?.LexicalEnclosingType
+            ?? GetEffectiveThisParameter()?.Type;
+        for (var type = enclosing; type != null; type = type.ContainingType)
+        {
+            if (type is StructSymbol { IsClass: true } classSymbol
+                && GetInheritedClrBaseType(classSymbol) is { } clrBase)
+            {
+                return clrBase;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// Gives an imported class symbol used as a static-member receiver the
+    /// family access of the current binding site (see
+    /// <see cref="GetFamilyAccessBase"/>), so a derived class can call an
+    /// inherited <c>protected</c> static member by its type name.
+    /// </summary>
+    /// <param name="classSymbol">The imported class receiver.</param>
+    /// <returns>The receiver, carrying the site's family-access base.</returns>
+    internal ImportedClassSymbol WithFamilyAccess(ImportedClassSymbol classSymbol)
+        => classSymbol.WithFamilyAccessBase(GetFamilyAccessBase());
+
+    /// <summary>
+    /// Requires a callable getter for a static property read through an
+    /// imported class receiver: public, a friend assembly's internal, or
+    /// protected when the receiver carries family access to the declaring
+    /// type. Reports the member as inaccessible otherwise.
+    /// </summary>
+    /// <param name="classSymbol">The imported class receiver.</param>
+    /// <param name="property">The static property being read.</param>
+    /// <param name="location">Where to report.</param>
+    /// <returns><see langword="true"/> when the getter may be called.</returns>
+    private bool TryRequireVisibleStaticGetter(ImportedClassSymbol classSymbol, PropertyInfo property, TextLocation location)
+    {
+        if (GetVisibleGetter(property, fromDerivedType: classSymbol.IsFamilyAccessible(property.DeclaringType)) != null)
+        {
+            return true;
+        }
+
+        Diagnostics.ReportMemberInaccessible(
+            location,
+            property.Name,
+            property.DeclaringType?.Name ?? classSymbol.ClassType.Name,
+            AccessorAccessibility(property.GetMethod));
+        return false;
+    }
+
+    /// <summary>The G# accessibility that best describes a CLR accessor, for diagnostics.</summary>
+    /// <param name="accessor">The accessor, or <see langword="null"/> when there is none.</param>
+    /// <returns>The accessibility.</returns>
+    private static Accessibility AccessorAccessibility(MethodBase? accessor)
+        => accessor switch
+        {
+            null => Accessibility.Private,
+            { IsPublic: true } => Accessibility.Public,
+            { IsFamily: true } or { IsFamilyOrAssembly: true } => Accessibility.Protected,
+            { IsAssembly: true } or { IsFamilyAndAssembly: true } => Accessibility.Internal,
+            _ => Accessibility.Private,
+        };
+
+    /// <summary>
     /// Issue #1582: resolves the CLR/metadata base type that a user-defined G#
     /// class (transitively) derives from, so inherited CLR members can be
     /// surfaced on instances of the derived type. Walks the user

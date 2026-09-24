@@ -79,6 +79,36 @@ public sealed class ImportedClassSymbol : Symbol
     public ExpressionSyntax? Declaration { get; }
 
     /// <summary>
+    /// Gets the CLR base type of the source class the lookup happens in, when
+    /// that class derives from an imported type. Static member lookup then
+    /// also admits <c>protected</c> and <c>protected internal</c> members
+    /// declared on that base or one of its own bases, as C# does for a derived
+    /// class (<c>Regex.ValidateMatchTimeout(...)</c> inside a class deriving
+    /// from <c>Regex</c>). <see langword="null"/> outside such a class, so
+    /// only public (and friend-internal) members are visible.
+    /// </summary>
+    public Type? FamilyAccessBase { get; private init; }
+
+    /// <summary>
+    /// Returns this symbol with <see cref="FamilyAccessBase"/> set to
+    /// <paramref name="familyAccessBase"/>.
+    /// </summary>
+    /// <param name="familyAccessBase">The CLR base type of the enclosing source class, or <see langword="null"/>.</param>
+    /// <returns>This symbol when nothing changes; otherwise a copy carrying the family-access base.</returns>
+    public ImportedClassSymbol WithFamilyAccessBase(Type? familyAccessBase)
+    {
+        if (ReferenceEquals(familyAccessBase, FamilyAccessBase))
+        {
+            return this;
+        }
+
+        return new ImportedClassSymbol(ClassType, Declaration, SymbolicReceiver, References)
+        {
+            FamilyAccessBase = familyAccessBase,
+        };
+    }
+
+    /// <summary>
     /// Tries to get a static member (field or property) from this imported
     /// class symbol. Static methods continue to flow through
     /// <see cref="TryLookupFunction(string, CallExpressionSyntax, ImmutableArray{BoundExpression}, out ImportedFunctionSymbol)"/>.
@@ -586,6 +616,59 @@ public sealed class ImportedClassSymbol : Symbol
         return methods.ToImmutable();
     }
 
+    /// <summary>
+    /// Whether the nearest declaration level named <paramref name="text"/>
+    /// holds a static method visible from the lookup site, including a
+    /// generic one. An unqualified call inside a derived class uses this to
+    /// decide whether an inherited imported static method is in scope before
+    /// committing to bind it.
+    /// </summary>
+    /// <param name="text">The method name.</param>
+    /// <returns><see langword="true"/> when a visible static method of that name is inherited.</returns>
+    internal bool HasVisibleStaticMethod(string text)
+    {
+        foreach (var method in FindNearestNamedMemberLevel(text).Methods)
+        {
+            if (method.IsStatic)
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// Whether a <c>protected</c> member declared on
+    /// <paramref name="declaringType"/> is reachable from the lookup site: the
+    /// declaring type is the <see cref="FamilyAccessBase"/> or one of its
+    /// bases. C# lets a derived class reach an inherited protected static
+    /// member through any type name, so the lookup's own
+    /// <see cref="ClassType"/> does not matter, only where the member is
+    /// declared.
+    /// </summary>
+    /// <param name="declaringType">The member's declaring type.</param>
+    /// <returns><see langword="true"/> when the lookup site derives from the declaring type.</returns>
+    internal bool IsFamilyAccessible(Type? declaringType)
+    {
+        if (FamilyAccessBase == null || declaringType == null)
+        {
+            return false;
+        }
+
+        var declaringDefinition = declaringType.IsGenericType ? declaringType.GetGenericTypeDefinition() : declaringType;
+        for (Type? current = FamilyAccessBase; current != null; current = GetBaseTypeSafe(current))
+        {
+            var currentDefinition = current.IsGenericType ? current.GetGenericTypeDefinition() : current;
+            if (current.IsSameAs(declaringType) || currentDefinition.IsSameAs(declaringDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
     private static Type? ProjectMethodGroupType(TypeSymbol type)
     {
         var clrType = NullableTypeSymbol.GetEffectiveClrType(type);
@@ -735,10 +818,14 @@ public sealed class ImportedClassSymbol : Symbol
         => property.GetMethod?.IsStatic == true || property.SetMethod?.IsStatic == true;
 
     private bool IsVisibleToCurrentCompilation(MethodBase method)
-        => method.IsPublic || (method.IsAssembly && References?.CanAccessInternalMembers(method.DeclaringType?.Assembly) == true);
+        => method.IsPublic
+            || (method.IsAssembly && References?.CanAccessInternalMembers(method.DeclaringType?.Assembly) == true)
+            || ((method.IsFamily || method.IsFamilyOrAssembly) && IsFamilyAccessible(method.DeclaringType));
 
     private bool IsVisibleToCurrentCompilation(FieldInfo field)
-        => field.IsPublic || (field.IsAssembly && References?.CanAccessInternalMembers(field.DeclaringType?.Assembly) == true);
+        => field.IsPublic
+            || (field.IsAssembly && References?.CanAccessInternalMembers(field.DeclaringType?.Assembly) == true)
+            || ((field.IsFamily || field.IsFamilyOrAssembly) && IsFamilyAccessible(field.DeclaringType));
 
     private bool IsVisibleToCurrentCompilation(PropertyInfo property)
     {
