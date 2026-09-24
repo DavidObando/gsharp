@@ -92,6 +92,8 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
     public async Task DefinitionRequestedDuringDiscovery_WaitsForProjectAwareContent()
     {
         var rootDir = CreateSampleWorkspace();
+        var continueDiscovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var discoveryStopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             var workspace = new WorkspaceState();
@@ -99,12 +101,12 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
             var fooPath = Path.Combine(rootDir, "Demo", "Foo.gs");
             var uri = DocumentUri.FromFileSystemPath(fooPath);
             var discoveryStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
-            var continueDiscovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
             server.TestBeforeWorkspaceDiscovery = () =>
             {
                 discoveryStarted.TrySetResult(true);
                 continueDiscovery.Task.GetAwaiter().GetResult();
             };
+            server.TestAfterWorkspaceDiscovery = () => discoveryStopped.TrySetResult(true);
 
             await server.InitializeAsync(new InitializeParams { RootPath = rootDir });
             await server.DidOpenAsync(new DidOpenTextDocumentParams
@@ -138,6 +140,12 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
         }
         finally
         {
+            continueDiscovery.TrySetResult(true);
+            if (!discoveryStopped.Task.IsCompleted)
+            {
+                await discoveryStopped.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
             Directory.Delete(rootDir, recursive: true);
         }
     }
@@ -147,6 +155,7 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
     {
         var rootDir = CreateSampleWorkspace();
         var continueDiscovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var discoveryStopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             var server = new LspServer(new DocumentContentService(), new WorkspaceState());
@@ -158,6 +167,7 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
                 discoveryStarted.TrySetResult(true);
                 continueDiscovery.Task.GetAwaiter().GetResult();
             };
+            server.TestAfterWorkspaceDiscovery = () => discoveryStopped.TrySetResult(true);
 
             await server.InitializeAsync(new InitializeParams { RootPath = rootDir });
             await server.DidOpenAsync(new DidOpenTextDocumentParams
@@ -185,6 +195,11 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
         finally
         {
             continueDiscovery.TrySetResult(true);
+            if (!discoveryStopped.Task.IsCompleted)
+            {
+                await discoveryStopped.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
             Directory.Delete(rootDir, recursive: true);
         }
     }
@@ -194,6 +209,7 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
     {
         var rootDir = CreateSampleWorkspace();
         var continueDiscovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+        var discoveryStopped = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
         try
         {
             var server = new LspServer(new DocumentContentService(), new WorkspaceState());
@@ -205,6 +221,7 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
                 discoveryStarted.TrySetResult(true);
                 continueDiscovery.Task.GetAwaiter().GetResult();
             };
+            server.TestAfterWorkspaceDiscovery = () => discoveryStopped.TrySetResult(true);
 
             await server.InitializeAsync(new InitializeParams { RootPath = rootDir });
             await server.DidOpenAsync(new DidOpenTextDocumentParams
@@ -227,6 +244,11 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
         finally
         {
             continueDiscovery.TrySetResult(true);
+            if (!discoveryStopped.Task.IsCompleted)
+            {
+                await discoveryStopped.Task.WaitAsync(TimeSpan.FromSeconds(10));
+            }
+
             Directory.Delete(rootDir, recursive: true);
         }
     }

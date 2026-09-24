@@ -50,6 +50,7 @@ public sealed class LspServer
     internal Action TestOnDiagnosticRefreshAfterDiscovery;
     internal Action TestBeforeWorkspaceDiscovery;
     internal Action TestBeforeWorkspaceDiscoveryCompletion;
+    internal Action TestAfterWorkspaceDiscovery;
     internal Func<CancellationToken, Task> TestPushBindDelay;
     private readonly TaskCompletionSource<int> exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object refreshLock = new object();
@@ -203,6 +204,7 @@ public sealed class LspServer
             finally
             {
                 completion?.TrySetResult(true);
+                this.TestAfterWorkspaceDiscovery?.Invoke();
             }
         });
     }
