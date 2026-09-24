@@ -1565,6 +1565,12 @@ public sealed partial class CSharpToGSharpTranslator
                 case RecursivePatternSyntax recursive:
                     return this.TranslateRecursivePatternTest(receiver, recursive, receiverSyntax, receiverType, isNestedPatternMember);
 
+                case DiscardPatternSyntax:
+                    // `_` always matches and binds nothing (reached as the leaf of
+                    // an extended property path whose links still need guarding,
+                    // issue #4356).
+                    return LiteralExpression.Bool(true);
+
                 case VarPatternSyntax varPattern:
                     // `x is var v` ALWAYS matches (it also matches `null`, unlike a
                     // type/declaration pattern), so it lowers to the literal `true`

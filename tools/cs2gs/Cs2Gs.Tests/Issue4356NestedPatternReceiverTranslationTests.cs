@@ -225,14 +225,40 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
                     _ => false,
                 };
 
+                // A discard leaf adds no test, but C# still requires `Clause`
+                // to be non-nil for the arm to match.
+                public static bool G(Node n) => n switch
+                {
+                    Rec { Clause.Items: _ } => true,
+                    _ => false,
+                };
+
+                // A reassigned `var` leaf: same guard, and the binder is a
+                // mutable capture of the value read once.
+                public static int H(Node n)
+                {
+                    switch (n)
+                    {
+                        case Rec { Clause.Items: var items }:
+                            object matched = items;
+                            items = new List<int>();
+                            return matched != null && items != null ? 10 : 0;
+                        default:
+                            return -1;
+                    }
+                }
+
                 public static void Run()
                 {
-                    Console.WriteLine(F(new Rec()) + "," + F(new Rec { Clause = new Clause() }));
+                    Console.WriteLine(
+                        F(new Rec()) + "," + F(new Rec { Clause = new Clause() }) + ";" +
+                        G(new Rec()) + "," + G(new Rec { Clause = new Clause() }) + ";" +
+                        H(new Rec()) + "," + H(new Rec { Clause = new Clause() }));
                 }
             }
             """);
 
-        Assert.Equal("False,True", CompileAndRun(printed, "C.Run()").Trim());
+        Assert.Equal("False,True;False,True;-1,10", CompileAndRun(printed, "C.Run()").Trim());
     }
 
     private static string CompileAndRun(string printed, string callExpression)

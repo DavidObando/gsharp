@@ -2089,10 +2089,15 @@ public sealed partial class CSharpToGSharpTranslator
                     // A flat `d.Clause.Items.Count` chain threw where C# falls
                     // through on a nil link, and bound only through gsc's old
                     // member-lookup carve-out for stated-nullable chains. A bare
-                    // `var`/discard leaf keeps the flat binding below: it has no
-                    // test to guard, and binds the member itself.
+                    // `var`/discard leaf adds no test of its own, but C# still
+                    // requires every intermediate link to be non-nil
+                    // (`Clause.Items: _` does not match a nil `Clause`), so it
+                    // takes the guarded lowering too whenever a link is
+                    // nullable; only an all-non-nullable path keeps the flat
+                    // binding below.
                     if (sub.ExpressionColon != null
-                        && sub.Pattern is not (VarPatternSyntax or DiscardPatternSyntax))
+                        && (sub.Pattern is not (VarPatternSyntax or DiscardPatternSyntax)
+                            || this.ExtendedPathHasNullableLink(sub.ExpressionColon.Expression)))
                     {
                         this.AddTypedSubpatternGuard(
                             () => this.TranslateExtendedPropertyMemberTest(
@@ -2100,7 +2105,8 @@ public sealed partial class CSharpToGSharpTranslator
                                 sub.Pattern,
                                 new IdentifierExpression(designator)),
                             bindings,
-                            guards);
+                            guards,
+                            mutableBindings);
                         continue;
                     }
 
@@ -2216,11 +2222,14 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // Issue #4356: records a guard built by `translate`, collecting any
-        // pattern binding it introduced exactly as AddTypedSubpatternTest does.
+        // pattern binding it introduced exactly as AddTypedSubpatternTest does:
+        // a binder the arm body reassigns becomes a mutable capture of its
+        // matched value, the rest bind directly.
         private void AddTypedSubpatternGuard(
             Func<GExpression> translate,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
-            List<GExpression> guards)
+            List<GExpression> guards,
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings = null)
         {
             var bindingsBefore = new HashSet<ISymbol>(
                 this.state.PatternBindings.Keys,
@@ -2228,13 +2237,46 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression memberTest = translate();
             foreach (ISymbol added in this.state.PatternBindings.Keys.ToList())
             {
-                if (!bindingsBefore.Contains(added))
+                if (bindingsBefore.Contains(added))
                 {
-                    bindings.Add((added, this.state.PatternBindings[added]));
+                    continue;
                 }
+
+                GExpression matched = this.state.PatternBindings[added];
+                if (mutableBindings != null
+                    && added is ILocalSymbol mutableSymbol
+                    && this.IsSymbolReassigned(
+                        mutableSymbol,
+                        this.state.CurrentBodyScope ?? mutableSymbol.DeclaringSyntaxReferences.FirstOrDefault()?.SyntaxTree.GetRoot()))
+                {
+                    mutableBindings.Add((mutableSymbol, matched));
+                    continue;
+                }
+
+                bindings.Add((added, matched));
             }
 
             guards.Add(memberTest);
+        }
+
+        // Issue #4356: whether any intermediate link of an extended property path
+        // (`Clause.Items` in `Clause.Items.Count`) is nullable in the emitted G#
+        // — Roslyn-annotated, or `T?` only on the ADR-0169 analyzer API.
+        private bool ExtendedPathHasNullableLink(ExpressionSyntax path)
+        {
+            for (ExpressionSyntax link = (path as MemberAccessExpressionSyntax)?.Expression;
+                link != null;
+                link = (link as MemberAccessExpressionSyntax)?.Expression)
+            {
+                ITypeSymbol declared = this.ResolveDeclaredReceiverType(this.context.GetTypeInfo(link).Type, link);
+                if ((declared is { IsReferenceType: true } && declared.NullableAnnotation == NullableAnnotation.Annotated)
+                    || this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(link).Symbol))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private void AddTypedSubpatternTest(
