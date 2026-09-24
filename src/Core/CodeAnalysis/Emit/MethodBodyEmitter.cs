@@ -1172,6 +1172,48 @@ internal sealed partial class MethodBodyEmitter
             || string.Equals(fullName, "System.MulticastDelegate", StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Issue #4358: whether <paramref name="target"/> is the natural
+    /// structural delegate shape <paramref name="sourceFn"/> materialises as
+    /// — the same <c>System.Func`N</c> / <c>System.Action[`N]</c> definition
+    /// <c>SignatureEncoder.ResolveDelegateClrType</c> builds for it.
+    /// </summary>
+    /// <remarks>
+    /// The name alone is not enough: a user assembly may declare its own
+    /// <c>System.Func</c> (issue #2948 supports exactly that collision), which
+    /// is a named delegate with a fixed signature. Comparing against the
+    /// natural definition for THIS source also pins the arity, so a
+    /// same-named delegate of a different arity can never qualify. Compared
+    /// by full name and assembly identity, since the two may come from
+    /// different reflection contexts (reference identity and
+    /// <c>ClrTypeUtilities.AreSame</c>, which is full-name based, are not
+    /// usable here).
+    /// </remarks>
+    /// <param name="target">The (possibly constructed) target delegate type.</param>
+    /// <param name="sourceFn">The source function type.</param>
+    /// <returns><see langword="true"/> when the target is the natural shape.</returns>
+    private bool IsNaturalDelegateShapeOf(Type target, FunctionTypeSymbol sourceFn)
+    {
+        // Func/Action stop at 16 parameters; a wider function type has no
+        // natural shape to compare against (ResolveDelegateClrType would throw).
+        if (target == null || sourceFn.ParameterTypes.Length > 16)
+        {
+            return false;
+        }
+
+        var natural = this.outer.signatures.ResolveDelegateClrType(sourceFn);
+        var targetDefinition = OpenDefinition(target);
+        var naturalDefinition = OpenDefinition(natural);
+        return string.Equals(targetDefinition.FullName, naturalDefinition.FullName, StringComparison.Ordinal)
+            && string.Equals(
+                targetDefinition.Assembly.GetName().Name,
+                naturalDefinition.Assembly.GetName().Name,
+                StringComparison.Ordinal);
+
+        static Type OpenDefinition(Type type)
+            => type.IsGenericType && !type.IsGenericTypeDefinition ? type.GetGenericTypeDefinition() : type;
+    }
+
     private static bool IsUnsignedOrChar(TypeSymbol t)
     {
         if (t == TypeSymbol.UInt8

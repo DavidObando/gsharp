@@ -936,6 +936,71 @@ public class Issue2918InlineLambdaErasedReceiverTests
                 contractsAssemblyName: "Issue2948CollisionContracts"));
     }
 
+    /// <summary>
+    /// Issue #4358, Copilot review follow-up: a user assembly's own
+    /// <c>System.Func&lt;T&gt;</c> (same full name as a BCL shape, different
+    /// assembly and a fixed tuple-returning signature) is a NAMED delegate. A
+    /// lambda whose tuple return has a reference-nullable element needs the
+    /// symbolic source path, and the emitter decided "target is the natural
+    /// Func/Action shape" by name alone, so it substituted the BCL
+    /// <c>Func&lt;string, ValueTuple&lt;…&gt;&gt;</c> for the user delegate
+    /// (ilverify StackUnexpected; the delegate's assembly identity lost). The
+    /// check now requires the target to be the exact definition the emitter
+    /// builds for this source (same arity, same assembly).
+    ///
+    /// <para>
+    /// Lambdas only: a METHOD GROUP or function VALUE converted to this user
+    /// delegate builds the BCL <c>Func</c> even on <c>main</c> with a plain,
+    /// non-nullable tuple source — a separate, pre-existing collision bug
+    /// that does not go through the path this fix changes (issue #4381).
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void SameFullNameTupleDelegateFromUserAssembly_WithSymbolicTupleLambda_RetainsAssemblyIdentity()
+    {
+        const string contracts = """
+            namespace System
+            {
+                public delegate (string, int) Func<T>(T value);
+            }
+
+            namespace Issue4358Collision
+            {
+                public static class Sink
+                {
+                    public static int Invoke(global::System.Func<string> f) =>
+                        f("hello").Item2;
+
+                    public static string AssemblyOf(global::System.Func<string> f) =>
+                        f.GetType().Assembly.GetName().Name!;
+                }
+            }
+            """;
+
+        const string source = """
+            package Issue4358Collision.Src
+            import System
+            import Issue4358Collision
+
+            func Main() {
+                // The contract is compiled without a nullable context, so the
+                // lambda's return binds as the oblivious `(string!, int32)` —
+                // a platform-type element, which nulls the tuple's ClrType
+                // exactly as a `string?` element does (issue #4358).
+                Console.WriteLine(Sink.AssemblyOf((s string) -> (s, s.Length)))
+                Console.WriteLine(Sink.Invoke((s string) -> (s, s.Length + 1)))
+            }
+            """;
+
+        Assert.Equal(
+            $"Issue4358CollisionContracts{Environment.NewLine}6{Environment.NewLine}",
+            CompileVerifyLoadAndRun(
+                source,
+                "System.String",
+                contractsSource: contracts,
+                contractsAssemblyName: "Issue4358CollisionContracts"));
+    }
+
     [Fact]
     public void HoistedImportedPredicateThroughGenericConstructor_RetainsDelegateIdentity()
     {

@@ -71,9 +71,26 @@ internal sealed partial class MethodBodyEmitter
         // to instantiate. Materialize the function value as its natural
         // delegate type (Func/Action) instead; the resulting reference is
         // already a System.Delegate, so the widening is a no-op upcast.
-        var targetDelegateType = IsSystemDelegateHostType(targetDelegateHostType)
+        var targetIsDelegateBase = IsSystemDelegateHostType(targetDelegateHostType);
+        var targetDelegateType = targetIsDelegateBase
             ? this.outer.signatures.ResolveDelegateClrType(sourceFn)
             : this.outer.signatures.ResolveTargetDelegateClrType(targetDelegateHostType);
+
+        // Issue #4358: `sourceNeedsSymbolic` says the SOURCE shape cannot be
+        // reflected faithfully, which decides how the source `Invoke` is
+        // referenced. It says nothing about the TARGET. The natural symbolic
+        // `Func`/`Action` shape is a valid thing to construct only when the
+        // target already IS that shape (whose reflected type arguments may be
+        // erased, which is what #1502 guards against) or the `System.Delegate`
+        // base (materialised as the natural shape above). Any other target is
+        // a NAMED delegate — generic or not, imported or constructed
+        // (`Splitter`, `GSplitter[string]`, `Predicate[T]`) — and only its
+        // own ctor is correct: substituting the natural shape pushed a
+        // `Func<…>` where the named delegate was expected (ilverify
+        // StackUnexpected). A named target that genuinely needs a symbolic
+        // ctor already arrives with `symbolicTargetCtorRef`.
+        bool targetIsNaturalShape = targetIsDelegateBase || this.IsNaturalDelegateShapeOf(targetDelegateType, sourceFn);
+        bool constructSymbolicNaturalShape = sourceNeedsSymbolic && targetIsNaturalShape;
 
         if (source is BoundFunctionLiteralExpression literal)
         {
@@ -93,7 +110,10 @@ internal sealed partial class MethodBodyEmitter
                     planKey = closureForAsync.InvokeMethod;
                 }
 
-                var asyncSymbolicCtor = planKey.StateMachineType != null
+                // Issue #4358: the symbolic async ctor is the NATURAL
+                // `Func<…, Task<…>>` shape, so it is only correct for a natural
+                // target; a named target keeps its own ctor (see above).
+                var asyncSymbolicCtor = planKey.StateMachineType != null && targetIsNaturalShape
                     ? this.outer.memberRefs.TryGetSymbolicAsyncDelegateCtorRef(literal.FunctionType, planKey)
                     : null;
                 if (asyncSymbolicCtor.HasValue)
@@ -106,7 +126,7 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            this.EmitFunctionLiteral(literal, overrideDelegateType: sourceNeedsSymbolic ? null : targetDelegateType);
+            this.EmitFunctionLiteral(literal, overrideDelegateType: constructSymbolicNaturalShape ? null : targetDelegateType);
             return;
         }
 
@@ -122,7 +142,7 @@ internal sealed partial class MethodBodyEmitter
                 return;
             }
 
-            this.EmitMethodGroup(methodGroup, overrideDelegateType: sourceNeedsSymbolic ? null : targetDelegateType);
+            this.EmitMethodGroup(methodGroup, overrideDelegateType: constructSymbolicNaturalShape ? null : targetDelegateType);
             return;
         }
 
@@ -169,7 +189,7 @@ internal sealed partial class MethodBodyEmitter
         }
 
         var ctorRef = symbolicTargetCtorRef
-            ?? (sourceNeedsSymbolic
+            ?? (constructSymbolicNaturalShape
             ? this.outer.memberRefs.GetFunctionDelegateCtorRef(sourceFn)
             : (EntityHandle)this.outer.memberRefs.GetDelegateCtorReference(targetDelegateType));
 

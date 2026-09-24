@@ -5710,9 +5710,34 @@ internal sealed class ReflectionMetadataEmitter
         // `Func<Owner,Pet,ValueTuple<object,object>>` while the body it
         // targets is really typed `ValueTuple<Owner,Pet>` — a stack-shape
         // mismatch ilverify rejects (StackUnexpected).
+        //
+        // Issue #4358: `tuple.ClrType` is ALSO null whenever any element
+        // merely carries a reference-nullable annotation (`(string?, int32)`)
+        // — `TupleTypeSymbol.BuildClrType` deliberately nulls the whole tuple
+        // out in that case (ADR-0186 / #2119 / #2702) so signature encoding
+        // keeps the nullable shape symbolic. The per-element recursion above
+        // does not see this: `ArgIsSymbolicUserDefined` unwraps a
+        // `NullableTypeSymbol` down to its non-nullable underlying type before
+        // recursing, which is correct for a bare reference-nullable
+        // parameter/return (erasure keeps its own `ClrType` non-null) but
+        // hides exactly the condition that poisons a *containing tuple's*
+        // `ClrType`. Missing this made `FunctionTypeNeedsSymbolicDelegate`
+        // answer false for a tuple-returning function type with a nullable
+        // element, so both the delegate-construction site and the
+        // `Invoke` call site fell back to the naive reflection path
+        // (`ResolveDelegateClrType` / `ResolveDelegateArgClrType`), which
+        // resolves the poisoned-null tuple `ClrType` through
+        // `MapToReferenceClrType` and silently erases it to `object` —
+        // producing an `Invoke` MemberRef typed `Func<string, object>` over a
+        // delegate instance that is actually `Func<string, ValueTuple<string,
+        // int32>>`. The struct-vs-object return calling convention mismatch
+        // segfaults the runtime instead of throwing (a P0: no diagnostic, no
+        // catchable exception). Checking `tuple.ClrType == null` directly
+        // catches this alongside the existing same-compilation-user-type
+        // recursion.
         if (arg is TupleTypeSymbol tuple)
         {
-            return tuple.ElementTypes.Any(ArgIsSymbolicUserDefined);
+            return tuple.ClrType == null || tuple.ElementTypes.Any(ArgIsSymbolicUserDefined);
         }
 
         // Issue #3501 (ilverify): a function-typed argument

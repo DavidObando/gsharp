@@ -260,6 +260,127 @@ func main() int32 {
         }
     }
 
+    /// <summary>
+    /// Issue #4358 (P0): converting a function value into a function type
+    /// whose TUPLE return differs from the source only by a reference-
+    /// nullability annotation on one element (<c>(string, int32)</c> →
+    /// <c>(string?, int32)</c>) used to segfault the process at run time
+    /// with no diagnostic and no catchable exception.
+    ///
+    /// <para>
+    /// Root cause: <c>TupleTypeSymbol.ClrType</c> is <see langword="null"/>
+    /// whenever any element merely carries a reference-nullable annotation
+    /// (<c>TupleTypeSymbol.BuildClrType</c> deliberately keeps such a tuple
+    /// symbolic). <c>ReflectionMetadataEmitter.ArgIsSymbolicUserDefined</c>
+    /// did not see this for a tuple whose poisoned element was a bare
+    /// reference-nullable wrapper: a <c>NullableTypeSymbol</c> element is
+    /// unwrapped to its underlying type before recursing (correct for a bare
+    /// nullable return, since erasure keeps that type's own <c>ClrType</c>
+    /// non-null), and a <c>PlatformTypeSymbol</c> (<c>T!</c>) element has no
+    /// case at all and falls straight through to "not symbolic". Either way
+    /// the per-element recursion never asks the one question that matters
+    /// for a *containing tuple*: whether the tuple's own <c>ClrType</c> came
+    /// back <see langword="null"/>. <c>UserTokenResolver.FunctionTypeNeedsSymbolicDelegate</c>
+    /// therefore answered <see langword="false"/> for
+    /// <c>(string) -&gt; (string?, int32)</c>, so
+    /// <c>MethodBodyEmitter.EmitIndirectCall</c> resolved the call's
+    /// <c>Invoke</c> MemberRef through the naive reflection path
+    /// (<c>SignatureEncoder.ResolveDelegateClrType</c> /
+    /// <c>ResolveDelegateArgClrType</c>), which silently erased the
+    /// poisoned-null tuple return type to <c>object</c> — producing
+    /// <c>Func&lt;string, object&gt;::Invoke</c> over a delegate instance
+    /// that was actually <c>Func&lt;string, ValueTuple&lt;string,
+    /// int32&gt;&gt;</c>. The struct-vs-object return calling-convention
+    /// mismatch corrupted the stack instead of throwing.
+    /// </para>
+    ///
+    /// <para>
+    /// ADR-0154 discrimination witness: on the pre-fix commit this test does
+    /// not fail an assertion — invoking <c>main</c> crashes the process
+    /// (SIGSEGV), exactly as <c>gsc</c>+<c>dotnet</c> did on the file-based
+    /// repro from the issue. The fix
+    /// (<c>ReflectionMetadataEmitter.ArgIsSymbolicUserDefined</c> checking
+    /// <c>tuple.ClrType == null</c> directly for a <c>TupleTypeSymbol</c>
+    /// argument) routes the conversion and the call site through the
+    /// symbolic <c>Func&lt;…&gt;</c> TypeSpec path instead, which encodes the
+    /// tuple's real CLR shape regardless of the nullable annotation.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ArrowFunctionType_NullableTupleElementReturn_DoesNotSegfault()
+    {
+        const string Source = @"package ArrowNullableTupleReturn
+import System
+
+func split(s string) (string, int32) { return (s, s.Length) }
+
+func main() int32 {
+    var splitter (string) -> (string?, int32) = split
+    var t = splitter(""hello"")
+    return t.Item2
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ArrowFunctionType_NullableTupleElementReturn_DoesNotSegfault));
+        try
+        {
+            var method = GetProgramMethod(asm, "main");
+            var result = method.Invoke(null, null);
+            Assert.Equal(5, result);
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
+    /// <summary>
+    /// Issue #4358 follow-up: a native-source INVOCATION witness. The same
+    /// nullable-tuple-element shape, but with the source function's OWN
+    /// declared return type already <c>(string?, int32)</c> — an identity
+    /// conversion rather than the representation-preserving widening that
+    /// <see cref="ArrowFunctionType_NullableTupleElementReturn_DoesNotSegfault"/>
+    /// goes through.
+    ///
+    /// <para>
+    /// This does NOT independently cover the delegate-construction site:
+    /// <c>FunctionTypeSymbol.BuildClrType</c> already returns
+    /// <see langword="null"/> for this function type (its tuple return's
+    /// <c>ClrType</c> is null), so <c>EmitMethodGroup</c>'s own
+    /// <c>functionType.ClrType != null</c> guard sent the construction through
+    /// <c>GetFunctionDelegateCtorRef</c> even before the fix. What goes red on
+    /// the pre-fix commit is the later <c>Invoke</c> call site, as in the first
+    /// test. Construction-site coverage for a real named-delegate target lives
+    /// in <c>Issue2876ImportedDataClassDelegateTargetEmitTests
+    /// .NullableTupleFunctionToImportedNonGenericNamedDelegate_Verifies</c>.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void ArrowFunctionType_SourceNativelyReturnsNullableTupleElement_DoesNotSegfault()
+    {
+        const string Source = @"package ArrowNullableTupleReturnNative
+import System
+
+func split(s string) (string?, int32) { return (s, s.Length) }
+
+func main() int32 {
+    var splitter (string) -> (string?, int32) = split
+    var t = splitter(""hello"")
+    return t.Item2
+}
+";
+        var (asm, ctx) = CompileToAssembly(Source, nameof(ArrowFunctionType_SourceNativelyReturnsNullableTupleElement_DoesNotSegfault));
+        try
+        {
+            var method = GetProgramMethod(asm, "main");
+            var result = method.Invoke(null, null);
+            Assert.Equal(5, result);
+        }
+        finally
+        {
+            ctx.Unload();
+        }
+    }
+
     [Fact]
     public void LegacyFuncForm_StillCompiles_EmitsGS0303_Warning()
     {
