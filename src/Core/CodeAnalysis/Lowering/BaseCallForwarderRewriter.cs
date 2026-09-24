@@ -256,12 +256,20 @@ public static class BaseCallForwarderRewriter
             // calling method's own `this`. Point the delegate at the
             // forwarder, which is private and non-virtual, instead.
             var rewritten = (BoundMethodGroupExpression)base.RewriteMethodGroupExpression(node);
+
+            // The forwarded group's candidate set is the forwarder alone (the
+            // rebuilt node's constructor sets it); a group that is not yet
+            // resolved to one candidate is left to the base rewrite. Read as a
+            // plain member of `node` so the GSA0005 clone-preservation check
+            // sees it in both the C# and the translated G# analyzer (a
+            // `.Length` read is not recognised after translation).
+            var candidates = node.Candidates;
             if (!rewritten.ForceNonVirtualDispatch
                 || !this.ForwardsBaseCalls
                 || rewritten.Receiver == null
                 || rewritten.Function is not { } method
                 || rewritten.FunctionType is not { } functionType
-                || rewritten.Candidates.Length != 1
+                || candidates.IsDefaultOrEmpty
                 || method.ReceiverType is not StructSymbol baseClass)
             {
                 return rewritten;
