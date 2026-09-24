@@ -87,13 +87,126 @@ namespace Corpus.Main
         Assert.DoesNotContain("EnumUtil.Answer", rendered, StringComparison.Ordinal);
     }
 
-    private static string TranslateCaller()
+    private const string CollidingAuxSource = @"
+namespace Corpus.Aux
+{
+    public static class StubSupport
+    {
+        public static string File(string source) => source + ""!"";
+
+        public static string Keep(string source) => source;
+
+        public static T[] List<T>(T value) => new T[] { value };
+    }
+}
+";
+
+    // `System.IO` is used for real (`Path.GetFileName`), so its import survives
+    // and `File` names an imported TYPE at file scope — the shape of
+    // GSharp.GeneratorHost.Tests' `using static StubTestSupport` beside
+    // `using Microsoft.CodeAnalysis`, whose `Project` type collided with the
+    // imported `Project(...)` helper.
+    private const string CollidingCallerSource = @"
+using System.Collections.Generic;
+using System.IO;
+using static Corpus.Aux.StubSupport;
+
+namespace Corpus.Main
+{
+    public class Consumer
+    {
+        public string F() => File(Path.GetFileName(""a/b""));
+
+        public string H() => Keep(""x"");
+
+        public string[] G() => List<string>(new List<string> { ""y"" }[0]);
+    }
+}
+";
+
+    /// <summary>
+    /// A <c>using static</c> member whose name is also an imported type keeps
+    /// its owner qualifier: gsc resolves the bare name to the TYPE, so a bare
+    /// <c>File(x)</c> would bind as a conversion to <c>System.IO.File</c>
+    /// (GS0155). C# picks the member in an invocation, so the translation must
+    /// spell it out. (A non-invoked reference has no such case: C# itself
+    /// reports CS0229 for a member-vs-type ambiguity there.) This is the nightly
+    /// self-migration regression in
+    /// <c>GSharp.GeneratorHost.Tests/GeneratedRegexStubTests.cs</c>.
+    /// </summary>
+    [Fact]
+    public void UsingStaticMember_WhoseNameIsAnImportedType_IsQualified()
+    {
+        string rendered = Translate(CollidingAuxSource, CollidingCallerSource);
+
+        Assert.Contains("StubSupport.File(", rendered, StringComparison.Ordinal);
+
+        // The explicit-generic form collides with `List[T]` the same way.
+        Assert.Contains("StubSupport.List[string](", rendered, StringComparison.Ordinal);
+
+        // No collision, no qualifier: the ADR-0134 bare form is unchanged.
+        Assert.Contains("Keep(\"x\")", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("StubSupport.Keep", rendered, StringComparison.Ordinal);
+    }
+
+    private const string CollidingInterfaceAuxSource = @"
+namespace Corpus.Aux
+{
+    public interface IStubHelpers
+    {
+        static string File(string source) => source + ""!"";
+
+        static T[] List<T>(T value) => new T[] { value };
+
+        static string Keep(string source) => source;
+    }
+}
+";
+
+    private const string CollidingInterfaceCallerSource = @"
+using System.Collections.Generic;
+using System.IO;
+using static Corpus.Aux.IStubHelpers;
+
+namespace Corpus.Main
+{
+    public class Consumer
+    {
+        public string F() => File(Path.GetFileName(""a/b""));
+
+        public string[] G() => List<string>(new List<string> { ""y"" }[0]);
+
+        public string H() => Keep(""x"");
+    }
+}
+";
+
+    /// <summary>
+    /// The same rule for a <c>using static</c> INTERFACE owner: C# imports an
+    /// interface's concrete static methods, and G# spells them as
+    /// <c>shared</c> interface members, so a colliding call keeps its
+    /// qualifier in both the plain and the explicit-generic form.
+    /// </summary>
+    [Fact]
+    public void UsingStaticInterfaceMember_WhoseNameIsAnImportedType_IsQualified()
+    {
+        string rendered = Translate(CollidingInterfaceAuxSource, CollidingInterfaceCallerSource);
+
+        Assert.Contains("IStubHelpers.File(", rendered, StringComparison.Ordinal);
+        Assert.Contains("IStubHelpers.List[string](", rendered, StringComparison.Ordinal);
+        Assert.Contains("Keep(\"x\")", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("IStubHelpers.Keep", rendered, StringComparison.Ordinal);
+    }
+
+    private static string TranslateCaller() => Translate(AuxSource, CallerSource);
+
+    private static string Translate(string auxSource, string callerSource)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[]
             {
-                ("EnumUtil.cs", AuxSource),
-                ("Caller.cs", CallerSource),
+                ("EnumUtil.cs", auxSource),
+                ("Caller.cs", callerSource),
             });
 
         Assert.True(

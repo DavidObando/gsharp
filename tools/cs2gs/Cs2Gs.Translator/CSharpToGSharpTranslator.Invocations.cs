@@ -353,13 +353,27 @@ public sealed partial class CSharpToGSharpTranslator
             else if (invocation.Expression is GenericNameSyntax generic)
             {
                 ISymbol genericSymbol = this.context.GetSymbolInfo(invocation).Symbol;
+
+                // A `using static` generic call whose name a file-scope type
+                // claims (`List[string](x)` beside `import
+                // System.Collections.Generic`) would bind as that type in gsc,
+                // so it keeps its owner qualifier, as the non-generic branch
+                // below does. That includes a `using static` INTERFACE owner:
+                // C# imports its concrete static methods, and G# spells them
+                // as `shared` interface members.
                 if (genericSymbol is IMethodSymbol genericMethod
                     && genericMethod.IsStatic
                     && genericMethod.ContainingType is INamedTypeSymbol genericOwner
-                    && (genericOwner.TypeKind == TypeKind.Class || genericOwner.TypeKind == TypeKind.Struct)
-                    && RequiresQualifiedImportedContextualCall(
-                        genericMethod,
-                        includeGenericPrefix: true))
+                    && (genericOwner.TypeKind == TypeKind.Class
+                        || genericOwner.TypeKind == TypeKind.Struct
+                        || (genericOwner.TypeKind == TypeKind.Interface && this.IsStaticUsingTarget(genericOwner)))
+                    && (RequiresQualifiedImportedContextualCall(
+                            genericMethod,
+                            includeGenericPrefix: true)
+                        || (this.IsStaticUsingTarget(genericOwner)
+                            && this.typeMapper.ClaimsDocumentScopeName(
+                                this.EmittedName(genericMethod, generic.Identifier.ValueText),
+                                this.context))))
                 {
                     target = new MemberAccessExpression(
                         this.StaticQualifierReceiver(
@@ -407,10 +421,15 @@ public sealed partial class CSharpToGSharpTranslator
                 staticMethod.IsStatic &&
                 staticMethod.MethodKind != MethodKind.LocalFunction &&
                 staticMethod.ContainingType is INamedTypeSymbol owner &&
-                (owner.TypeKind == TypeKind.Class || owner.TypeKind == TypeKind.Struct) &&
+                (owner.TypeKind == TypeKind.Class
+                    || owner.TypeKind == TypeKind.Struct
+                    || (owner.TypeKind == TypeKind.Interface && this.IsStaticUsingTarget(owner))) &&
                 !owner.IsImplicitlyDeclared &&
                 (!this.IsStaticUsingTarget(owner)
-                    || RequiresQualifiedImportedContextualCall(staticMethod)) &&
+                    || RequiresQualifiedImportedContextualCall(staticMethod)
+                    || this.typeMapper.ClaimsDocumentScopeName(
+                        this.EmittedName(staticMethod, staticMethod.Name),
+                        this.context)) &&
                 !SymbolEqualityComparer.Default.Equals(owner.OriginalDefinition, this.entryType?.OriginalDefinition) &&
                 !this.IsBareSiblingStaticScope(
                     owner,
@@ -424,7 +443,14 @@ public sealed partial class CSharpToGSharpTranslator
                 // owning type (`Geometry.Round(value, 2)`); see ADR-0115 §B.18.
                 // A bare call to a `using static` member is the exception
                 // (ADR-0134): gsc brings it into scope through `import Owner`,
-                // so it is left unqualified above.
+                // so it is left unqualified above — UNLESS its name is also
+                // claimed at file scope by an imported or source type (or an
+                // alias). gsc resolves that name to the type first, so a bare
+                // `Project(src)` beside `import Microsoft.CodeAnalysis` binds as
+                // a conversion to `Microsoft.CodeAnalysis.Project` (GS0155),
+                // where C# chose the `using static` method. Such a call keeps
+                // its owner qualifier (`StubTestSupport.Project(src)`), exactly
+                // as a colliding sibling static does (issue #3471).
                 // Issue #1886: a `static` LOCAL function is NOT a sibling type
                 // member — Roslyn still reports its enclosing TYPE as
                 // `ContainingType`, but cs2gs already lowers it to a local `let`
