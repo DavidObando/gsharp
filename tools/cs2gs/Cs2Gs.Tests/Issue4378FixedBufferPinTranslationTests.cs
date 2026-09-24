@@ -219,23 +219,41 @@ public class Issue4378FixedBufferPinTranslationTests
 
         string workDir = Path.Combine(AppContext.BaseDirectory, "issue-4378-e2e", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(workDir);
-        string gsPath = Path.Combine(workDir, "Snippet.gs");
-        string dllPath = Path.Combine(workDir, "Snippet.dll");
-        File.WriteAllText(
-            gsPath,
-            printed + Environment.NewLine +
-                $"Console.WriteLine({callExpression})" + Environment.NewLine);
+        try
+        {
+            string gsPath = Path.Combine(workDir, "Snippet.gs");
+            string dllPath = Path.Combine(workDir, "Snippet.dll");
+            File.WriteAllText(
+                gsPath,
+                printed + Environment.NewLine +
+                    $"Console.WriteLine({callExpression})" + Environment.NewLine);
 
-        (int compileExit, string compileOut) = RunDotnet(
-            $"\"{compiler}\" /target:exe /out:\"{dllPath}\" \"{gsPath}\"");
-        Assert.True(
-            compileExit == 0 && !compileOut.Contains("error", StringComparison.OrdinalIgnoreCase),
-            "gsc must compile the translated snippet with zero errors. Output:\n" + compileOut +
-                "\n\nTranslated G#:\n" + printed);
+            (int compileExit, string compileOut) = RunDotnet(
+                $"\"{compiler}\" /target:exe /out:\"{dllPath}\" \"{gsPath}\"");
+            Assert.True(
+                compileExit == 0 && !compileOut.Contains("error", StringComparison.OrdinalIgnoreCase),
+                "gsc must compile the translated snippet with zero errors. Output:\n" + compileOut +
+                    "\n\nTranslated G#:\n" + printed);
 
-        (int runExit, string stdout) = RunDotnet($"\"{dllPath}\"");
-        Assert.True(runExit == 0, "Translated snippet must run successfully. Output:\n" + stdout);
-        return stdout;
+            (int runExit, string stdout) = RunDotnet($"\"{dllPath}\"");
+            Assert.True(runExit == 0, "Translated snippet must run successfully. Output:\n" + stdout);
+            return stdout;
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(workDir, recursive: true);
+            }
+            catch (IOException)
+            {
+                // Best-effort cleanup.
+            }
+            catch (UnauthorizedAccessException)
+            {
+                // Best-effort cleanup.
+            }
+        }
     }
 
     private static (int Exit, string Output) RunDotnet(string arguments)
