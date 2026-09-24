@@ -560,6 +560,56 @@ Console.WriteLine(Err().Go())
             new[] { "q1 a1", "h1" },
         };
 
+        // A generic base method whose type parameter is bounded by the base
+        // class's own type parameter (`M[U T1, V T2]` on `Base2[T1, T2]`).
+        // When the derived class closes `T1`, the forwarder's clone must carry
+        // the concrete bound (`Animal`), not a VAR the forwarder's class does
+        // not have (UnsatisfiedMethodInst / VerificationException). The test
+        // covers fully and partially closed bases, a call and a method group.
+        yield return new object[]
+        {
+            "forwarded-generic-method-with-dependent-bound",
+            @"
+package P
+import System
+
+open class Animal {
+    open func Name() string -> ""animal""
+}
+class Dog : Animal {
+    override func Name() string -> ""dog""
+}
+
+open class Base2[T1, T2] {
+    open func M[U T1, V T2](u U, v V) string -> ""base2 "" + u.ToString() + "" "" + v.ToString()
+}
+
+class Derived[B] : Base2[Animal, B] {
+    override func M[U Animal, V B](u U, v V) string -> ""derived""
+    func Go(b B) string {
+        let f = () -> base.M(Dog(), b)
+        return f()
+    }
+}
+
+class Zoo : Base2[Animal, Animal] {
+    override func M[U Animal, V Animal](u U, v V) string -> ""zoo""
+    func Go() string {
+        let f = () -> base.M(Dog(), Animal())
+        let group = func () string {
+            let m (Dog, Dog) -> string = base.M
+            return m(Dog(), Dog())
+        }
+        return f() + "" | "" + group()
+    }
+}
+
+Console.WriteLine(Derived[string]().Go(""s""))
+Console.WriteLine(Zoo().Go())
+",
+            new[] { "base2 P.Dog s", "base2 P.Dog P.Animal | base2 P.Dog P.Dog" },
+        };
+
         // A direct call and a method group of the same base method can observe
         // different return types (a `() -> object` group over a `string`
         // method, a `() -> Task` group over a `Task<int32>` one). Each gets

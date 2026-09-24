@@ -643,10 +643,35 @@ public static class BaseCallForwarderRewriter
                 clone.ClassConstraint = tp.ClassConstraint is { } classConstraint
                     ? Binder.SubstituteType(classConstraint, substitution)
                     : null;
-                clone.TypeParameterBound = tp.TypeParameterBound is { } bound
-                    && substitution.TryGetValue(bound, out var mappedBound)
-                    ? mappedBound as TypeParameterSymbol
-                    : tp.TypeParameterBound;
+
+                // A dependent bound (`[U T]`) follows its substitution. When the
+                // derived class closes the declaring type's `T` (`Derived :
+                // Base[Animal]`), the bound becomes the concrete type argument:
+                // an interface lands in the interface slot and anything else
+                // in the class slot, so the forwarder's metadata constraint
+                // names `Animal` rather than a `VAR(0)` the non-generic
+                // forwarder class does not have.
+                clone.TypeParameterBound = tp.TypeParameterBound;
+                if (tp.TypeParameterBound is { } bound
+                    && substitution.TryGetValue(bound, out var mappedBound))
+                {
+                    clone.TypeParameterBound = mappedBound as TypeParameterSymbol;
+                    if (mappedBound is not TypeParameterSymbol)
+                    {
+                        if (mappedBound is InterfaceSymbol mappedInterface)
+                        {
+                            clone.InterfaceConstraint ??= mappedInterface;
+                        }
+                        else if (mappedBound.ClrType is { IsInterface: true })
+                        {
+                            clone.ClrInterfaceConstraint ??= mappedBound;
+                        }
+                        else
+                        {
+                            clone.ClassConstraint ??= mappedBound;
+                        }
+                    }
+                }
             }
 
             return clones.ToImmutable();
