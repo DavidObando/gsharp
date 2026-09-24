@@ -1432,8 +1432,13 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
                 }
 
+                // `node.GetLocation()` dereferences `node`, so its receiver
+                // takes the ordinary receiver forgiveness (issue #4356): a
+                // receiver whose G# counterpart is `T?` (`operation.Syntax`,
+                // BoundNode.Syntax) needs the same `!!` a `.Location` read
+                // written by hand would.
                 result = new MemberAccessExpression(
-                    this.TranslateExpression(locationReceiver.Expression),
+                    this.TranslateReceiverWithNullForgiveness(locationReceiver.Expression),
                     "Location",
                     isArrow: false);
                 return true;
@@ -2023,8 +2028,10 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // `symbol.Locations` dereferences `symbol`: ordinary receiver
+            // forgiveness, as for any member read (issue #4356).
             result = new MemberAccessExpression(
-                this.TranslateExpression(locationsAccess.Expression),
+                this.TranslateReceiverWithNullForgiveness(locationsAccess.Expression),
                 "Location",
                 isArrow: false);
             return true;
@@ -2081,10 +2088,19 @@ public sealed partial class CSharpToGSharpTranslator
             });
 
             this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Syntax");
-            GExpression parentKind = new MemberAccessExpression(
+
+            // Issue #4356: the C# is a pattern TEST on `X.Parent` — a nil parent
+            // simply fails `is AssignmentExpressionSyntax a` — never a
+            // dereference of it. So the synthesized `.Kind` read is
+            // null-conditional (`X.Parent?.Kind == SyntaxKind.…`, false for a
+            // nil parent), not the `!!` the ordinary receiver forgiveness would
+            // pick for a `T?` receiver like `SyntaxNode.Parent`: asserting would
+            // turn "not an assignment target" into a NullReferenceException.
+            // The lifted `SyntaxKind?` only feeds `==`, so the `?.` result
+            // type is harmless here.
+            GExpression parentKind = new ConditionalAccessExpression(
                 this.TranslateExpression(parentExpression),
-                "Kind",
-                isArrow: false);
+                new MemberAccessExpression(new ConditionalReceiverExpression(), "Kind", isArrow: false));
             GExpression Test(string kindName)
                 => new BinaryExpression(
                     parentKind,

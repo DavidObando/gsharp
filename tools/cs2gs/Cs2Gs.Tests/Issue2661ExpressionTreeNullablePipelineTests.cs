@@ -51,7 +51,11 @@ public sealed class Issue2661ExpressionTreeNullablePipelineTests
             Directory.GetFiles(runDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
 
-        Assert.DoesNotContain("b.Conversion!!", emitted, StringComparison.Ordinal);
+        // Issue #4356: the reference receiver takes `!!` inside the tree too —
+        // gsc elides a receiver check over a platform operand there and erases
+        // a reference-type assertion (#3349) — while the nullable VALUE-type
+        // reads keep their tree-safe spellings.
+        Assert.Contains("b.Conversion!!.AccountId", emitted, StringComparison.Ordinal);
         Assert.DoesNotContain("b.PurchaseDate!!", emitted, StringComparison.Ordinal);
         Assert.Contains(".Select((b Book) -> b.PurchaseDate.Value)", emitted, StringComparison.Ordinal);
         Assert.Contains("book.Conversion!!.AccountId", emitted, StringComparison.Ordinal);

@@ -207,6 +207,34 @@ internal sealed class DocumentTranslationState
     // before the guards that protect it.
     public List<GStatement> ShortCircuitSpillDeclarations { get; set; }
 
+    // Issue #4356: pattern-lowering receivers (member reads, and the locals a
+    // nested member is bound to) whose EMITTED G# type is a nullable reference
+    // although their Roslyn type says otherwise — ADR-0169 analyzer-API members
+    // such as `ParameterSyntax.Identifier` (a Roslyn `SyntaxToken` struct,
+    // `SyntaxToken?` in G#). Keyed by node identity: the lowering passes the
+    // same GExpression instance down to the nested test it builds.
+    public HashSet<Cs2Gs.CodeModel.Ast.GExpression> GSharpNullablePatternReceivers { get; } =
+        new HashSet<Cs2Gs.CodeModel.Ast.GExpression>(ReferenceEqualityComparer.Instance);
+
+    // Issue #4356: `var` locals a nested nullable pattern member is STORED in
+    // (so a designation's binding can read it after the test). A binding is
+    // materialized after the test's block expression has finished, outside
+    // the `!= nil` guard that narrowed the local, so every read BELOW the guard
+    // — member tests and descendant bindings alike — goes through `local!!`.
+    public HashSet<Cs2Gs.CodeModel.Ast.GExpression> StoredPatternCaptures { get; } =
+        new HashSet<Cs2Gs.CodeModel.Ast.GExpression>(ReferenceEqualityComparer.Instance);
+
+    // Issue #4356: for each local cs2gs EMITTED, whether its G# type is `T?`
+    // because of the ADR-0169 analyzer map (an untyped `let` inferred from
+    // `parameter.Identifier` is `SyntaxToken?` although Roslyn types it as the
+    // struct). Recorded where the local is emitted, from the initializer that
+    // was actually emitted. A local with NO entry — a binding shape not hooked
+    // here — is treated as nullable when its Roslyn type could be `T?` on the G#
+    // side (RoslynAnalyzerApiMap.IsGSharpNullableCapableType), so a miss costs a
+    // redundant `!!`, never a bare dereference of a `T?`.
+    public Dictionary<Microsoft.CodeAnalysis.ILocalSymbol, bool> EmittedLocalGSharpNullability { get; } =
+        new Dictionary<Microsoft.CodeAnalysis.ILocalSymbol, bool>(Microsoft.CodeAnalysis.SymbolEqualityComparer.Default);
+
     // Outermost short-circuit operand currently redirecting fallback pattern
     // spills. Nested lambdas/local functions must not reuse its declaration seam.
     public SyntaxNode ShortCircuitSpillScope { get; set; }

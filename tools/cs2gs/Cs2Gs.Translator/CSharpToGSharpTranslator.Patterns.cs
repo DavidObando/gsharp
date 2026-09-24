@@ -887,7 +887,8 @@ public sealed partial class CSharpToGSharpTranslator
                 && (requiresNativeDisjunctiveNarrowing
                     || (!PatternReadsScrutineeAtMostOnce(isPattern.Pattern)
                         && !this.IsSmartCastableScrutinee(isPattern.Expression))
-                    || PatternRequiresNestedTypeNarrowing(isPattern.Pattern)))
+                    || PatternRequiresNestedTypeNarrowing(isPattern.Pattern)
+                    || this.PatternTestsMembersOfNullableMember(isPattern.Pattern)))
             {
                 var bindings = new List<(ISymbol Symbol, GExpression Replacement)>();
                 var guards = new List<GExpression>();
@@ -941,6 +942,111 @@ public sealed partial class CSharpToGSharpTranslator
                 receiverType,
                 isPattern.Expression);
             return this.MaterializeFallbackPatternBindings(isPattern, receiver, test);
+        }
+
+        // Issue #4356: true when a property subpattern reads a member whose
+        // declared type is a nullable reference (or, in ADR-0169 analyzer mode,
+        // whose G# analyzer-API counterpart is `T?` although Roslyn's is not)
+        // more than once through a property pattern — nested (`{ P: { X: 0 } }`,
+        // `{ P: not { X: 1 } }`) or extended (`{ P.X: 0 }`). C# reads `P` once and
+        // tests every nested subpattern against that one value. Guard-lowering
+        // cannot: it emits `o.P != nil && o.P!!.X == 0`, which reads `P` twice,
+        // so a getter that is non-nil and then nil throws where C# matches
+        // (and gsc never narrows the unstable second read anyway). G#'s native
+        // property pattern evaluates each member once, like C#, so such
+        // patterns take that form (see TranslateIsPattern). This is a
+        // preference for the clearer output, not the correctness guarantee:
+        // a shape the native form cannot express falls back to the lowering,
+        // which binds a nested member once itself (TranslatePatternTest).
+        private bool PatternTestsMembersOfNullableMember(PatternSyntax pattern)
+        {
+            switch (pattern)
+            {
+                case RecursivePatternSyntax recursive:
+                    foreach (SubpatternSyntax subpattern in
+                        recursive.PropertyPatternClause?.Subpatterns
+                        ?? default(SeparatedSyntaxList<SubpatternSyntax>))
+                    {
+                        if (subpattern.NameColon != null
+                            && IsNativePropertyPatternShape(subpattern.Pattern)
+                            && (IsNullableReference(this.TryGetSubpatternMemberType(subpattern))
+                                || this.IsGSharpNullableAnalyzerApiMember(
+                                    this.GetPatternMemberSymbol(subpattern.NameColon.Name))))
+                        {
+                            return true;
+                        }
+
+                        if (subpattern.ExpressionColon?.Expression is MemberAccessExpressionSyntax path)
+                        {
+                            for (ExpressionSyntax link = path.Expression;
+                                link != null;
+                                link = (link as MemberAccessExpressionSyntax)?.Expression)
+                            {
+                                if (IsNullableReference(this.ResolveDeclaredReceiverType(
+                                        this.context.GetTypeInfo(link).Type, link))
+                                    || this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(link).Symbol))
+                                {
+                                    return true;
+                                }
+                            }
+                        }
+
+                        if (this.PatternTestsMembersOfNullableMember(subpattern.Pattern))
+                        {
+                            return true;
+                        }
+                    }
+
+                    foreach (SubpatternSyntax subpattern in
+                        recursive.PositionalPatternClause?.Subpatterns
+                        ?? default(SeparatedSyntaxList<SubpatternSyntax>))
+                    {
+                        if (this.PatternTestsMembersOfNullableMember(subpattern.Pattern))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+
+                case UnaryPatternSyntax unary:
+                    return this.PatternTestsMembersOfNullableMember(unary.Pattern);
+
+                case BinaryPatternSyntax binary:
+                    return this.PatternTestsMembersOfNullableMember(binary.Left)
+                        || this.PatternTestsMembersOfNullableMember(binary.Right);
+
+                case ParenthesizedPatternSyntax parenthesized:
+                    return this.PatternTestsMembersOfNullableMember(parenthesized.Pattern);
+
+                default:
+                    return false;
+            }
+
+            // Only shapes whose native G# spelling is exact: a property
+            // pattern, optionally negated or parenthesized. Anything else
+            // (a positional nested pattern, a combinator) stays on the
+            // lowering, which binds the member once itself.
+            static bool IsNativePropertyPatternShape(PatternSyntax nested)
+            {
+                if (nested is UnaryPatternSyntax unary)
+                {
+                    return IsNativePropertyPatternShape(unary.Pattern);
+                }
+
+                if (nested is ParenthesizedPatternSyntax parenthesized)
+                {
+                    return IsNativePropertyPatternShape(parenthesized.Pattern);
+                }
+
+                return nested is RecursivePatternSyntax recursive
+                    && recursive.PositionalPatternClause == null
+                    && recursive.PropertyPatternClause != null
+                    && recursive.PropertyPatternClause.Subpatterns.Count > 0;
+            }
+
+            static bool IsNullableReference(ITypeSymbol type) =>
+                type is { IsReferenceType: true } && type.NullableAnnotation == NullableAnnotation.Annotated;
         }
 
         // Issue #3555: true when a property subpattern's value is itself a
@@ -1163,6 +1269,196 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => false,
             };
 
+        /// <summary>
+        /// Issue #4356: whether the boolean lowering of <paramref name="pattern"/>
+        /// over a NULLABLE nested member embeds that member more than once — a
+        /// type test, a <c>!= nil</c> guard, and one read per property/positional
+        /// subpattern each read it, and a designation re-reads it wherever it is
+        /// used. That is the shape where a re-read is not merely redundant but
+        /// wrong: the first read is what the nil test (or type test) proved,
+        /// and a later read that yields nil throws where C# matches or falls
+        /// through. A single subpattern over a member that needs no guard reads
+        /// it once and needs no local.
+        /// <para>
+        /// A NON-nullable member re-read (<c>expr.Kind == A || expr.Kind == B</c>
+        /// for <c>{ Kind: A or B }</c>) is left as it was: it cannot fail a nil
+        /// test it never had, the self-migration inventory keeps the synthesized
+        /// temporaries it would add retired (Issue3347RemainingSpillInventoryTests),
+        /// and it is a pre-existing readability tradeoff outside #4356.
+        /// </para>
+        /// </summary>
+        /// <param name="pattern">The nested pattern.</param>
+        /// <param name="receiverType">The receiver's declared C# type, if known.</param>
+        /// <param name="receiver">The translated receiver (for the analyzer-mode registry).</param>
+        /// <returns>True when a single-evaluation local is needed.</returns>
+        private bool LoweredPatternReadsReceiverMoreThanOnce(
+            PatternSyntax pattern,
+            ITypeSymbol receiverType,
+            GExpression receiver)
+        {
+            bool gsharpNullable = this.IsGSharpNullablePatternReceiver(receiver);
+            bool nullableMember = gsharpNullable
+                || (receiverType != null
+                    && ((receiverType.IsReferenceType
+                            && receiverType.NullableAnnotation == NullableAnnotation.Annotated)
+                        || receiverType.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T));
+            return nullableMember && CountReads(pattern) > 1;
+
+            int CountReads(PatternSyntax current)
+            {
+                switch (current)
+                {
+                    case RecursivePatternSyntax recursive:
+                        if (recursive.Designation is SingleVariableDesignationSyntax)
+                        {
+                            return 2;
+                        }
+
+                        bool guarded = recursive.Type == null
+                            && (gsharpNullable || receiverType != null)
+                            && (gsharpNullable
+                                || (receiverType.IsReferenceType
+                                    && receiverType.NullableAnnotation == NullableAnnotation.Annotated)
+                                || receiverType.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T);
+                        return (recursive.Type != null ? 1 : 0)
+                            + (guarded ? 1 : 0)
+                            + (recursive.PropertyPatternClause?.Subpatterns.Count ?? 0)
+                            + (recursive.PositionalPatternClause?.Subpatterns.Count ?? 0);
+
+                    case UnaryPatternSyntax unary:
+                        return CountReads(unary.Pattern);
+
+                    case ParenthesizedPatternSyntax parenthesized:
+                        return CountReads(parenthesized.Pattern);
+
+                    case BinaryPatternSyntax binary:
+                        return CountReads(binary.Left) + CountReads(binary.Right);
+
+                    default:
+                        return PatternReadsScrutineeAtMostOnce(current) ? 1 : 2;
+                }
+            }
+        }
+
+        /// <summary>
+        /// Issue #4356: THE test for whether an extended-property-path link is
+        /// nullable in the emitted G# — a Roslyn-annotated nullable reference, a
+        /// <c>Nullable&lt;T&gt;</c> value, or a member that is <c>T?</c> only on
+        /// the ADR-0169 analyzer API. Every lowering that walks such a path
+        /// (the <c>is</c>-expression lowering and the typed switch arm) asks
+        /// this one predicate, so a link cannot be nullable to one and not the
+        /// other.
+        /// </summary>
+        /// <param name="declaredType">The link's declared C# type.</param>
+        /// <param name="link">The link's syntax.</param>
+        /// <returns>True when the link needs a nil guard and a single read.</returns>
+        private bool IsNullablePatternLink(ITypeSymbol declaredType, ExpressionSyntax link) =>
+            (declaredType is { IsReferenceType: true }
+                && declaredType.NullableAnnotation == NullableAnnotation.Annotated)
+            || IsNullableValueType(declaredType)
+            || this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(link).Symbol);
+
+        private static bool IsNullableValueType(ITypeSymbol type) =>
+            type?.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T;
+
+        /// <summary>
+        /// Issue #4356: the declared type of a property/field a pattern slot reads
+        /// (a property subpattern's member, or a positional slot's matching
+        /// member), registering <paramref name="memberAccess"/> as a G#-nullable
+        /// receiver when the ADR-0169 analyzer map makes it <c>T?</c>. Every
+        /// nested-member entry point passes this type to TranslatePatternTest, so
+        /// the read-once classifier always knows the slot's nullability.
+        /// </summary>
+        /// <param name="member">The slot's member symbol, if bound.</param>
+        /// <param name="memberAccess">The translated member read.</param>
+        /// <returns>The member's declared type, or null.</returns>
+        private ITypeSymbol RegisterPatternMemberSlot(ISymbol member, GExpression memberAccess)
+        {
+            if (this.IsGSharpNullableAnalyzerApiMember(member))
+            {
+                this.state.GSharpNullablePatternReceivers.Add(memberAccess);
+            }
+
+            return member switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                _ => null,
+            };
+        }
+
+        /// <summary>
+        /// Issue #4356: whether a pattern-lowering receiver's EMITTED G# type is a
+        /// nullable reference although its Roslyn type is not (an ADR-0169
+        /// analyzer-API member such as <c>ParameterSyntax.Identifier</c>, or a
+        /// local bound to one). See
+        /// <c>DocumentTranslationState.GSharpNullablePatternReceivers</c>.
+        /// </summary>
+        /// <param name="receiver">The translated receiver.</param>
+        /// <returns>True when the receiver is <c>T?</c> in G#.</returns>
+        private bool IsGSharpNullablePatternReceiver(GExpression receiver) =>
+            receiver != null && this.state.GSharpNullablePatternReceivers.Contains(receiver);
+
+        /// <summary>
+        /// Issue #4356: binds a nested pattern member to a <c>let</c> local once,
+        /// inside the test that reads it, and translates that test over the local.
+        /// </summary>
+        /// <param name="member">The member value, e.g. <c>o.P</c>.</param>
+        /// <param name="test">Builds the test over the bound local.</param>
+        /// <returns><c>{ let t = member; test(t) }</c>.</returns>
+        private GExpression BindPatternMemberOnce(GExpression member, Func<GExpression, GExpression> test)
+        {
+            string temp = $"__spill{this.state.SpillCounter++}";
+            var local = new IdentifierExpression(temp);
+            if (this.IsGSharpNullablePatternReceiver(member))
+            {
+                this.state.GSharpNullablePatternReceivers.Add(local);
+            }
+
+            return new BlockExpression(
+                new List<GStatement> { new LocalDeclarationStatement(BindingKind.Let, temp, type: null, initializer: member) },
+                test(local));
+        }
+
+        /// <summary>
+        /// Issue #4356: as <see cref="BindPatternMemberOnce"/>, for a nested
+        /// pattern that declares a designation: the local is a <c>var</c> declared
+        /// in <paramref name="declarations"/> (so a binder that refers to it stays
+        /// in scope after the test) and assigned inside the test.
+        /// </summary>
+        /// <param name="member">The member value, e.g. <c>o.P</c>.</param>
+        /// <param name="memberType">The member's C# type.</param>
+        /// <param name="gsharpNullable">Whether the member is <c>T?</c> only on the G# analyzer API.</param>
+        /// <param name="declarations">The enclosing declaration seam.</param>
+        /// <param name="test">Builds the test over the stored local.</param>
+        /// <returns><c>{ t = member; test(t) }</c>.</returns>
+        private GExpression StorePatternMemberOnce(
+            GExpression member,
+            ITypeSymbol memberType,
+            bool gsharpNullable,
+            List<GStatement> declarations,
+            Func<GExpression, GExpression> test)
+        {
+            GTypeReference storageType = this.typeMapper.Map(memberType, this.context, location: null);
+            if (memberType.IsReferenceType || gsharpNullable)
+            {
+                storageType = MakeNullable(storageType);
+            }
+
+            string temp = $"__spill{this.state.SpillCounter++}";
+            var local = new IdentifierExpression(temp);
+            this.state.StoredPatternCaptures.Add(local);
+            if (gsharpNullable)
+            {
+                this.state.GSharpNullablePatternReceivers.Add(local);
+            }
+
+            declarations.Add(new LocalDeclarationStatement(BindingKind.Var, temp, storageType));
+            return new BlockExpression(
+                new List<GStatement> { new AssignmentStatement(local, member) },
+                test(local));
+        }
+
         private GExpression TranslatePatternTest(
             GExpression receiver,
             PatternSyntax pattern,
@@ -1170,6 +1466,52 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax receiverSyntax = null,
             bool isNestedPatternMember = false)
         {
+            // Issue #4356: C# evaluates a subpattern's member ONCE and tests
+            // every nested subpattern against that one value; for a NULLABLE
+            // member (see LoweredPatternReadsReceiverMoreThanOnce) a re-read can
+            // be nil after the first read was proved non-nil. TranslateIsPattern
+            // applies that rule to the top-level scrutinee (it spills a
+            // non-trivial one into a local when the pattern reads it more than
+            // once); this is the same rule for a NESTED member (`o.P` in
+            // `{ P: { X: 0 } }`, `{ P: (0, 0) }`, `{ P: not { X: 1 } }`, a list
+            // element), which the lowering below would otherwise re-embed in a
+            // `!= nil` guard and in every member test — reading an unstable
+            // getter twice, where a value that is non-nil and then nil throws.
+            // The local is bound INSIDE the test (`{ let t = o.P; t != nil &&
+            // t.X == 0 }`), never in the statement prologue, so it is evaluated
+            // only after the enclosing guard has proved `o` non-nil; and a `let`
+            // local is smart-cast by that guard, so no `!!` is needed.
+            // A pattern that declares a designation needs its binder's
+            // replacement visible OUTSIDE the test, so its local is a `var`
+            // declared in the enclosing declaration seam and only ASSIGNED
+            // inside the test (`{ t = o.P; t != nil && t.X == 0 }`) — same
+            // single read, same evaluation order. In ADR-0169 analyzer mode a
+            // member whose G# counterpart is `T?` but whose Roslyn type is a
+            // struct counts as nullable here too (GSharpNullablePatternReceivers).
+            if (isNestedPatternMember
+                && !IsTrivialOperand(receiver)
+                && this.LoweredPatternReadsReceiverMoreThanOnce(pattern, receiverType, receiver))
+            {
+                Func<GExpression, GExpression> test =
+                    local => this.TranslatePatternTest(local, pattern, receiverType, receiverSyntax, isNestedPatternMember);
+                if (!PatternIntroducesBinding(pattern))
+                {
+                    return this.BindPatternMemberOnce(receiver, test);
+                }
+
+                List<GStatement> declarations =
+                    this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue;
+                if (declarations != null && receiverType != null && receiverType.TypeKind != TypeKind.Error)
+                {
+                    return this.StorePatternMemberOnce(
+                        receiver,
+                        receiverType,
+                        this.IsGSharpNullablePatternReceiver(receiver),
+                        declarations,
+                        test);
+                }
+            }
+
             switch (pattern)
             {
                 case ConstantPatternSyntax paramsNull
@@ -1275,6 +1617,12 @@ public sealed partial class CSharpToGSharpTranslator
                 case RecursivePatternSyntax recursive:
                     return this.TranslateRecursivePatternTest(receiver, recursive, receiverSyntax, receiverType, isNestedPatternMember);
 
+                case DiscardPatternSyntax:
+                    // `_` always matches and binds nothing (reached as the leaf of
+                    // an extended property path whose links still need guarding,
+                    // issue #4356).
+                    return LiteralExpression.Bool(true);
+
                 case VarPatternSyntax varPattern:
                     // `x is var v` ALWAYS matches (it also matches `null`, unlike a
                     // type/declaration pattern), so it lowers to the literal `true`
@@ -1340,6 +1688,14 @@ public sealed partial class CSharpToGSharpTranslator
             SeparatedSyntaxList<PatternSyntax> elements = listPattern.Patterns;
             int sliceIndex = FindSlicePatternIndex(elements);
             ITypeSymbol elementType = GetEnumerableElementType(receiverType);
+
+            // Issue #4356: the nil guard below tests `receiver`; every read under
+            // it goes through `receiver!!` when it is a stored `var` capture,
+            // whose element bindings are materialized outside the guard.
+            GExpression guardedReceiver = receiver;
+            receiver = this.state.StoredPatternCaptures.Contains(receiver)
+                ? new NonNullAssertionExpression(receiver)
+                : receiver;
             var lengthAccess = new MemberAccessExpression(receiver, "Length");
 
             GExpression test = sliceIndex < 0
@@ -1368,6 +1724,22 @@ public sealed partial class CSharpToGSharpTranslator
                 GExpression elementReceiver = this.BuildListElementReceiver(receiver, lengthAccess, i, elements.Count, sliceIndex);
                 GExpression elementTest = this.TranslatePatternTest(elementReceiver, element, elementType, isNestedPatternMember: isNestedPatternMember);
                 test = new BinaryExpression(test, "&&", elementTest);
+            }
+
+            // Issue #4356: a list pattern never matches nil, and a NESTED member
+            // tested with one (`{ P: [1] }`, `P` an `int[]?`) arrives here bound
+            // to a `let` local that is `T?` in G#. Guard it first: the guard both
+            // makes the pattern fall through on nil, as C# does, and smart-casts
+            // the local for the `.Length` / index reads.
+            if (isNestedPatternMember
+                && (this.IsGSharpNullablePatternReceiver(guardedReceiver)
+                    || (receiverType is { IsReferenceType: true }
+                        && receiverType.NullableAnnotation == NullableAnnotation.Annotated)))
+            {
+                test = new BinaryExpression(
+                    new BinaryExpression(guardedReceiver, "!=", LiteralExpression.Null()),
+                    "&&",
+                    test);
             }
 
             return test;
@@ -1701,6 +2073,16 @@ public sealed partial class CSharpToGSharpTranslator
                 receiverIsNonNullableReference = true;
             }
 
+            // Issue #4356: an analyzer-API member whose G# type is `T?` although
+            // Roslyn's is a struct (or non-null) is guarded like any nullable
+            // reference — the Roslyn-derived classification above cannot see it.
+            if (this.IsGSharpNullablePatternReceiver(receiver))
+            {
+                receiverIsValueType = false;
+                receiverIsNullableValueType = false;
+                receiverIsNonNullableReference = false;
+            }
+
             GExpression test = recursive.Type != null
                 ? this.BuildTypeTestExpression(receiver, recursive.Type, recursive)
                 : ((receiverIsValueType && !receiverIsNullableValueType) || receiverIsNonNullableReference) ? null : new BinaryExpression(receiver, "!=", LiteralExpression.Null());
@@ -1723,6 +2105,39 @@ public sealed partial class CSharpToGSharpTranslator
                 ? new NonNullAssertionExpression(receiver)
                 : receiver;
 
+            // Issue #4356: the same holds for a nested subpattern member over a
+            // nullable REFERENCE (`{ DeclaringType: { IsInterface: true } }`)
+            // when the receiver is still a member-access chain rather than a
+            // local. That happens only when the nested pattern declares a
+            // designation: otherwise TranslatePatternTest has already bound the
+            // member to a `let` local once, which the guard smart-casts (and
+            // TranslateIsPattern usually routes the whole pattern to G#'s native
+            // property pattern first, see PatternTestsMembersOfNullableMember).
+            // For a designation-bearing nested pattern the member is still read
+            // by the guard and again by each member test — the pre-existing
+            // fallback shape, kept so its binder stays visible. gsc narrows such a chain after `!= nil`
+            // only when every link is stable (SmartCastStability: a `let`
+            // field, or a non-virtual get-only auto-property); an imported
+            // `MethodInfo.DeclaringType` is neither, so
+            // `c.DeclaringType != nil && c.DeclaringType.IsInterface` bound
+            // only through gsc's old member-lookup carve-out for stated-nullable
+            // chains. The `!!` is safe for the same reason as above — the guard
+            // just proved the receiver non-nil — and where gsc DID narrow the
+            // chain it reports the assertion redundant (GS0536), which the
+            // polish pass strips.
+            if (test is BinaryExpression { Operator: "!=" }
+                && recursive.Type == null
+                && !receiverIsValueType
+                && isNestedPatternMember
+                && (receiver is not IdentifierExpression
+                    || this.state.StoredPatternCaptures.Contains(receiver)))
+            {
+                // A stored `var` capture (StorePatternMemberOnce) is read by
+                // descendant bindings AFTER the test, outside the guard that
+                // narrows it, so its reads below the guard assert too.
+                memberReceiver = EnsureNonNullAssertion(receiver);
+            }
+
             if (recursive.PropertyPatternClause != null)
             {
                 foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
@@ -1737,11 +2152,17 @@ public sealed partial class CSharpToGSharpTranslator
                     if (sub.NameColon != null)
                     {
                         string memberName = this.GetSubpatternMemberName(sub);
+                        ISymbol subpatternMember = this.GetPatternMemberSymbol(sub.NameColon.Name);
                         GExpression memberAccess = new MemberAccessExpression(
                             memberReceiver,
                             this.EmittedName(
-                                this.GetPatternMemberSymbol(sub.NameColon.Name),
+                                subpatternMember,
                                 memberName));
+                        if (this.IsGSharpNullableAnalyzerApiMember(subpatternMember))
+                        {
+                            this.state.GSharpNullablePatternReceivers.Add(memberAccess);
+                        }
+
                         ITypeSymbol memberType = this.TryGetSubpatternMemberType(sub);
                         memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, memberType, isNestedPatternMember: true);
                     }
@@ -1797,7 +2218,13 @@ public sealed partial class CSharpToGSharpTranslator
                     GExpression memberAccess = new MemberAccessExpression(
                         memberReceiver,
                         this.EmittedName(memberSymbol, memberName));
-                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, isNestedPatternMember: true);
+
+                    // Issue #4356: the slot's type lets a nested test over a
+                    // NULLABLE slot guard it and read it once, as C#'s single
+                    // Deconstruct call does (TranslatePatternTest), exactly as
+                    // the property-subpattern loop above passes its member type.
+                    ITypeSymbol slotType = this.RegisterPatternMemberSlot(memberSymbol, memberAccess);
+                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, slotType, isNestedPatternMember: true);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
             }
@@ -1957,27 +2384,101 @@ public sealed partial class CSharpToGSharpTranslator
                 current = memberAccess.Expression;
             }
 
-            GExpression memberReceiver = receiver;
-            GExpression guard = null;
-            for (int i = 0; i < names.Count - 1; i++)
-            {
-                memberReceiver = new MemberAccessExpression(memberReceiver, names[i]);
+            return this.TranslateExtendedPropertyLink(names, intermediateExprs, 0, receiver, memberPath, leafPattern);
+        }
 
-                ITypeSymbol declaredType = this.ResolveDeclaredReceiverType(
-                    this.context.GetTypeInfo(intermediateExprs[i]).Type, intermediateExprs[i]);
-                if (declaredType is { IsReferenceType: true } && declaredType.NullableAnnotation == NullableAnnotation.Annotated)
+        // Issue #4356: one link of an extended property path. A nullable
+        // intermediate is read ONCE, into a `let` local bound inside the test
+        // (`{ let t = s.Start; t != nil && t.X == 0 }`): the `!= nil` guard and
+        // the next link then read the same value, as C# does, and the guard
+        // smart-casts the local so the next link needs no `!!`. Re-reading the
+        // member (`s.Start != nil && s.Start.X == 0`) evaluated an unstable
+        // getter twice and bound only through gsc's old member-lookup carve-out.
+        private GExpression TranslateExtendedPropertyLink(
+            List<string> names,
+            ExpressionSyntax[] intermediateExprs,
+            int index,
+            GExpression memberReceiver,
+            ExpressionSyntax memberPath,
+            PatternSyntax leafPattern)
+        {
+            if (index == names.Count - 1)
+            {
+                GExpression finalMemberAccess = new MemberAccessExpression(memberReceiver, names[index]);
+                if (this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(memberPath).Symbol))
                 {
-                    GExpression stepGuard = new BinaryExpression(memberReceiver, "!=", LiteralExpression.Null());
-                    guard = guard == null ? stepGuard : new BinaryExpression(guard, "&&", stepGuard);
+                    this.state.GSharpNullablePatternReceivers.Add(finalMemberAccess);
                 }
+
+                ITypeSymbol leafType = this.context.GetTypeInfo(memberPath).Type;
+                return this.TranslatePatternTest(finalMemberAccess, leafPattern, leafType, isNestedPatternMember: true);
             }
 
-            string leafName = names[^1];
-            GExpression finalMemberAccess = new MemberAccessExpression(memberReceiver, leafName);
-            ITypeSymbol leafType = this.context.GetTypeInfo(memberPath).Type;
-            GExpression leafTest = this.TranslatePatternTest(finalMemberAccess, leafPattern, leafType, isNestedPatternMember: true);
+            GExpression link = new MemberAccessExpression(memberReceiver, names[index]);
+            ITypeSymbol declaredType = this.ResolveDeclaredReceiverType(
+                this.context.GetTypeInfo(intermediateExprs[index]).Type, intermediateExprs[index]);
 
-            return guard == null ? leafTest : new BinaryExpression(guard, "&&", leafTest);
+            // The emitted G# type decides, not Roslyn's: an analyzer-API link
+            // such as `Identifier` (a Roslyn struct) is `SyntaxToken?` in G#.
+            bool gsharpNullableLink = this.IsGSharpNullableAnalyzerApiMember(
+                this.context.GetSymbolInfo(intermediateExprs[index]).Symbol);
+
+            // A `Nullable<T>` value link (`P` in `P.X` for a `Point?` P) is
+            // nullable too. gsc's `&&` guard narrows a nullable REFERENCE local
+            // but not a nullable VALUE one (unwrapping `Nullable<T>` is a real
+            // conversion, #1943), so the next link reads it through `!!` —
+            // safe, the guard just proved it has a value.
+            bool nullableValueLink = IsNullableValueType(declaredType);
+            if (this.IsNullablePatternLink(declaredType, intermediateExprs[index]))
+            {
+                if (gsharpNullableLink)
+                {
+                    this.state.GSharpNullablePatternReceivers.Add(link);
+                }
+
+                Func<GExpression, GExpression> rest = local => new BinaryExpression(
+                    new BinaryExpression(local, "!=", LiteralExpression.Null()),
+                    "&&",
+                    this.TranslateExtendedPropertyLink(
+                        names,
+                        intermediateExprs,
+                        index + 1,
+                        nullableValueLink ? new NonNullAssertionExpression(local) : local,
+                        memberPath,
+                        leafPattern));
+
+                // A leaf that declares a designation (`Identifier.Text: var t`)
+                // leaves its binder's replacement reading through this local
+                // after the test, so the local must outlive the block: a `var`
+                // declared in the enclosing seam, assigned in the test.
+                List<GStatement> declarations =
+                    this.state.ShortCircuitSpillDeclarations ?? this.state.PendingSpillPrologue;
+                if (PatternIntroducesBinding(leafPattern) && declarations != null && declaredType != null)
+                {
+                    // The binder's replacement reads the next link through this
+                    // `var` AFTER the test, where the guard no longer narrows
+                    // it, so that read asserts — safe, the guard proved it.
+                    return this.StorePatternMemberOnce(
+                        link,
+                        declaredType,
+                        gsharpNullableLink,
+                        declarations,
+                        local => new BinaryExpression(
+                            new BinaryExpression(local, "!=", LiteralExpression.Null()),
+                            "&&",
+                            this.TranslateExtendedPropertyLink(
+                                names,
+                                intermediateExprs,
+                                index + 1,
+                                new NonNullAssertionExpression(local),
+                                memberPath,
+                                leafPattern)));
+                }
+
+                return this.BindPatternMemberOnce(link, rest);
+            }
+
+            return this.TranslateExtendedPropertyLink(names, intermediateExprs, index + 1, link, memberPath, leafPattern);
         }
 
         // Issue #1891: lowers an extended property subpattern's dotted member

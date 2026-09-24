@@ -1846,9 +1846,40 @@ public sealed partial class CSharpToGSharpTranslator
                 && (this.context.RepositoryCompilations ?? this.context.SiblingCompilations)?.Any(
                     compilation => compilation.AssemblyName == targetAssemblyName) == true
                 && this.ShouldPromoteToNullableReference(siblingParameter);
-            bool targetRequiresNonNull = argumentOperation?.Parameter is not { } targetParameter
-                || (this.TargetWillRemainNonNullableReference(targetParameter.Type, targetParameter)
-                    && !targetIsPromotedMigratedSibling);
+
+            // Issue #4356: a `T?`-only-in-G# analyzer value passed where the
+            // EMITTED parameter type is certainly non-null (a struct SyntaxToken,
+            // or a reference parameter cs2gs does not promote to `T?`). Roslyn
+            // sees the same non-null type on both sides, so the reference-type
+            // test cannot tell; ForgiveNullableReferenceValue bridges it. An
+            // expanded `params` argument has no IArgumentOperation of its own:
+            // decide from the params ELEMENT target, and assert nothing when that
+            // cannot be resolved — a missing `!!` fails to bind loudly, a wrong
+            // one turns a legal nil into a throw.
+            bool analyzerNullableArgument = this.IsGSharpNullableAnalyzerExpression(argument.Expression);
+            bool targetRequiresNonNull;
+            if (argumentOperation?.Parameter is { } targetParameter)
+            {
+                targetRequiresNonNull =
+                    (this.TargetWillRemainNonNullableReference(targetParameter.Type, targetParameter)
+                        && !targetIsPromotedMigratedSibling)
+                    || (analyzerNullableArgument
+                        && !targetIsPromotedMigratedSibling
+                        && this.AnalyzerBridgeTargetIsNonNull(targetParameter.Type, targetParameter, argument.Expression));
+            }
+            else if (analyzerNullableArgument)
+            {
+                targetRequiresNonNull = this.TryGetExpandedParamsElementTarget(
+                        argument,
+                        out ITypeSymbol analyzerParamsElementType,
+                        out IParameterSymbol analyzerParamsParameter)
+                    && this.AnalyzerBridgeTargetIsNonNull(analyzerParamsElementType, analyzerParamsParameter, argument.Expression);
+            }
+            else
+            {
+                targetRequiresNonNull = true;
+            }
+
             if (!IsNameOfArgument(argument)
                 && !isXunitNullAssertion
                 && targetRequiresNonNull
@@ -3976,6 +4007,18 @@ public sealed partial class CSharpToGSharpTranslator
             if (cast.Type is not NullableTypeSyntax
                 && this.CastUsesCheckedReferenceConversion(cast)
                 && this.IsFlowNarrowedAnnotatedReference(cast.Expression))
+            {
+                operand = EnsureNonNullAssertion(operand);
+            }
+
+            // Issue #4356: an operand that is `T?` only on the G# analyzer API
+            // (`(SyntaxToken)parameter.Identifier`, `(object)operation.Syntax`).
+            // Roslyn sees an identity/reference conversion from a non-null value;
+            // G# sees `T?` converted to a non-null type, so assert the operand —
+            // the same bridge every other value position takes.
+            if (cast.Type is not NullableTypeSyntax
+                && this.AnalyzerBridgeTargetIsNonNull(targetSymbol)
+                && this.IsGSharpNullableAnalyzerExpression(cast.Expression))
             {
                 operand = EnsureNonNullAssertion(operand);
             }

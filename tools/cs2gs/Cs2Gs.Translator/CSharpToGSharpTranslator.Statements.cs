@@ -279,6 +279,14 @@ public sealed partial class CSharpToGSharpTranslator
                         namedDelegateLocalType, this.context, declaration.Type.GetLocation());
                 }
 
+                // Issue #4356: record the emitted G# nullability of this local
+                // (analyzer mode), for every later read of it.
+                this.RecordEmittedLocalNullability(
+                    this.context.GetDeclaredSymbol(declarator) as ILocalSymbol,
+                    type,
+                    declarator.Initializer?.Value,
+                    initializer);
+
                 results.Add(new LocalDeclarationStatement(
                     binding,
                     this.EmittedName(declarator, declarator.Identifier),

@@ -125,6 +125,14 @@ public sealed class LeftCheckAnalyzer : DiagnosticAnalyzer
         Assert.Contains("SyntaxKind.CompoundIndexAssignmentExpression", printed, StringComparison.Ordinal);
         Assert.Contains("SyntaxKind.MemberFieldAssignmentExpression", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(".Left", printed, StringComparison.Ordinal);
+
+        // Issue #4356: the C# is a pattern TEST on `current.Parent` (a nil parent
+        // just fails it), so the synthesized `.Kind` read is null-conditional —
+        // not `!!`, and not a bare `.Kind` through a `SyntaxNode?` receiver,
+        // which bound only through gsc's old member-lookup carve-out.
+        Assert.Contains(".Parent?.Kind == SyntaxKind.MemberIndexAssignmentExpression", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Parent.Kind", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Parent!!.Kind", printed, StringComparison.Ordinal);
         Assert.Contains(diagnostics, d => d.DiagnosticId == "CS2GS-ANALYZER-SHAPE"
             && d.Message.Contains("write-node parent-kind check", StringComparison.Ordinal));
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
@@ -258,6 +266,11 @@ public sealed class BinaryComparisonAnalyzer : DiagnosticAnalyzer
         Assert.Contains("BoundNodeKind.TypeOfExpression", printed, StringComparison.Ordinal);
         Assert.Contains("BoundConversionExpression", printed, StringComparison.Ordinal);
         Assert.Contains("conversion.Expression", printed, StringComparison.Ordinal);
+
+        // Issue #4356: Roslyn's IOperation.Syntax is non-null, but G#'s
+        // BoundNode.Syntax is `SyntaxNode?`, so `.GetLocation()`'s rewrite to
+        // `.Location` dereferences a stated-nullable receiver and asserts it.
+        Assert.Contains("operation.Syntax!!.Location", printed, StringComparison.Ordinal);
 
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printed);
@@ -536,6 +549,553 @@ public sealed class ArgumentShapeAnalyzer : DiagnosticAnalyzer
         Assert.Contains(".Arguments", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ParameterList", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ArgumentList", printed, StringComparison.Ordinal);
+
+        // Issue #4356: Roslyn's ParameterSyntax.Identifier is a SyntaxToken
+        // struct, G#'s is `SyntaxToken?` — dereferencing it asserts.
+        Assert.Contains("declaration.Parameters[0].Identifier!!.Text", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void PropertyPatternOverRetargetedNullableMember_TakesTheNativePattern()
+    {
+        // Issue #4356: ParameterSyntax.Identifier is a SyntaxToken struct in
+        // Roslyn but `SyntaxToken?` on the G# analyzer API. A nested property
+        // pattern over it must take G#'s native pattern (one read, nil-safe),
+        // not the boolean lowering, which would treat the struct as non-nil
+        // and emit a bare `parameter.Identifier.Text`.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ParameterNameAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static bool FirstIsNamedX(MethodDeclarationSyntax declaration)
+    {
+        var parameter = declaration.ParameterList.Parameters[0];
+        return parameter is { Identifier: { Text: ""x"" } };
+    }
+}
+");
+
+        Assert.Contains("parameter is { Identifier: { Text: \"x\" } }", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(".Identifier.Text", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    /// <summary>
+    /// Issue #4356: the fallback paths (a quoted lambda, a pattern that must
+    /// leave the native form because it reassigns its binder) decide
+    /// nullability from the EMITTED G# type, not Roslyn's.
+    /// <c>ParameterSyntax.Identifier</c> is a Roslyn <c>SyntaxToken</c> struct
+    /// but <c>SyntaxToken?</c> on the G# analyzer API, so each of these
+    /// shapes used to print a bare <c>.Identifier.Text</c> chain that bound
+    /// only through gsc's member-lookup carve-out for stated-nullable chains.
+    /// </summary>
+    [Fact]
+    public void RetargetedNullableMember_InFallbackPaths_IsGuardedOrAsserted()
+    {
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Linq.Expressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class FallbackShapesAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static Expression<Func<MethodDeclarationSyntax, string>> QuotedFirstName()
+        => m => m.ParameterList.Parameters[0].Identifier.Text;
+
+    private static string ExtendedWithReassignedBinder(MethodDeclarationSyntax declaration)
+    {
+        var parameter = declaration.ParameterList.Parameters[0];
+        if (parameter is { Identifier.Text: var text })
+        {
+            text = text + ""!"";
+            return text;
+        }
+
+        return """";
+    }
+
+    private static bool NestedWithReassignedBinder(MethodDeclarationSyntax declaration)
+    {
+        var parameter = declaration.ParameterList.Parameters[0];
+        if (parameter is { Identifier: { Text: ""x"" } token })
+        {
+            var copy = token;
+            token = copy;
+            return token.Text == ""x"";
+        }
+
+        return false;
+    }
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("Identifier!!.Text", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void RetargetedNullableMember_ThroughInferredLocal_IsAsserted()
+    {
+        // Issue #4356: `var token = parameter.Identifier` emits an untyped
+        // `let`, which G# infers as `SyntaxToken?` although Roslyn types the
+        // local as the SyntaxToken struct. The local's later dereference,
+        // plain and inside a quoted lambda, must assert it like the direct read.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Linq.Expressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class InferredLocalAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static string FirstName(MethodDeclarationSyntax declaration)
+    {
+        var token = declaration.ParameterList.Parameters[0].Identifier;
+        var alias = token;
+        return alias.Text;
+    }
+
+    // A long alias chain: no fixed depth may cut it short.
+    private static string LongChain(MethodDeclarationSyntax declaration)
+    {
+        var a0 = declaration.ParameterList.Parameters[0].Identifier;
+        var a1 = a0; var a2 = a1; var a3 = a2; var a4 = a3; var a5 = a4;
+        var a6 = a5; var a7 = a6; var a8 = a7; var a9 = a8; var a10 = a9;
+        var a11 = a10; var a12 = a11;
+        return a12.Text;
+    }
+
+    // A captured inferred local read inside a quoted lambda.
+    private static Expression<Func<string>> QuotedFirstName(MethodDeclarationSyntax declaration)
+    {
+        var token = declaration.ParameterList.Parameters[0].Identifier;
+        return () => token.Text;
+    }
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("return alias!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("return a12!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("-> token!!.Text", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void RetargetedNullableMember_ThroughComposedInitializers_IsAsserted()
+    {
+        // Issue #4356: a local's G# type is inferred from its whole initializer,
+        // so a conditional, `??` or switch expression over analyzer-mapped
+        // `SyntaxToken?` members yields a `SyntaxToken?` local too — including
+        // one captured by a quoted lambda.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Linq.Expressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ComposedInitializerAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static string Conditional(MethodDeclarationSyntax declaration, bool first)
+    {
+        var chosen = first
+            ? declaration.ParameterList.Parameters[0].Identifier
+            : declaration.ParameterList.Parameters[1].Identifier;
+        return chosen.Text;
+    }
+
+    private static string Coalesced(MethodDeclarationSyntax declaration, SyntaxToken? preferred)
+    {
+        var picked = preferred ?? declaration.ParameterList.Parameters[0].Identifier;
+        return picked.Text;
+    }
+
+    private static string Switched(MethodDeclarationSyntax declaration, int which)
+    {
+        var selected = which switch
+        {
+            0 => declaration.ParameterList.Parameters[0].Identifier,
+            _ => declaration.ParameterList.Parameters[1].Identifier,
+        };
+        return selected.Text;
+    }
+
+    private static Expression<Func<string>> Quoted(MethodDeclarationSyntax declaration, bool first)
+    {
+        var chosen = first
+            ? declaration.ParameterList.Parameters[0].Identifier
+            : declaration.ParameterList.Parameters[1].Identifier;
+        return () => chosen.Text;
+    }
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("return chosen!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("return picked!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("return selected!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("-> chosen!!.Text", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void RetargetedNullableMember_ThroughEveryBindingShape_BindsWithoutCarveOut()
+    {
+        // Issue #4356: a local's emitted G# nullability is recorded where cs2gs
+        // emits it, and an unhooked binding shape of a type that can be `T?`
+        // on the G# side defaults to nullable. Every shape below binds a
+        // SyntaxToken that is `SyntaxToken?` in G#, so each dereference must
+        // assert — deconstruction, `out var`, `foreach` and a pattern designation.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Collections.Generic;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BindingShapesAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static string Deconstructed(MethodDeclarationSyntax declaration)
+    {
+        (var token, var count) = (declaration.ParameterList.Parameters[0].Identifier, 0);
+        return token.Text + count;
+    }
+
+    private static bool TryFirst(MethodDeclarationSyntax declaration, out SyntaxToken first)
+    {
+        first = declaration.ParameterList.Parameters[0].Identifier;
+        return true;
+    }
+
+    private static string OutVar(MethodDeclarationSyntax declaration)
+        => TryFirst(declaration, out var first) ? first.Text : """";
+
+    private static string Each(MethodDeclarationSyntax declaration)
+    {
+        var names = new List<string>();
+        foreach (var token in new[] { declaration.ParameterList.Parameters[0].Identifier })
+        {
+            names.Add(token.Text);
+        }
+
+        return string.Join("","", names);
+    }
+
+    private static string Designated(MethodDeclarationSyntax declaration)
+        => declaration.ParameterList.Parameters[0].Identifier is var token ? token.Text : """";
+}
+");
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void RetargetedNullableMember_AtEveryNonNullSink_BindsWithoutCarveOut()
+    {
+        // Issue #4356: every position that consumes a value as non-null must
+        // bridge a `T?`-only-in-G# analyzer value: a cast operand, an argument
+        // to a non-null parameter, a return, a conditional branch, a tuple
+        // element, a lambda result, a string concatenation and an
+        // interpolation. Receivers and local initializers are covered above.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class SinkAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static string Use(SyntaxToken token) => token.Text;
+
+    private static SyntaxToken Cast(MethodDeclarationSyntax d) => (SyntaxToken)d.ParameterList.Parameters[0].Identifier;
+
+    private static string Argument(MethodDeclarationSyntax d) => Use(d.ParameterList.Parameters[0].Identifier);
+
+    private static SyntaxToken Returned(MethodDeclarationSyntax d)
+    {
+        return d.ParameterList.Parameters[0].Identifier;
+    }
+
+    private static SyntaxToken Branch(MethodDeclarationSyntax d, bool first)
+        => first ? d.ParameterList.Parameters[0].Identifier : d.ParameterList.Parameters[1].Identifier;
+
+    private static (SyntaxToken Token, int Index) Tupled(MethodDeclarationSyntax d)
+        => (d.ParameterList.Parameters[0].Identifier, 0);
+
+    private static Func<MethodDeclarationSyntax, SyntaxToken> Lambda()
+        => d => d.ParameterList.Parameters[0].Identifier;
+
+    private static string Concatenated(MethodDeclarationSyntax d)
+        => ""p:"" + d.ParameterList.Parameters[0].Identifier;
+
+    private static string Interpolated(MethodDeclarationSyntax d)
+        => $""p:{d.ParameterList.Parameters[0].Identifier}"";
+}
+");
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void RetargetedNullableMember_IntoNullableEffectiveTargets_IsNotAsserted()
+    {
+        // Issue #4356: the bridge asserts only where the EFFECTIVE target is
+        // certainly non-null. An async lambda into `Func<Task<SyntaxNode?>>`
+        // (effective result `SyntaxNode?`, not the non-null Task envelope), a
+        // nullable parameter, a nullable cast and a generic `T` parameter all
+        // accept nil, so the value must pass through without `!!`; asserting
+        // would turn a legal nil into a runtime failure.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Threading.Tasks;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class NullableTargetsAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static Func<Task<SyntaxNode?>> Async(IOperation operation)
+        => async () => operation.Syntax;
+
+    private static bool TakesNullable(SyntaxNode? node) => node == null;
+
+    private static bool Argument(IOperation operation) => TakesNullable(operation.Syntax);
+
+    private static SyntaxNode? Cast(IOperation operation) => (SyntaxNode?)operation.Syntax;
+
+    private static T Identity<T>(T value) => value;
+
+    private static SyntaxNode? Generic(IOperation operation) => Identity(operation.Syntax);
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.DoesNotContain("operation.Syntax!!", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void RetargetedNullableMember_IntoPromotedOrNullableParamsTarget_IsNotAsserted()
+    {
+        // Issue #4356: an argument target is judged by its EMITTED type. A
+        // parameter cs2gs promotes to `T?` (its body tests it against null)
+        // and an expanded `params SyntaxNode?[]` element both accept nil, so the
+        // mapped `operation.Syntax` must pass through without `!!` — asserting
+        // turns a legal nil into a throw. A `params SyntaxNode[]` element is
+        // non-null, so there it IS asserted.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ArgumentTargetsAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static bool Promoted(SyntaxNode node) => node == null;
+
+    private static int TakeNullable(params SyntaxNode?[] values) => values.Length;
+
+    private static int TakeNonNull(params SyntaxNode[] values) => values.Length;
+
+    private static bool PassPromoted(IOperation operation) => Promoted(operation.Syntax);
+
+    private static int PassNullableParams(IOperation operation) => TakeNullable(operation.Syntax);
+
+    private static int PassNonNullParams(IOperation operation) => TakeNonNull(operation.Syntax);
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("Promoted(operation.Syntax)", flat, StringComparison.Ordinal);
+        Assert.Contains("TakeNullable(operation.Syntax)", flat, StringComparison.Ordinal);
+        Assert.Contains("TakeNonNull(operation.Syntax!!)", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void RetargetedNullableMember_IntoGenericTargets_AssertsOnlyExplicitNonNull()
+    {
+        // Issue #4356: a generic target G# RE-INFERS from the emitted argument
+        // (inferred `Identity(x)`, inferred `params T[]`) takes the value's own
+        // `T?`, so asserting would be wrong. With EXPLICIT type arguments
+        // (`Identity<SyntaxNode>(x)`) the substituted non-null parameter is the
+        // real target, so the value IS asserted.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class GenericTargetsAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static T Identity<T>(T value) => value;
+
+    private static int Count<T>(params T[] values) => values.Length;
+
+    private static SyntaxNode Explicit(IOperation operation) => Identity<SyntaxNode>(operation.Syntax);
+
+    private static SyntaxNode? Inferred(IOperation operation) => Identity(operation.Syntax);
+
+    private static int InferredParams(IOperation operation) => Count(operation.Syntax, operation.Syntax);
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("Identity[SyntaxNode](operation.Syntax!!)", flat, StringComparison.Ordinal);
+        Assert.Contains("-> Identity(operation.Syntax)", flat, StringComparison.Ordinal);
+        Assert.Contains("Count(operation.Syntax, operation.Syntax)", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
+    public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
+    {
+        // Issue #4356: SingleVariableDesignationSyntax.Identifier (a Roslyn
+        // SyntaxToken struct) maps to PatternSyntax.BindingIdentifier, which G#
+        // declares `SyntaxToken?`. The walk filters to non-nil tokens, but a
+        // filter proves nothing to the G# binder about a property read, so the
+        // dereference asserts — as the same read on a Roslyn-annotated `T?`
+        // member would.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Collections.Generic;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class DesignationAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static HashSet<string> Designations(SyntaxNode node)
+    {
+        var names = new HashSet<string>();
+        foreach (var designation in node.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
+        {
+            names.Add(designation.Identifier.Text);
+        }
+
+        return names;
+    }
+}
+");
+
+        Assert.Contains("designation.BindingIdentifier!!.Text", printed, StringComparison.Ordinal);
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printed);
     }

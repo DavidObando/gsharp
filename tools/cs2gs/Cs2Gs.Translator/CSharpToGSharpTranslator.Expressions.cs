@@ -998,8 +998,14 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (iteratorForeachReceiverRequiresAssertion
                 || importedGenericTupleElementRequiresAssertion
+
+                // Issue #4356: `T?` only on the G# analyzer API. Asked outside
+                // the pattern-binding gate below: a `var` designation
+                // (`x is var t`) binds `t` at the scrutinee's G# type unnarrowed,
+                // and gsc erases a reference `!!` in an expression tree.
+                || this.IsGSharpNullableAnalyzerExpression(recv)
                 || (!this.IsActivePatternBinding(recv)
-                && !this.IsWithinExpressionTreeLambda(recv)
+                && !this.ExpressionTreeForbidsReceiverAssertion(recv)
                 && !this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(recv)
                 && (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
                     || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
@@ -1211,6 +1217,16 @@ public sealed partial class CSharpToGSharpTranslator
 
             ISymbol symbol = this.context.GetSymbolInfo(recv).Symbol;
 
+            // Issue #4356: in ADR-0169 analyzer mode the read is retargeted
+            // onto the G# analyzer API, whose counterpart of some Roslyn
+            // members is declared `T?` although Roslyn's is non-null — often a
+            // SyntaxToken STRUCT, which the reference-type test below would
+            // reject outright. The C# type cannot say so, so ask the map.
+            if (this.IsGSharpNullableAnalyzerExpression(recv))
+            {
+                return true;
+            }
+
             // Issue #2113: in a nullable-OBLIVIOUS compilation the whole-program
             // taint analysis may promote a LOCAL or PARAMETER receiver to `T?`.
             // gsc smart-casts locals only after a flow-proven guard (inert under
@@ -1256,6 +1272,143 @@ public sealed partial class CSharpToGSharpTranslator
 
             return declared.NullableAnnotation == NullableAnnotation.Annotated
                 || this.ShouldPromoteToNullableReference(symbol);
+        }
+
+        /// <summary>
+        /// Issue #4356: whether <paramref name="symbol"/> is a Roslyn property or
+        /// field that ADR-0169 analyzer mode retargets onto a G# analyzer-API
+        /// member declared <c>T?</c>, although Roslyn declares it non-null
+        /// (see <c>RoslynAnalyzerApiMap.IsGSharpNullableMember</c>). The C#
+        /// symbol's own nullability cannot say so — for a <c>SyntaxToken</c>
+        /// it is a struct — so the forgiveness predicates ask here.
+        /// <para>
+        /// For a LOCAL the answer is what cs2gs recorded when it emitted the
+        /// local (<c>DocumentTranslationState.EmittedLocalGSharpNullability</c>),
+        /// never a walk over Roslyn declarator syntax. A local with no record —
+        /// a binding shape that is not hooked — is nullable when its Roslyn
+        /// type could be <c>T?</c> on the G# side, so a miss is a redundant
+        /// <c>!!</c> (legal; the polish pass strips GS0536), never a bare
+        /// dereference of a <c>T?</c>. This is the one place every forgiveness
+        /// and expression-tree predicate asks.
+        /// </para>
+        /// </summary>
+        /// <param name="symbol">The bound C# symbol of the read.</param>
+        /// <returns>True when the translated read is <c>T?</c> in G#.</returns>
+        private bool IsGSharpNullableAnalyzerApiMember(ISymbol symbol)
+        {
+            if (!this.InAnalyzerApiMode)
+            {
+                return false;
+            }
+
+            if (symbol is IPropertySymbol or IFieldSymbol)
+            {
+                return Analyzers.RoslynAnalyzerApiMap.IsGSharpNullableMember(
+                    RoslynTypeMetadataName(symbol.OriginalDefinition.ContainingType),
+                    symbol.Name);
+            }
+
+            if (symbol is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            if (this.state.EmittedLocalGSharpNullability.TryGetValue(local, out bool recorded))
+            {
+                return recorded;
+            }
+
+            return Analyzers.RoslynAnalyzerApiMap.IsGSharpNullableCapableType(
+                RoslynTypeMetadataName(local.Type as INamedTypeSymbol));
+        }
+
+        /// <summary>
+        /// Issue #4356: records whether a local cs2gs just emitted is <c>T?</c> in
+        /// G# because of the analyzer map, per
+        /// <see cref="IsGSharpNullableAnalyzerApiMember"/>. With an emitted type
+        /// clause it is not (the clause is the Roslyn type); without one, G#
+        /// infers the local from the emitted initializer, which is <c>T?</c>
+        /// exactly when the initializer's emitted type is (never after a <c>!!</c>).
+        /// </summary>
+        /// <param name="local">The local's symbol.</param>
+        /// <param name="emittedType">The emitted type clause, if any.</param>
+        /// <param name="initializerSyntax">The C# initializer, if any.</param>
+        /// <param name="emittedInitializer">The emitted initializer, if any.</param>
+        private void RecordEmittedLocalNullability(
+            ILocalSymbol local,
+            GTypeReference emittedType,
+            ExpressionSyntax initializerSyntax,
+            GExpression emittedInitializer)
+        {
+            if (!this.InAnalyzerApiMode || local == null)
+            {
+                return;
+            }
+
+            // A type clause comes from the Roslyn type (plus the ordinary
+            // nullable promotions, which the ordinary predicates already see),
+            // so no analyzer-map nullability hides behind it.
+            this.state.EmittedLocalGSharpNullability[local] = emittedType == null
+                && emittedInitializer is not NonNullAssertionExpression
+                && this.IsGSharpNullableAnalyzerExpression(initializerSyntax);
+        }
+
+        /// <summary>
+        /// Issue #4356: whether <paramref name="expression"/>'s EMITTED G# type is
+        /// <c>T?</c> because of the ADR-0169 analyzer map, although its Roslyn
+        /// type is non-null. This is the one classifier for that question: a
+        /// mapped member read, a local (its recorded emitted nullability, see
+        /// IsGSharpNullableAnalyzerApiMember), and the value-preserving shapes
+        /// that carry one through —
+        /// parentheses, a conditional (either arm), <c>??</c> (its fallback), a
+        /// switch expression (any arm) and an assignment (its value). Every
+        /// forgiveness, static-non-null and expression-tree check asks it, and
+        /// a local's provenance is this same question asked of its initializer,
+        /// so the direct read, an inferred local and a composed initializer
+        /// cannot disagree. A null-forgiving <c>x!</c> is non-null.
+        /// </summary>
+        /// <param name="expression">The C# expression.</param>
+        /// <returns>True when the emitted G# type is nullable per the analyzer map.</returns>
+        private bool IsGSharpNullableAnalyzerExpression(ExpressionSyntax expression)
+        {
+            if (!this.InAnalyzerApiMode || expression == null)
+            {
+                return false;
+            }
+
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return this.IsGSharpNullableAnalyzerExpression(parenthesized.Expression);
+
+                case PostfixUnaryExpressionSyntax suppression
+                    when suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    return false;
+
+                case ConditionalExpressionSyntax conditional:
+                    return this.IsGSharpNullableAnalyzerExpression(conditional.WhenTrue)
+                        || this.IsGSharpNullableAnalyzerExpression(conditional.WhenFalse);
+
+                case BinaryExpressionSyntax coalesce when coalesce.IsKind(SyntaxKind.CoalesceExpression):
+                    return this.IsGSharpNullableAnalyzerExpression(coalesce.Right);
+
+                case SwitchExpressionSyntax switchExpression:
+                    foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+                    {
+                        if (this.IsGSharpNullableAnalyzerExpression(arm.Expression))
+                        {
+                            return true;
+                        }
+                    }
+
+                    return false;
+
+                case AssignmentExpressionSyntax assignment when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
+                    return this.IsGSharpNullableAnalyzerExpression(assignment.Right);
+
+                default:
+                    return this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(expression).Symbol);
+            }
         }
 
         // Issue #2113: true for a nullable-oblivious compilation
@@ -1413,6 +1566,21 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.GSharpExpressionIsStaticallyNonNull(value, translated))
             {
                 return translated;
+            }
+
+            // Issue #4356: a value that is `T?` only on the G# analyzer API (a
+            // mapped member, or a local recorded as such) flowing into a target
+            // whose G# type is non-null. Roslyn cannot see the mismatch — for a
+            // SyntaxToken it is a struct on both sides — so the checks below
+            // would pass it through; assert it here. An inferred local takes the
+            // value's own type, and a target that is itself `T?` in G# needs nothing.
+            if (this.IsGSharpNullableAnalyzerExpression(value)
+                && translated is not NonNullAssertionExpression
+                && !IsInitializerOfInferredLocal(value, targetSymbol)
+                && !this.IsGSharpNullableAnalyzerApiMember(targetSymbol)
+                && this.AnalyzerBridgeTargetIsNonNull(targetType, targetSymbol, value))
+            {
+                return EnsureNonNullAssertion(translated);
             }
 
             if (value is ConditionalExpressionSyntax
@@ -1681,6 +1849,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            // Issue #4356: a Roslyn member that is non-null in C# — even a
+            // SyntaxToken struct — but `T?` on the G# analyzer API it is
+            // retargeted onto is never statically non-null in the output, nor
+            // is a local whose emitted G# type is `T?` because of one. Asked
+            // before the pattern-binding shortcuts: `x is var t` binds `t` at
+            // the scrutinee's G# type, which a `var` pattern does not narrow.
+            if (this.IsGSharpNullableAnalyzerExpression(expression))
+            {
+                return false;
+            }
+
             if (this.PatternLocalUsesNullableStorage(expression))
             {
                 return false;
@@ -1817,6 +1996,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+
             if (symbol is ILocalSymbol inferredLocal)
             {
                 if (this.TryGetInferredLocalStaticNonNull(
@@ -2647,13 +2827,103 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => null,
             };
 
+            // Issue #4356: an async LAMBDA's target is its delegate's Invoke, which
+            // is never itself `async`; the effective result is the envelope's
+            // `T`, exactly as for an async method.
+            bool asyncLambdaBody = current.Parent is AnonymousFunctionExpressionSyntax asyncLambda
+                && asyncLambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
             ITypeSymbol targetType = target switch
             {
-                IMethodSymbol method => GetEffectiveReturnType(method.ReturnType, method.IsAsync),
+                IMethodSymbol method => GetEffectiveReturnType(method.ReturnType, method.IsAsync || asyncLambdaBody),
                 IPropertySymbol property => property.Type,
                 _ => this.context.GetTypeInfo(value).ConvertedType,
             };
             return (targetType, target);
+        }
+
+        /// <summary>
+        /// Issue #4356: whether a target (an EFFECTIVE type — the <c>T</c> of an
+        /// async <c>Task&lt;T&gt;</c>, never the envelope) is certainly non-null in
+        /// G#, so a <c>T?</c>-only-in-G# analyzer value flowing into it must be
+        /// asserted. Anything that may accept nil answers false: an unknown
+        /// target, a <c>Nullable&lt;T&gt;</c>, any annotated <c>T?</c> (reference or
+        /// generic), and an unannotated type parameter, whose instantiation may
+        /// itself be nullable. The assertion is only fail-safe where the target
+        /// really is non-null; anywhere else it turns a legal nil into a throw.
+        /// Every analyzer-value bridge (value, argument, cast, lambda result)
+        /// asks this one predicate, and when unsure it answers false.
+        /// </summary>
+        /// <param name="targetType">The effective target type, if known.</param>
+        /// <param name="targetSymbol">The target parameter/member, if any.</param>
+        /// <param name="callSite">
+        /// For a parameter target, the argument expression — used to tell an
+        /// INFERRED generic target from an EXPLICIT one (see
+        /// <see cref="IsInferredGenericParameterTarget"/>).
+        /// </param>
+        /// <returns>True when the target is certainly non-null in G#.</returns>
+        private bool AnalyzerBridgeTargetIsNonNull(
+            ITypeSymbol targetType,
+            ISymbol targetSymbol = null,
+            ExpressionSyntax callSite = null) =>
+            targetType != null
+            && targetType is not ITypeParameterSymbol
+            && targetType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
+            && targetType.NullableAnnotation != NullableAnnotation.Annotated
+            && !(targetSymbol is IParameterSymbol parameter
+                && IsInferredGenericParameterTarget(parameter, callSite))
+
+            // A REFERENCE target's emitted type is what cs2gs emits for it, not
+            // Roslyn's: a parameter/member promoted to `T?`
+            // (ShouldPromoteToNullableReference, e.g. `SyntaxNode node` whose
+            // body tests `node == null`) accepts nil. TargetWillRemainNonNullable
+            // Reference answers exactly that. A value-type target (the struct
+            // SyntaxToken) is emitted as-is.
+            && (!targetType.IsReferenceType
+                || this.TargetWillRemainNonNullableReference(targetType, targetSymbol));
+
+        /// <summary>
+        /// Issue #4356: whether an argument's target parameter is generic in a way
+        /// G# will RE-INFER from the emitted argument — a parameter declared
+        /// <c>T</c> or <c>params T[]</c> on a call whose type arguments are
+        /// inferred. Then the emitted argument's own type decides <c>T</c>, so a
+        /// <c>T?</c> value makes <c>T</c> nullable and must not be asserted.
+        /// With EXPLICIT type arguments (<c>Identity&lt;SyntaxNode&gt;(x)</c>) the
+        /// substituted parameter type is the real target, so this answers false
+        /// and the ordinary nullability of that type decides. When the call site
+        /// cannot be found, the target is treated as inferred (no assertion).
+        /// </summary>
+        /// <param name="parameter">The (constructed) target parameter.</param>
+        /// <param name="callSite">The argument expression, if known.</param>
+        /// <returns>True when the target is an inferred generic parameter.</returns>
+        private static bool IsInferredGenericParameterTarget(IParameterSymbol parameter, ExpressionSyntax callSite)
+        {
+            ITypeSymbol declared = parameter.OriginalDefinition.Type;
+            bool generic = declared is ITypeParameterSymbol
+                || (parameter.IsParams && declared is IArrayTypeSymbol { ElementType: ITypeParameterSymbol });
+            return generic && !CallHasExplicitTypeArguments(callSite);
+        }
+
+        // Issue #4356: whether the invocation an argument belongs to spells its
+        // type arguments (`M<T>(…)`, `x.M<T>(…)`, `x?.M<T>(…)`).
+        private static bool CallHasExplicitTypeArguments(ExpressionSyntax argumentExpression)
+        {
+            if (argumentExpression?.Parent is not ArgumentSyntax argument
+                || argument.Parent?.Parent is not InvocationExpressionSyntax invocation)
+            {
+                return false;
+            }
+
+            ExpressionSyntax callee = invocation.Expression;
+            if (callee is MemberAccessExpressionSyntax memberAccess)
+            {
+                callee = memberAccess.Name;
+            }
+            else if (callee is MemberBindingExpressionSyntax memberBinding)
+            {
+                callee = memberBinding.Name;
+            }
+
+            return callee is GenericNameSyntax;
         }
 
         private static ITypeSymbol GetEffectiveReturnType(ITypeSymbol returnType, bool isAsync) =>
@@ -4402,6 +4672,38 @@ public sealed partial class CSharpToGSharpTranslator
 
             return null;
         }
+
+        /// <summary>
+        /// Issue #4356: whether a <c>!!</c> on the member/element-access RECEIVER
+        /// <paramref name="recv"/> would be unrepresentable because it sits
+        /// inside an expression-tree lambda.
+        /// </summary>
+        /// <remarks>
+        /// Issue #2496 suppressed every such receiver assertion, because gsc then
+        /// rejected any <c>!!</c> in an expression tree (GS0473). gsc has since
+        /// narrowed that (issue #3349): over a REFERENCE type the assertion is
+        /// pure static annotation and <c>ExpressionTreeLowerer</c> erases it, and
+        /// a receiver-position check over an ADR-0186 platform operand is elided
+        /// by <c>ExpressionTreeRestrictionValidator.ValidateReceiver</c>. Only an
+        /// assertion that strips a nullable VALUE type — a real
+        /// <c>Nullable&lt;T&gt;.Value</c> conversion — is still rejected, and gsc
+        /// treats an unconstrained type parameter the same way, since it may be
+        /// instantiated with one. Suppressing the reference case too left
+        /// <c>b.Conversion.AccountId</c> (a stated-<c>T?</c> navigation property
+        /// in an EF <c>Where</c>) printed with no <c>!!</c>, binding only through
+        /// gsc's old member-lookup carve-out.
+        /// </remarks>
+        /// <param name="recv">The receiver expression.</param>
+        /// <returns>True when the receiver is inside an expression tree and not a reference type.</returns>
+        private bool ExpressionTreeForbidsReceiverAssertion(ExpressionSyntax recv) =>
+            this.IsWithinExpressionTreeLambda(recv)
+            && this.context.GetTypeInfo(recv).Type is not { IsReferenceType: true }
+
+            // The C# type is not what gsc sees in analyzer mode: a retargeted
+            // Roslyn member such as `ParameterSyntax.Identifier` is a C# struct
+            // but a G# nullable REFERENCE (`SyntaxToken?`), whose assertion gsc
+            // erases in a tree like any other reference-type `!!`.
+            && !this.IsGSharpNullableAnalyzerExpression(recv);
 
         private bool IsWithinExpressionTreeLambda(SyntaxNode node) =>
             node.AncestorsAndSelf()

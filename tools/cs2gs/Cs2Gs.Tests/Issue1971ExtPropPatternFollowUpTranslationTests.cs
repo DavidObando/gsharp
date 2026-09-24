@@ -89,10 +89,14 @@ namespace Corpus.Issue1971
 }
 ");
 
-        Assert.Contains("s.Start != nil && s.Start.X == 0", rendered, StringComparison.Ordinal);
-        AssertRoundTripParses(
-            rendered,
-            "G# does not flow-narrow repeated nullable member access after the emitted nil guard.");
+        // Issue #4356: a nullable intermediate takes G#'s native property
+        // pattern, which reads `Start` once and falls through on nil exactly
+        // as C# does (`EmitPropertyPattern`'s NullableTypeSymbol guard). The
+        // old guard-lowered `s.Start != nil && s.Start.X == 0` read it twice
+        // and never bound, since G# does not narrow a mutable field chain.
+        Assert.Contains("s is { Start: { X: 0 } }", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("s.Start", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     [Fact]
@@ -156,10 +160,9 @@ namespace Corpus.Issue1971
 }
 ");
 
-        Assert.Contains("a.B != nil && a.B.C != nil && a.B.C.Value == 0", rendered, StringComparison.Ordinal);
-        AssertRoundTripParses(
-            rendered,
-            "G# does not flow-narrow repeated nullable member access after emitted nil guards.");
+        Assert.Contains("a is { B: { C: { Value: 0 } } }", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("a.B", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
     }
 
     [Fact]

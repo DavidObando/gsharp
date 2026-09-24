@@ -15,8 +15,18 @@ namespace Cs2Gs.Tests;
 
 public sealed class Issue2661ExpressionTreeNullableTranslationTests
 {
+    /// <summary>
+    /// Issue #2661's Oahu <c>BookLibrary</c> shape. The nullable VALUE-type reads
+    /// keep their expression-tree spellings (<c>!= nil</c>, <c>.Value</c>), since a
+    /// <c>!!</c> that strips <c>Nullable&lt;T&gt;</c> is a real conversion gsc cannot
+    /// represent in a tree (GS0473). The stated-<c>T?</c> REFERENCE receiver
+    /// <c>b.Conversion</c> takes <c>!!</c> exactly as it does outside a tree
+    /// (issue #4356): gsc erases a reference-type assertion there (issue #3349),
+    /// and without it the read bound only through gsc's old member-lookup
+    /// carve-out for stated-nullable chains.
+    /// </summary>
     [Fact]
-    public void OahuBookLibrary_QueryableLambdas_OmitThreeRuntimeAssertions()
+    public void OahuBookLibrary_QueryableLambdas_AssertOnlyTheReferenceReceiver()
     {
         string printed = Translate("""
             using System;
@@ -48,12 +58,13 @@ public sealed class Issue2661ExpressionTreeNullableTranslationTests
                         .Select(b => b.PurchaseDate.Value);
             }
             """,
-            "Queryable expression-tree lambdas intentionally omit runtime assertions that ordinary G# binding requires.");
+            "The in-memory round-trip binder resolves this IQueryable chain's result as IEnumerable (an overload question unrelated to nullability); the pipeline test compiles the same shape through the SDK.");
 
         Assert.Contains("b.PurchaseDate != nil", printed, StringComparison.Ordinal);
         Assert.Contains(".Select((b Book) -> b.PurchaseDate.Value)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("b.PurchaseDate!!", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("b.Conversion!!", printed, StringComparison.Ordinal);
+        Assert.Contains("b.Conversion!!.AccountId", printed, StringComparison.Ordinal);
+        Assert.Contains("b.Conversion!!.Region", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("GS0473", printed, StringComparison.Ordinal);
     }
 
