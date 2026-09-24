@@ -1293,10 +1293,11 @@ internal sealed partial class ExpressionBinder
                 out var multiIndexer,
                 out var multiSubstitution,
                 out var multiArguments,
-                out var multiReported))
+                out var multiReported,
+                out var multiView))
             {
                 return BindUserIndexerRead(
-                    target,
+                    ViewIndexerReceiver(target, multiView, targetLocation),
                     multiIndexer,
                     multiSubstitution,
                     (i, parameterType) => multiArguments.IsDefault
@@ -1768,10 +1769,11 @@ internal sealed partial class ExpressionBinder
                 out var readIndexer,
                 out var readSubstitution,
                 out var readArguments,
-                out var readReported))
+                out var readReported,
+                out var readView))
             {
                 return BindUserIndexerRead(
-                    target,
+                    ViewIndexerReceiver(target, readView, targetLocation),
                     readIndexer,
                     readSubstitution,
                     (_, parameterType) => readArguments.IsDefault
@@ -2770,8 +2772,10 @@ internal sealed partial class ExpressionBinder
                 out var writeIndexer,
                 out var writeSubstitution,
                 out var writeArguments,
-                out var writeReported))
+                out var writeReported,
+                out var writeView))
             {
+                target = ViewIndexerReceiver(target, writeView, diagnosticLocation);
                 var selectedIndexer = writeIndexer;
                 var paramType = SubstituteIndexerType(selectedIndexer.Parameters[0].Type, writeSubstitution);
                 BoundExpression ConvertWriteIndex() => writeArguments.IsDefault

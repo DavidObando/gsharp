@@ -22,18 +22,35 @@ internal sealed partial class ExpressionBinder
     /// <summary>
     /// Returns every indexer visible on <paramref name="receiverType"/>:
     /// the indexers of the receiver's own definition and of its bases, with a
-    /// base indexer hidden by a more-derived indexer of the same signature
-    /// (C# hide-by-signature). The returned properties are the OPEN
-    /// definition members so their accessors resolve to emitted MethodDefs.
+    /// base indexer hidden by a more-derived indexer of the same (substituted)
+    /// signature (C# hide-by-signature). The returned properties are the OPEN
+    /// definition members so their accessors resolve to emitted MethodDefs;
+    /// each carries the substitution from its declaring level's type
+    /// parameters to the receiver's type arguments (review finding: a
+    /// constructed base such as <c>IBase[int32]</c> must keep its arguments).
     /// </summary>
     /// <param name="receiverType">The indexed receiver's static type.</param>
     /// <returns>The visible indexers, most-derived first.</returns>
-    private static ImmutableArray<PropertySymbol> GetVisibleUserIndexers(TypeSymbol receiverType)
+    private ImmutableArray<VisibleUserIndexer> GetVisibleUserIndexers(TypeSymbol receiverType)
     {
-        var builder = ImmutableArray.CreateBuilder<PropertySymbol>();
+        var builder = ImmutableArray.CreateBuilder<VisibleUserIndexer>();
+        var receiverSubstitution = LevelSubstitution(receiverType, outer: null);
 
-        void AddLevel(ImmutableArray<PropertySymbol> properties)
+        void AddLevel(TypeSymbol level, ImmutableArray<PropertySymbol> properties, bool isReceiverLevel)
         {
+            var substitution = isReceiverLevel
+                ? receiverSubstitution
+                : MergeSubstitutions(receiverSubstitution, LevelSubstitution(level, receiverSubstitution));
+
+            // A constructed BASE level is reached through a receiver upcast to
+            // that level (`IBase[int32]` under `IDerived`), so the accessor is
+            // parented at the base's own constructed TypeSpec.
+            TypeSymbol? view = null;
+            if (!isReceiverLevel && LevelSubstitution(level, outer: null) != null)
+            {
+                view = receiverSubstitution != null ? SubstituteIndexerType(level, receiverSubstitution) : level;
+            }
+
             foreach (var property in properties)
             {
                 // Review finding (#4350): an explicit-interface indexer
@@ -47,7 +64,7 @@ internal sealed partial class ExpressionBinder
                 var hidden = false;
                 foreach (var existing in builder)
                 {
-                    if (DeclarationBinder.HaveSameIndexerSignature(existing.Parameters, property.Parameters))
+                    if (SameSubstitutedIndexerSignature(existing, property, substitution))
                     {
                         hidden = true;
                         break;
@@ -56,7 +73,7 @@ internal sealed partial class ExpressionBinder
 
                 if (!hidden)
                 {
-                    builder.Add(property);
+                    builder.Add(new VisibleUserIndexer(property, substitution, view));
                 }
             }
         }
@@ -64,22 +81,101 @@ internal sealed partial class ExpressionBinder
         switch (receiverType)
         {
             case StructSymbol structType:
-                foreach (var level in (structType.Definition ?? structType).GetHierarchy())
+                var structDefinition = structType.Definition ?? structType;
+                foreach (var level in structDefinition.GetHierarchy())
                 {
-                    AddLevel(level.Properties);
+                    AddLevel(level, (level.Definition ?? level).Properties, ReferenceEquals(level, structDefinition));
                 }
 
                 break;
             case InterfaceSymbol interfaceType:
                 foreach (var level in interfaceType.SelfAndAllBaseInterfaces())
                 {
-                    AddLevel((level.Definition ?? level).Properties);
+                    AddLevel(level, (level.Definition ?? level).Properties, ReferenceEquals(level, interfaceType));
                 }
 
                 break;
         }
 
         return builder.ToImmutable();
+    }
+
+    // The substitution from a constructed level's definition type parameters to
+    // its type arguments, each argument re-substituted through the receiver's
+    // own map (`IDerived[U] : IBase[U]` indexed as `IDerived[int32]`).
+    private Dictionary<TypeParameterSymbol, TypeSymbol>? LevelSubstitution(
+        TypeSymbol level,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? outer)
+    {
+        var (definitionParameters, typeArguments) = level switch
+        {
+            StructSymbol { Definition: { } definition } constructed when !ReferenceEquals(definition, constructed)
+                => (definition.TypeParameters, constructed.TypeArguments),
+            InterfaceSymbol { Definition: { } definition } constructed when !ReferenceEquals(definition, constructed)
+                => (definition.TypeParameters, constructed.TypeArguments),
+            _ => (ImmutableArray<TypeParameterSymbol>.Empty, ImmutableArray<TypeSymbol>.Empty),
+        };
+        if (definitionParameters.IsDefaultOrEmpty
+            || typeArguments.IsDefaultOrEmpty
+            || definitionParameters.Length != typeArguments.Length)
+        {
+            return null;
+        }
+
+        var map = new Dictionary<TypeParameterSymbol, TypeSymbol>(definitionParameters.Length);
+        for (var i = 0; i < definitionParameters.Length; i++)
+        {
+            map[definitionParameters[i]] = outer != null ? SubstituteIndexerType(typeArguments[i], outer) : typeArguments[i];
+        }
+
+        return map;
+    }
+
+    private static Dictionary<TypeParameterSymbol, TypeSymbol>? MergeSubstitutions(
+        Dictionary<TypeParameterSymbol, TypeSymbol>? first,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? second)
+    {
+        if (first == null)
+        {
+            return second;
+        }
+
+        if (second == null)
+        {
+            return first;
+        }
+
+        var merged = new Dictionary<TypeParameterSymbol, TypeSymbol>(first);
+        foreach (var entry in second)
+        {
+            merged[entry.Key] = entry.Value;
+        }
+
+        return merged;
+    }
+
+    private bool SameSubstitutedIndexerSignature(
+        VisibleUserIndexer existing,
+        PropertySymbol candidate,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? candidateSubstitution)
+    {
+        if (existing.Indexer.Parameters.Length != candidate.Parameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < candidate.Parameters.Length; i++)
+        {
+            if (existing.Indexer.Parameters[i].RefKind != candidate.Parameters[i].RefKind
+                || !DeclarationBinder.TypeSignaturesEquivalent(
+                    SubstituteIndexerType(existing.Indexer.Parameters[i].Type, existing.Substitution),
+                    SubstituteIndexerType(candidate.Parameters[i].Type, candidateSubstitution)))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -96,6 +192,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="substitution">The receiver's type-parameter substitution, if any.</param>
     /// <param name="boundArguments">The pre-bound arguments, or default when not bound.</param>
     /// <param name="reported">Whether a resolution diagnostic was reported.</param>
+    /// <param name="view">The constructed base type to view the receiver as, when the indexer is inherited from one.</param>
     /// <returns><see langword="true"/> when an indexer was selected.</returns>
     private bool TryResolveUserIndexer(
         TypeSymbol receiverType,
@@ -105,10 +202,12 @@ internal sealed partial class ExpressionBinder
         [NotNullWhen(true)] out PropertySymbol? indexer,
         out Dictionary<TypeParameterSymbol, TypeSymbol>? substitution,
         out ImmutableArray<BoundExpression> boundArguments,
-        out bool reported)
+        out bool reported,
+        out TypeSymbol? view)
     {
         indexer = null;
         substitution = null;
+        view = null;
         boundArguments = default;
         reported = false;
 
@@ -118,17 +217,10 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        substitution = receiverType switch
-        {
-            StructSymbol structType when TryGetUserIndexer(structType, out _, out var structSubstitution) => structSubstitution,
-            InterfaceSymbol interfaceType when TryGetUserIndexer(interfaceType, out _, out var interfaceSubstitution) => interfaceSubstitution,
-            _ => null,
-        };
-
-        var arityMatches = ImmutableArray.CreateBuilder<PropertySymbol>();
+        var arityMatches = ImmutableArray.CreateBuilder<VisibleUserIndexer>();
         foreach (var candidate in visible)
         {
-            if (AcceptsIndexArgumentCount(candidate, argumentCount))
+            if (AcceptsIndexArgumentCount(candidate.Indexer, argumentCount))
             {
                 arityMatches.Add(candidate);
             }
@@ -148,7 +240,9 @@ internal sealed partial class ExpressionBinder
 
         if (arityMatches.Count == 1)
         {
-            indexer = arityMatches[0];
+            indexer = arityMatches[0].Indexer;
+            substitution = arityMatches[0].Substitution;
+            view = arityMatches[0].View;
             return true;
         }
 
@@ -166,15 +260,17 @@ internal sealed partial class ExpressionBinder
         // presenting each indexer as a synthetic function over its (receiver-
         // substituted) index parameters.
         var synthetic = ImmutableArray.CreateBuilder<FunctionSymbol>(arityMatches.Count);
-        var byFunction = new Dictionary<FunctionSymbol, PropertySymbol>(arityMatches.Count);
-        foreach (var candidate in arityMatches)
+        var byFunction = new Dictionary<FunctionSymbol, VisibleUserIndexer>(arityMatches.Count);
+        foreach (var visibleCandidate in arityMatches)
         {
+            var candidate = visibleCandidate.Indexer;
+            var candidateSubstitution = visibleCandidate.Substitution;
             var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(candidate.Parameters.Length);
             foreach (var parameter in candidate.Parameters)
             {
                 var syntheticParameter = new ParameterSymbol(
                     parameter.Name,
-                    SubstituteIndexerType(parameter.Type, substitution),
+                    SubstituteIndexerType(parameter.Type, candidateSubstitution),
                     refKind: parameter.RefKind);
                 if (parameter.HasExplicitDefaultValue)
                 {
@@ -184,9 +280,9 @@ internal sealed partial class ExpressionBinder
                 parameters.Add(syntheticParameter);
             }
 
-            var function = new FunctionSymbol("this[]", parameters.MoveToImmutable(), SubstituteIndexerType(candidate.Type, substitution));
+            var function = new FunctionSymbol("this[]", parameters.MoveToImmutable(), SubstituteIndexerType(candidate.Type, candidateSubstitution));
             synthetic.Add(function);
-            byFunction[function] = candidate;
+            byFunction[function] = visibleCandidate;
         }
 
         var selected = overloads.SelectBestInstanceOverload(
@@ -211,7 +307,9 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        indexer = byFunction[selected];
+        indexer = byFunction[selected].Indexer;
+        substitution = byFunction[selected].Substitution;
+        view = byFunction[selected].View;
         return true;
     }
 
@@ -232,19 +330,15 @@ internal sealed partial class ExpressionBinder
         out Dictionary<TypeParameterSymbol, TypeSymbol>? substitution)
     {
         indexer = null;
-        substitution = receiverType switch
-        {
-            StructSymbol structType when TryGetUserIndexer(structType, out _, out var structSubstitution) => structSubstitution,
-            InterfaceSymbol interfaceType when TryGetUserIndexer(interfaceType, out _, out var interfaceSubstitution) => interfaceSubstitution,
-            _ => null,
-        };
-
+        substitution = null;
         foreach (var candidate in GetVisibleUserIndexers(receiverType))
         {
-            if (candidate.Parameters.Length == 1
-                && ClrTypeUtilities.AreSame(SubstituteIndexerType(candidate.Parameters[0].Type, substitution).ClrType, parameterClrType))
+            if (candidate.View == null
+                && candidate.Indexer.Parameters.Length == 1
+                && ClrTypeUtilities.AreSame(SubstituteIndexerType(candidate.Indexer.Parameters[0].Type, candidate.Substitution).ClrType, parameterClrType))
             {
-                indexer = candidate;
+                indexer = candidate.Indexer;
+                substitution = candidate.Substitution;
                 return true;
             }
         }
@@ -345,10 +439,13 @@ internal sealed partial class ExpressionBinder
             out var selected,
             out var substitution,
             out var preBound,
-            out var reported))
+            out var reported,
+            out var view))
         {
             return reported ? new BoundErrorExpression(null) : null;
         }
+
+        target = ViewIndexerReceiver(target, view, location);
 
         var indexer = selected;
         if (RefCapabilities.IsReadOnlyValueReference(target))
@@ -558,6 +655,14 @@ internal sealed partial class ExpressionBinder
         return new BoundBlockExpression(null, statements.ToImmutable(), valueRead);
     }
 
+    // Issue #4350 (review): an indexer inherited from a constructed base is
+    // called on the receiver viewed as that base (an implicit reference
+    // upcast), so its accessor is emitted against the base's TypeSpec.
+    private BoundExpression ViewIndexerReceiver(BoundExpression target, TypeSymbol? view, TextLocation location)
+        => view == null || ReferenceEquals(view, target.Type)
+            ? target
+            : conversions.BindConversion(location, target, view);
+
     // Issue #4350 (review): an indexer accepts `argumentCount` written
     // arguments when its extra trailing parameters all declare defaults,
     // exactly as a C# optional indexer parameter does.
@@ -606,4 +711,16 @@ internal sealed partial class ExpressionBinder
         => substitution != null
             ? Binder.SubstituteType(type, substitution, scope.References.MapClrTypeToReferences)
             : type;
+
+    /// <summary>
+    /// A visible user indexer and the substitution from its declaring level's
+    /// type parameters to the receiver's type arguments.
+    /// </summary>
+    /// <param name="Indexer">The OPEN indexer definition.</param>
+    /// <param name="Substitution">The declaring level's substitution, if any.</param>
+    /// <param name="View">The constructed base type the receiver is viewed as, when the indexer is inherited from one.</param>
+    private readonly record struct VisibleUserIndexer(
+        PropertySymbol Indexer,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? Substitution,
+        TypeSymbol? View);
 }

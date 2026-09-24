@@ -302,6 +302,59 @@ public class Issue4350IndexerOverloadEmitTests
     }
 
     [Fact]
+    public void IndexersInheritedFromConstructedBases_KeepTypeArguments()
+    {
+        // Review finding: `interface IDerived : IBase[int32]` must expose
+        // `IBase[T].this[T]` as `this[int32]`, and the call must be emitted
+        // against the constructed base (`IBase<int32>`), not the open one.
+        var source = """
+            package P
+            import System
+
+            interface IBase[T] {
+                prop this[key T] string { get; }
+            }
+
+            interface IDerived : IBase[int32] {
+            }
+
+            interface IView[U] : IBase[U] {
+            }
+
+            class Impl : IDerived {
+                prop this[key int32] string -> "impl:" + key.ToString()
+            }
+
+            class Words : IView[string] {
+                prop this[key string] string -> "word:" + key
+            }
+
+            open class Base[T] {
+                var last string = ""
+                prop this[key T] string {
+                    get { return "base:" + key.ToString() + last }
+                    set { last = "/" + value }
+                }
+            }
+
+            class Derived : Base[int32] {
+            }
+
+            let d IDerived = Impl()
+            Console.WriteLine(d[1])
+            let v IView[string] = Words()
+            Console.WriteLine(v["a"])
+            let b = Derived()
+            b[2] = "x"
+            Console.WriteLine(b[2])
+            """;
+
+        Assert.Equal(
+            string.Join(Environment.NewLine, "impl:1", "word:a", "base:2/x") + Environment.NewLine,
+            CompileAndRun(source));
+    }
+
+    [Fact]
     public void OverloadedIndexers_EmitOneItemPropertyPerSignature()
     {
         var libraryPath = EmitGSharpLibrary("Shape", Library);
