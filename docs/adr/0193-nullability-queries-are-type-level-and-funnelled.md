@@ -376,12 +376,37 @@ reference nullability?"*. New members on `TypeSymbol`
   the helper table above (`ReflectionMetadataEmitter.IsValueTypeNullable`,
   `Conversion.IsReferenceLikeTarget` as used for this purpose, `SymbolDisplay`'s
   `ClrType?.IsValueType` test) stop being used to answer this question.
-- **One join.** A single `TypeSymbol.JoinReferenceNullability(TypeSymbol common,
-  IEnumerable<TypeSymbol> arms)` implements ADR-0186 §3's rule (explicit `T?`
-  wins outright; otherwise any `T!` arm keeps the result `T!`; otherwise `T`). The
-  conditional, switch-expression and lambda joins call it; `??` keeps ADR-0186
-  §6's contract that its result is non-null unless the fallback is `T?`
-  (`b0c76053d`, pinned by `Issue2579`) and expresses that through the same API.
+- **One join, and a separate coalesce.** They are two operations, not one
+  operation called two ways. The join's "any `T!` arm keeps `T!`" is
+  wrong for `??`: `T! ?? T` would keep `T!`, while ADR-0186 §6 says the result of
+  `??` is non-null.
+  - `TypeSymbol.JoinReferenceNullability(TypeSymbol common, IEnumerable<TypeSymbol> arms)`
+    implements ADR-0186 §3's rule: an explicit `T?` arm wins outright; otherwise
+    any `T!` arm keeps the result `T!`; otherwise `T`. The conditional,
+    switch-expression and lambda joins call it.
+  - `TypeSymbol.CoalesceReferenceNullability(TypeSymbol common, TypeSymbol fallback)`
+    is `??`'s operation, and it encodes today's behaviour
+    (`BoundBinaryOperator.cs`, the `QuestionQuestionToken` arm, as left by
+    `b0c76053d` and pinned by `Issue2579`) exactly:
+    1. *Before the call*, both operands have their **top-level** `?` (reference
+       **or** value) and `!` removed — `StripReferenceNullability(deep: false)`
+       plus value-`Nullable<V>` unwrapping, matching today's
+       `leftUnderlying`/`rightUnderlying` — and `common` is computed from those
+       stripped types by the existing conversion rules (identity, then C#
+       §12.15's best common type).
+    2. The call returns `Nullable(common)` when `fallback.IsStatedNullable`, and
+       bare `common` otherwise. **A `T!` fallback yields bare `common`**, as
+       today; it does not make the result `T!`.
+    3. The special cases stay outside the call, unchanged: `x ?? throw e`
+       yields the stripped left operand; a `nil` left operand yields the right
+       operand's type.
+
+    Whether a platform fallback *should* make the result `T!` is an open
+    design question, issue #4364. This ADR does not settle it: Phase 3
+    preserves the current behaviour, and if #4364 changes it, the change goes
+    in `CoalesceReferenceNullability` alone. Phase 3's regression tests pin
+    `T! ?? T` → `T`, `T ?? T!` → `T`, `T! ?? T?` → `T?` and
+    `int32? ?? int32` → `int32`.
 - **`PlatformTypeSymbol.Get` normalises** exactly as `NullableTypeSymbol.Get`
   does, in the mirror direction: `Get(Nullable(U))` returns `Nullable(U)` (an
   explicit statement beats its absence), and `Get(V)` for a value type `V`
@@ -578,7 +603,9 @@ ADR-0186's steps did.
   variant.
 - Collapse the conditional (`UnionArmNullability`), switch-expression
   (`ComputeBestCommonType`) and lambda (`ComputeLambdaCommonType`) joins onto
-  `JoinReferenceNullability`, and express `??`'s result through the same API.
+  `JoinReferenceNullability`, and move `??`'s result onto
+  `CoalesceReferenceNullability` (§2) — **not** onto the join — preserving
+  today's behaviour and leaving #4364 open.
   Before changing the lambda join, reduce its missing platform arm to a failing
   program and add it as a regression test.
 - Replace the Layer 5 node-kind predicates' nullability disjunct
@@ -653,14 +680,34 @@ ADR-0186's steps did.
   type**. A shape-based rule (e.g. "only in members that produce a
   `GTypeReference`") would miss `bool`-returning deciders such as
   `IsImportedObliviousNullableTarget` and could be evaded by extracting any
-  comparison into a helper, so it is not used. The adapter exposes the
-  classified `ClrNullabilityState` for usage inference and the shared decision
-  for spelling; every one of the ~100 current reads migrates onto it, which is
-  what makes the rule reportable with no exemptions beyond the adapter. The
-  residual risk is code that hand-decides a spelling from a
-  `ClrNullabilityState` it got from the adapter; GSA0009 also reports a
-  `ClrNullabilityState` comparison outside the adapter and the rule class, which
-  closes that route too. The translator project gains an analyzer reference to
+  comparison into a helper, so it is not used.
+
+  The adapter therefore does **not** expose a raw `ClrNullabilityState`. If it
+  did, usage inference could not do anything with the value: GSA0009 also
+  reports a `ClrNullabilityState` comparison outside the adapter and the rule
+  class, so that it cannot become a back door for hand-deciding a spelling.
+  Instead the adapter (`Cs2Gs.Translator`'s `NullabilityImportAdapter`) exposes
+  two kinds of member, and every one of the ~100 current reads migrates onto
+  one of them:
+  - **Spelling operations** that apply the shared decision and return a
+    `GTypeReference`: `ApplyToDeclaration(GTypeReference, ITypeSymbol)`,
+    `ApplyToOpenSlot(GTypeReference argument, ITypeParameterSymbol slot, ITypeSymbol declared)`.
+  - **Semantic predicates** for usage inference and bridging, each answering
+    one named question and none returning the state itself:
+    `IsDeclaredOblivious(ITypeSymbol)`, `IsDeclaredNullable(ITypeSymbol)`,
+    `IsDeclaredNonNull(ITypeSymbol)`, the element forms
+    `IsElementDeclaredOblivious/Nullable/NonNull(IArrayTypeSymbol)`, and
+    `IsFlowNullable(TypeInfo)` for the flow-state reads
+    (`TypeInfo.Nullability.Annotation`) the translator makes today. Each
+    predicate is written in terms of the same classification the rule uses,
+    so a usage decision and a spelling decision cannot disagree about what a
+    declaration says.
+
+  Phase 5 inventories the ~100 reads, maps each onto one of these members (or
+  a new, equally narrow predicate added to the adapter with its own test), and
+  records the final list in this ADR. Because nothing outside the adapter can
+  see a state value, GSA0009 needs no exemptions beyond the adapter and the
+  rule class. The translator project gains an analyzer reference to
   `InternalAnalyzers` (today only `Cs2Gs.Tests` has one). Verify with the full
   self-migration gate.
 
