@@ -389,7 +389,7 @@ public static class BaseCallForwarderRewriter
             {
                 MethodTypeArguments = typeParameters.IsDefaultOrEmpty
                     ? default
-                    : ImmutableArray<TypeSymbol>.CastUp(typeParameters),
+                    : typeParameters.CastArray<TypeSymbol>(),
             };
             returnType = forwarderReturnType;
 
