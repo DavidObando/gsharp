@@ -50,6 +50,7 @@ public sealed class LspServer
     internal Action TestOnDiagnosticRefreshAfterDiscovery;
     internal Action TestBeforeWorkspaceDiscovery;
     internal Action TestBeforeWorkspaceDiscoveryCompletion;
+    internal Action TestAfterWorkspaceDiscovery;
     internal Func<CancellationToken, Task> TestPushBindDelay;
     private readonly TaskCompletionSource<int> exitSource = new TaskCompletionSource<int>(TaskCreationOptions.RunContinuationsAsynchronously);
     private readonly object refreshLock = new object();
@@ -62,6 +63,8 @@ public sealed class LspServer
     private LanguageServerInitializationOptions initializationOptions = new LanguageServerInitializationOptions();
     private string pendingWorkspaceRootPath;
     private CancellationTokenSource backgroundLoadCts;
+    private TaskCompletionSource<bool> workspaceDiscoveryCompletionSource;
+    private Task workspaceDiscoveryCompletion = Task.CompletedTask;
     private bool workspaceDiscoveryPending;
 
     public LspServer(DocumentContentService documentContentService, WorkspaceState workspaceState, ILogger logger = null)
@@ -87,6 +90,18 @@ public sealed class LspServer
     {
         this.pendingWorkspaceRootPath = request?.RootPath ?? request?.RootUri?.GetFileSystemPath();
         this.workspaceDiscoveryPending = !string.IsNullOrEmpty(this.pendingWorkspaceRootPath);
+        if (this.workspaceDiscoveryPending)
+        {
+            this.workspaceDiscoveryCompletionSource =
+                new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            this.workspaceDiscoveryCompletion = this.workspaceDiscoveryCompletionSource.Task;
+        }
+        else
+        {
+            this.workspaceDiscoveryCompletionSource = null;
+            this.workspaceDiscoveryCompletion = Task.CompletedTask;
+        }
+
         this.DetectClientDiagnosticCapabilities(request?.Capabilities ?? default);
         this.initializationOptions = request?.InitializationOptions ?? new LanguageServerInitializationOptions();
 
@@ -125,6 +140,7 @@ public sealed class LspServer
         this.backgroundLoadCts?.Dispose();
         var cts = new CancellationTokenSource();
         this.backgroundLoadCts = cts;
+        var completion = this.workspaceDiscoveryCompletionSource;
         _ = Task.Run(() =>
         {
             try
@@ -185,6 +201,11 @@ public sealed class LspServer
             {
                 // Shutdown disposed the CTS while the load observed its token; benign.
             }
+            finally
+            {
+                completion?.TrySetResult(true);
+                this.TestAfterWorkspaceDiscovery?.Invoke();
+            }
         });
     }
 
@@ -194,6 +215,7 @@ public sealed class LspServer
         this.shutdownRequested = true;
         this.backgroundLoadCts?.Cancel();
         this.backgroundLoadCts?.Dispose();
+        this.workspaceDiscoveryCompletionSource?.TrySetResult(true);
         return null;
     }
 
@@ -480,7 +502,8 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) => DocumentSymbolComputer.ComputeDocumentSymbols(content, ct).ToArray(),
             Array.Empty<SymbolInformationOrDocumentSymbol>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("workspace/symbol", UseSingleObjectParameterDeserialization = true)]
     public Task<WorkspaceSymbol[]> WorkspaceSymbolAsync(WorkspaceSymbolParams request, CancellationToken cancellationToken = default)
@@ -637,7 +660,8 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) => FoldingComputer.ComputeFoldings(content, ct).ToArray(),
             Array.Empty<FoldingRange>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/selectionRange", UseSingleObjectParameterDeserialization = true)]
     public Task<SelectionRange[]> SelectionRangeAsync(SelectionRangeParams request, CancellationToken cancellationToken = default)
@@ -653,7 +677,8 @@ public sealed class LspServer
                     return SelectionRangeComputer.ComputeSelectionRange(content, p);
                 }).ToArray(),
             Array.Empty<SelectionRange>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/semanticTokens/full", UseSingleObjectParameterDeserialization = true)]
     public Task<SemanticTokens> SemanticTokensFullAsync(SemanticTokensParams request, CancellationToken cancellationToken = default)
@@ -677,7 +702,8 @@ public sealed class LspServer
             request.TextDocument,
             (content, ct) => this.FormatDocument(content),
             Array.Empty<TextEdit>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/rangeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> RangeFormattingAsync(DocumentRangeFormattingParams request, CancellationToken cancellationToken = default)
@@ -690,7 +716,8 @@ public sealed class LspServer
                 return this.FormatDocument(content, TextSpan.FromBounds(Math.Min(start, end), Math.Max(start, end)));
             },
             Array.Empty<TextEdit>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/onTypeFormatting", UseSingleObjectParameterDeserialization = true)]
     public Task<TextEdit[]> OnTypeFormattingAsync(DocumentOnTypeFormattingParams request, CancellationToken cancellationToken = default)
@@ -702,7 +729,8 @@ public sealed class LspServer
                 return this.FormatDocument(content, new TextSpan(position, 0));
             },
             Array.Empty<TextEdit>(),
-            cancellationToken);
+            cancellationToken,
+            waitForWorkspaceDiscovery: false);
 
     [JsonRpcMethod("textDocument/implementation", UseSingleObjectParameterDeserialization = true)]
     public Task<Location[]> ImplementationAsync(ImplementationParams request, CancellationToken cancellationToken = default)
@@ -788,11 +816,21 @@ public sealed class LspServer
         Func<DocumentContent, CancellationToken, T> compute,
         T missing,
         CancellationToken cancellationToken,
+        bool waitForWorkspaceDiscovery = true,
         [System.Runtime.CompilerServices.CallerMemberName] string caller = null)
     {
         DocumentContent content;
         try
         {
+            if (waitForWorkspaceDiscovery)
+            {
+                await this.workspaceDiscoveryCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
+                if (this.shutdownRequested)
+                {
+                    return missing;
+                }
+            }
+
             await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {
