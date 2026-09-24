@@ -183,6 +183,58 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
             CompileAndRun(printed, "C.Run()").Trim());
     }
 
+    /// <summary>
+    /// A typed switch arm lowers its property subpatterns through a separate
+    /// path (<c>case r is Rec when …</c>). An extended subpattern there used
+    /// to print a flat <c>r.Clause.Items.Count</c> chain: it threw on a nil
+    /// <c>Clause</c> where C# falls through, and over an imported annotated
+    /// member it bound only through gsc's old member-lookup carve-out. Found
+    /// by the hot-core self-migration guard on this translator's own
+    /// <c>PatternTestsMembersOfNullableMember</c>.
+    /// </summary>
+    [Fact]
+    public void TypedSwitchArm_ExtendedSubpatternOverNullableLink_IsGuarded()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System;
+            using System.Collections.Generic;
+
+            namespace Sample;
+
+            public sealed class Clause
+            {
+                public List<int> Items = new List<int> { 1 };
+            }
+
+            public abstract class Node
+            {
+            }
+
+            public sealed class Rec : Node
+            {
+                public Clause? Clause;
+                public object? Other;
+            }
+
+            public static class C
+            {
+                public static bool F(Node n) => n switch
+                {
+                    Rec { Other: null, Clause.Items.Count: > 0 } => true,
+                    _ => false,
+                };
+
+                public static void Run()
+                {
+                    Console.WriteLine(F(new Rec()) + "," + F(new Rec { Clause = new Clause() }));
+                }
+            }
+            """);
+
+        Assert.Equal("False,True", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
     private static string CompileAndRun(string printed, string callExpression)
     {
         string? compiler = FindCompiler();

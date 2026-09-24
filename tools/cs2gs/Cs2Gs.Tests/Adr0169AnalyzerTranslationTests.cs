@@ -596,6 +596,73 @@ public sealed class ParameterNameAnalyzer : DiagnosticAnalyzer
         AssertBindsAgainstGsCore(printed);
     }
 
+    /// <summary>
+    /// Issue #4356: the fallback paths (a quoted lambda, a pattern that must
+    /// leave the native form because it reassigns its binder) decide
+    /// nullability from the EMITTED G# type, not Roslyn's.
+    /// <c>ParameterSyntax.Identifier</c> is a Roslyn <c>SyntaxToken</c> struct
+    /// but <c>SyntaxToken?</c> on the G# analyzer API, so each of these
+    /// shapes used to print a bare <c>.Identifier.Text</c> chain that bound
+    /// only through gsc's member-lookup carve-out for stated-nullable chains.
+    /// </summary>
+    [Fact]
+    public void RetargetedNullableMember_InFallbackPaths_IsGuardedOrAsserted()
+    {
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System;
+using System.Linq.Expressions;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Diagnostics;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class FallbackShapesAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static Expression<Func<MethodDeclarationSyntax, string>> QuotedFirstName()
+        => m => m.ParameterList.Parameters[0].Identifier.Text;
+
+    private static string ExtendedWithReassignedBinder(MethodDeclarationSyntax declaration)
+    {
+        var parameter = declaration.ParameterList.Parameters[0];
+        if (parameter is { Identifier.Text: var text })
+        {
+            text = text + ""!"";
+            return text;
+        }
+
+        return """";
+    }
+
+    private static bool NestedWithReassignedBinder(MethodDeclarationSyntax declaration)
+    {
+        var parameter = declaration.ParameterList.Parameters[0];
+        if (parameter is { Identifier: { Text: ""x"" } token })
+        {
+            var copy = token;
+            token = copy;
+            return token.Text == ""x"";
+        }
+
+        return false;
+    }
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("Identifier!!.Text", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
     [Fact]
     public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
     {

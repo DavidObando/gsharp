@@ -4457,7 +4457,13 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>True when the receiver is inside an expression tree and not a reference type.</returns>
         private bool ExpressionTreeForbidsReceiverAssertion(ExpressionSyntax recv) =>
             this.IsWithinExpressionTreeLambda(recv)
-            && this.context.GetTypeInfo(recv).Type is not { IsReferenceType: true };
+            && this.context.GetTypeInfo(recv).Type is not { IsReferenceType: true }
+
+            // The C# type is not what gsc sees in analyzer mode: a retargeted
+            // Roslyn member such as `ParameterSyntax.Identifier` is a C# struct
+            // but a G# nullable REFERENCE (`SyntaxToken?`), whose assertion gsc
+            // erases in a tree like any other reference-type `!!`.
+            && !this.IsGSharpNullableAnalyzerApiMember(this.context.GetSymbolInfo(recv).Symbol);
 
         private bool IsWithinExpressionTreeLambda(SyntaxNode node) =>
             node.AncestorsAndSelf()

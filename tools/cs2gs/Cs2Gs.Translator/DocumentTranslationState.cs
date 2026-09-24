@@ -217,6 +217,15 @@ internal sealed class DocumentTranslationState
     // before the guards that protect it.
     public List<GStatement> ShortCircuitSpillDeclarations { get; set; }
 
+    // Issue #4356: pattern-lowering receivers (member reads, and the locals a
+    // nested member is bound to) whose EMITTED G# type is a nullable reference
+    // although their Roslyn type says otherwise — ADR-0169 analyzer-API members
+    // such as `ParameterSyntax.Identifier` (a Roslyn `SyntaxToken` struct,
+    // `SyntaxToken?` in G#). Keyed by node identity: the lowering passes the
+    // same GExpression instance down to the nested test it builds.
+    public HashSet<Cs2Gs.CodeModel.Ast.GExpression> GSharpNullablePatternReceivers { get; } =
+        new HashSet<Cs2Gs.CodeModel.Ast.GExpression>(ReferenceEqualityComparer.Instance);
+
     // Outermost short-circuit operand currently redirecting fallback pattern
     // spills. Nested lambdas/local functions must not reuse its declaration seam.
     public SyntaxNode ShortCircuitSpillScope { get; set; }

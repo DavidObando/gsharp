@@ -2082,6 +2082,28 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
                 {
+                    // Issue #4356: an extended subpattern (`Clause.Items.Count: > 0`)
+                    // takes the same lowering as its `is`-expression spelling,
+                    // which guards each nullable link (Roslyn-annotated or, in
+                    // analyzer mode, `T?` only on the G# API) and reads it once.
+                    // A flat `d.Clause.Items.Count` chain threw where C# falls
+                    // through on a nil link, and bound only through gsc's old
+                    // member-lookup carve-out for stated-nullable chains. A bare
+                    // `var`/discard leaf keeps the flat binding below: it has no
+                    // test to guard, and binds the member itself.
+                    if (sub.ExpressionColon != null
+                        && sub.Pattern is not (VarPatternSyntax or DiscardPatternSyntax))
+                    {
+                        this.AddTypedSubpatternGuard(
+                            () => this.TranslateExtendedPropertyMemberTest(
+                                sub.ExpressionColon.Expression,
+                                sub.Pattern,
+                                new IdentifierExpression(designator)),
+                            bindings,
+                            guards);
+                        continue;
+                    }
+
                     List<string> memberPath = sub.NameColon != null
                         ? new List<string>
                         {
@@ -2108,12 +2130,23 @@ public sealed partial class CSharpToGSharpTranslator
                             memberName);
                     }
 
+                    ITypeSymbol memberType = null;
+                    if (sub.NameColon != null)
+                    {
+                        memberType = this.TryGetSubpatternMemberType(sub);
+                        if (this.IsGSharpNullableAnalyzerApiMember(this.GetPatternMemberSymbol(sub.NameColon.Name)))
+                        {
+                            this.state.GSharpNullablePatternReceivers.Add(memberAccess);
+                        }
+                    }
+
                     this.AddTypedSubpatternTest(
                         sub.Pattern,
                         memberAccess,
                         bindings,
                         guards,
-                        mutableBindings);
+                        mutableBindings,
+                        memberType);
                 }
             }
 
@@ -2182,12 +2215,35 @@ public sealed partial class CSharpToGSharpTranslator
             return this.BuildPatternTypeTest(designator, recursive.Type, recursive);
         }
 
+        // Issue #4356: records a guard built by `translate`, collecting any
+        // pattern binding it introduced exactly as AddTypedSubpatternTest does.
+        private void AddTypedSubpatternGuard(
+            Func<GExpression> translate,
+            List<(ISymbol Symbol, GExpression Replacement)> bindings,
+            List<GExpression> guards)
+        {
+            var bindingsBefore = new HashSet<ISymbol>(
+                this.state.PatternBindings.Keys,
+                SymbolEqualityComparer.Default);
+            GExpression memberTest = translate();
+            foreach (ISymbol added in this.state.PatternBindings.Keys.ToList())
+            {
+                if (!bindingsBefore.Contains(added))
+                {
+                    bindings.Add((added, this.state.PatternBindings[added]));
+                }
+            }
+
+            guards.Add(memberTest);
+        }
+
         private void AddTypedSubpatternTest(
             PatternSyntax pattern,
             GExpression memberAccess,
             List<(ISymbol Symbol, GExpression Replacement)> bindings,
             List<GExpression> guards,
-            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings)
+            List<(ILocalSymbol Symbol, GExpression MatchedValue)> mutableBindings,
+            ITypeSymbol memberType = null)
         {
             if (pattern is DiscardPatternSyntax)
             {
@@ -2211,22 +2267,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return;
             }
 
-            var bindingsBefore = new HashSet<ISymbol>(
-                this.state.PatternBindings.Keys,
-                SymbolEqualityComparer.Default);
-            GExpression memberTest = this.TranslatePatternTest(
-                memberAccess,
-                pattern,
-                isNestedPatternMember: true);
-            foreach (ISymbol added in this.state.PatternBindings.Keys.ToList())
-            {
-                if (!bindingsBefore.Contains(added))
-                {
-                    bindings.Add((added, this.state.PatternBindings[added]));
-                }
-            }
-
-            guards.Add(memberTest);
+            // Issue #4356: the member's type lets the nested test guard a
+            // nullable member and read it once (TranslatePatternTest).
+            this.AddTypedSubpatternGuard(
+                () => this.TranslatePatternTest(
+                    memberAccess,
+                    pattern,
+                    memberType,
+                    isNestedPatternMember: true),
+                bindings,
+                guards);
         }
 
         private static string LowerCamel(string name)
