@@ -384,19 +384,26 @@ reference nullability?"*. New members on `TypeSymbol`
     implements ADR-0186 §3's rule: an explicit `T?` arm wins outright; otherwise
     any `T!` arm keeps the result `T!`; otherwise `T`. The conditional,
     switch-expression and lambda joins call it.
-  - `TypeSymbol.CoalesceReferenceNullability(TypeSymbol common, TypeSymbol fallback)`
+  - `TypeSymbol.CoalesceReferenceNullability(TypeSymbol common, TypeSymbol originalFallback)`
     is `??`'s operation, and it encodes today's behaviour
     (`BoundBinaryOperator.cs`, the `QuestionQuestionToken` arm, as left by
     `b0c76053d` and pinned by `Issue2579`) exactly:
-    1. *Before the call*, both operands have their **top-level** `?` (reference
-       **or** value) and `!` removed — `StripReferenceNullability(deep: false)`
-       plus value-`Nullable<V>` unwrapping, matching today's
-       `leftUnderlying`/`rightUnderlying` — and `common` is computed from those
-       stripped types by the existing conversion rules (identity, then C#
-       §12.15's best common type).
-    2. The call returns `Nullable(common)` when `fallback.IsStatedNullable`, and
-       bare `common` otherwise. **A `T!` fallback yields bare `common`**, as
-       today; it does not make the result `T!`.
+    1. *Before the call*, **stripped copies** of both operands are made: the
+       top-level `?` (reference **or** value) and `!` are removed, using
+       `StripReferenceNullability(deep: false)` plus unwrapping of a value
+       `Nullable<V>`. These copies match today's `leftUnderlying` and
+       `rightUnderlying`. `common` is computed **from the stripped copies** by
+       the existing conversion rules: identity, then C# §12.15's best common
+       type. The stripped copies are used only to compute `common`.
+    2. The call receives the **original, unstripped** fallback operand type as
+       `originalFallback`, just as today's code tests the original `rightType`
+       (`rightType is NullableTypeSymbol`, `BoundBinaryOperator.cs:322` and
+       `:363`), not `rightUnderlying`. It returns `Nullable(common)` when
+       `originalFallback.IsStatedNullable` (reference or value `?`), and bare
+       `common` otherwise. **A `T!` fallback yields bare `common`**, as today;
+       it does not make the result `T!`. Passing the stripped fallback here
+       would be a bug: it could never be stated-nullable, so `T! ?? T?` would
+       wrongly become `T`.
     3. The special cases stay outside the call, unchanged: `x ?? throw e`
        yields the stripped left operand; a `nil` left operand yields the right
        operand's type.
@@ -405,8 +412,9 @@ reference nullability?"*. New members on `TypeSymbol`
     design question, issue #4364. This ADR does not settle it: Phase 3
     preserves the current behaviour, and if #4364 changes it, the change goes
     in `CoalesceReferenceNullability` alone. Phase 3's regression tests pin
-    `T! ?? T` → `T`, `T ?? T!` → `T`, `T! ?? T?` → `T?` and
-    `int32? ?? int32` → `int32`.
+    `T! ?? T` → `T`, `T ?? T!` → `T`, `T! ?? T?` → `T?` (the case that
+    requires the original fallback), `int32? ?? int32` → `int32`, and
+    `int32? ?? int32?` → `int32?`.
 - **`PlatformTypeSymbol.Get` normalises** exactly as `NullableTypeSymbol.Get`
   does, in the mirror direction: `Get(Nullable(U))` returns `Nullable(U)` (an
   explicit statement beats its absence), and `Get(V)` for a value type `V`
