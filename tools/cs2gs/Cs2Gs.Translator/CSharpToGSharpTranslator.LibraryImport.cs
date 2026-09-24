@@ -12,7 +12,9 @@ using Microsoft.CodeAnalysis.CSharp.Syntax;
 namespace Cs2Gs.Translator;
 
 /// <summary>
-/// Issue #4370: C# <c>[LibraryImport]</c> partial methods.
+/// Issue #4370: C# <c>[LibraryImport]</c> partial methods, and the safety net
+/// for any other partial member whose implementation a source generator
+/// produces.
 /// </summary>
 /// <remarks>
 /// <para>A <c>[LibraryImport]</c> method is a C# partial DEFINITION whose
@@ -275,6 +277,46 @@ public sealed partial class CSharpToGSharpTranslator
                     "marshaller; gsc's native @LibraryImport has no custom marshallers (ADR-0092).";
                 this.context.ReportUnsupported(node, message);
             }
+        }
+
+        /// <summary>
+        /// Issue #4370 safety net: reports a partial member whose definition
+        /// this run translates but whose implementation is generated code
+        /// that cs2gs does not translate (a source generator other than the
+        /// ones cs2gs rewrites itself — <c>[GeneratedRegex]</c> and
+        /// <c>[LibraryImport]</c>). The definition has no G# form without
+        /// its implementation (a lone declaring part is GS0609), so the
+        /// member is omitted; without this report the translation would
+        /// PASS with the member silently missing and its callers failing in
+        /// gsc.
+        /// </summary>
+        /// <param name="node">The definition's declaration.</param>
+        /// <param name="definition">The partial definition's symbol.</param>
+        /// <param name="implementation">Its implementation part, if any.</param>
+        private void ReportGeneratedPartialImplementation(
+            MemberDeclarationSyntax node,
+            ISymbol definition,
+            ISymbol implementation)
+        {
+            if (implementation == null
+                || implementation.DeclaringSyntaxReferences.Length == 0
+                || !this.IsHandAuthoredTranslatedTree(node.SyntaxTree)
+                || implementation.DeclaringSyntaxReferences.Any(reference =>
+                    this.IsHandAuthoredTranslatedTree(reference.SyntaxTree))
+                || definition.GetAttributes().Any(attribute =>
+                    attribute.AttributeClass?.ToDisplayString() ==
+                        "System.Text.RegularExpressions.GeneratedRegexAttribute"))
+            {
+                return;
+            }
+
+            string generatedFile = implementation.DeclaringSyntaxReferences[0].SyntaxTree.FilePath;
+            string message =
+                $"partial member '{definition.ContainingType?.Name}.{definition.Name}' is implemented by " +
+                $"generated code ('{generatedFile}') that cs2gs does not translate; the member is omitted from " +
+                "the G# type, so every use of it fails to compile. cs2gs rewrites only [GeneratedRegex] and " +
+                "[LibraryImport] partials; implement this member by hand in G#.";
+            this.context.ReportUnsupported(node, message);
         }
     }
 }

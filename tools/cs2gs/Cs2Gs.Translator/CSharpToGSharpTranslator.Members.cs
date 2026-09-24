@@ -185,6 +185,13 @@ public sealed partial class CSharpToGSharpTranslator
                     // partial-property definition is elided outright.
                     if (propertySymbol is { IsPartialDefinition: true })
                     {
+                        // Issue #4370: unless the implementation is generated
+                        // code this run does not translate — then the property
+                        // would vanish, so say so.
+                        this.ReportGeneratedPartialImplementation(
+                            property,
+                            propertySymbol,
+                            propertySymbol.PartialImplementationPart);
                         break;
                     }
 
@@ -1233,7 +1240,9 @@ public sealed partial class CSharpToGSharpTranslator
             // and gsc spells the import natively as a body-less
             // `@LibraryImport` func (see CSharpToGSharpTranslator.LibraryImport.cs),
             // so the DEFINITION translates and the generated implementation
-            // does not.
+            // does not. Any other definition whose implementation is
+            // untranslated generated code is reported, never silently
+            // dropped.
             if (symbol != null && symbol.IsPartialDefinition && !isNativeImportDefinition)
             {
                 if (isOrdinaryMemberPosition && IsLibraryImportDefinition(symbol))
@@ -1250,6 +1259,7 @@ public sealed partial class CSharpToGSharpTranslator
                         declaringPartSignature: symbol.PartialImplementationPart);
                 }
 
+                this.ReportGeneratedPartialImplementation(node, symbol, symbol.PartialImplementationPart);
                 return (null, false);
             }
 
