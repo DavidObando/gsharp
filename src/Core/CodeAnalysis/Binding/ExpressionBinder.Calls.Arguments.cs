@@ -3190,7 +3190,10 @@ internal sealed partial class ExpressionBinder
             declaringType,
             uic.Method,
             uic.Arguments,
-            uic.Type);
+            uic.Type)
+        {
+            MethodTypeArguments = uic.MethodTypeArguments,
+        };
     }
 
     /// <summary>

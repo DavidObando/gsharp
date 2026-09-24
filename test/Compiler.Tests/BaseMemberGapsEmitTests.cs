@@ -266,6 +266,205 @@ Console.WriteLine(Derived().GoAsync(6).Result.ToString())
             new[] { "7" },
         };
 
+        // Generic, ref, out and in base calls, called directly. A generic base
+        // method must be called through a MethodSpec; before, the call named
+        // the open method (StackUnexpected, InvalidProgramException).
+        yield return new object[]
+        {
+            "generic-and-byref-base-calls-direct",
+            @"
+package P
+import System
+
+open class Base {
+    var total int32 = 5
+    open func Id[T](x T) string { return ""base "" + x.ToString() }
+    open func Swap[T](ref a T, ref b T) {
+        let t = a
+        a = b
+        b = t
+    }
+    open func Bump(ref n int32) { n = n + 1 }
+    open func TryGet(out v int32) bool {
+        v = 42
+        return true
+    }
+    open func Peek(in n int32) int32 -> n * 2
+    open func Slot() ref int32 { return ref this.total }
+}
+
+class Derived : Base {
+    var other int32 = 0
+    override func Id[T](x T) string { return ""derived"" }
+    override func Swap[T](ref a T, ref b T) { }
+    override func Bump(ref n int32) { n = 1000 }
+    override func TryGet(out v int32) bool {
+        v = -1
+        return false
+    }
+    override func Peek(in n int32) int32 -> -1
+    override func Slot() ref int32 { return ref this.other }
+
+    func Go() string {
+        var n int32 = 1
+        base.Bump(ref n)
+        var v int32 = 0
+        let ok = base.TryGet(out v)
+        let k int32 = 5
+        var a = ""x""
+        var b = ""y""
+        base.Swap(ref a, ref b)
+        let slot = base.Slot()
+        return base.Id[int32](7) + "" "" + base.Id(""s"") + "" $n $ok $v ${base.Peek(in k)} $a$b $slot""
+    }
+}
+
+Console.WriteLine(Derived().Go())
+",
+            new[] { "base 7 base s 2 True 42 10 yx 5" },
+        };
+
+        // The same shapes inside function literals and an async body, where
+        // each goes through a forwarder: a generic forwarder for a generic
+        // base method (constraints carried over), by-reference parameters kept
+        // by-reference, and a ref-returning forwarder for a ref return.
+        yield return new object[]
+        {
+            "generic-and-byref-base-calls-forwarded",
+            @"
+package P
+import System
+import System.Threading.Tasks
+
+open class Base {
+    var total int32 = 5
+    open func Id[T](x T) string { return ""base "" + x.ToString() }
+    open func Swap[T](ref a T, ref b T) {
+        let t = a
+        a = b
+        b = t
+    }
+    open func Pick[T IComparable[T]](a T, b T) T -> a.CompareTo(b) > 0 ? a : b
+    open func Bump(ref n int32) { n = n + 1 }
+    open func TryGet(out v int32) bool {
+        v = 42
+        return true
+    }
+    open func Peek(in n int32) int32 -> n * 2
+    open func Slot() ref int32 { return ref this.total }
+}
+
+class Derived : Base {
+    var other int32 = 0
+    override func Id[T](x T) string { return ""derived"" }
+    override func Swap[T](ref a T, ref b T) { }
+    override func Pick[T IComparable[T]](a T, b T) T -> b
+    override func Bump(ref n int32) { n = 1000 }
+    override func TryGet(out v int32) bool {
+        v = -1
+        return false
+    }
+    override func Peek(in n int32) int32 -> -1
+    override func Slot() ref int32 { return ref this.other }
+
+    func Go() string {
+        let f = func () string {
+            var n int32 = 1
+            base.Bump(ref n)
+            var v int32 = 0
+            let ok = base.TryGet(out v)
+            let k int32 = 5
+            var a = ""x""
+            var b = ""y""
+            base.Swap[string](ref a, ref b)
+            let slot = base.Slot()
+            let group (int32) -> string = base.Id
+            return base.Id[int32](7) + "" "" + base.Id(""s"") + "" $n $ok $v ${base.Peek(in k)} $a$b ${base.Pick(3, 9)} $slot "" + group(1)
+        }
+        return f()
+    }
+
+    async func GoAsync() Task[string] {
+        await Task.Yield()
+        var n int32 = 1
+        base.Bump(ref n)
+        var v int32 = 0
+        let ok = base.TryGet(out v)
+        var a = 1
+        var b = 2
+        base.Swap(ref a, ref b)
+        return base.Id[int32](8) + "" $n $ok $v $a$b ${base.Pick(4, 2)}""
+    }
+}
+
+Console.WriteLine(Derived().Go())
+Console.WriteLine(Derived().GoAsync().Result)
+",
+            new[] { "base 7 base s 2 True 42 10 yx 9 5 base 1", "base 8 2 True 42 21 4" },
+        };
+
+        // A forwarder for a method of a generic base class names the type
+        // arguments the derived class passes to that base, not the base's
+        // own type parameters. An imported base's out parameter stays out.
+        yield return new object[]
+        {
+            "forwarded-generic-base-class-and-imported-out",
+            @"
+package P
+import System
+import System.Collections.Generic
+import System.Threading.Tasks
+
+open class Base[T] {
+    open func M(x T) string -> ""base "" + x.ToString()
+    open func G[U](x T, y U) string -> ""baseG "" + x.ToString() + y.ToString()
+}
+
+class D : Base[int32] {
+    override func M(x int32) string -> ""derived""
+    override func G[U](x int32, y U) string -> ""derivedG""
+    func Go() string {
+        let f = () -> base.M(3) + "" "" + base.G(4, ""u"")
+        return f()
+    }
+}
+
+class E[V] : Base[V] {
+    override func M(x V) string -> ""derivedE""
+    func Go(v V) string {
+        let f = () -> base.M(v)
+        return f()
+    }
+}
+
+class Dict : Dictionary[string, int32] {
+    func Go() string {
+        base.Add(""k"", 5)
+        let f = func () string {
+            var v int32 = 0
+            let ok = base.TryGetValue(""k"", out v)
+            return ""$ok $v""
+        }
+        return f()
+    }
+
+    async func GoAsync() Task[string] {
+        await Task.Yield()
+        var v int32 = 0
+        let ok = base.TryGetValue(""k"", out v)
+        return ""$ok $v""
+    }
+}
+
+Console.WriteLine(D().Go())
+Console.WriteLine(E[string]().Go(""s""))
+let d = Dict()
+Console.WriteLine(d.Go())
+Console.WriteLine(d.GoAsync().Result)
+",
+            new[] { "base 3 baseG 4u", "base s", "True 5", "True 5" },
+        };
+
         // All three gaps in the shape the [GeneratedRegex] output takes after
         // cs2gs: a Regex subclass validating its timeout through the
         // protected static Regex.ValidateMatchTimeout, and a RegexRunner

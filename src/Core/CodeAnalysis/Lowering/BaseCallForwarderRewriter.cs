@@ -210,7 +210,13 @@ public static class BaseCallForwarderRewriter
                 rewritten.Receiver,
                 forwarder,
                 rewritten.Arguments,
-                rewritten.Type);
+                rewritten.Type)
+            {
+                // A generic forwarder mirrors the base method's type
+                // parameters one for one, so the call's type arguments carry
+                // over unchanged.
+                MethodTypeArguments = rewritten.MethodTypeArguments,
+            };
         }
 
         protected override BoundExpression RewriteMethodGroupExpression(BoundMethodGroupExpression node)
@@ -226,20 +232,21 @@ public static class BaseCallForwarderRewriter
                 || rewritten.Function is not { } method
                 || rewritten.FunctionType is not { } functionType
                 || rewritten.Candidates.Length != 1
-                || !rewritten.MethodTypeArguments.IsDefaultOrEmpty
-                || method.IsGeneric
                 || method.ReceiverType is not StructSymbol baseClass)
             {
                 return rewritten;
             }
 
+            // A generic base method's forwarder is generic in the same type
+            // parameters, so the group's type arguments carry over.
             var forwarder = this.GetOrCreateForwarder(baseClass, method, method.Type);
             return new BoundMethodGroupExpression(
                 rewritten.Syntax,
                 rewritten.Receiver,
                 forwarder,
                 functionType,
-                rewritten.StaticOwnerType)
+                rewritten.StaticOwnerType,
+                rewritten.MethodTypeArguments)
             {
                 HasTargetDelegateType = rewritten.HasTargetDelegateType,
             };
@@ -273,30 +280,63 @@ public static class BaseCallForwarderRewriter
             this.ordinalByClass.TryGetValue(this.classDef, out var ordinal);
             this.ordinalByClass[this.classDef] = ordinal + 1;
 
+            // A generic base method gets a generic forwarder: one fresh type
+            // parameter per method type parameter, with the same constraints,
+            // so the forwarder's own instantiation satisfies the base method's
+            // constraints and the inner call passes its type parameters
+            // straight through.
+            //
+            // A method declared on a generic base class names that class's
+            // type parameters in its signature; the forwarder lives on the
+            // derived class, so they are replaced by the type arguments the
+            // derived class supplies to that base (`int32` for
+            // `D : Base[int32]`, `V` for `E[V] : Base[V]`).
+            var substitution = new Dictionary<TypeParameterSymbol, TypeSymbol>();
+            this.AddBaseClassTypeArguments(method, substitution);
+            var typeParameters = CloneMethodTypeParameters(method.TypeParameters, substitution);
+            TypeSymbol Substitute(TypeSymbol type) =>
+                substitution.Count == 0 ? type : Binder.SubstituteType(type, substitution);
+            var forwarderReturnType = substitution.Count == 0 ? returnType : Substitute(method.Type);
+
             // Fresh parameters so the forwarder body can read them without
-            // aliasing the base method's parameter symbols.
+            // aliasing the base method's parameter symbols. A `ref`, `out` or
+            // `in` parameter stays by-reference, so the forwarder passes the
+            // caller's storage through instead of a copy.
             var paramBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(method.Parameters.Length);
             foreach (var p in method.Parameters)
             {
-                paramBuilder.Add(new ParameterSymbol(p.Name, p.Type));
+                paramBuilder.Add(new ParameterSymbol(p.Name, Substitute(p.Type), refKind: p.RefKind));
             }
 
             var parameters = paramBuilder.ToImmutable();
             var forwarder = new FunctionSymbol(
                 "<>n__" + ordinal,
                 parameters,
-                returnType,
+                forwarderReturnType,
                 declaration: null,
                 this.containingFunction.Package,
                 Accessibility.Private,
                 receiverType: this.classDef,
-                explicitReceiverParameter: null);
+                explicitReceiverParameter: null)
+            {
+                ReturnRefKind = method.ReturnRefKind,
+            };
+            if (!typeParameters.IsDefaultOrEmpty)
+            {
+                forwarder.TypeParameters = typeParameters;
+            }
 
             var thisExpr = new BoundVariableExpression(null, Invariant.Required(forwarder.ThisParameter, "a synthesized forwarder has an instance receiver"));
             var argBuilder = ImmutableArray.CreateBuilder<BoundExpression>(parameters.Length);
             foreach (var p in parameters)
             {
-                argBuilder.Add(new BoundVariableExpression(null, p));
+                BoundExpression argument = new BoundVariableExpression(null, p);
+                if (p.RefKind != RefKind.None)
+                {
+                    argument = new BoundAddressOfExpression(null, argument);
+                }
+
+                argBuilder.Add(argument);
             }
 
             var innerCall = new BoundBaseClassCallExpression(
@@ -305,10 +345,16 @@ public static class BaseCallForwarderRewriter
                 baseClass,
                 method,
                 argBuilder.ToImmutable(),
-                returnType);
+                forwarderReturnType)
+            {
+                MethodTypeArguments = typeParameters.IsDefaultOrEmpty
+                    ? default
+                    : ImmutableArray<TypeSymbol>.CastUp(typeParameters),
+            };
+            returnType = forwarderReturnType;
 
             this.forwarders[key] = forwarder;
-            this.forwarderBodies[forwarder] = CreateForwarderBody(innerCall, returnType);
+            this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, returnType);
             return forwarder;
         }
 
@@ -350,7 +396,7 @@ public static class BaseCallForwarderRewriter
                 node.Property,
                 node.IsSetterAccessor);
 
-            this.forwarderBodies[forwarder] = CreateForwarderBody(innerCall, node.Type);
+            this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, node.Type);
             return forwarder;
         }
 
@@ -363,10 +409,28 @@ public static class BaseCallForwarderRewriter
             var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(node.Arguments.Length);
             for (var i = 0; i < node.Arguments.Length; i++)
             {
+                // A by-reference argument arrives as the address of the
+                // caller's storage. The forwarder declares a `ref`/`out`/`in`
+                // parameter of the pointee type and passes that address on,
+                // rather than a parameter typed as the address itself.
+                var argument = node.Arguments[i];
                 var refKind = node.ArgumentRefKinds.IsDefault ? RefKind.None : node.ArgumentRefKinds[i];
+                var parameterType = argument.Type;
+                var clrParameter = i < methodParameters.Length ? methodParameters[i] : null;
+                if (argument.Type is ByRefTypeSymbol byRef)
+                {
+                    parameterType = byRef.PointeeType;
+                    if (refKind == RefKind.None)
+                    {
+                        refKind = clrParameter?.IsOut == true
+                            ? RefKind.Out
+                            : clrParameter?.IsIn == true ? RefKind.In : RefKind.Ref;
+                    }
+                }
+
                 parameters.Add(new ParameterSymbol(
-                    i < methodParameters.Length ? methodParameters[i].Name ?? "arg" + i : "arg" + i,
-                    node.Arguments[i].Type,
+                    clrParameter?.Name ?? "arg" + i,
+                    parameterType,
                     refKind: refKind));
             }
 
@@ -385,9 +449,16 @@ public static class BaseCallForwarderRewriter
             };
 
             var arguments = ImmutableArray.CreateBuilder<BoundExpression>(parameterArray.Length);
-            foreach (var parameter in parameterArray)
+            for (var i = 0; i < parameterArray.Length; i++)
             {
-                arguments.Add(new BoundVariableExpression(null, parameter));
+                var parameter = parameterArray[i];
+                BoundExpression argument = new BoundVariableExpression(null, parameter);
+                if (node.Arguments[i].Type is ByRefTypeSymbol)
+                {
+                    argument = new BoundAddressOfExpression(null, argument);
+                }
+
+                arguments.Add(argument);
             }
 
             var innerCall = new BoundImportedInstanceCallExpression(
@@ -400,11 +471,94 @@ public static class BaseCallForwarderRewriter
                 node.TypeArgumentSymbols,
                 isNonVirtualBaseCall: true);
 
-            this.forwarderBodies[forwarder] = CreateForwarderBody(innerCall, node.Type);
+            this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, node.Type);
             return forwarder;
         }
 
-        private static BoundBlockStatement CreateForwarderBody(BoundExpression innerCall, TypeSymbol? type)
+        /// <summary>
+        /// Maps the type parameters of <paramref name="method"/>'s generic
+        /// declaring class to the type arguments the forwarder's class passes
+        /// to that base.
+        /// </summary>
+        private void AddBaseClassTypeArguments(FunctionSymbol method, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+        {
+            if (method.ReceiverType is not StructSymbol declaring)
+            {
+                return;
+            }
+
+            var declaringDefinition = declaring.Definition ?? declaring;
+            if (declaringDefinition.TypeParameters.IsDefaultOrEmpty)
+            {
+                return;
+            }
+
+            var constructed = this.classDef.FindConstructedGenericBase(
+                definition => ReferenceEquals(definition, declaringDefinition));
+            if (constructed == null
+                || constructed.TypeArguments.IsDefaultOrEmpty
+                || constructed.TypeArguments.Length != declaringDefinition.TypeParameters.Length)
+            {
+                return;
+            }
+
+            for (var i = 0; i < declaringDefinition.TypeParameters.Length; i++)
+            {
+                substitution[declaringDefinition.TypeParameters[i]] = constructed.TypeArguments[i];
+            }
+        }
+
+        /// <summary>
+        /// Clones a generic base method's type parameters for its forwarder,
+        /// carrying every constraint over and rewriting constraints that
+        /// mention a sibling type parameter to the matching clone.
+        /// </summary>
+        private static ImmutableArray<TypeParameterSymbol> CloneMethodTypeParameters(
+            ImmutableArray<TypeParameterSymbol> source,
+            Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+        {
+            if (source.IsDefaultOrEmpty)
+            {
+                return default;
+            }
+
+            var clones = ImmutableArray.CreateBuilder<TypeParameterSymbol>(source.Length);
+            foreach (var tp in source)
+            {
+                var clone = new TypeParameterSymbol(tp.Name, tp.Ordinal, tp.Constraint, tp.Variance)
+                {
+                    HasReferenceTypeConstraint = tp.HasReferenceTypeConstraint,
+                    HasValueTypeConstraint = tp.HasValueTypeConstraint,
+                    HasDefaultConstructorConstraint = tp.HasDefaultConstructorConstraint,
+                    HasUnmanagedConstraint = tp.HasUnmanagedConstraint,
+                };
+                substitution[tp] = clone;
+                clones.Add(clone);
+            }
+
+            for (var i = 0; i < source.Length; i++)
+            {
+                var tp = source[i];
+                var clone = clones[i];
+                clone.InterfaceConstraint = tp.InterfaceConstraint is { } iface
+                    ? Binder.SubstituteType(iface, substitution) as InterfaceSymbol ?? iface
+                    : null;
+                clone.ClrInterfaceConstraint = tp.ClrInterfaceConstraint is { } clrIface
+                    ? Binder.SubstituteType(clrIface, substitution)
+                    : null;
+                clone.ClassConstraint = tp.ClassConstraint is { } classConstraint
+                    ? Binder.SubstituteType(classConstraint, substitution)
+                    : null;
+                clone.TypeParameterBound = tp.TypeParameterBound is { } bound
+                    && substitution.TryGetValue(bound, out var mappedBound)
+                    ? mappedBound as TypeParameterSymbol
+                    : tp.TypeParameterBound;
+            }
+
+            return clones.ToImmutable();
+        }
+
+        private static BoundBlockStatement CreateForwarderBody(FunctionSymbol forwarder, BoundExpression innerCall, TypeSymbol? type)
         {
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
             if (type == null || type == TypeSymbol.Void)
@@ -414,7 +568,15 @@ public static class BaseCallForwarderRewriter
             }
             else
             {
-                statements.Add(new BoundReturnStatement(null, innerCall));
+                // A ref-returning base method's forwarder returns the same
+                // reference (`return ref base.M()`), not a copy of the value.
+                // Bound exactly like a written `return ref`: the operand is
+                // wrapped in an address-of so the emitter returns the address.
+                var isRef = forwarder.ReturnRefKind != RefKind.None;
+                var returned = isRef
+                    ? new BoundAddressOfExpression(null, innerCall, unmanaged: false, isReadOnly: forwarder.ReturnRefKind == RefKind.RefReadOnly)
+                    : innerCall;
+                statements.Add(new BoundReturnStatement(null, returned, isRef));
             }
 
             return new BoundBlockStatement(null, statements.ToImmutable());

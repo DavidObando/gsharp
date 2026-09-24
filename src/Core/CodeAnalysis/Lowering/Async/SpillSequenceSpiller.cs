@@ -1584,7 +1584,10 @@ public static class SpillSequenceSpiller
                 return Trivial(call);
             }
 
-            var value = new BoundBaseClassCallExpression(null, receiver, call.BaseClass, call.Method, args, call.Type, call.Property, call.IsSetterAccessor);
+            var value = new BoundBaseClassCallExpression(null, receiver, call.BaseClass, call.Method, args, call.Type, call.Property, call.IsSetterAccessor)
+            {
+                MethodTypeArguments = call.MethodTypeArguments,
+            };
             return new BoundSpillSequenceExpression(null, locals, sideEffects, value);
         }
 
