@@ -1528,10 +1528,14 @@ internal sealed partial class StatementBinder
             case BoundImportedInstanceCallExpression { IsNonVirtualBaseCall: true, Arguments.IsEmpty: true } clrBaseRead
                 when FindPropertyByGetter(clrBaseRead.Method) is { } clrBaseProperty:
             {
+                // The same derived-member visibility plain `base.P = v` uses:
+                // public, protected, or a friend assembly's internal setter.
                 var setter = clrBaseProperty.SetMethod;
+                var friendInternals = clrBaseProperty.DeclaringType?.Assembly is { } declaringAssembly
+                    && scope.References.CanAccessInternalMembers(declaringAssembly);
                 if (setter == null
                     || setter.IsAbstract
-                    || !(setter.IsPublic || setter.IsFamily || setter.IsFamilyOrAssembly))
+                    || !ClrMemberVisibility.IsVisibleFromDerived(setter, friendInternals))
                 {
                     Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, clrBaseProperty.Name);
                     return (null, null);

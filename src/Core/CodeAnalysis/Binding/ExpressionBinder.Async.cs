@@ -186,6 +186,17 @@ internal sealed partial class ExpressionBinder
                 var baseEventReceiver = new BoundVariableExpression(null, baseEventThis);
                 if (baseSourceEvent != null && baseSourceOwner != null)
                 {
+                    // The nearest event of that name hides any farther one,
+                    // even when the derived class cannot reach it (a
+                    // `private` base event): report it instead of binding its
+                    // accessors.
+                    if (!AccessibilityChecker.IsAccessible(baseSourceEvent.Accessibility, baseSourceOwner, function))
+                    {
+                        Diagnostics.ReportMemberInaccessible(eventNameSyntax.Location, baseSourceEvent.Name, baseSourceOwner.Name, baseSourceEvent.Accessibility);
+                        _ = BindExpression(syntax.Value);
+                        return new BoundErrorExpression(null);
+                    }
+
                     var sourceEventType = baseSourceOwner.SubstituteMemberType(baseSourceEvent.Type) ?? baseSourceEvent.Type;
                     var sourceHandler = BindEventSubscriptionHandler(syntax.Value, sourceEventType);
                     return new BoundEventSubscriptionExpression(null, baseEventReceiver, baseSourceOwner, baseSourceEvent, sourceHandler, isAdd, sourceEventType);
@@ -193,6 +204,24 @@ internal sealed partial class ExpressionBinder
 
                 if (baseClrEvent != null)
                 {
+                    // The reflected scan sees non-public events too, and the
+                    // nearest one hides farther ones; but its accessors must be
+                    // callable from the derived class (public, protected, or a
+                    // friend assembly's internal), or the call would fail at
+                    // run time with MethodAccessException.
+                    var eventAccessor = isAdd ? baseClrEvent.AddMethod : baseClrEvent.RemoveMethod;
+                    if (!ClrMemberVisibility.IsVisibleFromDerived(eventAccessor, CanAccessInternalsOf(baseClrEvent.DeclaringType)))
+                    {
+                        var hidden = eventAccessor == null || eventAccessor.IsPrivate ? Accessibility.Private : Accessibility.Internal;
+                        Diagnostics.ReportMemberInaccessible(
+                            eventNameSyntax.Location,
+                            baseClrEvent.Name,
+                            baseClrEvent.DeclaringType?.Name ?? eventName,
+                            hidden);
+                        _ = BindExpression(syntax.Value);
+                        return new BoundErrorExpression(null);
+                    }
+
                     var clrHandler = BindEventSubscriptionHandler(syntax.Value, MemberLookup.GetClrEventHandlerTypeSymbol(baseClrEvent));
                     return new BoundClrEventSubscriptionExpression(null, baseEventReceiver, baseClrEvent, clrHandler, isAdd);
                 }
