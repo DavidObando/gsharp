@@ -178,6 +178,99 @@ public class InheritedProtectedStaticMemberBinderTests
         Assert.Contains(result.Diagnostics, d => d.Id == "GS0130");
     }
 
+    [Fact]
+    public void InheritedStatic_DoesNotOutrankApplicableInstanceMethod()
+    {
+        // The inherited static is a last resort: a call that already bound to
+        // the derived class's own instance method keeps binding to it, even
+        // though the inherited `M(int32)` is a better match for `5`.
+        const string source = """
+            import System
+
+            open class Base {
+                shared {
+                    func M(x int32) string -> "Base.M(int32)"
+                }
+            }
+
+            class Derived : Base {
+                func M(x object) string -> "Derived.M(object)"
+                func Go() string -> M(5)
+            }
+
+            Console.WriteLine(Derived().Go())
+            """;
+
+        AssertRuns(source, "Derived.M(object)");
+    }
+
+    [Fact]
+    public void InheritedStatic_DoesNotOutrankEnclosingTypeStatic()
+    {
+        // A nested class sees its enclosing type's statics unqualified. That
+        // lookup came first before inherited statics were in scope, and it
+        // still does: neither the source base's `H` nor Regex's `Escape`
+        // takes over.
+        const string source = """
+            import System
+            import System.Text.RegularExpressions
+
+            open class Base {
+                shared {
+                    func H() string -> "Base.H"
+                }
+            }
+
+            class Outer {
+                shared {
+                    func H() string -> "Outer.H"
+                    func Escape(s string) string -> "Outer.Escape"
+                }
+
+                class Inner : Base {
+                    func Go() string -> H()
+                }
+
+                class InnerRegex : Regex {
+                    func Go() string -> Escape("a.b")
+                    shared {
+                        func GoStatic() string -> Escape("a.b")
+                    }
+                }
+            }
+
+            Console.WriteLine(Outer.Inner().Go())
+            Console.WriteLine(Outer.InnerRegex().Go())
+            Console.WriteLine(Outer.InnerRegex.GoStatic())
+            """;
+
+        AssertRuns(source, "Outer.H", "Outer.Escape", "Outer.Escape");
+    }
+
+    [Fact]
+    public void RegexSubclass_InheritedInstanceAndStaticMembers_Unqualified()
+    {
+        const string source = """
+            import System
+            import System.Text.RegularExpressions
+
+            class Digits : Regex {
+                init() : base("[0-9]+") {
+                    ValidateMatchTimeout(Regex.InfiniteMatchTimeout)
+                }
+
+                func Go() string {
+                    let m = Match("ab12c")
+                    return "${IsMatch("x9")} ${m.Value} ${Escape("1.2")}"
+                }
+            }
+
+            Console.WriteLine(Digits().Go())
+            """;
+
+        AssertRuns(source, "True 12 1\\.2");
+    }
+
     private static void AssertRuns(string source, params string[] expectedLines)
     {
         var result = EmittedOracle.Evaluate(source);

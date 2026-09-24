@@ -201,11 +201,7 @@ internal sealed partial class OverloadResolver
         out bool hasCandidates)
     {
         var instanceGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Instance(MemberKinds.Method));
-
-        // Static methods inherited from a source base class are in scope
-        // unqualified, as in C#; the static finalizer the caller routes a
-        // static pick to resolves the same inherited group.
-        var staticGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.InheritedStatic(MemberKinds.Method));
+        var staticGroup = TypeMemberModel.GetMethods(structSym, methodName, MemberQuery.Static(MemberKinds.Method));
         var unified = instanceGroup.IsDefaultOrEmpty
             ? staticGroup
             : staticGroup.IsDefaultOrEmpty

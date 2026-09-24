@@ -438,6 +438,39 @@ internal sealed partial class OverloadResolver
     }
 
     /// <summary>
+    /// The last-resort unqualified lookup of an inherited static method: the
+    /// enclosing class (through <c>this</c>, or as the owner of a
+    /// <c>shared</c> member or of the function literal being bound) inherits
+    /// a static method of that name from a source base class or from its
+    /// imported base.
+    /// </summary>
+    /// <param name="effThis">The effective <c>this</c>, or <see langword="null"/> in a static context.</param>
+    /// <param name="syntax">The unqualified call.</param>
+    /// <param name="result">The bound static call when one was found.</param>
+    /// <returns><see langword="true"/> when a base declares a static method of that name.</returns>
+    private bool TryBindInheritedStaticCallAsLastResort(
+        ParameterSymbol? effThis,
+        CallExpressionSyntax syntax,
+        [NotNullWhen(true)] out BoundExpression? result)
+    {
+        result = null;
+        var owner = (effThis?.Type ?? GetImplicitStaticSelfOwner()) as StructSymbol;
+        if (owner == null || !owner.IsClass)
+        {
+            return false;
+        }
+
+        if (bindUserTypeStaticCall != null
+            && !TypeMemberModel.GetMethods(owner, syntax.Identifier.ValueText, MemberQuery.InheritedStatic(MemberKinds.Method)).IsDefaultOrEmpty)
+        {
+            result = bindUserTypeStaticCall(owner, syntax);
+            return true;
+        }
+
+        return TryBindInheritedImportedStaticCall(owner, syntax, out result);
+    }
+
+    /// <summary>
     /// Binds an unqualified call to a static method a source class inherits
     /// from its imported base — public, or <c>protected</c> since the call
     /// site is inside the derived class
@@ -1221,11 +1254,6 @@ internal sealed partial class OverloadResolver
                 {
                     return implicitInheritedCall;
                 }
-
-                if (TryBindInheritedImportedStaticCall(implicitReceiverStruct, syntax, out var implicitInheritedStaticCall))
-                {
-                    return implicitInheritedStaticCall;
-                }
             }
 
             // ADR-0085 / ADR-0090 implicit `this` inside an interface default
@@ -1325,21 +1353,13 @@ internal sealed partial class OverloadResolver
             if (GetImplicitStaticSelfOwner() is StructSymbol implicitStaticStruct
                 && bindUserTypeStaticCall != null)
             {
-                // A static method inherited from a source base class is in
-                // scope unqualified, exactly as the qualified
-                // `Derived.Helper(args)` form already resolves it.
                 var implicitStaticStructOverloads = TypeMemberModel.GetMethods(
                     implicitStaticStruct,
                     syntax.Identifier.ValueText,
-                    MemberQuery.InheritedStatic(MemberKinds.Method));
+                    MemberQuery.Static(MemberKinds.Method));
                 if (!implicitStaticStructOverloads.IsDefaultOrEmpty)
                 {
                     return bindUserTypeStaticCall(implicitStaticStruct, syntax);
-                }
-
-                if (TryBindInheritedImportedStaticCall(implicitStaticStruct, syntax, out var implicitStaticInheritedCall))
-                {
-                    return implicitStaticInheritedCall;
                 }
             }
 
@@ -1493,6 +1513,19 @@ internal sealed partial class OverloadResolver
                     {
                         return Invariant.Required(submissionDelegateCall, "a matched submission delegate global produces a bound invocation");
                     }
+                }
+
+                // Last resort, reached only when every lookup above failed: a
+                // static method the enclosing class inherits from a base. C#
+                // puts inherited static members in scope unqualified
+                // (`ValidateMatchTimeout(timeout)` in a class deriving from
+                // `Regex`), but a lexically enclosing type's static, a
+                // using-static import or any other earlier match still wins,
+                // so no call that bound before this lookup existed changes
+                // meaning; only calls that were errors start to bind.
+                if (TryBindInheritedStaticCallAsLastResort(effThis, syntax, out var inheritedStaticCall))
+                {
+                    return inheritedStaticCall;
                 }
 
                 Diagnostics.ReportUndefinedFunction(syntax.Identifier.Location, syntax.Identifier.ValueText);
