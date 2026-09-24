@@ -1264,7 +1264,7 @@ blanket-rejection at GS0211 has been retired.
 | GS0322 | Error | `@DllImport` requires a non-empty library name as its first positional argument. | `@DllImport func F() int32;` — missing the library name. |
 | GS0323 | Error | P/Invoke parameter or return type `{type}` is not in the supported marshalling table. | `@DllImport("libc") func F(o Object) int32;` — `Object` is not marshallable in v1. |
 | GS0324 | Error | Function `{name}` is annotated `@DllImport` but has a managed body; P/Invoke declarations must use a `;` body. | `@DllImport("libc") func F() int32 { return 0 }`. |
-| GS0325 | Error | Function `{name}` has no body; only `@DllImport`-annotated functions may use a `;` body marker. | `func F() int32;` without a preceding `@DllImport`. |
+| GS0325 | Error | Function `{name}` has no body; only `@DllImport`- or `@LibraryImport`-annotated functions may use a `;` body marker. | `func F() int32;` with neither `@DllImport` nor `@LibraryImport`. |
 | GS0326 | Error | `@DllImport` or `@LibraryImport` (the attribute actually used) is not supported on this function shape (`{reason}`). | `@DllImport("libc") async func F() int32;` — async functions, generic functions, instance/extension methods, members of generic types, and ref-returning functions are all disallowed. A static member in a class or struct `shared { … }` block is supported (issue #4370). |
 | GS0327 | Error | `@DllImport` `CharSet` value `{value}` is not recognised; valid values are `CharSet.Ansi`, `CharSet.Unicode`, `CharSet.Auto`, and `CharSet.None`. | `@DllImport("libc", CharSet: "Utf8")`. |
 | GS0328 | Error | `@DllImport` `CallingConvention` value `{value}` is not recognised; valid values are `CallingConvention.Winapi`, `Cdecl`, `StdCall`, `ThisCall`, and `FastCall`. | `@DllImport("libc", CallingConvention: "MyCall")`. |
@@ -1293,7 +1293,7 @@ Cause/fix:
   marshalling, and custom marshallers are not supported in this release.
 - **GS0324** — drop the function body and replace it with `;`,
   or remove the `@DllImport` annotation.
-- **GS0325** — add `@DllImport("libname")` above the declaration,
+- **GS0325** — add `@DllImport("libname")` or `@LibraryImport("libname")` above the declaration,
   or replace the `;` with a managed body `{ ... }`.
 - **GS0326** — make the function a plain top-level `func` or a
   static member of a non-generic class or struct (inside its

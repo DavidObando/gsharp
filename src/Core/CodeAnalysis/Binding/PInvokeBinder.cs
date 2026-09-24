@@ -1131,7 +1131,7 @@ internal static class PInvokeBinder
 
         diagnostics.ReportDllImportInvalidFunctionShape(
             syntax.Identifier.Location,
-            function.PInvokeMetadata is { IsLibraryImport: true } ? "LibraryImport" : "DllImport",
+            KnownAttributes.FindDllImport(function.Attributes) != null ? "DllImport" : "LibraryImport",
             function.Name,
             "members of generic types are not supported");
     }

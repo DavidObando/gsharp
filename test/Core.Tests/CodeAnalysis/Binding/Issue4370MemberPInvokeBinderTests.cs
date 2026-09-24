@@ -90,6 +90,30 @@ class Native[T] {{
     }
 
     [Fact]
+    public void SharedLibraryImport_InGenericClass_WithInvalidArguments_NamesLibraryImport()
+    {
+        // An empty library name fails metadata extraction (GS0322), so the
+        // attribute name must come from the bound attributes, not the
+        // (absent) P/Invoke metadata.
+        const string source = @"
+package P
+import System.Runtime.InteropServices
+
+class Native[T] {
+    shared {
+        @LibraryImport("""", EntryPoint: ""getpid"")
+        func GetPid() int32;
+    }
+}
+";
+        var scope = BindSource(source);
+
+        var diagnostic = Assert.Single(scope.Diagnostics, d => d.Id == "GS0326");
+        Assert.StartsWith("'@LibraryImport' is not valid on 'GetPid'", diagnostic.Message);
+        Assert.Contains("members of generic types are not supported", diagnostic.Message);
+    }
+
+    [Fact]
     public void SharedPInvoke_InClassNestedInGenericClass_ReportsGS0326()
     {
         const string source = @"
