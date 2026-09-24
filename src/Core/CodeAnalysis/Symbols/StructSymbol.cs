@@ -948,6 +948,29 @@ public sealed class StructSymbol : TypeSymbol
         Methods = Methods.IsDefaultOrEmpty ? methods : Methods.AddRange(methods);
     }
 
+    /// <summary>
+    /// Removes methods a lowering pass attached earlier with
+    /// <see cref="AddMethods"/>, so a pass that runs again over the same bound
+    /// symbol (a repeated <c>Compilation.Emit</c>) can replace them instead of
+    /// accumulating a second copy.
+    /// </summary>
+    /// <param name="methods">The methods to remove; any not present are ignored.</param>
+    public void RemoveMethods(IEnumerable<FunctionSymbol> methods)
+    {
+        if (Methods.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        var remaining = Methods;
+        foreach (var method in methods)
+        {
+            remaining = remaining.Remove(method);
+        }
+
+        Methods = remaining;
+    }
+
     /// <summary>Appends additional static methods after the initial declaration binding pass (issue #1017: user-defined conversion operators declared at top level).</summary>
     /// <param name="methods">The static methods to append.</param>
     public void AddStaticMethods(ImmutableArray<FunctionSymbol> methods)

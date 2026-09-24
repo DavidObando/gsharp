@@ -39,6 +39,13 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 public static class BaseCallForwarderRewriter
 {
     /// <summary>
+    /// The forwarders each class currently carries from a previous run of this
+    /// pass, keyed weakly on the class symbol so they live exactly as long as
+    /// the compilation's bound program.
+    /// </summary>
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<StructSymbol, List<FunctionSymbol>> AttachedForwarders = new();
+
+    /// <summary>
     /// Rewrites every async / iterator function body in <paramref name="program"/>
     /// so that nested <c>base.M(...)</c> method calls are routed through
     /// synthesized forwarders, returning the updated program.
@@ -124,9 +131,21 @@ public static class BaseCallForwarderRewriter
             builder.Add(forwarder);
         }
 
+        // The compilation caches its bound program, so a second Emit runs this
+        // pass over the same class symbols. Replace the forwarders a previous
+        // run attached rather than adding another set: the old ones would stay
+        // in the class's method list with no body in this program.
         foreach (var entry in methodsByClass)
         {
-            entry.Key.AddMethods(entry.Value.ToImmutable());
+            var attached = entry.Value.ToImmutable();
+            if (AttachedForwarders.TryGetValue(entry.Key, out var previous))
+            {
+                entry.Key.RemoveMethods(previous);
+                AttachedForwarders.Remove(entry.Key);
+            }
+
+            entry.Key.AddMethods(attached);
+            AttachedForwarders.Add(entry.Key, new List<FunctionSymbol>(attached));
         }
 
         var functionsBuilder = program.Functions.ToBuilder();
