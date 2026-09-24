@@ -558,6 +558,69 @@ Console.WriteLine(Err().Go())
             new[] { "q1 a1", "h1" },
         };
 
+        // Forwarded calls to async and iterator base methods of a generic base
+        // class: the forwarder returns what the base method returns as
+        // emitted (Task, Task<T>, the sequence), not the G#-declared result.
+        // A `void` forwarder for `async func Complete()` left the Task on the
+        // stack (ILVerify ReturnVoid / StackUnderflow).
+        yield return new object[]
+        {
+            "forwarded-async-and-iterator-base-calls",
+            @"
+package P
+import System
+import System.Threading.Tasks
+
+open class FilterC[TInput] {
+    open async func Complete() {
+        await Task.Yield()
+        Console.WriteLine(""base complete"")
+    }
+    open async func Echo[T](x T) T {
+        await Task.Yield()
+        return x
+    }
+    open async func Count() int32 {
+        await Task.Yield()
+        return 7
+    }
+    open func Items() sequence[int32] {
+        yield 1
+        yield 2
+    }
+}
+
+class TransformC[TInput, TOutput] : FilterC[TInput] {
+    override async func Complete() {
+        await base.Complete()
+        let f = () -> base.Complete()
+        await f()
+    }
+    override async func Echo[T](x T) T { return x }
+    override async func Count() int32 { return -1 }
+    override func Items() sequence[int32] { yield 9 }
+
+    async func Go() string {
+        let a = await base.Echo(""e"")
+        let g = () -> base.Echo(4)
+        let b = await g()
+        let c = await base.Count()
+        let h = () -> base.Count()
+        let d = await h()
+        var sum = 0
+        let it = () -> base.Items()
+        for x in it() { sum += x }
+        return ""$a $b $c $d $sum""
+    }
+}
+
+let t = TransformC[int32, string]()
+t.Complete().Wait()
+Console.WriteLine(t.Go().Result)
+",
+            new[] { "base complete", "base complete", "e 4 7 7 3" },
+        };
+
         // Issue #4331: postfix chains after a base member, read and write,
         // on source and imported bases, directly and in a function literal.
         yield return new object[]

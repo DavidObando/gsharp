@@ -296,7 +296,7 @@ public static class BaseCallForwarderRewriter
             var typeParameters = CloneMethodTypeParameters(method.TypeParameters, substitution);
             TypeSymbol Substitute(TypeSymbol type) =>
                 substitution.Count == 0 ? type : Binder.SubstituteType(type, substitution);
-            var forwarderReturnType = substitution.Count == 0 ? returnType : Substitute(method.Type);
+            var forwarderReturnType = GetForwarderReturnType(method, returnType, Substitute);
 
             // Fresh parameters so the forwarder body can read them without
             // aliasing the base method's parameter symbols. A `ref`, `out` or
@@ -473,6 +473,60 @@ public static class BaseCallForwarderRewriter
 
             this.forwarderBodies[forwarder] = CreateForwarderBody(forwarder, innerCall, node.Type);
             return forwarder;
+        }
+
+        /// <summary>
+        /// The forwarder's return type: the type the base call returns as
+        /// emitted, not the G#-declared result type. An <c>async</c> method
+        /// declared with no result, or with result <c>T</c>, returns
+        /// <c>Task</c> or <c>Task&lt;T&gt;</c> (or the <c>ValueTask</c>
+        /// forms), and a forwarder that returned the declared type would
+        /// leave the task on the stack of a <c>void</c> method.
+        /// </summary>
+        /// <remarks>
+        /// For a non-generic method the call's own type is exactly that: the
+        /// emitted return type in the derived class's terms (a generic base
+        /// class's type parameters already replaced). A generic method's call
+        /// type names the call's type arguments, so the forwarder instead uses
+        /// the declared type in its own type parameters, re-wrapped in the
+        /// call's task type when the method is async.
+        /// </remarks>
+        private static TypeSymbol GetForwarderReturnType(
+            FunctionSymbol method,
+            TypeSymbol callType,
+            System.Func<TypeSymbol, TypeSymbol> substitute)
+        {
+            if (!method.IsGeneric)
+            {
+                return callType;
+            }
+
+            var declared = substitute(method.Type);
+            if (!method.IsAsyncOrSuspending
+                || (declared.ClrType is { IsGenericType: true } declaredClr
+                    && callType.ClrType is { IsGenericType: true } callClr
+                    && declaredClr.GetGenericTypeDefinition() == callClr.GetGenericTypeDefinition()))
+            {
+                // Not async, or the declared type already is the emitted one
+                // (an async iterator declared as the async sequence).
+                return declared;
+            }
+
+            if (method.Type == TypeSymbol.Void)
+            {
+                return callType;
+            }
+
+            if (callType.ClrType is { IsGenericType: true } taskClr
+                && taskClr.GetGenericArguments().Length == 1)
+            {
+                return ImportedTypeSymbol.GetConstructed(
+                    taskClr,
+                    taskClr.GetGenericTypeDefinition(),
+                    ImmutableArray.Create(declared));
+            }
+
+            return callType;
         }
 
         /// <summary>
