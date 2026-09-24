@@ -336,7 +336,9 @@ internal static class NullabilityImportRule
   nullability and would be checked at the coercion point, but it depends on a
   platform wrapper over a type parameter that may be instantiated with a value
   type, which Phase 1's `PlatformTypeSymbol.Get` normalisation does not yet
-  define. This cell was the one entry in the rule that needed the repository
+  define, and on symbolic-projection consumers that peel that wrapper, which
+  Phase 3 adds (PR #4362's attempts without them failed with GS0159 and
+  ILVerify `StackUnexpected`). This cell was the one entry in the rule that needed the repository
   owner's explicit confirmation before Phase 1 (Open question 1). **Resolved
   2026-09-24: the owner confirmed `Unchanged` as written.** Revisiting
   `Platform` for this cell is deferred until Phase 3 lands and is tracked in
@@ -801,12 +803,15 @@ No phase uses anything a later phase introduces.
 - **Exit criterion: #4385 is picked up.** Phase 3 is not complete until the
   deferred revisit of the `Annotated` × `Unknown` cell (`Unchanged` → `Platform`,
   i.e. `T!`; see Open question 1) is unblocked and someone owns it. The cell
-  change itself may be a follow-up PR, but before Phase 3 is called done:
-  - its prerequisite is in place: the symbolic-projection consumers above peel
-    `PlatformTypeSymbol` over symbolic generics, so a `T!` there no longer
-    degrades the projection (the GS0159 / ILVerify `StackUnexpected` failures
-    PR #4362 hit);
-  - #4385 is updated to say it is unblocked, with a link to the Phase 3 PR.
+  change itself may be a follow-up PR (it also needs `T!` over a maybe-value
+  type parameter specified; #4385 lists that work). Phase 3 is not called done
+  until:
+  - its PR has merged with #4385's prerequisite in place: the
+    symbolic-projection consumers above peel `PlatformTypeSymbol` over symbolic
+    generics, so a `T!` there no longer degrades the projection (the GS0159 /
+    ILVerify `StackUnexpected` failures PR #4362 hit);
+  - #4385 has then been updated to say it is unblocked, with a link to the
+    merged Phase 3 PR.
 - **This phase is one PR, and it is atomic.** Once Core references GSA0008 the
   rule analyzes the whole compilation, so landing it "for the files already
   migrated" would need a path filter, suppressions or an unfinished-file list —
