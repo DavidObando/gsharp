@@ -37,7 +37,8 @@ public sealed class BaseMemberAccessibilityBinderTests
 
         [assembly: InternalsVisibleTo("BaseAccess.Friend")]
 
-        namespace BaseAccess.Library;
+        namespace BaseAccess.Library
+        {
 
         public class Source
         {
@@ -72,6 +73,15 @@ public sealed class BaseMemberAccessibilityBinderTests
             public new int Count = 1;
 
             public new string Label { get; set; } = "a";
+        }
+        }
+
+        namespace BaseAccess.Named
+        {
+            public static class @base
+            {
+                public static string M() => "imported base.M";
+            }
         }
         """;
 
@@ -234,6 +244,27 @@ public sealed class BaseMemberAccessibilityBinderTests
                     base.Count += 1
                     base.Label += "!"
                 }
+            }
+            """,
+            StrangerName);
+
+        Assert.True(result.Success, Describe(result));
+    }
+
+    [Fact]
+    public void ImportedTypeNamedBase_StaticCall_Binds()
+    {
+        // `base` is contextual: an imported type named `base` keeps its
+        // ordinary meaning in `base.M()`, directly and in a function literal.
+        var result = CompileAgainstLibrary(
+            """
+            import BaseAccess.Named
+
+            func Direct() string -> base.M()
+
+            func InLiteral() string {
+                let f = () -> base.M()
+                return f()
             }
             """,
             StrangerName);

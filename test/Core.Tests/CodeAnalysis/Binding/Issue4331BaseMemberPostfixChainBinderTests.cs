@@ -137,6 +137,98 @@ public class Issue4331BaseMemberPostfixChainBinderTests
         AssertRuns(source, "42");
     }
 
+    [Fact]
+    public void NestedTypeAndLocalNamedBase_MemberCalls_KeepOrdinaryMeaning()
+    {
+        // `base` is contextual: a nested type or a local named `base` keeps
+        // its ordinary meaning in `base.M(args)`, directly and in a function
+        // literal.
+        const string source = """
+            import System
+
+            class Helper {
+                func M() string -> "helper.M"
+            }
+
+            class Outer {
+                class base {
+                    shared { func N() string -> "nested.N" }
+                }
+
+                func Go() string {
+                    let f = () -> base.N()
+                    return base.N() + " " + f()
+                }
+            }
+
+            func Run() string {
+                let base = Helper()
+                let f = () -> base.M()
+                return base.M() + " " + f()
+            }
+
+            Console.WriteLine(Run())
+            Console.WriteLine(Outer().Go())
+            """;
+
+        AssertRuns(source, "helper.M helper.M", "nested.N nested.N");
+    }
+
+    [Fact]
+    public void FunctionNamedBase_CallResultMemberCall_Binds()
+    {
+        const string source = """
+            import System
+
+            class Helper {
+                func M() string -> "helper.M"
+            }
+
+            func base() Helper -> Helper()
+
+            Console.WriteLine(base().M())
+            """;
+
+        AssertRuns(source, "helper.M");
+    }
+
+    [Fact]
+    public void SourceTypeNamedBase_StaticCalls_BindAndRun()
+    {
+        const string source = """
+            import System
+
+            class base {
+                shared {
+                    func M() string -> "base.M"
+                    func Twice(x int32) int32 -> x * 2
+                }
+            }
+
+            func Run() string {
+                let f = () -> base.M()
+                return base.M() + " " + base.Twice(4).ToString() + " " + f()
+            }
+
+            Console.WriteLine(Run())
+            """;
+
+        AssertRuns(source, "base.M 8 base.M");
+    }
+
+    [Fact]
+    public void ImportAliasNamedBase_StaticCall_Binds()
+    {
+        const string source = """
+            import System
+            import base = System.Math
+
+            Console.WriteLine(base.Max(1, 2).ToString())
+            """;
+
+        AssertRuns(source, "2");
+    }
+
     private static void AssertRuns(string source, params string[] expectedLines)
     {
         var result = EmittedOracle.Evaluate(source);

@@ -3064,9 +3064,13 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private BoundExpression BindBaseClassCallExpression(BaseClassCallExpressionSyntax syntax)
     {
-        if (scope.TryLookupSymbol(syntax.BaseKeyword.Text) is VariableSymbol)
+        // `base` is contextual: when anything named `base` is in scope (a
+        // local, field, function, source or imported type), `base.M(args)`
+        // is an ordinary member call on it.
+        var baseName = new NameExpressionSyntax(syntax.SyntaxTree, syntax.BaseKeyword);
+        if (!IsContextualBaseKeyword(baseName))
         {
-            var receiver = new NameExpressionSyntax(syntax.SyntaxTree, syntax.BaseKeyword);
+            var receiver = baseName;
             var accessor = new AccessorExpressionSyntax(syntax.SyntaxTree, receiver, syntax.DotToken, syntax.Call);
             return BindAccessorExpression(accessor);
         }
