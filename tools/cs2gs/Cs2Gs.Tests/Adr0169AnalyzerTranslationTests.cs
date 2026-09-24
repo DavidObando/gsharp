@@ -696,6 +696,16 @@ public sealed class InferredLocalAnalyzer : DiagnosticAnalyzer
         return alias.Text;
     }
 
+    // A long alias chain: no fixed depth may cut it short.
+    private static string LongChain(MethodDeclarationSyntax declaration)
+    {
+        var a0 = declaration.ParameterList.Parameters[0].Identifier;
+        var a1 = a0; var a2 = a1; var a3 = a2; var a4 = a3; var a5 = a4;
+        var a6 = a5; var a7 = a6; var a8 = a7; var a9 = a8; var a10 = a9;
+        var a11 = a10; var a12 = a11;
+        return a12.Text;
+    }
+
     // A captured inferred local read inside a quoted lambda.
     private static Expression<Func<string>> QuotedFirstName(MethodDeclarationSyntax declaration)
     {
@@ -707,6 +717,7 @@ public sealed class InferredLocalAnalyzer : DiagnosticAnalyzer
 
         string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
         Assert.Contains("return alias!!.Text", flat, StringComparison.Ordinal);
+        Assert.Contains("return a12!!.Text", flat, StringComparison.Ordinal);
         Assert.Contains("-> token!!.Text", flat, StringComparison.Ordinal);
         Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
         AssertBindsAgainstGsCore(printed);

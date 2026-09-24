@@ -2136,15 +2136,9 @@ public sealed partial class CSharpToGSharpTranslator
                             memberName);
                     }
 
-                    ITypeSymbol memberType = null;
-                    if (sub.NameColon != null)
-                    {
-                        memberType = this.TryGetSubpatternMemberType(sub);
-                        if (this.IsGSharpNullableAnalyzerApiMember(this.GetPatternMemberSymbol(sub.NameColon.Name)))
-                        {
-                            this.state.GSharpNullablePatternReceivers.Add(memberAccess);
-                        }
-                    }
+                    ITypeSymbol memberType = sub.NameColon != null
+                        ? this.RegisterPatternMemberSlot(this.GetPatternMemberSymbol(sub.NameColon.Name), memberAccess)
+                        : null;
 
                     this.AddTypedSubpatternTest(
                         sub.Pattern,
@@ -2209,12 +2203,16 @@ public sealed partial class CSharpToGSharpTranslator
                     GExpression memberAccess = new MemberAccessExpression(
                         new IdentifierExpression(designator),
                         this.EmittedName(memberSymbol, memberName));
+
+                    // Issue #4356: pass the slot's type, as the property loop
+                    // above does, so a nullable slot is guarded and read once.
                     this.AddTypedSubpatternTest(
                         sub.Pattern,
                         memberAccess,
                         bindings,
                         guards,
-                        mutableBindings);
+                        mutableBindings,
+                        this.RegisterPatternMemberSlot(memberSymbol, memberAccess));
                 }
             }
 

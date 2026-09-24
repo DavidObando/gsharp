@@ -1358,6 +1358,32 @@ public sealed partial class CSharpToGSharpTranslator
             type?.OriginalDefinition?.SpecialType == SpecialType.System_Nullable_T;
 
         /// <summary>
+        /// Issue #4356: the declared type of a property/field a pattern slot reads
+        /// (a property subpattern's member, or a positional slot's matching
+        /// member), registering <paramref name="memberAccess"/> as a G#-nullable
+        /// receiver when the ADR-0169 analyzer map makes it <c>T?</c>. Every
+        /// nested-member entry point passes this type to TranslatePatternTest, so
+        /// the read-once classifier always knows the slot's nullability.
+        /// </summary>
+        /// <param name="member">The slot's member symbol, if bound.</param>
+        /// <param name="memberAccess">The translated member read.</param>
+        /// <returns>The member's declared type, or null.</returns>
+        private ITypeSymbol RegisterPatternMemberSlot(ISymbol member, GExpression memberAccess)
+        {
+            if (this.IsGSharpNullableAnalyzerApiMember(member))
+            {
+                this.state.GSharpNullablePatternReceivers.Add(memberAccess);
+            }
+
+            return member switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                _ => null,
+            };
+        }
+
+        /// <summary>
         /// Issue #4356: whether a pattern-lowering receiver's EMITTED G# type is a
         /// nullable reference although its Roslyn type is not (an ADR-0169
         /// analyzer-API member such as <c>ParameterSyntax.Identifier</c>, or a
@@ -2188,7 +2214,13 @@ public sealed partial class CSharpToGSharpTranslator
                     GExpression memberAccess = new MemberAccessExpression(
                         memberReceiver,
                         this.EmittedName(memberSymbol, memberName));
-                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, isNestedPatternMember: true);
+
+                    // Issue #4356: the slot's type lets a nested test over a
+                    // NULLABLE slot guard it and read it once, as C#'s single
+                    // Deconstruct call does (TranslatePatternTest), exactly as
+                    // the property-subpattern loop above passes its member type.
+                    ITypeSymbol slotType = this.RegisterPatternMemberSlot(memberSymbol, memberAccess);
+                    GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, slotType, isNestedPatternMember: true);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
             }

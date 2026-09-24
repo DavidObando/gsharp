@@ -1273,9 +1273,12 @@ public sealed partial class CSharpToGSharpTranslator
         /// <param name="symbol">The bound C# symbol of the read.</param>
         /// <returns>True when the translated read is <c>T?</c> in G#.</returns>
         private bool IsGSharpNullableAnalyzerApiMember(ISymbol symbol) =>
-            this.InAnalyzerApiMode && this.IsGSharpNullableAnalyzerApiValue(symbol, depth: 0);
+            this.InAnalyzerApiMode && this.IsGSharpNullableAnalyzerApiValue(symbol, visited: null);
 
-        private bool IsGSharpNullableAnalyzerApiValue(ISymbol symbol, int depth)
+        // `visited` holds the locals already on the initializer walk: it ends a
+        // cycle without capping how long a chain of aliases may be, so
+        // `a9 = a8; …; a0 = parameter.Identifier` answers like `a0` does.
+        private bool IsGSharpNullableAnalyzerApiValue(ISymbol symbol, HashSet<ILocalSymbol> visited)
         {
             if (symbol is IPropertySymbol or IFieldSymbol)
             {
@@ -1284,7 +1287,13 @@ public sealed partial class CSharpToGSharpTranslator
                     symbol.Name);
             }
 
-            if (symbol is not ILocalSymbol local || depth > 8)
+            if (symbol is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            visited ??= new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+            if (!visited.Add(local))
             {
                 return false;
             }
@@ -1300,7 +1309,7 @@ public sealed partial class CSharpToGSharpTranslator
                     && declarator.Parent is VariableDeclarationSyntax declaration
                     && declaration.Type.IsVar
                     && declarator.Initializer != null
-                    && this.IsGSharpNullableAnalyzerExpression(declarator.Initializer.Value, depth + 1))
+                    && this.IsGSharpNullableAnalyzerExpression(declarator.Initializer.Value, visited))
                 {
                     return true;
                 }
@@ -1323,11 +1332,11 @@ public sealed partial class CSharpToGSharpTranslator
         /// cannot disagree. A null-forgiving <c>x!</c> is non-null.
         /// </summary>
         /// <param name="expression">The C# expression.</param>
-        /// <param name="depth">Recursion guard through local initializers.</param>
+        /// <param name="visited">Locals already on this initializer walk (cycle guard).</param>
         /// <returns>True when the emitted G# type is nullable per the analyzer map.</returns>
-        private bool IsGSharpNullableAnalyzerExpression(ExpressionSyntax expression, int depth = 0)
+        private bool IsGSharpNullableAnalyzerExpression(ExpressionSyntax expression, HashSet<ILocalSymbol> visited = null)
         {
-            if (!this.InAnalyzerApiMode || expression == null || depth > 8)
+            if (!this.InAnalyzerApiMode || expression == null)
             {
                 return false;
             }
@@ -1335,23 +1344,23 @@ public sealed partial class CSharpToGSharpTranslator
             switch (expression)
             {
                 case ParenthesizedExpressionSyntax parenthesized:
-                    return this.IsGSharpNullableAnalyzerExpression(parenthesized.Expression, depth);
+                    return this.IsGSharpNullableAnalyzerExpression(parenthesized.Expression, visited);
 
                 case PostfixUnaryExpressionSyntax suppression
                     when suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
                     return false;
 
                 case ConditionalExpressionSyntax conditional:
-                    return this.IsGSharpNullableAnalyzerExpression(conditional.WhenTrue, depth)
-                        || this.IsGSharpNullableAnalyzerExpression(conditional.WhenFalse, depth);
+                    return this.IsGSharpNullableAnalyzerExpression(conditional.WhenTrue, visited)
+                        || this.IsGSharpNullableAnalyzerExpression(conditional.WhenFalse, visited);
 
                 case BinaryExpressionSyntax coalesce when coalesce.IsKind(SyntaxKind.CoalesceExpression):
-                    return this.IsGSharpNullableAnalyzerExpression(coalesce.Right, depth);
+                    return this.IsGSharpNullableAnalyzerExpression(coalesce.Right, visited);
 
                 case SwitchExpressionSyntax switchExpression:
                     foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
                     {
-                        if (this.IsGSharpNullableAnalyzerExpression(arm.Expression, depth))
+                        if (this.IsGSharpNullableAnalyzerExpression(arm.Expression, visited))
                         {
                             return true;
                         }
@@ -1360,10 +1369,10 @@ public sealed partial class CSharpToGSharpTranslator
                     return false;
 
                 case AssignmentExpressionSyntax assignment when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression):
-                    return this.IsGSharpNullableAnalyzerExpression(assignment.Right, depth);
+                    return this.IsGSharpNullableAnalyzerExpression(assignment.Right, visited);
 
                 default:
-                    return this.IsGSharpNullableAnalyzerApiValue(this.context.GetSymbolInfo(expression).Symbol, depth);
+                    return this.IsGSharpNullableAnalyzerApiValue(this.context.GetSymbolInfo(expression).Symbol, visited);
             }
         }
 

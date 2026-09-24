@@ -543,6 +543,75 @@ public sealed class Issue4356NestedPatternReceiverTranslationTests
         Assert.Equal("-1,11;-1,32;-1,-1,23", CompileAndRun(printed, "C.Run()").Trim());
     }
 
+    /// <summary>
+    /// A NULLABLE positional slot (<c>Deconstruct(out Inner? p)</c> matched to a
+    /// nullable <c>P</c>) tested with a nested pattern: C# calls Deconstruct once
+    /// and tests that one value. The lowering reads the matching property, so it
+    /// must read it once and guard it — in the <c>is</c>-expression and in a
+    /// typed switch arm — against a getter that counts reads.
+    /// </summary>
+    [Fact]
+    public void NullablePositionalSlot_IsGuardedAndReadOnce()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System;
+
+            namespace Sample;
+
+            public sealed class Inner
+            {
+                public int X;
+            }
+
+            public class Node
+            {
+            }
+
+            public sealed class Outer : Node
+            {
+                public int Reads;
+                private readonly Inner? stored;
+
+                public Outer(Inner? stored) => this.stored = stored;
+
+                public Inner? P
+                {
+                    get
+                    {
+                        Reads++;
+                        return Reads == 1 ? stored : null;
+                    }
+                }
+
+                public void Deconstruct(out Inner? P) => P = this.P;
+            }
+
+            public static class C
+            {
+                public static string Arm(Node n) => n switch
+                {
+                    Outer({ X: 0 }) => "zero",
+                    _ => "other",
+                };
+
+                public static void Run()
+                {
+                    var a = new Outer(new Inner());
+                    bool isZero = a is Outer({ X: 0 });
+                    var b = new Outer(null);
+                    bool isNil = b is Outer({ X: 0 });
+                    var c = new Outer(new Inner());
+                    string arm = Arm(c);
+                    Console.WriteLine(
+                        isZero + "," + a.Reads + ";" + isNil + "," + b.Reads + ";" + arm + "," + c.Reads);
+                }
+            }
+            """);
+
+        Assert.Equal("True,1;False,1;zero,1", CompileAndRun(printed, "C.Run()").Trim());
+    }
+
     private static string CompileAndRun(string printed, string callExpression)
     {
         string? compiler = FindCompiler();
