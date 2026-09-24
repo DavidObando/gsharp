@@ -962,6 +962,54 @@ public sealed class NullableTargetsAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void RetargetedNullableMember_IntoPromotedOrNullableParamsTarget_IsNotAsserted()
+    {
+        // Issue #4356: an argument target is judged by its EMITTED type. A
+        // parameter cs2gs promotes to `T?` (its body tests it against null)
+        // and an expanded `params SyntaxNode?[]` element both accept nil, so the
+        // mapped `operation.Syntax` must pass through without `!!` — asserting
+        // turns a legal nil into a throw. A `params SyntaxNode[]` element is
+        // non-null, so there it IS asserted.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+using System.Collections.Immutable;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ArgumentTargetsAnalyzer : DiagnosticAnalyzer
+{
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray<DiagnosticDescriptor>.Empty;
+
+    public override void Initialize(AnalysisContext context)
+    {
+    }
+
+    private static bool Promoted(SyntaxNode node) => node == null;
+
+    private static int TakeNullable(params SyntaxNode?[] values) => values.Length;
+
+    private static int TakeNonNull(params SyntaxNode[] values) => values.Length;
+
+    private static bool PassPromoted(IOperation operation) => Promoted(operation.Syntax);
+
+    private static int PassNullableParams(IOperation operation) => TakeNullable(operation.Syntax);
+
+    private static int PassNonNullParams(IOperation operation) => TakeNonNull(operation.Syntax);
+}
+");
+
+        string flat = System.Text.RegularExpressions.Regex.Replace(printed, @"\s+", " ");
+        Assert.Contains("Promoted(operation.Syntax)", flat, StringComparison.Ordinal);
+        Assert.Contains("TakeNullable(operation.Syntax)", flat, StringComparison.Ordinal);
+        Assert.Contains("TakeNonNull(operation.Syntax!!)", flat, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void DesignationIdentifier_RetargetedToNullableBindingIdentifier_IsAsserted()
     {
         // Issue #4356: SingleVariableDesignationSyntax.Identifier (a Roslyn

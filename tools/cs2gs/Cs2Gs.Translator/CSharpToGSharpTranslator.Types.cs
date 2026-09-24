@@ -262,7 +262,7 @@ public sealed partial class CSharpToGSharpTranslator
                         expressionBody = new NonNullAssertionExpression(expressionBody);
                     }
                     else if (this.IsGSharpNullableAnalyzerExpression(bodyExpression)
-                        && AnalyzerBridgeTargetIsNonNull(GetEffectiveReturnType(
+                        && this.AnalyzerBridgeTargetIsNonNull(GetEffectiveReturnType(
                             this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod?.ReturnType,
                             lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword))))
                     {

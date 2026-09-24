@@ -1564,7 +1564,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && translated is not NonNullAssertionExpression
                 && !IsInitializerOfInferredLocal(value, targetSymbol)
                 && !this.IsGSharpNullableAnalyzerApiMember(targetSymbol)
-                && AnalyzerBridgeTargetIsNonNull(targetType, targetSymbol))
+                && this.AnalyzerBridgeTargetIsNonNull(targetType, targetSymbol))
             {
                 return EnsureNonNullAssertion(translated);
             }
@@ -2837,7 +2837,7 @@ public sealed partial class CSharpToGSharpTranslator
         /// itself be nullable. The assertion is only fail-safe where the target
         /// really is non-null; anywhere else it turns a legal nil into a throw.
         /// Every analyzer-value bridge (value, argument, cast, lambda result)
-        /// asks this one predicate.
+        /// asks this one predicate, and when unsure it answers false.
         /// </summary>
         /// <param name="targetType">The effective target type, if known.</param>
         /// <param name="targetSymbol">
@@ -2847,13 +2847,22 @@ public sealed partial class CSharpToGSharpTranslator
         /// argument it is actually given, which may be <c>T?</c>.
         /// </param>
         /// <returns>True when the target is certainly non-null in G#.</returns>
-        private static bool AnalyzerBridgeTargetIsNonNull(ITypeSymbol targetType, ISymbol targetSymbol = null) =>
+        private bool AnalyzerBridgeTargetIsNonNull(ITypeSymbol targetType, ISymbol targetSymbol = null) =>
             targetType != null
             && targetType is not ITypeParameterSymbol
             && targetType.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T
             && targetType.NullableAnnotation != NullableAnnotation.Annotated
             && !(targetSymbol is IParameterSymbol parameter
-                && parameter.OriginalDefinition.Type is ITypeParameterSymbol);
+                && parameter.OriginalDefinition.Type is ITypeParameterSymbol)
+
+            // A REFERENCE target's emitted type is what cs2gs emits for it, not
+            // Roslyn's: a parameter/member promoted to `T?`
+            // (ShouldPromoteToNullableReference, e.g. `SyntaxNode node` whose
+            // body tests `node == null`) accepts nil. TargetWillRemainNonNullable
+            // Reference answers exactly that. A value-type target (the struct
+            // SyntaxToken) is emitted as-is.
+            && (!targetType.IsReferenceType
+                || this.TargetWillRemainNonNullableReference(targetType, targetSymbol));
 
         private static ITypeSymbol GetEffectiveReturnType(ITypeSymbol returnType, bool isAsync) =>
             isAsync && returnType is INamedTypeSymbol taskLike && IsTaskLikeEnvelope(taskLike)
