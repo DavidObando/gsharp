@@ -69,16 +69,6 @@ internal sealed class DocumentTranslationState
     public HashSet<ISymbol> HoistedNullableGuardLocals { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
-    // Issue #1967: designation nodes (`SingleVariableDesignationSyntax`) already
-    // checked by `ReportIfIndexOrRangeTypedDesignation` for an Index/Range-typed
-    // declared symbol. A single designation can be reached from more than one
-    // translation path for the SAME node (e.g. a loop-condition pattern's main
-    // binder is inspected by both `FindMainPatternBinder` and
-    // `EmitMustHoldGuards`/`IsBindOnlyMainBinder`); this dedupes so the loud gap
-    // is reported once per designation, not once per visit.
-    public HashSet<SyntaxNode> ReportedIndexRangeDesignations { get; } =
-        new HashSet<SyntaxNode>();
-
     // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
     // surrounding statement seam has hoisted into trailing `i++` statements
     // (G# models inc/dec as statements, not expressions; spec §Statements).

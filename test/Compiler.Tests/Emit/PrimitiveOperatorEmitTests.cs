@@ -197,7 +197,7 @@ public class PrimitiveOperatorEmitTests
 
             let x = uint8(1)
             let y = uint8(254)
-            Console.WriteLine(^x == y)
+            Console.WriteLine(~x == y)
             """;
         Assert.Equal($"True{Environment.NewLine}", CompileAndRun(src));
     }

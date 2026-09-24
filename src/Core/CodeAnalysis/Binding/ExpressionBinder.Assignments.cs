@@ -161,7 +161,8 @@ internal sealed partial class ExpressionBinder
             // Issue #4224: a writable-ref-returning getter (no setter, but
             // `ReturnRefKind == Ref`) stores through the getter instead of
             // failing outright, mirroring the explicit-receiver forms below.
-            if (!implicitProp.Property.HasSetter)
+            if (!implicitProp.Property.HasSetter
+                && !IsGetOnlyAutoPropertyConstructorWrite(implicitProp.Property, implicitProp.StructType, receiver: null))
             {
                 var implicitRefConverted = conversions.BindConversion(syntax.Expression.Location, boundExpression, implicitProp.Property.Type);
                 if (TryBindRefGetterWriteThrough(
@@ -377,6 +378,71 @@ internal sealed partial class ExpressionBinder
     }
 
     /// <summary>
+    /// Issue #4350: whether an assignment to a get-only auto-property
+    /// (<c>prop P T { get; }</c>) is the C#-legal constructor write that stores
+    /// its synthesized backing field. As in C#, only the DECLARING type's
+    /// instance constructor may assign it, and only on the instance being
+    /// constructed; a lambda or local function inside that constructor is a
+    /// different function and stays rejected (C# CS0200). The write needs no
+    /// setter: the lowerer turns a declaring-type auto-property store into a
+    /// backing-field store.
+    /// </summary>
+    /// <param name="property">The property being assigned.</param>
+    /// <param name="declaringType">The type that declares <paramref name="property"/>.</param>
+    /// <param name="receiver">The bound receiver, or <see langword="null"/> for an implicit <c>this</c>.</param>
+    /// <returns><see langword="true"/> when the write is a permitted constructor store.</returns>
+    private bool IsGetOnlyAutoPropertyConstructorWrite(PropertySymbol property, TypeSymbol? declaringType, BoundExpression? receiver)
+    {
+        if (property.HasSetter
+            || !property.IsAutoProperty
+            || property.BackingField == null
+            || property.ReturnRefKind != RefKind.None)
+        {
+            return false;
+        }
+
+        var fn = this.function;
+        if (fn == null || fn.Name != ".ctor" || fn.ThisParameter == null)
+        {
+            return false;
+        }
+
+        var receiverIsThis = receiver == null
+            || (receiver is BoundVariableExpression variableReceiver
+                && ReferenceEquals(variableReceiver.Variable, fn.ThisParameter));
+        if (!receiverIsThis)
+        {
+            return false;
+        }
+
+        // C# forbids a derived constructor from assigning a base type's
+        // get-only auto-property; only the declaring type's constructor may.
+        // Compared through the constructor's own property list (backing-field
+        // identity survives generic substitution) because an implicit bare
+        // name reports the enclosing type, not the declaring one.
+        if (fn.ReceiverType is not StructSymbol constructedType)
+        {
+            return false;
+        }
+
+        if (declaringType is StructSymbol declaringStruct
+            && !ReferenceEquals(declaringStruct.Definition ?? declaringStruct, constructedType.Definition ?? constructedType))
+        {
+            return false;
+        }
+
+        foreach (var own in (constructedType.Definition ?? constructedType).Properties)
+        {
+            if (ReferenceEquals(own, property) || ReferenceEquals(own.BackingField, property.BackingField))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
     /// Issue #947: returns <see langword="true"/> when <paramref name="variable"/>
     /// is the enclosing function's <c>this</c> parameter (the instance under
     /// construction or the method's receiver).
@@ -488,7 +554,12 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        if (!receiverStructType.IsClass && !IsWritableStructFieldReceiver(receiver))
+        // ADR-0187 / issue #4350: a non-@UnscopedRef getter cannot return into
+        // its (possibly copied) receiver, so the write lands in the storage the
+        // reference names regardless of the receiver's writability — C#'s rule.
+        if (!receiverStructType.IsClass
+            && !IsWritableStructFieldReceiver(receiver)
+            && (prop.GetterSymbol?.HasUnscopedRef ?? true))
         {
             Diagnostics.ReportFieldAssignmentThroughStructTemporary(equalsLocation, prop.Name, receiverStructType);
             result = new BoundErrorExpression(null);
@@ -1219,7 +1290,7 @@ internal sealed partial class ExpressionBinder
             if (TypeMemberModel.TryGetProperty(structSymbol, syntax.FieldIdentifier.ValueText, out var prop, out var propDeclaringType))
             {
                 propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
-                if (!prop.HasSetter)
+                if (!prop.HasSetter && !IsGetOnlyAutoPropertyConstructorWrite(prop, propDeclaringType, assignmentReceiver))
                 {
                     // Issue #4224: a writable-ref-returning getter (no setter,
                     // but `ReturnRefKind == Ref`) stores through the getter
@@ -1714,7 +1785,8 @@ internal sealed partial class ExpressionBinder
 
         if (variable is ImplicitPropertyVariableSymbol implicitProp)
         {
-            if (!implicitProp.Property.HasSetter)
+            if (!implicitProp.Property.HasSetter
+                && !IsGetOnlyAutoPropertyConstructorWrite(implicitProp.Property, implicitProp.StructType, receiver: null))
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, name);
             }
@@ -2380,7 +2452,8 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            if (!prop.HasGetter || !prop.HasSetter)
+            if (!prop.HasGetter
+                || (!prop.HasSetter && !IsGetOnlyAutoPropertyConstructorWrite(prop, propDeclaringType, boundReceiver)))
             {
                 Diagnostics.ReportCannotAssign(syntax.OperatorToken.Location, memberName);
                 return new BoundErrorExpression(null);
@@ -3312,6 +3385,17 @@ internal sealed partial class ExpressionBinder
 
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
 
+        // ADR-0187 / issue #4350: a multi-parameter user indexer write.
+        if (rectangular == null
+            && TryBindMultiIndexUserAssignment(
+                target,
+                indexSyntaxes,
+                (elementType, _) => conversions.BindConversion(valueSyntax, elementType),
+                diagnosticLocation) is { } userIndexAssignment)
+        {
+            return userIndexAssignment;
+        }
+
         if (rectangular == null)
         {
             Diagnostics.ReportTypeNotIndexable(diagnosticLocation, target.Type);
@@ -3367,6 +3451,17 @@ internal sealed partial class ExpressionBinder
         {
             var target = BindExpression(syntax.Target.Target);
             var rectangular = GetRectangularArrayTypeForBinding(target.Type);
+
+            // ADR-0187 / issue #4350: a multi-parameter user indexer write.
+            if (rectangular == null
+                && TryBindMultiIndexUserAssignment(
+                    target,
+                    syntax.Target.Indices,
+                    (elementType, _) => conversions.BindConversion(syntax.Value, elementType),
+                    syntax.Target.Target.Location) is { } userIndexAssignment)
+            {
+                return userIndexAssignment;
+            }
 
             if (rectangular == null)
             {
@@ -3520,7 +3615,7 @@ internal sealed partial class ExpressionBinder
             if (TypeMemberModel.TryGetProperty(structSym, fieldName, out var prop, out var propDeclaringType))
             {
                 propDeclaringType = Invariant.Required(propDeclaringType, "a user-defined struct property has a declaring type");
-                if (!prop.HasSetter)
+                if (!prop.HasSetter && !IsGetOnlyAutoPropertyConstructorWrite(prop, propDeclaringType, receiver))
                 {
                     // Issue #4224: a writable-ref-returning getter (no setter,
                     // but `ReturnRefKind == Ref`) stores through the getter
@@ -3878,6 +3973,46 @@ internal sealed partial class ExpressionBinder
     {
         var target = BindExpression(syntax.Target.Target);
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
+
+        // ADR-0187 / issue #4350: `t[a, b] op= v` over a multi-parameter user
+        // indexer reads and writes the same selected indexer, evaluating the
+        // receiver and each index argument once; a postfix `t[a, b]++`
+        // yields the element's previous value.
+        if (rectangular == null
+            && SyntaxFacts.TryGetCompoundAssignmentBaseOperator(syntax.OperatorToken.Kind, out var userBaseOperator))
+        {
+            var userAssignment = TryBindMultiIndexUserAssignment(
+                target,
+                syntax.Target.Indices,
+                (elementType, readCurrent) =>
+                {
+                    var current = readCurrent();
+                    var rhs = BindExpression(syntax.Value);
+                    if (rhs is BoundErrorExpression || rhs.Type == TypeSymbol.Error)
+                    {
+                        return new BoundErrorExpression(syntax);
+                    }
+
+                    var combined = TryBindCompoundBinaryOperation(userBaseOperator, current, rhs, syntax.Value.Location);
+                    if (combined == null)
+                    {
+                        Diagnostics.ReportUndefinedBinaryOperator(
+                            syntax.OperatorToken.Location,
+                            syntax.OperatorToken.Text,
+                            elementType,
+                            rhs.Type);
+                        return new BoundErrorExpression(syntax);
+                    }
+
+                    return combined;
+                },
+                syntax.Target.Target.Location,
+                syntax.ReturnsPreviousValue);
+            if (userAssignment != null)
+            {
+                return userAssignment;
+            }
+        }
 
         if (rectangular == null)
         {

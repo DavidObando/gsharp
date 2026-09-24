@@ -128,7 +128,7 @@ public sealed record BoundUnaryOperator
         {
             list.Add(new BoundUnaryOperator(SyntaxKind.PlusToken, BoundUnaryOperatorKind.Identity, t));
             list.Add(new BoundUnaryOperator(SyntaxKind.MinusToken, BoundUnaryOperatorKind.Negation, t));
-            list.Add(new BoundUnaryOperator(SyntaxKind.HatToken, BoundUnaryOperatorKind.OnesComplement, t));
+            list.Add(new BoundUnaryOperator(SyntaxKind.TildeToken, BoundUnaryOperatorKind.OnesComplement, t));
         }
 
         // Unsigned integrals: unary + and ~ only (C# does not define unary
@@ -137,7 +137,7 @@ public sealed record BoundUnaryOperator
         foreach (var t in unsigned)
         {
             list.Add(new BoundUnaryOperator(SyntaxKind.PlusToken, BoundUnaryOperatorKind.Identity, t));
-            list.Add(new BoundUnaryOperator(SyntaxKind.HatToken, BoundUnaryOperatorKind.OnesComplement, t));
+            list.Add(new BoundUnaryOperator(SyntaxKind.TildeToken, BoundUnaryOperatorKind.OnesComplement, t));
         }
 
         // char: unary + only (treat as identity); ~ and - require explicit promotion.

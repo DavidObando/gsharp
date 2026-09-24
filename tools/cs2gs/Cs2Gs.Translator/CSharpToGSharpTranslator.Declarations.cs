@@ -442,11 +442,74 @@ public sealed partial class CSharpToGSharpTranslator
         private string EmittedName(
             SyntaxNode node,
             SyntaxToken token,
-            GSharpIdentifierNameContext context = GSharpIdentifierNameContext.General) =>
-            this.EmittedName(
-                this.context.GetDeclaredSymbol(node) ?? this.context.GetSymbolInfo(node).Symbol,
-                token.ValueText,
-                context);
+            GSharpIdentifierNameContext context = GSharpIdentifierNameContext.General)
+        {
+            ISymbol symbol = this.context.GetDeclaredSymbol(node) ?? this.context.GetSymbolInfo(node).Symbol;
+
+            // Issue #4350 (review): a static/virtual/override get-only
+            // auto-property is lowered to a private backing field plus an arrow
+            // getter so it keeps C#'s setter-less ABI. C# only lets such a
+            // property be written in its declaring constructor or initializer,
+            // and every such write targets the backing field.
+            if (symbol is IPropertySymbol property
+                && IsWriteTarget(node)
+                && this.IsBackingFieldLoweredGetOnlyAutoProperty(property))
+            {
+                return this.RegisterSynthesizedPropertyBackingField(property, primaryCtorParamNames: null);
+            }
+
+            return this.EmittedName(symbol, token.ValueText, context);
+        }
+
+        // Issue #4350: whether `node` (a simple name, or the member access that
+        // carries it) is written: an assignment's left side, an increment or
+        // decrement operand, or an element of a deconstruction target.
+        private static bool IsWriteTarget(SyntaxNode node)
+        {
+            SyntaxNode current = node.Parent is MemberAccessExpressionSyntax memberAccess && memberAccess.Name == node
+                ? memberAccess
+                : node;
+            while (current.Parent is ParenthesizedExpressionSyntax)
+            {
+                current = current.Parent;
+            }
+
+            while (current.Parent is ArgumentSyntax { Parent: TupleExpressionSyntax tuple })
+            {
+                current = tuple;
+            }
+
+            return current.Parent switch
+            {
+                AssignmentExpressionSyntax assignment => assignment.Left == current,
+                PrefixUnaryExpressionSyntax prefix => prefix.IsKind(SyntaxKind.PreIncrementExpression) || prefix.IsKind(SyntaxKind.PreDecrementExpression),
+                PostfixUnaryExpressionSyntax postfix => postfix.IsKind(SyntaxKind.PostIncrementExpression) || postfix.IsKind(SyntaxKind.PostDecrementExpression),
+                _ => false,
+            };
+        }
+
+        // Issue #4350 (review): a C# get-only auto-property that G# cannot
+        // spell as a get-only auto-property. A body-less `open`/`override`
+        // `{ get; }` declares an abstract slot, and G# has no static-constructor
+        // body, so these lower to a synthesized private backing field plus an
+        // arrow getter instead of gaining an ABI-visible `init` setter.
+        private bool IsBackingFieldLoweredGetOnlyAutoProperty(IPropertySymbol property)
+        {
+            if (property.SetMethod != null
+                || property.GetMethod == null
+                || property.IsAbstract
+                || property.IsIndexer
+                || property.ContainingType?.TypeKind == TypeKind.Interface
+                || !(property.IsStatic || property.IsVirtual || property.IsOverride))
+            {
+                return false;
+            }
+
+            return property.DeclaringSyntaxReferences
+                .Select(reference => reference.GetSyntax())
+                .OfType<PropertyDeclarationSyntax>()
+                .Any(IsGetOnlyAutoProperty);
+        }
 
         // Issue #2382: whether `localFunction` — declared among the top-level
         // statements — captures NOTHING from its top-level-statement siblings
@@ -909,10 +972,10 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                // An override get-only auto-property lowers to a backing field
-                // + computed arrow (see TranslateProperty); its initializer
-                // seeds the field, not a constructor assignment.
-                if (symbol is { IsOverride: true })
+                // A virtual/override get-only auto-property lowers to a backing
+                // field + computed arrow (see TranslateProperty); its
+                // initializer seeds the field, not a constructor assignment.
+                if (symbol != null && this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol))
                 {
                     continue;
                 }
@@ -1428,6 +1491,21 @@ public sealed partial class CSharpToGSharpTranslator
                 : this.MapPrimaryConstructor(node);
             var primaryCtorParamNames = new HashSet<string>(
                 primaryCtor?.Select(p => p.Name) ?? Enumerable.Empty<string>(), StringComparer.Ordinal);
+
+            // Issue #4350 (review): allocate every lowered get-only
+            // auto-property's backing field NOW, with the primary-constructor
+            // names reserved, so a constructor write translated before its
+            // property (`this.Value = v` or `Value = v`) reuses a name that
+            // cannot collide with a synthesized primary-constructor field.
+            foreach (PropertyDeclarationSyntax loweredCandidate in mergedMembers.OfType<PropertyDeclarationSyntax>())
+            {
+                using IDisposable loweredModelScope = this.context.UseSemanticModelFor(loweredCandidate.SyntaxTree);
+                if (this.context.GetDeclaredSymbol(loweredCandidate) is IPropertySymbol loweredSymbol
+                    && this.IsBackingFieldLoweredGetOnlyAutoProperty(loweredSymbol))
+                {
+                    this.RegisterSynthesizedPropertyBackingField(loweredSymbol, primaryCtorParamNames);
+                }
+            }
 
             // OD-T1: when the explicit constructor is kept (not lifted to a primary
             // constructor) and the type is a plain class/struct, get-only

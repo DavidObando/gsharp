@@ -1,9 +1,12 @@
 # ADR-0123: From-end index operator (`^n`) for index and range bounds
 
-- **Status**: Accepted
+- **Status**: Accepted; amended by [ADR-0187](0187-first-class-index-range-and-runtime-declarations.md)
 - **Date**: 2026-06-23
 - **Phase**: Phase 9 — language depth / collection ergonomics
 - **Related**: issue #1016 (the `..` range/slice operator), issue [#1022](https://github.com/DavidObando/gsharp/issues/1022)
+
+
+> **Amended by ADR-0187 (issue #4350).** ADR-0187 replaces its bracket-scoped `^n` marker and prefix-`^` one's-complement: prefix `^x` is a first-class `System.Index` expression in every expression context, a standalone range may begin with `^`, and unary one's-complement is spelled `~x`. Binary `^` remains XOR. The sections below are kept as the historical record of the original decision; the passages marked **Historical** no longer describe the language.
 
 ## Context
 
@@ -13,7 +16,8 @@ span-like values, and `System.Range` indexers. It intentionally **deferred** the
 C# "from-end" index operator `^n` (`a[^1]`, `a[..^1]`, `a[1..^1]`), which maps to
 `System.Index` with `fromEnd: true`.
 
-The deferral existed because `^` already has two meanings in G#:
+The deferral existed because `^` already had two meanings in G# (**Historical** —
+since ADR-0187 prefix one's-complement is spelled `~x`):
 
 - prefix **one's-complement** (`^x`), and
 - infix **bitwise-XOR** (`a ^ b`).
@@ -23,7 +27,10 @@ with those meanings and needs a deliberate disambiguation rule.
 
 ## Decision
 
-1. **Disambiguation by position.** A `^` is treated as a from-end index marker
+1. **Disambiguation by position.** (**Historical** — superseded by ADR-0187 §1/§3:
+   prefix `^x` is a from-end `System.Index` expression in every expression
+   context, and `~x` is one's-complement. The leading-bound position described
+   here is still parsed the same way for compatibility.) A `^` is treated as a from-end index marker
    **only in the leading position of an index or range bound** — that is, the
    first token of the single index in `a[^n]`, or the first token of either side
    of a range in `a[^lo..^hi]`. The index-argument parser (`ParseIndexArgument`
@@ -60,5 +67,9 @@ with those meanings and needs a deliberate disambiguation rule.
   in every range form, matching C# semantics.
 - The existing one's-complement and XOR uses of `^` are provably unaffected
   (regression tests assert `^5`, `6 ^ 3`, and `a[i ^ j]` keep their meanings).
+  **Historical** — since ADR-0187, `^5` is a `System.Index`, one's-complement is
+  `~5`, and the regression tests assert that instead; `6 ^ 3` and `a[i ^ j]`
+  remain XOR.
 - Standalone `System.Range`-producing expressions (`let r = 1..3`) remain
-  unsupported and are tracked separately as a follow-up.
+  unsupported and are tracked separately as a follow-up. **Historical** —
+  delivered by [ADR-0127](0127-standalone-range-value.md).

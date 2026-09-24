@@ -471,35 +471,62 @@ public class Issue4224RefReturningCallStorageTests
     }
 
     [Fact]
-    public void VarRefAlias_OfWritableGetter_OnReadOnlyStructReceiver_IsRejected()
+    public void VarRefAlias_OfWritableGetter_OnReadOnlyStructReceiver_AliasesHeapStorage()
     {
-        // The struct receiver would be defensively copied to call the getter
-        // (Holder is not `readonly`-marked); a writable alias into that copy
-        // would silently fail to observe on the original `let` binding, so it
-        // must be rejected exactly like aliasing any other read-only storage.
+        // ADR-0187 / issue #4350 (C#'s scoped-`this` rule): the receiver is
+        // defensively copied to call the getter, but a non-@UnscopedRef getter
+        // cannot return into that copy, so the alias names `data[0]` itself.
         var result = EmittedOracle.Evaluate("""
             struct Holder {
                 var data []int32
                 prop Value ref int32 { get { return ref data[0] } }
             }
-            func Run() {
+            func Run() int32 {
                 let h = Holder{ data: []int32{10} }
                 var ref alias = h.Value
+                alias = 77
+                return h.data[0]
             }
+            var answer = Run()
             """);
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS9005");
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(77, result.ReadGlobals()["answer"]);
     }
 
     [Fact]
-    public void Assignment_ThroughWritableGetter_OnReadOnlyStructReceiver_IsRejected()
+    public void Assignment_ThroughWritableGetter_OnReadOnlyStructReceiver_WritesHeapStorage()
     {
         var result = EmittedOracle.Evaluate("""
             struct Holder {
                 var data []int32
                 prop Value ref int32 { get { return ref data[0] } }
             }
-            func Run() {
+            func Run() int32 {
                 let h = Holder{ data: []int32{10} }
+                h.Value = 55
+                return h.data[0]
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(55, result.ReadGlobals()["answer"]);
+    }
+
+    [Fact]
+    public void Assignment_ThroughUnscopedRefGetter_OnReadOnlyStructReceiver_IsRejected()
+    {
+        // An @UnscopedRef getter CAN return into its receiver, so writing
+        // through a copied receiver would be lost: still rejected.
+        var result = EmittedOracle.Evaluate("""
+            import System.Diagnostics.CodeAnalysis
+            struct Holder {
+                var total int32
+
+                @UnscopedRef
+                prop Value ref int32 { get { return ref this.total } }
+            }
+            func Run() {
+                let h = Holder{ total: 10 }
                 h.Value = 55
             }
             """);

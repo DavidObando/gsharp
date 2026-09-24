@@ -86,7 +86,7 @@ public class Issue534EnumBitwiseEmitTests
             import System
             import System.IO
 
-            var result = ^FileShare.None
+            var result = ~FileShare.None
             Console.WriteLine(int32(result))
             """;
 
@@ -207,7 +207,7 @@ public class Issue534EnumBitwiseEmitTests
             import System
             import Probe534
 
-            var result = ^LargeFlags.None
+            var result = ~LargeFlags.None
             Console.WriteLine(int64(result))
             """;
 

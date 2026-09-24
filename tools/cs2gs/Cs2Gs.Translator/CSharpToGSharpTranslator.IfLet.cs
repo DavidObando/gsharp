@@ -87,8 +87,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
                 if (targetSymbol == null ||
                     targetSymbol.TypeKind == TypeKind.Error ||
-                    targetSymbol.IsRefLikeType ||
-                    CSharpTypeMapper.IsSystemIndexOrRange(targetSymbol))
+                    targetSymbol.IsRefLikeType)
                 {
                     return false;
                 }
@@ -140,12 +139,6 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return false;
             }
-
-            // Issue #1967 parity with TranslateIsPattern: an Index/Range-typed
-            // designation has no canonical G# type, and this rewrite bypasses
-            // that entry point — report the gap here so the diagnostic surfaces
-            // exactly once on both paths.
-            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             GExpression initializer = asTarget == null
@@ -299,8 +292,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
                 if (targetSymbol == null ||
                     targetSymbol.TypeKind == TypeKind.Error ||
-                    targetSymbol.IsRefLikeType ||
-                    CSharpTypeMapper.IsSystemIndexOrRange(targetSymbol))
+                    targetSymbol.IsRefLikeType)
                 {
                     return false;
                 }
@@ -387,11 +379,6 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return false;
             }
-
-            // Issue #1967 parity with TranslateIsPattern: an Index/Range-typed
-            // designation has no canonical G# type. Report here so the gap
-            // surfaces exactly once on this path too.
-            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             GExpression initializer = asTarget == null
@@ -588,8 +575,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
                 if (targetSymbol == null ||
                     targetSymbol.TypeKind == TypeKind.Error ||
-                    targetSymbol.IsRefLikeType ||
-                    CSharpTypeMapper.IsSystemIndexOrRange(targetSymbol))
+                    targetSymbol.IsRefLikeType)
                 {
                     return false;
                 }
@@ -624,8 +610,6 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return false;
             }
-
-            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             GExpression initializer = asTarget == null
@@ -723,8 +707,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ITypeSymbol targetSymbol = this.context.GetTypeInfo(typeSyntax).Type;
                 if (targetSymbol == null ||
                     targetSymbol.TypeKind == TypeKind.Error ||
-                    targetSymbol.IsRefLikeType ||
-                    CSharpTypeMapper.IsSystemIndexOrRange(targetSymbol))
+                    targetSymbol.IsRefLikeType)
                 {
                     return false;
                 }
@@ -747,8 +730,6 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return false;
             }
-
-            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             GExpression receiver = this.TranslateExpression(isPattern.Expression);
             GExpression initializer = asTarget == null

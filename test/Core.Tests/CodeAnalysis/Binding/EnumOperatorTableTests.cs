@@ -125,9 +125,9 @@ public class EnumOperatorTableTests
     // ── TryBindUnary ──────────────────────────────────────────────────
 
     [Fact]
-    public void UnaryHat_Enum_ReturnsOnesComplement()
+    public void UnaryTilde_Enum_ReturnsOnesComplement()
     {
-        Assert.True(EnumOperatorTable.TryBindUnary(SyntaxKind.HatToken, DayOfWeekType, out var kind, out var result));
+        Assert.True(EnumOperatorTable.TryBindUnary(SyntaxKind.TildeToken, DayOfWeekType, out var kind, out var result));
         Assert.Equal(BoundUnaryOperatorKind.OnesComplement, kind);
         Assert.Equal(DayOfWeekType, result);
     }
@@ -139,9 +139,9 @@ public class EnumOperatorTableTests
     }
 
     [Fact]
-    public void UnaryHat_NonEnum_NotSupported()
+    public void UnaryTilde_NonEnum_NotSupported()
     {
-        Assert.False(EnumOperatorTable.TryBindUnary(SyntaxKind.HatToken, TypeSymbol.Int32, out _, out _));
+        Assert.False(EnumOperatorTable.TryBindUnary(SyntaxKind.TildeToken, TypeSymbol.Int32, out _, out _));
     }
 
     // ── IsUnsignedEnumUnderlying ──────────────────────────────────────

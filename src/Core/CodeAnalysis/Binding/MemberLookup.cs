@@ -1653,36 +1653,7 @@ internal sealed class MemberLookup
             return null;
         }
 
-        var openMethod = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
-
-        Type? receiverOpenDef = null;
-        ImmutableArray<TypeSymbol> receiverTypeArgs = default;
-        if (receiverType is ImportedTypeSymbol imp && imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty)
-        {
-            receiverOpenDef = imp.OpenDefinition;
-            receiverTypeArgs = imp.TypeArguments;
-
-            // Issue #2375: `closed.GetGenericMethodDefinition()` only opens the
-            // METHOD's own generic parameters — it leaves the DECLARING TYPE's
-            // type arguments exactly as closed on `closed` (e.g. `object` when
-            // the receiver's own type argument was erased during overload
-            // resolution). For an instance method whose return type references
-            // BOTH a method-level parameter (e.g. `TRelated`) and the
-            // declaring type's own parameter (e.g. `TEntity`, as in
-            // `Builder<TEntity>.WithOne<TRelated>() : DependentBuilder<TRelated,
-            // TEntity>`), this left the second slot permanently erased to
-            // `object` even though the method-level slot recovered correctly.
-            // Re-resolve the truly-open method (both type- and method-level
-            // parameters unbound) from the receiver's OWN open declaring type by
-            // metadata-token match — the same recovery already used by
-            // `ExpressionBinder.Calls.TryGetOpenInstanceMethod` /
-            // `ResolveInstanceReturnTypeFromReceiver`.
-            var reopened = TryGetOpenMethodOnDeclaringType(receiverOpenDef, openMethod);
-            if (reopened != null)
-            {
-                openMethod = reopened;
-            }
-        }
+        var openMethod = ReopenForSymbolicProjection(closed, receiverType, out var receiverOpenDef, out var receiverTypeArgs);
 
         var openReturn = openMethod.ReturnType;
         if (openReturn == null || openReturn.IsSameAs(typeof(void)))
@@ -1749,6 +1720,54 @@ internal sealed class MemberLookup
             || TypeSymbol.ContainsSourceArrayShape(mapped)
             ? mapped
             : null;
+    }
+
+    /// <summary>
+    /// Issue #4350: the by-ref counterpart of
+    /// <see cref="ResolveCallReturnTypeFromSymbolicTypeArgs"/> for an inline
+    /// <c>out var</c>. When the resolved generic method's parameter pointee
+    /// contains a method type parameter that maps to an in-scope G# type
+    /// parameter (<c>MemoryMarshal.TryGetArray[T](memory, out var segment)</c>
+    /// inside <c>Slice[T]</c>), the declared local takes the symbolic
+    /// <c>ArraySegment[T]</c> rather than the erased <c>ArraySegment[object]</c>.
+    /// </summary>
+    /// <param name="closed">The closed generic method selected by overload resolution.</param>
+    /// <param name="parameterIndex">The by-ref parameter's position.</param>
+    /// <param name="symbolicMethodTypeArgs">Per-MVar symbolic type arguments; entries may be <see langword="null"/>.</param>
+    /// <param name="receiverType">The receiver's static type symbol (for type-level Var substitution); may be <see langword="null"/>.</param>
+    /// <returns>The symbolic pointee type, or <see langword="null"/> when no symbolic substitution applies.</returns>
+    public static TypeSymbol? ResolveByRefParameterPointeeFromSymbolicTypeArgs(
+        MethodInfo? closed,
+        int parameterIndex,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs,
+        TypeSymbol? receiverType)
+    {
+        if (closed == null || !closed.IsGenericMethod
+            || symbolicMethodTypeArgs.IsDefaultOrEmpty || !symbolicMethodTypeArgs.Any(s => s != null))
+        {
+            return null;
+        }
+
+        var openMethod = ReopenForSymbolicProjection(closed, receiverType, out var receiverOpenDef, out var receiverTypeArgs);
+        var parameters = openMethod.GetParameters();
+        if (parameterIndex < 0 || parameterIndex >= parameters.Length)
+        {
+            return null;
+        }
+
+        var openType = parameters[parameterIndex].ParameterType;
+        if (openType.IsByRef && openType.GetElementType() is { } pointee)
+        {
+            openType = pointee;
+        }
+
+        if (!openType.ContainsGenericParameters)
+        {
+            return null;
+        }
+
+        var mapped = MapOpenClrTypeToSymbolic(openType, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
+        return TypeSymbol.RequiresSymbolicProjection(mapped) ? mapped : null;
     }
 
     /// <summary>
@@ -7033,6 +7052,45 @@ internal sealed class MemberLookup
         }
 
         return null;
+    }
+
+    private static MethodInfo ReopenForSymbolicProjection(
+        MethodInfo closed,
+        TypeSymbol? receiverType,
+        out Type? receiverOpenDef,
+        out ImmutableArray<TypeSymbol> receiverTypeArgs)
+    {
+        var openMethod = closed.IsGenericMethodDefinition ? closed : closed.GetGenericMethodDefinition();
+        receiverOpenDef = null;
+        receiverTypeArgs = default;
+        if (receiverType is ImportedTypeSymbol imp && imp.OpenDefinition != null && !imp.TypeArguments.IsDefaultOrEmpty)
+        {
+            receiverOpenDef = imp.OpenDefinition;
+            receiverTypeArgs = imp.TypeArguments;
+
+            // Issue #2375: `closed.GetGenericMethodDefinition()` only opens the
+            // METHOD's own generic parameters — it leaves the DECLARING TYPE's
+            // type arguments exactly as closed on `closed` (e.g. `object` when
+            // the receiver's own type argument was erased during overload
+            // resolution). For an instance method whose return type references
+            // BOTH a method-level parameter (e.g. `TRelated`) and the
+            // declaring type's own parameter (e.g. `TEntity`, as in
+            // `Builder<TEntity>.WithOne<TRelated>() : DependentBuilder<TRelated,
+            // TEntity>`), this left the second slot permanently erased to
+            // `object` even though the method-level slot recovered correctly.
+            // Re-resolve the truly-open method (both type- and method-level
+            // parameters unbound) from the receiver's OWN open declaring type by
+            // metadata-token match — the same recovery already used by
+            // `ExpressionBinder.Calls.TryGetOpenInstanceMethod` /
+            // `ResolveInstanceReturnTypeFromReceiver`.
+            var reopened = TryGetOpenMethodOnDeclaringType(receiverOpenDef, openMethod);
+            if (reopened != null)
+            {
+                openMethod = reopened;
+            }
+        }
+
+        return openMethod;
     }
 
     private static TypeSymbol?[] InferSymbolicMethodTypeArgumentsCore(

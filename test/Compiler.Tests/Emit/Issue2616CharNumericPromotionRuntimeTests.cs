@@ -24,7 +24,7 @@ public class Issue2616CharNumericPromotionRuntimeTests
             var b char = '1'
             Console.WriteLine(a - b)
             Console.WriteLine(-a)
-            Console.WriteLine(^b)
+            Console.WriteLine(~b)
             Console.WriteLine(a + uint32(1))
 
             var c char = 'A'

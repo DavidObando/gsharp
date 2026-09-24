@@ -6,12 +6,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | Status | Count |
 | --- | --- |
 | Unclassified | 0 |
-| Translated | 240 |
+| Translated | 241 |
 | Lowered | 19 |
 | UnsupportedByDesign | 56 |
-| Gap | 6 |
+| Gap | 5 |
 
-## Translated (240)
+## Translated (241)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
@@ -126,7 +126,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | IfStatement | IfStatementSyntax | ADR-0115 §B |  | tools/cs2gs/corpus/grid/G03-ControlFlow-Console/Constructs/IfStatement.cs |  |  |
 | ImplicitArrayCreationExpression | ImplicitArrayCreationExpressionSyntax | ADR-0115 §B.16 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ImplicitArrayCreationExpression.cs |  |  |
 | ImplicitObjectCreationExpression | ImplicitObjectCreationExpressionSyntax | ADR-0115 §B.25 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/ObjectCreationExpression.cs |  |  |
-| IndexExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/IndexExpression.cs | https://github.com/DavidObando/gsharp/issues/1894 | Inline ^i green; Index-typed locals mis-lower (issue #1894, runtime crash). |
+| IndexExpression | PrefixUnaryExpressionSyntax | ADR-0115 §B.36 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/IndexExpression.cs | https://github.com/DavidObando/gsharp/issues/4350 | ^n is a first-class G# System.Index expression (ADR-0187); inline and saved Index values are green. |
 | IndexerDeclaration | IndexerDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/IndexerDeclaration.cs |  | User indexers (issue #944). A `ref`-returning indexer translates to `prop this[...] ref T` (issue #3879, the ADR-0060 amendment that extends the by-ref return from `func` to `prop`). `ref readonly` still gaps loudly at the declaration site: G# has no read-only by-ref return, so it would have to render either a copy (drops the aliasing) or a plain `ref` (makes read-only storage writable) — issue #3839. |
 | InitAccessorDeclaration | AccessorDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/InitAccessorDeclaration.cs |  |  |
 | InterfaceDeclaration | InterfaceDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/InterfaceDeclaration.cs |  |  |
@@ -189,6 +189,7 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | PropertyDeclaration | PropertyDeclarationSyntax | ADR-0115 §B.11 |  | tools/cs2gs/corpus/grid/G07-Members-Console/Constructs/PropertyDeclaration.cs |  | A `ref`-returning property translates to `prop P ref T` (issue #3879, the ADR-0060 amendment that extends the by-ref return from `func` to `prop`). `ref readonly` still gaps loudly at the declaration site: G# has no read-only by-ref return, so it would have to render either a copy (drops the aliasing) or a plain `ref` (makes read-only storage writable) — issue #3839. |
 | PropertyPatternClause | PropertyPatternClauseSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs |  | Property sub-patterns; designator collisions fixed in issue #1839. |
 | QualifiedName | QualifiedNameSyntax | ADR-0115 §B.12 |  |  |  |  |
+| RangeExpression | RangeExpressionSyntax | ADR-0187 §2 |  | tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/RangeExpression.cs | https://github.com/DavidObando/gsharp/issues/4350 | Bracket slices and reusable System.Range values (including ^a..^b) keep native G# range syntax (ADR-0187). |
 | RecordDeclaration | RecordDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordDeclaration.cs |  | with-expressions blocked by initializer bug (issue #1892). |
 | RecordStructDeclaration | RecordDeclarationSyntax | ADR-0115 §B.4 |  | tools/cs2gs/corpus/grid/G06-Types-Console/Constructs/RecordStructDeclaration.cs |  |  |
 | RecursivePattern | RecursivePatternSyntax | ADR-0115 §B.22 |  | tools/cs2gs/corpus/grid/G04-Patterns-Console/Constructs/RecursivePattern.cs | https://github.com/DavidObando/gsharp/issues/1923 | Property patterns green, including nested designations `{ P: T t } u` as native G# pattern variables (ADR-0166); nested reference-member and boxed/nullable subjects blocked by gsc (issue #1923). |
@@ -341,13 +342,12 @@ Drift fails `ConstructInventoryGoldenTests`. Do not edit by hand.
 | XmlText | XmlTextSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 | XmlTextAttribute | XmlTextAttributeSyntax |  | ToolingScope |  |  | Documentation/tooling structure, not program semantics; doc-comment mapping is ADR-0057 scope. |
 
-## Gap (6)
+## Gap (5)
 
 | Kind | Node type | Rule | Rationale | Fixture | Issue | Notes |
 | --- | --- | --- | --- | --- | --- | --- |
 | ImplicitElementAccess | ImplicitElementAccessSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 |  |
 | ImplicitStackAllocArrayCreationExpression | ImplicitStackAllocArrayCreationExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1897 | ADR-0124 stackalloc surface. |
 | PointerMemberAccessExpression | MemberAccessExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1905 | p->X lowered to p.X; (*p).X compiles. |
-| RangeExpression | RangeExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1896 | Lowers to .Slice(...) which gsc cannot resolve on arrays/strings. |
 | RefExpression | RefExpressionSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 | ref argument/return seam (&x pass-by-address). |
 | RefType | RefTypeSyntax |  |  |  | https://github.com/DavidObando/gsharp/issues/1900 |  |

@@ -28,7 +28,7 @@ public class Issue2616CharNumericPromotionEmittedOracleTests
             var a char = '5'
             var b char = '1'
             var difference = a - b
-            var unary = -a + ^b + +a
+            var unary = -a + ~b + +a
             var value char = 'A'
             value += 2
             var lifted char? = 'C'

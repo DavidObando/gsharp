@@ -355,7 +355,11 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor FixedBufferInvalidShape = new("GS0407", DiagnosticSeverity.Error, "Fixed-size buffer field '{0}' must have a fixed-length array element type '[N]T' (e.g. 'fixed {1} [8]int32') (ADR-0122 §10).");
     internal static readonly DiagnosticDescriptor FixedBufferInvalidLength = new("GS0408", DiagnosticSeverity.Error, "Fixed-size buffer field '{0}' must have a positive length; '{1}' is not allowed (ADR-0122 §10).");
     internal static readonly DiagnosticDescriptor FixedBufferElementTypeNotSupported = new("GS0409", DiagnosticSeverity.Error, "Fixed-size buffer element type '{0}' is not supported; use a blittable primitive (bool, int8…int64, uint8…uint64, char, float32, float64) (ADR-0122 §10).");
-    internal static readonly DiagnosticDescriptor FromEndMarkerNotAllowedInStandaloneRange = new("GS0410", DiagnosticSeverity.Error, "A from-end index marker '^' is only valid inside index brackets (e.g. 'arr[^1]' or 'arr[a..^b]') or after '..' in a standalone range upper bound ('a..^b'); a standalone range cannot start with '^'. Use an indexer, or parenthesise a one's-complement bound ('(^a)..b') (issue #1038).");
+
+    // GS0410 (leading from-end marker in a standalone range) retired by
+    // ADR-0187 / issue #4350: prefix `^x` is now a first-class System.Index
+    // expression everywhere, so `^a..^b` is valid. The id is tracked as
+    // Retired in DiagnosticIdUniquenessTests so it is never reused.
     internal static readonly DiagnosticDescriptor StackAllocCountInferredWithoutInitializer = new("GS0411", DiagnosticSeverity.Error, "A count-inferred 'stackalloc []T' requires a brace-delimited initializer to determine its length (e.g. 'stackalloc []int32{{1, 2, 3}}'); supply an initializer or spell the count explicitly ('stackalloc [n]T') (ADR-0124 / issue #1041).");
     internal static readonly DiagnosticDescriptor StackAllocInitializerLengthMismatch = new("GS0412", DiagnosticSeverity.Error, "A 'stackalloc [{0}]T{{…}}' initializer must supply exactly {1} element(s), but {2} were given; the explicit count and the initializer length must match (ADR-0124 / issue #1041).");
     internal static readonly DiagnosticDescriptor BaseClassCallAbstractMember = new("GS0413", DiagnosticSeverity.Error, "Cannot call the abstract base member '{0}.{1}' via 'base'; it has no base implementation to delegate to (issue #1260).");

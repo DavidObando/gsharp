@@ -50,7 +50,7 @@ internal static class ClrOperatorResolution
         [SyntaxKind.PlusToken] = "op_UnaryPlus",
         [SyntaxKind.MinusToken] = "op_UnaryNegation",
         [SyntaxKind.BangToken] = "op_LogicalNot",
-        [SyntaxKind.HatToken] = "op_OnesComplement",
+        [SyntaxKind.TildeToken] = "op_OnesComplement",
     };
 
     /// <summary>

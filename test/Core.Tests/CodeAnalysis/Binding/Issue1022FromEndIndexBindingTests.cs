@@ -84,7 +84,8 @@ public class Issue1022FromEndIndexBindingTests
     [Fact]
     public void OnesComplement_StillEvaluates()
     {
-        var result = Evaluate("^0");
+        // ADR-0187: one's-complement is spelled `~`.
+        var result = Evaluate("~0");
         Assert.Empty(result.Diagnostics);
         Assert.Equal(-1, result.Value);
     }

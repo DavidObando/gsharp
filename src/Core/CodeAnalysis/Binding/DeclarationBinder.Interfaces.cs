@@ -455,6 +455,10 @@ internal sealed partial class DeclarationBinder
         if (!syntax.Properties.IsDefaultOrEmpty)
         {
             var propertiesBuilder = ImmutableArray.CreateBuilder<PropertySymbol>();
+
+            // ADR-0187 / issue #4350: interface indexers overload by
+            // index-parameter signature, like struct and class indexers.
+            var declaredIndexerSignatures = new List<ImmutableArray<ParameterSymbol>>();
             foreach (var propSyntax in syntax.Properties)
             {
                 // ADR-0149 (issue #944 follow-up): an interface indexer
@@ -495,6 +499,7 @@ internal sealed partial class DeclarationBinder
                         // Issue #1913: indexer parameters can carry `@Attr`
                         // annotations same as any other parameter list.
                         BindAndAttachParameterAttributes(indexParamSyntax, indexerParam);
+                        conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam);
                         indexerParamBuilder.Add(indexerParam);
                     }
 
@@ -502,10 +507,18 @@ internal sealed partial class DeclarationBinder
                 }
 
                 var propName = isIndexer ? "Item" : propSyntax.Identifier.ValueText;
-                if (!seenNames.Add(propName))
+                var isIndexerOverload = isIndexer
+                    && declaredIndexerSignatures.Count > 0
+                    && !declaredIndexerSignatures.Any(declared => HaveSameIndexerSignature(declared, indexerParameters));
+                if (!seenNames.Add(propName) && !isIndexerOverload)
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
                     continue;
+                }
+
+                if (isIndexer)
+                {
+                    declaredIndexerSignatures.Add(indexerParameters);
                 }
 
                 var propType = propSyntax.Type is { } propTypeSyntax

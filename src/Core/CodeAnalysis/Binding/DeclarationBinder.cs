@@ -587,7 +587,7 @@ internal sealed partial class DeclarationBinder
                     case SyntaxKind.MinusToken:
                         value = -operandValue;
                         return true;
-                    case SyntaxKind.HatToken:
+                    case SyntaxKind.TildeToken:
                         value = ~operandValue;
                         return true;
                     default:

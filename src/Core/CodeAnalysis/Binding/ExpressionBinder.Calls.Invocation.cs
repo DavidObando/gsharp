@@ -979,13 +979,17 @@ internal sealed partial class ExpressionBinder
             staticFn.Declaration,
             returnTypeOverride: symbolicReturn);
         var refKinds = ComputeArgumentRefKinds(staticFn.Method.GetParameters());
-        result = new BoundImportedCallExpression(
+
+        // ADR-0056 §1 / issue #4350: a ref-returning static CLR method
+        // (`Unsafe.As[TFrom, TTo](&x)`) is observed through its pointee, exactly
+        // like a ref-returning instance member or indexer.
+        result = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedCallExpression(
             ce,
             overriddenFn,
             convertedArgs.MoveToImmutable(),
             refKinds,
             typeArgumentSymbols: default,
-            staticContainerType: symbolicReceiver);
+            staticContainerType: symbolicReceiver));
         result = CompleteImportedSuspendingCall(result, staticFn.Method, ce.Location);
         return true;
     }
@@ -2650,6 +2654,8 @@ internal sealed partial class ExpressionBinder
     {
         ImmutableArray<BoundExpression>.Builder? rebuilt = null;
         System.Reflection.ParameterInfo[]? parameters = null;
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default;
+        var symbolicMethodTypeArgsComputed = false;
         for (var i = 0; i < arguments.Length; i++)
         {
             if (!TryGetInlineOutVarArgument(ce, i, out var refArg))
@@ -2658,6 +2664,20 @@ internal sealed partial class ExpressionBinder
             }
 
             parameters ??= resolvedMethod.GetParameters();
+
+            // Issue #4350: an inferred (not explicitly listed) method type
+            // argument that is an in-scope G# type parameter was erased to
+            // `object` when the CLR method closed, so recover the symbolic
+            // vector from the other arguments before typing the new local.
+            if (!symbolicMethodTypeArgsComputed && resolvedMethod.IsGenericMethod)
+            {
+                symbolicMethodTypeArgsComputed = true;
+                symbolicMethodTypeArgs = MemberLookup.BuildSymbolicMethodTypeArgs(
+                    resolvedMethod,
+                    typeArgSymbols,
+                    SymbolicArgumentTypesInParameterOrder(arguments, parameterMapping, parameters.Length));
+            }
+
             var paramIndex = !parameterMapping.IsDefault && i < parameterMapping.Length ? parameterMapping[i] : i;
             if (paramIndex < 0 || paramIndex >= parameters.Length)
             {
@@ -2676,6 +2696,7 @@ internal sealed partial class ExpressionBinder
             // type arguments (mirroring `ResolveInstanceReturnTypeFromReceiver`).
             var pointeeType = ResolveInstanceParameterPointeeTypeFromReceiver(receiverType, resolvedMethod, paramIndex)
                 ?? ResolveMethodGenericParameterPointeeType(resolvedMethod, paramIndex, typeArgSymbols)
+                ?? MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs(resolvedMethod, paramIndex, symbolicMethodTypeArgs, receiverType)
                 ?? TypeSymbol.FromClrType(pointeeClr);
             var syntheticParameter = new ParameterSymbol(
                 parameters[paramIndex].Name ?? "value",
@@ -2688,6 +2709,40 @@ internal sealed partial class ExpressionBinder
         }
 
         return rebuilt != null ? rebuilt.ToImmutable() : arguments;
+    }
+
+    /// <summary>
+    /// Issue #4350: the bound argument types in PARAMETER order, so a named call
+    /// (<c>TryGetArray(segment: out var s, memory: m)</c>) recovers the same
+    /// symbolic method type arguments as its positional spelling. A parameter
+    /// with no source argument (an omitted default) contributes nothing.
+    /// </summary>
+    /// <param name="arguments">The bound arguments in source order.</param>
+    /// <param name="parameterMapping">The source-argument to parameter mapping; default for positional calls.</param>
+    /// <param name="parameterCount">The resolved method's parameter count.</param>
+    /// <returns>The argument types in parameter order.</returns>
+    private static ImmutableArray<TypeSymbol> SymbolicArgumentTypesInParameterOrder(
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<int> parameterMapping,
+        int parameterCount)
+    {
+        if (parameterMapping.IsDefault)
+        {
+            return ImmutableArray.CreateRange(arguments.Select(a => a.Type));
+        }
+
+        var ordered = new TypeSymbol[parameterCount];
+        Array.Fill(ordered, TypeSymbol.Error);
+        for (var i = 0; i < arguments.Length && i < parameterMapping.Length; i++)
+        {
+            var parameterIndex = parameterMapping[i];
+            if (parameterIndex >= 0 && parameterIndex < parameterCount && ordered[parameterIndex] == TypeSymbol.Error)
+            {
+                ordered[parameterIndex] = arguments[i].Type;
+            }
+        }
+
+        return ImmutableArray.Create(ordered);
     }
 
     /// <summary>
@@ -3236,13 +3291,15 @@ internal sealed partial class ExpressionBinder
                 // the erased closed method, which is exactly what the emitted
                 // signature encodes, so carrying the symbolic container changes
                 // only the parent token.
-                BoundExpression staticCall = new BoundImportedCallExpression(
+                // ADR-0056 §1 / issue #4350: ref-returning static CLR calls
+                // auto-dereference like instance members and indexers.
+                BoundExpression staticCall = ConversionClassifier.AutoDereferenceRefReturn(new BoundImportedCallExpression(
                     ce,
                     staticFn,
                     staticArguments,
                     refKinds,
                     staticTypeArgSymbolsForCall,
-                    classSymbol.SymbolicReceiver);
+                    classSymbol.SymbolicReceiver));
                 staticCall = CompleteImportedSuspendingCall(staticCall, staticFn.Method, ce.Location);
                 return WrapWithHandlerPrelude(staticCall, staticHandlerPrelude, ce);
             }

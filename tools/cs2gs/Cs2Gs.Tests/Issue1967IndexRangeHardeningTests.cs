@@ -12,48 +12,21 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #1967: hardens the issue #1894/#1894 loud-gap coverage for
-/// <c>System.Index</c>/<c>System.Range</c> at three classes of site the
-/// original fix missed:
-/// <list type="bullet">
-/// <item><c>IsDirectIndexBracketArgument</c> did not recognise
-/// <c>ImplicitElementAccessSyntax</c> (a dictionary/collection-initializer
-/// element, <c>{ [^1] = v }</c>), so a valid inline from-end index there would
-/// have over-gapped as if it were outside any bracket. Making this position
-/// canonical in turn exposed a pre-existing <see cref="GSharpPrinter"/> bug:
-/// a NON-generic zero-argument construction target
-/// (<c>new IndexKeyed() { [^1] = 5 }</c>) printed its constructor call's `()`
-/// away, but gsc's parser only recognises a bare `Identifier{ ... }` as a
-/// STRUCT literal (`Identifier :` fields) — never as a collection initializer
-/// with a `[key] = value`/`key: value` element — so the emitted G# silently
-/// failed to parse. The printer now keeps the `()` whenever the target is
-/// non-generic.</item>
-/// <item>An Index/Range-typed local declared via a NON-declarator site —
-/// <c>foreach (Index i in xs)</c>, an <c>is</c>/<c>switch</c> pattern
-/// designation (<c>x is Index i</c>, <c>case Index i:</c>), an <c>out Index
-/// i</c> argument, or tuple deconstruction (<c>var (i, r) = ...</c>) — bypassed
-/// the declarator-only symbol check in <c>TranslateLocalDeclaration</c> and
-/// would slip through with no diagnostic.</item>
-/// <item>An Index/Range-typed LINQ query range variable (<c>from Index i in
-/// xs</c>, a <c>let</c>/<c>join</c> binding, or a query continuation's
-/// <c>into y</c>) binds an <c>IRangeVariableSymbol</c>, not an
-/// <c>ILocalSymbol</c> — none of those sites have any designation syntax at
-/// all, so they need their own symbol-based guard
-/// (<c>ReportIfIndexOrRangeTypedRangeVariable</c>).</item>
-/// </list>
+/// Issue #1967 hardened the issue #1894 loud-gap coverage for
+/// <c>System.Index</c>/<c>System.Range</c> at every non-declarator binding
+/// site: <c>foreach</c> variables, <c>is</c>/<c>switch</c> pattern
+/// designations, <c>out</c> arguments, tuple deconstruction, LINQ query range
+/// variables, and collection-initializer elements (<c>{ [^1] = v }</c>).
+/// ADR-0187 / issue #4350 made Index/Range first-class G# values, so each of
+/// those sites now translates directly and the printed G# must bind.
 /// </summary>
 public class Issue1967IndexRangeHardeningTests
 {
     [Fact]
-    public void ImplicitElementAccess_FromEndIndexKey_StaysCanonicalNoGap()
+    public void ImplicitElementAccess_FromEndIndexKey_TranslatesWithoutGap()
     {
-        // `{ [^1] = v }` inside a collection initializer is just as direct a
-        // bracket-argument position as a real element access — must not gap
-        // with the "from-end index ... outside a direct bracket" diagnostic
-        // (`IsDirectIndexBracketArgument`'s `ImplicitElementAccessSyntax` gap).
-        // The indexer's own `Index i` PARAMETER still independently gaps per
-        // #1894 (an Index-typed parameter has no canonical G# type) — that is
-        // unrelated to this check and is asserted separately below.
+        // `{ [^1] = v }` inside a collection initializer, against an indexer
+        // whose parameter is `Index`: both translate directly (ADR-0187).
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
 using System;
@@ -85,21 +58,18 @@ namespace Corpus.Issue1967
         string rendered = GSharpPrinter.Print(unit);
 
         Assert.Contains("^1", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain(context.Diagnostics, d => d.Message.Contains("outside a direct", StringComparison.Ordinal));
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
 
-        // Issue #1967: `IsDirectIndexBracketArgument` now treats an initializer
-        // element (`{ [^1] = v }`) the same as a real element access — verify
-        // gsc's OWN parser actually accepts a from-end index in that position,
-        // not just that the printer emitted the `^1` text (a printer-only check
-        // would miss gsc silently rejecting it as unparseable G#).
+        // Verify gsc's OWN parser and binder accept a from-end index in the
+        // initializer-element position and the Index-typed indexer parameter,
+        // not just that the printer emitted the `^1` text.
         RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(rendered);
         Assert.True(roundTrip.Success, "Translated G# must parse. Errors:\n" +
             string.Join("\n", roundTrip.Errors) + "\n\nPrinted:\n" + rendered);
     }
 
     [Fact]
-    public void ForEachIndexTypedVariable_StaysLoudGap()
+    public void ForEachIndexTypedVariable_TranslatesWithoutGap()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
@@ -120,17 +90,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
-        Assert.All(context.Diagnostics, d => Assert.Equal(TranslationSeverity.Unsupported, d.Severity));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void IsPatternIndexTypedDesignation_StaysLoudGap()
+    public void IsPatternIndexTypedDesignation_TranslatesWithoutGap()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
@@ -152,16 +116,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void WhileLoopConditionIsPatternIndexTypedDesignation_StaysLoudGap()
+    public void WhileLoopConditionIsPatternIndexTypedDesignation_TranslatesWithoutGap()
     {
         // A loop-condition `is`-pattern is hoisted through a SEPARATE code path
         // (HoistLoopConditionClauseCore) that never calls TranslateIsPattern.
@@ -183,16 +142,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void SwitchCasePatternIndexTypedDesignation_StaysLoudGap()
+    public void SwitchCasePatternIndexTypedDesignation_TranslatesWithoutGap()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
@@ -215,16 +169,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void SwitchExpressionArmPatternIndexTypedDesignation_StaysLoudGap()
+    public void SwitchExpressionArmPatternIndexTypedDesignation_TranslatesWithoutGap()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
@@ -242,16 +191,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void OutIndexTypedArgument_StaysLoudGap()
+    public void OutIndexTypedArgument_TranslatesWithoutGap()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
@@ -271,16 +215,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void TupleDeconstructionIndexTypedElement_StaysLoudGap()
+    public void TupleDeconstructionIndexTypedElement_TranslatesWithoutGap()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Source.cs", @"
@@ -300,16 +239,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void TupleDeconstructionAssignment_MixedIndexTypedElement_StaysLoudGap()
+    public void TupleDeconstructionAssignment_MixedIndexTypedElement_TranslatesWithoutGap()
     {
         // `(x, Index i) = ...` — the mixed-tuple-assignment declaration path
         // (LowerTupleAssignment), distinct from the all-`var` declaration path
@@ -333,16 +267,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void QueryFromClauseIndexTypedRangeVariable_StaysLoudGap()
+    public void QueryFromClauseIndexTypedRangeVariable_TranslatesWithoutGap()
     {
         // `from Index i in xs` binds `i` as an `IRangeVariableSymbol`, not an
         // `ILocalSymbol` — a designation-only check would miss it entirely.
@@ -363,16 +292,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void QueryLetClauseIndexTypedRangeVariable_StaysLoudGap()
+    public void QueryLetClauseIndexTypedRangeVariable_TranslatesWithoutGap()
     {
         // `let i = ^n` binds `i` (an Index) via `LowerLetClause`, inferred from
         // the `let` expression's own type rather than a source collection.
@@ -393,16 +317,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void QueryJoinClauseIndexTypedRangeVariable_StaysLoudGap()
+    public void QueryJoinClauseIndexTypedRangeVariable_TranslatesWithoutGap()
     {
         // `join y in ys on ...` with `ys : List<Index>` infers `y`'s type from
         // the inner sequence's element type (no explicit `Index` in the clause
@@ -426,16 +345,11 @@ namespace Corpus.Issue1967
 }
 ") });
 
-        Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
+        AssertTranslatesAndBinds(project);
     }
 
     [Fact]
-    public void QueryContinuationIndexTypedRangeVariable_StaysLoudGap()
+    public void QueryContinuationIndexTypedRangeVariable_TranslatesWithoutGap()
     {
         // `select ^n into i` re-starts the query scope with `i : Index` — the
         // continuation's range variable type is inferred from the preceding
@@ -459,28 +373,20 @@ namespace Corpus.Issue1967
 }
 ") });
 
+        AssertTranslatesAndBinds(project);
+    }
+
+    private static void AssertTranslatesAndBinds(LoadedCSharpProject project)
+    {
         Assert.True(project.BoundWithoutErrors, string.Join("\n", project.ErrorDiagnostics));
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
-        new CSharpToGSharpTranslator().TranslateDocument(document, context);
-
-        Assert.Contains(context.Diagnostics, d => d.Message.Contains("System.Index", StringComparison.Ordinal));
-    }
-
-    private static string Render(string source)
-    {
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Source.cs", source) });
-
-        Assert.True(
-            project.BoundWithoutErrors,
-            "inline source should bind with no C# errors: " +
-                string.Join(Environment.NewLine, project.ErrorDiagnostics));
-
-        LoadedDocument document = Assert.Single(project.Documents);
-        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         Cs2Gs.CodeModel.Ast.CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
-        Assert.Empty(context.Diagnostics);
-        return GSharpPrinter.Print(unit);
+        string rendered = GSharpPrinter.Print(unit);
+
+        Assert.DoesNotContain(context.Diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        RoundTripResult roundTrip = TranslationTestValidation.AssertBinds(rendered);
+        Assert.True(roundTrip.Success, "Translated G# must bind. Errors:\n" +
+            string.Join("\n", roundTrip.Errors) + "\n\nPrinted:\n" + rendered);
     }
 }

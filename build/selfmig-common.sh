@@ -43,11 +43,6 @@ selfmig_project_filters=(
   --exclude src/vs-gsharp/src/VsGsharp.CodeLens/VsGsharp.CodeLens.csproj
   --exclude src/vs-gsharp/test/VsGsharp.UnitTests
   --exclude src/Sdk/Gsharp.Extensions
-  # Issue #4350: keep the native-runtime implementation as a verbatim C#
-  # dependency until ADR-0192's declaration-view and first-class Index/Range
-  # work makes the project itself fully self-migratable. Remove this
-  # passthrough only after a full corpus run banks the project green.
-  --passthrough src/Sdk/Gsharp.Runtime.Values/Gsharp.Runtime.Values.csproj
   --exclude tools/cs2gs/corpus/CompileGap-Library
   # ADR-0174 D11: the concurrency benchmark's C# and Go sides are measurement
   # apparatus, not migration targets. Translating the CLR baseline would

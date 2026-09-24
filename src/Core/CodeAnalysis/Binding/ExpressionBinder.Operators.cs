@@ -3236,7 +3236,7 @@ internal sealed partial class ExpressionBinder
     {
         var nullable = operandType as NullableTypeSymbol;
         if ((nullable?.UnderlyingType ?? operandType) == TypeSymbol.Char
-            && operatorKind is SyntaxKind.PlusToken or SyntaxKind.MinusToken or SyntaxKind.HatToken)
+            && operatorKind is SyntaxKind.PlusToken or SyntaxKind.MinusToken or SyntaxKind.TildeToken)
         {
             promotedType = nullable == null ? TypeSymbol.Int32 : NullableTypeSymbol.Get(TypeSymbol.Int32);
             return true;

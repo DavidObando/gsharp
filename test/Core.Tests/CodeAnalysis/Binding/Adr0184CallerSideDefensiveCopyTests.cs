@@ -420,40 +420,23 @@ public class Adr0184CallerSideDefensiveCopyTests
     // ---------------------------------------------------------------------
 
     /// <summary>
-    /// (16) This one looks like a false positive and is not — but the reason
-    /// is NOT the one it is tempting to give, so it is written out in full.
+    /// (16) The returned reference comes from <c>y</c>, a <c>ref</c> parameter
+    /// — the CALLER's storage. Real csc ACCEPTS the C# analogue: a
+    /// non-<c>[UnscopedRef]</c> struct method's <c>this</c> is
+    /// <c>scoped ref</c>, so the receiver is excluded from the result's
+    /// ref-safe-context and the result's scope is <c>ref y</c>'s alone.
     /// <para>
-    /// The returned reference ultimately comes from <c>y</c>, a <c>ref</c>
-    /// parameter — the CALLER's storage, which plainly outlives the call.
-    /// <b>Real csc ACCEPTS the C# analogue</b> (verified directly against csc,
-    /// alongside the same file's <c>FromIn</c>, which csc rejects with CS8156):
-    /// a non-<c>[UnscopedRef]</c> struct method's <c>this</c> is
-    /// <c>scoped ref</c>, so C# EXCLUDES the receiver from the result's
-    /// ref-safe-context entirely and the result's scope is <c>ref y</c>'s
-    /// alone. So this is not "the same reason" as case (1), where the receiver
-    /// really is <c>@UnscopedRef</c> and really does contribute.
-    /// </para>
-    /// <para>
-    /// G# rejects it because G#'s escape walk includes a call's receiver
-    /// UNCONDITIONALLY, whether or not the callee is <c>@UnscopedRef</c> —
-    /// <b>pre-existing behaviour, not introduced here</b>: the by-VALUE
-    /// receiver spelling of this exact shape already reported GS0254 before
-    /// this change (verified against the pre-fix compiler). The defensive copy
-    /// makes an <c>in</c> receiver function-local too, so the <c>in</c>
-    /// spelling now joins it, consistently. G# is therefore strictly MORE
-    /// conservative than C# here — it rejects some code csc accepts, and
-    /// accepts nothing csc rejects.
-    /// </para>
-    /// <para>
-    /// DO NOT "fix" this as an over-rejection in isolation. It is one face of
-    /// the unconditional-receiver rule that tests (11) and (12) also pin;
-    /// relaxing it is a separate, deliberate precision change to that rule,
-    /// not a repair to this one. The remedy GS0591 names still works: take the
-    /// receiver by <c>ref</c> instead of <c>in</c>.
+    /// G# used to reject it (GS0591) because its escape walk included a call's
+    /// receiver unconditionally. ADR-0187 / issue #4350 adopted the C# rule
+    /// (<c>RefCapabilities.ReceiverContributesRefScope</c>): the callee side is
+    /// already enforced by GS0589, so a non-<c>@UnscopedRef</c> member can
+    /// never return into its receiver, and the defensive copy of an
+    /// <c>in</c> receiver cannot be the reference's source. Cases (1)-(12)
+    /// keep their diagnostics because their member IS <c>@UnscopedRef</c>.
     /// </para>
     /// </summary>
     [Fact]
-    public void RefArgumentForwardedThroughCopiedReceiver_ReportsGS0591()
+    public void RefArgumentForwardedThroughCopiedReceiver_IsClean_LikeCSharp()
     {
         var diagnostics = Bind("""
             package P
@@ -461,8 +444,35 @@ public class Adr0184CallerSideDefensiveCopyTests
                 func Pick(ref x int32) ref int32 { return ref x }
             }
             func k(in a Acc, ref y int32) ref readonly int32 { return ref a.Pick(ref y) }
+            func v(a Acc, ref y int32) ref int32 { return ref a.Pick(ref y) }
             """);
-        Assert.Contains(diagnostics, d => d.Id == "GS0591");
+        Assert.Empty(diagnostics);
+    }
+
+    /// <summary>
+    /// (16b) Runtime proof for (16): the reference forwarded through a copied
+    /// receiver still aliases the caller's own <c>y</c>.
+    /// </summary>
+    [Fact]
+    public void RefArgumentForwardedThroughReceiver_AliasesCallerStorage_AtRuntime()
+    {
+        var result = EmittedOracle.Evaluate("""
+            struct Acc {
+                var Total int32
+                func Pick(ref x int32) ref int32 { return ref x }
+            }
+            func k(in a Acc, ref y int32) ref int32 { return ref a.Pick(ref y) }
+            func Run() int32 {
+                var y = 7
+                let acc = Acc{Total: 1}
+                var ref slot = k(in acc, ref y)
+                slot = 42
+                return y
+            }
+            var answer = Run()
+            """);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.ReadGlobals()["answer"]);
     }
 
     // ---------------------------------------------------------------------

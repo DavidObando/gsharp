@@ -1516,13 +1516,22 @@ public sealed partial class CSharpToGSharpTranslator
             // emitted G# round-trips (ADR-0115 §B.6).
             bool isOpen = this.IsMemberEmittedOpen(symbol, isOverride);
 
-            // Receiver-clause methods and value-aggregate members have no
-            // `open`/`override`: G# value aggregates expose no open base method
-            // to override. Drop the modifiers so the emitted G# binds.
-            if (receiver != null || IsValueAggregate(ownerKind))
+            // Receiver-clause methods have no `open`/`override`, and a value
+            // aggregate has no open members of its own. A `data struct`
+            // replaces its synthesized `ToString` with a plain `func` (ADR-0029
+            // / #2361). Issue #4350: a plain struct's `override` of an
+            // inherited `object` member (`Equals`, `GetHashCode`, `ToString`)
+            // is KEPT — dropping it declared a new non-virtual method that hid
+            // the override, so boxed equality and hashing silently fell back
+            // to `ValueType`'s.
+            if (receiver != null || ownerKind == TypeDeclarationKind.DataStruct)
             {
                 isOpen = false;
                 isOverride = false;
+            }
+            else if (IsValueAggregate(ownerKind))
+            {
+                isOpen = false;
             }
 
             // Generic interface methods are supported by the G# parser since
@@ -2950,7 +2959,14 @@ public sealed partial class CSharpToGSharpTranslator
             // TranslateExpression's FieldExpressionSyntax case) resolves to it.
             string fieldKeywordBackingName = this.TryRegisterFieldKeywordBackingField(
                 node, symbol, primaryCtorParamNames, out IFieldSymbol fieldKeywordBackingSymbol);
-            if (fieldKeywordBackingName == null
+            bool lowersToBackingField = symbol != null && this.IsBackingFieldLoweredGetOnlyAutoProperty(symbol);
+            if (fieldKeywordBackingName == null && lowersToBackingField)
+            {
+                fieldKeywordBackingName = this.RegisterSynthesizedPropertyBackingField(
+                    symbol,
+                    primaryCtorParamNames);
+            }
+            else if (fieldKeywordBackingName == null
                 && !isStatic
                 && node.Initializer != null
                 && (!IsGetOnlyAutoProperty(node)
@@ -3023,10 +3039,8 @@ public sealed partial class CSharpToGSharpTranslator
             // implementing the abstract getter. Lower it to the synthesized
             // private backing field (seeded with the initializer above) plus a
             // computed arrow reading it.
-            if (isOverride
-                && !isStatic
-                && node.Initializer != null
-                && IsGetOnlyAutoProperty(node)
+            if ((lowersToBackingField
+                    || (isOverride && !isStatic && node.Initializer != null && IsGetOnlyAutoProperty(node)))
                 && fieldKeywordBackingName != null)
             {
                 arrowBody = new ReturnStatement(new IdentifierExpression(fieldKeywordBackingName));
@@ -3119,6 +3133,17 @@ public sealed partial class CSharpToGSharpTranslator
             if (primaryCtorParamNames != null)
             {
                 taken.UnionWith(primaryCtorParamNames);
+            }
+            else
+            {
+                // Issue #4350 (review): a caller without the aggregate's
+                // primary-constructor name set (a write site reached first)
+                // conservatively reserves every instance-constructor parameter
+                // name, since a lifted primary constructor's synthesized fields
+                // are named after exactly those parameters.
+                taken.UnionWith(symbol.ContainingType.InstanceConstructors
+                    .SelectMany(constructor => constructor.Parameters)
+                    .Select(parameter => parameter.Name));
             }
 
             taken.UnionWith(this.state.SynthesizedPropertyBackingFieldNames.Values);

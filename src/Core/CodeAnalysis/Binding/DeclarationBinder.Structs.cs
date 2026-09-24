@@ -267,7 +267,7 @@ internal sealed partial class DeclarationBinder
         BindStructProperties(syntax, package, structSymbol, memberBinding);
         BindStructEvents(syntax, package, structSymbol, baseBinding, memberBinding);
         BindStructSharedBlock(syntax, package, structSymbol, fieldBinding, memberBinding);
-        RegisterStructConversionOperators(package, memberBinding.PendingConversionOperators);
+        RegisterStructConversionOperators(package, structSymbol, memberBinding.PendingConversionOperators);
         RegisterStructDeferredInitializers(package, structSymbol, fieldBinding);
         RegisterStructInterfaceChecks(syntax, structSymbol, baseBinding);
         BindStructFinalMembers(syntax, package, structSymbol, baseBinding);
@@ -1746,6 +1746,12 @@ internal sealed partial class DeclarationBinder
                 }
             }
 
+            // ADR-0187 / issue #4350: indexers overload by index-parameter
+            // signature, exactly like C#. Track the plain (non-explicit)
+            // indexer signatures already declared on this type so a second
+            // `this[...]` with a different parameter list is accepted while an
+            // exact duplicate still reports GS0102.
+            var declaredIndexerSignatures = new List<ImmutableArray<ParameterSymbol>>();
             foreach (var propSyntax in syntax.Properties)
             {
                 // ADR-0118 / issue #944: an indexer member (`prop this[…] T`)
@@ -1781,6 +1787,11 @@ internal sealed partial class DeclarationBinder
                         // Issue #1913: indexer parameters can carry `@Attr`
                         // annotations same as any other parameter list.
                         BindAndAttachParameterAttributes(indexParamSyntax, indexerParam);
+
+                        // Issue #4350 (review): an indexer parameter may declare
+                        // a default (`this[row int32, column int32 = 0]`), which
+                        // was previously dropped silently.
+                        conversions.BindAndAttachParameterDefaultValue(indexParamSyntax, indexerParam);
                         indexerParamBuilder.Add(indexerParam);
                     }
 
@@ -1806,7 +1817,26 @@ internal sealed partial class DeclarationBinder
                 // than one explicit-interface indexer implementation, closing
                 // a gap the old mangled-name convention only partially covered.
                 var propAlreadyDeclared = existingNames.Contains(propName);
-                var propExemptCollision = propSyntax.HasExplicitInterfaceClause || explicitInterfaceClauseNames.Contains(propName);
+                if (isIndexer
+                    && propAlreadyDeclared
+                    && !propSyntax.HasExplicitInterfaceClause
+                    && declaredIndexerSignatures.Count > 0)
+                {
+                    // ADR-0187: an indexer only collides with another plain
+                    // indexer of the same index-parameter signature.
+                    propAlreadyDeclared = declaredIndexerSignatures.Any(
+                        declared => HaveSameIndexerSignature(declared, indexerParameters));
+                }
+
+                // Review finding (#4350): the explicit-interface exemption lets a
+                // plain indexer share `Item` with explicit implementations, but it
+                // never excuses a plain indexer that duplicates another plain
+                // indexer's signature.
+                var duplicatesPlainIndexer = isIndexer
+                    && !propSyntax.HasExplicitInterfaceClause
+                    && declaredIndexerSignatures.Any(declared => HaveSameIndexerSignature(declared, indexerParameters));
+                var propExemptCollision = !duplicatesPlainIndexer
+                    && (propSyntax.HasExplicitInterfaceClause || explicitInterfaceClauseNames.Contains(propName));
                 if (methodNames.Contains(propName) || (propAlreadyDeclared && !propExemptCollision))
                 {
                     Diagnostics.ReportSymbolAlreadyDeclared(propSyntax.Identifier.Location, propName);
@@ -1814,6 +1844,11 @@ internal sealed partial class DeclarationBinder
                 }
 
                 existingNames.Add(propName);
+                if (isIndexer && !propSyntax.HasExplicitInterfaceClause)
+                {
+                    declaredIndexerSignatures.Add(indexerParameters);
+                }
+
                 if (propSyntax.HasExplicitInterfaceClause)
                 {
                     explicitInterfaceClauseNames.Add(propName);
@@ -1929,7 +1964,7 @@ internal sealed partial class DeclarationBinder
                 PropertySymbol? overriddenProperty = null;
                 if (isOverride)
                 {
-                    if (structSymbol.BaseClass != null && TypeMemberModel.TryGetProperty(structSymbol.BaseClass, propName, out var baseProp))
+                    if (structSymbol.BaseClass != null && TryGetOverriddenPropertyCandidate(structSymbol.BaseClass, propName, isIndexer, indexerParameters, out var baseProp))
                     {
                         if (!baseProp.IsVirtual && !baseProp.IsOverride)
                         {
@@ -3305,6 +3340,7 @@ internal sealed partial class DeclarationBinder
 
     private void RegisterStructConversionOperators(
         PackageSymbol package,
+        StructSymbol declaringType,
         List<(FunctionDeclarationSyntax Syntax, ImmutableArray<ParameterSymbol> Parameters, TypeSymbol ReturnType, Accessibility Accessibility, ImmutableArray<BoundAttribute> Attributes)> pendingConversionOperators)
     {
         // Issue #1283: register in-body conversion operators as static
@@ -3320,7 +3356,8 @@ internal sealed partial class DeclarationBinder
                 conversionOperator.ReturnType,
                 conversionOperator.Accessibility,
                 package,
-                conversionOperator.Attributes);
+                conversionOperator.Attributes,
+                declaringType);
         }
     }
 

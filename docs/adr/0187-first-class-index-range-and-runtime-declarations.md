@@ -1,8 +1,12 @@
-# ADR-0192: First-class Index/Range expressions and recognized runtime declarations
+# ADR-0187: First-class Index/Range expressions and recognized runtime declarations
 
-- **Status**: Proposed
+- **Status**: Accepted (implemented for issue #4350)
 - **Date**: 2026-09-21
 - **Issue**: [#4350](https://github.com/DavidObando/gsharp/issues/4350)
+- **Numbering**: proposed as ADR-0192 in #4351 and renumbered to the free slot
+  0187 when ADR-0192 was assigned to partial methods (#4339). The 0187 number
+  was earlier proposed by closed, unmerged PR #4326, which ADR-0192 cites by
+  PR number.
 - **Related**: [ADR-0115](0115-csharp-to-gsharp-migration-tool.md),
   [ADR-0154](0154-test-oracle-strength.md),
   [ADR-0181](0181-readonly-managed-reference-contracts.md),
@@ -19,9 +23,44 @@ The maintainer approved the declaration-view design and requested two changes:
    expressions. cs2gs preserves their readable syntax rather than lowering
    reusable values to explicit BCL factory calls.
 
-The ADR remains **Proposed** until the language/compiler work lands. The
-temporary corpus exclusion can merge independently and should be removed only
-after the re-entry criteria below pass.
+The ADR was **Proposed** until the language/compiler work landed. The
+temporary corpus exclusion merged independently (#4351) and is removed by the
+implementation PR once the re-entry criteria below pass.
+
+## Implementation notes
+
+- **Parser.** Prefix `^` produces `FromEndIndexExpressionSyntax` at unary
+  precedence in every expression context. The historical bracket-bound and
+  range-upper-bound positions keep reading the whole bound as the operand
+  (`a[^n + 1]` is `a[^(n + 1)]`); that only accepts programs C# rejects, so
+  no C#-valid program changes meaning. `~` is a new `TildeToken` for unary
+  one's-complement and for `operator ~()` declarations (`op_OnesComplement`).
+- **Binder.** A bare `^x` binds to `new System.Index(x, fromEnd: true)`.
+  Range bounds are bound once, left to right: an integer converts to a
+  from-start Index, a `^n` bound stays a from-end marker, and a bound that is
+  already a `System.Index` is used as-is. Direct array/string/span slicing
+  resolves saved Index bounds with `Index.GetOffset(length)`; native slices
+  switch to the runtime's `Subslice(Range)` overload for them. `GS0410` is
+  retired.
+- **cs2gs.** `System.Index`/`System.Range` map as ordinary imported types.
+  `^x`, all range forms, and `~x` print verbatim, and the #1894/#1967
+  loud-gap guards are gone. `CSharpTypeMapper.IsRecognizedRuntimeConsumerType`
+  keeps `Slice`/`ReadOnlySlice`/`ManagedRef`/`ReadOnlyManagedRef` nominal when
+  their original definition lives in the compilation being translated.
+- **Shared defects closed for re-entry.** Translating and compiling
+  `Gsharp.Runtime.Values` exposed general gaps, fixed without any
+  runtime-specific exception: overloaded and multi-parameter user indexers;
+  C#'s scoped-`this` receiver rule for ref returns through struct members;
+  type parameters introduced by a nullable generic receiver clause;
+  construction preferred over a same-named bare-form extension; cs2gs keeping
+  every indexer argument and widening (not narrowing) a constant operand;
+  symbolic `out var` pointees for inferred generic CLR methods;
+  auto-dereferenced ref-returning static CLR calls; source-declared
+  generic implicit conversions (`Span[T] -> ReadOnlySpan[T]`) parented at the
+  symbolic TypeSpec; plain-struct `override` members kept by cs2gs; in-body
+  conversion operators owned by their enclosing type; and C#-equivalent
+  constructor assignment of get-only auto-properties (so cs2gs no longer adds
+  `init` setters).
 
 ## Context
 
@@ -321,20 +360,31 @@ This recovery can merge before any ADR implementation.
 
 ## Acceptance criteria
 
-- [ ] `^x` is a reusable `System.Index` expression in every expression context.
-- [ ] `^a..^b` and all omitted-bound forms produce reusable
+- [x] `^x` is a reusable `System.Index` expression in every expression context.
+- [x] `^a..^b` and all omitted-bound forms produce reusable
       `System.Range` values.
-- [ ] `~x` is unary ones-complement and binary `x ^ y` remains XOR.
-- [ ] Saved Index/Range values preserve C# evaluation and runtime behavior.
-- [ ] cs2gs translates Index/Range declarations and expressions without
+- [x] `~x` is unary ones-complement and binary `x ^ y` remains XOR.
+- [x] Saved Index/Range values preserve C# evaluation and runtime behavior.
+- [x] cs2gs translates Index/Range declarations and expressions without
       unsupported diagnostics or factory-noise fallbacks.
-- [ ] Source declarations of every compiler-recognized runtime type remain
+- [x] Source declarations of every compiler-recognized runtime type remain
       nominal during translation of their declaring compilation.
-- [ ] Referenced metadata types retain native consumer spelling and semantics.
-- [ ] `Gsharp.Runtime.Values` passes all four migration stages after re-entry.
+- [x] Referenced metadata types retain native consumer spelling and semantics.
+- [x] `Gsharp.Runtime.Values` passes all four migration stages after re-entry.
 - [ ] The full corpus is green with the existing ratchets and without the
       temporary Runtime.Values exclusion.
-- [ ] C# and G# consumers observe the same runtime assembly/type/member ABI.
+- [x] C# and G# consumers observe the same runtime assembly/type/member ABI.
+      Verified by a metadata comparison of the C# and migrated assemblies:
+      every public/protected type and member matches in name, signature,
+      static-ness and virtual dispatch. The comparison found and fixed four
+      divergences: struct `Equals`/`GetHashCode` overrides printed without
+      `override`; an in-body `op_Implicit` attached to (and later dropped
+      from) the source type; and `init` setters added to get-only
+      auto-properties. Remaining differences are additive G# conventions —
+      the `<Program>` host types, a default constructor on the extension
+      owner `SliceExtensions`, sealed (`final`) overrides, inherited
+      interfaces resolved by the runtime rather than re-listed in metadata,
+      and missing `specialname` flags on arrow-bodied property getters.
 
 ## Compatibility
 

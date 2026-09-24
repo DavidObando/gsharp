@@ -373,24 +373,6 @@ public sealed class CSharpTypeMapper
             return new NamedTypeReference("object");
         }
 
-        // Issue #1894: `System.Index`/`System.Range` have no canonical G# value
-        // type. G#'s own `^n`/`a..b` syntax exists only as bracket-scoped index
-        // sugar (gsc's Parser.ParseIndexBound) that lowers directly against the
-        // collection it indexes — there is no reusable value carrying from-end
-        // semantics. Mapping the type through as a bare name would let a local,
-        // parameter, field, or return type of type Index/Range compile and then
-        // silently misbehave at runtime (a stored `^n` re-parses elsewhere as
-        // one's-complement, not from-end). Gap loudly instead.
-        if (IsSystemIndexOrRange(type))
-        {
-            context.Report(new TranslationDiagnostic(
-                type.Name,
-                $"'System.{type.Name}' has no canonical G# type: G# has no reusable from-end index/range value, only bracket-scoped '^n'/'a..b' sugar, so a {type.Name}-typed local/parameter/field/return cannot carry from-end semantics correctly (issue #1894).",
-                location,
-                TranslationSeverity.Unsupported));
-            return new NamedTypeReference(UnsupportedPlaceholderType);
-        }
-
         // A C# unsafe pointer type (`T*`, `void*`) maps to the canonical G#
         // PREFIX pointer form `*T` (spec §"Byref/pointer syntax exists as
         // `*T`"; grammar `'*' TypeClause '?'?`). A `void*` (no element type)
@@ -779,8 +761,7 @@ public sealed class CSharpTypeMapper
                 return;
             }
 
-            if (MapPredefinedName(named.SpecialType) != null
-                || IsSystemIndexOrRange(named))
+            if (MapPredefinedName(named.SpecialType) != null)
             {
                 return;
             }
@@ -1249,9 +1230,45 @@ public sealed class CSharpTypeMapper
     }
 
     /// <summary>
+    /// ADR-0187 §6: whether <paramref name="type"/> is a compiler-recognized
+    /// <c>Gsharp.Runtime.Values</c> type (one of <paramref name="names"/>) seen
+    /// through its native CONSUMER view.
+    /// </summary>
+    /// <remarks>
+    /// The native <c>slice[T]</c> / <c>managed T</c> spellings are views of the
+    /// runtime assembly's metadata. The compilation that DECLARES those structs
+    /// is implementing the nominal CLR types themselves, so inside it every
+    /// reference — constructors, interfaces, operators, nested types and
+    /// self-references — keeps its nominal spelling. Provenance comes from the
+    /// Roslyn symbol, not from a project path or assembly-name mode.
+    /// </remarks>
+    /// <param name="type">The C# type symbol to classify.</param>
+    /// <param name="compilation">The compilation being translated.</param>
+    /// <param name="names">The recognized generic type names to match.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> should use its native G# spelling.</returns>
+    internal static bool IsRecognizedRuntimeConsumerType(ITypeSymbol type, Compilation compilation, params string[] names)
+        => IsRecognizedRuntimeType(type, names)
+            && !SymbolEqualityComparer.Default.Equals(type.OriginalDefinition.ContainingAssembly, compilation.Assembly);
+
+    /// <summary>
+    /// ADR-0187 §6: whether <paramref name="type"/> has the assembly, namespace
+    /// and generic name of a compiler-recognized <c>Gsharp.Runtime.Values</c>
+    /// type, regardless of which compilation declares it.
+    /// </summary>
+    /// <param name="type">The C# type symbol to classify.</param>
+    /// <param name="names">The recognized generic type names to match.</param>
+    /// <returns><see langword="true"/> when <paramref name="type"/> has a recognized runtime identity.</returns>
+    internal static bool IsRecognizedRuntimeType(ITypeSymbol type, params string[] names)
+        => type is INamedTypeSymbol { Arity: 1 } named
+            && named.ContainingAssembly?.Name == "Gsharp.Runtime.Values"
+            && named.ContainingNamespace.ToDisplayString() == "Gsharp.Values"
+            && Array.IndexOf(names, named.Name) >= 0;
+
+    /// <summary>
     /// Issue #1894: whether <paramref name="type"/> is the BCL <c>System.Index</c>
-    /// or <c>System.Range</c> struct — the two from-end-indexing value types that
-    /// have no canonical G# representation (see <see cref="MapCore"/>).
+    /// or <c>System.Range</c> struct. ADR-0187 maps both as ordinary imported
+    /// types; this only distinguishes a range bound's compiler-inserted
+    /// Index conversion from its natural type.
     /// </summary>
     /// <param name="type">The C# type symbol to check.</param>
     /// <returns><see langword="true"/> when <paramref name="type"/> is <c>System.Index</c> or <c>System.Range</c>.</returns>
@@ -1301,9 +1318,7 @@ public sealed class CSharpTypeMapper
     // which returns `TypeSymbol.FromClrType(typeof(EventHandler))`).
     internal GTypeReference MapTypeOf(ITypeSymbol type, TranslationContext context, Location location)
     {
-        return IsSystemIndexOrRange(type)
-            ? this.MapCore(type, context, location)
-            : this.MapExplicitType(type, context, location);
+        return this.MapExplicitType(type, context, location);
     }
 
     internal GTypeReference MapNominalDelegate(
@@ -1604,9 +1619,7 @@ public sealed class CSharpTypeMapper
 
         if (type is INamedTypeSymbol named)
         {
-            if (named.ContainingAssembly.Name == "Gsharp.Runtime.Values"
-                && named.ContainingNamespace.ToDisplayString() == "Gsharp.Values"
-                && named.Arity == 1 && named.Name is "ManagedRef" or "ReadOnlyManagedRef")
+            if (IsRecognizedRuntimeConsumerType(named, context.Compilation, "ManagedRef", "ReadOnlyManagedRef"))
             {
                 var readOnly = named.Name == "ReadOnlyManagedRef";
                 var element = this.Map(named.TypeArguments[0], context, location);
@@ -1620,9 +1633,7 @@ public sealed class CSharpTypeMapper
                 return new ManagedReferenceTypeReference(element, readOnly);
             }
 
-            if (named.ContainingAssembly.Name == "Gsharp.Runtime.Values"
-                && named.ContainingNamespace.ToDisplayString() == "Gsharp.Values"
-                && named.Arity == 1 && named.Name is "Slice" or "ReadOnlySlice")
+            if (IsRecognizedRuntimeConsumerType(named, context.Compilation, "Slice", "ReadOnlySlice"))
             {
                 var element = this.Map(named.TypeArguments[0], context, location);
                 if (!location.IsInSource || location.SourceTree != context.SemanticModel.SyntaxTree

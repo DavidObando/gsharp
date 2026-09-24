@@ -805,6 +805,14 @@ internal sealed class ConversionClassifier
 
             // Stream E: fall back to a user-defined op_Implicit (and
             // op_Explicit when allowed) on either source or target CLR type.
+            // Issue #4350: a conversion between symbolic generics (`Span[T]` ->
+            // `ReadOnlySpan[T]`) resolves on the open definition first; the
+            // CLR branch below would pick the erased `<object>` operator.
+            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var symbolicConvMethod))
+            {
+                return new BoundClrConversionCallExpression(null, expression, symbolicConvMethod, type);
+            }
+
             if (expression.Type?.ClrType != null && type?.ClrType != null
                 && ClrOperatorResolution.TryResolveConversion(expression.Type.ClrType, type.ClrType, allowExplicit, out var convMethod, out var isExplicit))
             {
@@ -944,6 +952,11 @@ internal sealed class ConversionClassifier
                     projectionUserConvOp,
                     projectionUserConvOwner,
                     allowExplicit);
+            }
+
+            if (TryResolveSymbolicImportedConversion(expression.Type, type, out var projectionSymbolicConvMethod))
+            {
+                return new BoundClrConversionCallExpression(null, expression, projectionSymbolicConvMethod, type);
             }
 
             if (expression.Type?.ClrType != null && type?.ClrType != null
@@ -1614,6 +1627,15 @@ internal sealed class ConversionClassifier
     /// <returns>Whether a user-defined implicit conversion was applied.</returns>
     public bool TryApplyUserDefinedImplicitArgumentConversion(BoundExpression argument, TypeSymbol expectedType, out BoundExpression converted)
     {
+        // Issue #4350: resolve symbolic generic pairs before the erased CLR
+        // branch can bind the `<object>` operator.
+        if (argument.Type != TypeSymbol.Error
+            && TryResolveSymbolicImportedConversion(argument.Type, expectedType, out var symbolicConvMethod))
+        {
+            converted = new BoundClrConversionCallExpression(null, argument, symbolicConvMethod, expectedType);
+            return true;
+        }
+
         if (argument.Type?.ClrType != null
             && expectedType.ClrType != null
             && argument.Type != TypeSymbol.Error
@@ -1882,83 +1904,35 @@ internal sealed class ConversionClassifier
         [NotNullWhen(true)] out MethodInfo? conversion)
     {
         conversion = null;
-        if (source == null
-            || target is not ImportedTypeSymbol { OpenDefinition: { } openDefinition } imported
-            || imported.TypeArguments.IsDefaultOrEmpty)
+        if (source == null || target == null)
         {
             return false;
         }
 
-        // Only the symbolic/open case is in scope: a fully CLR-backed target
+        // Only the symbolic/open case is in scope: a fully CLR-backed pair
         // already resolves through ClrOperatorResolution, and re-resolving it
         // here would change which operator a concrete call site picks.
-        var needsSymbolic = false;
-        foreach (var typeArgument in imported.TypeArguments)
-        {
-            if (TypeSymbol.ContainsTypeParameter(typeArgument)
-                || TypeSymbol.RequiresSymbolicProjection(typeArgument))
-            {
-                needsSymbolic = true;
-                break;
-            }
-        }
-
-        if (!needsSymbolic)
+        if (!NeedsSymbolicConversion(target) && !NeedsSymbolicConversion(source))
         {
             return false;
         }
 
-        MethodInfo[] candidates;
-        try
+        // Issue #3932: the operator declared on the TARGET's open definition
+        // (`Memory`1::op_Implicit(!0[])`).
+        if (target is ImportedTypeSymbol { OpenDefinition: { } targetOpen } importedTarget
+            && !importedTarget.TypeArguments.IsDefaultOrEmpty
+            && TryFindSymbolicImplicitOperator(targetOpen, importedTarget.TypeArguments, source, target, out conversion))
         {
-            candidates = openDefinition.GetMethods(BindingFlags.Public | BindingFlags.Static);
-        }
-        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
-        {
-            return false;
-        }
-
-        foreach (var candidate in candidates)
-        {
-            if (!string.Equals(candidate.Name, "op_Implicit", StringComparison.Ordinal))
-            {
-                continue;
-            }
-
-            var parameters = candidate.GetParameters();
-            if (parameters.Length != 1)
-            {
-                continue;
-            }
-
-            var mappedParameter = MemberLookup.MapOpenClrTypeToSymbolic(
-                parameters[0].ParameterType,
-                openDefinition,
-                imported.TypeArguments);
-            var mappedReturn = MemberLookup.MapOpenClrTypeToSymbolic(
-                candidate.ReturnType,
-                openDefinition,
-                imported.TypeArguments);
-
-            // The return must be the target's OWN generic, substituted with the
-            // target's own arguments — compared by open definition rather than
-            // by symbol identity, because the mapped projection is a fresh
-            // ImportedTypeSymbol instance that never reference-equals the
-            // target even when it is structurally the same `Memory[T]`.
-            if (mappedParameter == null
-                || mappedParameter == TypeSymbol.Error
-                || !mappedParameter.Equals(source)
-                || mappedReturn is not ImportedTypeSymbol { OpenDefinition: { } returnOpenDefinition }
-                || returnOpenDefinition != openDefinition)
-            {
-                continue;
-            }
-
-            conversion = candidate;
             return true;
         }
 
-        return false;
+        // Issue #4350: the operator declared on the SOURCE's open definition
+        // (`Span`1::op_Implicit(Span<!0>) : ReadOnlySpan<!0>`). The erased CLR
+        // branch would otherwise bind `Span<object>`'s operator inside a
+        // generic body and emit unverifiable IL.
+        return source is ImportedTypeSymbol { OpenDefinition: { } sourceOpen } importedSource
+            && !importedSource.TypeArguments.IsDefaultOrEmpty
+            && TryFindSymbolicImplicitOperator(sourceOpen, importedSource.TypeArguments, source, target, out conversion);
     }
 
     /// <summary>
@@ -4596,5 +4570,112 @@ internal sealed class ConversionClassifier
         }
 
         return BindConversion(diagnosticLocation, read, slot.TargetType);
+    }
+
+    private static bool NeedsSymbolicConversion(TypeSymbol type)
+    {
+        if (type is not ImportedTypeSymbol { OpenDefinition: not null } imported || imported.TypeArguments.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var typeArgument in imported.TypeArguments)
+        {
+            if (TypeSymbol.ContainsTypeParameter(typeArgument)
+                || TypeSymbol.RequiresSymbolicProjection(typeArgument))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool TryFindSymbolicImplicitOperator(
+        Type openDefinition,
+        ImmutableArray<TypeSymbol> ownerTypeArguments,
+        TypeSymbol source,
+        TypeSymbol target,
+        [NotNullWhen(true)] out MethodInfo? conversion)
+    {
+        conversion = null;
+        MethodInfo[] candidates;
+        try
+        {
+            candidates = openDefinition.GetMethods(BindingFlags.Public | BindingFlags.Static);
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            return false;
+        }
+
+        foreach (var candidate in candidates)
+        {
+            if (!string.Equals(candidate.Name, "op_Implicit", StringComparison.Ordinal))
+            {
+                continue;
+            }
+
+            var parameters = candidate.GetParameters();
+            if (parameters.Length != 1)
+            {
+                continue;
+            }
+
+            var mappedParameter = MemberLookup.MapOpenClrTypeToSymbolic(
+                parameters[0].ParameterType,
+                openDefinition,
+                ownerTypeArguments);
+            var mappedReturn = MemberLookup.MapOpenClrTypeToSymbolic(
+                candidate.ReturnType,
+                openDefinition,
+                ownerTypeArguments);
+
+            // Both sides must match exactly. A mapped projection is a fresh
+            // ImportedTypeSymbol that never reference-equals the declared
+            // `Memory[T]`/`ReadOnlySpan[T]` even when it is structurally the
+            // same type, so constructed generics compare by open definition
+            // and type arguments.
+            if (!IsSameSymbolicType(mappedParameter, source) || !IsSameSymbolicType(mappedReturn, target))
+            {
+                continue;
+            }
+
+            conversion = candidate;
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsSameSymbolicType(TypeSymbol? mapped, TypeSymbol expected)
+    {
+        if (mapped == null || mapped == TypeSymbol.Error)
+        {
+            return false;
+        }
+
+        if (mapped.Equals(expected))
+        {
+            return true;
+        }
+
+        if (mapped is not ImportedTypeSymbol { OpenDefinition: { } mappedOpen } mappedImported
+            || expected is not ImportedTypeSymbol { OpenDefinition: { } expectedOpen } expectedImported
+            || mappedOpen != expectedOpen
+            || mappedImported.TypeArguments.Length != expectedImported.TypeArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < mappedImported.TypeArguments.Length; i++)
+        {
+            if (!IsSameSymbolicType(mappedImported.TypeArguments[i], expectedImported.TypeArguments[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 }

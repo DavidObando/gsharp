@@ -418,6 +418,16 @@ public partial class Parser
             var prefixOperand = ParseBinaryExpression(6);
             left = BuildIncrementDecrementExpression(prefixOperand, prefixOp, isPrefix: true);
         }
+        else if (Current.Kind == SyntaxKind.HatToken && parentPrecedence <= 6)
+        {
+            // ADR-0187: prefix `^x` is the first-class `System.Index` from-end
+            // expression in every expression context, at C#'s unary precedence
+            // (`^a.b` is `^(a.b)`; `^a + 1` is `(^a) + 1`). One's-complement is
+            // spelled `~x`, and binary `^` remains XOR.
+            var hatToken = NextToken();
+            var operand = ParseBinaryExpression(6);
+            left = new FromEndIndexExpressionSyntax(syntaxTree, hatToken, operand);
+        }
         else if (unaryOperatorPrecedence != 0 && unaryOperatorPrecedence >= parentPrecedence)
         {
             var operatorToken = NextToken();

@@ -90,7 +90,7 @@ public static class SyntaxFacts
             case SyntaxKind.PlusToken:         // identity
             case SyntaxKind.MinusToken:        // negation
             case SyntaxKind.BangToken:         // logical negation
-            case SyntaxKind.HatToken:          // one's complement
+            case SyntaxKind.TildeToken:        // one's complement (ADR-0187)
             case SyntaxKind.StarToken:         // dereference
             case SyntaxKind.AmpersandToken:    // reference of
             case SyntaxKind.LeftArrowToken:    // channel
@@ -509,6 +509,8 @@ public static class SyntaxFacts
                 return "^";
             case SyntaxKind.HatEqualsToken:
                 return "^=";
+            case SyntaxKind.TildeToken:
+                return "~";
             case SyntaxKind.AmpersandToken:
                 return "&";
             case SyntaxKind.AmpersandAmpersandToken:

@@ -589,13 +589,9 @@ internal sealed partial class ExpressionBinder
                 // binds to a constructed `System.Range` value.
                 return BindStandaloneRange((RangeExpressionSyntax)syntax);
             case SyntaxKind.FromEndIndexExpression:
-                // Issue #1038: a bare `^n` from-end marker is only meaningful as
-                // an index/range bound (handled inside the index-argument and
-                // range binders); surfacing it standalone is rejected (GS0410).
-                var bareFromEnd = (FromEndIndexExpressionSyntax)syntax;
-                Diagnostics.ReportFromEndMarkerNotAllowedInStandaloneRange(bareFromEnd.HatToken.Location);
-                _ = BindExpression(bareFromEnd.Operand);
-                return new BoundErrorExpression(null);
+                // ADR-0187: `^n` is a first-class `System.Index` value in every
+                // expression context (`let last = ^1`, `consume(^2)`).
+                return BindFromEndIndexValue((FromEndIndexExpressionSyntax)syntax);
             default:
                 throw new Exception($"Unexpected syntax {syntax.Kind}");
         }

@@ -84,25 +84,6 @@ public sealed partial class CSharpToGSharpTranslator
                         localTarget);
                 }
 
-                // Issue #1894: a local's declared type normally only reaches
-                // CSharpTypeMapper.Map when an explicit type clause is emitted
-                // below — but when the declared type equals the initializer's
-                // natural type (the common case, e.g. `Index x = ^3;` or the
-                // `var`-inferred equivalent), the type clause is elided entirely
-                // and Map is never called, so an Index/Range-typed local would
-                // slip through with no diagnostic. Check the bound local symbol's
-                // type directly so every Index/Range local gaps loudly regardless
-                // of whether a type clause ends up in the printed G#.
-                if (this.context.GetDeclaredSymbol(declarator) is ILocalSymbol { Type: { } localType } &&
-                    CSharpTypeMapper.IsSystemIndexOrRange(localType))
-                {
-                    this.context.Report(new TranslationDiagnostic(
-                        localType.Name,
-                        $"local '{declarator.Identifier.Text}' has type 'System.{localType.Name}', which has no canonical G# type — see CSharpTypeMapper.Map (issue #1894).",
-                        declarator.GetLocation(),
-                        TranslationSeverity.Unsupported));
-                }
-
                 BindingKind binding;
                 if (isConst)
                 {
@@ -545,10 +526,27 @@ public sealed partial class CSharpToGSharpTranslator
             bool leftIsIntegral = IsIntegralNumericKind(leftUnderlying);
             bool rightIsIntegral = IsIntegralNumericKind(rightUnderlying);
 
-            if (rightConst
+            // Issue #4350: retyping the constant is faithful for a comparison
+            // (the result is `bool` either way), but NOT for an arithmetic or
+            // bitwise operator whose C# operation type is the constant's own
+            // wider type: `2L * capacity` multiplies in `long`, so narrowing the
+            // literal to `int32(2L)` would silently change it into an `int`
+            // multiplication that overflows. Those operators take the
+            // converted-type path below, which widens the non-constant side.
+            bool isComparison = IsComparisonOperator(op);
+
+            // Issue #4350 (review): a shift is typed by its LEFT operand alone and
+            // its count is always `int`, so neither side's constant is retyped to
+            // the other's type — `2L << count` stays a `long` shift. Roslyn's
+            // converted types below already describe the shift faithfully.
+            bool isShift = op is "<<" or ">>" or ">>>";
+
+            if (!isShift
+                && rightConst
                 && !leftConst
                 && leftIsIntegral
                 && rightIsIntegral
+                && (isComparison || !this.OperandWidenedToConstantType(binary.Left, rightUnderlying))
                 && this.IntegralConstantFits(binary.Right, leftUnderlying))
             {
                 right = this.CoerceOperandTo(
@@ -558,10 +556,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return new BinaryExpression(left, op, right);
             }
 
-            if (leftConst
+            if (!isShift
+                && leftConst
                 && !rightConst
                 && leftIsIntegral
                 && rightIsIntegral
+                && (isComparison || !this.OperandWidenedToConstantType(binary.Right, leftUnderlying))
                 && this.IntegralConstantFits(binary.Left, rightUnderlying))
             {
                 left = this.CoerceOperandTo(
@@ -601,6 +601,21 @@ public sealed partial class CSharpToGSharpTranslator
 
             return new BinaryExpression(left, op, right);
         }
+
+        // Issue #4350: whether C# binary numeric promotion widened the
+        // non-constant operand to the constant's own type, i.e. the operation
+        // itself runs in the constant's (wider) type.
+        private bool OperandWidenedToConstantType(ExpressionSyntax nonConstant, SpecialType constantUnderlying)
+        {
+            TypeInfo info = this.context.GetTypeInfo(nonConstant);
+            return TryGetNumericKind(info.Type, out SpecialType own)
+                && TryGetNumericKind(info.ConvertedType, out SpecialType converted)
+                && own != converted
+                && converted == constantUnderlying;
+        }
+
+        private static bool IsComparisonOperator(string op) =>
+            op is "==" or "!=" or "<" or "<=" or ">" or ">=";
 
         private GExpression TranslateBinaryRightOperand(BinaryExpressionSyntax binary)
         {
@@ -965,135 +980,11 @@ public sealed partial class CSharpToGSharpTranslator
             return index;
         }
 
-        // Issue #1894/#1967: whether `expression` sits directly in a bracketed
-        // index argument position (`recv[EXPR]` / `recv?[EXPR]` / a dictionary/
-        // collection-initializer element `{ [EXPR] = v }`) — the one position
-        // where gsc's own parser recognises a leading `^` as a from-end marker
-        // rather than one's-complement (Parser.ParseIndexBound). A `^n` nested
-        // any deeper (e.g. as a `RangeExpressionSyntax` bound, `recv[a..^n]`) is
-        // NOT a direct argument — `TranslateRangeBound` emits it as its own
-        // native `FromEndIndexExpression` (gsc's `^n`) before it ever reaches
-        // this generic prefix-unary path (an inline `recv[a..^n]` slice never
-        // gaps). `ImplicitElementAccessSyntax` is the initializer-element shape
-        // (`{ [^1] = v }` inside a collection/object initializer) — Roslyn binds
-        // its bracketed argument list directly to it (no `ElementAccessExpressionSyntax`
-        // wrapper), so it must be recognised here too or a from-end index inside
-        // an initializer element would over-gap (issue #1967).
-        private static bool IsDirectIndexBracketArgument(ExpressionSyntax expression) =>
-            expression.Parent is ArgumentSyntax
-            {
-                Parent: BracketedArgumentListSyntax
-                {
-                    Parent: ElementAccessExpressionSyntax or ElementBindingExpressionSyntax or ImplicitElementAccessSyntax,
-                },
-            };
-
-        // Issue #1967: hardens the issue #1894 loud-gap check (see
-        // `TranslateLocalDeclaration`'s declared-symbol check) against Index/Range
-        // locals bound OUTSIDE a `var`/typed local declarator — `foreach (Index i in
-        // xs)`, `x is Index i`/`case Index i`, `M(out Index i)`, and tuple/positional
-        // deconstruction (`var (i, r) = ...`) all declare a NEW `ILocalSymbol`
-        // without ever going through `TranslateLocalDeclaration`, so an Index/Range
-        // local bound at one of those sites would silently bypass the existing
-        // guard. Every one of those sites resolves its designation to a declared
-        // symbol independently; this is the single choke point they all route
-        // through to report the same gap uniformly.
-        private void ReportIfIndexOrRangeTypedDesignation(SingleVariableDesignationSyntax designation)
-        {
-            if (designation == null || !this.state.ReportedIndexRangeDesignations.Add(designation))
-            {
-                return;
-            }
-
-            if (this.context.GetDeclaredSymbol(designation) is ILocalSymbol { Type: { } type } &&
-                CSharpTypeMapper.IsSystemIndexOrRange(type))
-            {
-                this.context.Report(new TranslationDiagnostic(
-                    type.Name,
-                    $"local '{designation.Identifier.Text}' has type 'System.{type.Name}', which has no canonical G# type — see CSharpTypeMapper.Map (issue #1894).",
-                    designation.GetLocation(),
-                    TranslationSeverity.Unsupported));
-            }
-        }
-
-        // Issue #1967: scans every `SingleVariableDesignationSyntax` nested
-        // anywhere inside a pattern tree (a bare `Index i`, or one nested inside a
-        // recursive/positional/list/`and`/`or`/`not` pattern) and reports the same
-        // Index/Range loud gap as a declarator. Called once per pattern ROOT (never
-        // from the recursive per-subpattern translators) so a nested designation is
-        // checked exactly once.
-        private void ReportIndexOrRangeDesignationsInPattern(PatternSyntax pattern)
-        {
-            if (pattern == null)
-            {
-                return;
-            }
-
-            foreach (SingleVariableDesignationSyntax designation in
-                pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
-            {
-                this.ReportIfIndexOrRangeTypedDesignation(designation);
-            }
-        }
-
-        // Issue #1967: `foreach (Index i in xs)` declares its loop variable
-        // directly on the `ForEachStatementSyntax` node itself (no designation
-        // syntax at all — unlike every other declaration site), so it needs its
-        // own symbol-based guard mirroring `ReportIfIndexOrRangeTypedDesignation`.
-        private void ReportIfIndexOrRangeTypedForEachVariable(ForEachStatementSyntax forEach)
-        {
-            if (this.context.GetDeclaredSymbol(forEach) is ILocalSymbol { Type: { } type } &&
-                CSharpTypeMapper.IsSystemIndexOrRange(type))
-            {
-                this.context.Report(new TranslationDiagnostic(
-                    type.Name,
-                    $"local '{forEach.Identifier.Text}' has type 'System.{type.Name}', which has no canonical G# type — see CSharpTypeMapper.Map (issue #1894).",
-                    forEach.GetLocation(),
-                    TranslationSeverity.Unsupported));
-            }
-        }
-
-        // Issue #1967: `M(out Index i)` declares `i` via an out-argument
-        // designation, not a declarator — check it here, the single choke point
-        // every `out var`/`out T` argument translates through.
         private GExpression TranslateOutVarDesignation(SingleVariableDesignationSyntax single)
         {
-            this.ReportIfIndexOrRangeTypedDesignation(single);
             return new OutArgumentExpression(
                 "out var",
                 this.EmittedName(single, single.Identifier));
-        }
-
-        // Issue #1967: an Index/Range-typed LINQ query range variable
-        // (`from Index i in xs`, `let i = <Index expr>`, `join`, or a query
-        // continuation's `into y`) binds via a query clause, not a designation —
-        // it never goes through `ReportIfIndexOrRangeTypedDesignation`. `type` is
-        // the range variable's resolved element type (explicit `TypeSyntax` wins,
-        // else inferred from the source collection/`let` expression — same
-        // resolution `ResolveRangeVariableType`/`ResolveRangeVariableElementTypeSymbol`
-        // use, so the loud gap and the actual G# type stay in sync).
-        private void ReportIfIndexOrRangeTypedRangeVariable(SyntaxNode anchor, SyntaxToken identifier, ITypeSymbol type)
-        {
-            if (type != null && CSharpTypeMapper.IsSystemIndexOrRange(type))
-            {
-                this.context.Report(new TranslationDiagnostic(
-                    type.Name,
-                    $"query range variable '{identifier.Text}' has type 'System.{type.Name}', which has no canonical G# type — see CSharpTypeMapper.Map (issue #1894).",
-                    anchor.GetLocation(),
-                    TranslationSeverity.Unsupported));
-            }
-        }
-
-        // Resolves an Index/Range check for a `from`/`join` range variable: an
-        // explicit `TypeSyntax` wins, else the source collection's element type
-        // (mirrors `ResolveRangeVariableType`'s own precedence).
-        private void ReportIfIndexOrRangeTypedRangeVariable(
-            SyntaxNode anchor, SyntaxToken identifier, TypeSyntax explicitType, ExpressionSyntax source)
-        {
-            ITypeSymbol type = explicitType != null
-                ? this.context.GetTypeInfo(explicitType).Type
-                : this.ResolveRangeVariableElementTypeSymbol(source);
-            this.ReportIfIndexOrRangeTypedRangeVariable(anchor, identifier, type);
         }
 
         // Reports whether the element-access target indexes by `int32`: a C# array,

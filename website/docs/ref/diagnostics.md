@@ -2212,7 +2212,7 @@ above retain their longer explanations and examples.
 | GS0381 | Error | A class participates in a direct or transitive inheritance cycle.  | |
 | GS0382 | Error | Struct `{structName}` cannot declare base type `{baseTypeName}`; a struct may only implement interfaces.  | |
 | GS0392 | Error | A range expression slices a type that has no supported array, slice, string, span-like, or `System.Range` indexer shape.  | |
-| GS0410 | Error | A from-end index marker `^` is only valid inside index brackets (e.g. `arr[^1]` or `arr[a..^b]`) or after `..` in a standalone range upper bound (`a..^b`); a standalone range cannot start with `^`. Use an indexer, or parenthesise a one's-complement bound (`(^a)..b`).  | |
+| GS0410 | _Retired_ | Previously: a standalone range could not start with a from-end `^` marker. ADR-0187 (issue #4350) made prefix `^x` a first-class `System.Index` expression and moved one's-complement to `~x`, so `^a..^b` is valid; this diagnostic is no longer emitted. | — |
 | GS0414 | Error | An unqualified reference to a `shared` member is ambiguous between two or more imported types (the G# form of C# `using static`). Qualify it with the owning type name.  | |
 | GS0415 | Error | The operand of `sizeof(T)` must be an unmanaged type — a blittable primitive, an enum, a value struct whose fields are all unmanaged, a pointer, or a generic type parameter constrained `unmanaged`.  | |
 | GS0416 | Error | A list pattern contains more than one slice (`..`) subpattern.  | |

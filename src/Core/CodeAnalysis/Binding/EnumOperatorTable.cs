@@ -161,7 +161,7 @@ internal static class EnumOperatorTable
         kind = default;
         resultType = null;
 
-        if (syntaxKind == SyntaxKind.HatToken && IsEnumType(operandType))
+        if (syntaxKind == SyntaxKind.TildeToken && IsEnumType(operandType))
         {
             kind = BoundUnaryOperatorKind.OnesComplement;
             resultType = operandType;

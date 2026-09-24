@@ -686,6 +686,20 @@ public sealed partial class CSharpToGSharpTranslator
                 return analyzerIdiom;
             }
 
+            // Issue #4350 (review): `this.P = v` (or `Type.P = v`) in a
+            // constructor targets the synthesized backing field of a lowered
+            // static/virtual/override get-only auto-property, exactly like the
+            // bare `P = v` form handled in EmittedName.
+            if (this.context.GetSymbolInfo(member).Symbol is IPropertySymbol loweredProperty
+                && IsWriteTarget(member.Name)
+                && this.IsBackingFieldLoweredGetOnlyAutoProperty(loweredProperty))
+            {
+                string backingName = this.RegisterSynthesizedPropertyBackingField(loweredProperty, primaryCtorParamNames: null);
+                return loweredProperty.IsStatic
+                    ? new IdentifierExpression(backingName)
+                    : new MemberAccessExpression(this.TranslateExpression(member.Expression), backingName);
+            }
+
             // C# permits namespace-qualified type expressions without importing
             // their namespace, including relative qualification from the current
             // namespace. G# resolves expression receivers as values/types, not as
@@ -2689,14 +2703,6 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateIndexArgumentWithNullForgiveness(ArgumentSyntax argument)
         {
             GExpression translated = this.TranslateExpression(argument.Expression);
-            if (argument.Expression is PrefixUnaryExpressionSyntax bitwiseNot
-                && bitwiseNot.IsKind(SyntaxKind.BitwiseNotExpression))
-            {
-                // G# spells bitwise complement as `^x`, but a leading `^` in
-                // bracket position means from-end indexing. Parentheses retain
-                // the value-expression interpretation.
-                translated = new ParenthesizedExpression(translated);
-            }
 
             // Issue #3564: a TUPLE-typed key whose G#-side elements are
             // promoted-nullable while the indexer's key tuple elements are not

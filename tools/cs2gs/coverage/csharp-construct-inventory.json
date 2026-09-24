@@ -1145,8 +1145,8 @@
     "rule": "ADR-0115 \u00A7B.36",
     "rationale": "None",
     "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/IndexExpression.cs",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1894",
-    "notes": "Inline ^i green; Index-typed locals mis-lower (issue #1894, runtime crash)."
+    "issue": "https://github.com/DavidObando/gsharp/issues/4350",
+    "notes": "^n is a first-class G# System.Index expression (ADR-0187); inline and saved Index values are green."
   },
   {
     "kind": "IndexerDeclaration",
@@ -1824,10 +1824,12 @@
   {
     "kind": "RangeExpression",
     "nodeType": "RangeExpressionSyntax",
-    "status": "Gap",
+    "status": "Translated",
+    "rule": "ADR-0187 \u00A72",
     "rationale": "None",
-    "issue": "https://github.com/DavidObando/gsharp/issues/1896",
-    "notes": "Lowers to .Slice(...) which gsc cannot resolve on arrays/strings."
+    "fixture": "tools/cs2gs/corpus/grid/G05-Collections-Console/Constructs/RangeExpression.cs",
+    "issue": "https://github.com/DavidObando/gsharp/issues/4350",
+    "notes": "Bracket slices and reusable System.Range values (including ^a..^b) keep native G# range syntax (ADR-0187)."
   },
   {
     "kind": "RecordDeclaration",

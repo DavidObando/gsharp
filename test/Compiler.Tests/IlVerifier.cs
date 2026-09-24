@@ -483,7 +483,7 @@ internal static class IlVerifier
         }
     }
 
-    private static string FindRepoRoot()
+    internal static string FindRepoRoot()
     {
         // Walk up from this assembly's location until we find a directory
         // containing `.config/dotnet-tools.json`. This keeps tool discovery

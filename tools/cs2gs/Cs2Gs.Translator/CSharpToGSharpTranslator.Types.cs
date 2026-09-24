@@ -559,10 +559,6 @@ public sealed partial class CSharpToGSharpTranslator
                 var guards = new List<GExpression>();
                 var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
-                // Issue #1967: `case Index i:`/`Index i =>` binds via a switch
-                // pattern designation, not a declarator — check the whole arm
-                // pattern tree here.
-                this.ReportIndexOrRangeDesignationsInPattern(arm.Pattern);
                 GPattern pattern = this.TranslateSwitchPattern(
                     arm.Pattern,
                     subject,
@@ -878,7 +874,6 @@ public sealed partial class CSharpToGSharpTranslator
                 var guards = new List<GExpression>();
                 var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
-                this.ReportIndexOrRangeDesignationsInPattern(arm.Pattern);
                 GPattern pattern = this.TranslateSwitchPattern(
                     arm.Pattern,
                     subject,
@@ -1051,9 +1046,6 @@ public sealed partial class CSharpToGSharpTranslator
                             var guards = new List<GExpression>();
                             var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
-                            // Issue #1967: same guard as the switch-expression arm
-                            // path above, for the switch-statement `case` form.
-                            this.ReportIndexOrRangeDesignationsInPattern(patternLabel.Pattern);
                             GPattern pattern = this.TranslateSwitchPattern(
                                 patternLabel.Pattern,
                                 subject,
@@ -1461,7 +1453,6 @@ public sealed partial class CSharpToGSharpTranslator
             foreach (SingleVariableDesignationSyntax designation in
                 node.Variable.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
             {
-                this.ReportIfIndexOrRangeTypedDesignation(designation);
             }
 
             if (names.Count >= 2)
@@ -2332,7 +2323,6 @@ public sealed partial class CSharpToGSharpTranslator
             // equivalent System.Linq method chain (`from … where … orderby …
             // select …` → `.Where(…).OrderBy(…).Select(…)`, ADR-0115 §B LINQ).
             FromClauseSyntax from = query.FromClause;
-            this.ReportIfIndexOrRangeTypedRangeVariable(from, from.Identifier, from.Type, from.Expression);
             GExpression current = this.TranslateExpression(from.Expression);
             GTypeReference rangeType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
 
@@ -2512,7 +2502,6 @@ public sealed partial class CSharpToGSharpTranslator
             // re-starts the scope as a single range variable over the projection.
             if (body.Continuation != null)
             {
-                this.ReportIfIndexOrRangeTypedRangeVariable(body.Continuation, body.Continuation.Identifier, resultTypeSymbol);
                 var continuationScope = new List<(string Name, GTypeReference Type, ISymbol Symbol)>
                 {
                     (
@@ -2540,7 +2529,6 @@ public sealed partial class CSharpToGSharpTranslator
         {
             var prologue = new List<GStatement>();
             Parameter param = this.BuildScopeParameter(scope);
-            this.ReportIfIndexOrRangeTypedRangeVariable(let, let.Identifier, this.context.GetTypeInfo(let.Expression).Type);
 
             // Issue #3348: as in `BuildScopeLambda`, the `let` value is evaluated
             // inside this Select lambda — hoist into its own prologue, not the
@@ -2580,7 +2568,6 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression current)
         {
             LambdaExpression collectionSelector = this.BuildScopeLambda(scope, from.Expression);
-            this.ReportIfIndexOrRangeTypedRangeVariable(from, from.Identifier, from.Type, from.Expression);
             GTypeReference newVarType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
             (string Name, GTypeReference Type, ISymbol Symbol) newVar = (
                 from.Identifier.ValueText,
@@ -2606,7 +2593,6 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression current)
         {
             GExpression inner = this.TranslateExpression(join.InExpression);
-            this.ReportIfIndexOrRangeTypedRangeVariable(join, join.Identifier, join.Type, join.InExpression);
             GTypeReference innerVarType = this.ResolveRangeVariableType(join.Type, join.InExpression, join);
             var innerVar = (
                 Name: join.Identifier.ValueText,

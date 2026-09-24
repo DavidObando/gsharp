@@ -66,7 +66,7 @@ Notable contextual roles: `prop`, `event`, `delegate`, `data`, `inline`, `partia
 
 ### Operators and punctuation
 
-Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`, and `>>>=`. Built-in operands use read/operate/write lowering; when the receiver type declares the matching compound-assignment operator, that in-place operator is called instead. `>>` is the signed (arithmetic) right shift, replicating the sign bit; `>>>` is the unsigned (logical) right shift, which always shifts in zero bits regardless of the operand's signedness. Prefix and postfix `++` and `--` are value-producing expressions on assignable numeric lvalues. The null-coalescing compound assignment `??=` writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`), and a leading `^n` marks a from-end index (`a[^1]`, `a[1..^1]`); see [Range and slice expressions](#range-and-slice-expressions). `@` begins annotations on declarations.
+Compound assignment recognizes `+=`, `-=`, `*=`, `/=`, `%=`, `^=`, `&=`, `|=`, `&^=`, `<<=`, `>>=`, and `>>>=`. Built-in operands use read/operate/write lowering; when the receiver type declares the matching compound-assignment operator, that in-place operator is called instead. `>>` is the signed (arithmetic) right shift, replicating the sign bit; `>>>` is the unsigned (logical) right shift, which always shifts in zero bits regardless of the operand's signedness. Prefix and postfix `++` and `--` are value-producing expressions on assignable numeric lvalues. The null-coalescing compound assignment `??=` writes the right-hand side into the left only when the lvalue currently reads as nil; see [Null-coalescing compound assignment](#null-coalescing-compound-assignment) under *Statements*. The `..` range operator slices a sliceable value inside an indexer (`a[lo..hi]`) and also forms a standalone `System.Range` value (`let r = 1..3`), and prefix `^n` is a first-class `System.Index` from-end expression (`a[^1]`, `let last = ^1`, `^3..^1`); prefix `~` is one's-complement; see [Range and slice expressions](#range-and-slice-expressions). `@` begins annotations on declarations.
 
 ### Integer literals
 
@@ -559,6 +559,8 @@ Function types are written `(T1, T2) -> R` — fully-parenthesized parameter typ
 
 Type declarations introduce aggregates with the aggregate keyword (`class`, `struct`, `enum`, `interface`) as the head — the legacy `type Name kind` form was removed / . Structs are value-like and may declare fields, **in-body instance methods**, properties, events, and `shared` static members; a struct in-body `func` binds as an instance method on the value type with a synthesized by-ref `this`, the same canonical, warning-free site classes use. Structs are constructed via primary constructors and struct literals; explicit `init(...)` constructors remain class-only. Classes are reference-like and can have primary constructors, explicit `init` constructors, base classes, interfaces, fields, methods, properties, events, and `shared` static members. Plain classes are sealed for inheritance unless marked `open`; overriding requires `override` and a compatible open base method. `sealed class` declares a Kotlin-style closed hierarchy (subclasses allowed in-package, exhaustiveness-bound in `switch`). Inside an instance member of a derived class, an `override` (or any other instance member) may invoke the **base class** implementation of an inherited virtual member non-virtually via the **base-class call** syntax `base.Member(args)` — the faithful mapping of C# `base.M(...)` — or the explicit bracketed form `base[BaseClass].Member(args)`. Postfix access applies normally to the result, as in `base.Member(args).Next()`. The call emits as `ldarg.0` followed by a non-virtual `call instance R BaseClass::Member(...)`, so the nearest base implementation runs without re-dispatching through the v-table; this lets an override delegate to the member it shadows without infinite recursion. The member is resolved by walking the base chain, so a grandparent's implementation is reached when the immediate base class does not declare its own override; parameters, generics, and return values are supported. `base.Member(...)` is valid only inside an instance member of a class; otherwise the call is rejected with GS0383. : the base class may be an **imported / BCL** type — a class deriving from a CLR base (e.g. `System.IO.Stream`, `System.IO.MemoryStream`, or simply `System.Object`) can delegate to an inherited virtual member via `base.Dispose(disposing)`, `base.ToString()`, `base.Position`, etc. The inherited member is resolved against the class's CLR base type (honoring `protected`/`public` accessibility and walking a user → user → BCL chain) and emits the same non-virtual `call`; a base call into an **abstract** BCL member with no implementation (e.g. `base.Read(...)` on `System.IO.Stream`) is rejected with GS0413 (matching C# CS0205). A missing member on any base reports GS0384, and a `base[Type]` selector that is not the actual base class reports GS0385 — see the diagnostics reference. A class method MAY be declared **abstract** by giving an `open func` a `;` no-body marker instead of a `{ … }` block — `open func Area() float64;` — the canonical G# spelling of a C# `abstract` method. An abstract method declares a virtual slot with no implementation (emitted as `MethodAttributes.Abstract | Virtual | NewSlot`, no IL body); it is only valid as an `open` member of an `open class` (otherwise GS0388). A class that declares — or inherits without overriding — an abstract method is itself **abstract**: it is emitted with `TypeAttributes.Abstract` and cannot be instantiated (constructing it is the compile error GS0386, never a runtime failure). A concrete (non-`open`) subclass must `override` every inherited abstract member (otherwise GS0387); an `open` subclass may leave them abstract and remain abstract itself. Abstract methods support parameters, generic type parameters, and reference- or value-typed (including `ref`) return types, and dispatch virtually through the base/abstract slot.
 
+**Construction versus same-named callables.** A call-shaped construction `T(args)` / `T[A](args)` competes with any callable of the same name in scope. A free (non-receiver) function, a function-valued local, or a member of the enclosing type named `T` shadows the type, so the call binds to that callable. A receiver-clause **extension** function never shadows a constructible source type of the same name: C# never considers an extension method for `new T(...)`, so `Slice[T](owner, 0, n, n)` constructs `Slice[T]` even when an extension `func (s Slice[T]) Slice[T](lo int32, hi int32, max int32)` has the same arity in bare form (ADR-0187 / issue #4350). Such an extension stays callable in receiver form (`s.Slice(1, 2, 4)`).
+
 `data class` and `data struct` synthesize structural ergonomics such as equality and copy/update support; `data class` is reference-typed, `data struct` is value-typed. The `record` keyword was removed; migrate to `data struct Name(...)` (or `data class Name(...)` when reference semantics are desired). `inline struct` is the inline value class form and must have exactly one field.
 
 ```gsharp title="samples/DataStruct.gs"
@@ -887,9 +889,21 @@ the indexer round-trips with C# and other CLR consumers. The enclosing type may
 be generic; index parameter and element types are substituted through the
 receiver's type arguments. An indexer declared without index parameters reports
 `GS0370`; one declared without an accessor body (an "auto-indexer") reports
-`GS0371`. Element **access** (`obj[i]`) currently binds single-parameter
-indexers; multi-parameter and overloaded indexers are reserved for a future
-revision.
+`GS0371`.
+
+A type may declare several indexers, including multi-parameter ones, as long
+as their index-parameter signatures differ (ADR-0187 / issue #4350). Each is
+emitted as its own `Item` property, exactly as C# emits overloaded indexers.
+An element access (`obj[i]`, `obj[row, column]`) selects the indexer by
+ordinary overload resolution over the written arguments; an ambiguous access
+reports `GS0266` and an access no indexer accepts reports `GS0267`. A second
+indexer with the same signature still reports `GS0102`. A derived type's
+indexer hides only a base indexer with the same signature. A
+`System.Index` value (`obj[^1]`, `obj[saved]`) binds to a declared
+`this[System.Index]` indexer. Writes and compound assignments through a
+multi-parameter indexer evaluate the receiver and each argument once, then
+store through the setter, or through a writable `ref` getter when there is no
+setter.
 
 A property declared on a **generic** type whose type mentions a class type
 parameter (`prop Value T`, or a constructed form such as `prop Items []T`) is
@@ -897,6 +911,20 @@ substituted through the receiver's type arguments on member access, exactly like
 a generic field: reading or writing `box.Value` where `box : Box[int32]` binds
 as `int32`. The accessor call on a constructed receiver is emitted
 against the constructed type so the substitution holds at run time.
+
+#### Get-only auto-properties
+
+A get-only auto-property (`prop Length int32 { get; }`) exposes only a getter,
+but — as in C# — it may be assigned inside an instance constructor (`init(...)`)
+of the **declaring** type, on the instance being constructed: `Length = n`,
+`this.Length = n`, compound assignment (`Length += 1`), and increment
+(`Count++`) all store its synthesized backing field directly. No setter or
+`init` accessor is emitted, so the property keeps a get-only CLR ABI. Anywhere
+else the property is read-only (`GS0127`): an ordinary method, another instance
+(`other.Length = n`), a derived type's constructor, and a lambda or local
+function inside the constructor (C# CS0200). A `shared` get-only auto-property
+has no user-writable static constructor body and is assigned only through its
+declaration.
 
 #### Init-only accessors
 
@@ -994,7 +1022,7 @@ Unary operators bind tighter than binary operators. Binary operators are left-as
 
 | Precedence | Operators | Meaning |
 | --- | --- | --- |
-| 8 | `+`, `-`, `!`, `^`, `*`, `&`, `<-`, `await` | unary |
+| 8 | `+`, `-`, `!`, `~`, `^` (from-end index), `*`, `&`, `<-`, `await` | unary |
 | 7 | `*`, `/`, `%`, `<<`, `>>`, `&`, `&^` | multiplicative, shifts, bitwise and, bit clear |
 | 6 | `+`, `-`, `\|`, `^` | additive, bitwise or, xor |
 | 5 | `==`, `!=`, `<`, `<=`, `>`, `>=`, `is`, `as` | equality, comparison, type test, safe cast |
@@ -1085,7 +1113,7 @@ Slicing a target that matches none of these shapes reports `GS0392`.
 
 #### From-end indices (`^n`)
 
-A **from-end index** marker `^n` (mirroring C# `System.Index` with `fromEnd: true`) is recognized in the *leading position* of an index or range bound. It measures the offset `n` from the end of the target, i.e. the concrete offset is `length - n`:
+A **from-end index** expression `^n` (ADR-0187) is a first-class `System.Index` value with `IsFromEnd == true`, exactly as in C#. It measures the offset `n` from the end of whatever it eventually indexes, i.e. the concrete offset is `length - n`:
 
 ```gsharp
 let xs = []int32{10, 20, 30, 40, 50}
@@ -1100,7 +1128,24 @@ let head = s[..^3]   // "abc"
 
 A bare `a[^n]` reads the single element `length - n` from an array/slice, a `string`, or any value with an `int Length`/`int Count` property plus a `this[int]` or `this[System.Index]` indexer. Inside a range, a from-end bound computes `length - n` at lowering time for the array/string/span-like paths, and is passed through as `System.Index(n, fromEnd: true)` when the target exposes a `this[System.Range]` indexer.
 
-The `^n` marker is only recognized at the *start* of an index/range bound. Elsewhere — including inside the offset expression itself (e.g. `a[^(x ^ y)]`) — `^` keeps its ordinary prefix one's-complement and infix bitwise-XOR meanings unchanged. For example, `a[i ^ j]` is an XOR-computed single index, and `^5` outside brackets is one's-complement.
+`^n` is valid in every expression context: it can be stored, passed, returned, and used later as an index. Its operand is converted to `int32` and evaluated once; creating the value does not inspect any collection length (`^0` is a valid value that fails only when a consuming operation rejects its offset):
+
+```gsharp
+let third System.Index = ^3
+let last = ^1            // last : System.Index
+let value = xs[third]    // same element as xs[^3]
+consume(^2)
+```
+
+Outside an index bracket, `^` is a unary operator at unary precedence (`^a.b` is `^(a.b)`). At the leading position of an index bound or after `..`, the marker keeps its historical reading of the whole bound expression as the operand (`a[^n + 1]` is `a[^(n + 1)]`). Binary `^` remains bitwise XOR (`a[i ^ j]`), and one's-complement is spelled `~x`:
+
+| spelling | meaning |
+|---|---|
+| `~x` | unary integer/enum one's-complement |
+| `x ^ y` | binary bitwise XOR |
+| `^x` | `System.Index` from-end expression |
+
+Parentheses do not restore a one's-complement reading: `(^x)` is still an Index. Write `(~x)` for a complemented integer.
 
 #### Standalone range values
 
@@ -1114,13 +1159,13 @@ let tail = 2..     // 2..end
 let head = ..^1    // start..^1 (drop the last)
 ```
 
-All four open forms (`lo..hi`, `lo..`, `..hi`, `..`) are supported. A bound becomes a `System.Index`: a plain value `v` is `Index(v)` (from-start), a `^n` marker is `Index(n, fromEnd: true)`, an open lower defaults to the start, and an open upper defaults to the end. The value is constructed as `new System.Range(start, end)`, matching how C# lowers a range expression, and is typed `System.Range`.
+All four open forms (`lo..hi`, `lo..`, `..hi`, `..`) are supported, and either bound may be a from-end index (`^3..`, `^4..^1`). A bound becomes a `System.Index`: a plain integer `v` is `Index(v)` (from-start), a `^n` marker is `Index(n, fromEnd: true)`, a bound that is already a `System.Index` value is used as-is, an open lower defaults to the start, and an open upper defaults to the end. Each written bound is evaluated exactly once, left to right. The value is constructed as `new System.Range(start, end)`, matching how C# lowers a range expression, and is typed `System.Range`.
 
 **Precedence.** The `..` operator binds *looser than every binary operator*, so each bound is a full expression: `1+2..3+4` parses as `(1+2)..(3+4)`. An open upper bound (`lo..`) ends at a closing delimiter, a separator, or a line break — so `let r = 1..` on its own line is the open range `1..end`, not a continuation onto the next statement.
 
 **Indexing by a range value.** A `System.Range`-typed value used as an index argument (`a[r]`, or the inline `a[(1..3)]`) slices the receiver using the *same* shapes as the syntactic `a[1..3]` form: arrays/slices copy via `Array.Copy`, `string` uses `Substring`, span-like values use `Slice`, and a `this[System.Range]` indexer is called with the value directly. The concrete `start`/`length` are resolved from the range value at runtime via `System.Index.GetOffset(length)`.
 
-**From-end restriction.** A from-end `^n` marker is allowed in the *upper* bound of a standalone range (`lo..^hi`, `..^hi`), where it is unambiguous because it follows `..`. A *leading* `^` at the very start of a standalone range is **not** allowed (`^a..b`), because it is genuinely ambiguous with the one's-complement unary operator (`^a` parses as `~a`); such a form reports `GS0410`. To slice from the end, index the value directly (`arr[^a..]`); to use a one's-complement value as a from-start lower bound, parenthesise it (`(^a)..b`).
+**From-end bounds.** Since ADR-0187 a standalone range may begin with a from-end bound (`^a..b`, `^4..^1`); the former `GS0410` restriction is retired. Saved `System.Index` values are valid bounds too (`let r = i..j`).
 
 ### Composite literals
 
@@ -1512,9 +1557,9 @@ Assignment        = identifier "=" Assignment
                   | identifier "." identifier "=" Assignment
                   | AccessorExpression ( "+=" | "-=" ) Assignment
                   | RangeExpression .
-RangeExpression   = BinaryExpression? ".." ( "^"? BinaryExpression )? | BinaryExpression .  (* standalone System.Range value, ; `..` binds looser than every binary operator, so `1+2..3+4` is `(1+2)..(3+4)`. A leading `^` is rejected (GS0410); a `^` upper bound is a from-end marker. Suppressed inside an index bound, where IndexArgument owns `..`. *)
+RangeExpression   = BinaryExpression? ".." ( "^"? BinaryExpression )? | BinaryExpression .  (* standalone System.Range value, ; `..` binds looser than every binary operator, so `1+2..3+4` is `(1+2)..(3+4)`. Either bound may be a `^` from-end Index expression (ADR-0187). Suppressed inside an index bound, where IndexArgument owns `..`. *)
 BinaryExpression  = PrefixExpression { BinaryOperator PrefixExpression } .
-PrefixExpression  = ( "+" | "-" | "!" | "^" | "*" | "&" | "<-" | "await" | "++" | "--" ) PrefixExpression | PostfixExpression .
+PrefixExpression  = ( "+" | "-" | "!" | "~" | "^" | "*" | "&" | "<-" | "await" | "++" | "--" ) PrefixExpression | PostfixExpression .  (* "~" one's-complement; "^" System.Index from-end (ADR-0187) *)
 PostfixExpression = PrimaryExpression { "!!" } { ( "." | "?." ) NameOrCall | ( "[" | "?[" ) IndexArgument "]" } ( "++" | "--" )? ( "with" "{" FieldEqualsList? "}" )? .
 (* Prefix `++x`/`--x` and postfix `x++`/`x--` are value-producing expressions. Prefix yields the value AFTER mutation; postfix yields the value BEFORE mutation. The operand must be an assignable variable, field, or indexed element; otherwise GS0402 is reported. They are also valid as standalone statements (`IncDecStmt`).. *)
 IndexArgument     = Expression | Expression? ".." Expression? .  (* the range form slices; see "Range and slice expressions" *)
@@ -2342,7 +2387,7 @@ Assignment        ::= identifier '=' Assignment
                     | (identifier | PostfixExpression) ('+=' | '-=') Assignment   (* event subscribe / unsubscribe *)
                     | ConditionalExpression
 ConditionalExpression ::= RangeExpression ('?' Assignment ':' Assignment)?   (* ternary,  *)
-RangeExpression   ::= NullCoalescingExpression? '..' ('^'? NullCoalescingExpression)? | NullCoalescingExpression   (* standalone System.Range value, ; `..` binds looser than all binary operators. A leading '^' is rejected (GS0410); a '^' upper bound is a from-end marker. Suppressed inside an index bound (IndexArgument owns '..'); re-enabled inside parens/argument lists. *)
+RangeExpression   ::= NullCoalescingExpression? '..' ('^'? NullCoalescingExpression)? | NullCoalescingExpression   (* standalone System.Range value, ; `..` binds looser than all binary operators. Either bound may be a '^' from-end Index expression (ADR-0187). Suppressed inside an index bound (IndexArgument owns '..'); re-enabled inside parens/argument lists. *)
 NullCoalescingExpression ::= WithExpression ('??' NullCoalescingExpression)?  (* right-assoc null-coalescing,  *)
 WithExpression    ::= BinaryExpression ('with' '{' FieldEqualsList? '}')*    (* non-destructive record update *)
 CompoundAssign    ::= '+=' | '-=' | '*=' | '/=' | '%=' | '^=' | '&=' | '|=' | '&^=' | '<<=' | '>>=' | '>>>=' | '??='   (* '>>>=' unsigned right shift assign,  *)
@@ -2356,7 +2401,7 @@ BinaryOperator    ::= '*' | '/' | '%' | '<<' | '>>' | '>>>' | '&' | '&^'
                     | '==' | '!=' | '<' | '<=' | '>' | '>='
                     | '&&'
                     | '||'
-PrefixExpression  ::= ('+' | '-' | '!' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression
+PrefixExpression  ::= ('+' | '-' | '!' | '~' | '^' | '*' | '&' | '<-' | 'await') PrefixExpression | PostfixExpression   (* '~' is one's-complement; '^' is a System.Index from-end expression (ADR-0187) *)
 PostfixExpression ::= PrimaryExpression PostfixOp*
 PostfixOp         ::= '!!' | ('.' | '?.') NameOrCall | ('[' | '?[') IndexArgumentList ']'
 IndexArgumentList ::= IndexArgument (',' IndexArgument)*

@@ -1269,6 +1269,88 @@ internal sealed partial class ExpressionBinder
     {
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
 
+        if (rectangular == null && target.Type is StructSymbol or InterfaceSymbol)
+        {
+            // ADR-0187 / issue #4350: a multi-parameter user indexer
+            // (`this[index int32, fromEnd bool]`) is read with the same
+            // comma-separated index list as a rectangular array.
+            ImmutableArray<BoundExpression> BindAll()
+            {
+                var bound = ImmutableArray.CreateBuilder<BoundExpression>(indexSyntaxes.Count);
+                foreach (var indexSyntax in indexSyntaxes)
+                {
+                    bound.Add(BindExpression(indexSyntax));
+                }
+
+                return bound.MoveToImmutable();
+            }
+
+            if (TryResolveUserIndexer(
+                target.Type,
+                indexSyntaxes.Count,
+                BindAll,
+                targetLocation,
+                out var multiIndexer,
+                out var multiSubstitution,
+                out var multiArguments,
+                out var multiReported,
+                out var multiView))
+            {
+                return BindUserIndexerRead(
+                    ViewIndexerReceiver(target, multiView, targetLocation),
+                    multiIndexer,
+                    multiSubstitution,
+                    (i, parameterType) => multiArguments.IsDefault
+                        ? conversions.BindConversion(indexSyntaxes[i], parameterType)
+                        : conversions.BindConversion(indexSyntaxes[i].Location, multiArguments[i], parameterType),
+                    targetLocation,
+                    indexSyntaxes.Count);
+            }
+
+            if (multiReported)
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+
+        if (rectangular == null
+            && target.Type is ImportedTypeSymbol or StructSymbol or NullabilityAnnotatedTypeSymbol
+            && target.Type.ClrType is { } multiClrTarget)
+        {
+            // Issue #4350: a multi-parameter IMPORTED indexer — the runtime's
+            // `Slice<T>.this[int index, bool fromEnd]`, reached through the
+            // native `slice[T]` view — resolves through the same CLR indexer
+            // overload resolution as a single index.
+            var multiClrArguments = ImmutableArray.CreateBuilder<BoundExpression>(indexSyntaxes.Count);
+            foreach (var indexSyntax in indexSyntaxes)
+            {
+                multiClrArguments.Add(BindExpression(indexSyntax));
+            }
+
+            var multiOutcome = this.memberLookup.TryResolveClrIndexer(
+                target.Type,
+                multiClrTarget,
+                multiClrArguments.MoveToImmutable(),
+                out var multiClrIndexer,
+                out var multiResolvedArguments);
+            if (multiOutcome == ClrIndexerResolutionOutcome.Resolved
+                && multiClrIndexer != null
+                && ClrMemberVisibility.GetVisibleGetter(multiClrIndexer, CanAccessInternalsOf(multiClrIndexer.DeclaringType)) != null)
+            {
+                var elementType = target.Type is ImportedTypeSymbol importedTarget
+                    ? MapErasedIndexerElementType(importedTarget, multiClrIndexer)
+                    : MemberLookup.GetClrPropertyTypeSymbol(target.Type, multiClrIndexer);
+                var convertedArguments = BindClrIndexerArguments(target.Type, multiClrIndexer, multiResolvedArguments, targetLocation);
+                return ConversionClassifier.AutoDereferenceRefReturn(
+                    new BoundClrIndexExpression(null, target, multiClrIndexer, convertedArguments, elementType));
+            }
+
+            if (ReportClrIndexerResolutionFailure(multiOutcome, targetLocation))
+            {
+                return new BoundErrorExpression(null);
+            }
+        }
+
         if (rectangular == null)
         {
             Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
@@ -1672,64 +1754,39 @@ internal sealed partial class ExpressionBinder
 
         // ADR-0118 / issue #944: index access on a user-defined type that
         // declares an indexer member (`prop this[i T] U`). Binds `obj[i]` to a
-        // call of the indexer getter (`obj.get_Item(i)`).
-        if (target.Type is StructSymbol userIndexTarget
-            && TryGetUserIndexer(userIndexTarget, out var readIndexer, out var readSubstitution)
-            && readIndexer.Parameters.Length == 1)
+        // call of the indexer getter (`obj.get_Item(i)`). ADR-0149 follow-up
+        // (issue #2370): an INTERFACE-typed receiver dispatches through the
+        // interface's own get_Item slot the same way. ADR-0187 / issue #4350:
+        // a type may declare several overloaded indexers; the one taking the
+        // written argument is selected by ordinary overload resolution.
+        if (target.Type is StructSymbol or InterfaceSymbol)
         {
-            if (readIndexer.GetterSymbol == null)
+            if (TryResolveUserIndexer(
+                target.Type,
+                argumentCount: 1,
+                () => ImmutableArray.Create(BoundIndexArg()),
+                indexSyntax.Location,
+                out var readIndexer,
+                out var readSubstitution,
+                out var readArguments,
+                out var readReported,
+                out var readView))
             {
-                Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
-                return new BoundErrorExpression(null);
+                return BindUserIndexerRead(
+                    ViewIndexerReceiver(target, readView, targetLocation),
+                    readIndexer,
+                    readSubstitution,
+                    (_, parameterType) => readArguments.IsDefault
+                        ? ConvertIndex(parameterType)
+                        : conversions.BindConversion(indexSyntax.Location, readArguments[0], parameterType),
+                    targetLocation,
+                    writtenArgumentCount: 1);
             }
 
-            var paramType = readSubstitution != null
-                ? Binder.SubstituteType(readIndexer.Parameters[0].Type, readSubstitution, scope.References.MapClrTypeToReferences)
-                : readIndexer.Parameters[0].Type;
-            var indexArg = ConvertIndex(paramType);
-            var elementType = readSubstitution != null
-                ? Binder.SubstituteType(readIndexer.Type, readSubstitution, scope.References.MapClrTypeToReferences)
-                : readIndexer.Type;
-            return new BoundUserInstanceCallExpression(
-                null,
-                target,
-                readIndexer.GetterSymbol,
-                ImmutableArray.Create(indexArg),
-                elementType);
-        }
-
-        // ADR-0149 follow-up (issue #2370): index access through an
-        // INTERFACE-typed receiver (`asIface[i]`, `b: IBox; b[0]`). Interfaces
-        // could not declare indexers at all before ADR-0149, so this branch
-        // never had a symbol to resolve; now that `prop this[...] T` is legal
-        // inside a G# interface body, dispatch it exactly like the concrete
-        // struct/class case above — `callvirt` through the interface's OWN
-        // get_Item slot (registered in `MethodHandles`/`ResolveUserInterfaceInstanceMethodToken`
-        // by the emitter regardless of whether the implementer satisfies the
-        // slot implicitly or via an explicit `(IFoo)` clause).
-        if (target.Type is InterfaceSymbol userIndexIface
-            && TryGetUserIndexer(userIndexIface, out var readIfaceIndexer, out var readIfaceSubstitution)
-            && readIfaceIndexer.Parameters.Length == 1)
-        {
-            if (readIfaceIndexer.GetterSymbol == null)
+            if (readReported)
             {
-                Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
                 return new BoundErrorExpression(null);
             }
-
-            var paramType = readIfaceSubstitution != null
-                ? Binder.SubstituteType(readIfaceIndexer.Parameters[0].Type, readIfaceSubstitution, scope.References.MapClrTypeToReferences)
-                : readIfaceIndexer.Parameters[0].Type;
-            var indexArg = ConvertIndex(paramType);
-            var elementType = readIfaceSubstitution != null
-                ? Binder.SubstituteType(readIfaceIndexer.Type, readIfaceSubstitution, scope.References.MapClrTypeToReferences)
-                : readIfaceIndexer.Type;
-            return new BoundUserInstanceCallExpression(
-                null,
-                target,
-                readIfaceIndexer.GetterSymbol,
-                ImmutableArray.Create(indexArg),
-                elementType);
         }
 
         if (!ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location)
@@ -2121,6 +2178,28 @@ internal sealed partial class ExpressionBinder
                     statements);
             }
 
+            // Review finding (#4350): a built-in operator over a writable
+            // ref-returning element must also call the getter exactly once —
+            // read and write through the hoisted reference rather than binding
+            // a second getter call for the store.
+            if (addressTemp != null)
+            {
+                if (AsyncBoundTreeQueries.HasAwait(rhsBound))
+                {
+                    Diagnostics.ReportManagedReference(
+                        resolvedCompoundRhsSyntax.Location,
+                        "a ref-returning assignment target cannot survive suspension; evaluate the value before selecting the target");
+                    return new BoundErrorExpression(outerSyntax);
+                }
+
+                scope.TryDeclareVariable(addressTemp);
+                statements.Add(new BoundVariableDeclaration(
+                    outerSyntax,
+                    addressTemp,
+                    Invariant.Required(elementAddress, "a hoisted element reference has an address")));
+                indexRead = userCompoundTarget;
+            }
+
             previousValue = CapturePostfixCompoundValue(
                 outerSyntax is CompoundIndexAssignmentExpressionSyntax { ReturnsPreviousValue: true },
                 outerSyntax,
@@ -2143,13 +2222,18 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(null);
             }
 
-            assignment = BindIndexedAssignmentToVariableWithBoundValue(
-                tempVar,
-                indexSyntax,
-                combined,
-                diagnosticLocation,
-                sharedIndex,
-                boundReceiver);
+            assignment = addressTemp != null
+                ? new BoundIndirectAssignmentExpression(
+                    outerSyntax,
+                    new BoundVariableExpression(null, addressTemp),
+                    conversions.BindConversion(resolvedCompoundRhsSyntax.Location, combined, compoundTarget.Type))
+                : BindIndexedAssignmentToVariableWithBoundValue(
+                    tempVar,
+                    indexSyntax,
+                    combined,
+                    diagnosticLocation,
+                    sharedIndex,
+                    boundReceiver);
         }
         else if (boundValueOverride != null)
         {
@@ -2388,7 +2472,8 @@ internal sealed partial class ExpressionBinder
             FunctionSymbol setter,
             BoundExpression index,
             BoundExpression value,
-            TypeSymbol elementType)
+            TypeSymbol elementType,
+            ImmutableArray<BoundExpression> trailingDefaults)
         {
             if (isReadOnlyReceiver)
             {
@@ -2410,7 +2495,7 @@ internal sealed partial class ExpressionBinder
                 null,
                 target,
                 setter,
-                ImmutableArray.Create<BoundExpression>(indexRead, resultRead));
+                trailingDefaults.Insert(0, indexRead).Add(resultRead));
             return new BoundBlockExpression(
                 null,
                 ImmutableArray.Create<BoundStatement>(
@@ -2673,89 +2758,78 @@ internal sealed partial class ExpressionBinder
 
         // ADR-0118 / issue #944: index assignment on a user-defined type that
         // declares an indexer member. Binds `obj[i] = v` to a call of the
-        // indexer setter (`obj.set_Item(i, v)`).
-        if (targetType is StructSymbol userIndexTarget
-            && TryGetUserIndexer(userIndexTarget, out var writeIndexer, out var writeSubstitution)
-            && writeIndexer.Parameters.Length == 1)
+        // indexer setter (`obj.set_Item(i, v)`). ADR-0149 follow-up (issue
+        // #2370): an INTERFACE-typed receiver dispatches through the
+        // interface's own set_Item slot. ADR-0187 / issue #4350: overloaded
+        // indexers are selected by the written index argument first.
+        if (targetType is StructSymbol or InterfaceSymbol)
         {
-            if (writeIndexer.SetterSymbol == null)
+            if (TryResolveUserIndexer(
+                targetType,
+                argumentCount: 1,
+                () => ImmutableArray.Create(BindIndexValue()),
+                indexSyntax.Location,
+                out var writeIndexer,
+                out var writeSubstitution,
+                out var writeArguments,
+                out var writeReported,
+                out var writeView))
             {
-                // Issue #4224: a writable-ref-returning indexer getter (no
-                // setter, but `ReturnRefKind == Ref`) stores through the
-                // getter instead of failing outright, mirroring the
-                // named-property write-through path (TryBindRefGetterWriteThrough)
-                // and the existing imported/CLR ref-indexer write-through
-                // below. A `ref readonly` getter stays protected.
-                if (writeIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref } refIndexerGetter)
+                target = ViewIndexerReceiver(target, writeView, diagnosticLocation);
+                var selectedIndexer = writeIndexer;
+                var paramType = SubstituteIndexerType(selectedIndexer.Parameters[0].Type, writeSubstitution);
+                BoundExpression ConvertWriteIndex() => writeArguments.IsDefault
+                    ? ConvertIndexValue(paramType)
+                    : conversions.BindConversion(indexSyntax.Location, writeArguments[0], paramType);
+
+                if (selectedIndexer.SetterSymbol == null)
                 {
-                    if (isReadOnlyReceiver)
+                    // Issue #4224: a writable-ref-returning indexer getter (no
+                    // setter, but `ReturnRefKind == Ref`) stores through the
+                    // getter instead of failing outright, mirroring the
+                    // named-property write-through path (TryBindRefGetterWriteThrough)
+                    // and the existing imported/CLR ref-indexer write-through
+                    // above. A `ref readonly` getter stays protected.
+                    if (targetType is StructSymbol
+                        && selectedIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref } refIndexerGetter)
                     {
-                        Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
-                        return new BoundErrorExpression(indexSyntax);
+                        if (isReadOnlyReceiver)
+                        {
+                            Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                            return new BoundErrorExpression(indexSyntax);
+                        }
+
+                        var refElementType = SubstituteIndexerType(refIndexerGetter.Type, writeSubstitution);
+                        var refIndexArg = ConvertWriteIndex();
+                        var refValue = BindValue(refElementType);
+                        var refGetCall = new BoundUserInstanceCallExpression(
+                            null,
+                            target,
+                            refIndexerGetter,
+                            TrailingIndexerDefaults(selectedIndexer, 1, writeSubstitution).Insert(0, refIndexArg),
+                            refElementType);
+                        return new BoundIndirectAssignmentExpression(null, new BoundAddressOfExpression(null, refGetCall, unmanaged: false), refValue);
                     }
 
-                    var refParamType = writeSubstitution != null
-                        ? Binder.SubstituteType(writeIndexer.Parameters[0].Type, writeSubstitution, scope.References.MapClrTypeToReferences)
-                        : writeIndexer.Parameters[0].Type;
-                    var refElementType = writeSubstitution != null
-                        ? Binder.SubstituteType(refIndexerGetter.Type, writeSubstitution, scope.References.MapClrTypeToReferences)
-                        : refIndexerGetter.Type;
-                    var refIndexArg = ConvertIndexValue(refParamType);
-                    var refValue = BindValue(refElementType);
-                    var refGetCall = new BoundUserInstanceCallExpression(null, target, refIndexerGetter, ImmutableArray.Create(refIndexArg), refElementType);
-                    return new BoundIndirectAssignmentExpression(null, new BoundAddressOfExpression(null, refGetCall, unmanaged: false), refValue);
+                    Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
+                    return new BoundErrorExpression(null);
                 }
 
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
-                return new BoundErrorExpression(null);
+                var elementType = SubstituteIndexerType(selectedIndexer.SetterSymbol.Parameters[^1].Type, writeSubstitution);
+                var indexArg = ConvertWriteIndex();
+                var value = BindValue(elementType);
+                return MakeUserIndexAssignment(
+                    selectedIndexer.SetterSymbol,
+                    indexArg,
+                    value,
+                    elementType,
+                    TrailingIndexerDefaults(selectedIndexer, 1, writeSubstitution));
             }
 
-            var paramType = writeSubstitution != null
-                ? Binder.SubstituteType(writeIndexer.Parameters[0].Type, writeSubstitution, scope.References.MapClrTypeToReferences)
-                : writeIndexer.Parameters[0].Type;
-            var setterValueType = writeIndexer.SetterSymbol.Parameters[^1].Type;
-            var elementType = writeSubstitution != null
-                ? Binder.SubstituteType(setterValueType, writeSubstitution, scope.References.MapClrTypeToReferences)
-                : setterValueType;
-
-            var indexArg = ConvertIndexValue(paramType);
-            var value = BindValue(elementType);
-            return MakeUserIndexAssignment(
-                writeIndexer.SetterSymbol,
-                indexArg,
-                value,
-                elementType);
-        }
-
-        // ADR-0149 follow-up (issue #2370): index assignment through an
-        // INTERFACE-typed receiver — the write-side counterpart of the read
-        // branch above. Dispatches via `callvirt` through the interface's own
-        // set_Item slot.
-        if (targetType is InterfaceSymbol writeIndexIface
-            && TryGetUserIndexer(writeIndexIface, out var writeIfaceIndexer, out var writeIfaceSubstitution)
-            && writeIfaceIndexer.Parameters.Length == 1)
-        {
-            if (writeIfaceIndexer.SetterSymbol == null)
+            if (writeReported)
             {
-                Diagnostics.ReportTypeNotIndexable(diagnosticLocation, targetType);
                 return new BoundErrorExpression(null);
             }
-
-            var paramType = writeIfaceSubstitution != null
-                ? Binder.SubstituteType(writeIfaceIndexer.Parameters[0].Type, writeIfaceSubstitution, scope.References.MapClrTypeToReferences)
-                : writeIfaceIndexer.Parameters[0].Type;
-            var setterValueType = writeIfaceIndexer.SetterSymbol.Parameters[^1].Type;
-            var elementType = writeIfaceSubstitution != null
-                ? Binder.SubstituteType(setterValueType, writeIfaceSubstitution, scope.References.MapClrTypeToReferences)
-                : setterValueType;
-
-            var indexArg = ConvertIndexValue(paramType);
-            var value = BindValue(elementType);
-            return MakeUserIndexAssignment(
-                writeIfaceIndexer.SetterSymbol,
-                indexArg,
-                value,
-                elementType);
         }
 
         if (!ReportClrIndexerResolutionFailure(clrIndexerOutcome, indexSyntax.Location)
@@ -3183,26 +3257,19 @@ internal sealed partial class ExpressionBinder
             }
         }
 
-        if (target.Type is StructSymbol userTarget
-            && TryGetUserIndexer(userTarget, out var userIndexer, out var substitution)
-            && userIndexer.Parameters.Length == 1
+        // ADR-0187 / issue #4350: a user type that declares a
+        // `this[System.Index]` indexer (among possibly several overloads)
+        // receives the Index value directly, as C# binds it.
+        if (target.Type is StructSymbol or InterfaceSymbol
+            && TryGetUserIndexerTaking(target.Type, typeof(System.Index), out var userIndexer, out var substitution, out var indexView)
             && userIndexer.GetterSymbol != null)
         {
-            var parameterType = substitution != null
-                ? Binder.SubstituteType(userIndexer.Parameters[0].Type, substitution, scope.References.MapClrTypeToReferences)
-                : userIndexer.Parameters[0].Type;
-            if (ClrTypeUtilities.AreSame(parameterType.ClrType, typeof(System.Index)))
-            {
-                var resultType = substitution != null
-                    ? Binder.SubstituteType(userIndexer.Type, substitution, scope.References.MapClrTypeToReferences)
-                    : userIndexer.Type;
-                return new BoundUserInstanceCallExpression(
-                    null,
-                    target,
-                    userIndexer.GetterSymbol,
-                    ImmutableArray.Create(conversions.BindConversion(targetLocation, indexValue, parameterType)),
-                    resultType);
-            }
+            return BindUserIndexerRead(
+                ViewIndexerReceiver(target, indexView, targetLocation),
+                userIndexer,
+                substitution,
+                (_, parameterType) => conversions.BindConversion(targetLocation, indexValue, parameterType),
+                targetLocation);
         }
 
         Diagnostics.ReportTypeNotIndexable(targetLocation, target.Type);
@@ -3292,19 +3359,23 @@ internal sealed partial class ExpressionBinder
             return new BoundBlockExpression(null, statements.ToImmutable(), assignment);
         }
 
-        if (targetType is StructSymbol userTarget
-            && TryGetUserIndexer(userTarget, out var userIndexer, out var substitution)
-            && userIndexer.Parameters.Length == 1
-            && userIndexer.SetterSymbol != null)
+        // ADR-0187 / issue #4350: a user `this[System.Index]` indexer
+        // receives the Index value directly; a ref-returning getter with no
+        // setter stores through the returned reference.
+        if (targetType is StructSymbol or InterfaceSymbol
+            && TryGetUserIndexerTaking(targetType, typeof(System.Index), out var userIndexer, out var substitution, out var indexView))
         {
-            var parameterType = substitution != null
-                ? Binder.SubstituteType(userIndexer.Parameters[0].Type, substitution, scope.References.MapClrTypeToReferences)
-                : userIndexer.Parameters[0].Type;
-            if (ClrTypeUtilities.AreSame(parameterType.ClrType, typeof(System.Index)))
+            target = ViewIndexerReceiver(target, indexView, diagnosticLocation);
+            var parameterType = SubstituteIndexerType(userIndexer.Parameters[0].Type, substitution);
+            if (userIndexer.SetterSymbol != null)
             {
-                var valueType = substitution != null
-                    ? Binder.SubstituteType(userIndexer.Type, substitution, scope.References.MapClrTypeToReferences)
-                    : userIndexer.Type;
+                if (isReadOnlyReceiver)
+                {
+                    Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                    return new BoundErrorExpression(null);
+                }
+
+                var valueType = SubstituteIndexerType(userIndexer.Type, substitution);
                 return new BoundUserInstanceCallExpression(
                     null,
                     target,
@@ -3312,6 +3383,28 @@ internal sealed partial class ExpressionBinder
                     ImmutableArray.Create(
                         conversions.BindConversion(diagnosticLocation, indexValue, parameterType),
                         bindValue(valueType)));
+            }
+
+            if (targetType is StructSymbol
+                && userIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref } refGetter)
+            {
+                if (isReadOnlyReceiver)
+                {
+                    Diagnostics.ReportCannotAssign(diagnosticLocation, "this[]");
+                    return new BoundErrorExpression(null);
+                }
+
+                var refElementType = SubstituteIndexerType(refGetter.Type, substitution);
+                var refGetCall = new BoundUserInstanceCallExpression(
+                    null,
+                    target,
+                    refGetter,
+                    ImmutableArray.Create(conversions.BindConversion(diagnosticLocation, indexValue, parameterType)),
+                    refElementType);
+                return new BoundIndirectAssignmentExpression(
+                    null,
+                    new BoundAddressOfExpression(null, refGetCall, unmanaged: false),
+                    bindValue(refElementType));
             }
         }
 
@@ -3446,11 +3539,11 @@ internal sealed partial class ExpressionBinder
 
         BoundExpression SrcLenRef() => new BoundVariableExpression(null, srcLenLocal);
 
-        var lowerBound = BindRangeBoundValue(range.LowerBound, SrcLenRef, new BoundLiteralExpression(null, 0));
+        var lowerBound = BindRangeBoundValue(BindRangeBound(range.LowerBound), SrcLenRef, new BoundLiteralExpression(null, 0), statements);
         var startLocal = DeclareRangeTemp("start", TypeSymbol.Int32, lowerBound, statements);
         var startRef = new BoundVariableExpression(null, startLocal);
 
-        var upperBound = BindRangeBoundValue(range.UpperBound, SrcLenRef, SrcLenRef());
+        var upperBound = BindRangeBoundValue(BindRangeBound(range.UpperBound), SrcLenRef, SrcLenRef(), statements);
 
         var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32)!;
         var lengthExpr = new BoundBinaryExpression(null, upperBound, subtractOp, startRef);
@@ -3462,24 +3555,64 @@ internal sealed partial class ExpressionBinder
             new BoundVariableExpression(null, lenLocal));
     }
 
-    // Issue #1022: bind a single range bound to an int32 offset. A from-end
-    // marker `^n` lowers to `srcLen - n`; a missing bound uses
-    // <paramref name="defaultValue"/>; otherwise the bound is the plain value.
-    private BoundExpression BindRangeBoundValue(ExpressionSyntax? boundSyntax, Func<BoundExpression> srcLenRef, BoundExpression defaultValue)
+    // ADR-0187: bind one written range bound exactly once. A `^n` marker keeps
+    // its int32 operand and from-end flag so the direct slicing paths can
+    // resolve it against the source length; a bound that is already a
+    // `System.Index` value (`i..j` over saved indices, `(^1)..`) is kept as an
+    // Index; any other bound converts to an int32 from-start offset.
+    private RangeBound? BindRangeBound(ExpressionSyntax? boundSyntax)
     {
         if (boundSyntax == null)
         {
-            return defaultValue;
+            return null;
         }
 
         if (boundSyntax is FromEndIndexExpressionSyntax fromEnd)
         {
-            var offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
-            var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32)!;
-            return new BoundBinaryExpression(null, srcLenRef(), subtractOp, offset);
+            return new RangeBound(conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32), FromEnd: true, IsIndexValue: false);
         }
 
-        return conversions.BindConversion(boundSyntax, TypeSymbol.Int32);
+        if (boundSyntax is DefaultExpressionSyntax or InterpolatedStringExpressionSyntax)
+        {
+            return new RangeBound(conversions.BindConversion(boundSyntax, TypeSymbol.Int32), FromEnd: false, IsIndexValue: false);
+        }
+
+        var bound = BindExpression(boundSyntax);
+        if (bound is not BoundErrorExpression && ClrTypeUtilities.AreSame(bound.Type?.ClrType, typeof(System.Index)))
+        {
+            return new RangeBound(bound, FromEnd: false, IsIndexValue: true);
+        }
+
+        return new RangeBound(conversions.BindConversion(boundSyntax.Location, bound, TypeSymbol.Int32), FromEnd: false, IsIndexValue: false);
+    }
+
+    // Issue #1022: resolve a bound range bound to an int32 offset. A from-end
+    // marker `^n` lowers to `srcLen - n`; an Index value resolves through
+    // `Index.GetOffset(srcLen)` (ADR-0187); a missing bound uses
+    // <paramref name="defaultValue"/>; otherwise the bound is the plain value.
+    private BoundExpression BindRangeBoundValue(
+        RangeBound? bound,
+        Func<BoundExpression> srcLenRef,
+        BoundExpression defaultValue,
+        ImmutableArray<BoundStatement>.Builder statements)
+    {
+        if (bound is not { } value)
+        {
+            return defaultValue;
+        }
+
+        if (value.IsIndexValue)
+        {
+            return BuildSystemIndexOffset(value.Value, srcLenRef(), statements);
+        }
+
+        if (value.FromEnd)
+        {
+            var subtractOp = BoundBinaryOperator.Bind(SyntaxKind.MinusToken, TypeSymbol.Int32, TypeSymbol.Int32)!;
+            return new BoundBinaryExpression(null, srcLenRef(), subtractOp, value.Value);
+        }
+
+        return value.Value;
     }
 
     private BoundExpression BindArraySlice(BoundExpression target, RangeExpressionSyntax range, TypeSymbol elementType)
@@ -3610,48 +3743,48 @@ internal sealed partial class ExpressionBinder
     // expression's bounds. Each bound becomes a `System.Index`: an open lower
     // defaults to the start (`Index(0, fromEnd: false)`), an open upper to the
     // end (`Index(0, fromEnd: true)`), a `^n` marker to `Index(n, fromEnd:
-    // true)`, and a plain value `v` to `Index(v, fromEnd: false)`. Shared by the
-    // `this[System.Range]` indexer-slice path (#1016) and the standalone range
-    // value `let r = 1..3` (#1038).
+    // true)`, a bound that is already a `System.Index` value is used as-is
+    // (ADR-0187: `^3..^1`, `i..j`), and a plain value `v` to `Index(v,
+    // fromEnd: false)`. Shared by the `this[System.Range]` indexer-slice path
+    // (#1016), the native-slice path, and the standalone range value (#1038).
+    // Bounds are bound, and therefore evaluated, exactly once, left to right.
     private BoundExpression BuildSystemRangeValue(RangeExpressionSyntax range)
+    {
+        var lower = BindRangeBound(range.LowerBound);
+        var upper = BindRangeBound(range.UpperBound);
+        return BuildSystemRangeValue(lower, upper);
+    }
+
+    private static BoundExpression BuildSystemRangeValue(RangeBound? lower, RangeBound? upper)
     {
         var indexCtor = typeof(System.Index).GetConstructor(new[] { typeof(int), typeof(bool) })!;
         var rangeCtor = typeof(System.Range).GetConstructor(new[] { typeof(System.Index), typeof(System.Index) })!;
         var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
         var rangeSym = TypeSymbol.FromClrType(typeof(System.Range));
 
-        BoundExpression MakeIndex(ExpressionSyntax? boundSyntax, bool defaultFromEnd)
+        BoundExpression MakeIndex(RangeBound? bound, bool defaultFromEnd)
         {
-            // Issue #1022: a `^n` bound becomes System.Index(n, fromEnd: true);
-            // the System.Range value resolves the concrete offset at runtime.
-            if (boundSyntax is FromEndIndexExpressionSyntax fromEnd)
+            if (bound is { IsIndexValue: true } indexValue)
             {
-                var endValue = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
-                return new BoundClrConstructorCallExpression(
-                    null,
-                    typeof(System.Index),
-                    indexCtor,
-                    ImmutableArray.Create<BoundExpression>(endValue, new BoundLiteralExpression(null, true)),
-                    indexSym);
+                return indexValue.Value;
             }
 
-            var value = boundSyntax != null
-                ? conversions.BindConversion(boundSyntax, TypeSymbol.Int32)
-                : new BoundLiteralExpression(null, 0);
+            // Issue #1022: a `^n` bound becomes System.Index(n, fromEnd: true);
+            // the System.Range value resolves the concrete offset at runtime.
+            var value = bound?.Value ?? new BoundLiteralExpression(null, 0);
+            var fromEnd = bound?.FromEnd ?? defaultFromEnd;
             return new BoundClrConstructorCallExpression(
                 null,
                 typeof(System.Index),
                 indexCtor,
-                ImmutableArray.Create<BoundExpression>(value, new BoundLiteralExpression(null, defaultFromEnd)),
+                ImmutableArray.Create<BoundExpression>(value, new BoundLiteralExpression(null, fromEnd)),
                 indexSym);
         }
 
         // Open lower defaults to the start (0, from-start); open upper defaults
         // to the end (^0, i.e. value 0 from-end).
-        var startIndex = MakeIndex(range.LowerBound, defaultFromEnd: false);
-        var endIndex = range.UpperBound != null
-            ? MakeIndex(range.UpperBound, defaultFromEnd: false)
-            : MakeIndex(null, defaultFromEnd: true);
+        var startIndex = MakeIndex(lower, defaultFromEnd: false);
+        var endIndex = MakeIndex(upper, defaultFromEnd: true);
 
         return new BoundClrConstructorCallExpression(
             null,
@@ -3661,29 +3794,25 @@ internal sealed partial class ExpressionBinder
             rangeSym);
     }
 
-    // Issue #1038: bind a standalone range expression (`let r = 1..3`) to a
-    // constructed `System.Range` value. A leading `^` at the very start is
-    // genuinely ambiguous with the one's-complement unary operator, so the
-    // parser reads `^a..` as `(~a)..`; reject that here (GS0410) so the from-end
-    // intent isn't silently misread — use an indexer (`arr[^a..]`) or
-    // parenthesise the complement (`(^a)..`).
-    private BoundExpression BindStandaloneRange(RangeExpressionSyntax range)
+    // ADR-0187: bind a first-class `^n` expression to a `System.Index` value.
+    private BoundExpression BindFromEndIndexValue(FromEndIndexExpressionSyntax syntax)
     {
-        if (range.LowerBound is UnaryExpressionSyntax leadingUnary
-            && leadingUnary.OperatorToken.Kind == SyntaxKind.HatToken)
-        {
-            Diagnostics.ReportFromEndMarkerNotAllowedInStandaloneRange(leadingUnary.OperatorToken.Location);
-            _ = BindExpression(leadingUnary.Operand);
-            if (range.UpperBound != null)
-            {
-                _ = BindExpression(range.UpperBound is FromEndIndexExpressionSyntax fe ? fe.Operand : range.UpperBound);
-            }
-
-            return new BoundErrorExpression(range);
-        }
-
-        return BuildSystemRangeValue(range);
+        _ = TryBindSystemIndexValue(syntax, out var indexValue);
+        return Invariant.Required(indexValue, "TryBindSystemIndexValue always binds a from-end index expression");
     }
+
+    // Issue #1038 / ADR-0187: bind a standalone range expression (`let r =
+    // 1..3`, `^4..^1`, `..`) to a constructed `System.Range` value.
+    private BoundExpression BindStandaloneRange(RangeExpressionSyntax range)
+        => BuildSystemRangeValue(range);
+
+    /// <summary>
+    /// ADR-0187: one bound written in a range expression, bound exactly once.
+    /// </summary>
+    /// <param name="Value">The bound int32 offset or <c>System.Index</c> value.</param>
+    /// <param name="FromEnd">Whether <paramref name="Value"/> is the operand of a written <c>^n</c> marker.</param>
+    /// <param name="IsIndexValue">Whether <paramref name="Value"/> is already a <c>System.Index</c>.</param>
+    private readonly record struct RangeBound(BoundExpression Value, bool FromEnd, bool IsIndexValue);
 
     // Issue #1038: slice a target by a runtime `System.Range` value (`a[r]`,
     // where `r : System.Range`). Mirrors the syntactic `a[1..3]` shapes from

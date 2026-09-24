@@ -408,19 +408,27 @@ It reports GS0254 rather than GS0591, which is accurate: by the time the
   scoping rules and adding an escape hatch in the same change would make neither
   reviewable.
 - No `unsafe` gate (D3), by decision, not by omission.
-- **A call's receiver contributes to the result's ref-safe-context
-  unconditionally**, whether or not the callee is `@UnscopedRef`. C# is more
+- ~~**A call's receiver contributes to the result's ref-safe-context
+  unconditionally**~~ — **resolved by ADR-0187 / issue #4350.** C# is more
   precise: a non-`[UnscopedRef]` struct method's `this` is `scoped ref` and is
   excluded from the result's scope, so csc accepts
-  `func k(in a Acc, ref y int32) ref readonly int32 { return ref a.Pick(ref y) }`
-  where G# reports GS0591. Pre-existing (the by-value spelling already reported
-  GS0254), strictly more conservative, and left alone here: narrowing it is its
-  own change with its own soundness argument, and doing it in the same commit
-  as a soundness fix would make neither reviewable.
+  `func k(in a Acc, ref y int32) ref readonly int32 { return ref a.Pick(ref y) }`.
+  The soundness argument is this ADR's own callee-side rule: a struct member
+  can only return a reference into its receiver when it is `@UnscopedRef`
+  (GS0589), so when the receiver's static type is a concrete struct and the
+  member is not `@UnscopedRef`, the receiver cannot be the reference's source.
+  `RefCapabilities.ReceiverContributesRefScope` now encodes that rule and is
+  consulted by `HasFunctionLocalRefScope`, `IsDefensivelyCopiedReceiverForwarding`,
+  the #4224 read-only-storage classifier, and the ref-getter write-through
+  check. Type-parameter and interface receivers keep the conservative answer,
+  because the implementation they dispatch to may be `@UnscopedRef` where the
+  called slot is not. A ref struct receiver's VALUE scope still contributes,
+  exactly like a by-value byref-like argument.
 - **G# has no `readonly` MEMBER concept.** C# exempts a `readonly` struct member
   from the defensive copy on a read-only receiver; G# has no `readonly func`, so
-  every native instance member forces the copy and therefore every forward of a
-  reference out of one through a read-only receiver is GS0591. That is strictly
+  every native instance member forces the copy. Since ADR-0187 that copy only
+  matters for an `@UnscopedRef` member, and forwarding a reference out of such
+  a member through a read-only receiver is GS0591. That is strictly
   more conservative than C#, never less — it rejects some code csc would accept,
   and accepts nothing csc rejects. `RefCapabilities.RequiresReadOnlyReceiverDefensiveCopy`
   already takes an `isReadOnlyMember` flag for the CLR-metadata case; a future

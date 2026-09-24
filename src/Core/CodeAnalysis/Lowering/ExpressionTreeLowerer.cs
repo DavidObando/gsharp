@@ -1063,7 +1063,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             SyntaxKind.PlusToken => nameof(System.Linq.Expressions.Expression.UnaryPlus),
             SyntaxKind.MinusToken => nameof(System.Linq.Expressions.Expression.Negate),
             SyntaxKind.BangToken => nameof(System.Linq.Expressions.Expression.Not),
-            SyntaxKind.HatToken => nameof(System.Linq.Expressions.Expression.Not),
+            SyntaxKind.TildeToken => nameof(System.Linq.Expressions.Expression.Not),
             _ => throw new NotSupportedException($"Unsupported CLR unary operator token '{expression.OperatorKind}'."),
         };
 

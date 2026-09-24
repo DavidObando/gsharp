@@ -1858,6 +1858,215 @@ internal sealed class UserTokenResolver
         return memberRef;
     }
 
+    private static bool IndexParametersMatch(
+        ParameterInfo[] clrParameters,
+        ImmutableArray<ParameterSymbol> parameters,
+        ImmutableArray<TypeParameterSymbol> declaringTypeParameters)
+    {
+        if (clrParameters.Length != parameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < clrParameters.Length; i++)
+        {
+            if (!IndexParameterTypeMatches(clrParameters[i].ParameterType, parameters[i].Type, declaringTypeParameters))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // Review finding (#4350): a CLR nested type flattens its enclosing types'
+    // generic parameters before its own, so `Outer[T].Inner[U]`'s `U` is CLR
+    // generic position 1 even though its G# ordinal is 0. Returns the
+    // declaring type's parameters in that CLR order.
+    private static ImmutableArray<TypeParameterSymbol> FlattenedTypeParameters(Symbol? type)
+    {
+        if (type is null)
+        {
+            return ImmutableArray<TypeParameterSymbol>.Empty;
+        }
+
+        var own = type switch
+        {
+            StructSymbol structSymbol => structSymbol.TypeParameters,
+            InterfaceSymbol interfaceSymbol => interfaceSymbol.TypeParameters,
+            _ => ImmutableArray<TypeParameterSymbol>.Empty,
+        };
+        var enclosing = FlattenedTypeParameters(type.ContainingType);
+        return enclosing.IsEmpty ? own : enclosing.AddRange(own.IsDefault ? ImmutableArray<TypeParameterSymbol>.Empty : own);
+    }
+
+    // Review finding (#4350): a symbolic index parameter has no reflected
+    // `ClrType`, but it must still discriminate between same-arity overloads
+    // (`this[T]` vs `this[int32]`, `this[A.Key]` vs `this[B.Key]`) rather than
+    // match anything. A type parameter matches only the generic parameter at
+    // the same position; a source type matches only the reflected type with
+    // the same namespace, name and arity, with its type arguments matched the
+    // same way; an array or slice matches element-wise. Any other symbolic
+    // shape is not matched, so no overload is picked by accident.
+    private static bool IndexParameterTypeMatches(
+        Type clrParameterType,
+        TypeSymbol parameterType,
+        ImmutableArray<TypeParameterSymbol> declaringTypeParameters)
+    {
+        // Review finding (#4350): a nullable parameter's `ClrType` is its
+        // UNDERLYING type, but a nullable value type reflects as `Nullable<X>`.
+        // Match the wrapper structurally: `Nullable<X>` against the underlying
+        // type, and a nullable reference type or unconstrained `T?` (which
+        // reflect as the bare type) against the underlying type directly.
+        if (parameterType is NullableTypeSymbol nullable)
+        {
+            if (!clrParameterType.IsGenericParameter
+                && clrParameterType.IsGenericType
+                && clrParameterType.GetGenericTypeDefinition().FullName == "System.Nullable`1")
+            {
+                return IndexParameterTypeMatches(clrParameterType.GetGenericArguments()[0], nullable.UnderlyingType, declaringTypeParameters);
+            }
+
+            return IndexParameterTypeMatches(clrParameterType, nullable.UnderlyingType, declaringTypeParameters);
+        }
+
+        if (parameterType.ClrType is { } parameterClrType)
+        {
+            return ClrTypeUtilities.AreSame(clrParameterType, parameterClrType);
+        }
+
+        switch (parameterType)
+        {
+            case TypeParameterSymbol typeParameter:
+                var flattenedPosition = declaringTypeParameters.IsDefault ? -1 : declaringTypeParameters.IndexOf(typeParameter);
+                return clrParameterType.IsGenericParameter
+                    && clrParameterType.GenericParameterPosition == (flattenedPosition >= 0 ? flattenedPosition : typeParameter.Ordinal);
+            case ArrayTypeSymbol array:
+                return clrParameterType.IsArray
+                    && clrParameterType.GetElementType() is { } arrayElement
+                    && IndexParameterTypeMatches(arrayElement, array.ElementType, declaringTypeParameters);
+            case SliceTypeSymbol slice:
+                return clrParameterType.IsArray
+                    && clrParameterType.GetElementType() is { } sliceElement
+                    && IndexParameterTypeMatches(sliceElement, slice.ElementType, declaringTypeParameters);
+            case StructSymbol structSymbol:
+                return SourceTypeMatches(clrParameterType, structSymbol, structSymbol.PackageName, AllTypeArguments(structSymbol), declaringTypeParameters);
+            case InterfaceSymbol interfaceSymbol:
+                return SourceTypeMatches(clrParameterType, interfaceSymbol, interfaceSymbol.PackageName, interfaceSymbol.TypeArguments, declaringTypeParameters);
+            case EnumSymbol enumSymbol:
+                return SourceTypeMatches(clrParameterType, enumSymbol, enumSymbol.PackageName, ImmutableArray<TypeSymbol>.Empty, declaringTypeParameters);
+            default:
+                return false;
+        }
+    }
+
+    private static bool SourceTypeMatches(
+        Type clrType,
+        TypeSymbol symbol,
+        string packageName,
+        ImmutableArray<TypeSymbol> typeArguments,
+        ImmutableArray<TypeParameterSymbol> declaringTypeParameters)
+    {
+        // Review finding: `OuterA.Key` and `OuterB.Key` share a namespace and
+        // simple name, so the declaring chain is part of the identity too.
+        if (clrType.IsGenericParameter || !DeclarationChainMatches(clrType, symbol, packageName))
+        {
+            return false;
+        }
+
+        var clrArguments = clrType.IsGenericType ? clrType.GetGenericArguments() : Type.EmptyTypes;
+        var symbolArguments = typeArguments.IsDefault ? ImmutableArray<TypeSymbol>.Empty : typeArguments;
+        if (clrArguments.Length != symbolArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < clrArguments.Length; i++)
+        {
+            if (!IndexParameterTypeMatches(clrArguments[i], symbolArguments[i], declaringTypeParameters))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    // A CLR nested type in a generic outer type lists the enclosing type's
+    // arguments before its own.
+    private static ImmutableArray<TypeSymbol> AllTypeArguments(StructSymbol structSymbol)
+    {
+        var own = structSymbol.TypeArguments.IsDefault ? ImmutableArray<TypeSymbol>.Empty : structSymbol.TypeArguments;
+        return structSymbol.EnclosingTypeArguments.IsDefaultOrEmpty
+            ? own
+            : structSymbol.EnclosingTypeArguments.AddRange(own);
+    }
+
+    private static bool DeclarationChainMatches(Type clrType, Symbol symbol, string packageName)
+    {
+        var clrName = clrType.Name;
+        var arityMarker = clrName.IndexOf('`', StringComparison.Ordinal);
+        if (!string.Equals(arityMarker < 0 ? clrName : clrName.Substring(0, arityMarker), symbol.Name, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        if (symbol.ContainingType is { } container)
+        {
+            return clrType.IsNested
+                && clrType.DeclaringType is { } declaringType
+                && DeclarationChainMatches(declaringType, container, packageName);
+        }
+
+        return !clrType.IsNested
+            && string.Equals(clrType.Namespace ?? string.Empty, packageName ?? string.Empty, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ADR-0187 / issue #4350: maps a property of a constructed type (or the
+    /// definition's own property) to the definition's property. A type may
+    /// declare several overloaded <c>Item</c> indexers, so the mapping is by
+    /// identity, then by position in the substituted member list (which
+    /// preserves the definition's order), and only then by name.
+    /// </summary>
+    /// <param name="constructedProperties">The constructed type's properties.</param>
+    /// <param name="definitionProperties">The definition's properties.</param>
+    /// <param name="property">The property to map.</param>
+    /// <returns>The definition's property.</returns>
+    private static PropertySymbol MapToDefinitionProperty(
+        ImmutableArray<PropertySymbol> constructedProperties,
+        ImmutableArray<PropertySymbol> definitionProperties,
+        PropertySymbol property)
+    {
+        if (definitionProperties.IsDefaultOrEmpty)
+        {
+            return property;
+        }
+
+        if (definitionProperties.Contains(property))
+        {
+            return property;
+        }
+
+        var position = constructedProperties.IsDefault ? -1 : constructedProperties.IndexOf(property);
+        if (position >= 0 && position < definitionProperties.Length)
+        {
+            return definitionProperties[position];
+        }
+
+        foreach (var candidate in definitionProperties)
+        {
+            if (candidate.Name == property.Name
+                && candidate.IsIndexer == property.IsIndexer
+                && candidate.Parameters.Length == property.Parameters.Length)
+            {
+                return candidate;
+            }
+        }
+
+        return property;
+    }
+
     /// <summary>
     /// Issue #989: resolves the right token for a call to a user property's
     /// get/set accessor. For a non-generic containing type returns the bare
@@ -1879,14 +2088,10 @@ internal sealed class UserTokenResolver
         var defProp = property;
         if (!ReferenceEquals(defType, containingType))
         {
-            foreach (var candidate in property.IsStatic ? defType.StaticProperties : defType.Properties)
-            {
-                if (candidate.Name == property.Name && candidate.IsIndexer == property.IsIndexer)
-                {
-                    defProp = candidate;
-                    break;
-                }
-            }
+            defProp = MapToDefinitionProperty(
+                property.IsStatic ? containingType.StaticProperties : containingType.Properties,
+                property.IsStatic ? defType.StaticProperties : defType.Properties,
+                property);
         }
 
         if (!this.cache.PropertyAccessorHandles.TryGetValue(defProp, out var handles))
@@ -1894,7 +2099,12 @@ internal sealed class UserTokenResolver
             if (containingType.ClrType != null)
             {
                 var bindingFlags = (property.IsStatic ? BindingFlags.Static : BindingFlags.Instance) | BindingFlags.Public | BindingFlags.NonPublic;
-                var importedProperty = containingType.ClrType.GetProperty(defProp.Name, bindingFlags);
+                // ADR-0187: an overloaded indexer shares its `Item` name with
+                // its siblings, so match the index-parameter list as well.
+                var importedProperty = containingType.ClrType
+                    .GetProperties(bindingFlags)
+                    .FirstOrDefault(candidate => candidate.Name == defProp.Name
+                        && IndexParametersMatch(candidate.GetIndexParameters(), defProp.Parameters, FlattenedTypeParameters(defType)));
                 var importedAccessor = wantSetter ? importedProperty?.SetMethod : importedProperty?.GetMethod;
                 if (importedAccessor != null)
                 {
@@ -1945,15 +2155,10 @@ internal sealed class UserTokenResolver
         var definitionProperty = property;
         if (!ReferenceEquals(definition, containingInterface))
         {
-            foreach (var candidate in definition.Properties)
-            {
-                if (candidate.Name == property.Name
-                    && candidate.IsIndexer == property.IsIndexer)
-                {
-                    definitionProperty = candidate;
-                    break;
-                }
-            }
+            definitionProperty = MapToDefinitionProperty(
+                containingInterface.Properties,
+                definition.Properties,
+                property);
         }
 
         if (!this.cache.PropertyAccessorHandles.TryGetValue(

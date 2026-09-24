@@ -1566,7 +1566,7 @@ internal sealed partial class MethodBodyEmitter
             ? this.outer.memberRefs.GetMethodEntityHandle(
                 method,
                 default(ImmutableArray<TypeSymbol?>),
-                conv.Type)
+                SymbolicConversionOwner(method, UnwrapNullable(conv.Source.Type), UnwrapNullable(conv.Type)))
             : this.outer.memberRefs.GetMethodReference(method));
         this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(method.ReturnType), conv.Type);
 
@@ -1702,9 +1702,24 @@ internal sealed partial class MethodBodyEmitter
             ? this.outer.memberRefs.GetMethodEntityHandle(
                 conversionMethod,
                 default(ImmutableArray<TypeSymbol?>),
-                conversion.Type)
+                SymbolicConversionOwner(conversionMethod, UnwrapNullable(conversion.Source.Type), UnwrapNullable(conversion.Type)))
             : this.outer.memberRefs.GetMethodReference(conversionMethod));
     }
+
+    // Issue #4350: an open imported conversion operator is parented at the
+    // symbolic TypeSpec of whichever side declares it — the target for
+    // `Memory`1::op_Implicit(!0[])` (#3932), the source for
+    // `Span`1::op_Implicit(Span<!0>) : ReadOnlySpan<!0>`.
+    private static TypeSymbol SymbolicConversionOwner(System.Reflection.MethodInfo method, TypeSymbol source, TypeSymbol target)
+        => source is ImportedTypeSymbol { OpenDefinition: { } sourceOpen }
+            && method.DeclaringType is { } declaring
+            && ClrTypeUtilities.AreSame(sourceOpen, declaring)
+            && !(target is ImportedTypeSymbol { OpenDefinition: { } targetOpen } && ClrTypeUtilities.AreSame(targetOpen, declaring))
+                ? source
+                : target;
+
+    private static TypeSymbol UnwrapNullable(TypeSymbol type)
+        => type is NullableTypeSymbol nullable ? nullable.UnderlyingType : type;
 
     private static bool IsNullableValueType(Type t)
     {

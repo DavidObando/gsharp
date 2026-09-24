@@ -156,32 +156,18 @@ public sealed partial class CSharpToGSharpTranslator
                             prefix.IsKind(SyntaxKind.PreIncrementExpression) ? "+=" : "-=");
                     }
 
-                    // Issue #1894: a C# from-end index `^n` (SyntaxKind.IndexExpression)
-                    // shares its `^` token with bitwise complement, and gsc's own G#
-                    // grammar only recognises a bare `^n` as "from-end" INSIDE an
-                    // index bracket (Parser.ParseIndexBound) — everywhere else `^n`
-                    // parses as the one's-complement operator. G# has no
-                    // `System.Index` value type, so a from-end index printed outside
-                    // a direct `[...]`/`?[...]` bracket (bound to a local, passed as
-                    // an argument, returned, used as a range bound, ...) would
-                    // silently re-bind to the wrong (complemented) integer instead of
-                    // gapping loudly. Only the direct bracket-argument position is
-                    // safe to emit as a bare `^n`; every other position reports a gap.
-                    if (prefix.IsKind(SyntaxKind.IndexExpression) && !IsDirectIndexBracketArgument(prefix))
+                    // ADR-0187: a C# from-end index `^n` is a first-class G#
+                    // `System.Index` expression in every position, so it
+                    // round-trips verbatim — as a bracket argument, a saved
+                    // local, an argument, or a range bound.
+                    if (prefix.IsKind(SyntaxKind.IndexExpression))
                     {
-                        this.context.Report(new TranslationDiagnostic(
-                            "IndexExpression",
-                            "a from-end index '^n' has no canonical G# form outside a direct '[...]' index bracket: G# has no 'System.Index' value type, so storing, returning, or otherwise reusing '^n' apart from the bracket it indexes cannot preserve from-end semantics (issue #1894).",
-                            prefix.GetLocation(),
-                            TranslationSeverity.Unsupported));
-                        return LiteralExpression.Int("0");
+                        return new FromEndIndexExpression(this.TranslateExpression(prefix.Operand));
                     }
 
-                    // G# uses the Go-style `^` for bitwise complement; C# spells it
-                    // `~`. Every other prefix operator token is identical.
-                    string prefixOp = prefix.IsKind(SyntaxKind.BitwiseNotExpression)
-                        ? "^"
-                        : prefix.OperatorToken.Text;
+                    // C# `~x` (one's-complement) and every other prefix
+                    // operator token are spelled identically in G# (ADR-0187).
+                    string prefixOp = prefix.OperatorToken.Text;
                     return new UnaryExpression(
                         prefixOp,
                         this.TranslateExpression(prefix.Operand));
@@ -209,6 +195,13 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case AnonymousObjectCreationExpressionSyntax anonymous:
                     return this.TranslateAnonymousObjectCreation(anonymous);
+
+                case RangeExpressionSyntax range:
+                    // ADR-0187: a reusable C# range value keeps its readable
+                    // `a..b` / `^a..^b` / `..` form as a G# System.Range value.
+                    return new RangeIndexExpression(
+                        range.LeftOperand != null ? this.TranslateExpression(range.LeftOperand) : null,
+                        range.RightOperand != null ? this.TranslateExpression(range.RightOperand) : null);
 
                 case ElementAccessExpressionSyntax elementAccess:
                     if (elementAccess.ArgumentList.Arguments.Count == 1 &&
@@ -248,15 +241,25 @@ public sealed partial class CSharpToGSharpTranslator
                     // plain index expression is now the correct lowering, with
                     // the same read semantics C# gives it. Issue #4220 also
                     // preserves the readonly form at its declaration.
+                    //
+                    // Issue #4350: a multi-parameter user/CLR indexer
+                    // (`slice[index, fromEnd]`) keeps EVERY argument, in source
+                    // order; only the single-`int32` indexer shape is coerced.
+                    GExpression indexedReceiver = this.TranslateReceiverWithNullForgiveness(elementAccess.Expression);
+                    if (elementAccess.ArgumentList.Arguments.Count > 1)
+                    {
+                        return new IndexExpression(
+                            indexedReceiver,
+                            this.TranslateIndexArguments(elementAccess.ArgumentList));
+                    }
+
                     GExpression index = elementAccess.ArgumentList.Arguments.Count > 0
                         ? this.CoerceIndexToInt32(
                             elementAccess,
                             this.TranslateIndexArgumentWithNullForgiveness(
                                 elementAccess.ArgumentList.Arguments[0]))
                         : new IdentifierExpression("nil");
-                    return new IndexExpression(
-                        this.TranslateReceiverWithNullForgiveness(elementAccess.Expression),
-                        index);
+                    return new IndexExpression(indexedReceiver, index);
 
                 case SimpleLambdaExpressionSyntax simpleLambda:
                     return this.TranslateLambda(simpleLambda);
@@ -414,6 +417,13 @@ public sealed partial class CSharpToGSharpTranslator
                         elementBinding.ArgumentList.Arguments[0].Expression is RangeExpressionSyntax conditionalRange)
                     {
                         return this.TranslateRangeSlice(bindingReceiver, conditionalRange);
+                    }
+
+                    if (elementBinding.ArgumentList.Arguments.Count > 1)
+                    {
+                        return new IndexExpression(
+                            bindingReceiver,
+                            this.TranslateIndexArguments(elementBinding.ArgumentList));
                     }
 
                     GExpression bindingIndex = elementBinding.ArgumentList.Arguments.Count > 0
@@ -839,12 +849,6 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return analyzerNullConditionalTypeTest;
             }
-
-            // Issue #1967: `x is Index i` (or any nested designation inside a
-            // recursive/positional pattern) declares `i` via a pattern designation,
-            // not a declarator — check the whole pattern tree here, the entry point
-            // for every non-loop-condition `is`-pattern.
-            this.ReportIndexOrRangeDesignationsInPattern(isPattern.Pattern);
 
             // ADR-0166 / issue #3409: a binding pattern whose designations G#
             // scopes natively is emitted verbatim (`x is T t && t.M`), keeping
@@ -2280,6 +2284,40 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
+        /// Issue #4350: translates every argument of a multi-parameter indexer
+        /// access, preserving source order (and so C#'s left-to-right single
+        /// evaluation of each argument).
+        /// </summary>
+        private List<GExpression> TranslateIndexArguments(BracketedArgumentListSyntax arguments)
+        {
+            // Review finding (#4350): a named index argument binds by name, so
+            // `grid[column: c, row: r]` targets `this[int row, int column]`
+            // in the opposite order to its text. G# index arguments are purely
+            // positional; an in-order named list simply drops its names, and a
+            // REORDERED one is reported rather than silently swapping the
+            // bound parameters.
+            for (var i = 0; i < arguments.Arguments.Count; i++)
+            {
+                ArgumentSyntax argument = arguments.Arguments[i];
+                if (argument.NameColon != null
+                    && this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } parameter }
+                    && parameter.Ordinal != i)
+                {
+                    this.context.Report(new TranslationDiagnostic(
+                        "ElementAccessExpression",
+                        $"named index argument '{argument.NameColon.Name.Identifier.ValueText}' is out of parameter order; G# index arguments are positional, so reordered named index arguments have no faithful translation (issue #4350).",
+                        argument.GetLocation(),
+                        TranslationSeverity.Unsupported));
+                    break;
+                }
+            }
+
+            return arguments.Arguments
+                .Select(this.TranslateIndexArgumentWithNullForgiveness)
+                .ToList();
+        }
+
+        /// <summary>
         /// Translates a CLR rectangular-array element access directly to native
         /// G# multi-index syntax. Runtime preserves left-to-right single
         /// evaluation, per-dimension bounds checks, and row-major storage.
@@ -3006,10 +3044,7 @@ public sealed partial class CSharpToGSharpTranslator
             return new IndexExpression(receiver, new RangeIndexExpression(start, end));
         }
 
-        private GExpression TranslateRangeBound(ExpressionSyntax bound) =>
-            bound is PrefixUnaryExpressionSyntax fromEnd && fromEnd.IsKind(SyntaxKind.IndexExpression)
-                ? new FromEndIndexExpression(this.TranslateExpression(fromEnd.Operand))
-                : this.TranslateExpression(bound);
+        private GExpression TranslateRangeBound(ExpressionSyntax bound) => this.TranslateExpression(bound);
 
         private GTypeReference ResolveExpressionType(ExpressionSyntax expression)
         {

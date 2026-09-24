@@ -157,7 +157,7 @@ public sealed class Issue3519PackageConstEmitTests
                 const Equal = 7 == 7 && 8 != 9
                 const Logical = false || true
                 const Cleared = 15u &^ 6u
-                const Complement = ^15u
+                const Complement = ~15u
                 const BitMix = (12u & 10u) | (1u ^ 3u)
                 const Coalesced = nil ?? "fallback"
                 const Asserted = "ok"!!
