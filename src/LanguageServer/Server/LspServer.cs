@@ -62,6 +62,8 @@ public sealed class LspServer
     private LanguageServerInitializationOptions initializationOptions = new LanguageServerInitializationOptions();
     private string pendingWorkspaceRootPath;
     private CancellationTokenSource backgroundLoadCts;
+    private TaskCompletionSource<bool> workspaceDiscoveryCompletionSource;
+    private Task workspaceDiscoveryCompletion = Task.CompletedTask;
     private bool workspaceDiscoveryPending;
 
     public LspServer(DocumentContentService documentContentService, WorkspaceState workspaceState, ILogger logger = null)
@@ -87,6 +89,18 @@ public sealed class LspServer
     {
         this.pendingWorkspaceRootPath = request?.RootPath ?? request?.RootUri?.GetFileSystemPath();
         this.workspaceDiscoveryPending = !string.IsNullOrEmpty(this.pendingWorkspaceRootPath);
+        if (this.workspaceDiscoveryPending)
+        {
+            this.workspaceDiscoveryCompletionSource =
+                new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            this.workspaceDiscoveryCompletion = this.workspaceDiscoveryCompletionSource.Task;
+        }
+        else
+        {
+            this.workspaceDiscoveryCompletionSource = null;
+            this.workspaceDiscoveryCompletion = Task.CompletedTask;
+        }
+
         this.DetectClientDiagnosticCapabilities(request?.Capabilities ?? default);
         this.initializationOptions = request?.InitializationOptions ?? new LanguageServerInitializationOptions();
 
@@ -125,6 +139,7 @@ public sealed class LspServer
         this.backgroundLoadCts?.Dispose();
         var cts = new CancellationTokenSource();
         this.backgroundLoadCts = cts;
+        var completion = this.workspaceDiscoveryCompletionSource;
         _ = Task.Run(() =>
         {
             try
@@ -185,6 +200,10 @@ public sealed class LspServer
             {
                 // Shutdown disposed the CTS while the load observed its token; benign.
             }
+            finally
+            {
+                completion?.TrySetResult(true);
+            }
         });
     }
 
@@ -194,6 +213,7 @@ public sealed class LspServer
         this.shutdownRequested = true;
         this.backgroundLoadCts?.Cancel();
         this.backgroundLoadCts?.Dispose();
+        this.workspaceDiscoveryCompletionSource?.TrySetResult(true);
         return null;
     }
 
@@ -793,6 +813,7 @@ public sealed class LspServer
         DocumentContent content;
         try
         {
+            await this.workspaceDiscoveryCompletion.WaitAsync(cancellationToken).ConfigureAwait(false);
             await this.gate.WaitAsync(cancellationToken).ConfigureAwait(false);
             try
             {

@@ -89,6 +89,60 @@ public class WorkspaceDiscoveryDiagnosticRefreshTests
     }
 
     [Fact]
+    public async Task DefinitionRequestedDuringDiscovery_WaitsForProjectAwareContent()
+    {
+        var rootDir = CreateSampleWorkspace();
+        try
+        {
+            var workspace = new WorkspaceState();
+            var server = new LspServer(new DocumentContentService(), workspace);
+            var fooPath = Path.Combine(rootDir, "Demo", "Foo.gs");
+            var uri = DocumentUri.FromFileSystemPath(fooPath);
+            var discoveryStarted = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            var continueDiscovery = new TaskCompletionSource<bool>(TaskCreationOptions.RunContinuationsAsynchronously);
+            server.TestBeforeWorkspaceDiscovery = () =>
+            {
+                discoveryStarted.TrySetResult(true);
+                continueDiscovery.Task.GetAwaiter().GetResult();
+            };
+
+            await server.InitializeAsync(new InitializeParams { RootPath = rootDir });
+            await server.DidOpenAsync(new DidOpenTextDocumentParams
+            {
+                TextDocument = new TextDocumentItem { Uri = uri, Text = FooSource },
+            });
+
+            using var doc = JsonDocument.Parse("{}");
+            server.Initialized(doc.RootElement.Clone());
+            await discoveryStarted.Task.WaitAsync(TimeSpan.FromSeconds(10));
+
+            var definitionTask = server.DefinitionAsync(
+                new DefinitionParams
+                {
+                    TextDocument = new TextDocumentIdentifier { Uri = uri },
+                    Position = LanguageServerTestHelpers.PositionOf(FooSource, "Bar"),
+                });
+
+            try
+            {
+                await Task.Delay(100);
+                Assert.False(definitionTask.IsCompleted);
+            }
+            finally
+            {
+                continueDiscovery.TrySetResult(true);
+            }
+
+            var definition = Assert.Single(await definitionTask);
+            Assert.EndsWith("Bar.gs", definition.Uri.GetFileSystemPath());
+        }
+        finally
+        {
+            Directory.Delete(rootDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public async Task PullClient_DiscoveryFailure_RestoresSemanticDiagnostics()
     {
         var rootDir = CreateSampleWorkspace();
