@@ -1075,6 +1075,65 @@ internal static class PInvokeBinder
     }
 
     /// <summary>
+    /// Issue #4370: reports GS0326 when an INSTANCE method of a class or
+    /// struct carries <c>@DllImport</c> or <c>@LibraryImport</c>. The CLR
+    /// represents every P/Invoke as a static method (C# requires
+    /// <c>static</c> too), so the G# spelling is a member of the type's
+    /// <c>shared { }</c> block.
+    /// </summary>
+    /// <param name="method">The instance method, with its attributes bound.</param>
+    /// <param name="syntax">The originating function declaration.</param>
+    /// <param name="diagnostics">The diagnostics bag for this binder.</param>
+    /// <returns><c>true</c> when the method carries a P/Invoke attribute (and was reported).</returns>
+    internal static bool ReportPInvokeOnInstanceMethod(
+        FunctionSymbol method,
+        FunctionDeclarationSyntax syntax,
+        DiagnosticBag diagnostics)
+    {
+        if (KnownAttributes.FindDllImport(method.Attributes) == null
+            && KnownAttributes.FindLibraryImport(method.Attributes) == null)
+        {
+            return false;
+        }
+
+        diagnostics.ReportDllImportInvalidFunctionShape(
+            syntax.Identifier.Location,
+            method.Name,
+            "instance methods are not supported; P/Invoke methods are static, so declare it inside the type's 'shared { }' block");
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4370: reports GS0326 when a <c>shared</c>-block P/Invoke
+    /// (<paramref name="function"/>, already confirmed a P/Invoke) belongs to
+    /// a generic type or a type nested in one. The CLR refuses to load a
+    /// P/Invoke method whose declaring type is generic (csc reports CS7042
+    /// for the same shape), so this is a compile-time error rather than a
+    /// TypeLoadException at first call.
+    /// </summary>
+    /// <param name="function">The <c>shared</c>-block P/Invoke method.</param>
+    /// <param name="owner">The declaring class or struct.</param>
+    /// <param name="syntax">The originating function declaration.</param>
+    /// <param name="diagnostics">The diagnostics bag for this binder.</param>
+    internal static void ReportPInvokeInGenericType(
+        FunctionSymbol function,
+        StructSymbol owner,
+        FunctionDeclarationSyntax syntax,
+        DiagnosticBag diagnostics)
+    {
+        if (owner.TypeParameters.IsDefaultOrEmpty
+            && StructSymbol.CollectEnclosingTypeParameters(owner).IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        diagnostics.ReportDllImportInvalidFunctionShape(
+            syntax.Identifier.Location,
+            function.Name,
+            "members of generic types are not supported");
+    }
+
+    /// <summary>
     /// ADR-0096 / issue #762: walks the parameter symbols of a
     /// non-P/Invoke function and reports GS0360 for every parameter
     /// that carries a <c>@MarshalAs(...)</c> annotation. Called from

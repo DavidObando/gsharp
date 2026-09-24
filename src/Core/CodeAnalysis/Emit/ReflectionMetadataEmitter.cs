@@ -582,6 +582,26 @@ internal sealed class ReflectionMetadataEmitter
         }
     }
 
+    // ADR-0092 / issue #758: a LibraryImport function emits TWO MethodDef
+    // rows — the user-visible managed stub (already planned by the caller at
+    // `row - 1`) and, immediately after it, the hidden blittable inner
+    // P/Invoke the stub calls (FunctionEmitter.EmitLibraryImportFunction
+    // writes them back to back). Issue #4370: every planner that reserves a
+    // row for a function that may be a P/Invoke — package-level functions
+    // AND class/struct `shared` members — must reserve the inner row too, or
+    // the emitter's LibraryImportInnerHandles lookup has nothing to find.
+    // Returns the next free row.
+    private int PlanLibraryImportInnerRow(FunctionSymbol function, int row)
+    {
+        if (function.PInvokeMetadata is { IsLibraryImport: true })
+        {
+            this.cache.LibraryImportInnerHandles[function] = MetadataTokens.MethodDefinitionHandle(row);
+            return row + 1;
+        }
+
+        return row;
+    }
+
     // Issue #3883: whether <paramref name="c"/> is the class that declares the
     // authored async `Main`, and therefore owns the synthesized `<Main>$`
     // entry-point stub's MethodDef row.
@@ -2216,6 +2236,7 @@ internal sealed class ReflectionMetadataEmitter
                     var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                     aggregateMethodHandles[m] = handle;
                     this.cache.MethodHandles[m] = handle;
+                    methodRow = this.PlanLibraryImportInnerRow(m, methodRow);
                 }
 
                 // Issue #3883: one extra row on THIS class for the synthesized
@@ -2394,6 +2415,7 @@ internal sealed class ReflectionMetadataEmitter
                     var handle = MetadataTokens.MethodDefinitionHandle(methodRow++);
                     aggregateMethodHandles[m] = handle;
                     this.cache.MethodHandles[m] = handle;
+                    methodRow = this.PlanLibraryImportInnerRow(m, methodRow);
                 }
             }
 
@@ -3243,15 +3265,7 @@ internal sealed class ReflectionMetadataEmitter
             foreach (var fn in functionsByPackage[pkg])
             {
                 this.cache.FunctionHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
-
-                // ADR-0092 / issue #758: a LibraryImport function emits TWO
-                // MethodDef rows — the user-visible managed stub (handle above)
-                // and a hidden blittable inner P/Invoke that the stub calls.
-                if (fn.IsPInvoke
-                    && Invariant.Required(fn.PInvokeMetadata, "a P/Invoke function has P/Invoke metadata").IsLibraryImport)
-                {
-                    this.cache.LibraryImportInnerHandles[fn] = MetadataTokens.MethodDefinitionHandle(nextRow++);
-                }
+                nextRow = this.PlanLibraryImportInnerRow(fn, nextRow);
             }
 
             if (this.emitCtx.Program.EntryPoint is not null && pkg == entryPointPackage && !entryPointIsClassOwned)

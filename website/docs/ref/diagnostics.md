@@ -1265,7 +1265,7 @@ blanket-rejection at GS0211 has been retired.
 | GS0323 | Error | P/Invoke parameter or return type `{type}` is not in the supported marshalling table. | `@DllImport("libc") func F(o Object) int32;` — `Object` is not marshallable in v1. |
 | GS0324 | Error | Function `{name}` is annotated `@DllImport` but has a managed body; P/Invoke declarations must use a `;` body. | `@DllImport("libc") func F() int32 { return 0 }`. |
 | GS0325 | Error | Function `{name}` has no body; only `@DllImport`-annotated functions may use a `;` body marker. | `func F() int32;` without a preceding `@DllImport`. |
-| GS0326 | Error | `@DllImport` is not supported on this function shape (`{reason}`). | `@DllImport("libc") async func F() int32;` — async functions, generic functions, instance/extension methods, `shared` members, and ref-returning functions are all disallowed in v1. |
+| GS0326 | Error | `@DllImport` is not supported on this function shape (`{reason}`). | `@DllImport("libc") async func F() int32;` — async functions, generic functions, instance/extension methods, members of generic types, and ref-returning functions are all disallowed. A static member in a class or struct `shared { … }` block is supported (issue #4370). |
 | GS0327 | Error | `@DllImport` `CharSet` value `{value}` is not recognised; valid values are `CharSet.Ansi`, `CharSet.Unicode`, `CharSet.Auto`, and `CharSet.None`. | `@DllImport("libc", CharSet: "Utf8")`. |
 | GS0328 | Error | `@DllImport` `CallingConvention` value `{value}` is not recognised; valid values are `CallingConvention.Winapi`, `Cdecl`, `StdCall`, `ThisCall`, and `FastCall`. | `@DllImport("libc", CallingConvention: "MyCall")`. |
 | GS0329 | Error | `@DllImport` `EntryPoint` must be a non-empty string. | `@DllImport("libc", EntryPoint: "")`. |
@@ -1295,9 +1295,10 @@ Cause/fix:
   or remove the `@DllImport` annotation.
 - **GS0325** — add `@DllImport("libname")` above the declaration,
   or replace the `;` with a managed body `{ ... }`.
-- **GS0326** — make the function a plain top-level `func`: not
-  `async`, not generic, no receiver, no `ref` return, no `shared`
-  block. These shapes are not supported in this release.
+- **GS0326** — make the function a plain top-level `func` or a
+  static member of a non-generic class or struct (inside its
+  `shared { … }` block): not `async`, not generic, no receiver, not an
+  instance method, no `ref` return.
 - **GS0327** / **GS0328** — use one of the documented enum members
   (e.g. `CharSet.Ansi`, `CallingConvention.Cdecl`).
 - **GS0329** — `EntryPoint` must be a non-empty literal string;
