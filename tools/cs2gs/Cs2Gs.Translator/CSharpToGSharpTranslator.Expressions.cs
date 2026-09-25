@@ -1645,13 +1645,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // the redundant type clause (issue #1737, `let name = n.Name`).
                 // Without the `!!` the local is `T!`, and every later use of
                 // it (`Wrap(name)`) would infer from `T!` in turn.
-                case EqualsValueClauseSyntax
-                {
-                    Parent: VariableDeclaratorSyntax
-                    {
-                        Parent: VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax },
-                    },
-                }:
+                case EqualsValueClauseSyntax clause when LocalDeclarationOf(clause) != null:
                     return true;
 
                 // An element whose array or collection type is inferred from it.
@@ -1662,6 +1656,22 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return false;
             }
+        }
+
+        // The local declaration whose initializer is <paramref name="clause"/>,
+        // or null when it initializes something else (a field, a property, a
+        // parameter default). Written as plain type tests: cs2gs translates
+        // itself, and a nested property pattern here would spill.
+        private static VariableDeclarationSyntax LocalDeclarationOf(EqualsValueClauseSyntax clause)
+        {
+            if (clause.Parent is not VariableDeclaratorSyntax declarator
+                || declarator.Parent is not VariableDeclarationSyntax declaration
+                || declaration.Parent is not LocalDeclarationStatementSyntax)
+            {
+                return null;
+            }
+
+            return declaration;
         }
 
         // ADR-0186 step 6 (PR 0): whether a lambda's delegate type is inferred
@@ -1676,13 +1686,8 @@ public sealed partial class CSharpToGSharpTranslator
             // inferred local.
             SyntaxNode node = SkipValuePreservingParents(lambda);
 
-            if (node.Parent is EqualsValueClauseSyntax
-                {
-                    Parent: VariableDeclaratorSyntax
-                    {
-                        Parent: VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax } declaration,
-                    },
-                })
+            if (node.Parent is EqualsValueClauseSyntax clause
+                && LocalDeclarationOf(clause) is { } declaration)
             {
                 return declaration.Type.IsVar;
             }
