@@ -3,10 +3,12 @@
 // </copyright>
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Loading;
@@ -21,6 +23,11 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
+        // Issue #4356 follow-up: DeclaringCompilationPromotes' usage-scan
+        // results, per declaring compilation (see there).
+        private static readonly ConditionalWeakTable<CSharpCompilation, ConcurrentDictionary<ISymbol, bool>>
+            DeclaringUsageScans = new ConditionalWeakTable<CSharpCompilation, ConcurrentDictionary<ISymbol, bool>>();
+
         private HashSet<string> repositorySharedDocumentPaths;
 
         // Issue #4146 (Copilot review of #4128's fix): lazily-built cache
@@ -215,14 +222,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            var key = (source, scope);
-            if (!this.state.UsedAsNullableCache.TryGetValue(key, out bool used))
-            {
-                used = ScopeUsesAsNullable(owner.GetSemanticModel(scope.SyntaxTree), source, scope);
-                this.state.UsedAsNullableCache[key] = used;
-            }
-
-            return used;
+            // The answer depends only on the declaring compilation and the
+            // member, so it is cached per compilation for the whole run rather
+            // than per consuming document: a test project reads the same few
+            // members from thousands of sites.
+            return DeclaringUsageScans
+                .GetValue(owner, _ => new ConcurrentDictionary<ISymbol, bool>(SymbolEqualityComparer.Default))
+                .GetOrAdd(
+                    source,
+                    member => ScopeUsesAsNullable(owner.GetSemanticModel(scope.SyntaxTree), member, scope));
         }
 
         // Promotes <paramref name="type"/> to its nullable (`T?`) form when the
