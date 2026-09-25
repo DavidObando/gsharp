@@ -4608,8 +4608,14 @@ internal sealed partial class ExpressionBinder
         int? receiverStart,
         CallExpressionSyntax ce)
     {
+        // Value-ness is asked of the SYMBOL, as SmartCastStability asks it, not
+        // of `UnderlyingType.ClrType`: a receiver whose underlying type has no
+        // CLR type while binding (a same-compilation class, a normalized
+        // `sequence[...]`) is still a nilable reference and must not slip
+        // through as "not known".
         if (receiver.Type is not NullableTypeSymbol nullableReceiver
-            || nullableReceiver.UnderlyingType.ClrType is not { IsValueType: false })
+            || NullableLifting.IsValueTypeNullable(nullableReceiver)
+            || NullableLifting.IsUserValueTypeNullable(nullableReceiver))
         {
             return false;
         }

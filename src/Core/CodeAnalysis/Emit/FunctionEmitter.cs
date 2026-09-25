@@ -684,11 +684,15 @@ internal sealed class FunctionEmitter
         // when gsc started rejecting calls on a `T?` receiver:
         // `await service.RunAsync(opts, ct).ConfigureAwait(false)` across a
         // G# assembly boundary).
-        var returnFlags = asyncPlan == null
+        //
+        // An async ENTRY POINT is the exception: EncodeFunctionSignature emits
+        // `function.Type` (void / int32 / uint32) for it, not the task (issue
+        // #1904: the kickoff blocks on the task and unwraps the result), so its
+        // flags are those of `function.Type`, exactly like a non-async method.
+        var drivenSynchronously = isEntryPoint && asyncPlan?.StateMachine.BuilderInfo.TaskProperty != null;
+        var returnFlags = asyncPlan == null || drivenSynchronously
             ? NullableFlagsBuilder.Build(function.Type)
-            : isEntryPoint && asyncPlan.StateMachine.BuilderInfo.TaskProperty != null
-                ? ImmutableArray<byte>.Empty
-                : AsyncKickoffReturnFlags(function, asyncPlan);
+            : AsyncKickoffReturnFlags(function, asyncPlan);
         var paramFlagsList = new List<ImmutableArray<byte>>();
         foreach (var p in function.EmittedParameters)
         {

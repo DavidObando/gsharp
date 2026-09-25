@@ -53,6 +53,12 @@ public sealed class Issue4287StatedNullableReceiverCallTests
     [InlineData("func use(s string?) bool { return s.StartsWith(\"a\") }", "")]
     [InlineData("func use(o object?) string? { return o.ToString() }", "")]
 
+    // A G# class deriving from an imported one has no CLR type while binding,
+    // so its inherited imported method resolves on another path; the gate
+    // must not depend on the receiver's CLR type to see a reference `T?`.
+    [InlineData("class MyError : Exception {\n    init() : base(\"m\") { }\n}\nfunc use(e MyError?) Exception { return e.GetBaseException() }", "")]
+    [InlineData("func use[T class](x T?) string { return x.ToString() }", "")]
+
     // Cases 5, 11 and 12: a stated `string?` return, chained with no syntax
     // of its own for the receiver.
     [InlineData("", "    Console.WriteLine(Path.GetDirectoryName(\"/\").ToUpper())")]
