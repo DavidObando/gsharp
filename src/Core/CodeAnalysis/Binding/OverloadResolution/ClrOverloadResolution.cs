@@ -389,13 +389,11 @@ internal static class ClrOverloadResolution
         // generic method invoked with an explicit type argument (e.g.
         // `Task.FromResult[int32](default)`) stays applicable; the concrete-typed
         // default is materialized against the resolved parameter after selection.
-        // Issue #4400: a by-ref target is classified by its pointee, exactly as a
-        // plain value argument's is below (ADR-0039 peel), so `S(default)` for
-        // `S(in long)` stays applicable and binds like C# (a readonly temp). A
-        // `ref`/`out` slot still rejects it afterwards (ValidateRefArguments).
+        // Issue #4400: an `in` slot accepts it too, but only the candidate loops
+        // can tell `in` from `ref`/`out` (ClassifyArgumentAtParameter).
         if (ReferenceEquals(source, DefaultLiteralArgumentType))
         {
-            return ImplicitConversionKind.Identity;
+            return target.IsByRef ? ImplicitConversionKind.None : ImplicitConversionKind.Identity;
         }
 
         // Issue #3907: a by-ref argument over a same-compilation user reference
@@ -1898,6 +1896,24 @@ internal static class ClrOverloadResolution
 
         return true;
     }
+
+    // Issue #4400: classifies an argument against a candidate's resolved CLR
+    // parameter. Identical to ClassifyImplicit, except that an untyped
+    // `default` is applicable to an `in` (readonly by-ref) slot, as in C# (it is
+    // materialized at the pointee and passed through a readonly temp). A
+    // `ref`/`out` slot still rejects it, so an `M(int)` / `M(ref int)` overload
+    // set keeps selecting `M(int)` for `M(default)`.
+    private static ImplicitConversionKind ClassifyArgumentAtParameter(
+        ParameterInfo parameter,
+        Type target,
+        Type? source,
+        Func<Type, Type, bool>? supplementaryInterfaceCheck)
+        => ReferenceEquals(source, DefaultLiteralArgumentType)
+            && target.IsByRef
+            && parameter.IsIn
+            && !parameter.IsOut
+                ? ImplicitConversionKind.Identity
+                : ClassifyImplicit(target, source, supplementaryInterfaceCheck);
 
     /// <summary>
     /// Issue #4037: whether a type parameter's own bounds prove it is a
@@ -3471,7 +3487,7 @@ internal static class ClrOverloadResolution
                     continue;
                 }
 
-                var conv = ClassifyImplicit(paramTypes[i], argTypes[i], supplementaryInterfaceCheck);
+                var conv = ClassifyArgumentAtParameter(parameters[paramIndex], paramTypes[i], argTypes[i], supplementaryInterfaceCheck);
                 conv = RefineErasedTypeParameterConversion(
                     conv,
                     symbolicArgTypes != null && i < symbolicArgTypes.Count ? symbolicArgTypes[i] : null,
@@ -4042,7 +4058,9 @@ internal static class ClrOverloadResolution
                 continue;
             }
 
-            var conv = ClassifyImplicit(target, argTypes[i], supplementaryInterfaceCheck);
+            var conv = slot == paramsIndex
+                ? ClassifyImplicit(target, argTypes[i], supplementaryInterfaceCheck)
+                : ClassifyArgumentAtParameter(parameters[slot], target, argTypes[i], supplementaryInterfaceCheck);
             if (conv == ImplicitConversionKind.None
                 && interpolatedStringArgs != null
                 && i < interpolatedStringArgs.Count

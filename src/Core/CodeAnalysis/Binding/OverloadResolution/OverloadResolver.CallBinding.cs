@@ -2252,7 +2252,7 @@ internal sealed partial class OverloadResolver
             var lambdaSyntax = i < parameterSyntax.Length && parameterSyntax[i] is { } sourceArgument
                 ? GetLambdaArgumentSyntax(sourceArgument)
                 : null;
-            if (parameter.RefKind == RefKind.None
+            if (parameter.RefKind is RefKind.None or RefKind.In
                 && TryConvertLambdaArgumentWithTarget(
                     argument,
                     expectedType,
@@ -2261,9 +2261,15 @@ internal sealed partial class OverloadResolver
                     lambdaSyntax,
                     parameter))
             {
-                boundArguments[i] = Invariant.Required(
+                var typedLambda = Invariant.Required(
                     targetTypedLambda,
                     "a successfully target-typed lambda produces a bound expression");
+
+                // Issue #4400: at an `in` delegate parameter the target-typed
+                // lambda is a value; pass it by readonly reference.
+                boundArguments[i] = parameter.RefKind == RefKind.In && typedLambda is not BoundErrorExpression
+                    ? conversions.CreateImplicitInReference(typedLambda, Invariant.Required(expectedType, "a bound parameter has a target type"))
+                    : typedLambda;
                 continue;
             }
 

@@ -76,6 +76,10 @@ public class Issue4400ImplicitInArgumentTests
 
             public static int F(in System.Func<int, int> f) => f(2);
 
+            public static string O(int x) => "value";
+
+            public static string O(ref int x) => "ref";
+
             public static T Id<T>(in T x) => x;
 
             public static string Gen<T>(in T x) => x?.ToString() ?? "null";
@@ -459,6 +463,46 @@ public class Issue4400ImplicitInArgumentTests
             """,
             new[] { "8", "15", "24", "12", "9", "6", "1", "7" },
         };
+
+        // The `shared` (static) user-call path's side branches: a generic
+        // function-literal adapter, an untyped lambda at a non-generic `in`
+        // delegate parameter, and an open type parameter passed through; plus
+        // the same lambda shapes on instance and extension calls.
+        yield return new object[]
+        {
+            "shared-static-lambdas",
+            """
+            package P
+            import System
+
+            class S {
+                shared {
+                    func Use[T](in f (T) -> T, v T) T -> f(v)
+                    func UseN(in f (int32) -> int32) int32 -> f(3)
+                    func Pass[T](in x T) T -> x
+                }
+                func M(in f (int32) -> int32) int32 -> f(4)
+                func MG[T](in f (T) -> T, v T) T -> f(v)
+            }
+
+            struct Q {
+                var X int32
+            }
+
+            func (q Q) Ext(in f (int32) -> int32) int32 -> f(q.X)
+
+            func G[U](u U) U -> S.Pass(u)
+
+            Console.WriteLine(S.Use((x int32) -> x + 1, 1))
+            Console.WriteLine(S.UseN((x) -> x * 2))
+            Console.WriteLine(S().M((x) -> x * 3))
+            Console.WriteLine(S().MG((x int32) -> x * 4, 2))
+            Console.WriteLine(Q{X: 5}.Ext((x int32) -> x * 5))
+            Console.WriteLine(G(9))
+            Console.WriteLine(S.Pass(10))
+            """,
+            new[] { "2", "6", "12", "8", "25", "9", "10" },
+        };
     }
 
     /// <summary>
@@ -540,6 +584,7 @@ public class Issue4400ImplicitInArgumentTests
             Console.WriteLine(Fwd64(40))
             Console.WriteLine(Api.S(default))
             Console.WriteLine(Api.F((x int32) -> x * 5))
+            Console.WriteLine(Api.O(default))
             """;
 
         var tempDir = Directory.CreateTempSubdirectory("gs_4400_imp_").FullName;
@@ -555,7 +600,7 @@ public class Issue4400ImplicitInArgumentTests
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, $"the app must run. Exit {exit}:\n{output}");
             Assert.Equal(
-                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41", "1", "10" },
+                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41", "1", "10", "value" },
                 SplitLines(output));
         }
         finally

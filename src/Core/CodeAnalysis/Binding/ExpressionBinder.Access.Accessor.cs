@@ -4556,7 +4556,10 @@ internal sealed partial class ExpressionBinder
                 var lambdaSyntax = slotSyntax is { } sourceArgument
                     ? OverloadResolver.GetLambdaArgumentSyntax(sourceArgument)
                     : null;
-                if (method.Parameters[i].RefKind == RefKind.None
+
+                // Issue #4400: an `in` delegate parameter target-types a lambda
+                // like a by-value one; the post-pass below passes it by reference.
+                if (method.Parameters[i].RefKind is RefKind.None or RefKind.In
                     && overloads.TryConvertLambdaArgumentWithTarget(
                         permutedArgs[i],
                         expectedType,
@@ -4572,6 +4575,23 @@ internal sealed partial class ExpressionBinder
                 }
 
                 convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArgs[i], expectedType, method.Parameters[i], i + 1));
+            }
+
+            // Issue #4400: the early `continue`s above (type-parameter
+            // pass-through, function-literal adapter, target-typed lambda) never
+            // reach BindCallArgumentWithRefKind; pass any plain value they left
+            // at an `in` slot by readonly reference.
+            for (var i = 0; i < convertedArgs.Count && i < method.Parameters.Length; i++)
+            {
+                if (method.Parameters[i].RefKind == RefKind.In
+                    && ConversionClassifier.IsPlainValueArgument(convertedArgs[i])
+                    && convertedArgs[i].Type != TypeSymbol.Error)
+                {
+                    var inType = substitution != null
+                        ? Binder.SubstituteType(method.Parameters[i].Type, substitution, scope.References.MapClrTypeToReferences)
+                        : method.Parameters[i].Type;
+                    convertedArgs[i] = conversions.CreateImplicitInReference(convertedArgs[i], inType);
+                }
             }
 
             // Issue #1209: when the static call dispatches on a constructed

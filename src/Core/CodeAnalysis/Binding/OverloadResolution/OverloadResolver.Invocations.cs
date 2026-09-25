@@ -1439,7 +1439,7 @@ internal sealed partial class OverloadResolver
             var lambdaSyntax = i < permutedSyntax.Length && permutedSyntax[i] is { } sourceArgument
                 ? GetLambdaArgumentSyntax(sourceArgument)
                 : null;
-            if (extension.Parameters[i + 1].RefKind == RefKind.None
+            if (extension.Parameters[i + 1].RefKind is RefKind.None or RefKind.In
                 && TryConvertLambdaArgumentWithTarget(
                     permutedArguments[i],
                     expectedType,
@@ -1930,7 +1930,7 @@ internal sealed partial class OverloadResolver
             var lambdaSyntax = argSyntaxForLocation is { } sourceArgument
                 ? GetLambdaArgumentSyntax(sourceArgument)
                 : null;
-            if (parameter.RefKind == RefKind.None
+            if (parameter.RefKind is RefKind.None or RefKind.In
                 && TryConvertLambdaArgumentWithTarget(
                     permutedArguments[i],
                     expectedType,
