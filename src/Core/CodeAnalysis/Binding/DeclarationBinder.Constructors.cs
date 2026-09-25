@@ -706,7 +706,7 @@ internal sealed partial class DeclarationBinder
             || baseTypeArguments.IsDefaultOrEmpty
             || index < 0
             || index >= openBaseCtorParams.Length
-            || openBaseCtorParams[index].ParameterType.GetElementType() is not { } openPointee)
+            || !openBaseCtorParams[index].ParameterType.IsByRef)
         {
             return null;
         }
@@ -716,7 +716,7 @@ internal sealed partial class DeclarationBinder
         // type parameter or same-compilation type in the pointee, or a base
         // type argument whose nullability, fixed length or tuple names the
         // erased closed signature cannot carry (`Base[string?]`, `Base[[3]int32]`).
-        var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(openPointee, openBaseDefinition, baseTypeArguments);
+        var mapped = MemberLookup.GetClrOpenParameterPointeeTypeSymbol(openBaseCtorParams[index], openBaseDefinition, baseTypeArguments);
         var keepsSymbolicShape = TypeSymbol.ContainsTypeParameter(mapped)
             || TypeSymbol.ContainsSameCompilationUserType(mapped)
             || baseTypeArguments.Any(static argument => TypeSymbol.RequiresSymbolicProjection(argument)
