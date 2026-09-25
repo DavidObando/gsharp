@@ -1607,18 +1607,20 @@ public sealed partial class CSharpToGSharpTranslator
                         || (parameter.ContainingSymbol is IMethodSymbol { IsGenericMethod: true }
                             && MentionsMethodTypeParameter(parameter.OriginalDefinition.Type));
 
-                // A lambda result: the lambda's return type may be inferred
-                // from it (`xs.Select(x => ext.Name)`). A lambda whose target
-                // delegate already returns `T?` (`Func<string?> f = () =>
-                // n.Name`) is the exception: its result type is fixed and
-                // nullable, so a bare `T!` converts to it with no check, and a
-                // `!!` there would throw on a nil the C# returns.
+                // A lambda result, when the lambda's own type is inferred and
+                // so may be inferred from the result: the lambda is itself an
+                // inference position (`xs.Select(x => ext.Name)`, or `var f =
+                // () => ext.Name`). A lambda converted to a fixed delegate
+                // type (`Func<string?> f = …`, or an oblivious `Reader` whose
+                // Invoke returns `T!`) is not: its result converts to that
+                // declared return, checked by gsc where it is non-null, and a
+                // `!!` would throw on a nil the C# returns.
                 case AnonymousFunctionExpressionSyntax lambda:
-                    return !this.LambdaTargetReturnsNullableReference(lambda);
+                    return this.LambdaTypeIsInferred(lambda);
                 case ReturnStatementSyntax when node.Parent.FirstAncestorOrSelf<SyntaxNode>(
                         n => n is AnonymousFunctionExpressionSyntax or BaseMethodDeclarationSyntax
                             or LocalFunctionStatementSyntax or AccessorDeclarationSyntax) is AnonymousFunctionExpressionSyntax enclosingLambda:
-                    return !this.LambdaTargetReturnsNullableReference(enclosingLambda);
+                    return this.LambdaTypeIsInferred(enclosingLambda);
 
                 // The receiver of a generic extension whose `this` parameter is
                 // the method type parameter itself (`x.Also(...)` with
@@ -1654,21 +1656,30 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        // ADR-0186 step 6 (PR 0): whether the delegate a lambda converts to
-        // returns an annotated-nullable reference type (`Func<string?>`). The
-        // effective return of an async lambda is the awaited type.
-        private bool LambdaTargetReturnsNullableReference(AnonymousFunctionExpressionSyntax lambda)
+        // ADR-0186 step 6 (PR 0): whether a lambda's delegate type is inferred
+        // rather than fixed by its target. A lambda initializing a `var` local
+        // takes its natural type from its body; any other lambda is inferred
+        // exactly when it sits in an inference position itself.
+        private bool LambdaTypeIsInferred(AnonymousFunctionExpressionSyntax lambda)
         {
-            if (this.context.GetTypeInfo(lambda).ConvertedType is not INamedTypeSymbol { DelegateInvokeMethod: { } invoke })
+            SyntaxNode node = lambda;
+            while (node.Parent is ParenthesizedExpressionSyntax)
             {
-                return false;
+                node = node.Parent;
             }
 
-            ITypeSymbol returnType = GetEffectiveReturnType(
-                invoke.ReturnType,
-                lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword));
-            return returnType is { IsReferenceType: true }
-                && returnType.NullableAnnotation == NullableAnnotation.Annotated;
+            if (node.Parent is EqualsValueClauseSyntax
+                {
+                    Parent: VariableDeclaratorSyntax
+                    {
+                        Parent: VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax } declaration,
+                    },
+                })
+            {
+                return declaration.Type.IsVar;
+            }
+
+            return this.ValueFeedsTypeInference(lambda);
         }
 
         // True when <paramref name="member"/> binds to an extension method whose
@@ -4759,8 +4770,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // ADR-0186 step 6 (PR 0): an oblivious-metadata result is `T!`,
+            // which gsc checks at the lambda's non-null return itself, unless
+            // the lambda's own type is inferred from it.
             return this.IsNullablePromotedValue(use)
-                || this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(use).Symbol);
+                || (this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(use).Symbol)
+                    && !this.PlatformTypedImportNeedsNoBridge(use));
         }
 
         // Issue #4179: `Task.Run<TResult>(Func<TResult> function)` (and its

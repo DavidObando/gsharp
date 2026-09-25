@@ -68,6 +68,8 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
         {
             public Node Child;
         }
+
+        public delegate string Reader();
         """;
 
     private const string ConsumerSource = """
@@ -292,6 +294,76 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
                 public static bool NameIsNil(Node n)
                 {
                     System.Func<string?> read = () => { return n.Name; };
+                    return read() == null;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+
+        Assert.DoesNotContain("n.Name!!", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.NameIsNil(Node.Make(nil, nil))" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(true, result.Value);
+    }
+
+    /// <summary>
+    /// A lambda passed where its delegate type is inferred keeps its result's
+    /// <c>!!</c>: <c>Select(x =&gt; x.Name)</c> would otherwise infer
+    /// <c>IEnumerable[string!]</c>, and <c>ToList()</c> a <c>List[string!]</c>
+    /// that the declared <c>List[string]</c> does not accept (GS0155).
+    /// </summary>
+    [Fact]
+    public void A_Lambda_Whose_Type_Is_Inferred_Keeps_Its_Result_Assertion()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousSelectLib");
+        string printed = Translate(
+            """
+            using System.Linq;
+            using ObLib;
+
+            public static class Use
+            {
+                public static int Count(Node n)
+                {
+                    System.Collections.Generic.List<string> names = new[] { n }.Select(x => x.Name).ToList();
+                    return names.Count;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+
+        Assert.Contains("x.Name!!", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.Count(Node.Make(\"a\", nil))" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(1, result.Value);
+    }
+
+    /// <summary>
+    /// A lambda converted to an oblivious delegate (<c>Reader</c>, whose Invoke
+    /// returns <c>string!</c>) has a fixed result type too, so its result stays
+    /// bare, and a nil name is returned rather than thrown.
+    /// </summary>
+    [Fact]
+    public void A_Lambda_With_An_Oblivious_Target_Return_Leaves_Its_Result_Bare()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousDelegateLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static bool NameIsNil(Node n)
+                {
+                    Reader read = () => n.Name;
                     return read() == null;
                 }
             }
