@@ -1571,6 +1571,14 @@ public sealed partial class CSharpToGSharpTranslator
         // read does.
         private static bool HasNestedReferencePosition(ITypeSymbol type)
         {
+            // Roslyn leaves TypeInfo.Type null for an unbound expression. No
+            // type means no known nested position; the member checks after
+            // this call decide the read.
+            if (type == null)
+            {
+                return false;
+            }
+
             if (type is IArrayTypeSymbol array)
             {
                 return IsOrHoldsReference(array.ElementType);
