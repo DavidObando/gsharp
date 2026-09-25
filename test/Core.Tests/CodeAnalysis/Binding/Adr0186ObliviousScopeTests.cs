@@ -261,7 +261,9 @@ public class Adr0186ObliviousScopeTests
                 func Echo(value string) string { return value }
                 func Body() string {
                     var local string = nil
-                    var xs List[string] = List[string]{}
+                    // A nil element needs a nilable element type: nested
+                    // positions stay as written in an oblivious scope.
+                    var xs List[string?] = List[string?]{}
                     xs.Add(nil)
                     for item string in xs {
                         local = item
@@ -935,7 +937,7 @@ public class Adr0186ObliviousScopeTests
     /// pins that they still conform.
     /// </summary>
     [Fact]
-    public void Nested_Platform_Positions_Conform()
+    public void Nested_Positions_Conform_As_Written()
     {
         var output = Run(
             """
