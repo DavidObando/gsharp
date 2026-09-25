@@ -1225,7 +1225,9 @@ internal sealed partial class OverloadResolver
                 // A nil literal has no evaluation to preserve. Capturing it
                 // would create a local whose type is `nil`, which has no CLR
                 // signature representation; leave it in its parameter slot.
-                replacements[slot] = argument;
+                // Issue #4400: an `in` nil keeps its original typed spill,
+                // since the slot needs an address, not the bare value.
+                replacements[slot] = implicitInSpill ? parameterOrderedArguments[slot] : argument;
                 continue;
             }
 

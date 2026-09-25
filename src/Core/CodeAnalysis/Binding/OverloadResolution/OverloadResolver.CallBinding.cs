@@ -2326,9 +2326,20 @@ internal sealed partial class OverloadResolver
                         // Issue #4400 (ADR-0060 amendment): `in` without the
                         // call-site modifier passes a readonly reference, as in
                         // C# — the lvalue's own address, or a spilled temp's.
+                        // An interpolated string at an `in IFormattable` /
+                        // `in FormattableString` parameter is re-lowered to
+                        // the formattable first, exactly as a by-value one is.
+                        var inValue = argument;
+                        if (argSyntax is InterpolatedStringExpressionSyntax interpolatedInArg
+                            && expectedType != null
+                            && isFormattableStringTargetType(expectedType))
+                        {
+                            inValue = bindInterpolatedStringAsFormattable(interpolatedInArg, expectedType);
+                        }
+
                         var implicitIn = conversions.BindImplicitInArgument(
                             argSyntax?.Location ?? syntax.Location,
-                            argument,
+                            inValue,
                             Invariant.Required(expectedType, "a bound parameter has a target type"),
                             parameter);
                         boundArguments[i] = implicitIn;

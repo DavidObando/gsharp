@@ -686,7 +686,17 @@ internal sealed partial class OverloadResolver
                 {
                     if (parameter.RefKind == RefKind.In && argumentRefKind == RefKind.None)
                     {
-                        // Issue #4400: pass a readonly reference, as in C#.
+                        // Issue #4400: pass a readonly reference, as in C#. An
+                        // untyped lambda is target-bound first, exactly as at
+                        // a by-value delegate parameter.
+                        if (GetLambdaArgumentSyntax(argumentSyntax) is { } inLambdaSyntax
+                            && bindLambdaWithTarget != null
+                            && IsUntypedArrowLambda(inLambdaSyntax)
+                            && parameter.Type is FunctionTypeSymbol inLambdaTarget)
+                        {
+                            argument = bindLambdaWithTarget(inLambdaSyntax, inLambdaTarget);
+                        }
+
                         var implicitIn = conversions.BindImplicitInArgument(argumentLocation, argument, parameter.Type, parameter);
                         hasErrors |= implicitIn is BoundErrorExpression;
                         converted.Add(implicitIn);

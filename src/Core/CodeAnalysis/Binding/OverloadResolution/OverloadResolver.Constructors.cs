@@ -1239,7 +1239,13 @@ internal sealed partial class OverloadResolver
                 && parameterSyntax[i] is InterpolatedStringExpressionSyntax interpolatedCtorArg
                 && isFormattableStringTargetType(paramType))
             {
-                convertedArguments.Add(bindInterpolatedStringAsFormattable(interpolatedCtorArg, paramType));
+                var formattable = bindInterpolatedStringAsFormattable(interpolatedCtorArg, paramType);
+
+                // Issue #4400: at an `in` parameter the formattable is a value;
+                // pass it by readonly reference.
+                convertedArguments.Add(parameter.RefKind == RefKind.In && formattable is not BoundErrorExpression
+                    ? conversions.CreateImplicitInReference(formattable, paramType)
+                    : formattable);
                 continue;
             }
 

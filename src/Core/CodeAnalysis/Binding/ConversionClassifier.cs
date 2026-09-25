@@ -2970,7 +2970,10 @@ internal sealed class ConversionClassifier
             return new BoundAddressOfExpression(value.Syntax, value, unmanaged: false, isReadOnly: true);
         }
 
-        var tempType = value.Type == TypeSymbol.Null || value.Type == TypeSymbol.Never ? parameterType : value.Type;
+        // The temp is typed as the SLOT, not the value: an implicit reference
+        // conversion (`FormattableString` at `in IFormattable`) leaves the
+        // value's own type on the node, but the callee takes `IFormattable&`.
+        var tempType = parameterType != TypeSymbol.Error ? parameterType : value.Type;
         var temp = new LocalVariableSymbol(
             $"{ImplicitInTempPrefix}{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
             isReadOnly: true,

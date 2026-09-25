@@ -511,6 +511,39 @@ public class Issue4400ImplicitInArgumentTests
             new[] { "2", "6", "12", "8", "25", "9", "10" },
         };
 
+        // Special argument conversions ahead of the by-ref handling: an
+        // interpolated string re-lowered to `IFormattable` (function and
+        // constructor; the temp takes the slot type, not `FormattableString`),
+        // a reordered named `nil`, and an untyped lambda through a named
+        // delegate's `in` function parameter.
+        yield return new object[]
+        {
+            "formattable-nil-delegate",
+            """
+            package P
+            import System
+
+            func F(in x IFormattable) string -> x.ToString(nil, nil)
+
+            class K {
+                var S string = ""
+                init(in x IFormattable) { S = x.ToString(nil, nil) }
+            }
+
+            func Opt(in s string?, b int32) string -> "${s ?? "nil"}${b}"
+
+            delegate D(in f (int32) -> int32) int32;
+
+            let n = 5
+            Console.WriteLine(F("n=${n}"))
+            Console.WriteLine(K("k=${n}").S)
+            Console.WriteLine(Opt(b: 2, s: nil))
+            var d D = (in f (int32) -> int32) -> f(3)
+            Console.WriteLine(d((x) -> x * 7))
+            """,
+            new[] { "n=5", "k=5", "nil2", "21" },
+        };
+
         // Named arguments keep lexical evaluation order when an omitted-`in`
         // rvalue is reordered into its parameter slot (free function, instance
         // method, constructor); a side-effect-free lvalue stays in its slot.
