@@ -111,8 +111,11 @@ corpus cannot reach a row, by a snippet translation test.
 - `RegisterOperationBlockAction` → `RegisterBoundBodyAction`, receiving a
   `BoundBodyAnalysisContext` (`OwningSymbol`, `OwningFunction`, `Bodies`,
   `Compilation`, `ReportDiagnostic`). The driver dispatches it once per bound
-  function body; lambdas and local functions are nested in their enclosing
-  body, as Roslyn nests them in the operation block.
+  function body and once per field initializer (owned by the field, as a
+  Roslyn field-initializer block is); lambdas and local functions are nested
+  in their enclosing body, as Roslyn nests them in the operation block. A
+  property accessor, which has no declaration of its own, takes its
+  property's source tree for generated-code skipping.
 - `IOperation.ChildOperations` → `BoundNode.ChildNodes`, and
   `Descendants()` / `DescendantsAndSelf()`. They follow Roslyn's operation
   tree where the compiler walker does not: a function literal's body is

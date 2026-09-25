@@ -49,6 +49,10 @@ namespace GSharp.Core.CodeAnalysis.Binding
         // part of the member's operation block.
         public Func<Type, TypeSymbol> InLambda() => t => TypeSymbol.FromClrType(t);
 
+        // Reported: a door in a field initializer, which is an operation
+        // block of its own, owned by the field.
+        public readonly TypeSymbol Initialized = TypeSymbol.FromClrType(typeof(string));
+
         // Reported: a wrapper factory inside a funnel member.
         [NullabilityFunnel]
         public TypeSymbol Wrap(Type type) => NullableTypeSymbol.Get(TypeSymbol.FromClrType(type));

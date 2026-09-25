@@ -49,10 +49,11 @@ public sealed class Adr0169FunnelSurfaceParityTests : IDisposable
     [Fact]
     public void TranslatedFunnelRule_MatchesRoslyn_OverTranslatedCorpus()
     {
-        // Door, door in a lambda, wrapper factory, the five signature-accessor
-        // shapes (direct, declared local, assignment, foreach, out var),
-        // method group and unattributed property getter.
-        AssertParity("FunnelSurfaceAnalyzer", "Corpus.cs", expected: 10);
+        // Door, door in a lambda, door in a field initializer, wrapper
+        // factory, the five signature-accessor shapes (direct, declared local,
+        // assignment, foreach, out var), method group and unattributed
+        // property getter.
+        AssertParity("FunnelSurfaceAnalyzer", "Corpus.cs", expected: 11);
     }
 
     [Fact]
@@ -142,6 +143,8 @@ public sealed class Adr0169FunnelSurfaceParityTests : IDisposable
                     return method.Identifier.ValueText;
                 case Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax property:
                     return property.Identifier.ValueText;
+                case Microsoft.CodeAnalysis.CSharp.Syntax.VariableDeclaratorSyntax { Parent.Parent: Microsoft.CodeAnalysis.CSharp.Syntax.FieldDeclarationSyntax } field:
+                    return field.Identifier.ValueText;
             }
         }
 
@@ -163,6 +166,9 @@ public sealed class Adr0169FunnelSurfaceParityTests : IDisposable
                     break;
                 case GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax property:
                     name = property.Identifier.Text;
+                    break;
+                case GSharp.Core.CodeAnalysis.Syntax.FieldDeclarationSyntax field:
+                    name = field.Identifier.Text;
                     break;
             }
 

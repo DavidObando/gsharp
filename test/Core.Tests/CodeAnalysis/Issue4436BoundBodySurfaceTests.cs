@@ -92,6 +92,34 @@ func Outer() int32 {
     }
 
     [Fact]
+    public void BoundBodyAction_RunsOnFieldInitializers_OwnedByTheField()
+    {
+        // Roslyn runs operation-block actions on field-initializer blocks.
+        // G# keeps initializers outside every function body, the
+        // constructor's included, so they are dispatched on their own.
+        const string source = @"package App
+
+func Add(left int32, right int32) int32 {
+    return left + right
+}
+
+class Holder {
+    var count int32 = Add(5, 6)
+    shared {
+        let Seed int32 = Add(7, 8)
+    }
+    init() {
+    }
+}
+";
+        var probe = Run(source, GeneratedCodeAnalysisFlags.None);
+
+        Assert.Equal(new[] { "Seed", "count" }, probe.FieldOwners.OrderBy(n => n, System.StringComparer.Ordinal));
+        Assert.All(probe.FieldOwners, name =>
+            Assert.Contains(probe.Bodies[name].SelectMany(b => b.DescendantsAndSelf()), n => n.Kind == BoundNodeKind.CallExpression));
+    }
+
+    [Fact]
     public void AnAccessorKeepsThePropertyThatFirstClaimedIt()
     {
         // A constructed generic property reuses its definition's accessors;
@@ -145,6 +173,8 @@ func Outer() int32 {
 
         public List<FunctionSymbol> Owners { get; } = new();
 
+        public List<string> FieldOwners { get; } = new();
+
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(ProbeRule);
 
         public override void Initialize(AnalysisContext context)
@@ -155,8 +185,13 @@ func Outer() int32 {
                 if (ctx.OwningFunction is { } function)
                 {
                     Owners.Add(function);
-                    Bodies[function.Name] = ctx.Bodies;
                 }
+                else
+                {
+                    FieldOwners.Add(ctx.OwningSymbol.Name);
+                }
+
+                Bodies[ctx.OwningSymbol.Name] = ctx.Bodies;
             });
         }
     }

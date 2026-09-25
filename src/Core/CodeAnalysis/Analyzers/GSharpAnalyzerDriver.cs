@@ -184,17 +184,39 @@ public sealed class GSharpAnalyzerDriver
         {
             cancellationToken.ThrowIfCancellationRequested();
 
-            var isGenerated = ProvenanceTree(function, body) is { } tree && IsGeneratedTree(tree);
-            foreach (var entry in registry.BoundBodyActions)
-            {
-                if (SkipsGenerated(entry.Owner, isGenerated))
-                {
-                    continue;
-                }
+            DispatchBoundBody(function, body, ProvenanceTree(function, body));
+        }
 
-                var context = new BoundBodyAnalysisContext(function, body, compilation, Sink(entry.Owner), cancellationToken);
-                Guarded(entry.Owner, () => entry.Action(context));
+        // Roslyn runs operation-block actions on field-initializer blocks too,
+        // owned by the field. G# keeps them on the declaring type, outside any
+        // function body (not even the constructor's).
+        foreach (var declaredStruct in program.Structs)
+        {
+            // The owning field must answer ContainingType/ContainingNamespace,
+            // as the symbol-action path anchors them (idempotent).
+            SymbolContainment.AnchorMembers(declaredStruct);
+            foreach (var (field, initializer) in declaredStruct.StaticFieldInitializers.Concat(declaredStruct.InstanceFieldInitializers))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var tree = field.Declaration?.SyntaxTree
+                    ?? initializer.DescendantsAndSelf().Select(node => node.Syntax).FirstOrDefault(syntax => syntax != null)?.SyntaxTree;
+                DispatchBoundBody(field, initializer, tree);
             }
+        }
+    }
+
+    private void DispatchBoundBody(Symbol owner, BoundNode body, SyntaxTree? provenance)
+    {
+        var isGenerated = provenance is { } tree && IsGeneratedTree(tree);
+        foreach (var entry in registry.BoundBodyActions)
+        {
+            if (SkipsGenerated(entry.Owner, isGenerated))
+            {
+                continue;
+            }
+
+            var context = new BoundBodyAnalysisContext(owner, body, compilation, Sink(entry.Owner), cancellationToken);
+            Guarded(entry.Owner, () => entry.Action(context));
         }
     }
 

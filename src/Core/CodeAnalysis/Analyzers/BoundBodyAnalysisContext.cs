@@ -21,39 +21,45 @@ namespace GSharp.Core.CodeAnalysis.Analyzers;
 /// <remarks>
 /// Function literals and local functions are bound inside the body that
 /// declares them, so they are part of that body, as they are part of their
-/// containing method's operation block in Roslyn. Top-level statements have
-/// no owning function and are not dispatched to body actions.
+/// containing method's operation block in Roslyn. A field's initializer is a
+/// body of its own, owned by the field, as a Roslyn field-initializer block
+/// is. Top-level statements have no owning symbol and are not dispatched to
+/// body actions.
 /// </remarks>
 public readonly struct BoundBodyAnalysisContext
 {
     private readonly Action<Diagnostic> reportDiagnostic;
 
     internal BoundBodyAnalysisContext(
-        FunctionSymbol owningFunction,
+        Symbol owningSymbol,
         BoundNode body,
         Compilation.Compilation compilation,
         Action<Diagnostic> reportDiagnostic,
         CancellationToken cancellationToken)
     {
-        OwningFunction = owningFunction;
+        OwningSymbol = owningSymbol;
         Bodies = ImmutableArray.Create(body);
         Compilation = compilation;
         this.reportDiagnostic = reportDiagnostic;
         CancellationToken = cancellationToken;
     }
 
-    /// <summary>Gets the function whose body is being analyzed.</summary>
-    public FunctionSymbol OwningFunction { get; }
+    /// <summary>
+    /// Gets the function whose body is being analyzed, or
+    /// <see langword="null"/> for a field initializer.
+    /// </summary>
+    public FunctionSymbol? OwningFunction => OwningSymbol as FunctionSymbol;
 
     /// <summary>
-    /// Gets the function whose body is being analyzed as a <see cref="Symbol"/>
-    /// — the Roslyn <c>OwningSymbol</c> analogue.
+    /// Gets the member that owns the body — the Roslyn <c>OwningSymbol</c>
+    /// analogue: a function, or a field for its initializer.
     /// </summary>
-    public Symbol OwningSymbol => OwningFunction;
+    public Symbol OwningSymbol { get; }
 
     /// <summary>
     /// Gets the bound body — the Roslyn <c>OperationBlocks</c> analogue. A G#
-    /// function has one body, so this always has exactly one element.
+    /// function has one body, and a field one initializer, so this always has
+    /// exactly one element.
     /// </summary>
     public ImmutableArray<BoundNode> Bodies { get; }
 
