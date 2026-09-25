@@ -355,6 +355,22 @@ public sealed class Conversion
             return platformArgumentMismatch;
         }
 
+        // ADR-0186 §3, #4443: a platform pair is classified before either
+        // side's nullable-flags annotation is stripped below. The strip keeps
+        // the outer CLR shape and drops the argument nullability the flags
+        // carry, and the platform arm's rule-3 comparison needs exactly those
+        // arguments. With the strip first, `List[string!]! -> List[string!]`
+        // (an oblivious list whose top level inference stripped, the
+        // destination held as the flags-annotated `List<string>`) compared its
+        // `string!` element against the bare base's `string` and was rejected
+        // as rule 3's `C[T!] -> C[T]`. The platform arm reads annotated
+        // arguments itself (`TryGetConstructedGenericArguments`) and re-enters
+        // this method for the underlying pair, which strips them then.
+        if (from is PlatformTypeSymbol || to is PlatformTypeSymbol)
+        {
+            return ClassifyPlatformType(from, to, allowStructuralProjection, allowExplicitReference);
+        }
+
         // Inner generic nullability metadata does not change the outer CLR type's
         // conversion rules. Expose the symbolic generic/interface shape beneath
         // it before applying identity, hierarchy, and variance classification.
@@ -377,7 +393,7 @@ public sealed class Conversion
         }
 
         // ADR-0186 §3: the platform type `T!` owns its whole conversion table,
-        // and it must own it HERE — ahead of every arm below.
+        // and it must own it ahead of every arm below.
         //
         // Before this arm existed, `T! -> T` was admitted silently and
         // unconditionally. `PlatformTypeSymbol` relays its underlying's
@@ -399,11 +415,8 @@ public sealed class Conversion
         // platform wrapper by design (it answers a question about RUNTIME
         // shape, where `string!` and `string` genuinely are one type), and
         // three separate arms below consult it. Any of them would answer
-        // "identity" for `List[string!] -> List[string]`.
-        if (from is PlatformTypeSymbol || to is PlatformTypeSymbol)
-        {
-            return ClassifyPlatformType(from, to, allowStructuralProjection, allowExplicitReference);
-        }
+        // "identity" for `List[string!] -> List[string]`. (#4443 moved the
+        // arm itself above the annotation strip; see there.)
 
         // Issue #3093: sequence[T] is an identity alias, not merely a
         // reference conversion, for the matching enumerable interface.

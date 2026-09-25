@@ -7203,6 +7203,43 @@ internal sealed class MemberLookup
 
         var openParams = openMethod.GetParameters();
         var argumentCount = symbolicArgTypes.IsDefault ? 0 : symbolicArgTypes.Length;
+
+        // ADR-0186 §3 (as amended by #4443): a platform-typed argument
+        // contributes its underlying `T`, never `T!`; the call coerces it
+        // `T! → T` and §4 checks that. Only the argument's top level is
+        // stripped (a nested `List[string!]` element still infers
+        // `string!`). This mirrors `Binder.InferTypeArguments` for the
+        // imported-method path, with two slots that keep the argument exact:
+        // - a by-reference slot, since a `ref` argument has no coercion to
+        //   carry the check;
+        // - a slot the declaration leaves oblivious. That slot reads as `T!`
+        //   after substitution, so the argument would cross into it with no
+        //   check, while the method's other positions (an oblivious
+        //   `List<T>` return, say) read the stripped `T` as non-null. A nil
+        //   would then reach a `List[string]` unchecked. Keeping `T!` there
+        //   keeps the result `List[string!]`, as before.
+        TypeSymbol? ArgumentForInference(ParameterInfo parameter, bool paramsElement, int i)
+        {
+            if (symbolicArgTypes[i] is not PlatformTypeSymbol platform
+                || parameter.ParameterType.IsByRef)
+            {
+                return symbolicArgTypes[i];
+            }
+
+            var slot = ClrNullability.GetParameterTypeSymbol(parameter);
+            if (paramsElement)
+            {
+                slot = (slot is PlatformTypeSymbol outer ? outer.UnderlyingType : slot) switch
+                {
+                    ArrayTypeSymbol array => array.ElementType,
+                    SliceTypeSymbol slice => slice.ElementType,
+                    _ => slot,
+                };
+            }
+
+            return slot is PlatformTypeSymbol ? platform : platform.UnderlyingType;
+        }
+
         if (isExpanded
             && openParams.Length > 0
             && ClrOverloadResolution.IsParamsArrayParameter(openParams[^1])
@@ -7214,7 +7251,7 @@ internal sealed class MemberLookup
             {
                 UnifyForMethodTypeArgs(
                     openParams[i].ParameterType,
-                    OpenSlotInferenceArgument(openParams[i], symbolicArgTypes[i]),
+                    OpenSlotInferenceArgument(openParams[i], ArgumentForInference(openParams[i], paramsElement: false, i)),
                     openMethod,
                     bounds,
                     ArgumentBoundKind(i));
@@ -7224,7 +7261,7 @@ internal sealed class MemberLookup
             {
                 UnifyForMethodTypeArgs(
                     paramsElementType,
-                    symbolicArgTypes[i],
+                    ArgumentForInference(openParams[^1], paramsElement: true, i),
                     openMethod,
                     bounds,
                     ArgumentBoundKind(i));
@@ -7237,7 +7274,7 @@ internal sealed class MemberLookup
             {
                 UnifyForMethodTypeArgs(
                     openParams[i].ParameterType,
-                    OpenSlotInferenceArgument(openParams[i], symbolicArgTypes[i]),
+                    OpenSlotInferenceArgument(openParams[i], ArgumentForInference(openParams[i], paramsElement: false, i)),
                     openMethod,
                     bounds,
                     ArgumentBoundKind(i));

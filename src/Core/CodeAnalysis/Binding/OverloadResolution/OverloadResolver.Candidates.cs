@@ -2398,7 +2398,19 @@ internal sealed partial class OverloadResolver
             }
 
             var parameter = candidate.Parameters[i + parameterOffset];
-            inferTypeArguments(parameter.Type, RefCapabilities.GetInferenceType(parameter, argType), substitution);
+            var inferenceType = RefCapabilities.GetInferenceType(parameter, argType);
+            if (parameter.RefKind != RefKind.None)
+            {
+                // ADR-0186 §3 (#4443): a by-reference argument keeps its exact
+                // type. Stripping a `T!` here would bind the callee's slot as
+                // `T` over a location that may hold nil, and a `ref` has no
+                // coercion to carry §4's check.
+                Binder.InferTypeArgumentsExact(parameter.Type, inferenceType, substitution);
+            }
+            else
+            {
+                inferTypeArguments(parameter.Type, inferenceType, substitution);
+            }
         }
 
         if (isVariadic
