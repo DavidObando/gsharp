@@ -3671,7 +3671,10 @@ internal sealed partial class ExpressionBinder
             // ADR-0186 §9: an array element is a nested position, so it stays
             // as written in an oblivious scope too (the owner's 2026-09-25
             // amendment to open question 12); `[]string{…}` there is a
-            // `[]string`, matching an oblivious `[]string` declaration.
+            // `[]string`. An oblivious `[]string` slot is `[]!string` (its
+            // top level only is platform), so the literal is stored there
+            // through the top-level `T → T!` conversion; the element types
+            // are identical.
         }
 
         if (elementType is EnumSymbol bareElementEnum)

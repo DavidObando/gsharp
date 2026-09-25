@@ -1182,7 +1182,7 @@ public class Adr0186ObliviousScopeTests
     // no symbolic argument list; its argument is then read off the CLR type.
     private static TypeSymbol TypeArgument(TypeSymbol type, int index) => type switch
     {
-        ImportedTypeSymbol { TypeArguments.Length: 0, ClrType: { IsGenericType: true } clr } =>
+        ImportedTypeSymbol { TypeArguments.Length: 0, ClrType: { IsGenericType: true, IsGenericTypeDefinition: false } clr } =>
             TypeSymbol.FromClrType(clr.GetGenericArguments()[index]),
         ImportedTypeSymbol imported => imported.TypeArguments[index],
         DelegateTypeSymbol @delegate => @delegate.TypeArguments[index],

@@ -392,7 +392,7 @@ public class Adr0186ObliviousRoundTripEmitTests
 
         // A constructed CLR type whose arguments say nothing beyond their CLR
         // types is kept erased, with no symbolic argument list.
-        ImportedTypeSymbol { TypeArguments.Length: 0, ClrType: { IsGenericType: true } clr } =>
+        ImportedTypeSymbol { TypeArguments.Length: 0, ClrType: { IsGenericType: true, IsGenericTypeDefinition: false } clr } =>
             TypeSymbol.FromClrType(clr.GetGenericArguments()[index]),
         ImportedTypeSymbol imported => imported.TypeArguments[index],
         MapTypeSymbol map => index == 0 ? map.KeyType : map.ValueType,
