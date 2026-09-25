@@ -374,6 +374,19 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualType);
 
     /// <summary>
+    /// Issue #4422: GS0612 — a by-reference argument's storage type differs
+    /// from the parameter type only in reference nullability.
+    /// </summary>
+    /// <param name="location">The argument's location.</param>
+    /// <param name="refKind">The parameter's ref kind, spelled as in source (<c>ref</c>, <c>out</c>, <c>in</c>).</param>
+    /// <param name="name">The parameter name.</param>
+    /// <param name="parameterType">The parameter type.</param>
+    /// <param name="storageType">The argument's storage type.</param>
+    /// <param name="reason">Which way a nil can flow through the shared storage.</param>
+    public void ReportByRefArgumentNullabilityMismatch(TextLocation location, string refKind, string name, TypeSymbol parameterType, TypeSymbol storageType, string reason)
+    => Report(location, DiagnosticDescriptors.ByRefArgumentNullabilityMismatch, refKind, name, storageType, parameterType, reason);
+
+    /// <summary>
     /// Rerpots that there's no conversion from one type to the other.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

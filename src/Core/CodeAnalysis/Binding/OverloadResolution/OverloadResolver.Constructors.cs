@@ -1254,12 +1254,15 @@ internal sealed partial class OverloadResolver
             // standard convertibility check so the address is forwarded as-is.
             // ADR-0061: BoundConditionalAddressExpression is the analogous
             // shape for conditional ref-arguments.
+            var refArgumentLocation = i < parameterSyntax.Length && parameterSyntax[i] is { } refArgumentSyntax
+                ? refArgumentSyntax.Location
+                : syntax.Identifier.Location;
             if (parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrCtor)
             {
                 var pointee = addrCtor.Operand?.Type;
-                if (DeclarationBinder.TypeSignaturesEquivalent(pointee, paramType)
-                    || pointee == TypeSymbol.Error
-                    || paramType == TypeSymbol.Error)
+                if (pointee == TypeSymbol.Error
+                    || paramType == TypeSymbol.Error
+                    || (pointee != null && conversions.CheckByRefArgumentStorage(refArgumentLocation, parameter, pointee, paramType)))
                 {
                     convertedArguments.Add(argument);
                     continue;
@@ -1268,9 +1271,9 @@ internal sealed partial class OverloadResolver
             else if (parameter.RefKind != RefKind.None && argument is BoundConditionalAddressExpression condAddrCtor)
             {
                 var pointee = condAddrCtor.PointeeType;
-                if (DeclarationBinder.TypeSignaturesEquivalent(pointee, paramType)
-                    || pointee == TypeSymbol.Error
-                    || paramType == TypeSymbol.Error)
+                if (pointee == TypeSymbol.Error
+                    || paramType == TypeSymbol.Error
+                    || conversions.CheckByRefArgumentStorage(refArgumentLocation, parameter, pointee, paramType))
                 {
                     convertedArguments.Add(argument);
                     continue;
@@ -1504,9 +1507,12 @@ internal sealed partial class OverloadResolver
                 : FindParameterIndex(constructor.Parameters, name);
             if (parameterIndex < 0
                 || parameterIndex >= parameterTypes.Length
-                || !DeclarationBinder.TypeSignaturesEquivalent(
+                || !ByRefStorageMatching.AreSameStorageType(
                     argumentType,
-                    parameterTypes[parameterIndex]))
+                    parameterTypes[parameterIndex],
+                    out _,
+                    out _,
+                    out _))
             {
                 return false;
             }
@@ -1929,9 +1935,12 @@ internal sealed partial class OverloadResolver
             if (parameterIndex < 0
                 || parameterIndex >= constructor.Parameters.Length
                 || argumentTypes[argumentIndex] is not { } argumentType
-                || !DeclarationBinder.TypeSignaturesEquivalent(
+                || !ByRefStorageMatching.AreSameStorageType(
                     argumentType,
-                    constructor.Parameters[parameterIndex].Type))
+                    constructor.Parameters[parameterIndex].Type,
+                    out _,
+                    out _,
+                    out _))
             {
                 return false;
             }
@@ -2107,7 +2116,7 @@ internal sealed partial class OverloadResolver
 
             var isCompatible = parameter.RefKind == RefKind.None
                 ? Conversion.Classify(argumentType, parameterType).IsImplicit
-                : DeclarationBinder.TypeSignaturesEquivalent(argumentType, parameterType);
+                : ByRefStorageMatching.AreSameStorageType(argumentType, parameterType, out _, out _, out _);
             if (!isCompatible)
             {
                 return false;
@@ -2371,9 +2380,9 @@ internal sealed partial class OverloadResolver
             if (parameter.RefKind != RefKind.None && argument is BoundAddressOfExpression addrInit)
             {
                 var pointee = addrInit.Operand?.Type;
-                if (DeclarationBinder.TypeSignaturesEquivalent(pointee, parameter.Type)
-                    || pointee == TypeSymbol.Error
-                    || parameter.Type == TypeSymbol.Error)
+                if (pointee == TypeSymbol.Error
+                    || parameter.Type == TypeSymbol.Error
+                    || (pointee != null && conversions.CheckByRefArgumentStorage(argLocation, parameter, pointee, parameter.Type)))
                 {
                     convertedArgs.Add(argument);
                     continue;
@@ -2382,9 +2391,9 @@ internal sealed partial class OverloadResolver
             else if (parameter.RefKind != RefKind.None && argument is BoundConditionalAddressExpression condAddrInit)
             {
                 var pointee = condAddrInit.PointeeType;
-                if (DeclarationBinder.TypeSignaturesEquivalent(pointee, parameter.Type)
-                    || pointee == TypeSymbol.Error
-                    || parameter.Type == TypeSymbol.Error)
+                if (pointee == TypeSymbol.Error
+                    || parameter.Type == TypeSymbol.Error
+                    || conversions.CheckByRefArgumentStorage(argLocation, parameter, pointee, parameter.Type))
                 {
                     convertedArgs.Add(argument);
                     continue;
