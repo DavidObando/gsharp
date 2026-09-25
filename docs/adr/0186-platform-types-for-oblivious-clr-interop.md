@@ -1674,6 +1674,16 @@ Suggested sequencing, each step independently landable and green:
    > the local's type clause, and the local then carries `T!` into its own
    > later uses. Reads of a *repo-sibling* member are unchanged, because
    > cs2gs decides that member's emitted type (`T` or a promoted `T?`).
+   > A read whose type has a nested reference position (an array, or a
+   > generic type with a reference or type-parameter argument) also keeps
+   > its `!!`. gsc reads an oblivious method's `string[]` return as
+   > `[]!string!`, which does not convert to an enabled `[]string`; `!!`
+   > strips the top level and the result converts. The field reader gives
+   > the same position `[]!string` instead, and that disagreement is
+   > [#4449](https://github.com/DavidObando/gsharp/issues/4449). The
+   > netstandard2.0 `Gsharp.NET.Sdk` (`lines = File.ReadAllLines(path)`)
+   > broke on the first cut of this rule, so the rule leaves container
+   > reads exactly as before.
    >
    > **Measured before any code, as open questions 9 and 14 ask.** A
    > whole-corpus translate-only run recorded 20,495 forgiveness decisions

@@ -1537,6 +1537,19 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // A container (an array, or a constructed type with a reference
+            // argument) keeps its `!!`. gsc reads an oblivious container's
+            // nested positions as `T!` too, and on such a value the top-level
+            // `!!` also decides whether it converts to an enabled container:
+            // `File.ReadAllLines(path)` is `[]!string!` and does not convert to
+            // `[]string`, while `File.ReadAllLines(path)!!` does (the
+            // netstandard2.0 Gsharp.NET.Sdk, #4449). Only a value whose type
+            // has no nested reference position is left bare.
+            if (HasNestedReferencePosition(this.context.GetTypeInfo(expression).Type))
+            {
+                return false;
+            }
+
             if (expression is ElementAccessExpressionSyntax elementAccess
                 && elementAccess.Expression is not ConditionalAccessExpressionSyntax
                 && this.IsFrozenObliviousImportMember(this.context.GetSymbolInfo(elementAccess.Expression).Symbol)
@@ -1547,6 +1560,38 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return this.IsFrozenObliviousImportMember(this.context.GetSymbolInfo(expression).Symbol);
+        }
+
+        // Whether a value of <paramref name="type"/> carries a reference
+        // position below its top level: an array (its element), or a
+        // constructed type with a reference or type-parameter argument,
+        // including one nested inside a value-type argument (a tuple).
+        private static bool HasNestedReferencePosition(ITypeSymbol type)
+        {
+            if (type is IArrayTypeSymbol)
+            {
+                return true;
+            }
+
+            if (type is not INamedTypeSymbol named)
+            {
+                return false;
+            }
+
+            for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
+            {
+                foreach (ITypeSymbol argument in current.TypeArguments)
+                {
+                    if (argument.IsReferenceType
+                        || argument is ITypeParameterSymbol
+                        || HasNestedReferencePosition(argument))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private bool IsFrozenObliviousImportMember(ISymbol symbol) =>

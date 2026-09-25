@@ -34,7 +34,9 @@ namespace Cs2Gs.Tests;
 /// <para>
 /// Since ADR-0186 step 3 gsc imports the oblivious read as the platform type
 /// <c>T!</c> and checks it itself at the store, so these tests now pin that
-/// cs2gs emits no <c>!!</c> (ADR-0186 step 6, PR 0). The test names
+/// cs2gs emits no <c>!!</c> on a scalar read (ADR-0186 step 6, PR 0). A
+/// container read (the <c>string[]</c> returns) keeps its <c>!!</c>, which is
+/// still load-bearing there (#4449). The test names
 /// (<c>…Bridged</c>) predate ADR-0186 step 6 and are kept for issue
 /// traceability; the assertions state the current contract.
 /// </para>
@@ -89,11 +91,10 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("Ext.Items()", printed);
-        Assert.DoesNotContain("Ext.Items()!!", printed);
+        // A container read keeps its `!!` (ADR-0186 step 6, PR 0): the oblivious
+        // `string[]` return reads as `[]!string!`, and only the `!!` lets it
+        // convert to the enabled `[]string` slot (#4449).
+        Assert.Contains("Ext.Items()!!", printed);
     }
 
     [Fact]
@@ -133,11 +134,10 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("Ext.Items()", printed);
-        Assert.DoesNotContain("Ext.Items()!!", printed);
+        // A container read keeps its `!!` (ADR-0186 step 6, PR 0): the oblivious
+        // `string[]` return reads as `[]!string!`, and only the `!!` lets it
+        // convert to the enabled `[]string` slot (#4449).
+        Assert.Contains("Ext.Items()!!", printed);
     }
 
     [Fact]
@@ -184,11 +184,10 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("Ext.Items()", printed);
-        Assert.DoesNotContain("Ext.Items()!!", printed);
+        // A container read keeps its `!!` (ADR-0186 step 6, PR 0): the oblivious
+        // `string[]` return reads as `[]!string!`, and only the `!!` lets it
+        // convert to the enabled `[]string` slot (#4449).
+        Assert.Contains("Ext.Items()!!", printed);
     }
 
     [Fact]

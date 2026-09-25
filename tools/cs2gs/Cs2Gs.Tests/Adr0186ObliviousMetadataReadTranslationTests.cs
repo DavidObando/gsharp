@@ -49,6 +49,7 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
                 return node;
             }
             public string Describe() { return "node"; }
+            public static string[] Lines(string p) { return new[] { p, p }; }
         }
 
         public static class Wrapping
@@ -179,6 +180,45 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
             new EmittedOracleOptions { References = new[] { libraryPath } });
         Assert.Empty(missing.Diagnostics);
         Assert.Equal(-1, missing.Value);
+    }
+
+    /// <summary>
+    /// A container read keeps its <c>!!</c>. An oblivious method returning
+    /// <c>string[]</c> reads as <c>[]!string!</c>, which does not convert to
+    /// the enabled <c>[]string</c> it is assigned to; <c>!!</c> strips the top
+    /// level and the value converts. This is the netstandard2.0
+    /// <c>Gsharp.NET.Sdk</c> shape
+    /// (<c>lines = File.ReadAllLines(path)</c>, #4449) that the first cut of
+    /// this rule broke. The compile check fails if the assertion is dropped.
+    /// </summary>
+    [Fact]
+    public void A_Container_Read_Keeps_Its_Assertion()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousContainerLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static int Count(string p)
+                {
+                    string[] lines;
+                    lines = Node.Lines(p);
+                    return lines.Length;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Enable);
+
+        Assert.Contains("Node.Lines(p)!!", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.Count(\"x\")" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(2, result.Value);
     }
 
     /// <summary>
