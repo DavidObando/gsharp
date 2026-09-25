@@ -47,8 +47,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <c>[]string</c> is <c>[]!string</c>. ADR-0186 §3 rule 3 gives <c>C[T]</c>
 /// and <c>C[T!]</c> no conversion in either direction, so wrapping nested
 /// positions made every container handed between an oblivious scope and an
-/// enabled declaration an error (about 2,700 such hand-offs in the
-/// self-migration corpus). Imported oblivious metadata is not affected: its
+/// enabled declaration an error (the ADR-0186 §9 note records the
+/// measurement). Imported oblivious metadata is not affected: its
 /// nested positions still read <c>T!</c> per §2.
 /// </para>
 /// <para>

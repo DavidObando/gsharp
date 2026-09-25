@@ -643,8 +643,10 @@ public class Adr0186ObliviousScopeTests
             """,
             NullabilityMode.PlatformTypes);
 
-        // A binding diagnostic, so the bound program is enough; no emit.
-        Assert.Contains(compilation.BoundProgram.Diagnostics, d => d.Id == "GS0155");
+        // A binding diagnostic, so the bound program is enough; no emit. The
+        // nil store is the only error, so nothing else can make this pass.
+        var error = Assert.Single(compilation.BoundProgram.Diagnostics, d => d.IsError);
+        Assert.Equal("GS0155", error.Id);
     }
 
     /// <summary>
