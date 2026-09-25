@@ -2589,18 +2589,22 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // Issue #4382: finds the property or field that `deconstruct`'s
-        // out-parameter `parameter` reads, walking the base-type chain from
-        // the type that DECLARES `deconstruct` (an inherited Deconstruct reads
-        // its own type's members, not a derived type's). An exactly-named
+        // out-parameter `parameter` reads. Candidates are the names that match
+        // the parameter case-insensitively anywhere in the declaring type's
+        // inheritance graph (base classes, and base interfaces for an
+        // interface); each name is then resolved by Roslyn's own member lookup
+        // FROM THE DECLARING TYPE, so hiding (`new`), overriding and interface
+        // diamonds follow C#, not a hand-rolled walk. An exactly-named
         // property wins (a record's positional properties). Otherwise the C#
         // convention `out T x` <-> `X` applies: exactly one property or field
         // whose name matches case-insensitively. Either way the member's type
         // must be the parameter's (a pattern tests the value Deconstruct
-        // returns, not a wider member it converts). The member must then be readable
-        // by that name on `matchedType` at `pattern`: accessible there, and
-        // not hidden by a same-named member of a type between `matchedType`
-        // and the declaring type (the lowering reads `receiver.Name`). Anything
-        // else returns null with a reason.
+        // returns, not a wider member it converts). The member must then be
+        // readable as `receiver.Name` on `matchedType` at `pattern`:
+        // accessible there, and resolved by member lookup on `matchedType`
+        // (a class, an interface or a constrained type parameter) to that
+        // same slot, not to a member that hides it. Anything else returns
+        // null with a reason.
         private ISymbol FindDeconstructSlotMember(
             ITypeSymbol matchedType,
             IMethodSymbol deconstruct,
@@ -2609,33 +2613,66 @@ public sealed partial class CSharpToGSharpTranslator
             out string failureReason)
         {
             failureReason = null;
-            ISymbol match = null;
-            var candidates = new List<ISymbol>();
-            var seenNames = new HashSet<string>(StringComparer.Ordinal);
-            for (ITypeSymbol current = deconstruct.ContainingType; current != null && match == null; current = current.BaseType)
+            INamedTypeSymbol declaringType = deconstruct.ContainingType;
+            var searched = new List<ITypeSymbol>();
+            for (ITypeSymbol current = declaringType; current != null; current = current.BaseType)
             {
-                foreach (ISymbol member in current.GetMembers())
+                searched.Add(current);
+            }
+
+            if (declaringType.TypeKind == TypeKind.Interface)
+            {
+                searched.AddRange(declaringType.AllInterfaces);
+            }
+
+            var names = new HashSet<string>(StringComparer.Ordinal);
+            foreach (ITypeSymbol type in searched)
+            {
+                foreach (ISymbol member in type.GetMembers())
                 {
-                    if (!IsDeconstructSlotCandidate(member)
-                        || !string.Equals(member.Name, parameter.Name, StringComparison.OrdinalIgnoreCase))
+                    if (IsDeconstructSlotCandidate(member)
+                        && string.Equals(member.Name, parameter.Name, StringComparison.OrdinalIgnoreCase))
                     {
-                        continue;
-                    }
-
-                    if (member is IPropertySymbol && member.Name == parameter.Name)
-                    {
-                        // Issue #1887: an exactly-named property.
-                        match = member;
-                        break;
-                    }
-
-                    // A derived member hides a same-named base member; only
-                    // the most-derived one is reachable by name.
-                    if (seenNames.Add(member.Name))
-                    {
-                        candidates.Add(member);
+                        names.Add(member.Name);
                     }
                 }
+            }
+
+            // Look each name up where the Deconstruct body would: inside its
+            // declaration when it is in source, else at the pattern.
+            SemanticModel declaringModel = this.context.SemanticModel;
+            int declaringPosition = pattern.SpanStart;
+            SyntaxReference declaringSyntax = deconstruct.DeclaringSyntaxReferences.FirstOrDefault();
+            if (declaringSyntax != null)
+            {
+                declaringModel = this.context.SemanticModel.Compilation.GetSemanticModel(declaringSyntax.SyntaxTree);
+                declaringPosition = declaringSyntax.Span.Start;
+            }
+
+            ISymbol match = null;
+            var candidates = new List<ISymbol>();
+            foreach (string name in names.OrderBy(name => name, StringComparer.Ordinal))
+            {
+                ImmutableArray<ISymbol> found = declaringModel.LookupSymbols(declaringPosition, declaringType, name);
+                if (found.Length != 1 || !IsDeconstructSlotCandidate(found[0]))
+                {
+                    if (found.Length > 1)
+                    {
+                        failureReason = $"Deconstruct out-parameter '{parameter.Name}' matches '{name}' ambiguously on '{declaringType.Name}'";
+                        return null;
+                    }
+
+                    continue;
+                }
+
+                if (found[0] is IPropertySymbol && name == parameter.Name)
+                {
+                    // Issue #1887: an exactly-named property.
+                    match = found[0];
+                    break;
+                }
+
+                candidates.Add(found[0]);
             }
 
             if (match == null)
@@ -2663,21 +2700,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
-            for (ITypeSymbol current = matchedType;
-                current != null && !SymbolEqualityComparer.Default.Equals(current, match.ContainingType);
-                current = current.BaseType)
-            {
-                // Any same-named member (a `new` property or field, a method,
-                // a nested type, ...) stops member lookup there, except an
-                // overriding property: that is the same virtually dispatched
-                // slot the Deconstruct's own read reaches.
-                if (current.GetMembers(match.Name).Any(member => member is not IPropertySymbol { IsOverride: true }))
-                {
-                    failureReason = $"Deconstruct out-parameter '{parameter.Name}' reads '{match.ContainingType.Name}.{match.Name}', which '{current.Name}.{match.Name}' hides";
-                    return null;
-                }
-            }
-
             // Accessibility is judged from the pattern's enclosing type and
             // THROUGH the matched type, as C# judges `receiver.Name`: a
             // protected member is readable only through the accessing type
@@ -2702,7 +2724,36 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
+            // The lowering reads `receiver.Name` on the matched type. Member
+            // lookup there (through base classes, base interfaces or a type
+            // parameter's constraints) must reach the same slot: `match`
+            // itself or a property that overrides it. Anything else (a `new`
+            // member in a derived class or interface, a method, a nested
+            // type, an interface diamond) would read a different member.
+            ImmutableArray<ISymbol> reached = this.context.SemanticModel.LookupSymbols(pattern.SpanStart, matchedType, match.Name);
+            ISymbol other = reached.FirstOrDefault(symbol => !IsSameSlot(symbol, match));
+            if (other != null || reached.IsEmpty)
+            {
+                failureReason = other != null
+                    ? $"Deconstruct out-parameter '{parameter.Name}' reads '{match.ContainingType.Name}.{match.Name}', which '{other.ContainingType?.Name}.{other.Name}' hides"
+                    : $"Deconstruct out-parameter '{parameter.Name}' reads '{match.ContainingType.Name}.{match.Name}', which is not reachable by name on '{matchedType.Name}'";
+                return null;
+            }
+
             return match;
+
+            static bool IsSameSlot(ISymbol symbol, ISymbol slot)
+            {
+                for (ISymbol current = symbol; current != null; current = (current as IPropertySymbol)?.OverriddenProperty)
+                {
+                    if (SymbolEqualityComparer.Default.Equals(current.OriginalDefinition, slot.OriginalDefinition))
+                    {
+                        return true;
+                    }
+                }
+
+                return false;
+            }
 
             static bool IsDeconstructSlotCandidate(ISymbol member) =>
                 member is IPropertySymbol { IsIndexer: false } or IFieldSymbol { IsImplicitlyDeclared: false }

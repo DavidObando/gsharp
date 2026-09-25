@@ -275,10 +275,81 @@ public sealed class Issue4382DeconstructCaseMismatchTests
     }
 
     /// <summary>
+    /// An interface's <c>Deconstruct</c> reached through a derived interface
+    /// and through a type parameter constrained to it reads the declaring
+    /// interface's slot (<c>out int p</c> to <c>IBase.P</c>).
+    /// </summary>
+    [Fact]
+    public void CaseMismatch_ResolvesThroughDerivedInterfacesAndConstraints()
+    {
+        string printed = Translate("""
+            #nullable enable
+            using System;
+
+            namespace Sample;
+
+            public interface IBase
+            {
+                int P { get; }
+
+                int R { get; }
+
+                void Deconstruct(out int p, out int r);
+            }
+
+            public interface IDerived : IBase
+            {
+                int Q { get; }
+            }
+
+            public sealed class Impl : IDerived
+            {
+                public int P { get; set; }
+
+                public int R { get; set; }
+
+                public int Q => 0;
+
+                public void Deconstruct(out int p, out int r)
+                {
+                    p = P;
+                    r = R;
+                }
+            }
+
+            public static class C
+            {
+                public static bool Untyped(IDerived d) => d is (1, > 0);
+
+                public static bool Typed(object o) => o is IDerived(1, _);
+
+                public static bool Constrained<T>(T t)
+                    where T : class, IDerived => t is (1, > 0);
+
+                public static void Run()
+                {
+                    IDerived hit = new Impl { P = 1, R = 2 };
+                    IDerived miss = new Impl { P = 2, R = 2 };
+                    IDerived zero = new Impl { P = 1, R = 0 };
+                    Console.WriteLine(
+                        Untyped(hit) + " " + Untyped(miss) + " " + Untyped(zero) + ";"
+                        + Typed(hit) + " " + Typed(miss) + " " + Typed("x") + ";"
+                        + Constrained(hit) + " " + Constrained(miss) + " " + Constrained(zero));
+                }
+            }
+            """);
+
+        Assert.Equal(
+            "True False False;True False False;True False False",
+            CompileAndRun(printed, "C.Run()").Trim());
+    }
+
+    /// <summary>
     /// Out-parameters that cannot be mapped faithfully stay loud, with the
     /// reason, on every lowering route: an ambiguous case-insensitive match,
     /// no matching member, a member of another type, a member a derived type
-    /// hides from an inherited <c>Deconstruct</c>, an inaccessible member, a
+    /// or derived interface hides from an inherited <c>Deconstruct</c> (also
+    /// through a constrained type parameter), an inaccessible member, a
     /// property whose getter is missing or inaccessible,
     /// and an extension <c>Deconstruct</c>.
     /// </summary>
@@ -298,6 +369,9 @@ public sealed class Issue4382DeconstructCaseMismatchTests
     [InlineData("protectedGetter", "public static bool F(object o) => o is Target(1);", "reads 'P', whose getter is not accessible here")]
     [InlineData("protectedThroughBase", "public static bool F(object o) => Sub.G(o);", "reads 'P', whose getter is not accessible here")]
     [InlineData("hiddenByMethod", "public static bool F(object o) => o is Target(1);", "reads 'TargetBase.P', which 'Target.P' hides")]
+    [InlineData("interfaceHidden", "public static bool F(object o) => o is IDerived(1);", "reads 'IBase.P', which 'IDerived.P' hides")]
+    [InlineData("interfaceHidden", "public static bool F(IDerived2 d) => d is (1, _);", "reads 'IBase.P', which 'IDerived.P' hides")]
+    [InlineData("interfaceHidden", "public static bool F<T>(T t) where T : class, IDerived => t is (1, _);", "reads 'IBase.P', which 'IDerived.P' hides")]
     [InlineData("missing", "public static bool F(object o) => o is not Target(1);", "has no matching property or field")]
     [InlineData("missing", "public static bool F(object o) => o is Target(1) or string;", "has no matching property or field")]
     [InlineData("missing", "public static bool F(object o) => o is Box(Target(1));", "has no matching property or field")]
@@ -392,6 +466,23 @@ public sealed class Issue4382DeconstructCaseMismatchTests
                     // Inside a derived class, but `P`'s protected getter is
                     // not readable through a `Target`-typed receiver (CS1540).
                     public static bool G(object o) => o is Target(1);
+                }
+                """,
+            "interfaceHidden" => """
+                public interface IBase
+                {
+                    int P { get; }
+                    void Deconstruct(out int p);
+                    void Deconstruct(out int p, out int q);
+                }
+
+                public interface IDerived : IBase
+                {
+                    new int P { get; }
+                }
+
+                public interface IDerived2 : IDerived
+                {
                 }
                 """,
             "hiddenByMethod" => """
