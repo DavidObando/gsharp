@@ -19,12 +19,14 @@ instruction, follow the maintainer.
     rather than ignoring it.
   - Read the summary's "Open" and "Previously missed" sections too. They can
     hold real findings that have no inline thread.
-- **`mergeStateStatus: CLEAN` ignores review threads.** Before merging, check
-  for unresolved threads:
+- **`mergeStateStatus: CLEAN` ignores review threads.** Before merging, count
+  unresolved threads across every page (replace `N`):
   ```sh
-  gh api graphql -f query='query { repository(owner: "DavidObando", name: "gsharp") {
-    pullRequest(number: N) { reviewThreads(first: 100) { nodes { isResolved } } } } }' \
-    --jq '[.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved==false)] | length'
+  gh api graphql --paginate -f query='query($endCursor: String) {
+    repository(owner: "DavidObando", name: "gsharp") { pullRequest(number: N) {
+      reviewThreads(first: 100, after: $endCursor) {
+        nodes { isResolved } pageInfo { hasNextPage endCursor } } } } }' \
+    --jq '.data.repository.pullRequest.reviewThreads.nodes[] | select(.isResolved == false) | 1' | wc -l
   ```
 - **When review rounds keep finding the same class of bug in new shapes,
   stop patching shapes.** Find the single place the decision is made and fix
@@ -72,11 +74,16 @@ instruction, follow the maintainer.
 - **Build docs** (`pages.yml`): the WebKit dark-theme accessibility check on
   `project/quality-dashboard` fails intermittently. When a PR doesn't touch
   that page, rerun it with `gh run rerun <run-id> --failed`.
-- **`Issue3347RemainingSpillInventoryTests`** translates `src/Core` and the
-  cs2gs translator through cs2gs. It fails if the output contains retired
-  synthesized names (`__spill`, `__cast`, `__decon`, `__using`). If it fails,
-  change new C# code (or cs2gs) so the translation doesn't produce them. Don't
-  weaken the test.
+- **`Issue3347RemainingSpillInventoryTests`** translates code through cs2gs
+  and fails if the output contains retired synthesized names. It has two
+  scopes:
+  - `src/Core` is checked for all four families: `__spill`, `__cast`,
+    `__decon` and `__using`.
+  - The cs2gs translator project is checked for `__spill` only.
+
+  If it fails, change the new C# code (or cs2gs) so the translation doesn't
+  produce the name. Don't weaken the test. Its translator scope doesn't cover
+  the other three families, so don't treat it as a gate for them.
 - **Flaky or not, check the logs first.** Pull the job log
   (`gh api repos/DavidObando/gsharp/actions/jobs/<id>/logs`) and show that
   the failure is unrelated, e.g. the same failure on `main` or on an
@@ -111,14 +118,21 @@ Before touching it, read:
   `PlatformTypeSymbol`, which is distinct from `NullableTypeSymbol` (`T?`).
   `--nullability=platform-types` is the default. The legacy `enabled` mode is
   being retired (#4372), so don't add new code paths that support it.
-- **ADR-0193:** nullability queries go through one funnel.
-  - `NullabilityImportRule` is the only place that decides how an imported
-    position's nullability maps to a G# type.
-  - Consumers should use the `TypeSymbol` query API rather than writing their
-    own `is NullableTypeSymbol` tests.
-  - Analyzers GSA0007, GSA0008 and GSA0009 enforce this as the phases land.
-  - Don't add a new, independent computation of "is this nullable". That has
-    been the single most frequent root cause of bugs (#4363 tracks it).
+- **ADR-0193 (Proposed; phased rollout tracked in #4363):** nullability
+  queries go through one funnel. Check what has landed before relying on it:
+  - **Today:** don't add a new, independent computation of "is this
+    nullable". That has been the single most frequent root cause of bugs.
+    Reuse the existing readers (`ClrNullability.Get*TypeSymbol`, the
+    receiver-aware `MemberLookup.GetClr*TypeSymbol` family) instead of calling
+    `TypeSymbol.FromClrType` or `MapOpenClrTypeToSymbolic` on a signature
+    position directly.
+  - **Phase 1:** adds `NullabilityImportRule`, the single place that decides
+    how an imported position's nullability maps to a G# type, plus the first
+    `TypeSymbol` query members. From then on, route new decisions through it.
+  - **Phases 2–3:** add the rest of the query API, and the analyzers that
+    enforce the funnel (GSA0007/GSA0008, plus GSA0009 for cs2gs in Phase 5).
+    After they land, consumers use the query API instead of writing their own
+    `is NullableTypeSymbol` tests.
 - **Settled decisions** (don't reopen them without the maintainer):
   - `[Nullable(2)]` on an open type-parameter slot: a reference-type argument
     gives `T?`; a value-type argument is left unchanged, with no wrapping
