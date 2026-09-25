@@ -1658,6 +1658,47 @@ Suggested sequencing, each step independently landable and green:
    self-migration gate. **This step is the real verification**: the corpus must
    stay at its `greenFloor` while the assertion count falls sharply. Budget the
    `Cs2Gs.Tests` surface (open question 14) here, not as a surprise.
+
+   > **Implementation note (step 6, PR 0): the pre-step-3 mirror goes first.**
+   > cs2gs still copied ADR-0136's import rule for *frozen* oblivious
+   > metadata (a CLR assembly no project in the migration run emits): its
+   > rule `2202-imported-oblivious-nullable-member` and its siblings assumed
+   > such a read was `T?` and emitted `!!` at every receiver, value,
+   > initializer and assignment. Since step 3 gsc reads it as `T!` and checks
+   > it itself at each coercion to a non-null reference, so the `!!` only
+   > duplicated that check. GS0536 never fires on a `T!` operand, so the
+   > polish pass never stripped it. PR 0 leaves those reads bare, except for
+   > a value whose platform-ness would reach type inference (a `T!` argument
+   > infers `List[string!]`, which §3 rule 3 does not convert to an enabled
+   > `List[string]`). Reads of a *repo-sibling* member are unchanged, because
+   > cs2gs decides that member's emitted type (`T` or a promoted `T?`).
+   >
+   > **Measured before any code, as open questions 9 and 14 ask.** A
+   > whole-corpus translate-only run recorded 20,495 forgiveness decisions
+   > in `NullForgivenessTelemetry`. About 13,700 (67%) come from the
+   > oblivious-only rules this step deletes, and about 6,800 from the
+   > stated-nullable rules it keeps. Rule 2202 fired 6,701 times, but almost
+   > all of those are repo-sibling reads, not frozen metadata: PR 0 moves it
+   > to 6,545, and the pre-polish `!!` count from 23,157 to 23,014. The repo
+   > corpus depends on very little oblivious third-party metadata.
+   >
+   > **The container gap (§9 note) blocks the rest of step 6 as written.** A
+   > Roslyn probe over the 54 repo apps counted about 2,700 hand-offs of an
+   > unchanged container type (same generic definition, or an array) between
+   > an oblivious scope and an enabled declaration. About 2,130 run
+   > oblivious to enabled (for example, `string[]` arguments to Compiler and
+   > Core APIs); about 550 run enabled to oblivious (for example,
+   > `Enum.GetNames(...)` stored in an oblivious `string[]`). They sit mostly
+   > in `test/Compiler.Tests` (1,168) and `test/Core.Tests` (1,018). Each one
+   > compiles today, because cs2gs spells an untainted oblivious container as
+   > an enabled `List[string]`. Each one is GS0154 or GS0155 once the scope is
+   > emitted oblivious. A further 30 sites pass a literal `null` to an
+   > enabled non-null parameter (open question 2). About 3,500 more are
+   > up-casts (`List[string!]` to `IEnumerable[string]`) that compile only
+   > because gsc skips rule 3 for a base or interface destination
+   > ([#4420](https://github.com/DavidObando/gsharp/issues/4420)). The choice
+   > among the options this implies is the repository owner's, and PRs A
+   > (scope emission) and B (the fixpoint removal) wait for it.
 7. Optional: GS0592, and retire `NullAssertionPolishPass` if measurement supports
    it.
 
