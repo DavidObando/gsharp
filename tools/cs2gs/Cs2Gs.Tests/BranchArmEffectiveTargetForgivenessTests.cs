@@ -105,7 +105,8 @@ namespace App
     /// Every branching form whose whole-expression target accepts nil leaves
     /// the arm bare when the member is declared in another project of the run:
     /// a conditional or switch into a widened local, a return from a widened
-    /// method, an expression-bodied member, and an assignment.
+    /// method, an expression-bodied member, an assignment, and the left
+    /// operand of <c>??</c>.
     /// </summary>
     [Fact]
     public void NullableEffectiveTarget_ArmsStayBare()
@@ -141,6 +142,10 @@ namespace App
             e = i >= 0 ? null : argument.Name;
             return e;
         }
+
+        public static string Coalesced(Model.Arg argument, int i) => (i >= 0 ? null : argument.Name) ?? ""fallback"";
+
+        public static string SwitchCoalesced(Model.Arg argument, int i) => (i switch { 0 => null, _ => argument.Name }) ?? ""fallback"";
     }
 }";
         string printed = TranslateCrossProject(app);

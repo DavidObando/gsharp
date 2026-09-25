@@ -1533,13 +1533,21 @@ public sealed partial class CSharpToGSharpTranslator
             // promotion — so asserting there would reintroduce the throw this
             // change removes, one frame down. Narrowly scoped to that one new
             // promotion; every other value position keeps its existing bytes.
+            //
             // A conditional or switch-expression arm flows into the whole
             // expression's target (FindContextualValueTarget). When that target
             // accepts nil — `string? x = c ? null : a.Name`, a return of a
-            // method cs2gs widened to `T?` — asserting the arm would turn the
-            // nil C# happily stores into a throw.
+            // method cs2gs widened to `T?`, or the left operand of `??`, which
+            // exists to receive a nil — asserting the arm would turn the nil C#
+            // happily passes on into a throw.
+            if (IsBranchArm(value)
+                && (BranchFeedsCoalesceOperand(value)
+                    || this.NullForgivingTargetAcceptsNil(targetType, targetSymbol)))
+            {
+                return translated;
+            }
+
             if (!this.IsPureForwardingPromotedTarget(targetSymbol)
-                && !(IsBranchArm(value) && this.NullForgivingTargetAcceptsNil(targetType, targetSymbol))
                 && !this.IsActivePatternBinding(value)
                 && !this.LambdaResultFeedsNullableObservedInvocation(value)
                 && this.ReceiverNeedsNullForgiveness(value))
@@ -2831,6 +2839,40 @@ public sealed partial class CSharpToGSharpTranslator
                 SwitchExpressionArmSyntax arm => arm.Expression == current,
                 _ => false,
             };
+        }
+
+        // Whether the branching expression `value` is an arm of is (through
+        // parentheses and nested arms) the LEFT operand of `??`: a nil there
+        // selects the fallback, so the arm's target accepts nil whatever the
+        // C# type says.
+        private static bool BranchFeedsCoalesceOperand(ExpressionSyntax value)
+        {
+            SyntaxNode current = value;
+            while (true)
+            {
+                if (current.Parent is ParenthesizedExpressionSyntax)
+                {
+                    current = current.Parent;
+                }
+                else if (current.Parent is ConditionalExpressionSyntax conditional
+                    && (conditional.WhenTrue == current || conditional.WhenFalse == current))
+                {
+                    current = conditional;
+                }
+                else if (current.Parent is SwitchExpressionArmSyntax { Parent: SwitchExpressionSyntax switchExpression } arm
+                    && arm.Expression == current)
+                {
+                    current = switchExpression;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            return current.Parent is BinaryExpressionSyntax coalesce
+                && coalesce.IsKind(SyntaxKind.CoalesceExpression)
+                && coalesce.Left == current;
         }
 
         private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)
