@@ -1984,7 +1984,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // G# property pattern whose fields are the tuple/record
                     // members each position deconstructs to.
                     SeparatedSyntaxList<SubpatternSyntax> subs = recursive.PositionalPatternClause.Subpatterns;
-                    string[] memberNames = this.TryGetPositionalMemberNames(recursive, subs.Count);
+                    PositionalSlots positional = this.TryGetPositionalMembers(recursive, subs.Count, out string positionalFailure);
                     for (int i = 0; i < subs.Count; i++)
                     {
                         SubpatternSyntax sub = subs[i];
@@ -1996,20 +1996,20 @@ public sealed partial class CSharpToGSharpTranslator
                             continue;
                         }
 
-                        string memberName = sub.NameColon?.Name.Identifier.ValueText ?? memberNames?[i];
-                        if (memberName == null)
+                        if (!this.TryResolvePositionalSlot(
+                                sub,
+                                i,
+                                positional,
+                                positionalFailure,
+                                recursive.Type != null ? this.context.GetTypeInfo(recursive.Type).Type : null,
+                                out string memberName,
+                                out ISymbol memberSymbol,
+                                out string slotFailure))
                         {
-                            this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                            this.context.ReportUnsupported(sub, PositionalSubpatternGapMessage("positional subpattern", slotFailure));
                             continue;
                         }
 
-                        ISymbol memberSymbol = sub.NameColon != null
-                            ? this.GetPatternMemberSymbol(sub.NameColon.Name)
-                            : (recursive.Type != null
-                                ? this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol
-                                : null)?
-                                .GetMembers(memberName)
-                                .FirstOrDefault();
                         string emittedMemberName = this.EmittedName(memberSymbol, memberName);
                         fields.Add(new PropertyPatternField(
                             emittedMemberName,
@@ -2176,7 +2176,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // so it is installed/removed on the same schedule as every other
                 // arm-scoped binding.
                 SeparatedSyntaxList<SubpatternSyntax> subs = recursive.PositionalPatternClause.Subpatterns;
-                string[] memberNames = this.TryGetPositionalMemberNames(recursive, subs.Count);
+                PositionalSlots positional = this.TryGetPositionalMembers(recursive, subs.Count, out string positionalFailure);
                 for (int i = 0; i < subs.Count; i++)
                 {
                     SubpatternSyntax sub = subs[i];
@@ -2187,22 +2187,22 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    string memberName = sub.NameColon?.Name.Identifier.ValueText ?? memberNames?[i];
-                    if (memberName == null)
+                    if (!this.TryResolvePositionalSlot(
+                            sub,
+                            i,
+                            positional,
+                            positionalFailure,
+                            this.context.GetTypeInfo(recursive.Type).Type,
+                            out string memberName,
+                            out ISymbol memberSymbol,
+                            out string slotFailure))
                     {
                         this.context.ReportUnsupported(
                             sub,
-                            "typed positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                            PositionalSubpatternGapMessage("typed positional subpattern", slotFailure));
                         continue;
                     }
 
-                    ISymbol memberSymbol = sub.NameColon != null
-                        ? this.GetPatternMemberSymbol(sub.NameColon.Name)
-                        : (recursive.Type != null
-                            ? this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol
-                            : null)?
-                            .GetMembers(memberName)
-                            .FirstOrDefault();
                     GExpression memberAccess = new MemberAccessExpression(
                         new IdentifierExpression(designator),
                         this.EmittedName(memberSymbol, memberName));

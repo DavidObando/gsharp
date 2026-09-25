@@ -124,6 +124,32 @@ public sealed partial class CSharpToGSharpTranslator
             public ExpressionSyntax FixedExpression { get; }
         }
 
+        // Issue #4382: the members a positional pattern's slots read (see
+        // TryGetPositionalMembers). For a tuple, `IsTuple` is set, the names
+        // are `Item1`, `Item2`, ..., and `Members`/`Failures` are empty. For a
+        // `Deconstruct`, `Members[i]` is the property or field slot `i` reads,
+        // or null when it has no canonical member, and `Failures[i]` says why.
+        // A class rather than a nullable tuple so the self-migrated G# needs
+        // no tuple conversion and no nil array.
+        private sealed class PositionalSlots
+        {
+            public PositionalSlots(bool isTuple, string[] names, ISymbol[] members, string[] failures)
+            {
+                this.IsTuple = isTuple;
+                this.Names = names;
+                this.Members = members;
+                this.Failures = failures;
+            }
+
+            public bool IsTuple { get; }
+
+            public string[] Names { get; }
+
+            public ISymbol[] Members { get; }
+
+            public string[] Failures { get; }
+        }
+
         // Issue #1971: groups extended property subpatterns (`{ A.B: 0, A.C: 1 }`,
         // parsed as `ExpressionColon`) sharing a leftmost identifier prefix so
         // <see cref="TranslateRecursivePattern"/> can merge them into ONE nested

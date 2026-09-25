@@ -2138,6 +2138,17 @@ public sealed partial class CSharpToGSharpTranslator
                 memberReceiver = EnsureNonNullAssertion(receiver);
             }
 
+            // The typed form of the same hazard (`Outer(Inner(var a, _))`): a
+            // stored capture's type test narrows it only inside the test
+            // block, but a descendant binding reads it after the test, so
+            // member reads go through the narrowed `(t as Inner)!!`.
+            if (recursive.Type != null
+                && isNestedPatternMember
+                && this.state.StoredPatternCaptures.Contains(receiver))
+            {
+                memberReceiver = this.BuildPatternNarrowingReplacement(receiver, receiverSyntax: null, recursive.Type);
+            }
+
             if (recursive.PropertyPatternClause != null)
             {
                 foreach (SubpatternSyntax sub in recursive.PropertyPatternClause.Subpatterns)
@@ -2189,7 +2200,10 @@ public sealed partial class CSharpToGSharpTranslator
                 // the matching property for a record — so it lowers to the same
                 // nested member-access test a property subpattern uses.
                 SeparatedSyntaxList<SubpatternSyntax> subs = recursive.PositionalPatternClause.Subpatterns;
-                string[] memberNames = this.TryGetPositionalMemberNames(recursive, subs.Count);
+                PositionalSlots positional = this.TryGetPositionalMembers(recursive, subs.Count, out string positionalFailure);
+                ITypeSymbol positionalLookupType = recursive.Type != null
+                    ? this.context.GetTypeInfo(recursive.Type).Type
+                    : receiverType;
                 for (int i = 0; i < subs.Count; i++)
                 {
                     SubpatternSyntax sub = subs[i];
@@ -2201,20 +2215,20 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    string memberName = sub.NameColon?.Name.Identifier.ValueText ?? memberNames?[i];
-                    if (memberName == null)
+                    if (!this.TryResolvePositionalSlot(
+                            sub,
+                            i,
+                            positional,
+                            positionalFailure,
+                            positionalLookupType,
+                            out string memberName,
+                            out ISymbol memberSymbol,
+                            out string slotFailure))
                     {
-                        this.context.ReportUnsupported(sub, "positional subpattern has no canonical G# form yet (ADR-0115 §B).");
+                        this.context.ReportUnsupported(sub, PositionalSubpatternGapMessage("positional subpattern", slotFailure));
                         continue;
                     }
 
-                    ISymbol memberSymbol = sub.NameColon != null
-                        ? this.GetPatternMemberSymbol(sub.NameColon.Name)
-                        : (recursive.Type != null
-                            ? this.context.GetTypeInfo(recursive.Type).Type as INamedTypeSymbol
-                            : receiverType as INamedTypeSymbol)?
-                            .GetMembers(memberName)
-                            .FirstOrDefault();
                     GExpression memberAccess = new MemberAccessExpression(
                         memberReceiver,
                         this.EmittedName(memberSymbol, memberName));
@@ -2494,17 +2508,24 @@ public sealed partial class CSharpToGSharpTranslator
         // <see cref="ExtendedPropertyFieldTree"/> before being converted, so
         // they merge into one nested field (`{ A: { B: 0, C: 1 } }`) instead of
         // emitting the same top-level field name twice.
-        // Resolves the property name each positional subpattern of `recursive`
+        // Resolves the member each positional subpattern of `recursive`
         // deconstructs to (issue #1887), so a positional pattern can lower to the
         // same nested member-access form a property pattern uses. Returns null
-        // when no canonical mapping exists (an explicit `Deconstruct` whose
-        // out-parameters don't share a name with a same-named property), so
-        // callers fall back to the loud "no canonical G# form" diagnostic instead
-        // of silently dropping the subpattern.
-        private string[] TryGetPositionalMemberNames(RecursivePatternSyntax recursive, int arity)
+        // when no canonical mapping exists, with `failureReason` saying why, so
+        // callers report the loud "no canonical G# form" diagnostic (a
+        // CS2GS-GAP that fails the translate stage) instead of guessing.
+        // For a `Deconstruct`, each slot's member (possibly inherited) gives
+        // callers its real casing and declared type (issue #4382); see
+        // PositionalSlots.
+        private PositionalSlots TryGetPositionalMembers(
+            RecursivePatternSyntax recursive,
+            int arity,
+            out string failureReason)
         {
+            failureReason = null;
             if (this.context.SemanticModel.GetOperation(recursive) is not IRecursivePatternOperation operation)
             {
+                failureReason = "the pattern has no bound recursive-pattern operation";
                 return null;
             }
 
@@ -2519,44 +2540,225 @@ public sealed partial class CSharpToGSharpTranslator
                     tupleNames[i] = "Item" + (i + 1).ToString(CultureInfo.InvariantCulture);
                 }
 
-                return tupleNames;
+                return new PositionalSlots(true, tupleNames, Array.Empty<ISymbol>(), Array.Empty<string>());
             }
 
-            if (operation.DeconstructSymbol is not IMethodSymbol deconstruct || deconstruct.Parameters.Length != arity)
+            // Roslyn has already picked the Deconstruct overload whose arity
+            // matches the pattern, so only its shape is checked here.
+            if (operation.DeconstructSymbol is not IMethodSymbol deconstruct)
             {
+                failureReason = $"no Deconstruct method was bound for '{operation.MatchedType?.Name}'";
                 return null;
             }
 
+            if (deconstruct.IsExtensionMethod || deconstruct.ReducedFrom != null)
+            {
+                // An extension Deconstruct is declared away from the type, and
+                // nothing ties its out-parameters to the type's members.
+                failureReason = $"'{deconstruct.ContainingType?.Name}.{deconstruct.Name}' is an extension Deconstruct";
+                return null;
+            }
+
+            if (deconstruct.Parameters.Length != arity
+                || deconstruct.Parameters.Any(parameter => parameter.RefKind != RefKind.Out))
+            {
+                failureReason = $"'{deconstruct.Name}' does not take {arity} out-parameter(s)";
+                return null;
+            }
+
+            // Each slot resolves on its own: a slot that stays unresolved
+            // (null member, with its reason) fails only if its subpattern
+            // tests something, so `Inner(var a, _)` still lowers when only the
+            // discarded slot has no matching member.
             var names = new string[arity];
+            var members = new ISymbol[arity];
+            var failures = new string[arity];
             for (int i = 0; i < arity; i++)
             {
-                string name = deconstruct.Parameters[i].Name;
-                if (!HasMatchingProperty(operation.MatchedType, name))
+                ISymbol member = this.FindDeconstructSlotMember(
+                    operation.MatchedType,
+                    deconstruct,
+                    deconstruct.Parameters[i],
+                    recursive,
+                    out failures[i]);
+                names[i] = member?.Name;
+                members[i] = member;
+            }
+
+            return new PositionalSlots(false, names, members, failures);
+        }
+
+        // Issue #4382: finds the property or field that `deconstruct`'s
+        // out-parameter `parameter` reads, walking the base-type chain from
+        // the type that DECLARES `deconstruct` (an inherited Deconstruct reads
+        // its own type's members, not a derived type's). An exactly-named
+        // property wins (a record's positional properties). Otherwise the C#
+        // convention `out T x` <-> `X` applies: exactly one property or field
+        // whose name matches case-insensitively. Either way the member's type
+        // must be the parameter's (a pattern tests the value Deconstruct
+        // returns, not a wider member it converts). The member must then be readable
+        // by that name on `matchedType` at `pattern`: accessible there, and
+        // not hidden by a same-named member of a type between `matchedType`
+        // and the declaring type (the lowering reads `receiver.Name`). Anything
+        // else returns null with a reason.
+        private ISymbol FindDeconstructSlotMember(
+            ITypeSymbol matchedType,
+            IMethodSymbol deconstruct,
+            IParameterSymbol parameter,
+            SyntaxNode pattern,
+            out string failureReason)
+        {
+            failureReason = null;
+            ISymbol match = null;
+            var candidates = new List<ISymbol>();
+            var seenNames = new HashSet<string>(StringComparer.Ordinal);
+            for (ITypeSymbol current = deconstruct.ContainingType; current != null && match == null; current = current.BaseType)
+            {
+                foreach (ISymbol member in current.GetMembers())
                 {
+                    if (!IsDeconstructSlotCandidate(member)
+                        || !string.Equals(member.Name, parameter.Name, StringComparison.OrdinalIgnoreCase))
+                    {
+                        continue;
+                    }
+
+                    if (member is IPropertySymbol && member.Name == parameter.Name)
+                    {
+                        // Issue #1887: an exactly-named property.
+                        match = member;
+                        break;
+                    }
+
+                    // A derived member hides a same-named base member; only
+                    // the most-derived one is reachable by name.
+                    if (seenNames.Add(member.Name))
+                    {
+                        candidates.Add(member);
+                    }
+                }
+            }
+
+            if (match == null)
+            {
+                if (candidates.Count == 0)
+                {
+                    failureReason = $"Deconstruct out-parameter '{parameter.Name}' has no matching property or field";
                     return null;
                 }
 
-                names[i] = name;
+                if (candidates.Count > 1)
+                {
+                    failureReason = $"Deconstruct out-parameter '{parameter.Name}' matches several members case-insensitively ("
+                        + string.Join(", ", candidates.Select(candidate => $"'{candidate.Name}'")) + ")";
+                    return null;
+                }
+
+                match = candidates[0];
             }
 
-            return names;
-        }
-
-        // Walks the base-type chain looking for a property named `name` (a
-        // record's positional properties are declared directly on the record,
-        // but this also covers a Deconstruct that mirrors an inherited property).
-        private static bool HasMatchingProperty(ITypeSymbol type, string name)
-        {
-            for (ITypeSymbol current = type; current != null; current = current.BaseType)
+            ITypeSymbol memberType = match is IPropertySymbol property ? property.Type : ((IFieldSymbol)match).Type;
+            if (!SymbolEqualityComparer.Default.Equals(memberType, parameter.Type))
             {
-                if (current.GetMembers(name).OfType<IPropertySymbol>().Any())
+                failureReason = $"Deconstruct out-parameter '{parameter.Name}' is '{parameter.Type.ToDisplayString()}' but member '{match.Name}' is '{memberType.ToDisplayString()}'";
+                return null;
+            }
+
+            for (ITypeSymbol current = matchedType;
+                current != null && !SymbolEqualityComparer.Default.Equals(current, match.ContainingType);
+                current = current.BaseType)
+            {
+                // Any same-named member (a `new` property or field, a method,
+                // a nested type, ...) stops member lookup there, except an
+                // overriding property: that is the same virtually dispatched
+                // slot the Deconstruct's own read reaches.
+                if (current.GetMembers(match.Name).Any(member => member is not IPropertySymbol { IsOverride: true }))
                 {
-                    return true;
+                    failureReason = $"Deconstruct out-parameter '{parameter.Name}' reads '{match.ContainingType.Name}.{match.Name}', which '{current.Name}.{match.Name}' hides";
+                    return null;
                 }
             }
 
-            return false;
+            // Accessibility is judged from the pattern's enclosing type and
+            // THROUGH the matched type, as C# judges `receiver.Name`: a
+            // protected member is readable only through the accessing type
+            // or one derived from it.
+            ISymbol enclosing = this.context.SemanticModel.GetEnclosingSymbol(pattern.SpanStart);
+            ISymbol within = enclosing as INamedTypeSymbol
+                ?? (ISymbol)enclosing?.ContainingType
+                ?? this.context.SemanticModel.Compilation.Assembly;
+            Compilation compilation = this.context.SemanticModel.Compilation;
+            if (!compilation.IsSymbolAccessibleWithin(match, within, matchedType))
+            {
+                failureReason = $"Deconstruct out-parameter '{parameter.Name}' reads '{match.Name}', which is not accessible here";
+                return null;
+            }
+
+            // A property is read through its getter, which can be missing or
+            // less accessible than the property itself.
+            if (match is IPropertySymbol { GetMethod: var getter }
+                && (getter == null || !compilation.IsSymbolAccessibleWithin(getter, within, matchedType)))
+            {
+                failureReason = $"Deconstruct out-parameter '{parameter.Name}' reads '{match.Name}', whose getter is not accessible here";
+                return null;
+            }
+
+            return match;
+
+            static bool IsDeconstructSlotCandidate(ISymbol member) =>
+                member is IPropertySymbol { IsIndexer: false } or IFieldSymbol { IsImplicitlyDeclared: false }
+                && !member.IsStatic;
         }
+
+        // Resolves positional subpattern `index`'s member name and symbol from
+        // `positional` (see TryGetPositionalMembers). For a Deconstruct, the
+        // resolved member wins even over a `name:` label, which names the
+        // out-parameter (`Outer(p: 0)`), not the member, so an unresolved
+        // slot stays unresolved even when labelled. A tuple keeps the label
+        // or `ItemN`, looked up on `lookupType`. When unresolved, returns
+        // false and `failure` says why (`positionalFailure` when the whole
+        // pattern failed to resolve).
+        private bool TryResolvePositionalSlot(
+            SubpatternSyntax sub,
+            int index,
+            PositionalSlots positional,
+            string positionalFailure,
+            ITypeSymbol lookupType,
+            out string memberName,
+            out ISymbol memberSymbol,
+            out string failure)
+        {
+            memberName = null;
+            memberSymbol = null;
+            failure = positionalFailure;
+            if (positional == null)
+            {
+                return false;
+            }
+
+            if (!positional.IsTuple)
+            {
+                memberSymbol = positional.Members[index];
+                if (memberSymbol == null)
+                {
+                    failure = positional.Failures[index];
+                    return false;
+                }
+
+                memberName = memberSymbol.Name;
+                return true;
+            }
+
+            memberName = sub.NameColon?.Name.Identifier.ValueText ?? positional.Names[index];
+            memberSymbol = sub.NameColon != null
+                ? this.GetPatternMemberSymbol(sub.NameColon.Name)
+                : (lookupType as INamedTypeSymbol)?.GetMembers(memberName).FirstOrDefault();
+            return true;
+        }
+
+        private static string PositionalSubpatternGapMessage(string prefix, string failureReason) =>
+            failureReason == null
+                ? $"{prefix} has no canonical G# form yet (ADR-0115 §B)."
+                : $"{prefix} has no canonical G# form yet (ADR-0115 §B): {failureReason}.";
 
         private void BindPatternDesignation(VariableDesignationSyntax designation, GExpression receiver)
         {
