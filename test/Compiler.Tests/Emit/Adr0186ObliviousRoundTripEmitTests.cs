@@ -184,6 +184,7 @@ public class Adr0186ObliviousRoundTripEmitTests
     {
         const string source = """
             package Probe
+            import System.Collections.Generic
             import System.Threading.Tasks
 
             class Rep {
@@ -209,6 +210,11 @@ public class Adr0186ObliviousRoundTripEmitTests
                     await Task.Yield()
                     return Rep()
                 }
+
+                async func NestedValues(options Opts?, name string?, tag string?) ValueTask[List[string?]] {
+                    await Task.Yield()
+                    return List[string?]()
+                }
             }
             """;
 
@@ -230,6 +236,14 @@ public class Adr0186ObliviousRoundTripEmitTests
             var maybe = ClrNullability.GetReturnTypeSymbol(service.GetMethod("Maybe")!);
             Assert.IsNotType<NullableTypeSymbol>(maybe);
             Assert.IsType<NullableTypeSymbol>(FirstTypeArgument(maybe));
+
+            // A generic VALUE task keeps its leading placeholder slot, so the
+            // nested positions line up: without it the `?` lands on the list
+            // (`ValueTask[List[string]?]`) instead of its element.
+            var nested = ClrNullability.GetReturnTypeSymbol(service.GetMethod("NestedValues")!);
+            var list = FirstTypeArgument(nested);
+            Assert.IsNotType<NullableTypeSymbol>(list);
+            AssertNullableString(FirstTypeArgument(list));
         });
     }
 

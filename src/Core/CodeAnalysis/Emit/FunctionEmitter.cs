@@ -971,11 +971,16 @@ internal sealed class FunctionEmitter
     /// Issue #4287: the <c>[Nullable]</c> flags of an async kickoff's emitted
     /// return, which is the builder's task type (<c>Task</c>, <c>Task&lt;T&gt;</c>,
     /// <c>ValueTask&lt;T&gt;</c>, …), not <c>function.Type</c>. Laid out the way
-    /// csc lays out the same signature: the task's own byte when it is a
-    /// reference type (always non-null: the builder never returns nil), then
-    /// the awaited result's flags when the task is generic. A value-type task
-    /// contributes no byte of its own, and an <c>async void</c> kickoff has
-    /// nothing to describe.
+    /// csc lays out the same signature, and as <see cref="NullableFlagsBuilder"/>
+    /// lays out any other type:
+    /// <list type="bullet">
+    /// <item><description>the task's own byte: non-null for a reference task
+    /// (the builder never returns nil), the oblivious placeholder for a
+    /// generic value task, nothing for a non-generic value task;</description></item>
+    /// <item><description>then, for a generic task, the awaited result's
+    /// flags.</description></item>
+    /// </list>
+    /// An <c>async void</c> kickoff has nothing to describe.
     /// </summary>
     /// <param name="function">The async function.</param>
     /// <param name="asyncPlan">Its state-machine plan.</param>
@@ -989,12 +994,22 @@ internal sealed class FunctionEmitter
         }
 
         var flags = ImmutableArray.CreateBuilder<byte>();
-        if (!taskProperty.PropertyType.IsValueType)
+        var taskType = taskProperty.PropertyType;
+        if (!taskType.IsValueType)
         {
             flags.Add(NullableFlagsBuilder.NotAnnotated);
         }
+        else if (taskType.IsGenericType)
+        {
+            // A closed generic VALUE type (`ValueTask<T>`) still occupies a
+            // leading slot, the oblivious placeholder, before its type
+            // arguments: NullableFlagsBuilder's layout rule, and csc's. Without
+            // it every nested flag shifts by one, so `ValueTask<List<string?>>`
+            // would re-import as `ValueTask[List[string]?]` (Copilot review).
+            flags.Add(NullableFlagsBuilder.Oblivious);
+        }
 
-        if (taskProperty.PropertyType.IsGenericType)
+        if (taskType.IsGenericType)
         {
             // `function.Type` is the awaited result, whether the author wrote
             // `async func F() T` or `async func F() Task[T]`; unwrap the latter
