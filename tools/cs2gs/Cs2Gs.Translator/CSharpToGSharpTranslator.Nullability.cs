@@ -210,6 +210,22 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>True when the declaring project emits the member <c>T?</c>.</returns>
         private bool DeclaringCompilationPromotes(CSharpCompilation owner, ISymbol source)
         {
+            // The producer's own eligibility gate, applied to the DECLARED type:
+            // `source` is the original definition, so a consumer's substituted
+            // `Box<string>.Value` is judged as `T Value`, which the producer never
+            // widens unless `T` is known to be a reference type.
+            ITypeSymbol declared = source switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                _ => null,
+            };
+            if (declared is not { IsReferenceType: true }
+                || declared.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
             if (ObliviousNullabilityAnalyzer.HasAllowNullWriteContract(source))
             {
                 return true;

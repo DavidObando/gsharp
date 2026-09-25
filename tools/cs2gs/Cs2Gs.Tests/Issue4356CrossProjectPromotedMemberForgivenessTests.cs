@@ -149,6 +149,54 @@ namespace App
     }
 
     /// <summary>
+    /// Precision: an unconstrained generic member is judged by its DECLARED
+    /// type, as the producer judges it. <c>Box&lt;T&gt;.Value</c> is tested with
+    /// <c>is null</c> in its own project, but its type <c>T</c> is not known to
+    /// be a reference type, so the producer emits it as <c>T</c>. A consumer
+    /// reading <c>Box&lt;string&gt;.Value</c> must not assert it, whether it
+    /// sees the producer as source or as metadata.
+    /// </summary>
+    /// <param name="throughMetadata">Whether the consumer binds the producer's emitted image.</param>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void SubstitutedGenericMember_IsJudgedByItsDeclaredType(bool throughMetadata)
+    {
+        const string box = @"
+namespace Lib
+{
+    public sealed class Box<T>
+    {
+        public Box(T value) { Value = value; }
+
+        public T Value { get; }
+
+        public bool IsEmpty => Value is null;
+    }
+}";
+        const string consumer = @"
+namespace App
+{
+    public static class Reader
+    {
+        public static int Length(Lib.Box<string> box) => box.Value.Length;
+    }
+}";
+        (CSharpCompilation library, MetadataReference image) = Compile(box, "Lib", Array.Empty<MetadataReference>());
+        (CSharpCompilation app, _) = Compile(
+            consumer,
+            "App",
+            new[] { throughMetadata ? image : library.ToMetadataReference() });
+
+        string producer = Translate(library, new[] { library, app });
+        string printed = Translate(app, new[] { library, app });
+
+        Assert.DoesNotContain("Value T?", producer);
+        Assert.Contains("box.Value.Length", printed);
+        Assert.DoesNotContain("!!", printed);
+    }
+
+    /// <summary>
     /// Precision: the declaring compilation is matched by full assembly
     /// identity. A consumer bound to a same-named assembly of ANOTHER version
     /// (a package, not this run's project) keeps that metadata's contract, so
