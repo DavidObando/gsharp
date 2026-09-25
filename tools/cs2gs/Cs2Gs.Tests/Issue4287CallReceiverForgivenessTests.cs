@@ -25,9 +25,11 @@ public class Issue4287CallReceiverForgivenessTests
     [Fact]
     public void GenericMethodCall_OnAFlowNarrowedNullableField_AssertsTheReceiver()
     {
-        // C# narrows the mutable field after the null test; G# narrows only
-        // stable locals, so the receiver needs `!!`. The generic-name call path
-        // used to translate its receiver bare, unlike the non-generic one.
+        // C#'s flow analysis tracks the field's null state after the test (no
+        // warning here). G# narrows only STABLE receivers (locals and `let`
+        // fields, ADR-0069), and this field is a mutable `var`, so the G#
+        // receiver needs `!!`. The generic-name call path used to translate
+        // its receiver bare, unlike the non-generic one.
         string printed = TranslateUnit(@"
 #nullable enable
 using System.Collections.Generic;
