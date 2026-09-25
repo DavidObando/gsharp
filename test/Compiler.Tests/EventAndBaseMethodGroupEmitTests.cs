@@ -630,7 +630,7 @@ d2.Fire()
         }
         finally
         {
-            Directory.Delete(tempDir, recursive: true);
+            DeleteBestEffort(tempDir);
         }
     }
 
@@ -646,7 +646,7 @@ d2.Fire()
         }
         finally
         {
-            Directory.Delete(tempDir, recursive: true);
+            DeleteBestEffort(tempDir);
         }
     }
 
@@ -695,6 +695,18 @@ d2.Fire()
         var (exit, text) = RunDotnet(dll);
         Assert.True(exit == 0, $"C# reference program failed. Exit {exit}:\n{text}");
         return SplitLines(text);
+    }
+
+    private static void DeleteBestEffort(string directory)
+    {
+        try
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+        {
+            // A handle the child `dotnet` process releases late must not fail the test.
+        }
     }
 
     private static string[] SplitLines(string output)

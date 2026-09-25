@@ -204,8 +204,10 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
+        // Metadata may omit an accessor: an event with no add (or remove) is
+        // never subscribable here, and is reported below as inaccessible.
         var accessor = isAdd ? hidden.AddMethod : hidden.RemoveMethod;
-        if (IsFamilyAccessibleClrEvent(accessor, hidden.DeclaringType, receiver))
+        if (accessor != null && IsFamilyAccessibleClrEvent(accessor, hidden.DeclaringType, receiver))
         {
             return hidden;
         }
@@ -228,7 +230,7 @@ internal sealed partial class ExpressionBinder
     /// the receiver is of the current class (or a class derived from it), the
     /// C# rule for protected instance access.
     /// </summary>
-    private bool IsFamilyAccessibleClrEvent(MethodInfo? accessor, Type? declaringType, BoundExpression? receiver)
+    private bool IsFamilyAccessibleClrEvent(MethodInfo accessor, Type? declaringType, BoundExpression? receiver)
     {
         if (!ClrMemberVisibility.IsVisibleFromDerived(accessor, CanAccessInternalsOf(declaringType))
             || declaringType == null
@@ -927,10 +929,12 @@ internal sealed partial class ExpressionBinder
 
         // Issue #4394: the visibility probe above admits an event by its add
         // accessor; `-=` calls the remove accessor, which metadata can declare
-        // with a narrower accessibility.
+        // with a narrower accessibility. A missing accessor (possible in
+        // metadata) cannot be called either and takes the same report.
         var subscriptionAccessor = isAdd ? eventInfo.AddMethod : eventInfo.RemoveMethod;
-        if (!familyAccessEvent
-            && !ClrMemberVisibility.IsVisible(subscriptionAccessor, CanAccessInternalsOf(eventInfo.DeclaringType)))
+        if (subscriptionAccessor == null
+            || (!familyAccessEvent
+                && !ClrMemberVisibility.IsVisible(subscriptionAccessor, CanAccessInternalsOf(eventInfo.DeclaringType))))
         {
             Diagnostics.ReportMemberInaccessible(
                 eventNameSyntax.Location,
