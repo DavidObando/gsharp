@@ -2233,7 +2233,13 @@ internal sealed partial class OverloadResolver
                     && deferredTarget != null)
                 {
                     var targeted = bindLambdaWithTarget(deferredLambda, deferredTarget);
-                    boundArguments[i] = conversions.BindConversion(lambdaLoc, targeted, expectedType);
+
+                    // Issue #4400: at an `in` delegate parameter the target-
+                    // bound lambda is a value; pass it by readonly reference.
+                    boundArguments[i] = parameter.RefKind == RefKind.In
+                        ? conversions.BindImplicitInArgument(lambdaLoc, targeted, expectedType, parameter)
+                        : conversions.BindConversion(lambdaLoc, targeted, expectedType);
+                    hasErrors |= parameter.RefKind == RefKind.In && boundArguments[i] is BoundErrorExpression;
                     continue;
                 }
 

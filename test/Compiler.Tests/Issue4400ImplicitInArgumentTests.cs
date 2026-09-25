@@ -74,6 +74,8 @@ public class Issue4400ImplicitInArgumentTests
 
             public static long S(in long x) => x + 1;
 
+            public static int F(in System.Func<int, int> f) => f(2);
+
             public static T Id<T>(in T x) => x;
 
             public static string Gen<T>(in T x) => x?.ToString() ?? "null";
@@ -414,6 +416,49 @@ public class Issue4400ImplicitInArgumentTests
             """,
             new[] { "22", "22", "11", "5", "9" },
         };
+
+        // Arguments bound on the side paths that skip the ref-kind check: an
+        // untyped lambda target-bound late (free function and constructor), a
+        // method group through a convenience-init chain, a typed lambda through
+        // a generic method's function-literal adapter, an open type parameter
+        // passed through a generic method, and an untyped `default`.
+        yield return new object[]
+        {
+            "lambda-group-generic-default",
+            """
+            package P
+            import System
+
+            func Top(in x int32) int32 -> x + 1
+            func UseF(in f (int32) -> int32) int32 -> f(4)
+            func UseFunc(in f Func[int32, int32]) int32 -> f(5)
+            func Twice(x int32) int32 -> x * 2
+
+            class K {
+                var V int32 = 0
+                init(in f Func[int32, int32]) { V = f(6) }
+                convenience init() {
+                    init(Twice)
+                }
+                func M(in x int32) int32 -> x + 7
+                func Take[T](in x T) T -> x
+                func TakeF[T](in f (T) -> T, v T) T -> f(v)
+            }
+
+            func G[U](k K, u U) U -> k.Take(u)
+
+            let k = K()
+            Console.WriteLine(UseF((x) -> x * 2))
+            Console.WriteLine(UseFunc((x) -> x * 3))
+            Console.WriteLine(K((x) -> x * 4).V)
+            Console.WriteLine(k.V)
+            Console.WriteLine(k.TakeF((x int32) -> x + 1, 8))
+            Console.WriteLine(G(k, 6))
+            Console.WriteLine(Top(default))
+            Console.WriteLine(k.M(default))
+            """,
+            new[] { "8", "15", "24", "12", "9", "6", "1", "7" },
+        };
     }
 
     /// <summary>
@@ -493,6 +538,8 @@ public class Issue4400ImplicitInArgumentTests
             Console.WriteLine(Api.Id(p).X)
             Console.WriteLine(Api.Gen(12))
             Console.WriteLine(Fwd64(40))
+            Console.WriteLine(Api.S(default))
+            Console.WriteLine(Api.F((x int32) -> x * 5))
             """;
 
         var tempDir = Directory.CreateTempSubdirectory("gs_4400_imp_").FullName;
@@ -508,7 +555,7 @@ public class Issue4400ImplicitInArgumentTests
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, $"the app must run. Exit {exit}:\n{output}");
             Assert.Equal(
-                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41" },
+                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41", "1", "10" },
                 SplitLines(output));
         }
         finally

@@ -389,9 +389,13 @@ internal static class ClrOverloadResolution
         // generic method invoked with an explicit type argument (e.g.
         // `Task.FromResult[int32](default)`) stays applicable; the concrete-typed
         // default is materialized against the resolved parameter after selection.
+        // Issue #4400: a by-ref target is classified by its pointee, exactly as a
+        // plain value argument's is below (ADR-0039 peel), so `S(default)` for
+        // `S(in long)` stays applicable and binds like C# (a readonly temp). A
+        // `ref`/`out` slot still rejects it afterwards (ValidateRefArguments).
         if (ReferenceEquals(source, DefaultLiteralArgumentType))
         {
-            return target.IsByRef ? ImplicitConversionKind.None : ImplicitConversionKind.Identity;
+            return ImplicitConversionKind.Identity;
         }
 
         // Issue #3907: a by-ref argument over a same-compilation user reference

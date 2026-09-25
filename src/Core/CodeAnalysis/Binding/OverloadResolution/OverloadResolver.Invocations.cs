@@ -763,6 +763,34 @@ internal sealed partial class OverloadResolver
         return true;
     }
 
+    // Issue #4400: the per-argument loops of the user-method and extension
+    // paths leave through several early `continue`s (an open type-parameter
+    // pass-through, function-literal adapters, formattable strings) that never
+    // reach BindCallArgumentWithRefKind. Any plain value such a branch leaves
+    // at an `in` slot is passed by readonly reference here, so no path can
+    // hand the emitter a value where the callee expects an address.
+    private void PassPlainInArgumentsByReference(
+        ImmutableArray<BoundExpression>.Builder convertedArgs,
+        ImmutableArray<ParameterSymbol> parameters,
+        int parameterOffset,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution)
+    {
+        for (var i = 0; i < convertedArgs.Count && i + parameterOffset < parameters.Length; i++)
+        {
+            var parameter = parameters[i + parameterOffset];
+            if (parameter.RefKind != RefKind.In || !ConversionClassifier.IsPlainValueArgument(convertedArgs[i]))
+            {
+                continue;
+            }
+
+            var expectedType = substitution != null ? substituteType(parameter.Type, substitution) : parameter.Type;
+            var value = convertedArgs[i] is BoundDefaultExpression { Type: var defaultType } untypedDefault && defaultType == TypeSymbol.Error
+                ? new BoundDefaultExpression(untypedDefault.Syntax, expectedType)
+                : convertedArgs[i];
+            convertedArgs[i] = conversions.CreateImplicitInReference(value, expectedType);
+        }
+    }
+
     private bool TryBuildImplicitMemberLoad(
         VariableSymbol variable,
         TextLocation location,
@@ -1429,6 +1457,9 @@ internal sealed partial class OverloadResolver
             convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1], i + 1));
         }
 
+        // convertedArgs[0] is the receiver, so it aligns with extension.Parameters.
+        PassPlainInArgumentsByReference(convertedArgs, extension.Parameters, parameterOffset: 0, substitution);
+
         // Issue #1931: stash the extension function's own (explicit or
         // inferred) type arguments on the bound node so the emitter's
         // MethodSpec construction can use this authoritative bind-time result
@@ -1945,6 +1976,8 @@ internal sealed partial class OverloadResolver
 
             methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
         }
+
+        PassPlainInArgumentsByReference(convertedArgs, method.Parameters, parameterOffset, substitution);
 
         var finalArguments = PreserveNamedArgumentEvaluationOrder(
             ce.Arguments,

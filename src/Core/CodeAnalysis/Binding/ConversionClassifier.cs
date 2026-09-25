@@ -2933,6 +2933,13 @@ internal sealed class ConversionClassifier
             return argument;
         }
 
+        // An untyped `default` (ADR-0100 placeholder) takes the pointee type,
+        // exactly as it takes a by-value parameter's type.
+        if (argument is BoundDefaultExpression { Type: var defaultType } && defaultType == TypeSymbol.Error)
+        {
+            argument = new BoundDefaultExpression(argument.Syntax, expectedType);
+        }
+
         var converted = BindConversion(location, argument, expectedType, callParameter: parameter);
         if (converted is BoundErrorExpression || converted.Type == TypeSymbol.Error)
         {
@@ -2985,10 +2992,22 @@ internal sealed class ConversionClassifier
         => parameter.ParameterType.IsByRef
             && parameter.IsIn
             && !parameter.IsOut
-            && argument is not (BoundAddressOfExpression or BoundConditionalAddressExpression or BoundErrorExpression)
+            && IsPlainValueArgument(argument);
+
+    /// <summary>
+    /// Issue #4400: whether a bound argument is a plain VALUE — not already an
+    /// address (<c>in x</c>, <c>&amp;x</c>, a conditional address, a <c>*T</c>),
+    /// not a by-ref interpolated-string handler (lowered to an address later),
+    /// and not an error. An untyped <c>default</c> placeholder counts: it is
+    /// materialized at the pointee type.
+    /// </summary>
+    /// <param name="argument">The bound argument.</param>
+    /// <returns><see langword="true"/> when an <c>in</c> slot needs it passed by implicit reference.</returns>
+    public static bool IsPlainValueArgument(BoundExpression argument)
+        => argument is not (BoundAddressOfExpression or BoundConditionalAddressExpression or BoundErrorExpression)
             && argument is not BoundInterpolatedStringExpression { Handler: not null }
             && argument.Type is not (ByRefTypeSymbol or PointerTypeSymbol)
-            && argument.Type != TypeSymbol.Error;
+            && (argument.Type != TypeSymbol.Error || argument is BoundDefaultExpression);
 
     /// <summary>
     /// Issue #4400: the pointee type an implicit <c>in</c> argument converts to

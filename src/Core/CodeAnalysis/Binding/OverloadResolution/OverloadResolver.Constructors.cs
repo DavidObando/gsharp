@@ -1275,25 +1275,31 @@ internal sealed partial class OverloadResolver
                 ? Invariant.Required(parameterSyntax[i], "an explicit constructor argument has source syntax").Location
                 : syntax.Identifier.Location;
 
-            // Issue #4400: a plain argument at an `in` constructor parameter is
-            // passed by readonly reference, as in C#.
-            if (parameter.RefKind == RefKind.In
+            var isImplicitIn = parameter.RefKind == RefKind.In
                 && argument is not BoundAddressOfExpression
-                && argument is not BoundConditionalAddressExpression)
-            {
-                var implicitIn = conversions.BindImplicitInArgument(argLocation, argument, paramType, parameter);
-                hasErrors |= implicitIn is BoundErrorExpression;
-                convertedArguments.Add(implicitIn);
-                continue;
-            }
-
+                && argument is not BoundConditionalAddressExpression;
             if (argument is BoundErrorExpression { Syntax: LambdaExpressionSyntax deferredLambda }
                 && bindLambdaWithTarget != null
                 && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var deferredTarget)
                 && !TypeSymbol.ContainsTypeParameter(deferredTarget))
             {
                 var targeted = bindLambdaWithTarget(deferredLambda, deferredTarget);
-                convertedArguments.Add(conversions.BindConversion(argLocation, targeted, paramType));
+                var targetedArgument = isImplicitIn
+                    ? conversions.BindImplicitInArgument(argLocation, targeted, paramType, parameter)
+                    : conversions.BindConversion(argLocation, targeted, paramType);
+                hasErrors |= isImplicitIn && targetedArgument is BoundErrorExpression;
+                convertedArguments.Add(targetedArgument);
+                continue;
+            }
+
+            // Issue #4400: a plain argument at an `in` constructor parameter is
+            // passed by readonly reference, as in C# (a deferred lambda was
+            // target-bound first, just above).
+            if (isImplicitIn)
+            {
+                var implicitIn = conversions.BindImplicitInArgument(argLocation, argument, paramType, parameter);
+                hasErrors |= implicitIn is BoundErrorExpression;
+                convertedArguments.Add(implicitIn);
                 continue;
             }
 
@@ -2335,7 +2341,13 @@ internal sealed partial class OverloadResolver
 
             if (TryBindConstructorMethodGroup(argument, parameter.Type, argLocation, out var methodGroupArg))
             {
-                convertedArgs.Add(Invariant.Required(methodGroupArg, "a successful constructor method-group binding produces a bound expression"));
+                var boundGroup = Invariant.Required(methodGroupArg, "a successful constructor method-group binding produces a bound expression");
+
+                // Issue #4400: a method group at an `in` delegate parameter is
+                // a delegate VALUE; pass it by readonly reference.
+                convertedArgs.Add(parameter.RefKind == RefKind.In && boundGroup is not BoundErrorExpression
+                    ? conversions.CreateImplicitInReference(boundGroup, parameter.Type)
+                    : boundGroup);
                 hadErrors |= methodGroupArg is BoundErrorExpression;
                 continue;
             }
