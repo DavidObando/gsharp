@@ -116,6 +116,11 @@ internal static class NullForgivenessTelemetry
     /// </summary>
     internal static void EnsureInitialized()
     {
+        // Explicit rather than relying on the call itself: the type has a
+        // static constructor (so it is not beforefieldinit and any static
+        // call would run it), but this states the intent and survives a
+        // later refactor that removes that constructor.
+        System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(NullForgivenessTelemetry).TypeHandle);
     }
 
     // Best effort: a measurement dump must never fail a run that otherwise
