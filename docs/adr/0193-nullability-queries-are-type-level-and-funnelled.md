@@ -1134,6 +1134,20 @@ something the plan left open:
     source (ILVerify `StackUnexpected` in `Issue3932GenericEmitSitesTests`).
   - The interpolated-string-handler local takes a `params` handler array's
     element, not the array.
+- **Correction to §3: the analyzers' Roslyn surface is bounded.** §3 assumed
+  an `InternalAnalyzers` rule may use the whole `IOperation` tree. It cannot:
+  ADR-0169 self-migrates every InternalAnalyzer to G# through cs2gs's
+  `RoslynAnalyzerApiMap`, and the hot-core translation guard enforces that.
+  GSA0007 exceeds the map. It uses `IMethodReferenceOperation` (the
+  method-group clause), `ILocalReferenceOperation`, `IAssignmentOperation`,
+  `IVariableDeclaratorOperation`, `IForEachLoopOperation`,
+  `IDeclarationExpressionOperation` and `IPropertyReferenceOperation` (the
+  signature-accessor clause), and `MethodKind` and
+  `IMethodSymbol.AssociatedSymbol` (member resolution). GSA0008 will exceed it
+  too (`IIsTypeOperation`, the pattern operations, `ITypeOfOperation`).
+  Restricting the rules to the mapped surface would open the holes §3 exists
+  to close, so the resolution is a decision about the two ADRs, not about the
+  rules. It is pending with the repository owner on PR #4427.
 - **Deleted, not attributed:**
   - `StatementBinder`'s private `MapOpenClrTypeToSymbolic` forwarding wrapper;
   - the unused `MemberLookup.SubstituteOpenIndexerType`;
