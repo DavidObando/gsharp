@@ -211,15 +211,25 @@ degrades in the stub (§B) and may reduce what attribute-driven generators match
 - **Degraded / unsupported:** generators inspecting method **bodies** or
   C#-syntax trivia (stubs have no bodies), generators keying on C#-only syntax
   shapes, interceptors and other csc-only hooks, VB generators.
-- **Discoverability:** `gsgen` emits a per-build summary (generators discovered,
-  run, skipped, crashed, documents produced), plus `GS9206` info when a
-  generator produced zero output while its triggering attribute appears in user
-  code, and `GS9207` per-document back-translation gaps (reusing cs2gs triage
-  records). Host/generator failures use `GS9200`–`GS9219` (verified free):
-  `GS9200` non-structured exit, `GS9201` parse-fatal input, `GS9202` stub
-  re-parse failure (host bug), `GS9203` generator threw, `GS9204` unspellable
-  signature type, `GS9205` analyzer load failure, `GS9206` generator matched
-  nothing, `GS9207` back-translation gap.
+- **Discoverability:** `gsgen` was to emit a per-build summary (generators
+  discovered, run, skipped, crashed, documents produced), plus `GS9206` info
+  when a generator produced zero output while its triggering attribute appears
+  in user code, and per-document back-translation gaps (reusing cs2gs triage
+  records). Host/generator diagnostics use `GS9200`–`GS9219` (verified free).
+  As built (2026-09-24):
+  - emitted: `GS9200` non-structured exit, `GS9203` generator threw or failed
+    to load, `GS9204` unspellable signature type, `GS9207` a note about the
+    invocation (an ignored or malformed argument), and `GS9208` a generated
+    implementing part that cannot take its declaring part's header (see the
+    2026-09-24 amendment);
+  - reserved, not emitted: `GS9201` parse-fatal input, `GS9202` stub re-parse
+    failure (host bug), `GS9205` analyzer load failure (reported as `GS9203`),
+    `GS9206` generator matched nothing.
+
+  The per-build summary and a back-translation-gap diagnostic are not
+  implemented; a back-translation gap surfaces as a gsc error in the
+  generated `.g.gs`. The diagnostics references (`docs/diagnostics.md`) list
+  the same assignments.
 
 ### I. Determinism contract
 
@@ -428,6 +438,75 @@ Follow-ups (not in the initial delivery):
   (`samples/ForeignCompile/ThisAssembly.cs`) with NBGV's exact shape; making
   NBGV itself fire for `Language=Gsharp` needs its own follow-up.
 
+### Amendment (2026-09-24): generated partial-method implementing parts
+
+ADR-0192 follow-on 2 makes gsgen supply the implementing part of a G#
+partial method whose declaring part the user wrote, such as
+`@GeneratedRegex(...) private partial func Digits() Regex;` in a `shared`
+block. Three rules extend §B–§D:
+
+- **Implementing parts.** The stub renders a lone G# declaring part as a C#
+  partial method definition. A generated implementation of it translates to a
+  G# implementing part (`partial func` with its body, cs2gs's
+  `emitGeneratedImplementingParts`), which gsc pairs with the declaring part
+  (ADR-0192).
+- **One unit per namespace.** A generated document that declares several
+  namespaces is split into one `.g.gs` per namespace, the way `cs2gs migrate`'s
+  repository layout splits a source file (`TranslateStage`, `packageFilter`).
+  The first unit, with the fewest dots in its namespace, keeps the hint-name
+  file. It also takes the document's global-namespace declarations (and any
+  top-level statements), which the unsplit translation hoisted into a package
+  too; without that they would match no unit and vanish. Each other unit is
+  written to `{hint}.{Package_With_Underscores}.g.gs`. When a generator hint
+  name already owns that file, the split unit gets a `.split` marker instead
+  (`{hint}.{Package}.split.g.gs`), so the plain name never depends on write
+  order.
+  Translated as one unit, the Regex generator's file put its helper types
+  (`Digits_0`, `Utilities`, `RunnerFactory`, the `IndexOfAny*` extension
+  funcs) in the user's package, where a user type named `Utilities` collided
+  with them (GS0102). Split, they stay in
+  `System.Text.RegularExpressions.Generated`, and the user-package unit reaches
+  them through an ordinary import. The generator declares them `file` types.
+  G# has no file scope, so they become `internal` types of that separate
+  package: invisible outside the assembly and out of the user's namespace.
+  Several user packages that use the generator share one helper package,
+  because the generator emits one `Generated` namespace. The split also
+  applies to foreign C# `Compile` items (issue #2214).
+- **Header copying.** gsc pairs the parts by comparing header text (GS0611,
+  and the parameter-type grouping key), but the implementing part is spelled
+  from the generated C#: `Regex` where the user wrote
+  `System.Text.RegularExpressions.Regex`, `int32` where the user wrote `int`.
+  So gsgen re-spells each implementing part's header with its declaring
+  part's own text, from the first modifier through the return type. The
+  renderer records each lone declaring part it offered, and
+  `ImplementingPartHeaders` finds both headers with gsc's own parser. The two
+  parts are matched by package, top-level type, name and parameter count.
+  Method annotations and the body are kept, because gsc unions annotations
+  and each part keeps its own. The user file's namespace imports, and any
+  alias import the header names, are added to the `.g.gs` so the copied
+  header binds.
+
+  The header is left as generated, and `GS9208` is reported at the declaring
+  part, when:
+  - a parameter name differs, because the body refers to the generated
+    names and copying the header would rebind it to other parameters; or
+  - an alias the header needs is already bound to a different target in the
+    `.g.gs`: by the generated code, or by another user file whose declaring
+    part's header was copied into the same `.g.gs`. A partial class split
+    across files that alias one name differently hits this, because a `.g.gs`
+    has one import scope. The message names both sources.
+
+  gsc then reports the two parts as mismatched, so nothing pairs silently.
+
+  Limits:
+  - Overloads with the same name and parameter count in one type are not told
+    apart, so their headers stay as generated.
+  - A copied namespace import can make a name in the generated body
+    ambiguous. gsc reports that as an error; it is never silently bound.
+  - Conflicting aliases across a partial class's files are reported, not
+    resolved (for example by qualifying the alias target in the copied
+    header).
+
 ## Consequences
 
 - Positive: native `.gsproj` projects get the C# generator experience — build
@@ -441,7 +520,7 @@ Follow-ups (not in the initial delivery):
 - Negative: the SDK gains a second `ResolvePackageAssets` invocation with a
   divergent `ProjectLanguage` — unconventional and exposed to SDK-version drift;
   it must be e2e-covered on every SDK bump. `gsgen`'s pinned Roslyn version
-  bounds which generator packages can load (`GS9205`).
+  bounds which generator packages can load (a load failure is `GS9203`).
 - Negative: LS regeneration rebuilds the stub compilation per debounced edit;
   large projects may need save-only triggering if per-keystroke is too hot.
 - Constraint: depends on ADR-0144 partial types (generated parts augment user
@@ -452,8 +531,9 @@ Follow-ups (not in the initial delivery):
 
 Generators inspecting method bodies, C#-syntax shapes, or csc-only hooks
 (interceptors) are not supported — the stub carries declarations only. This is a
-deliberate boundary, surfaced to developers via the per-build summary and
-`GS9206`/`GS9207`, not a silent degradation.
+deliberate boundary: a generator that needs more fails loudly, through its own
+diagnostics, `GS9203`, or gsc errors in the generated `.g.gs`, not through a
+silent degradation.
 
 ## Alternatives considered
 

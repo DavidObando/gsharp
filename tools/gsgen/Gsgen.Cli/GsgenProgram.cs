@@ -379,6 +379,27 @@ public static class GsgenProgram
         {
             stdout.WriteLine($"{GsgenDiagnostics.SyntheticAnchor}: info GS9204: {fallback}");
         }
+
+        // ADR-0192 follow-on 2: a generated implementing part whose header
+        // could not be copied from the user's declaring part (GS9208). An
+        // error, anchored at the declaring part, so the build fails there.
+        foreach (var diagnostic in result.HostDiagnostics)
+        {
+            stdout.WriteLine(FormatHostDiagnostic(diagnostic));
+        }
+    }
+
+    private static string FormatHostDiagnostic(GeneratorHostDiagnostic diagnostic)
+    {
+        var message = diagnostic.Message.Replace("\r", " ").Replace("\n", " ");
+        var location = diagnostic.Location;
+        if (string.IsNullOrEmpty(location.FileName))
+        {
+            return $"{GsgenDiagnostics.SyntheticAnchor}: error {diagnostic.Id}: {message}";
+        }
+
+        return $"{location.FileName}({location.StartLine + 1},{location.StartCharacter + 1},"
+            + $"{location.EndLine + 1},{location.EndCharacter + 1}): error {diagnostic.Id}: {message}";
     }
 
     /// <summary>

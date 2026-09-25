@@ -145,6 +145,21 @@ For native `.gsproj` projects, `gsgen` hosts Roslyn source generators outside `g
 
 `gsgen` projects G# declarations to C# stubs, runs the real Roslyn generators, translates generated C# back to G#, and emits partial `.g.gs` parts. This is the path used by source generators in migrated projects too: `cs2gs` preserves generator inputs rather than freezing generated output.
 
+A generator that implements a partial method, such as the Regex generator, pairs with a G# declaring part. Write a static one inside a `shared` block; `private shared partial func` is not valid G#:
+
+```gsharp
+partial class Patterns {
+    shared {
+        @GeneratedRegex("\\d+", RegexOptions.IgnoreCase)
+        private partial func Digits() Regex;
+    }
+}
+```
+
+`gsgen` writes the generated body as an implementing part (`partial func` with a body) spelled with your declaring part's header, so a signature spelled differently from the generated C# still pairs: `System.Text.RegularExpressions.Regex` or `Regex`, `int` or `int32`. Two limits apply:
+- overloads with the same name and parameter count in one type keep the generated spelling, so spell those the way the generated code does;
+- parameter names must match the generator's, which normally copies them from your declaration. A mismatch is reported as `GS9208`. The generator's helper types stay in their own package, `System.Text.RegularExpressions.Generated` for the Regex generator, so they cannot collide with your types. See [`samples/GeneratedRegex`](https://github.com/DavidObando/gsharp/tree/main/samples/GeneratedRegex).
+
 Stray `.cs` `Compile` items produced by other MSBuild targets are partitioned out before `gsc` sees them and are translated through the same `gsgen` pipeline.
 
 ## Libraries and packages

@@ -95,6 +95,14 @@ are reported unsupported unless invariant construction preserves their
 semantics. This preserves runtime behavior without back-translating the
 generator's large specialized runner.
 
+*Note (2026-09-24).* Native G# now has the build-time path this rewrite
+stands in for: a G# `@GeneratedRegex` declaring part in a `shared` block,
+whose implementing part gsgen produces from the real generator (ADR-0192
+follow-on 2; ADR-0145's 2026-09-24 amendment). The migrate side does not use
+it yet. `TryTranslateGeneratedRegex` still emits the cached-`Regex` rewrite
+until step 5 of that follow-on retires it in favour of emitting the declaring
+part (issue #4301).
+
 **File/options-driven generators (Avalonia `.axaml`, issue #2223).** Some
 generators consume non-source inputs rather than attributes — Avalonia's XAML
 name generator reads each `.axaml` (a Roslyn `AdditionalText`) and, guided by
@@ -255,7 +263,10 @@ written only on the definition). ADR-0192 has since given G# partial methods
   user-implementation shape, which today still takes the pre-amendment path)
   and retiring the `GeneratedRegex` rewrite above in favour of a real
   declaring part plus a gsgen-produced implementing part (ADR-0192 follow-on
-  items 2–3, issue #4301).
+  items 2–3, issue #4301). *Update (2026-09-24):* item 2 is done. gsgen
+  produces the implementing part for a user-written G# declaring part, but
+  the migrate side is still the `TryTranslateGeneratedRegex` rewrite until
+  item 3 (step 5) lands.
 
 ## Consequences
 

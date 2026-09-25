@@ -114,6 +114,17 @@ internal static class PartialMethodMerger
     }
 
     /// <summary>
+    /// The text GS0611 compares a node of a partial method's header by: each
+    /// token's kind and text, with trivia between tokens ignored. gsgen uses it
+    /// to decide whether a generated implementing part already spells its
+    /// declaring part's header (ADR-0192 follow-on 2), so the two comparisons
+    /// cannot drift.
+    /// </summary>
+    /// <param name="node">The header node, or <see langword="null"/>.</param>
+    /// <returns>The normalized token signature (empty for <see langword="null"/>).</returns>
+    internal static string TokenSignature(SyntaxNode? node) => NormalizeNodeText(node);
+
+    /// <summary>
     /// Collapses the partial-method groups in one method list. Non-partial
     /// methods pass through in place and in source order; a merged pair takes
     /// the position of its <em>declaring</em> part, which is the position a

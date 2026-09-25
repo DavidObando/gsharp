@@ -147,6 +147,7 @@ public sealed partial class CSharpToGSharpTranslator
     private readonly string projectDirectory;
     private readonly string packageFilter;
     private readonly bool includeFileAttributes;
+    private readonly bool includeGlobalNamespace;
     private readonly bool analyzerApiMode;
 
     // Issue #3645: when true, the C# entry-point class is always preserved as
@@ -200,6 +201,14 @@ public sealed partial class CSharpToGSharpTranslator
     /// When <see langword="false"/>, omits compilation-unit assembly/module
     /// attributes. Used for secondary package-split outputs so file-level
     /// metadata is emitted once.
+    /// </param>
+    /// <param name="includeGlobalNamespace">
+    /// With <paramref name="packageFilter"/>, also emits the document's
+    /// global-namespace declarations (and top-level statements) into this
+    /// unit's package. A package-split caller passes <see langword="true"/>
+    /// for exactly one unit, so a global type lands where the unsplit
+    /// translation hoists it (a package) instead of matching no filter and
+    /// vanishing. Ignored without <paramref name="packageFilter"/>.
     /// </param>
     /// <param name="widenObliviousReferenceFields">
     /// When <see langword="true"/>, nullable-oblivious reference fields are
@@ -262,9 +271,11 @@ public sealed partial class CSharpToGSharpTranslator
         string projectDirectory = null,
         bool emitPartialMethodPairs = false,
         IReadOnlyCollection<string> translatedFilePaths = null,
-        bool emitGeneratedImplementingParts = false)
+        bool emitGeneratedImplementingParts = false,
+        bool includeGlobalNamespace = false)
     {
         this.emitGeneratedImplementingParts = emitGeneratedImplementingParts;
+        this.includeGlobalNamespace = includeGlobalNamespace;
         this.translatedFilePaths = translatedFilePaths is null
             ? null
             : new HashSet<string>(translatedFilePaths, StringComparer.Ordinal);
@@ -389,6 +400,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ownedExtensions,
                 this.preservePartialParts,
                 this.packageFilter,
+                this.includeGlobalNamespace,
                 preserveEntryType ? null : entryType);
         IEnumerable<Microsoft.CodeAnalysis.SyntaxTree> extraUsingTrees =
             contributingTrees
@@ -463,6 +475,7 @@ public sealed partial class CSharpToGSharpTranslator
         // so this only ever matches one document.
         List<GlobalStatementSyntax> globalStatements = root.Members.OfType<GlobalStatementSyntax>().ToList();
         bool hasNativeTopLevelStatements = globalStatements.Count > 0
+            && (this.packageFilter is null || this.includeGlobalNamespace)
             && entryPoint != null
             && entryPoint.DeclaringSyntaxReferences.Length > 0
             && entryPoint.DeclaringSyntaxReferences[0].SyntaxTree == root.SyntaxTree
@@ -481,7 +494,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         foreach (MemberDeclarationSyntax member in EnumerateTopLevelDeclarations(root)
             .Where(member => this.packageFilter is null
-                || DeclarationBelongsToPackage(member, context, this.packageFilter)))
+                || DeclarationBelongsToPackage(member, context, this.packageFilter, this.includeGlobalNamespace)))
         {
             if (member is GlobalStatementSyntax)
             {
@@ -658,11 +671,32 @@ public sealed partial class CSharpToGSharpTranslator
         }
     }
 
+    // A package-split unit's declarations: those of its own namespace, plus,
+    // for the one unit that takes them, the global namespace's.
     private static bool DeclarationBelongsToPackage(
         MemberDeclarationSyntax member,
         TranslationContext context,
-        string package) =>
-        context.GetDeclaredSymbol(member)?.ContainingNamespace?.ToDisplayString() == package;
+        string package,
+        bool includeGlobalNamespace) =>
+        NamespaceBelongsToPackage(context.GetDeclaredSymbol(member)?.ContainingNamespace, package, includeGlobalNamespace);
+
+    private static bool NamespaceBelongsToPackage(
+        INamespaceSymbol containingNamespace,
+        string package,
+        bool includeGlobalNamespace)
+    {
+        if (containingNamespace is null)
+        {
+            return false;
+        }
+
+        if (containingNamespace.IsGlobalNamespace)
+        {
+            return includeGlobalNamespace;
+        }
+
+        return containingNamespace.ToDisplayString() == package;
+    }
 
     private static IEnumerable<MemberDeclarationSyntax> FlattenNamespaceMembers(MemberDeclarationSyntax member)
     {
@@ -1183,6 +1217,7 @@ public sealed partial class CSharpToGSharpTranslator
         OwnedExtensionRegistry ownedExtensions,
         bool preservePartialParts,
         string packageFilter,
+        bool includeGlobalNamespace,
         INamedTypeSymbol flattenedEntryType)
     {
         var trees = new HashSet<Microsoft.CodeAnalysis.SyntaxTree>
@@ -1197,7 +1232,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             INamedTypeSymbol type = rootModel.GetDeclaredSymbol(declaration);
             if (packageFilter != null
-                && type?.ContainingNamespace?.ToDisplayString() != packageFilter)
+                && !NamespaceBelongsToPackage(type?.ContainingNamespace, packageFilter, includeGlobalNamespace))
             {
                 continue;
             }

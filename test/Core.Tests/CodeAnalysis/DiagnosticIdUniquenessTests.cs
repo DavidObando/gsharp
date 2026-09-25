@@ -219,6 +219,18 @@ public class DiagnosticIdUniquenessTests
             // Emitted directly by the compiler's reference-closure check.
             ["GS9100"] = "Warning",
 
+            // Emitted by the gsgen source-generator host (ADR-0145), not gsc;
+            // the rest of the GS9200–GS9219 block is reserved there.
+            ["GS9200"] = "Error",
+            ["GS9201"] = "Reserved",
+            ["GS9202"] = "Reserved",
+            ["GS9203"] = "Warning",
+            ["GS9204"] = "Info",
+            ["GS9205"] = "Reserved",
+            ["GS9206"] = "Reserved",
+            ["GS9207"] = "Info",
+            ["GS9208"] = "Error",
+
             // Emitted directly for unexpected emit failures.
             ["GS9998"] = "Error",
 

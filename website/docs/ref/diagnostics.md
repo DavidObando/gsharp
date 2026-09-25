@@ -376,6 +376,25 @@ passed via `/gsanalyzer:`.
 | GS9306 | Error | `@ExtensionOwner` (issue #4234), synthesized by cs2gs to preserve a migrated C# static extension class's CLR owner-type identity, was used outside the one shape it supports: a top-level extension function carrying a single `typeof(T)` argument naming a non-generic class declared in the same package. |
 | GS9307 | Error | `@Oblivious` / `@NullabilityEnabled` (ADR-0186 §9) was written in a shape it does not support: with arguments, with a target specifier, or both annotations on the same declaration. Neither takes arguments; the nearest annotation decides whether the unadorned reference types written inside it are oblivious (`T!`). |
 
+### Source-generator host diagnostics (GS9200–GS9219)
+
+The GS9200–GS9219 block belongs to `gsgen`, the Roslyn source-generator host
+([ADR-0145](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0145-source-generator-host-native-gsharp.md)). `gsgen` runs before `gsc`, and the SDK relays its diagnostics
+into the build; an error fails the build. A generator's own diagnostics keep
+the generator's IDs (for example `SYSLIB1043`).
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS9200 | Error | `gsgen` failed outright: an invalid response file, a missing input file, or an unexpected exception. The message carries the reason. |
+| GS9201 | Reserved | Reserved: parse-fatal G# input. |
+| GS9202 | Reserved | Reserved: the C# stub rendered from the G# declarations did not re-parse (a host bug). |
+| GS9203 | Warning | A generator threw, or its assembly could not be loaded. That generator's output is skipped and the others still run. |
+| GS9204 | Info | A G# type in a declaration signature has no C# spelling in the stub, so generators see it as `object`. |
+| GS9205 | Reserved | Reserved: analyzer assembly load failure (reported as GS9203 today). |
+| GS9206 | Reserved | Reserved: a generator matched nothing although its trigger attribute appears in user code. |
+| GS9207 | Info | A note about the `gsgen` invocation, such as an unrecognized or malformed argument that was ignored. |
+| GS9208 | Error | A generated implementing part of a partial method could not take its declaring part's header (ADR-0192). It is reported at the declaring part in two cases. First, the generated implementation names a parameter differently: its body uses the generated names, so the header is left as generated and `gsc` reports the two parts as mismatched. Second, an alias the header needs is already bound to a different target in the generated file: either by the generated code, or by another file's declaring part whose header went into the same file. Give the alias one meaning across the partial class's files, or spell the type without it. |
+
 ### Internal diagnostics (GS9996–GS9999)
 
 These diagnostics indicate a fatal compiler or runtime execution failure. If you encounter them, please file an issue.

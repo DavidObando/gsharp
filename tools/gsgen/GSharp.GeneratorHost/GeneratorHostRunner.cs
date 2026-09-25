@@ -36,9 +36,9 @@ public static class GeneratorHostRunner
         AnalyzerConfigOptionsProvider optionsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(generators);
-        string stub = ProjectStub(gsCompilation, out IReadOnlyList<string> fallbacks);
+        GsStubRenderer renderer = ProjectStub(gsCompilation, out string stub);
         GeneratorRunResult runResult = GeneratorRunner.Run(stub, references, generators, additionalTexts, optionsProvider);
-        return Assemble(stub, runResult, references, fallbacks);
+        return Assemble(stub, runResult, references, renderer);
     }
 
     /// <summary>
@@ -59,26 +59,27 @@ public static class GeneratorHostRunner
         AnalyzerConfigOptionsProvider optionsProvider = null)
     {
         ArgumentNullException.ThrowIfNull(analyzerAssemblyPaths);
-        string stub = ProjectStub(gsCompilation, out IReadOnlyList<string> fallbacks);
+        GsStubRenderer renderer = ProjectStub(gsCompilation, out string stub);
         GeneratorRunResult runResult = GeneratorRunner.RunFromAnalyzerPaths(stub, references, analyzerAssemblyPaths, additionalTexts, optionsProvider);
-        return Assemble(stub, runResult, references, fallbacks);
+        return Assemble(stub, runResult, references, renderer);
     }
 
-    private static string ProjectStub(Compilation gsCompilation, out IReadOnlyList<string> fallbacks)
+    private static GsStubRenderer ProjectStub(Compilation gsCompilation, out string stub)
     {
-        string stub = GsToCSharpProjection.ProjectToCSharp(gsCompilation, out GsStubRenderer renderer);
-        fallbacks = renderer.Fallbacks;
-        return stub;
+        stub = GsToCSharpProjection.ProjectToCSharp(gsCompilation, out GsStubRenderer renderer);
+        return renderer;
     }
 
     private static GeneratorHostResult Assemble(
         string stub,
         GeneratorRunResult runResult,
         IReadOnlyList<MetadataReference> references,
-        IReadOnlyList<string> fallbacks)
+        GsStubRenderer renderer)
     {
+        // ADR-0192 follow-on 2: the lone declaring parts the stub offered to
+        // generators, whose headers the generated implementing parts copy.
         IReadOnlyList<TranslatedGsDocument> translated =
-            GeneratedDocTranslator.Translate(stub, runResult.Documents, references);
+            GeneratedDocTranslator.Translate(stub, runResult.Documents, references, renderer.PartialDefinitions);
 
         // Deterministic ordering: sort back-translated parts by hint name.
         var gsFiles = translated
@@ -90,7 +91,8 @@ public static class GeneratorHostRunner
             gsFiles,
             runResult.GeneratorDiagnostics,
             runResult.Failures,
-            fallbacks);
+            renderer.Fallbacks,
+            translated.SelectMany(t => t.HostDiagnostics).ToList());
     }
 }
 
@@ -108,16 +110,19 @@ public sealed class GeneratorHostResult
     /// <param name="generatorDiagnostics">The diagnostics reported by the generators.</param>
     /// <param name="failures">Crash-isolated generator/load failures.</param>
     /// <param name="stubFallbacks">The type-spelling fallbacks (GS9204) from the stub projection.</param>
+    /// <param name="hostDiagnostics">Diagnostics the host itself reported (e.g. GS9208), or <see langword="null"/> for none.</param>
     public GeneratorHostResult(
         IReadOnlyList<(string HintName, string GSharpSource)> generatedGsFiles,
         IReadOnlyList<Diagnostic> generatorDiagnostics,
         IReadOnlyList<GeneratorFailure> failures,
-        IReadOnlyList<string> stubFallbacks)
+        IReadOnlyList<string> stubFallbacks,
+        IReadOnlyList<GeneratorHostDiagnostic> hostDiagnostics = null)
     {
         GeneratedGsFiles = generatedGsFiles;
         GeneratorDiagnostics = generatorDiagnostics;
         Failures = failures;
         StubFallbacks = stubFallbacks;
+        HostDiagnostics = hostDiagnostics ?? Array.Empty<GeneratorHostDiagnostic>();
     }
 
     /// <summary>Gets the back-translated G# parts (hint name + G# source).</summary>
@@ -131,4 +136,7 @@ public sealed class GeneratorHostResult
 
     /// <summary>Gets the type-spelling fallbacks (GS9204) from the stub projection.</summary>
     public IReadOnlyList<string> StubFallbacks { get; }
+
+    /// <summary>Gets the diagnostics the host itself reported (e.g. <c>GS9208</c>).</summary>
+    public IReadOnlyList<GeneratorHostDiagnostic> HostDiagnostics { get; }
 }
