@@ -2310,11 +2310,15 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
+                // Issue #4400: an `in` slot's pointee is recovered the same way,
+                // so an implicit `in` argument spills/addresses at `!0`, not at
+                // the erased `object`.
                 var recovered = ConversionClassifier.TrySubstituteCtorParameterTypeFromConstructedType(
                     openGenericDefinition,
                     symbolicTypeArgs,
                     bestCtor,
-                    p);
+                    p,
+                    peelByRef: ctorParameters[p].ParameterType.IsByRef && ctorParameters[p].IsIn && !ctorParameters[p].IsOut);
                 if (recovered == null)
                 {
                     continue;

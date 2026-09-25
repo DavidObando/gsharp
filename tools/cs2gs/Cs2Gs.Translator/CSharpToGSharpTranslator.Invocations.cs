@@ -2060,13 +2060,17 @@ public sealed partial class CSharpToGSharpTranslator
             && parameter.RefKind == RefKind.In
             && !parameter.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty;
 
-        // Issue #4400: C# passes an implicit `in` variable by reference only
-        // when it already has the parameter's type; a converted argument
-        // (`int` local at an `in long` parameter) is converted and spilled, so
-        // it must stay a plain value rather than become `in x` (GS0154).
+        // Issue #4400: C# passes an implicit `in` argument by reference only
+        // when it is variable storage that already has the parameter's type.
+        // A converted argument (`int` local at an `in long` parameter) is
+        // converted and spilled, and a property or constant is an rvalue, so
+        // each must stay a plain value: an explicit G# `in` demands an lvalue
+        // of the parameter type (GS0154 / GS9001).
         private bool PassesInArgumentWithoutConversion(ArgumentSyntax argument) =>
             this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } parameter, Value: { } value }
-            && value is not IConversionOperation { IsImplicit: true }
+            && value is ILocalReferenceOperation
+                or IParameterReferenceOperation
+                or IFieldReferenceOperation { Field.IsConst: false }
             && SymbolEqualityComparer.Default.Equals(value.Type, parameter.Type);
 
         // Issue #3414: Roslyn has already fixed the converted delegate signature

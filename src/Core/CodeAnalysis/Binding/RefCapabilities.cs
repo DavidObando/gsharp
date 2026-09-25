@@ -290,6 +290,10 @@ internal static class RefCapabilities
             BoundVariableExpression variable =>
                 (variable.NarrowedType == null || variable.NarrowedType == variable.Variable.Type)
                 && variable.Variable is not GlobalVariableSymbol { IsConst: true },
+
+            // A `const` field has no storage: lowering folds it to a literal.
+            BoundFieldAccessExpression { Field.IsConst: true } => false,
+            BoundClrPropertyAccessExpression { Member: FieldInfo { IsLiteral: true } } => false,
             BoundBlockExpression or BoundConditionalExpression => false,
             _ => ExpressionBinder.IsLvalue(value),
         };

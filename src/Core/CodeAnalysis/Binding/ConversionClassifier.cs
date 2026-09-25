@@ -1189,11 +1189,11 @@ internal sealed class ConversionClassifier
                     var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
                         ? call.Arguments[sourceIndex].Location
                         : call?.Location ?? default;
-                    rebound = BindImplicitInArgument(
-                        location,
-                        argument,
-                        GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs),
-                        parameter: null);
+                    TypeSymbol? inPointeeOverride = null;
+                    parameterTypeOverrides?.TryGetValue(paramIndex, out inPointeeOverride);
+                    var inPointee = inPointeeOverride
+                        ?? GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs);
+                    rebound = BindImplicitInArgument(location, argument, inPointee, parameter: null);
                 }
                 else if (!parameterType.IsByRef
                     && (argument.Type != TypeSymbol.Error || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
@@ -1974,12 +1974,16 @@ internal sealed class ConversionClassifier
     /// <param name="symbolicTypeArgs">The construction's symbolic type arguments.</param>
     /// <param name="closedConstructor">The resolved (closed, erased) CLR constructor.</param>
     /// <param name="paramIndex">Zero-based index into the constructor's parameter list.</param>
+    /// <param name="peelByRef">Issue #4400: map a by-ref slot's POINTEE instead
+    /// of skipping it, for an implicit <c>in</c> argument that must be spilled
+    /// or addressed at the symbolic type (<c>Holder&lt;T&gt;(in !0)</c>).</param>
     /// <returns>The recovered symbolic parameter type, or <see langword="null"/>.</returns>
     public static TypeSymbol? TrySubstituteCtorParameterTypeFromConstructedType(
         Type? openGenericDefinition,
         ImmutableArray<TypeSymbol> symbolicTypeArgs,
         ConstructorInfo? closedConstructor,
-        int paramIndex)
+        int paramIndex,
+        bool peelByRef = false)
     {
         if (openGenericDefinition == null
             || closedConstructor == null
@@ -2020,12 +2024,17 @@ internal sealed class ConversionClassifier
         }
 
         var openParamType = openParams[paramIndex].ParameterType;
-        if (openParamType.IsByRef)
+        if (openParamType.IsByRef != peelByRef)
         {
             // A by-ref ctor slot is emitted as an address, never boxed, so it
             // is already correct and rewriting it here would change RefKind
-            // handling downstream.
+            // handling downstream. Only the implicit-`in` caller asks for it.
             return null;
+        }
+
+        if (peelByRef)
+        {
+            openParamType = Invariant.Required(openParamType.GetElementType(), "a by-ref parameter has an element type");
         }
 
         // Only a parameter that actually MENTIONS the declaring generic's own
@@ -2138,6 +2147,14 @@ internal sealed class ConversionClassifier
         }
 
         var openParamType = openParams[paramIndex].ParameterType;
+
+        // Issue #4400: an `in` slot (`T&`) recovers its pointee's slot. The
+        // by-value callers never pass a by-ref parameter here.
+        if (openParamType.IsByRef)
+        {
+            openParamType = Invariant.Required(openParamType.GetElementType(), "a by-ref parameter has an element type");
+        }
+
         if (openParamType.IsGenericParameter
             && openParamType.DeclaringMethod == null
             && openParamType.GenericParameterPosition < imported.TypeArguments.Length
@@ -2992,7 +3009,8 @@ internal sealed class ConversionClassifier
         ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs)
     {
         var substituted = TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType, symbolicMethodTypeArgs)
-            ?? TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs);
+            ?? TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs)
+            ?? TryRecoverReceiverTypeParameterSlot(method, paramIndex, receiverType);
         if (substituted != null)
         {
             return TypeSymbol.TryGetPointeeType(substituted, out var substitutedPointee) ? substitutedPointee : substituted;
@@ -3016,12 +3034,16 @@ internal sealed class ConversionClassifier
     /// <param name="parameters">The resolved CLR method's parameters.</param>
     /// <param name="call">The originating call, for argument locations.</param>
     /// <param name="parameterMapping">Optional source-argument to parameter map.</param>
+    /// <param name="method">The resolved CLR method, for symbolic slot recovery.</param>
+    /// <param name="receiverType">The receiver/constraint type carrying symbolic type arguments.</param>
     /// <returns>The arguments, with each plain <c>in</c> argument passed by readonly reference.</returns>
     public ImmutableArray<BoundExpression> BindImplicitInClrArguments(
         ImmutableArray<BoundExpression> arguments,
         ParameterInfo[] parameters,
         CallExpressionSyntax call,
-        ImmutableArray<int> parameterMapping = default)
+        ImmutableArray<int> parameterMapping,
+        MethodInfo? method,
+        TypeSymbol? receiverType)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -3034,7 +3056,7 @@ internal sealed class ConversionClassifier
                 builder[i] = BindImplicitInArgument(
                     location,
                     arguments[i],
-                    GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method: null, receiverType: null, symbolicMethodTypeArgs: default),
+                    GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs: default),
                     parameter: null);
             }
         }

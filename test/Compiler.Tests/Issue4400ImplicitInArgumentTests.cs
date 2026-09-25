@@ -106,6 +106,45 @@ public class Issue4400ImplicitInArgumentTests
             public static int SM(in int x) => x * 5;
         }
 
+        public class GenBox<T>
+        {
+            public static T STake(in T x) => x;
+
+            public T Take(in T x) => x;
+        }
+
+        public class GenHolder<T>
+        {
+            public T Value;
+
+            public GenHolder(in T x)
+            {
+                Value = x;
+            }
+        }
+
+        public class GenBase<T>
+        {
+            public T Value;
+
+            public GenBase(in T x)
+            {
+                Value = x;
+            }
+
+            public string Describe() => Value.ToString();
+        }
+
+        public interface IGenPick<T>
+        {
+            T Pick(in T x);
+        }
+
+        public class GenPick<T> : IGenPick<T>
+        {
+            public T Pick(in T x) => x;
+        }
+
         public class InBase
         {
             public int V;
@@ -204,6 +243,7 @@ public class Issue4400ImplicitInArgumentTests
             class C : Base {
                 var field int32 = 40
                 let roField int32 = 41
+                const K int32 = 2
 
                 override func In(in x int32) int32 -> x + 100
                 func In64(in x int64) int64 -> x + 1
@@ -226,13 +266,14 @@ public class Issue4400ImplicitInArgumentTests
                     let i = C.SIn(local + 1)
                     let lam = () -> this.In(local) + base.In(3)
                     let j = lam()
-                    return "${a} ${b} ${c} ${d} ${e} ${f} ${g} ${h} ${i} ${j}"
+                    let k = this.In(K)
+                    return "${a} ${b} ${c} ${d} ${e} ${f} ${g} ${h} ${i} ${j} ${k}"
                 }
             }
 
             Console.WriteLine(C().Go())
             """,
-            new[] { "109 10 105 140 141 108 6 4 12 109" },
+            new[] { "109 10 105 140 141 108 6 4 12 109 102" },
         };
 
         // Free functions (formerly GS0242), a generic `in T`, and a named
@@ -477,6 +518,77 @@ public class Issue4400ImplicitInArgumentTests
     }
 
     /// <summary>
+    /// Imported GENERIC members whose <c>in T</c> slot the closed reflection
+    /// shape erases to <c>object&amp;</c> — over an open <c>T</c> and over a
+    /// same-compilation struct — spill/address at the symbolic <c>!0</c>, the
+    /// type the emitted MemberRef actually takes: instance and static methods,
+    /// a constructor, an interface slot, and a <c>: base(...)</c> initializer
+    /// into a generic CLR base.
+    /// </summary>
+    [Fact]
+    public void GenericImportedInParameter_OmittedModifier_UsesTheSymbolicPointee()
+    {
+        const string source = """
+            package P
+            import System
+            import InLib
+
+            struct Pt {
+                var X int32
+                override func ToString() string -> "Pt(${X})"
+            }
+
+            class Derived[T] : GenBase[T] {
+                init(x T) : base(x) { }
+            }
+
+            class DerivedPt : GenBase[Pt] {
+                init(p Pt) : base(p) { }
+            }
+
+            func Open[T](b GenBox[T], v T) T -> b.Take(v)
+            func OpenStatic[T](v T) T -> GenBox[T].STake(v)
+            func OpenCtor[T](v T) T -> GenHolder[T](v).Value
+            func OpenIface[T](g IGenPick[T], v T) T -> g.Pick(v)
+
+            let p = Pt{X: 5}
+            Console.WriteLine(Open(GenBox[int32](), 3))
+            Console.WriteLine(Open(GenBox[Pt](), p).X)
+            Console.WriteLine(GenBox[Pt]().Take(p).X)
+            Console.WriteLine(GenBox[Pt].STake(p).X)
+            Console.WriteLine(GenBox[int32].STake(4))
+            Console.WriteLine(OpenStatic(p).X)
+            Console.WriteLine(OpenCtor(p).X)
+            Console.WriteLine(GenHolder[Pt](p).Value.X)
+            Console.WriteLine(Derived[Pt](p).Describe())
+            Console.WriteLine(Derived[int32](6).Describe())
+            Console.WriteLine(DerivedPt(p).Describe())
+            Console.WriteLine(OpenIface(GenPick[Pt](), p).X)
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4400_gen_").FullName;
+        try
+        {
+            var libPath = CompileCSharp(tempDir, "InLib", LibrarySource);
+            var appPath = Path.Combine(tempDir, "Generic.dll");
+            var log = Compile(tempDir, source, appPath, "/reference:" + libPath);
+            Assert.True(File.Exists(appPath), $"the app must compile. Log:\n{log}");
+
+            IlVerifier.Verify(appPath, new[] { libPath });
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, $"the app must run. Exit {exit}:\n{output}");
+            Assert.Equal(
+                new[] { "3", "5", "5", "5", "4", "5", "5", "5", "Pt(5)", "6", "Pt(5)", "5" },
+                SplitLines(output));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
     /// Interface-constrained calls — an instance slot and a static-abstract
     /// slot — bind their arguments on paths that skip the general CLR
     /// conversion pass for a non-generic method; an omitted <c>in</c> must
@@ -549,7 +661,10 @@ public class Issue4400ImplicitInArgumentTests
             string expected;
             try
             {
-                var twin = context.LoadFromAssemblyPath(twinPath);
+                // Load from bytes so no file handle outlives the collectible
+                // context's asynchronous unload (the directory is deleted below).
+                using var twinImage = new MemoryStream(File.ReadAllBytes(twinPath));
+                var twin = context.LoadFromStream(twinImage);
                 var run = twin.GetType("Twin", throwOnError: true)!.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)!;
                 expected = (string)run.Invoke(null, null)!;
             }

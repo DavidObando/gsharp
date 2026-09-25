@@ -475,13 +475,15 @@ internal sealed partial class DeclarationBinder
 
                 // Issue #4400: a plain argument at an imported `in` base
                 // constructor parameter is passed by readonly reference.
+                // For a generic base (`Base<T>(in T)`) the pointee is projected
+                // through the base's own type arguments exactly as the by-value
+                // branch below projects its target (#3984); the erased closed
+                // `object&` is not what the emitted `.ctor(!0&)` takes.
                 if (ConversionClassifier.IsImplicitInClrArgument(orderedArgs[i], ctorParams[i]))
                 {
-                    convertedArgs.Add(conversions.BindImplicitInArgument(
-                        argLocation(i),
-                        orderedArgs[i],
-                        ConversionClassifier.GetImplicitInClrPointeeType(ctorParams[i], i, method: null, receiverType: null, symbolicMethodTypeArgs: default),
-                        parameter: null));
+                    var inPointee = TryProjectSymbolicBaseInPointeeType(openBaseCtorParams, openBaseDefinition, baseTypeArguments, i)
+                        ?? ConversionClassifier.GetImplicitInClrPointeeType(ctorParams[i], i, method: null, receiverType: null, symbolicMethodTypeArgs: default);
+                    convertedArgs.Add(conversions.BindImplicitInArgument(argLocation(i), orderedArgs[i], inPointee, parameter: null));
                     continue;
                 }
 
@@ -682,6 +684,31 @@ internal sealed partial class DeclarationBinder
         // accepted whichever way either side is written.
         var mapped = raw;
 
+        return mapped != TypeSymbol.Error
+            && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
+            ? mapped
+            : null;
+    }
+
+    // Issue #4400: the symbolic pointee of a generic base constructor's `in`
+    // parameter (`Base<T>(in T)` → `T`), or null when nothing was erased.
+    private static TypeSymbol? TryProjectSymbolicBaseInPointeeType(
+        ParameterInfo[]? openBaseCtorParams,
+        System.Type? openBaseDefinition,
+        ImmutableArray<TypeSymbol> baseTypeArguments,
+        int index)
+    {
+        if (openBaseCtorParams == null
+            || openBaseDefinition == null
+            || baseTypeArguments.IsDefaultOrEmpty
+            || index < 0
+            || index >= openBaseCtorParams.Length
+            || openBaseCtorParams[index].ParameterType.GetElementType() is not { } openPointee)
+        {
+            return null;
+        }
+
+        var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(openPointee, openBaseDefinition, baseTypeArguments);
         return mapped != TypeSymbol.Error
             && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
             ? mapped

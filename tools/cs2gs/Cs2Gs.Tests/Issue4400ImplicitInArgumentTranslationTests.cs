@@ -56,7 +56,14 @@ public class Issue4400ImplicitInArgumentTranslationTests
                 Value = seed;
             }
 
+            public const int K = 2;
+
+            public int Prop { get; set; } = 5;
+
             public int Add(in int x) => Value + x;
+
+            // Bare property / constant / field names: only the field is storage.
+            public int ViaMembers() => Calc.Scale(Prop) + Calc.Scale(K) + Calc.Scale(Value);
         }
 
         public static class Calc
@@ -79,6 +86,7 @@ public class Issue4400ImplicitInArgumentTranslationTests
                 Console.WriteLine(box.Add(box.Value));
                 Func<int, int> f = v => Scale(v * 3);
                 Console.WriteLine(f(2));
+                Console.WriteLine(box.ViaMembers());
             }
         }
         """;
@@ -96,16 +104,26 @@ public class Issue4400ImplicitInArgumentTranslationTests
         Assert.DoesNotContain("&(x + 1)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("&x + 1", printed, StringComparison.Ordinal);
 
-        (string dllPath, string stdout, int exit) = CompileVerifyAndRun(printed);
-        Assert.True(exit == 0, "Translated program must run. Output:\n" + stdout + "\n\nTranslated G#:\n" + printed);
-        Assert.Equal(
-            new[] { "6", "8", "4", "7", "14", "8", "12" },
-            stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToArray());
+        string workDir = Path.Combine(
+            AppContext.BaseDirectory, nameof(Issue4400ImplicitInArgumentTranslationTests), Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(workDir);
+        try
+        {
+            (string dllPath, string stdout, int exit) = CompileAndRun(workDir, printed);
+            Assert.True(exit == 0, "Translated program must run. Output:\n" + stdout + "\n\nTranslated G#:\n" + printed);
+            Assert.Equal(
+                new[] { "6", "8", "4", "7", "14", "8", "12", "22" },
+                stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToArray());
 
-        IlVerifyResult result = new IlVerifyRunner().Verify(dllPath);
-        Assert.True(
-            result.Errors.Count == 0,
-            "ilverify reported findings:\n" + string.Join(Environment.NewLine, result.Errors.Select(e => e.RawLine)));
+            IlVerifyResult result = new IlVerifyRunner().Verify(dllPath);
+            Assert.True(
+                result.Errors.Count == 0,
+                "ilverify reported findings:\n" + string.Join(Environment.NewLine, result.Errors.Select(e => e.RawLine)));
+        }
+        finally
+        {
+            Directory.Delete(workDir, recursive: true);
+        }
     }
 
     private static string Translate(string source)
@@ -119,14 +137,10 @@ public class Issue4400ImplicitInArgumentTranslationTests
         return GSharpPrinter.Print(unit);
     }
 
-    private static (string DllPath, string Stdout, int Exit) CompileVerifyAndRun(string printed)
+    private static (string DllPath, string Stdout, int Exit) CompileAndRun(string workDir, string printed)
     {
         string compiler = LocalFunctionHoistTranslationTests.FindCompiler();
         Assert.True(compiler != null, "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
-
-        string workDir = Path.Combine(
-            AppContext.BaseDirectory, nameof(Issue4400ImplicitInArgumentTranslationTests), Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(workDir);
 
         string gsPath = Path.Combine(workDir, "Program.gs");
         File.WriteAllText(gsPath, printed);

@@ -963,6 +963,16 @@ internal sealed partial class ExpressionBinder
             }
 
             var argLoc = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
+
+            // Issue #4400: a plain argument at an `in T` slot is passed by
+            // readonly reference to the symbolic pointee (`!0`), as in C#.
+            if (ConversionClassifier.IsImplicitInClrArgument(argument, openParameters[i])
+                && TypeSymbol.TryGetPointeeType(symbolicParamType, out var symbolicInPointee))
+            {
+                convertedArgs.Add(conversions.BindImplicitInArgument(argLoc, argument, symbolicInPointee, parameter: null));
+                continue;
+            }
+
             var conversion = Conversion.Classify(argument.Type, symbolicParamType);
             convertedArgs.Add(
                 conversion.IsExplicit
