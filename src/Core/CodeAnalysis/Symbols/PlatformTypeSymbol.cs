@@ -82,20 +82,34 @@ public sealed class PlatformTypeSymbol : TypeSymbol
     public TypeSymbol UnderlyingType { get; }
 
     /// <summary>
-    /// Returns the cached <see cref="PlatformTypeSymbol"/> wrapping the given
-    /// underlying type.
+    /// Returns the platform type <c>T!</c> over the given underlying type,
+    /// normalised exactly as <see cref="NullableTypeSymbol.Get"/> is, in the
+    /// mirror direction (ADR-0193 §2).
+    /// <list type="bullet">
+    /// <item><description>Wrapping a <see cref="PlatformTypeSymbol"/> is a no-op.</description></item>
+    /// <item><description>Wrapping a <see cref="NullableTypeSymbol"/> returns it
+    /// unchanged: an explicit statement always beats the absence of one
+    /// (ADR-0186 §3), so <c>T?!</c> is <c>T?</c>. With
+    /// <see cref="NullableTypeSymbol.Get"/>'s own normalisation, neither
+    /// <c>T?!</c> nor <c>T!?</c> can be constructed.</description></item>
+    /// <item><description>Wrapping a value type returns it unchanged: <c>T!</c>
+    /// is a statement about a reference position, and a value type has no
+    /// reference nullability to leave unstated. "Value type" is
+    /// <see cref="NullabilityImportRule.ClassifyArgument(TypeSymbol)"/>'s
+    /// answer, the same classifier the import rule uses.</description></item>
+    /// </list>
     /// </summary>
     /// <param name="underlyingType">The underlying reference type.</param>
     /// <returns>
-    /// A cached platform wrapper. Wrapping a <see cref="PlatformTypeSymbol"/>
-    /// is a no-op, exactly as <see cref="NullableTypeSymbol.Get"/> is
-    /// idempotent over its own wrapper.
+    /// A cached platform wrapper, or <paramref name="underlyingType"/> itself
+    /// when one of the normalisations above applies.
     /// </returns>
-    public static PlatformTypeSymbol Get(TypeSymbol underlyingType)
+    public static TypeSymbol Get(TypeSymbol underlyingType)
     {
-        if (underlyingType is PlatformTypeSymbol already)
+        if (underlyingType is PlatformTypeSymbol or NullableTypeSymbol
+            || NullabilityImportRule.ClassifyArgument(underlyingType) == TypeArgumentKind.Value)
         {
-            return already;
+            return underlyingType;
         }
 
         return Cache.GetOrAdd(underlyingType, static t => new PlatformTypeSymbol(t));

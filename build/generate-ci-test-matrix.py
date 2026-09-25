@@ -78,6 +78,11 @@ SHARDED_PROJECTS = {
     "test/Core.Tests/Core.Tests.csproj": {
         # 8475 tests, 11.5m, previously one unsharded job. Binding is 75% of it.
         "binding": ["GSharp.Core.Tests.CodeAnalysis.Binding."],
+        # ADR-0193 §4 / owner decision 6: the reader-agreement differential
+        # over the reference BCL, netstandard2.0, FsCheck and a csc fixture
+        # runs as its own shard, in parallel with the other two — not inline
+        # in one of them and not nightly-only.
+        "reader-agreement": ["GSharp.Core.Tests.ReaderAgreement."],
         "remainder": [],
     },
 }

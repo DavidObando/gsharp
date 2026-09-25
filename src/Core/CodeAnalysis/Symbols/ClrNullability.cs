@@ -67,7 +67,12 @@ public static class ClrNullability
         // e.g. `DirectoryInfo.Parent`).
         // ADR-0172 Phase B: surface imported tuple element names.
         return TupleElementNamesReader.ApplyNames(
-            ApplyReferenceNullabilityFull(baseSymbol, property.PropertyType, property, property.DeclaringType),
+            ApplyReferenceNullabilityFull(
+                baseSymbol,
+                property.PropertyType,
+                property,
+                property.DeclaringType,
+                GetOpenDefinition(property)?.PropertyType),
             property);
     }
 
@@ -86,8 +91,14 @@ public static class ClrNullability
     public static TypeSymbol GetPropertyElementTypeSymbol(PropertyInfo property, Type elementType)
     {
         var baseSymbol = TypeSymbol.FromClrType(elementType);
+        var layoutType = GetOpenDefinition(property)?.PropertyType;
+        if (layoutType?.IsByRef == true)
+        {
+            layoutType = layoutType.GetElementType();
+        }
+
         return TupleElementNamesReader.ApplyNames(
-            ApplyReferenceNullabilityFull(baseSymbol, elementType, property, property.DeclaringType),
+            ApplyReferenceNullabilityFull(baseSymbol, elementType, property, property.DeclaringType, layoutType),
             property);
     }
 
@@ -103,7 +114,12 @@ public static class ClrNullability
 
         // ADR-0172 Phase B: surface imported tuple element names.
         return TupleElementNamesReader.ApplyNames(
-            ApplyReferenceNullabilityFull(baseSymbol, field.FieldType, field, field.DeclaringType),
+            ApplyReferenceNullabilityFull(
+                baseSymbol,
+                field.FieldType,
+                field,
+                field.DeclaringType,
+                GetOpenDefinition(field)?.FieldType),
             field);
     }
 
@@ -154,10 +170,18 @@ public static class ClrNullability
         var parameterType = parameter.ParameterType.IsByRef
             ? parameter.ParameterType.GetElementType()
             : parameter.ParameterType;
-        var definition = parameter.Member is MethodBase method
-            ? GetMetadataDefinition(method)
-            : null;
-        var definitionParameters = definition?.GetParameters();
+
+        // ADR-0193 §4: an indexer's parameter needs its open declaration as
+        // the layout too, exactly as a method's does — without one an
+        // oblivious `TKey` index parameter read through a closed
+        // `ConcurrentDictionary<string, …>` stamped the slot's byte onto the
+        // argument (`string!`).
+        var definitionParameters = parameter.Member switch
+        {
+            MethodBase method => GetMetadataDefinition(method)?.GetParameters(),
+            PropertyInfo indexer => GetOpenDefinition(indexer)?.GetIndexParameters(),
+            _ => null,
+        };
         var layoutType = definitionParameters != null
             && (uint)parameter.Position < (uint)definitionParameters.Length
                 ? definitionParameters[parameter.Position].ParameterType
@@ -706,18 +730,27 @@ public static class ClrNullability
     /// otherwise — ADR-0136's answer, which is what keeps
     /// <c>--nullability=platform-types</c> a genuine no-op while it is off.</description></item>
     /// </list>
+    /// <para>
+    /// ADR-0193 §1: under platform types this is
+    /// <see cref="NullabilityImportRule.ApplyConcrete"/> — the rule, not a
+    /// copy of it. The <c>--nullability=enabled</c> arm is the mode #4372
+    /// retires, and it stays here, outside the rule, until then.
+    /// </para>
     /// </summary>
     /// <param name="baseSymbol">The unwrapped position type.</param>
     /// <param name="state">What the declaration says about the position.</param>
     /// <returns>The nullability-aware type symbol.</returns>
-    internal static TypeSymbol SymbolForState(TypeSymbol baseSymbol, ClrNullabilityState state) => state switch
+    internal static TypeSymbol SymbolForState(TypeSymbol baseSymbol, ClrNullabilityState state)
     {
-        ClrNullabilityState.NotAnnotated => baseSymbol,
-        ClrNullabilityState.Annotated => NullableTypeSymbol.Get(baseSymbol),
-        _ => NullabilityOptions.PlatformTypesEnabled
-            ? PlatformTypeSymbol.Get(baseSymbol)
-            : NullableTypeSymbol.Get(baseSymbol),
-    };
+        if (NullabilityOptions.PlatformTypesEnabled)
+        {
+            return NullabilityImportRule.ApplyConcrete(baseSymbol, state);
+        }
+
+        return state == ClrNullabilityState.NotAnnotated
+            ? baseSymbol
+            : NullableTypeSymbol.Get(baseSymbol);
+    }
 
     /// <summary>
     /// Issue #1354, issue #3705 family 2 — <b>the</b> predicate that turns one
@@ -866,87 +899,18 @@ public static class ClrNullability
     }
 
     /// <summary>
-    /// ADR-0186 §2: returns the byte an absent position expands to, which is
-    /// not a detail but <b>the rule itself</b> written as a value.
-    /// <para>
-    /// ADR-0136 says an absent position means <c>T?</c>, so the fill is
-    /// <c>2</c>. ADR-0186 says it means <c>T!</c>, so under
-    /// <see cref="NullabilityMode.PlatformTypes"/> the fill becomes <c>0</c> —
-    /// the oblivious byte, which <see cref="ClassifyPosition"/> then reads as
-    /// <see cref="ClrNullabilityState.Oblivious"/>.
-    /// </para>
-    /// <para>
-    /// This must track the mode, and an implementer who leaves it at <c>2</c>
-    /// gets a silent drift rather than a failure: the layout/projection paths
-    /// (<see cref="SymbolFromLayoutFlags"/> → <c>ProjectNullableFlags</c>, and
-    /// <c>NullableFlagsBuilder.MergeDeclarationNullability</c>'s
-    /// <c>declaredFlags</c>) would expand an absent byte to <c>2</c> and read
-    /// the position as <c>T?</c>, while the direct path
-    /// (<see cref="SymbolFromFlagsOffset"/> over the raw flags) reads the very
-    /// same declaration as <c>T!</c>. Two readers disagreeing about one
-    /// declaration is precisely the #3705 family-2 defect ADR-0136's
-    /// single-predicate rule exists to prevent, and ADR-0186 explicitly
-    /// preserves that rule.
-    /// </para>
-    /// <para>
-    /// Platform-types is the default since ADR-0186 step 3, so <c>0</c> is the
-    /// ordinary answer. Under <c>--nullability=enabled</c> this is the literal
-    /// constant <c>2</c> the two-argument overload always used, so that mode
-    /// keeps ADR-0136's reading unchanged.
-    /// </para>
+    /// Rewrites the nullable flags an open declaration carries
+    /// (<paramref name="layoutType"/> order) into the layout of the closed
+    /// type <paramref name="actualType"/> that substitutes it — the projection
+    /// reader. Open slots resolve through
+    /// <see cref="NullabilityImportRule.ApplyOpenSlotToFlags"/> under platform
+    /// types (ADR-0193 §1).
     /// </summary>
-    /// <returns>The fill byte for positions the declaration did not supply.</returns>
-    private static byte DefaultAbsentFill()
-        => NullabilityOptions.PlatformTypesEnabled ? (byte)0 : (byte)2;
-
-    private static TupleTypeSymbol BuildTupleTypeSymbol(
-        Type clrType,
-        ImmutableArray<byte> flags,
-        int offset)
-    {
-        var elements = ImmutableArray.CreateBuilder<TypeSymbol>();
-        var position = offset;
-        AppendElements(clrType);
-        return TupleTypeSymbol.Get(elements.ToImmutable());
-
-        void AppendElements(Type tupleType)
-        {
-            position++; // Generic value-type placeholder.
-            var arguments = tupleType.GetGenericArguments();
-            var directCount = arguments.Length == 8 ? 7 : arguments.Length;
-            for (var i = 0; i < directCount; i++)
-            {
-                var argument = arguments[i];
-                elements.Add(SymbolFromFlagsOffset(argument, flags, position));
-                position += CountNullabilityBytes(argument);
-            }
-
-            if (arguments.Length == 8)
-            {
-                AppendElements(arguments[7]);
-            }
-        }
-    }
-
-    private static TypeSymbol ApplyReferenceNullabilityFull(
-        TypeSymbol baseSymbol,
-        Type? clrType,
-        ICustomAttributeProvider declaration,
-        MemberInfo? enclosingMember,
-        Type? layoutType = null)
-    {
-        if (clrType == null)
-        {
-            return baseSymbol;
-        }
-
-        var flags = ReadNullableFlags(declaration, enclosingMember);
-        return layoutType == null
-            ? SymbolFromFlagsOffset(clrType, flags, 0)
-            : SymbolFromLayoutFlags(clrType, layoutType, flags);
-    }
-
-    private static ImmutableArray<byte> ProjectNullableFlags(
+    /// <param name="actualType">Closed reflected type to project onto.</param>
+    /// <param name="layoutType">Open metadata type that defines flag positions.</param>
+    /// <param name="flags">Nullable flags in <paramref name="layoutType"/> order.</param>
+    /// <returns>Flags in <paramref name="actualType"/> order.</returns>
+    internal static ImmutableArray<byte> ProjectNullableFlags(
         Type actualType,
         Type layoutType,
         ImmutableArray<byte> flags)
@@ -1064,10 +1028,30 @@ public static class ClrNullability
                 // compiled before because the oblivious slot fabricated a
                 // `T?` (ADR-0136) and then a `T!`; neither is §2's answer.
                 // `Issue4044NilTupleInferenceTests` pins the parity.
-                if (NullabilityOptions.PlatformTypesEnabled
-                    && ClassifyFlag(flag) != ClrNullabilityState.Annotated)
+                //
+                // ADR-0193 §1: the platform-types decision is
+                // `NullabilityImportRule`'s, not this arm's. Routing it there
+                // also fixed a drift from the merge reader that the §4
+                // reader-agreement test found: an explicit `2` used to be
+                // expanded over EVERY position of the argument, so
+                // `[Nullable(2)] TSource` at `TSource := List<string>` read
+                // `List<string?>?` here and `List<string>?` through
+                // `MergeDeclarationNullability`. The slot's `?` belongs to the
+                // argument's root only, and a value-type argument takes none.
+                if (NullabilityOptions.PlatformTypesEnabled)
                 {
-                    flag = 1;
+                    if (NullabilityImportRule.IsUnsubstitutedSlot(actual, layout))
+                    {
+                        // No substitution happened (see IsUnsubstitutedSlot):
+                        // this arm's pre-ADR-0193 answer, which only an
+                        // explicit `2` widens.
+                        builder.Add(ClassifyFlag(flag) == ClrNullabilityState.Annotated ? (byte)2 : (byte)1);
+                        return;
+                    }
+
+                    builder.AddRange(
+                        NullabilityImportRule.ApplyOpenSlotToFlags(actual, ClassifyFlag(flag)));
+                    return;
                 }
 
                 builder.AddRange(
@@ -1119,6 +1103,87 @@ public static class ClrNullability
         }
     }
 
+    /// <summary>
+    /// ADR-0186 §2: returns the byte an absent position expands to, which is
+    /// not a detail but <b>the rule itself</b> written as a value.
+    /// <para>
+    /// ADR-0136 says an absent position means <c>T?</c>, so the fill is
+    /// <c>2</c>. ADR-0186 says it means <c>T!</c>, so under
+    /// <see cref="NullabilityMode.PlatformTypes"/> the fill becomes <c>0</c> —
+    /// the oblivious byte, which <see cref="ClassifyPosition"/> then reads as
+    /// <see cref="ClrNullabilityState.Oblivious"/>.
+    /// </para>
+    /// <para>
+    /// This must track the mode, and an implementer who leaves it at <c>2</c>
+    /// gets a silent drift rather than a failure: the layout/projection paths
+    /// (<see cref="SymbolFromLayoutFlags"/> → <c>ProjectNullableFlags</c>, and
+    /// <c>NullableFlagsBuilder.MergeDeclarationNullability</c>'s
+    /// <c>declaredFlags</c>) would expand an absent byte to <c>2</c> and read
+    /// the position as <c>T?</c>, while the direct path
+    /// (<see cref="SymbolFromFlagsOffset"/> over the raw flags) reads the very
+    /// same declaration as <c>T!</c>. Two readers disagreeing about one
+    /// declaration is precisely the #3705 family-2 defect ADR-0136's
+    /// single-predicate rule exists to prevent, and ADR-0186 explicitly
+    /// preserves that rule.
+    /// </para>
+    /// <para>
+    /// Platform-types is the default since ADR-0186 step 3, so <c>0</c> is the
+    /// ordinary answer. Under <c>--nullability=enabled</c> this is the literal
+    /// constant <c>2</c> the two-argument overload always used, so that mode
+    /// keeps ADR-0136's reading unchanged.
+    /// </para>
+    /// </summary>
+    /// <returns>The fill byte for positions the declaration did not supply.</returns>
+    private static byte DefaultAbsentFill()
+        => NullabilityOptions.PlatformTypesEnabled ? (byte)0 : (byte)2;
+
+    private static TupleTypeSymbol BuildTupleTypeSymbol(
+        Type clrType,
+        ImmutableArray<byte> flags,
+        int offset)
+    {
+        var elements = ImmutableArray.CreateBuilder<TypeSymbol>();
+        var position = offset;
+        AppendElements(clrType);
+        return TupleTypeSymbol.Get(elements.ToImmutable());
+
+        void AppendElements(Type tupleType)
+        {
+            position++; // Generic value-type placeholder.
+            var arguments = tupleType.GetGenericArguments();
+            var directCount = arguments.Length == 8 ? 7 : arguments.Length;
+            for (var i = 0; i < directCount; i++)
+            {
+                var argument = arguments[i];
+                elements.Add(SymbolFromFlagsOffset(argument, flags, position));
+                position += CountNullabilityBytes(argument);
+            }
+
+            if (arguments.Length == 8)
+            {
+                AppendElements(arguments[7]);
+            }
+        }
+    }
+
+    private static TypeSymbol ApplyReferenceNullabilityFull(
+        TypeSymbol baseSymbol,
+        Type? clrType,
+        ICustomAttributeProvider declaration,
+        MemberInfo? enclosingMember,
+        Type? layoutType = null)
+    {
+        if (clrType == null)
+        {
+            return baseSymbol;
+        }
+
+        var flags = ReadNullableFlags(declaration, enclosingMember);
+        return layoutType == null
+            ? SymbolFromFlagsOffset(clrType, flags, 0)
+            : SymbolFromLayoutFlags(clrType, layoutType, flags);
+    }
+
     private static string[] ReadNotNullIfNotNullParameters(MethodInfo method)
     {
         // Prefer the open metadata definition: on a constructed generic the
@@ -1162,6 +1227,52 @@ public static class ClrNullability
         }
 
         return builder == null ? Array.Empty<string>() : builder.ToArray();
+    }
+
+    /// <summary>
+    /// ADR-0193 §4: the open declaration of a field or property reached
+    /// through a constructed generic type, whose type defines the positions
+    /// the <c>[Nullable]</c> bytes describe — exactly as
+    /// <see cref="GetMetadataDefinition"/> is for a method. Reading a closed
+    /// <c>Box&lt;List&lt;string&gt;&gt;.Value</c> against its own closed type
+    /// misaligned the open declaration's bytes and stamped the slot's byte onto
+    /// the argument (<c>string!</c> for an oblivious <c>T Value</c>), which the
+    /// method and parameter readers stopped doing when they gained a layout;
+    /// the reader-agreement test found the field and property readers never
+    /// had one.
+    /// </summary>
+    /// <typeparam name="TMember">The member kind.</typeparam>
+    /// <param name="member">The possibly-closed member.</param>
+    /// <returns>The open member, or <see langword="null"/> when <paramref name="member"/> is not on a constructed generic.</returns>
+    private static TMember? GetOpenDefinition<TMember>(TMember member)
+        where TMember : MemberInfo
+    {
+        var declaringType = member.DeclaringType;
+        if (declaringType == null
+            || !declaringType.IsGenericType
+            || declaringType.IsGenericTypeDefinition)
+        {
+            return null;
+        }
+
+        try
+        {
+            const BindingFlags All = BindingFlags.Public | BindingFlags.NonPublic
+                | BindingFlags.Instance | BindingFlags.Static | BindingFlags.DeclaredOnly;
+            foreach (var candidate in declaringType.GetGenericTypeDefinition().GetMember(member.Name, member.MemberType, All))
+            {
+                if (candidate is TMember open && open.MetadataToken == member.MetadataToken)
+                {
+                    return open;
+                }
+            }
+        }
+        catch (Exception exception) when (exception is TypeLoadException or NotSupportedException or System.IO.FileNotFoundException)
+        {
+            // An unresolvable open definition reads as before: no layout.
+        }
+
+        return null;
     }
 
     private static MethodBase? GetMetadataDefinition(MethodBase method)

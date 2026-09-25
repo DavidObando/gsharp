@@ -5047,9 +5047,11 @@ internal sealed class MemberLookup
             && openDefinition != null)
         {
             EventInfo? openEvent = null;
+
+            // ADR-0193 §4: static events too, as for static properties.
             foreach (var candidate in ClrTypeUtilities.SafeGetEvents(
                          openDefinition,
-                         BindingFlags.Public | BindingFlags.Instance))
+                         BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static))
             {
                 if (candidate.Name == closedEvent.Name)
                 {
@@ -5084,14 +5086,48 @@ internal sealed class MemberLookup
     internal static TypeSymbol GetClrEventHandlerTypeSymbol(EventInfo closedEvent)
     {
         var handlerType = TypeSymbol.FromClrType(closedEvent.EventHandlerType);
+        if (closedEvent.DeclaringType is not { } declaringType)
+        {
+            return handlerType;
+        }
 
-        // A constructed generic declaring type would need its flags projected
-        // through the substitution first (the symbolic path above does exactly
-        // that); leave those alone rather than misalign the byte positions.
-        return closedEvent.DeclaringType is { } declaringType
-            && !declaringType.IsConstructedGenericType
-            ? ApplyEventDeclarationNullability(handlerType, closedEvent, declaringType)
-            : handlerType;
+        if (!declaringType.IsConstructedGenericType)
+        {
+            return ApplyEventDeclarationNullability(handlerType, closedEvent, declaringType);
+        }
+
+        // ADR-0193 §4: a constructed generic declaring type needs its flags
+        // projected through the substitution first. This used to leave those
+        // alone, which returned the handler with no declared nullability at
+        // all — the reader-agreement test found it disagreeing with every
+        // sibling reader. The projection reader does exactly the alignment
+        // that was missing, against the open event's handler type.
+        var openDefinition = declaringType.GetGenericTypeDefinition();
+        EventInfo? openEvent = null;
+        foreach (var candidate in ClrTypeUtilities.SafeGetEvents(
+                     openDefinition,
+                     BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+        {
+            if (candidate.MetadataToken == closedEvent.MetadataToken)
+            {
+                openEvent = candidate;
+                break;
+            }
+        }
+
+        if (openEvent?.EventHandlerType is not Type handlerLayout
+            || closedEvent.EventHandlerType is not Type closedHandler)
+        {
+            return handlerType;
+        }
+
+        var projected = ClrNullability.SymbolFromLayoutFlags(
+            closedHandler,
+            handlerLayout,
+            ClrNullability.ReadNullableFlags(openEvent, openDefinition));
+        return projected is NullableTypeSymbol nullableHandler
+            ? nullableHandler.UnderlyingType
+            : projected;
     }
 
     /// <summary>
@@ -5161,17 +5197,33 @@ internal sealed class MemberLookup
                 // imported `string?` return reached the binder as non-null
                 // `string`. GetClrFieldTypeSymbol's symbolic branch folds the
                 // declaration flags back in; this one now does the same.
+                //
+                // ADR-0193 §4: a `ref T` return is peeled before the merge and
+                // re-wrapped after it, exactly as the parameter branch below
+                // and `ClrNullability.GetReturnTypeSymbol` do — `[Nullable]` on
+                // a by-ref annotates the pointee. Merging against the by-ref
+                // type itself read it as a reference position and produced a
+                // platform-wrapped by-ref for `GetPinnableReference()`, which
+                // the reader-agreement test found disagreeing with every
+                // sibling reader.
+                var openReturnType = openMethod.ReturnType;
+                var returnLayout = openReturnType.IsByRef
+                    ? Invariant.Required(
+                        openReturnType.GetElementType(),
+                        "a by-ref return type has an element type")
+                    : openReturnType;
                 var mapped = MapOpenClrTypeToSymbolic(
-                    openMethod.ReturnType,
+                    returnLayout,
                     openDefinition,
                     declaringTypeArguments);
                 var declarationFlags = ClrNullability.ReadNullableFlags(
                     openMethod.ReturnParameter,
                     openMethod);
-                return NullableFlagsBuilder.MergeDeclarationNullability(
+                var merged = NullableFlagsBuilder.MergeDeclarationNullability(
                     mapped,
-                    openMethod.ReturnType,
+                    returnLayout,
                     declarationFlags);
+                return openReturnType.IsByRef ? ByRefTypeSymbol.Get(merged) : merged;
             }
         }
 
@@ -5428,9 +5480,15 @@ internal sealed class MemberLookup
             return null;
         }
 
+        // ADR-0193 §4: static properties too. `Comparer[string?].Default` and
+        // `ImmutableArray[string?].Empty` are reached through a symbolic
+        // receiver like any instance property, and without the open
+        // definition they fell back to the ERASED read and lost the receiver's
+        // `?` — the reader-agreement test found every static property of a
+        // generic type disagreeing with the merge this way.
         var candidates = ClrTypeUtilities.SafeGetProperties(
             openDefinition,
-            BindingFlags.Public | BindingFlags.Instance);
+            BindingFlags.Public | BindingFlags.Instance | BindingFlags.Static);
         var token = closedIndexer.MetadataToken;
         foreach (var candidate in candidates)
         {

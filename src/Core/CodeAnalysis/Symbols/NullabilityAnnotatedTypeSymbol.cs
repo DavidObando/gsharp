@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.Linq;
 using GSharp.Core.CodeAnalysis.Emit;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -138,8 +139,6 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
             return GetTypeArgumentSymbol(targetClrType.GenericParameterPosition);
         }
 
-        int offset = 1; // byte 0 = outer type
-
         // Issue #4159 (Copilot review finding on this PR): matching by
         // CLOSED CLR type alone is ambiguous for a custom awaitable — this
         // method is reached from ANY type with a conforming duck-typed
@@ -156,7 +155,6 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
         // ever return a nullability annotation that might belong to a
         // different type parameter.
         var matchIndex = -1;
-        var matchOffset = 0;
         var ambiguous = false;
 
         for (int i = 0; i < args.Length; i++)
@@ -173,31 +171,123 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
                 else
                 {
                     matchIndex = i;
-                    matchOffset = offset;
                 }
             }
-
-            offset += ClrNullability.CountNullabilityBytes(arg);
         }
 
         if (matchIndex >= 0 && !ambiguous)
         {
-            var arg = args[matchIndex];
-            var flagged = ClrNullability.SymbolFromFlagsOffset(arg, NullableFlags, matchOffset);
-
-            // ADR-0172: transfer tuple element names from the wrapped
-            // symbolic base's matching argument (the flags-derived symbol
-            // is rebuilt from the CLR shape and cannot carry them).
-            if (BaseType is ImportedTypeSymbol { TypeArguments.IsDefaultOrEmpty: false } symbolicBase
-                && (uint)matchIndex < (uint)symbolicBase.TypeArguments.Length)
-            {
-                flagged = TransferTupleNames(symbolicBase.TypeArguments[matchIndex], flagged);
-            }
-
-            return flagged;
+            // ADR-0193 §4: one lazy accessor, reached by index or by CLR
+            // type. This arm used to decode the flags itself and, over a
+            // symbolic base, only transferred tuple names — so it never
+            // merged the base's own argument, and `IEnumerable[string?]`'s
+            // element read `string` here and `string?` through
+            // `GetTypeArgumentSymbol`. The reader-agreement test found the
+            // two disagreeing. Over a non-symbolic base the two computed the
+            // same thing, so delegating changes nothing there.
+            return GetTypeArgumentSymbol(matchIndex);
         }
 
         return TypeSymbol.FromClrType(targetClrType);
+    }
+
+    /// <summary>
+    /// ADR-0193 §2: this representation's half of
+    /// <see cref="TypeSymbol.GetElementPositions"/> — every position decoded
+    /// through the same lazy accessors an element read uses, so a query and a
+    /// read cannot disagree.
+    /// </summary>
+    /// <returns>The element / type-argument positions.</returns>
+    internal ImmutableArray<TypeSymbol> GetAnnotatedElementPositions()
+    {
+        // A symbolic array shape (a slice over `T`, say) has an erased or no
+        // CLR type, so its element is the symbolic one, not the CLR one.
+        if (BaseType is SliceTypeSymbol or ArrayTypeSymbol or RectangularArrayTypeSymbol)
+        {
+            return DecodeSymbolicPositions();
+        }
+
+        var clr = ClrType;
+        if (clr?.IsArray == true && clr.GetElementType() is { } element)
+        {
+            return ImmutableArray.Create(GetTypeArgumentSymbolForClrType(element));
+        }
+
+        if (clr == null || !clr.IsGenericType || clr.IsGenericTypeDefinition)
+        {
+            // Only the array shapes above have a layout this type can decode
+            // symbolically without re-deriving NullableFlagsBuilder's (a
+            // tuple's interleaved TRest placeholders, a nested type's
+            // enclosing arguments). Other symbolic bases keep their own
+            // positions; ADR-0193 Phase 3's query API owns the general case.
+            return BaseType.GetElementPositions();
+        }
+
+        var count = clr.GetGenericArguments().Length;
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(count);
+        for (var i = 0; i < count; i++)
+        {
+            builder.Add(GetTypeArgumentSymbol(i));
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Decodes <see cref="NullableFlags"/> against the base's SYMBOLIC
+    /// positions, for a base with no CLR shape to lay the bytes out against. The
+    /// layout is the one <see cref="NullableFlagsBuilder.Build"/> writes for
+    /// that same base, so each position's slice of the flags is found by the
+    /// byte count the builder gives it; a position whose declared state says
+    /// <c>?</c> or <c>!</c> gets it through the import rule
+    /// (<see cref="ClrNullability.SymbolForState"/>), and one with further
+    /// positions of its own keeps its slice lazily, like a CLR-decoded one.
+    /// </summary>
+    /// <returns>The decoded positions.</returns>
+    private ImmutableArray<TypeSymbol> DecodeSymbolicPositions()
+    {
+        var positions = BaseType.GetElementPositions();
+        if (positions.IsDefaultOrEmpty || NullableFlags.IsDefaultOrEmpty)
+        {
+            return positions;
+        }
+
+        // Called only for a slice/array/rectangular base: one element, laid
+        // out after the array's own byte.
+        var widths = positions.Select(p => NullableFlagsBuilder.Build(p).Length).ToImmutableArray();
+        var offset = NullableFlagsBuilder.Build(BaseType).Length - widths.Sum();
+        if (offset < 0)
+        {
+            return positions;
+        }
+
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(positions.Length);
+        for (var i = 0; i < positions.Length; i++)
+        {
+            var position = positions[i];
+            var width = widths[i];
+            if (width == 0 || position is NullableTypeSymbol or PlatformTypeSymbol)
+            {
+                // A value position has no byte; a stated `?`/`!` already speaks.
+                builder.Add(position);
+            }
+            else
+            {
+                var core = width > 1
+                    ? new NullabilityAnnotatedTypeSymbol(position, Slice(offset, width))
+                    : position;
+                builder.Add(ClrNullability.SymbolForState(core, ClrNullability.ClassifyPosition(NullableFlags, offset)));
+            }
+
+            offset += width;
+        }
+
+        return builder.MoveToImmutable();
+
+        ImmutableArray<byte> Slice(int start, int length)
+            => NullableFlags.Length <= 1
+                ? NullableFlags
+                : ImmutableArray.CreateRange(NullableFlags.Skip(start).Take(length));
     }
 
     /// <summary>
