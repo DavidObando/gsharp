@@ -293,6 +293,66 @@ partial class Calc {
         Assert.Equal(42, Invoke(run.Type("Calc"), "Twice", 21));
     }
 
+    // Copilot review (#4430): only a bare name or the LEFTMOST segment of a
+    // qualified name can resolve through an alias. `Regex` here is the last
+    // segment of `System.Text.RegularExpressions.Regex`, so the unused alias
+    // `Regex` must not be copied into the .g.gs.
+    [Fact]
+    public void AliasNamedLikeATrailingSegment_IsNotCopied()
+    {
+        const string UserSource = @"package App
+
+import System.Text.RegularExpressions
+import Regex = System.Text.StringBuilder
+
+partial class P {
+    shared {
+        @GeneratedRegex(""\\d+"")
+        private partial func Digits() System.Text.RegularExpressions.Regex;
+
+        public func Test(s string) bool {
+            return Digits().IsMatch(s)
+        }
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { UserSource }, RegexGenerator());
+
+        string userPart = run.File("RegexGenerator.g.cs");
+        Assert.Contains("private partial func Digits() System.Text.RegularExpressions.Regex ->", userPart, StringComparison.Ordinal);
+        Assert.DoesNotContain("import Regex =", userPart, StringComparison.Ordinal);
+        Assert.Equal(true, Invoke(run.Type("P"), "Test", "a1"));
+    }
+
+    // The leading segment of a qualified name is what an alias resolves:
+    // `R.Regex` needs `import R = System.Text.RegularExpressions`.
+    [Fact]
+    public void AliasAsTheLeadingSegment_IsCopied()
+    {
+        const string UserSource = @"package App
+
+import System.Text.RegularExpressions
+import R = System.Text.RegularExpressions
+
+partial class P {
+    shared {
+        @GeneratedRegex(""\\d+"")
+        private partial func Digits() R.Regex;
+
+        public func Test(s string) bool {
+            return Digits().IsMatch(s)
+        }
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { UserSource }, RegexGenerator());
+
+        string userPart = run.File("RegexGenerator.g.cs");
+        Assert.Contains("import R = System.Text.RegularExpressions", userPart, StringComparison.Ordinal);
+        Assert.Contains("private partial func Digits() R.Regex ->", userPart, StringComparison.Ordinal);
+        Assert.Equal(true, Invoke(run.Type("P"), "Test", "a1"));
+    }
+
     // Copilot review (#4430): only the names a header REFERENCES can need an
     // alias. Two files of one partial class carry unused aliases named like
     // their parameter (`count`) that disagree; neither header uses them, so

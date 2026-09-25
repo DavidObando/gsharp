@@ -327,60 +327,194 @@ internal static class ImplementingPartHeaders
         return null;
     }
 
-    // The identifiers the header REFERENCES (in types, default values and
-    // annotations), by value. The names it DECLARES (the method, its
-    // parameters, its type parameters) cannot refer to an alias, so they are
-    // left out: an unused alias that happens to share a parameter's name is
-    // not needed, and must not be copied or reported as a clash.
+    // The names in the header that an import alias could resolve: the bare
+    // identifiers and the LEFTMOST segment of every qualified name, in type
+    // positions, default values and annotations (`R` in `R.Regex`, never the
+    // `Regex` in `System.Text.RegularExpressions.Regex`). Each generic type
+    // argument is a name of its own. Worked out from the parsed syntax, so
+    // names the header declares (the method, its parameters and type
+    // parameters) and member names after a dot never count.
     private static HashSet<string> HeaderIdentifiers(FunctionDeclarationSyntax declaration)
     {
         TextSpan header = HeaderSpan(declaration);
-        var declaredNames = new HashSet<int> { declaration.Identifier.Span.Start };
-        foreach (ParameterSyntax parameter in declaration.Parameters)
-        {
-            if (parameter.Identifier != null)
-            {
-                declaredNames.Add(parameter.Identifier.Span.Start);
-            }
-        }
-
-        if (declaration.TypeParameterList != null)
-        {
-            foreach (TypeParameterSyntax typeParameter in declaration.TypeParameterList.Parameters)
-            {
-                declaredNames.Add(typeParameter.Identifier.Span.Start);
-            }
-        }
-
         var identifiers = new HashSet<string>(StringComparer.Ordinal);
-        CollectIdentifiers(declaration, header, declaredNames, identifiers);
+        foreach (SyntaxNode child in declaration.GetChildren())
+        {
+            if (child is SyntaxToken || child.Span.Start < header.Start || child.Span.End > header.End)
+            {
+                continue;
+            }
+
+            CollectReferences(child, identifiers);
+        }
+
         return identifiers;
     }
 
-    private static void CollectIdentifiers(
-        SyntaxNode node,
-        TextSpan header,
-        HashSet<int> declaredNames,
-        HashSet<string> identifiers)
+    private static void CollectReferences(SyntaxNode node, HashSet<string> identifiers)
+    {
+        switch (node)
+        {
+            case SyntaxToken:
+                // A token outside the shapes below names nothing an alias can
+                // stand for (a declared name, a keyword, a member after `.`).
+                return;
+
+            case TypeClauseSyntax type:
+                // `Identifier` is the leftmost segment; the qualifier segments
+                // after it are members of whatever it resolves to.
+                AddName(type.Identifier, identifiers);
+                CollectChildReferences(type, identifiers);
+                foreach (SyntaxNode outer in type.OuterSegmentTypeArgumentChildren)
+                {
+                    CollectReferences(outer, identifiers);
+                }
+
+                return;
+
+            case TypeParameterSyntax typeParameter:
+                if (typeParameter.ConstraintType != null)
+                {
+                    CollectReferences(typeParameter.ConstraintType, identifiers);
+                }
+                else
+                {
+                    AddName(typeParameter.Constraint, identifiers);
+                    if (typeParameter.ConstraintTypeArguments != null)
+                    {
+                        foreach (TypeClauseSyntax argument in typeParameter.ConstraintTypeArguments)
+                        {
+                            CollectReferences(argument, identifiers);
+                        }
+                    }
+                }
+
+                return;
+
+            case AnnotationSyntax annotation:
+                if (annotation.NameSegments.Length > 0)
+                {
+                    AddName(annotation.NameSegments[0], identifiers);
+                }
+
+                if (annotation.TypeArguments != null)
+                {
+                    foreach (TypeClauseSyntax argument in annotation.TypeArguments)
+                    {
+                        CollectReferences(argument, identifiers);
+                    }
+                }
+
+                foreach (ExpressionSyntax argument in annotation.Arguments)
+                {
+                    CollectReferences(argument, identifiers);
+                }
+
+                return;
+
+            case AccessorExpressionSyntax accessor:
+                CollectReferences(accessor.LeftPart, identifiers);
+                CollectMemberReferences(accessor.RightPart, identifiers);
+                return;
+
+            case NameExpressionSyntax name:
+                AddName(name.IdentifierToken, identifiers);
+                return;
+
+            case GenericNameExpressionSyntax generic:
+                AddName(generic.Identifier, identifiers);
+                CollectReferences(generic.TypeArgumentList, identifiers);
+                return;
+
+            case CallExpressionSyntax call:
+                if (call.Callee != null)
+                {
+                    CollectReferences(call.Callee, identifiers);
+                }
+                else
+                {
+                    AddName(call.Identifier, identifiers);
+                }
+
+                CollectCallParts(call, identifiers);
+                return;
+
+            case NamedArgumentExpressionSyntax named:
+                // The name before `:` is a parameter or property of the
+                // attribute, not a reference.
+                CollectReferences(named.Expression, identifiers);
+                return;
+
+            default:
+                CollectChildReferences(node, identifiers);
+                return;
+        }
+    }
+
+    // The part after a `.`: its own name is a member, but its arguments and
+    // type arguments are names of their own.
+    private static void CollectMemberReferences(ExpressionSyntax member, HashSet<string> identifiers)
+    {
+        switch (member)
+        {
+            case NameExpressionSyntax:
+                return;
+
+            case GenericNameExpressionSyntax generic:
+                CollectReferences(generic.TypeArgumentList, identifiers);
+                return;
+
+            case CallExpressionSyntax call:
+                if (call.Callee != null)
+                {
+                    CollectMemberReferences(call.Callee, identifiers);
+                }
+
+                CollectCallParts(call, identifiers);
+                return;
+
+            case AccessorExpressionSyntax accessor:
+                CollectMemberReferences(accessor.LeftPart, identifiers);
+                CollectMemberReferences(accessor.RightPart, identifiers);
+                return;
+
+            default:
+                CollectReferences(member, identifiers);
+                return;
+        }
+    }
+
+    private static void CollectCallParts(CallExpressionSyntax call, HashSet<string> identifiers)
+    {
+        if (call.ConversionTypeClause != null)
+        {
+            CollectReferences(call.ConversionTypeClause, identifiers);
+        }
+
+        if (call.TypeArgumentList != null)
+        {
+            CollectReferences(call.TypeArgumentList, identifiers);
+        }
+
+        foreach (ExpressionSyntax argument in call.Arguments)
+        {
+            CollectReferences(argument, identifiers);
+        }
+    }
+
+    private static void CollectChildReferences(SyntaxNode node, HashSet<string> identifiers)
     {
         foreach (SyntaxNode child in node.GetChildren())
         {
-            if (child.Span.End <= header.Start || child.Span.Start >= header.End)
-            {
-                continue;
-            }
+            CollectReferences(child, identifiers);
+        }
+    }
 
-            if (child is SyntaxToken token)
-            {
-                if (token.Kind == SyntaxKind.IdentifierToken && !declaredNames.Contains(token.Span.Start))
-                {
-                    identifiers.Add(token.ValueText);
-                }
-
-                continue;
-            }
-
-            CollectIdentifiers(child, header, declaredNames, identifiers);
+    private static void AddName(SyntaxToken token, HashSet<string> identifiers)
+    {
+        if (token != null && token.Kind == SyntaxKind.IdentifierToken)
+        {
+            identifiers.Add(token.ValueText);
         }
     }
 
