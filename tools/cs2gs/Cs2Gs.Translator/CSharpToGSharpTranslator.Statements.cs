@@ -715,6 +715,23 @@ public sealed partial class CSharpToGSharpTranslator
                 ? new ParenthesizedExpression(translated)
                 : translated;
 
+            // Issue #4287: a NILABLE reference operand concatenates as the empty
+            // string in C# (`"p:" + null` is "p:"), so the conversion is the
+            // null-conditional `x?.ToString()`, whose `string?` result G#
+            // concatenates the same way. `x.ToString()` was a call on a `T?`
+            // receiver: gsc now reports it (GS0159), and it threw on nil
+            // where C# did not. Nilable here means `T?` in the EMITTED G#: a C#
+            // `T?` reference declaration, or a Roslyn member that is `T?` only
+            // on the G# analyzer API (whatever its C# shape: Roslyn's
+            // `SyntaxToken` is a struct, G#'s is a nilable class).
+            if ((operandType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated })
+                || this.IsGSharpNullableAnalyzerExpression(operandSyntax))
+            {
+                return new ConditionalAccessExpression(
+                    receiver,
+                    new InvocationExpression(new MemberAccessExpression(new ConditionalReceiverExpression(), "ToString")));
+            }
+
             return new InvocationExpression(new MemberAccessExpression(receiver, "ToString"));
         }
 

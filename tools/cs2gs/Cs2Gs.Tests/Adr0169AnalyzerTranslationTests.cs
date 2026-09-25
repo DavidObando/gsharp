@@ -384,6 +384,56 @@ public sealed class BlockSurfaceAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void SpecialTypeComparison_AssertsTheNilableContainingTypeReceiver()
+    {
+        // Issue #4287: `x.SpecialType != SpecialType.System_Object` is
+        // rewritten to a CALL, `x.ToDisplayString(DisplayFormat.FullyQualified)
+        // != "global::System.Object"`. `method.ContainingType` is `T?` on the
+        // G# analyzer API, and gsc reports GS0159 for an instance call on a
+        // stated `T?` receiver, so the synthesized receiver needs the same `!!`
+        // a member read through it gets. This is GSA0002's own shape; it took
+        // the hot-core translation guard red.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Collections.Immutable;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class ObjectEqualsAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4287"", ""Title"", ""Message"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterOperationAction(Analyze, OperationKind.Invocation);
+    }
+
+    private static void Analyze(OperationAnalysisContext context)
+    {
+        var operation = (IInvocationOperation)context.Operation;
+        if (operation.Arguments.Length != 2
+            || operation.TargetMethod.ContainingType.SpecialType != SpecialType.System_Object)
+        {
+            return;
+        }
+
+        context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
+    }
+}
+");
+
+        Assert.Contains(".ContainingType!!.ToDisplayString(DisplayFormat.FullyQualified) != \"global::System.Object\"", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void NamespaceSymbolParameter_MapsToNullableStringWithoutAssert()
     {
         // Roslyn annotates INamespaceSymbol non-nullable even though
