@@ -344,11 +344,22 @@ public static class C
             startInfo.ArgumentList.Add(argument);
         }
 
-        using var process = Process.Start(startInfo);
+        using Process process = Process.Start(startInfo);
+        Assert.NotNull(process);
+
+        // Drain both streams concurrently so neither pipe can fill and block
+        // the child, and bound the wait so a hung child fails the test.
+        System.Threading.Tasks.Task<string> stdout = process.StandardOutput.ReadToEndAsync();
+        System.Threading.Tasks.Task<string> stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(TimeSpan.FromMinutes(5)))
+        {
+            process.Kill(entireProcessTree: true);
+            Assert.Fail("dotnet " + string.Join(' ', arguments) + " did not exit within 5 minutes.");
+        }
+
         var output = new StringBuilder();
-        output.Append(process.StandardOutput.ReadToEnd());
-        output.Append(process.StandardError.ReadToEnd());
-        process.WaitForExit();
+        output.Append(stdout.GetAwaiter().GetResult());
+        output.Append(stderr.GetAwaiter().GetResult());
         return (process.ExitCode, output.ToString());
     }
 
