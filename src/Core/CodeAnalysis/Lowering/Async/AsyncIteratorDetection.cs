@@ -144,7 +144,7 @@ public static class AsyncIteratorDetection
         if (fullName == "System.Collections.Generic.IAsyncEnumerable`1"
             || fullName == "System.Collections.Generic.IAsyncEnumerator`1")
         {
-            return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+            return TypeSymbol.FromClrTypeWithoutNullability(clr.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
         }
 
         return null;

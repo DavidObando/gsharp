@@ -96,19 +96,19 @@ internal sealed class ChannelRuntimeBinder
     public bool IsAvailable => chanOpen != null && channelOps != null && cancellationToken != null;
 
     /// <summary>Gets the runtime's <c>ScopeFrame</c> type symbol (ADR-0174 D6).</summary>
-    public TypeSymbol ScopeFrameType => TypeSymbol.FromClrType(Required(scopeFrameType));
+    public TypeSymbol ScopeFrameType => TypeSymbol.FromClrTypeWithoutNullability(Required(scopeFrameType), NullabilityFreeReason.TypeLiteral);
 
     /// <summary>Gets the runtime's <c>AsyncLetCell</c> type (ADR-0174 D15).</summary>
-    public TypeSymbol AsyncLetCellType => TypeSymbol.FromClrType(Required(asyncLetCellType));
+    public TypeSymbol AsyncLetCellType => TypeSymbol.FromClrTypeWithoutNullability(Required(asyncLetCellType), NullabilityFreeReason.TypeLiteral);
 
     /// <summary>Gets the runtime's <c>SelectWaiter</c> type symbol (ADR-0174 D8).</summary>
-    public TypeSymbol SelectWaiterType => TypeSymbol.FromClrType(Required(selectWaiterType));
+    public TypeSymbol SelectWaiterType => TypeSymbol.FromClrTypeWithoutNullability(Required(selectWaiterType), NullabilityFreeReason.TypeLiteral);
 
     /// <summary>Gets the runtime's <c>Context</c> type symbol (ADR-0174 D6/D7).</summary>
-    public TypeSymbol ContextType => TypeSymbol.FromClrType(Required(contextType));
+    public TypeSymbol ContextType => TypeSymbol.FromClrTypeWithoutNullability(Required(contextType), NullabilityFreeReason.TypeLiteral);
 
     /// <summary>Gets the CLR <c>ValueTask</c> type symbol.</summary>
-    public TypeSymbol ValueTaskType => TypeSymbol.FromClrType(Required(valueTask));
+    public TypeSymbol ValueTaskType => TypeSymbol.FromClrTypeWithoutNullability(Required(valueTask), NullabilityFreeReason.TypeLiteral);
 
     /// <summary>Binds <c>ScopeFrame.Enter(ambient)</c>; the ambient context is <c>null</c> (= <c>Context.None</c>) until the hidden context parameter lands.</summary>
     /// <param name="syntax">The scope syntax.</param>
@@ -190,7 +190,7 @@ internal sealed class ChannelRuntimeBinder
             if (candidate.IsGenericType
                 && candidate.GetGenericTypeDefinition().FullName == "Gsharp.Concurrency.ISelectable`1")
             {
-                element = TypeSymbol.FromClrType(candidate.GetGenericArguments()[0]);
+                element = TypeSymbol.FromClrTypeWithoutNullability(candidate.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
                 return true;
             }
         }
@@ -498,7 +498,7 @@ internal sealed class ChannelRuntimeBinder
         {
             var discardOpen = runtime.GetMethod("Discard", BindingFlags.Public | BindingFlags.Static)
                 ?? throw new InvalidOperationException("GoroutineRuntime.Discard is missing from the channel runtime.");
-            var elementType = type is ImportedTypeSymbol { TypeArguments: { IsDefaultOrEmpty: false } args } ? args[0] : TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+            var elementType = type is ImportedTypeSymbol { TypeArguments: { IsDefaultOrEmpty: false } args } ? args[0] : TypeSymbol.FromClrTypeWithoutNullability(clr.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
             var (closedElement, symbolic) = ProjectElement(elementType);
             var closed = discardOpen.MakeGenericMethod(closedElement);
             var function = new ImportedFunctionSymbol("Discard", goroutineRuntimeClass, closed, declaration: null, returnTypeOverride: ValueTaskType);
@@ -535,7 +535,7 @@ internal sealed class ChannelRuntimeBinder
             .Single(static c => c.GetParameters().Length == 1);
         TypeSymbol resultType = symbolic
             ? ImportedTypeSymbol.GetConstructed(closedType, open, ImmutableArray.Create(elementType))
-            : TypeSymbol.FromClrType(closedType);
+            : TypeSymbol.FromClrTypeWithoutNullability(closedType, NullabilityFreeReason.CompilerProduced);
         var arguments = ImmutableArray.Create(capacity ?? new BoundLiteralExpression(null, 0));
         return new BoundClrConstructorCallExpression(syntax, closedType, constructor, arguments, resultType);
     }
@@ -634,7 +634,7 @@ internal sealed class ChannelRuntimeBinder
             "SendAsync",
             CarrierFor(direction),
             elementType,
-            TypeSymbol.FromClrType(Required(valueTask)),
+            TypeSymbol.FromClrTypeWithoutNullability(Required(valueTask), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create(channel, value, cancellation ?? DefaultToken()));
         return Await(syntax, call, TypeSymbol.Void);
     }
@@ -841,7 +841,7 @@ internal sealed class ChannelRuntimeBinder
             return symbolic;
         }
 
-        return TypeSymbol.FromClrType(call.Function.Method.GetGenericArguments()[0]);
+        return TypeSymbol.FromClrTypeWithoutNullability(call.Function.Method.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
     }
 
     /// <summary>Binds <c>AsyncLetCell.Start(frame)</c> (ADR-0174 D15).</summary>
@@ -960,7 +960,7 @@ internal sealed class ChannelRuntimeBinder
     {
         if (resultType == TypeSymbol.Void)
         {
-            return TypeSymbol.FromClrType(Required(valueTask));
+            return TypeSymbol.FromClrTypeWithoutNullability(Required(valueTask), NullabilityFreeReason.TypeLiteral);
         }
 
         var open = Required(valueTaskOpen);
@@ -968,7 +968,7 @@ internal sealed class ChannelRuntimeBinder
         var closed = open.MakeGenericType(closedResult);
         return symbolic
             ? ImportedTypeSymbol.GetConstructed(closed, open, ImmutableArray.Create(resultType))
-            : TypeSymbol.FromClrType(closed);
+            : TypeSymbol.FromClrTypeWithoutNullability(closed, NullabilityFreeReason.CompilerProduced);
     }
 
     private static BoundExpression Await(SyntaxNode? syntax, BoundExpression call, TypeSymbol resultType)
@@ -1033,7 +1033,7 @@ internal sealed class ChannelRuntimeBinder
     }
 
     private BoundExpression DefaultToken()
-        => new BoundDefaultExpression(null, TypeSymbol.FromClrType(Required(cancellationToken)));
+        => new BoundDefaultExpression(null, TypeSymbol.FromClrTypeWithoutNullability(Required(cancellationToken), NullabilityFreeReason.TypeLiteral));
 
     private BoundExpression BindSelectCall(VariableSymbol waiter, string name, TypeSymbol returnType)
     {

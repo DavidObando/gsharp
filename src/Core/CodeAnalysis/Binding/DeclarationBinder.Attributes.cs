@@ -754,7 +754,7 @@ internal sealed partial class DeclarationBinder
 
             if (scope.References.TryResolveType(name, out var clrType) && clrType != null)
             {
-                return TypeSymbol.FromClrType(clrType);
+                return TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.ResolvedTypeName);
             }
         }
 
@@ -820,7 +820,7 @@ internal sealed partial class DeclarationBinder
                     break;
                 }
 
-                current = TypeSymbol.FromClrType(nestedClrType);
+                current = TypeSymbol.FromClrTypeWithoutNullability(nestedClrType, NullabilityFreeReason.ResolvedTypeName);
             }
 
             if (resolved)

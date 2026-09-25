@@ -408,10 +408,13 @@ internal sealed partial class DeclarationBinder
             var symbolicParamsSlice =
                 TryProjectSymbolicBaseParameterType(openBaseCtorParams, openBaseDefinition, baseTypeArguments, paramsIndex)
                     as SliceTypeSymbol;
+
+            // The packed array's element, read through the funnel and taken
+            // bare: the emitter pushes an array of the erased element shape.
             var elementTypeSymbol = symbolicParamsSlice?.ElementType
                 ?? (elementClrType == null
                     ? TypeSymbol.Object
-                    : TypeSymbol.FromClrType(elementClrType));
+                    : ReadParamsElementShape(ctorParams[paramsIndex]));
             var sliceType = symbolicParamsSlice ?? SliceTypeSymbol.Get(elementTypeSymbol);
 
             var tailCount = boundArguments.Count - paramsIndex;
@@ -667,8 +670,8 @@ internal sealed partial class DeclarationBinder
             return null;
         }
 
-        var raw = MemberLookup.MapOpenClrParameterTypeToSymbolic(
-            openBaseCtorParams[index].ParameterType,
+        var raw = MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+            openBaseCtorParams[index],
             openBaseDefinition,
             baseTypeArguments);
 
@@ -803,7 +806,7 @@ internal sealed partial class DeclarationBinder
                 }
 
                 if (!ExpressionBinder.IsDeferredBranchyArgumentPlaceholder(boundArguments[index], out var syntax)
-                    || !ExpressionBinder.CanTargetDependentBlockArgument(syntax, TypeSymbol.FromClrType(targetClrType)))
+                    || !ExpressionBinder.CanTargetDependentBlockArgument(syntax, ClrNullability.GetParameterTypeSymbol(parameters[index])))
                 {
                     deferredTargetsMatch = false;
                     break;
@@ -833,6 +836,7 @@ internal sealed partial class DeclarationBinder
         foreach (var index in deferred)
         {
             System.Type? commonTargetType = null;
+            ParameterInfo? commonTargetParameter = null;
             var targetsDisagree = false;
             foreach (var candidate in compatible)
             {
@@ -845,6 +849,7 @@ internal sealed partial class DeclarationBinder
                 if (commonTargetType is null)
                 {
                     commonTargetType = candidateTargetType;
+                    commonTargetParameter = candidate.Parameters[index];
                 }
                 else if (!ClrTypeUtilities.AreSame(commonTargetType, candidateTargetType))
                 {
@@ -853,12 +858,12 @@ internal sealed partial class DeclarationBinder
                 }
             }
 
-            if (commonTargetType is null || targetsDisagree)
+            if (commonTargetParameter is null || targetsDisagree)
             {
                 continue;
             }
 
-            var targetType = TypeSymbol.FromClrType(commonTargetType);
+            var targetType = ClrNullability.GetParameterTypeSymbol(commonTargetParameter);
             boundArguments[index] = conversions.BindConversion(
                 boundArguments[index].Syntax?.Location ?? default,
                 boundArguments[index],
@@ -1652,5 +1657,13 @@ internal sealed partial class DeclarationBinder
 
         scope = savedScope;
         binderCtx.CurrentTypeParameters = savedTypeParameters;
+    }
+
+    private static TypeSymbol ReadParamsElementShape(ParameterInfo paramsParameter)
+    {
+        var positions = ClrNullability.GetParameterTypeSymbol(paramsParameter).GetElementPositions();
+        return positions.Length == 1
+            ? positions[0].StripTopLevelReferenceNullability()
+            : TypeSymbol.Object;
     }
 }

@@ -57,6 +57,7 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
     /// The properly-nullified symbol, or <see cref="TypeSymbol.Error"/> when the
     /// outer CLR type is not a closed generic.
     /// </returns>
+    [NullabilityFunnel]
     public TypeSymbol GetTypeArgumentSymbol(int argIndex)
     {
         var clr = ClrType;
@@ -109,6 +110,7 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
     /// </summary>
     /// <param name="targetClrType">The CLR element type to locate.</param>
     /// <returns>The nullified symbol for the first matching argument.</returns>
+    [NullabilityFunnel]
     public TypeSymbol GetTypeArgumentSymbolForClrType(Type? targetClrType)
     {
         if (targetClrType == null)
@@ -244,6 +246,7 @@ public sealed class NullabilityAnnotatedTypeSymbol : TypeSymbol
     /// positions of its own keeps its slice lazily, like a CLR-decoded one.
     /// </summary>
     /// <returns>The decoded positions.</returns>
+    [NullabilityFunnel]
     private ImmutableArray<TypeSymbol> DecodeSymbolicPositions()
     {
         var positions = BaseType.GetElementPositions();

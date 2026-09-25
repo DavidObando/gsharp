@@ -101,7 +101,9 @@ internal static class AnalyzerTestHelper
         var needed = new HashSet<string>(StringComparer.OrdinalIgnoreCase)
         {
             "System.Collections.Concurrent.dll",
+            "System.Collections.Immutable.dll",
             "System.Collections.dll",
+            "System.Linq.dll",
             "System.Private.CoreLib.dll",
             "System.Reflection.dll",
             "System.Runtime.dll",

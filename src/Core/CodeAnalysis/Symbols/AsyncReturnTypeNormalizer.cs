@@ -113,7 +113,7 @@ internal static class AsyncReturnTypeNormalizer
             var definition = clr.GetGenericTypeDefinition();
             if (definition.IsSameAs(typeof(Task<>)) || definition.IsSameAs(typeof(ValueTask<>)))
             {
-                awaited = TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+                awaited = TypeSymbol.FromClrTypeWithoutNullability(clr.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
                 isValueTask = definition.IsSameAs(typeof(ValueTask<>));
                 return true;
             }

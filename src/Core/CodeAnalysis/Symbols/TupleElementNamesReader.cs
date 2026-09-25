@@ -215,7 +215,7 @@ public static class TupleElementNamesReader
                 var changed = false;
                 foreach (var clrArgument in clrArguments)
                 {
-                    var argumentSymbol = TypeSymbol.FromClrType(clrArgument);
+                    var argumentSymbol = TypeSymbol.FromClrTypeWithoutNullability(clrArgument, NullabilityFreeReason.TypeStructure);
                     var applied = Apply(argumentSymbol, names, ref position);
                     arguments.Add(applied);
                     changed |= !ReferenceEquals(applied, argumentSymbol);

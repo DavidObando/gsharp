@@ -23,18 +23,18 @@ namespace GSharp.Core.CodeAnalysis.Lowering;
 /// </summary>
 internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
 {
-    private static readonly TypeSymbol SystemTypeSymbol = TypeSymbol.FromClrType(typeof(Type));
+    private static readonly TypeSymbol SystemTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(Type), NullabilityFreeReason.TypeLiteral);
     private static readonly TypeSymbol ObjectTypeSymbol = TypeSymbol.Object;
-    private static readonly TypeSymbol BindingFlagsTypeSymbol = TypeSymbol.FromClrType(typeof(BindingFlags));
-    private static readonly TypeSymbol ReflectionConstructorInfoTypeSymbol = TypeSymbol.FromClrType(typeof(ConstructorInfo));
-    private static readonly TypeSymbol ReflectionFieldInfoTypeSymbol = TypeSymbol.FromClrType(typeof(FieldInfo));
-    private static readonly TypeSymbol ReflectionMethodInfoTypeSymbol = TypeSymbol.FromClrType(typeof(MethodInfo));
-    private static readonly TypeSymbol ReflectionPropertyInfoTypeSymbol = TypeSymbol.FromClrType(typeof(PropertyInfo));
-    private static readonly TypeSymbol ReflectionMemberInfoTypeSymbol = TypeSymbol.FromClrType(typeof(MemberInfo));
-    private static readonly TypeSymbol ExpressionTypeSymbol = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.Expression));
-    private static readonly TypeSymbol MemberBindingTypeSymbol = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberBinding));
-    private static readonly TypeSymbol NewExpressionTypeSymbol = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression));
-    private static readonly TypeSymbol ParameterExpressionTypeSymbol = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.ParameterExpression));
+    private static readonly TypeSymbol BindingFlagsTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(BindingFlags), NullabilityFreeReason.TypeLiteral);
+    private static readonly TypeSymbol ReflectionConstructorInfoTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(ConstructorInfo), NullabilityFreeReason.TypeLiteral);
+    private static readonly TypeSymbol ReflectionFieldInfoTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(FieldInfo), NullabilityFreeReason.TypeLiteral);
+    private static readonly TypeSymbol ReflectionMethodInfoTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(MethodInfo), NullabilityFreeReason.TypeLiteral);
+    private static readonly TypeSymbol ReflectionPropertyInfoTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(PropertyInfo), NullabilityFreeReason.TypeLiteral);
+    private static readonly TypeSymbol ReflectionMemberInfoTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(MemberInfo), NullabilityFreeReason.TypeLiteral);
+    private static readonly TypeSymbol ExpressionTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.Expression), NullabilityFreeReason.TypeLiteral);
+    private static readonly TypeSymbol MemberBindingTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberBinding), NullabilityFreeReason.TypeLiteral);
+    private static readonly TypeSymbol NewExpressionTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewExpression), NullabilityFreeReason.TypeLiteral);
+    private static readonly TypeSymbol ParameterExpressionTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.ParameterExpression), NullabilityFreeReason.TypeLiteral);
 
     private static readonly MethodInfo ExpressionParameterMethod = GetRequiredMethod(
         typeof(System.Linq.Expressions.Expression),
@@ -310,7 +310,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         var lambda = new BoundClrStaticCallExpression(
             syntax,
             ExpressionLambdaMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.LambdaExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.LambdaExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 CreateTypeOf(MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out var delegateType) ? delegateType : TypeSymbol.Error),
                 UpcastToExpression(body),
@@ -332,7 +332,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return new BoundClrStaticCallExpression(
                     expression.Syntax,
                     ExpressionDefaultMethod,
-                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.DefaultExpression)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.DefaultExpression), NullabilityFreeReason.TypeLiteral),
                     ImmutableArray.Create<BoundExpression>(CreateTypeOf(@default.Type)));
             case BoundTypeOfExpression typeOf:
                 return BuildRuntimeConstant(typeOf, SystemTypeSymbol);
@@ -355,7 +355,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                     return new BoundClrStaticCallExpression(
                         expression.Syntax,
                         ExpressionArrayAccessMethod,
-                        TypeSymbol.FromClrType(typeof(System.Linq.Expressions.IndexExpression)),
+                        TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.IndexExpression), NullabilityFreeReason.TypeLiteral),
                         ImmutableArray.Create<BoundExpression>(
                             UpcastToExpression(this.TranslateExpression(index.Target, parameterMap)),
                             BuildExpressionArray(index.Indices.Select(i => this.TranslateExpression(i, parameterMap)))));
@@ -364,7 +364,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return new BoundClrStaticCallExpression(
                     expression.Syntax,
                     ExpressionArrayIndexMethod,
-                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.BinaryExpression)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.BinaryExpression), NullabilityFreeReason.TypeLiteral),
                     ImmutableArray.Create<BoundExpression>(
                         UpcastToExpression(this.TranslateExpression(index.Target, parameterMap)),
                         UpcastToExpression(this.TranslateExpression(index.Index, parameterMap))));
@@ -372,7 +372,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return new BoundClrStaticCallExpression(
                     expression.Syntax,
                     ExpressionIndexerPropertyMethod,
-                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.IndexExpression)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.IndexExpression), NullabilityFreeReason.TypeLiteral),
                     ImmutableArray.Create<BoundExpression>(
                         UpcastToExpression(this.TranslateExpression(clrIndex.Target, parameterMap)),
                         new BoundLiteralExpression(null, clrIndex.Indexer.Name, TypeSymbol.String),
@@ -385,7 +385,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return new BoundClrStaticCallExpression(
                     expression.Syntax,
                     ExpressionConditionMethod,
-                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.ConditionalExpression)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.ConditionalExpression), NullabilityFreeReason.TypeLiteral),
                     ImmutableArray.Create<BoundExpression>(
                         UpcastToExpression(this.TranslateExpression(conditional.Condition, parameterMap)),
                         UpcastToExpression(this.TranslateExpression(conditional.WhenTrue, parameterMap)),
@@ -394,7 +394,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return new BoundClrStaticCallExpression(
                     expression.Syntax,
                     ExpressionTypeIsMethod,
-                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.TypeBinaryExpression)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.TypeBinaryExpression), NullabilityFreeReason.TypeLiteral),
                     ImmutableArray.Create<BoundExpression>(
                         UpcastToExpression(this.TranslateExpression(isExpression.Expression, parameterMap)),
                         CreateTypeOf(Invariant.Required(
@@ -404,7 +404,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 return new BoundClrStaticCallExpression(
                     expression.Syntax,
                     ExpressionTypeAsMethod,
-                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.UnaryExpression)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.UnaryExpression), NullabilityFreeReason.TypeLiteral),
                     ImmutableArray.Create<BoundExpression>(
                         UpcastToExpression(this.TranslateExpression(asExpression.Expression, parameterMap)),
                         CreateTypeOf(asExpression.TargetType)));
@@ -450,7 +450,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 literal.Syntax,
                 ExpressionConstantUntypedMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.ConstantExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.ConstantExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, null, TypeSymbol.Null)));
         }
 
@@ -462,7 +462,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             runtimeValue.Syntax,
             ExpressionConstantMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.ConstantExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.ConstantExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 new BoundConversionExpression(null, ObjectTypeSymbol, runtimeValue),
                 CreateTypeOf(runtimeType)));
@@ -478,7 +478,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 field.Syntax,
                 ExpressionFieldStaticMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(
                     new BoundLiteralExpression(null, null, TypeSymbol.Null),
                     CreateTypeOf(Invariant.Required(
@@ -490,7 +490,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             field.Syntax,
             ExpressionFieldInstanceMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(field.Receiver, parameterMap)),
                 new BoundLiteralExpression(null, field.Field.Name, TypeSymbol.String)));
@@ -505,7 +505,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 property.Syntax,
                 ExpressionPropertyStaticMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(
                     new BoundLiteralExpression(null, null, TypeSymbol.Null),
                     CreateTypeOf(Invariant.Required(
@@ -517,7 +517,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             property.Syntax,
             ExpressionPropertyInstanceMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(property.Receiver, parameterMap)),
                 new BoundLiteralExpression(null, property.Property.Name, TypeSymbol.String)));
@@ -529,8 +529,8 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
     {
         var memberName = property.Member.Name;
         var ownerType = property.StaticContainerType
-            ?? TypeSymbol.FromClrType(
-                Invariant.Required(property.Member.DeclaringType, "a CLR property has a declaring type"));
+            ?? TypeSymbol.FromClrTypeWithoutNullability(
+                Invariant.Required(property.Member.DeclaringType, "a CLR property has a declaring type"), NullabilityFreeReason.TypeStructure);
         var isField = property.Member is FieldInfo;
         var staticMethod = isField ? ExpressionFieldStaticMethod : ExpressionPropertyStaticMethod;
         var instanceMethod = isField ? ExpressionFieldInstanceMethod : ExpressionPropertyInstanceMethod;
@@ -540,7 +540,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 property.Syntax,
                 staticMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(
                     new BoundLiteralExpression(null, null, TypeSymbol.Null),
                     CreateTypeOf(ownerType),
@@ -550,7 +550,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             property.Syntax,
             instanceMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(property.Receiver, parameterMap)),
                 new BoundLiteralExpression(null, memberName, TypeSymbol.String)));
@@ -587,7 +587,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             unary.Syntax,
             method,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.UnaryExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.UnaryExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create(operand));
     }
 
@@ -601,12 +601,12 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             var rightNot = new BoundClrStaticCallExpression(
                 binary.Syntax,
                 GetRequiredMethod(typeof(System.Linq.Expressions.Expression), nameof(System.Linq.Expressions.Expression.Not), typeof(System.Linq.Expressions.Expression)),
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.UnaryExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.UnaryExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create(UpcastToExpression(this.TranslateExpression(binary.Right, parameterMap))));
             return new BoundClrStaticCallExpression(
                 binary.Syntax,
                 GetRequiredMethod(typeof(System.Linq.Expressions.Expression), nameof(System.Linq.Expressions.Expression.And), typeof(System.Linq.Expressions.Expression), typeof(System.Linq.Expressions.Expression)),
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.BinaryExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.BinaryExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create(left, UpcastToExpression(rightNot)));
         }
 
@@ -643,14 +643,14 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 binary.Syntax,
                 method,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.BinaryExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.BinaryExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(leftExpr, rightExpr, BuildMethodInfoConstant(concat)));
         }
 
         return new BoundClrStaticCallExpression(
             binary.Syntax,
             method,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.BinaryExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.BinaryExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create(leftExpr, rightExpr));
     }
 
@@ -663,7 +663,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 array.Syntax,
                 ExpressionNewArrayBoundsMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewArrayExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewArrayExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(
                     CreateTypeOf(array.ElementType),
                     BuildExpressionArray(array.DimensionExpressions.Select(
@@ -679,7 +679,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             array.Syntax,
             ExpressionNewArrayInitMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewArrayExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewArrayExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 CreateTypeOf(array.ElementType),
                 BuildExpressionArray(elements)));
@@ -701,7 +701,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 structLiteral.Syntax,
                 ExpressionNewTypeMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(CreateTypeOf(structLiteral.StructType)));
         }
 
@@ -724,7 +724,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             structLiteral.Syntax,
             ExpressionNewCtorMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 ctorInfo,
                 BuildExpressionArray(TranslateArguments(argValuesImmutable, GetArgumentTypes(argValuesImmutable), parameterMap))));
@@ -739,7 +739,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 constructor.Syntax,
                 ExpressionNewTypeMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(CreateTypeOf(constructor.StructType)));
         }
 
@@ -766,7 +766,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 constructor.Syntax,
                 ExpressionNewCtorMembersMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(
                     ctorInfo,
                     BuildExpressionArray(TranslateArguments(constructor.Arguments, GetArgumentTypes(constructor.Arguments), parameterMap)),
@@ -776,7 +776,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             constructor.Syntax,
             ExpressionNewCtorMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 ctorInfo,
                 BuildExpressionArray(TranslateArguments(constructor.Arguments, GetArgumentTypes(constructor.Arguments), parameterMap))));
@@ -791,7 +791,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 constructor.Syntax,
                 ExpressionNewTypeMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(CreateTypeOf(constructor.Type)));
         }
 
@@ -805,7 +805,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             constructor.Syntax,
             ExpressionNewCtorMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.NewExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.NewExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 ctorInfo,
                 BuildExpressionArray(TranslateArguments(constructor.Arguments, GetArgumentTypes(constructor.Arguments), parameterMap))));
@@ -840,7 +840,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 conversion.Syntax,
                 ExpressionConvertWithMethodMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.UnaryExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.UnaryExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create<BoundExpression>(
                     UpcastToExpression(this.TranslateExpression(conversion.Expression, parameterMap)),
                     CreateTypeOf(conversion.Type),
@@ -850,7 +850,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             conversion.Syntax,
             ExpressionConvertMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.UnaryExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.UnaryExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(conversion.Expression, parameterMap)),
                 CreateTypeOf(conversion.Type)));
@@ -879,7 +879,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             conversion.Syntax,
             ExpressionConvertWithMethodMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.UnaryExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.UnaryExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(conversion.Source, parameterMap)),
                 CreateTypeOf(conversion.Type),
@@ -893,7 +893,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             call.Syntax,
             ExpressionCallInstanceMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MethodCallExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MethodCallExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(call.Receiver, parameterMap)),
                 new BoundLiteralExpression(null, call.Method.Name, TypeSymbol.String),
@@ -908,10 +908,10 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             call.Syntax,
             ExpressionCallStaticMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MethodCallExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MethodCallExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
-                CreateTypeOf(TypeSymbol.FromClrType(
-                    Invariant.Required(call.Function.Method.DeclaringType, "a CLR method has a declaring type"))),
+                CreateTypeOf(TypeSymbol.FromClrTypeWithoutNullability(
+                    Invariant.Required(call.Function.Method.DeclaringType, "a CLR method has a declaring type"), NullabilityFreeReason.TypeStructure)),
                 new BoundLiteralExpression(null, call.Function.Method.Name, TypeSymbol.String),
                 BuildTypeArray(GetNullableTypeSymbols(call.TypeArgumentSymbols)),
                 BuildExpressionArray(TranslateArguments(call.Arguments, call.Function.Method.GetParameters(), parameterMap))));
@@ -924,10 +924,10 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             call.Syntax,
             ExpressionCallStaticMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MethodCallExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MethodCallExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
-                CreateTypeOf(TypeSymbol.FromClrType(
-                    Invariant.Required(call.Method.DeclaringType, "a CLR method has a declaring type"))),
+                CreateTypeOf(TypeSymbol.FromClrTypeWithoutNullability(
+                    Invariant.Required(call.Method.DeclaringType, "a CLR method has a declaring type"), NullabilityFreeReason.TypeStructure)),
                 new BoundLiteralExpression(null, call.Method.Name, TypeSymbol.String),
                 BuildTypeArray(ImmutableArray<TypeSymbol>.Empty),
                 BuildExpressionArray(TranslateArguments(call.Arguments, call.Method.GetParameters(), parameterMap))));
@@ -940,7 +940,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             call.Syntax,
             ExpressionCallInstanceMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MethodCallExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MethodCallExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(call.Receiver, parameterMap)),
                 new BoundLiteralExpression(null, call.Method.Name, TypeSymbol.String),
@@ -960,7 +960,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             call.Syntax,
             ExpressionCallStaticMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MethodCallExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MethodCallExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 CreateTypeOf(call.Function.StaticOwnerType),
                 new BoundLiteralExpression(null, call.Function.Name, TypeSymbol.String),
@@ -997,7 +997,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
 
         var leftExpr = UpcastToExpression(this.TranslateExpression(expression.Left, parameterMap));
         var rightExpr = UpcastToExpression(this.TranslateExpression(expression.Right, parameterMap));
-        var resultType = TypeSymbol.FromClrType(typeof(System.Linq.Expressions.BinaryExpression));
+        var resultType = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.BinaryExpression), NullabilityFreeReason.TypeLiteral);
 
         // Issue #2398: same-compilation operators have no MethodInfo until the
         // emitted declaring type exists. Resolve it at runtime from the exact
@@ -1076,7 +1076,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         return new BoundClrStaticCallExpression(
             expression.Syntax,
             factory,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.UnaryExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.UnaryExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 UpcastToExpression(this.TranslateExpression(expression.Operand, parameterMap)),
                 BuildMethodInfoConstant(expression.Method)));
@@ -1116,7 +1116,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         expression = new BoundClrStaticCallExpression(
             block.Syntax,
             ExpressionMemberInitMethod,
-            TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberInitExpression)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberInitExpression), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(
                 translatedInitializer.Type == NewExpressionTypeSymbol
                     ? translatedInitializer
@@ -1137,7 +1137,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 new BoundClrStaticCallExpression(
                     field.Syntax,
                     ExpressionBindMethod,
-                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberAssignment)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberAssignment), NullabilityFreeReason.TypeLiteral),
                     ImmutableArray.Create<BoundExpression>(
                         BuildUserFieldInfoLookup(BoundNodeForm.DeclaringType(field), field.Field.Name),
                         UpcastToExpression(this.TranslateExpression(field.Value, parameterMap)))),
@@ -1145,7 +1145,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 new BoundClrStaticCallExpression(
                     property.Syntax,
                     ExpressionBindMethod,
-                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberAssignment)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberAssignment), NullabilityFreeReason.TypeLiteral),
                     ImmutableArray.Create<BoundExpression>(
                         BuildUserPropertyInfoLookup(
                             Invariant.Required(
@@ -1157,7 +1157,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
                 new BoundClrStaticCallExpression(
                     clrProperty.Syntax,
                     ExpressionBindMethod,
-                    TypeSymbol.FromClrType(typeof(System.Linq.Expressions.MemberAssignment)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.MemberAssignment), NullabilityFreeReason.TypeLiteral),
                     ImmutableArray.Create<BoundExpression>(
                         BuildMemberInfoConstant(clrProperty.Member),
                         UpcastToExpression(this.TranslateExpression(clrProperty.Value, parameterMap)))),
@@ -1175,7 +1175,9 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         var builder = ImmutableArray.CreateBuilder<BoundExpression>(arguments.Length);
         for (var i = 0; i < arguments.Length; i++)
         {
-            var expectedType = i < parameters.Length ? TypeSymbol.FromClrType(parameters[i].ParameterType) : null;
+            var expectedType = i < parameters.Length
+                ? ClrNullability.GetParameterTypeSymbol(parameters[i]).StripTopLevelReferenceNullability()
+                : null;
             builder.Add(this.TranslateArgument(arguments[i], expectedType, parameterMap));
         }
 
@@ -1229,7 +1231,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
             return new BoundClrStaticCallExpression(
                 argument.Syntax,
                 ExpressionQuoteMethod,
-                TypeSymbol.FromClrType(typeof(System.Linq.Expressions.UnaryExpression)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Linq.Expressions.UnaryExpression), NullabilityFreeReason.TypeLiteral),
                 ImmutableArray.Create(UpcastToExpression(nested)));
         }
 

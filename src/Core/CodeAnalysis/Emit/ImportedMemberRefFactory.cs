@@ -1224,7 +1224,7 @@ internal sealed class ImportedMemberRefFactory
                     var symbolicIfaceArgs = ImmutableArray.CreateBuilder<TypeSymbol>(ifaceArgs.Length);
                     foreach (var ifa in ifaceArgs)
                     {
-                        symbolicIfaceArgs.Add(MemberLookup.MapOpenClrTypeToSymbolic(ifa, openDefinition, typeArguments));
+                        symbolicIfaceArgs.Add(MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(ifa, openDefinition, typeArguments, NullabilityFreeReason.TypeStructure));
                     }
 
                     openDefinition = methodDeclOpen;
@@ -2690,7 +2690,7 @@ internal sealed class ImportedMemberRefFactory
                 taskClrType,
                 taskClrType.GetGenericTypeDefinition(),
                 ImmutableArray.Create(resultSym))
-            : ImportedTypeSymbol.Get(taskClrType);
+            : ImportedTypeSymbol.GetWithoutNullability(taskClrType, NullabilityFreeReason.EmitShape);
 
         var asyncFn = FunctionTypeSymbol.Get(fnType.ParameterTypes, taskReturn);
         return this.outer.userTokens.FunctionTypeNeedsSymbolicDelegate(asyncFn)

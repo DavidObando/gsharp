@@ -353,7 +353,7 @@ public sealed class InterpolatedStringHandlerInfo
 
         return new InterpolatedStringHandlerInfo(
             peeled,
-            TypeSymbol.FromClrType(peeled),
+            ReadHandlerType(parameter, peeled),
             constructor,
             forwardedArgs,
             hasOutBool,
@@ -647,5 +647,22 @@ public sealed class InterpolatedStringHandlerInfo
         }
 
         return string.Equals(t?.FullName, "System.Boolean", System.StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// The handler local's type: the parameter's bare (by-ref peeled) shape,
+    /// read through the funnel — or, for a <c>params</c> array of handlers,
+    /// its element. A handler is constructed, never nil.
+    /// </summary>
+    private static TypeSymbol ReadHandlerType(ParameterInfo parameter, System.Type handler)
+    {
+        var read = ClrNullability.GetParameterTypeSymbol(parameter).StripTopLevelReferenceNullability();
+        if (ClrTypeUtilities.AreSame(read.ClrType, handler))
+        {
+            return read;
+        }
+
+        var elements = read.GetElementPositions();
+        return elements.Length == 1 ? elements[0].StripTopLevelReferenceNullability() : read;
     }
 }

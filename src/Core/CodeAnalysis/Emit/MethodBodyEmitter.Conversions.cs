@@ -1037,6 +1037,23 @@ internal sealed partial class MethodBodyEmitter
         this.il.MarkLabel(end);
     }
 
+    /// <summary>
+    /// ADR-0193 Phase 2: the CLR-return overload. The widening only asks
+    /// whether the reflected return is <c>System.Object</c> — the one CLR type
+    /// that maps to <see cref="TypeSymbol.Object"/>, compared by full name as
+    /// <see cref="TypeSymbol.FromClrType"/> compares it — so the signature
+    /// position is tested in place rather than converted to a symbol.
+    /// </summary>
+    /// <param name="runtimeReturnClr">The reflected return type of the called member.</param>
+    /// <param name="expectedType">The bound (symbolic) type of the call.</param>
+    private void EmitErasedObjectReturnWidening(Type runtimeReturnClr, TypeSymbol? expectedType)
+    {
+        if (runtimeReturnClr.FullName == "System.Object")
+        {
+            this.EmitErasedObjectReturnWidening(TypeSymbol.Object, expectedType);
+        }
+    }
+
     private void EmitErasedObjectReturnWidening(TypeSymbol runtimeReturnType, TypeSymbol? expectedType)
     {
         if (!IsObjectStackType(runtimeReturnType)
@@ -1568,7 +1585,7 @@ internal sealed partial class MethodBodyEmitter
                 default(ImmutableArray<TypeSymbol?>),
                 SymbolicConversionOwner(method, UnwrapNullable(conv.Source.Type), UnwrapNullable(conv.Type)))
             : this.outer.memberRefs.GetMethodReference(method));
-        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(method.ReturnType), conv.Type);
+        this.EmitErasedObjectReturnWidening(method.ReturnType, conv.Type);
 
         // Issue #663: when the operator returns a non-nullable value type T but the
         // target type is Nullable<T> (e.g. op_Explicit(JsonNode) → int, target int32?),
@@ -1734,7 +1751,7 @@ internal sealed partial class MethodBodyEmitter
         this.il.OpCode(ILOpCode.Initobj);
         var initType = ChannelElementNeedsSymbolicType(gsharpType)
             ? gsharpType
-            : TypeSymbol.FromClrType(clrType);
+            : TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.EmitShape);
         this.il.Token(this.outer.memberRefs.GetElementTypeToken(initType));
     }
 }

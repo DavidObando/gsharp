@@ -395,7 +395,7 @@ public sealed class TupleTypeSymbol : TypeSymbol
             var builder = ImmutableArray.CreateBuilder<TypeSymbol>();
             foreach (var argument in closedShape.GetGenericArguments())
             {
-                var symbol = FromClrType(argument);
+                var symbol = FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure);
                 if (symbol == null)
                 {
                     return false;

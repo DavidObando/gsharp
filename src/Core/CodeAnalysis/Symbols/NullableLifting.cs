@@ -257,6 +257,20 @@ public static class NullableLifting
     }
 
     /// <summary>
+    /// ADR-0193 §3: wraps a value type read from a CLR <c>Nullable&lt;V&gt;</c>
+    /// as G#'s <c>V?</c>. This is value optionality (ADR-0001), which the CLR
+    /// signature itself spells, not a reference-nullability decision, so it
+    /// does not go through <see cref="NullabilityImportRule"/>. The funnel's
+    /// walkers call this rather than <see cref="NullableTypeSymbol.Get"/>, so
+    /// GSA0007's walker clause keeps every <em>reference</em> wrapper they
+    /// build on the rule.
+    /// </summary>
+    /// <param name="valueUnderlying">The mapped <c>V</c> of a CLR <c>Nullable&lt;V&gt;</c>.</param>
+    /// <returns><c>V?</c>.</returns>
+    internal static TypeSymbol WrapValueTypeNullable(TypeSymbol valueUnderlying)
+        => NullableTypeSymbol.Get(valueUnderlying);
+
+    /// <summary>
     /// Returns the underlying type of a constructed CLR <c>Nullable&lt;T&gt;</c>.
     /// Uses <see cref="Nullable.GetUnderlyingType(Type)"/> for runtime types and
     /// a metadata-name fallback for types owned by a

@@ -1074,12 +1074,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        TypeSymbol memberTypeSymbol = member switch
-        {
-            System.Reflection.PropertyInfo p2 => ClrNullability.GetPropertyTypeSymbol(p2),
-            System.Reflection.FieldInfo f2 => ClrNullability.GetFieldTypeSymbol(f2),
-            _ => TypeSymbol.FromClrType(memberClrType),
-        };
+        TypeSymbol memberTypeSymbol = MemberLookup.GetClrMemberValueTypeSymbol(member);
 
         BoundExpression delegateLoad = ApplyMemberNarrowing(
             new BoundClrPropertyAccessExpression(null, receiver, member, memberTypeSymbol));
@@ -1214,12 +1209,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        TypeSymbol memberTypeSymbol = member switch
-        {
-            PropertyInfo p2 => ClrNullability.GetPropertyTypeSymbol(p2),
-            FieldInfo f2 => ClrNullability.GetFieldTypeSymbol(f2),
-            _ => TypeSymbol.FromClrType(memberClrType),
-        };
+        TypeSymbol memberTypeSymbol = MemberLookup.GetClrMemberValueTypeSymbol(member);
 
         BoundExpression delegateLoad = ApplyMemberNarrowing(
             new BoundClrPropertyAccessExpression(null, null, member, memberTypeSymbol));
@@ -1646,7 +1636,7 @@ internal sealed partial class ExpressionBinder
                         : ImmutableArray.CreateRange<TypeSymbol?>(typeArgSymbols);
                 var returnType = ResolveImportedGenericReturnType(best, typeArgSymbols)
                     ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(best, inheritedSymbolicTypeArgs, receiver.Type)
-                    ?? ResolveInstanceReturnTypeFromReceiver(receiver.Type, best)
+                    ?? MemberLookup.GetClrReceiverProjectedReturnTypeSymbol(receiver.Type, best)
                     ?? MapClrMethodReturnType(best);
                 var inheritedParameters = best.GetParameters();
                 var inheritedMapping = resolution.ParameterMapping;
@@ -2002,7 +1992,7 @@ internal sealed partial class ExpressionBinder
         bool ExtensionStructuralProjectionCheck(int index, Type target) =>
             index == 0
                 ? ClrTypeUtilities.IsAssignableByName(target, argTypes[0])
-                    || Conversion.ClassifyNonStructural(receiver.Type, TypeSymbol.FromClrType(target)).IsImplicit
+                    || Conversion.ClassifyNonStructural(receiver.Type, TypeSymbol.FromClrTypeWithoutNullability(target, NullabilityFreeReason.IdentityComparison)).IsImplicit
                 : argumentStructuralProjectionCheck?.Invoke(index, target) == true;
 
         // Issue #3989: the same offset-by-one shape for the subtractive check.
@@ -4460,7 +4450,7 @@ internal sealed partial class ExpressionBinder
         // annotation on `object.ToString()` must not leak a spurious nullable
         // return into the generic context (which would reject the common
         // `func Show[T struct]() string -> v.ToString()` shape with GS0156).
-        var returnType = TypeSymbol.FromClrType(method.ReturnType);
+        var returnType = ClrNullability.GetReturnTypeSymbol(method).StripTopLevelReferenceNullability();
 
         // Unlike the CLR-interface path, the parameter of a matched object
         // member (e.g. Equals(object)) is a real System.Object, so a `T`-typed
@@ -4567,7 +4557,10 @@ internal sealed partial class ExpressionBinder
         }
 
         var parameters = method.GetParameters();
-        var returnType = TypeSymbol.FromClrType(method.ReturnType);
+
+        // Read nullable-obliviously, as the object-member path above does: the
+        // receiver is an erased type parameter.
+        var returnType = ClrNullability.GetReturnTypeSymbol(method).StripTopLevelReferenceNullability();
 
         var mapping = resolution.ParameterMapping;
         var convertedArgs = conversions.BindClrParameterConversions(arguments, parameters, ce, mapping, method: method, receiverType: receiver.Type);

@@ -834,7 +834,7 @@ internal sealed partial class ExpressionBinder
                         // containing the in-scope `K`) instead of the
                         // type-erased `ICollection<object>`.
                         var propType = prop.PropertyType.IsByRef
-                            ? MapClrMemberType(prop.PropertyType)
+                            ? ClrNullability.GetPropertyTypeSymbol(prop)
                             : MemberLookup.GetClrPropertyTypeSymbol(
                                 clrInstanceReceiverType,
                                 prop,
@@ -1392,7 +1392,7 @@ internal sealed partial class ExpressionBinder
 
         return type.ClrType is { IsArray: true } clr && clr.GetArrayRank() > 1
             ? RectangularArrayTypeSymbol.Get(
-                TypeSymbol.FromClrType(clr.GetElementType()),
+                TypeSymbol.FromClrTypeWithoutNullability(clr.GetElementType(), NullabilityFreeReason.TypeStructure),
                 clr.GetArrayRank())
             : null;
     }
@@ -2713,7 +2713,9 @@ internal sealed partial class ExpressionBinder
                             : ResolveIndexerElementType(targetType, idxProp);
                         var pointeeType = resolvedElementType is ByRefTypeSymbol byRef
                             ? byRef.PointeeType
-                            : TypeSymbol.FromClrType(refGetter.ReturnType.GetElementType()!);
+                            : ClrNullability.GetReturnTypeSymbol(refGetter) is ByRefTypeSymbol readByRef
+                                ? readByRef.PointeeType
+                                : TypeSymbol.Error;
                         var refValue = BindValue(pointeeType);
                         return MakeClrIndexAssignment(
                             idxProp,
@@ -2940,10 +2942,17 @@ internal sealed partial class ExpressionBinder
                     // parameter path uses (#2365).
                     if (openCore.ContainsGenericParameters)
                     {
-                        var projected = MemberLookup.MapOpenClrTypeToSymbolic(
-                            openCore,
+                        // ADR-0193 Phase 2: merged, like every sibling
+                        // indexer read (`GetClrPropertyTypeSymbol`).
+                        var projected = MemberLookup.GetClrMemberValueTypeSymbol(
+                            openIndexer,
                             openDefinition,
                             target.TypeArguments);
+                        if (projected is ByRefTypeSymbol projectedByRef)
+                        {
+                            projected = projectedByRef.PointeeType;
+                        }
+
                         if (projected != null
                             && projected != TypeSymbol.Error
                             && (TypeSymbol.RequiresSymbolicProjection(projected)
@@ -3017,22 +3026,12 @@ internal sealed partial class ExpressionBinder
         return ClrNullability.GetPropertyTypeSymbol(indexer);
     }
 
-    private static TypeSymbol MapClrMemberType(System.Type clrType)
-    {
-        if (clrType != null && clrType.IsByRef)
-        {
-            return ByRefTypeSymbol.Get(TypeSymbol.FromClrType(clrType.GetElementType()!));
-        }
-
-        return TypeSymbol.FromClrType(clrType);
-    }
-
     /// <summary>
     /// Issue #1354: maps an imported method's return type to a
     /// <see cref="TypeSymbol"/>, applying the reference-type nullability rule
     /// (oblivious/unannotated → <c>T?</c>, explicit <c>[Nullable(1)]</c> →
     /// non-null) via <see cref="ClrNullability.GetReturnTypeSymbol"/>. This is
-    /// the call-return-type counterpart of <see cref="MapClrMemberType"/>:
+    /// the call-return-type counterpart of the property readers:
     /// without it, the non-generic instance-method fallback chain would land on
     /// a bare <see cref="TypeSymbol.FromClrType"/> and treat oblivious imported
     /// reference returns as non-null. The existing by-ref-return handling
@@ -3044,7 +3043,7 @@ internal sealed partial class ExpressionBinder
     {
         if (method == null)
         {
-            return TypeSymbol.FromClrType(null);
+            return TypeSymbol.Void;
         }
 
         return ImportedTypeSymbol.NormalizeSemanticAggregate(
@@ -3142,18 +3141,25 @@ internal sealed partial class ExpressionBinder
         try
         {
             const BindingFlags staticFlags = BindingFlags.Public | BindingFlags.Static;
-            Type? openMemberType = closedMember switch
+            MemberInfo? openMember = closedMember switch
             {
-                PropertyInfo => ClrTypeUtilities.SafeGetProperty(symbolicReceiver.OpenDefinition, closedMember.Name, staticFlags)?.PropertyType,
-                FieldInfo => symbolicReceiver.OpenDefinition.GetField(closedMember.Name, staticFlags)?.FieldType,
+                PropertyInfo => ClrTypeUtilities.SafeGetProperty(symbolicReceiver.OpenDefinition, closedMember.Name, staticFlags),
+                FieldInfo => symbolicReceiver.OpenDefinition.GetField(closedMember.Name, staticFlags),
                 _ => null,
             };
-            if (openMemberType == null)
+            Type? openMemberType = openMember switch
+            {
+                PropertyInfo openProperty => openProperty.PropertyType,
+                FieldInfo openField => openField.FieldType,
+                _ => null,
+            };
+            if (openMember == null || openMemberType == null)
             {
                 return null;
             }
 
-            var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openMemberType, symbolicReceiver.OpenDefinition, symbolicReceiver.TypeArguments);
+            // ADR-0193 Phase 2: merged, as the instance-member readers are.
+            var mapped = MemberLookup.GetClrMemberValueTypeSymbol(openMember, symbolicReceiver.OpenDefinition, symbolicReceiver.TypeArguments);
             return TypeSymbol.ContainsTypeParameter(mapped)
                 || TypeSymbol.IsSameCompilationUserTypeTopLevel(mapped)
                 || openMemberType.IsGenericParameter
@@ -3206,7 +3212,7 @@ internal sealed partial class ExpressionBinder
         if (syntax is FromEndIndexExpressionSyntax fromEnd)
         {
             var indexCtor = typeof(System.Index).GetConstructor(new[] { typeof(int), typeof(bool) });
-            var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
+            var indexSym = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Index), NullabilityFreeReason.TypeLiteral);
             var offset = conversions.BindConversion(fromEnd.Operand, TypeSymbol.Int32);
             indexValue = new BoundClrConstructorCallExpression(
                 null,
@@ -3516,7 +3522,7 @@ internal sealed partial class ExpressionBinder
             ArrayTypeSymbol arr => arr.ElementType,
             SliceTypeSymbol slice => slice.ElementType,
             ImportedTypeSymbol imp when imp.ClrType?.IsArray == true && imp.ClrType.GetArrayRank() == 1
-                => TypeSymbol.FromClrType(imp.ClrType.GetElementType()),
+                => TypeSymbol.FromClrTypeWithoutNullability(imp.ClrType.GetElementType(), NullabilityFreeReason.TypeStructure),
             NullabilityAnnotatedTypeSymbol annot when annot.ClrType?.IsArray == true && annot.ClrType.GetArrayRank() == 1
                 => annot.GetTypeArgumentSymbolForClrType(annot.ClrType.GetElementType()),
             _ => null,
@@ -3698,7 +3704,7 @@ internal sealed partial class ExpressionBinder
             lengthOf,
             statements);
 
-        var returnType = SliceResultType(target, sliceMethod.ReturnType);
+        var returnType = SliceResultType(target, sliceMethod.ReturnType, ClrNullability.GetReturnTypeSymbol(sliceMethod));
         var call = new BoundImportedInstanceCallExpression(
             null,
             srcRef,
@@ -3712,7 +3718,7 @@ internal sealed partial class ExpressionBinder
     private BoundExpression BindRangeIndexerSlice(BoundExpression target, RangeExpressionSyntax range, PropertyInfo indexer)
     {
         var rangeValue = BuildSystemRangeValue(range);
-        var resultType = SliceResultType(target, indexer.PropertyType);
+        var resultType = SliceResultType(target, indexer.PropertyType, ClrNullability.GetPropertyTypeSymbol(indexer));
         return new BoundClrIndexExpression(range, target, indexer, ImmutableArray.Create(rangeValue), resultType);
     }
 
@@ -3742,8 +3748,9 @@ internal sealed partial class ExpressionBinder
     /// </remarks>
     /// <param name="target">The sliced receiver.</param>
     /// <param name="reflectedResult">The slice member's reflected result type.</param>
+    /// <param name="readResult">The slice member's result type, read through the funnel.</param>
     /// <returns>The slice expression's static type.</returns>
-    private static TypeSymbol SliceResultType(BoundExpression target, Type reflectedResult)
+    private static TypeSymbol SliceResultType(BoundExpression target, Type reflectedResult, TypeSymbol readResult)
     {
         var targetType = target.Type;
         if (targetType?.ClrType != null && targetType.ClrType.IsSameAs(reflectedResult))
@@ -3751,7 +3758,7 @@ internal sealed partial class ExpressionBinder
             return targetType;
         }
 
-        return TypeSymbol.FromClrType(reflectedResult);
+        return readResult;
     }
 
     // Issue #1016/#1022/#1038: construct a `System.Range` value from a range
@@ -3774,8 +3781,8 @@ internal sealed partial class ExpressionBinder
     {
         var indexCtor = typeof(System.Index).GetConstructor(new[] { typeof(int), typeof(bool) })!;
         var rangeCtor = typeof(System.Range).GetConstructor(new[] { typeof(System.Index), typeof(System.Index) })!;
-        var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
-        var rangeSym = TypeSymbol.FromClrType(typeof(System.Range));
+        var indexSym = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Index), NullabilityFreeReason.TypeLiteral);
+        var rangeSym = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Range), NullabilityFreeReason.TypeLiteral);
 
         BoundExpression MakeIndex(RangeBound? bound, bool defaultFromEnd)
         {
@@ -3893,7 +3900,7 @@ internal sealed partial class ExpressionBinder
         {
             if (TryFindRangeIndexer(clrType, out var rangeIndexer))
             {
-                var resultType = SliceResultType(target, rangeIndexer.PropertyType);
+                var resultType = SliceResultType(target, rangeIndexer.PropertyType, ClrNullability.GetPropertyTypeSymbol(rangeIndexer));
                 return new BoundClrIndexExpression(null, target, rangeIndexer, ImmutableArray.Create(rangeValue), resultType);
             }
 
@@ -3908,7 +3915,7 @@ internal sealed partial class ExpressionBinder
                     lengthOf,
                     statements);
 
-                var returnType = SliceResultType(target, sliceMethod.ReturnType);
+                var returnType = SliceResultType(target, sliceMethod.ReturnType, ClrNullability.GetReturnTypeSymbol(sliceMethod));
                 var call = new BoundImportedInstanceCallExpression(
                     null,
                     srcRef,
@@ -3933,7 +3940,7 @@ internal sealed partial class ExpressionBinder
         Func<BoundExpression, BoundExpression> lengthOf,
         ImmutableArray<BoundStatement>.Builder statements)
     {
-        var indexSym = TypeSymbol.FromClrType(typeof(System.Index));
+        var indexSym = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Index), NullabilityFreeReason.TypeLiteral);
         var startProp = typeof(System.Range).GetProperty("Start")!;
         var endProp = typeof(System.Range).GetProperty("End")!;
         var getOffset = typeof(System.Index).GetMethod("GetOffset", new[] { typeof(int) })!;
@@ -4219,7 +4226,7 @@ internal sealed partial class ExpressionBinder
 
             // Issue #664: CLR T[] arrays (e.g. result of string.Split) are indexable.
             ImportedTypeSymbol imp when imp.ClrType?.IsArray == true && imp.ClrType.GetArrayRank() == 1
-                => TypeSymbol.FromClrType(imp.ClrType.GetElementType()),
+                => TypeSymbol.FromClrTypeWithoutNullability(imp.ClrType.GetElementType(), NullabilityFreeReason.TypeStructure),
             NullabilityAnnotatedTypeSymbol annot when annot.ClrType?.IsArray == true && annot.ClrType.GetArrayRank() == 1
                 => annot.GetTypeArgumentSymbolForClrType(annot.ClrType.GetElementType()),
             _ => null,

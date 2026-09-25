@@ -606,7 +606,7 @@ internal sealed partial class MethodBodyEmitter
                     if (!this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(receiverType, property, out _))
                     {
                         this.EmitErasedObjectReturnWidening(
-                            TypeSymbol.FromClrType(getter.ReturnType),
+                            getter.ReturnType,
                             field.Type);
                     }
 
@@ -927,7 +927,7 @@ internal sealed partial class MethodBodyEmitter
             else if (!this.outer.userTokens.TryGetSymbolicSubstitutedPropertyReturn(lp.Type, indexerProperty, out _))
             {
                 this.EmitErasedObjectReturnWidening(
-                    TypeSymbol.FromClrType(itemGetter.ReturnType),
+                    itemGetter.ReturnType,
                     lp.ElementType);
             }
         }

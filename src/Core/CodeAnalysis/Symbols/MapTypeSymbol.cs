@@ -147,8 +147,8 @@ public sealed class MapTypeSymbol : TypeSymbol
                         return false;
                     }
 
-                    keyType = FromClrType(arguments[0]);
-                    valueType = FromClrType(arguments[1]);
+                    keyType = FromClrTypeWithoutNullability(arguments[0], NullabilityFreeReason.TypeStructure);
+                    valueType = FromClrTypeWithoutNullability(arguments[1], NullabilityFreeReason.TypeStructure);
                     return keyType != null && valueType != null;
                 }
 

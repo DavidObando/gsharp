@@ -129,7 +129,7 @@ public static class AsyncIteratorRewriter
             {
                 if (seen.Add(awaiterClrType))
                 {
-                    result.Add((awaiterClrType, TypeSymbol.FromClrType(awaiterClrType)));
+                    result.Add((awaiterClrType, TypeSymbol.FromClrTypeWithoutNullability(awaiterClrType, NullabilityFreeReason.EmitShape)));
                 }
             }
             else
@@ -137,7 +137,7 @@ public static class AsyncIteratorRewriter
                 if (!hasReferenceAwaiter)
                 {
                     hasReferenceAwaiter = true;
-                    result.Add((typeof(object), TypeSymbol.FromClrType(typeof(object))));
+                    result.Add((typeof(object), TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral)));
                 }
             }
         }

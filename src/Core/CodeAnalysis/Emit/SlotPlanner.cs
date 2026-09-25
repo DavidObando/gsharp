@@ -521,7 +521,7 @@ internal sealed class SlotPlanner
                     closedCarrier,
                     openDefinition,
                     ImmutableArray.Create(elementType))
-                : TypeSymbol.FromClrType(closedCarrier);
+                : TypeSymbol.FromClrTypeWithoutNullability(closedCarrier, NullabilityFreeReason.CompilerProduced);
         }
 
         private static void AllocatePatternBindings(
@@ -539,7 +539,7 @@ internal sealed class SlotPlanner
                     if (!typePatternScratchSlots.ContainsKey(tp))
                     {
                         var scratch = localTypes.Count;
-                        localTypes.Add(TypeSymbol.FromClrType(typeof(object)));
+                        localTypes.Add(TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral));
                         typePatternScratchSlots[tp] = scratch;
                     }
 

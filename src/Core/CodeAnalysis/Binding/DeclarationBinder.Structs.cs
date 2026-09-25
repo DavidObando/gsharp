@@ -2508,7 +2508,7 @@ internal sealed partial class DeclarationBinder
             {
                 TypeSymbol containingType = ReferenceEquals(clrInterface, declaredInterface)
                     ? ifaceSymbol
-                    : TypeSymbol.FromClrType(clrInterface);
+                    : TypeSymbol.FromClrTypeWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure);
                 foreach (var interfaceEvent in clrInterface.GetEvents(
                     BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {

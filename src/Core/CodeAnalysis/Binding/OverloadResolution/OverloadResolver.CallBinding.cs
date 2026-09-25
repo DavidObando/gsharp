@@ -143,18 +143,21 @@ internal sealed partial class OverloadResolver
                 return false;
             }
 
+            // ADR-0193 Phase 2: read through the funnel, then taken bare. A
+            // method group's signature feeds type inference, which has always
+            // seen the erased shapes here; inferring from the declared
+            // nullability instead is a Phase 4 change (issue #4363).
             var methodParameters = method.GetParameters();
             parameters = new TypeSymbol[delegateArity];
             for (var i = 0; i < parameters.Length; i++)
             {
-                parameters[i] = TypeSymbol.FromClrType(
-                    binderCtx.References.MapClrTypeToReferences(
-                        methodParameters[i + parameterOffset].ParameterType));
+                parameters[i] = ClrNullability.GetParameterTypeSymbol(methodParameters[i + parameterOffset])
+                    .StripTopLevelReferenceNullability();
             }
 
             returnType = method.ReturnType.IsSameAs(typeof(void))
                 ? TypeSymbol.Void
-                : TypeSymbol.FromClrType(binderCtx.References.MapClrTypeToReferences(method.ReturnType));
+                : ClrNullability.GetReturnTypeSymbol(method).StripTopLevelReferenceNullability();
             return true;
         }
 
@@ -352,7 +355,9 @@ internal sealed partial class OverloadResolver
             return null;
         }
 
-        return TypeSymbol.FromClrType(binderCtx.References.MapClrTypeToReferences(best.ReturnType));
+        // ADR-0193 Phase 2: read through the funnel and taken bare, as the
+        // method-group signature above is.
+        return ClrNullability.GetReturnTypeSymbol(best).StripTopLevelReferenceNullability();
     }
 
     private bool TryResolveImplicitInheritedTypeArguments(
@@ -3207,7 +3212,7 @@ internal sealed partial class OverloadResolver
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(parameterCount);
         for (var i = 0; i < parameterCount; i++)
         {
-            var mapped = TypeSymbol.FromClrType(args[i]);
+            var mapped = TypeSymbol.FromClrTypeWithoutNullability(args[i], NullabilityFreeReason.TypeStructure);
             if (mapped is null || mapped == TypeSymbol.Error)
             {
                 return false;
@@ -3216,7 +3221,7 @@ internal sealed partial class OverloadResolver
             parameterTypes.Add(mapped);
         }
 
-        var returnType = isFunc ? TypeSymbol.FromClrType(args[^1]) : TypeSymbol.Void;
+        var returnType = isFunc ? TypeSymbol.FromClrTypeWithoutNullability(args[^1], NullabilityFreeReason.TypeStructure) : TypeSymbol.Void;
         if (returnType is null || returnType == TypeSymbol.Error)
         {
             return false;

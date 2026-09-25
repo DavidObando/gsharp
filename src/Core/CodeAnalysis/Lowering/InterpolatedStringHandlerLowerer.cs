@@ -650,7 +650,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                     node.Syntax,
                     new BoundVariableExpression(null, handlerLocal),
                     appendLiteral,
-                    TypeSymbol.FromClrType(appendLiteral.ReturnType),
+                    ClrNullability.GetReturnTypeSymbol(appendLiteral),
                     ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(null, part.Literal)));
             }
             else
@@ -696,7 +696,7 @@ internal sealed class InterpolatedStringHandlerLowerer : NestedFunctionBodyRewri
                     node.Syntax,
                     new BoundVariableExpression(null, handlerLocal),
                     method,
-                    TypeSymbol.FromClrType(method.ReturnType),
+                    ClrNullability.GetReturnTypeSymbol(method),
                     arguments.ToImmutable(),
                     argumentRefKinds: default,
                     typeArgumentSymbols: ToNullableTypeArguments(typeArguments));

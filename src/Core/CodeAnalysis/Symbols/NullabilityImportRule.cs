@@ -182,6 +182,32 @@ internal static class NullabilityImportRule
                 : argument;
 
     /// <summary>
+    /// Issue #4403: the direct parameter reader lifts a reference parameter
+    /// whose default value is <c>null</c> to <c>T?</c>. That is a G#-side
+    /// inference from the default value, not a classified metadata position,
+    /// so it is named here rather than passed off as an <c>Annotated</c>
+    /// state. Only <c>ClrNullability.GetParameterTypeSymbol</c> applies it
+    /// today; #4403 decides whether the other readers should.
+    /// </summary>
+    /// <param name="parameterType">The parameter's already-read type.</param>
+    /// <returns>The parameter type, stated nullable.</returns>
+    internal static TypeSymbol ApplyNullDefaultLift(TypeSymbol parameterType)
+        => NullableTypeSymbol.Get(parameterType);
+
+    /// <summary>
+    /// The <see cref="ImportedReferenceNullability.Unchanged"/> decision for a
+    /// walker that peeled its input's own <c>?</c> to rebuild the core under
+    /// it (merging the arguments of a <c>List[string]?</c>, say): the rebuilt
+    /// core gets the input's <c>?</c> back, whether it was a reference or a
+    /// value-type one. No metadata byte is consulted — the input already
+    /// stated it.
+    /// </summary>
+    /// <param name="rebuiltCore">The rebuilt, unwrapped core.</param>
+    /// <returns>The core, stated nullable again.</returns>
+    internal static TypeSymbol RestorePeeledNullable(TypeSymbol rebuiltCore)
+        => NullableTypeSymbol.Get(rebuiltCore);
+
+    /// <summary>
     /// The byte-domain applier for an open slot, for the projection reader
     /// (<c>ClrNullability.ProjectNullableFlags</c>), which rewrites a flag
     /// array rather than building a <see cref="TypeSymbol"/>. The argument is

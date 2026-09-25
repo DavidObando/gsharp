@@ -552,7 +552,7 @@ internal sealed class InterfaceImplEmitter
             {
                 var containingType = ReferenceEquals(clrInterface, declaredInterface)
                     ? ifaceSymbol
-                    : TypeSymbol.FromClrType(clrInterface);
+                    : TypeSymbol.FromClrTypeWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure);
                 foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
                     var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(
@@ -626,7 +626,7 @@ internal sealed class InterfaceImplEmitter
             {
                 var containingType = ReferenceEquals(clrInterface, declaredInterface)
                     ? ifaceSymbol
-                    : TypeSymbol.FromClrType(clrInterface);
+                    : TypeSymbol.FromClrTypeWithoutNullability(clrInterface, NullabilityFreeReason.TypeStructure);
                 foreach (var slotEvent in clrInterface.GetEvents(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
                 {
                     var slotType = MemberLookup.GetClrEventHandlerTypeSymbol(

@@ -1,0 +1,92 @@
+// <copyright file="Adr0193FunnelMergeTests.cs" company="GSharp">
+// Copyright (C) GSharp Authors. All rights reserved.
+// </copyright>
+
+using System.Linq;
+using GSharp.Tests;
+using Xunit;
+
+namespace GSharp.Core.Tests.CodeAnalysis.Binding;
+
+/// <summary>
+/// ADR-0193 Phase 2 (issue #4363): signature positions that were converted
+/// with a bare <c>TypeSymbol.FromClrType</c> or an unmerged
+/// <c>MapOpenClrTypeToSymbolic</c> now go through the funnel readers, so a
+/// declaration's <c>string?</c> reaches the binder. Each case below compiled
+/// with no diagnostic before — the declared <c>?</c> was dropped, so a nil
+/// value flowed into a non-null <c>string</c> unchecked.
+/// </summary>
+public sealed class Adr0193FunnelMergeTests
+{
+    private const string Contract = """
+        #nullable enable
+        namespace Adr0193Contracts
+        {
+            public sealed class NullableItems
+            {
+                public Enumerator GetEnumerator() => new Enumerator();
+
+                public struct Enumerator
+                {
+                    private int index;
+
+                    public bool MoveNext() => index++ < 1;
+
+                    public string? Current => null;
+                }
+            }
+
+            public sealed class NullableAwaitable
+            {
+                public Awaiter GetAwaiter() => new Awaiter();
+
+                public readonly struct Awaiter : System.Runtime.CompilerServices.INotifyCompletion
+                {
+                    public bool IsCompleted => true;
+
+                    public string? GetResult() => null;
+
+                    public void OnCompleted(System.Action continuation) => continuation();
+                }
+            }
+        }
+        """;
+
+    [Fact]
+    public void PatternEnumeratorCurrentKeepsItsDeclaredNullability()
+    {
+        AssertNullableStringRejected("""
+            import Adr0193Contracts
+
+            func Take(items NullableItems) {
+                for item in items {
+                    let s string = item
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void AwaiterGetResultKeepsItsDeclaredNullability()
+    {
+        AssertNullableStringRejected("""
+            import Adr0193Contracts
+
+            async func Take(awaitable NullableAwaitable) {
+                let s string = await awaitable
+            }
+            """);
+    }
+
+    private static void AssertNullableStringRejected(string source)
+    {
+        using var fixture = new CSharpFixture(Contract);
+        var result = EmittedOracle.Evaluate(
+            new[] { source },
+            new EmittedOracleOptions { IsLibrary = true, References = new[] { fixture.AssemblyPath } });
+
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.Message.Contains("string?", System.StringComparison.Ordinal));
+    }
+}

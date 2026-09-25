@@ -627,7 +627,7 @@ internal sealed class UserTokenResolver
 
                 if (matched != null)
                 {
-                    var elementSym = TypeSymbol.FromClrType(matched.GetGenericArguments()[0]);
+                    var elementSym = TypeSymbol.FromClrTypeWithoutNullability(matched.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
                     if (TryUnify(fseqAny.ElementType, elementSym, tp, out inferred))
                     {
                         return true;
@@ -668,7 +668,7 @@ internal sealed class UserTokenResolver
 
             if (matched != null)
             {
-                var elementSym = TypeSymbol.FromClrType(matched.GetGenericArguments()[0]);
+                var elementSym = TypeSymbol.FromClrTypeWithoutNullability(matched.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
                 if (TryUnify(faseqAny.ElementType, elementSym, tp, out inferred))
                 {
                     return true;
@@ -709,7 +709,7 @@ internal sealed class UserTokenResolver
                 var b = ImmutableArray.CreateBuilder<TypeSymbol>(actualClr.GenericTypeArguments.Length);
                 foreach (var arg in actualClr.GenericTypeArguments)
                 {
-                    b.Add(TypeSymbol.FromClrType(arg));
+                    b.Add(TypeSymbol.FromClrTypeWithoutNullability(arg, NullabilityFreeReason.TypeStructure));
                 }
 
                 actualElements = b.MoveToImmutable();
@@ -769,7 +769,7 @@ internal sealed class UserTokenResolver
                     {
                         if (TryUnify(
                                 formalImported.TypeArguments[i],
-                                TypeSymbol.FromClrType(matchedArgs[i]),
+                                TypeSymbol.FromClrTypeWithoutNullability(matchedArgs[i], NullabilityFreeReason.TypeStructure),
                                 tp,
                                 out inferred))
                         {
@@ -910,7 +910,7 @@ internal sealed class UserTokenResolver
             var builder = ImmutableArray.CreateBuilder<TypeSymbol>(clrArgs.Length);
             for (int i = 0; i < clrArgs.Length; i++)
             {
-                builder.Add(TypeSymbol.FromClrType(clrArgs[i]));
+                builder.Add(TypeSymbol.FromClrTypeWithoutNullability(clrArgs[i], NullabilityFreeReason.TypeStructure));
             }
 
             return builder.MoveToImmutable();
@@ -2595,6 +2595,7 @@ internal sealed class UserTokenResolver
     /// <returns><see langword="true"/> when the receiver is a symbolic
     /// open-generic container and the substituted return differs from the
     /// closed CLR <c>object</c> shape.</returns>
+    [NullabilityFunnel]
     internal bool TryGetSymbolicSubstitutedPropertyReturn(
         TypeSymbol receiverType,
         PropertyInfo property,
@@ -2625,6 +2626,9 @@ internal sealed class UserTokenResolver
             return false;
         }
 
+        // ADR-0193 Phase 2: [NullabilityFunnel] on purpose. This is the IL
+        // stack type of the symbolic-container MemberRef, which decides only
+        // the erasure widening; IL carries no reference nullability.
         substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openProp.PropertyType, openDef, typeArguments);
         if (substitutedReturn == null || substitutedReturn == TypeSymbol.Error)
         {
@@ -2667,6 +2671,7 @@ internal sealed class UserTokenResolver
     /// <returns><see langword="true"/> when the receiver is a symbolic
     /// open-generic container and the substituted return resolves to a
     /// non-error symbolic type.</returns>
+    [NullabilityFunnel]
     internal bool TryGetSymbolicSubstitutedInstanceMethodReturn(
         TypeSymbol receiverType,
         MethodInfo method,
@@ -2702,6 +2707,8 @@ internal sealed class UserTokenResolver
             return false;
         }
 
+        // ADR-0193 Phase 2: [NullabilityFunnel] on purpose; see the property
+        // variant above.
         substitutedReturn = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, openDef, typeArguments);
         if (substitutedReturn == null || substitutedReturn == TypeSymbol.Error)
         {
@@ -2749,6 +2756,7 @@ internal sealed class UserTokenResolver
     /// reproject the open return type to a same-compilation user type or an
     /// in-scope generic type parameter (issue #1445), so the erasure-widening
     /// must be skipped.</returns>
+    [NullabilityFunnel]
     internal bool TryGetSymbolicSubstitutedImportedCallReturn(
         MethodInfo method,
         ImmutableArray<TypeSymbol?> typeArgSymbols,
@@ -2778,6 +2786,8 @@ internal sealed class UserTokenResolver
         // same-compilation user type OR an in-scope generic type parameter
         // means the MethodSpec deviates from the erased `object` placeholder
         // and the widening must be suppressed.
+        // ADR-0193 Phase 2: [NullabilityFunnel] on purpose; an IL stack shape,
+        // as in the instance variant above.
         var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openReturn, null, default, openMethod, typeArgSymbols);
         if (mapped == null || mapped == TypeSymbol.Error)
         {

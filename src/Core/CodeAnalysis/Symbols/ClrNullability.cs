@@ -49,6 +49,7 @@ public static class ClrNullability
     /// </summary>
     /// <param name="property">The property to inspect.</param>
     /// <returns>The mapped type symbol.</returns>
+    [NullabilityFunnel]
     public static TypeSymbol GetPropertyTypeSymbol(PropertyInfo property)
     {
         if (property.PropertyType.IsByRef)
@@ -88,6 +89,7 @@ public static class ClrNullability
     /// <param name="property">The ref-returning indexer/property to read attributes from.</param>
     /// <param name="elementType">The dereferenced (non-byref) element type.</param>
     /// <returns>The nullability-aware element type symbol.</returns>
+    [NullabilityFunnel]
     public static TypeSymbol GetPropertyElementTypeSymbol(PropertyInfo property, Type elementType)
     {
         var baseSymbol = TypeSymbol.FromClrType(elementType);
@@ -108,6 +110,7 @@ public static class ClrNullability
     /// </summary>
     /// <param name="field">The field to inspect.</param>
     /// <returns>The mapped type symbol.</returns>
+    [NullabilityFunnel]
     public static TypeSymbol GetFieldTypeSymbol(FieldInfo field)
     {
         var baseSymbol = TypeSymbol.FromClrType(field.FieldType);
@@ -134,6 +137,7 @@ public static class ClrNullability
     /// </summary>
     /// <param name="method">The method to inspect.</param>
     /// <returns>The mapped type symbol.</returns>
+    [NullabilityFunnel]
     public static TypeSymbol GetReturnTypeSymbol(MethodInfo method)
     {
         // ReturnType.IsByRef guarantees a non-null reflected element type on that branch.
@@ -165,6 +169,7 @@ public static class ClrNullability
     /// </summary>
     /// <param name="parameter">The parameter to inspect.</param>
     /// <returns>The mapped type symbol.</returns>
+    [NullabilityFunnel]
     public static TypeSymbol GetParameterTypeSymbol(ParameterInfo parameter)
     {
         var parameterType = parameter.ParameterType.IsByRef
@@ -210,7 +215,7 @@ public static class ClrNullability
                 || ReferenceEquals(rawDefault, Missing.Value)
                 || ReferenceEquals(rawDefault, System.DBNull.Value))
             && mapped is not NullableTypeSymbol
-                ? NullableTypeSymbol.Get(mapped)
+                ? NullabilityImportRule.ApplyNullDefaultLift(mapped)
                 : mapped;
     }
 
@@ -363,6 +368,7 @@ public static class ClrNullability
     /// <param name="declaration">The attribute provider to inspect (parameter, return parameter, etc.).</param>
     /// <param name="enclosingMember">The enclosing member used to walk up to <c>[NullableContext]</c>.</param>
     /// <returns>The full byte array, or an empty array when no annotation is available.</returns>
+    [NullabilityFunnel]
     internal static ImmutableArray<byte> ReadNullableFlags(ICustomAttributeProvider declaration, MemberInfo? enclosingMember)
     {
         var attrs = SafeGetCustomAttributesData(declaration);
@@ -650,6 +656,7 @@ public static class ClrNullability
     /// <param name="flags">The nullable-flags byte array (possibly empty or scalar).</param>
     /// <param name="index">The DFS position index of the reference-type position.</param>
     /// <returns><c>true</c> when the position is explicitly non-null.</returns>
+    [NullabilityFunnel]
     internal static bool IsPositionNonNull(ImmutableArray<byte> flags, int index)
         => ClassifyPosition(flags, index) == ClrNullabilityState.NotAnnotated;
 
@@ -687,6 +694,7 @@ public static class ClrNullability
     /// <param name="flags">The nullable-flags byte array (possibly empty or scalar).</param>
     /// <param name="index">The DFS position index of the reference-type position.</param>
     /// <returns>What the declaration says about that position.</returns>
+    [NullabilityFunnel]
     internal static ClrNullabilityState ClassifyPosition(ImmutableArray<byte> flags, int index)
     {
         if (flags.IsDefaultOrEmpty)
@@ -723,6 +731,7 @@ public static class ClrNullability
     /// </summary>
     /// <param name="flag">A single C# nullable-metadata byte (0, 1 or 2).</param>
     /// <returns>What that byte says.</returns>
+    [NullabilityFunnel]
     internal static ClrNullabilityState ClassifyFlag(byte flag) => flag switch
     {
         1 => ClrNullabilityState.NotAnnotated,
@@ -790,6 +799,7 @@ public static class ClrNullability
     /// </summary>
     /// <param name="flag">A single C# nullable-metadata byte (0, 1 or 2).</param>
     /// <returns><c>true</c> only for <c>1</c> (not-annotated).</returns>
+    [NullabilityFunnel]
     internal static bool IsFlagNonNull(byte flag) => ClassifyFlag(flag) == ClrNullabilityState.NotAnnotated;
 
     /// <summary>
@@ -803,11 +813,12 @@ public static class ClrNullability
     /// <param name="flags">The full nullable-flags byte array.</param>
     /// <param name="offset">The index within <paramref name="flags"/> where this type's byte lives.</param>
     /// <returns>The appropriately-nullified <see cref="TypeSymbol"/>.</returns>
+    [NullabilityFunnel]
     internal static TypeSymbol SymbolFromFlagsOffset(Type clrType, ImmutableArray<byte> flags, int offset)
     {
         if (NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) is { } nullableUnderlying)
         {
-            return NullableTypeSymbol.Get(
+            return NullableLifting.WrapValueTypeNullable(
                 SymbolFromFlagsOffset(nullableUnderlying, flags, offset));
         }
 
@@ -922,6 +933,7 @@ public static class ClrNullability
     /// <param name="layoutType">Open metadata type that defines flag positions.</param>
     /// <param name="flags">Nullable flags in <paramref name="layoutType"/> order.</param>
     /// <returns>Flags in <paramref name="actualType"/> order.</returns>
+    [NullabilityFunnel]
     internal static ImmutableArray<byte> ProjectNullableFlags(
         Type actualType,
         Type layoutType,
@@ -1178,6 +1190,7 @@ public static class ClrNullability
         }
     }
 
+    [NullabilityFunnel]
     private static TypeSymbol ApplyReferenceNullabilityFull(
         TypeSymbol baseSymbol,
         Type? clrType,

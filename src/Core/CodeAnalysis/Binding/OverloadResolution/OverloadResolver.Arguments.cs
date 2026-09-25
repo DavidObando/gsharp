@@ -66,7 +66,7 @@ internal sealed partial class OverloadResolver
             var openElementType = openParameters[paramsIndex].ParameterType.GetElementType();
             if (openElementType != null)
             {
-                var symbolicElementType = MemberLookup.MapOpenClrTypeToSymbolic(
+                var symbolicElementType = MemberLookup.MapOpenSignatureWithoutDeclarationMerge(
                     openElementType,
                     openDefinition: null,
                     typeArguments: default,
@@ -429,9 +429,12 @@ internal sealed partial class OverloadResolver
             _ => parameterType,
         };
 
+        // A parameter that states nothing about its element positions (no
+        // annotation wrapper) has an element type with no nullability to
+        // read, which is the element CLR type as it stands.
         return parameterType is NullabilityAnnotatedTypeSymbol annotated
             ? annotated.GetTypeArgumentSymbolForClrType(elementClrType)
-            : TypeSymbol.FromClrType(elementClrType);
+            : TypeSymbol.FromClrTypeWithoutNullability(elementClrType, NullabilityFreeReason.TypeStructure);
     }
 
     /// <summary>

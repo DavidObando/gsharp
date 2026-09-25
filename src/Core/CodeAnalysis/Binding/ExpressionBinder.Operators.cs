@@ -148,7 +148,7 @@ internal sealed partial class ExpressionBinder
                     syntax.OperatorToken.Kind,
                     boundOperand,
                     clrMethod,
-                    TypeSymbol.FromClrType(clrMethod.ReturnType));
+                    ClrNullability.GetReturnTypeSymbol(clrMethod));
             }
             else if (ambiguous)
             {
@@ -768,7 +768,7 @@ internal sealed partial class ExpressionBinder
     {
         if (scope.References.TryResolveType("System.Exception", out var t))
         {
-            return TypeSymbol.FromClrType(t);
+            return TypeSymbol.FromClrTypeWithoutNullability(t, NullabilityFreeReason.TypeLiteral);
         }
 
         return null;
@@ -2522,8 +2522,8 @@ internal sealed partial class ExpressionBinder
             && ClrOperatorResolution.TryResolveBinary(opKind, left.Type, right.Type, out var clrMethod, out ambiguous))
         {
             var clrParameters = clrMethod.GetParameters();
-            var leftParameterType = TypeSymbol.FromClrType(clrParameters[0].ParameterType);
-            var rightParameterType = TypeSymbol.FromClrType(clrParameters[1].ParameterType);
+            var leftParameterType = ClrNullability.GetParameterTypeSymbol(clrParameters[0]);
+            var rightParameterType = ClrNullability.GetParameterTypeSymbol(clrParameters[1]);
             var hasByRefSignature = clrParameters.Any(p => p.ParameterType.IsByRef)
                 || clrMethod.ReturnType.IsByRef;
 
@@ -2551,7 +2551,7 @@ internal sealed partial class ExpressionBinder
                 rightLocation,
                 leftParameterType,
                 rightParameterType,
-                TypeSymbol.FromClrType(clrMethod.ReturnType),
+                ClrNullability.GetReturnTypeSymbol(clrMethod),
                 hasByRefSignature,
                 out var liftedClrResultType))
             {
@@ -2589,7 +2589,7 @@ internal sealed partial class ExpressionBinder
                 left,
                 right,
                 clrMethod,
-                TypeSymbol.FromClrType(clrMethod.ReturnType));
+                ClrNullability.GetReturnTypeSymbol(clrMethod));
         }
 
         return null;
@@ -3581,7 +3581,7 @@ internal sealed partial class ExpressionBinder
 
             return IsImplicitConstantNarrowingArgument(
                 boundArguments[argIndex],
-                TypeSymbol.FromClrType(effectiveParameterType));
+                TypeSymbol.FromClrTypeWithoutNullability(effectiveParameterType, NullabilityFreeReason.IdentityComparison));
         };
     }
 
@@ -3634,7 +3634,7 @@ internal sealed partial class ExpressionBinder
                 return null;
             }
 
-            var targetType = TypeSymbol.FromClrType(clrParameterType);
+            var targetType = TypeSymbol.FromClrTypeWithoutNullability(clrParameterType, NullabilityFreeReason.IdentityComparison);
             if (targetType == null)
             {
                 return null;
@@ -3695,7 +3695,7 @@ internal sealed partial class ExpressionBinder
             }
 
             var sourceType = boundArguments[argIndex].Type;
-            var targetType = TypeSymbol.FromClrType(clrParameterType);
+            var targetType = TypeSymbol.FromClrTypeWithoutNullability(clrParameterType, NullabilityFreeReason.IdentityComparison);
             return Conversion.ClassifyNonStructural(sourceType, targetType).IsImplicit
                 || StructuralProjectionPlanner.CanProject(sourceType, targetType)
                 || IsApplicableIgnoringReferenceNullability(sourceType, targetType);
@@ -3861,11 +3861,11 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
-            var realParameter = MemberLookup.MapOpenClrParameterTypeToSymbolic(
-                parameters[index].ParameterType,
+            var realParameter = MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                parameters[index],
                 openDefinition: null,
                 typeArguments: ImmutableArray<TypeSymbol>.Empty,
-                openMethodDefinition: openMethod,
+                openMethod: openMethod,
                 methodTypeArguments: nullableTypeArgSymbols);
             if (realParameter == null
                 || ReferenceEquals(realParameter, TypeSymbol.Error)
@@ -3973,7 +3973,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        var targetType = TypeSymbol.FromClrType(clrParameterType);
+        var targetType = TypeSymbol.FromClrTypeWithoutNullability(clrParameterType, NullabilityFreeReason.IdentityComparison);
         if (targetType == null)
         {
             return false;

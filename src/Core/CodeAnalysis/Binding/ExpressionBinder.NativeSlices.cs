@@ -97,7 +97,7 @@ internal sealed partial class ExpressionBinder
     private bool ValidateNativeSharingArguments(ImportedClassSymbol? container, string name, ImmutableArray<BoundExpression> arguments, SyntaxNode syntax)
     {
         if (container == null || name is not ("FromArray" or "TryFromMemory")
-            || !NativeSliceTypes.TryGetElement(container.SymbolicReceiver ?? TypeSymbol.FromClrType(container.ClassType), out var targetElement, out _))
+            || !NativeSliceTypes.TryGetElement(container.SymbolicReceiver ?? TypeSymbol.FromClrTypeWithoutNullability(container.ClassType, NullabilityFreeReason.TypeStructure), out var targetElement, out _))
         {
             return true;
         }

@@ -327,6 +327,7 @@ internal static class ExternalClrOverrideResolver
         return abstractSlots.ToImmutable();
     }
 
+    [NullabilityFunnel]
     private static bool SlotSignaturesMatch(
         MethodInfo derived,
         MethodInfo baseMethod,
@@ -359,6 +360,11 @@ internal static class ExternalClrOverrideResolver
         var baseSubstitution = FindTypeArgumentSubstitution(baseMethod.DeclaringType, typeSubstitutions);
         for (var i = 0; i < derivedParameters.Length; i++)
         {
+            // ADR-0193 Phase 2: [NullabilityFunnel] on purpose. A CLR override
+            // slot is matched by signature identity, which carries no
+            // nullability — C# lets an override differ from its base in
+            // annotations alone — so both sides are projected unmerged and
+            // compared as shapes.
             var derivedType = MemberLookup.MapOpenClrTypeToSymbolic(
                 derivedParameters[i].ParameterType,
                 derivedSubstitution.OpenDefinition,
@@ -973,6 +979,7 @@ internal static class ExternalClrOverrideResolver
             typeSubstitutions)
             || (!hasSetter && IsCovariantReturn(clrPropertyType, propertyType));
 
+    [NullabilityFunnel]
     private static bool TypeMatches(
         Type? clrType,
         TypeSymbol type,
@@ -988,6 +995,8 @@ internal static class ExternalClrOverrideResolver
 
         foreach (var substitution in typeSubstitutions)
         {
+            // ADR-0193 Phase 2: [NullabilityFunnel] on purpose, for the same
+            // reason as SlotSignaturesMatch: slot identity is nullability-free.
             var substituted = MemberLookup.MapOpenClrTypeToSymbolic(
                 clrType,
                 substitution.OpenDefinition,

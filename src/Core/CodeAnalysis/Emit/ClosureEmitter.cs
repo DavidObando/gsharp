@@ -471,7 +471,7 @@ internal sealed class ClosureEmitter
             // ADR-0174 D5: the goroutine body yields a plain ValueTask that the
             // runtime's work item consumes exactly once. The binder shaped the
             // operand (Discard<T> / Wrap) so it is either ValueTask-typed or void.
-            var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
+            var valueTaskType = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.ValueTask), NullabilityFreeReason.TypeLiteral);
             var returnType = valueTaskType;
             var yieldsValueTask = go.Expression.Type?.ClrType?.FullName == "System.Threading.Tasks.ValueTask";
             var body = yieldsValueTask

@@ -202,7 +202,7 @@ internal sealed class ConversionClassifier
     /// <returns>The bound default-value argument.</returns>
     public static BoundExpression CreateOptionalDefaultArgument(ParameterInfo parameter)
     {
-        var typeSymbol = TypeSymbol.FromClrType(parameter.ParameterType);
+        var typeSymbol = ClrNullability.GetParameterTypeSymbol(parameter);
 
         if (TryGetDateTimeParameterDefault(parameter, out var dateTime))
         {
@@ -1868,19 +1868,18 @@ internal sealed class ConversionClassifier
             var mappedArguments = ImmutableArray.CreateBuilder<TypeSymbol?>(closedArguments.Length);
             foreach (var argument in closedArguments)
             {
-                mappedArguments.Add(TypeSymbol.FromClrType(argument));
+                mappedArguments.Add(TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure));
             }
 
             effectiveMethodTypeArgs = mappedArguments.MoveToImmutable();
         }
 
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
-            openParamType,
+        var mapped = MemberLookup.GetClrOpenParameterConversionTargetTypeSymbol(
+            openParams[paramIndex],
             openDef,
             imported.TypeArguments,
             openMethod,
             effectiveMethodTypeArgs);
-        mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
 
         // Issue #4012: the exit filter is the entry gate's twin and needed the
         // same widening. Without it the mapped `[3]int32` — recovered
@@ -2050,12 +2049,10 @@ internal sealed class ConversionClassifier
             return null;
         }
 
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
-            openParamType,
+        var mapped = MemberLookup.GetClrOpenParameterConversionTargetTypeSymbol(
+            openParams[paramIndex],
             openGenericDefinition,
-            symbolicTypeArgs,
-            openMethodDefinition: null,
-            methodTypeArguments: default);
+            symbolicTypeArgs);
         return mapped != null && mapped != TypeSymbol.Error ? mapped : null;
 
         // Whether an open CLR type mentions a TYPE-level generic parameter
@@ -2233,20 +2230,19 @@ internal sealed class ConversionClassifier
                 merged.Add(symbolicType != null && symbolicType != TypeSymbol.Error
                     ? symbolicType
                     : (uint)i < (uint)closedTypeArgs.Length
-                        ? TypeSymbol.FromClrType(closedTypeArgs[i])
+                        ? TypeSymbol.FromClrTypeWithoutNullability(closedTypeArgs[i], NullabilityFreeReason.TypeStructure)
                         : null);
             }
 
             effectiveMethodTypeArgs = merged.MoveToImmutable();
         }
 
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
-            openParamType,
+        var mapped = MemberLookup.GetClrOpenParameterConversionTargetTypeSymbol(
+            openParams[paramIndex],
             openDefinition: null,
             typeArguments: default,
-            openMethodDefinition: openMethod,
-            methodTypeArguments: effectiveMethodTypeArgs);
-        mapped = PreserveParameterTopLevelNullability(openParams[paramIndex], mapped);
+            openMethod,
+            effectiveMethodTypeArgs);
 
         return mapped != null
             && mapped != TypeSymbol.Error
@@ -3392,7 +3388,7 @@ internal sealed class ConversionClassifier
     public BoundExpression? TryBuildDisposeAsyncCall(VariableSymbol variable, TextLocation location)
     {
         var variableType = Invariant.Required(variable.Type, "async-disposable variables have a bound type");
-        var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
+        var valueTaskType = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.ValueTask), NullabilityFreeReason.TypeLiteral);
 
         // User-defined G# class path: probe for DisposeAsync() returning ValueTask.
         if (variable.Type is StructSymbol userType
@@ -3531,20 +3527,6 @@ internal sealed class ConversionClassifier
         return checkedExpression.Type == type
             ? checkedExpression
             : BindConversion(diagnosticLocation, checkedExpression, type, allowExplicit: true);
-    }
-
-    private static TypeSymbol? PreserveParameterTopLevelNullability(ParameterInfo parameter, TypeSymbol? mapped)
-    {
-        var flags = ClrNullability.ReadNullableFlags(parameter, parameter.Member);
-        return mapped != null
-            && mapped is not NullableTypeSymbol
-            && ClrTypeUtilities.IsDelegateType(parameter.ParameterType)
-
-            // ADR-0193 Phase 1: classify, never compare bytes by hand. An
-            // empty array classifies as Oblivious, so this is the same test.
-            && ClrNullability.ClassifyPosition(flags, 0) == ClrNullabilityState.Annotated
-                ? NullableTypeSymbol.Get(mapped)
-                : mapped;
     }
 
     private static bool IsNaturalStructuralDelegateTarget(TypeSymbol source, TypeSymbol target)
@@ -3946,7 +3928,12 @@ internal sealed class ConversionClassifier
                 || NullableLifting.IsUserValueTypeNullable(nullable)
                 || nullable.UnderlyingType is TypeParameterSymbol))
         {
-            return TypeSymbol.FromClrType(parameter.ParameterType);
+            // The argument is value-optional (or a nullable type parameter)
+            // and the parameter is a reference position: the target is the
+            // bare reference type, so the value is boxed rather than lifted.
+            // Read the position through the funnel and drop its top-level
+            // reference nullability, rather than reading it erased.
+            return ClrNullability.GetParameterTypeSymbol(parameter).StripTopLevelReferenceNullability();
         }
 
         return ClrNullability.GetParameterTypeSymbol(parameter);
@@ -4335,7 +4322,7 @@ internal sealed class ConversionClassifier
         }
         else if (target.ClrType is System.Type { IsEnum: true } clrEnum)
         {
-            target = TypeSymbol.FromClrType(Enum.GetUnderlyingType(clrEnum));
+            target = TypeSymbol.FromClrTypeWithoutNullability(Enum.GetUnderlyingType(clrEnum), NullabilityFreeReason.TypeStructure);
         }
 
         return target == TypeSymbol.Char || ExpressionBinder.IsIntegerType(target);
@@ -5010,14 +4997,18 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
-            var mappedParameter = MemberLookup.MapOpenClrTypeToSymbolic(
-                parameters[0].ParameterType,
+            // Matched by shape: the BCL declares `op_Implicit(T[]? array)`,
+            // and the operator applies to a non-null source just the same,
+            // so each side's own top-level `?`/`!` is dropped before the
+            // exact comparison below.
+            var mappedParameter = MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                parameters[0],
                 openDefinition,
-                ownerTypeArguments);
-            var mappedReturn = MemberLookup.MapOpenClrTypeToSymbolic(
-                candidate.ReturnType,
+                ownerTypeArguments).StripTopLevelReferenceNullability();
+            var mappedReturn = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
+                candidate,
                 openDefinition,
-                ownerTypeArguments);
+                ownerTypeArguments).StripTopLevelReferenceNullability();
 
             // Both sides must match exactly. A mapped projection is a fresh
             // ImportedTypeSymbol that never reference-equals the declared

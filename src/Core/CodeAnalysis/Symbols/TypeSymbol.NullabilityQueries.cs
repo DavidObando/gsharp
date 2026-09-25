@@ -167,6 +167,40 @@ public partial class TypeSymbol
     }
 
     /// <summary>
+    /// ADR-0193 Phase 2: this type with its top-level <em>reference</em>
+    /// nullability removed — a reference <c>?</c>, a platform <c>!</c>, and a
+    /// <see cref="NullabilityAnnotatedTypeSymbol"/> wrapper, repeatedly — and a
+    /// value-type <c>Nullable&lt;V&gt;</c> left alone. For the few callers
+    /// that read a signature position through the funnel but deliberately
+    /// want its bare shape (an object member called on an erased type
+    /// parameter, a boxing target). This is ADR-0193 §2's
+    /// <c>StripReferenceNullability(deep: false)</c>; Phase 3 adds the deep
+    /// form and folds the existing strip helpers onto it.
+    /// </summary>
+    /// <returns>The bare type.</returns>
+    internal TypeSymbol StripTopLevelReferenceNullability()
+    {
+        var type = this;
+        while (true)
+        {
+            switch (type)
+            {
+                case PlatformTypeSymbol platform:
+                    type = platform.UnderlyingType;
+                    continue;
+                case NullableTypeSymbol nullable when !NullableLifting.IsAnyValueTypeNullable(nullable):
+                    type = nullable.UnderlyingType;
+                    continue;
+                case NullabilityAnnotatedTypeSymbol annotated:
+                    type = annotated.BaseType;
+                    continue;
+                default:
+                    return type;
+            }
+        }
+    }
+
+    /// <summary>
     /// An eight-argument <c>ValueTuple</c>/<c>Tuple</c> nests elements eight
     /// onward in its <c>TRest</c> argument. <see cref="TupleTypeSymbol"/> — what
     /// <see cref="FromClrType"/> builds — is already flat (issue #2750), so the
@@ -221,7 +255,7 @@ public partial class TypeSymbol
         if (clrType.IsArray)
         {
             return clrType.GetElementType() is { } element
-                ? ImmutableArray.Create(FromClrType(element))
+                ? ImmutableArray.Create(FromClrTypeWithoutNullability(element, NullabilityFreeReason.TypeStructure))
                 : ImmutableArray<TypeSymbol>.Empty;
         }
 
@@ -234,7 +268,7 @@ public partial class TypeSymbol
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>(arguments.Length);
         foreach (var argument in arguments)
         {
-            builder.Add(FromClrType(argument));
+            builder.Add(FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure));
         }
 
         return builder.MoveToImmutable();

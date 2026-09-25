@@ -475,7 +475,9 @@ in the IDE.
      metadata) to a `TypeSymbol` is one of: `TypeSymbol.FromClrType`, the
      `MemberLookup.MapOpenClrTypeToSymbolic` overloads,
      and `ClrNullability.ReadNullableFlags` / `ClassifyFlag` /
-     `ClassifyPosition`. A call to any of them is reported unless one of the
+     `ClassifyPosition`. (*Phase 2 correction:* `ImportedTypeSymbol.Get(Type)`
+     and `MemberLookup.MapOpenClrParameterTypeToSymbolic` are doors too;
+     see the Phase 2 implementation note.) A call to any of them is reported unless one of the
      next two points applies. The wrapper factories `NullableTypeSymbol.Get` and
      `PlatformTypeSymbol.Get` are *not* doors in general, because the language
      legitimately wraps types it already has (the `?.` result, a nil arm, a
@@ -941,6 +943,206 @@ something the plan left open:
   carries a `#pragma warning disable GSA0007` with a comment pointing at Phase 4,
   the only suppression the phase may add.
 
+#### Phase 2 implementation note
+
+Where the implementation differed from the plan above, or had to decide
+something the plan left open:
+
+- **The census.** GSA0007 itself produced the worklist, which is more
+  reliable than a grep because it reports method-group references and
+  ignores comments and `<see cref>` text. On `4907a2acd`, with the door set
+  below, it reported **446** door calls in `src/Core`. Each has exactly one
+  of the outcomes the plan names:
+  - **274 moved to a named, nullability-free door**, each with its reason:
+
+    | `NullabilityFreeReason` | Calls | What it covers |
+    |---|---|---|
+    | `TypeLiteral` | 122 | `typeof(...)` in the compiler's own source, and runtime-helper types resolved by their well-known name |
+    | `TypeStructure` | 99 | a component of a CLR `Type` the caller already holds: a symbol's own `ClrType`, its generic arguments, element, definition, base or implemented interface, a declaring type |
+    | `IdentityComparison` | 18 | a type compared only for shape or identity (variance slots, overload-resolution callbacks that receive a bare `Type`, blittability) |
+    | `ResolvedTypeName` | 13 | a type named in G# source and resolved to its CLR type |
+    | `EmitShape` | 13 | state-machine fields, awaiter locals, `initobj` targets and other lowering and IL shapes |
+    | `CompilerProduced` | 9 | a type the compiler built itself (`MakeGenericType` over erased arguments, a script submission, the closed types CLR inference produced) |
+
+    They are 254 `TypeSymbol.FromClrTypeWithoutNullability` calls, 7
+    `ImportedTypeSymbol.GetWithoutNullability` calls and 13
+    `MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability` calls.
+  - **About 111 were routed through a funnel reader.** The arithmetic:
+    446 − 274 nullability-free − 9 gap calls − 52 door calls left inside
+    funnel members = 111. The 52 includes calls that the new funnel members
+    added, and a few sites were deleted outright. They now read through
+    `ClrNullability.Get*TypeSymbol`, the `MemberLookup.GetClr*` family, or the
+    new members of that family listed below. Where a caller deliberately wants
+    the bare shape (an `object` member called on an erased type parameter, a
+    boxing target, a method group's inference signature, a lowered local), it
+    reads through the funnel and then drops the top-level reference nullability
+    with the new `TypeSymbol.StripTopLevelReferenceNullability()`, which is
+    ADR-0193 §2's `StripReferenceNullability(deep: false)`. Phase 3 adds the
+    deep form and folds the existing strip helpers onto it.
+  - **The rest now sit inside `[NullabilityFunnel]` members.** There are 46 such
+    members, pinned by `Adr0193NullabilityFunnelMembersTests` (Core.Tests):
+    - the door bodies, including the escape hatches' own bodies;
+    - the Layer 0 classifier (`ClassifyFlag`, `ClassifyPosition` and the
+      two `IsFlagNonNull` / `IsPositionNonNull` projections of it);
+    - the Layer 1 walkers and the lazy accessors;
+    - the direct readers and the `MemberLookup.GetClr*` family;
+    - two member groups whose job is a nullability-free signature shape, each
+      commented at the call. These five members are this PR's review
+      decision. The escape hatch could not take them, because the accessor
+      clause fires on their `openProp.PropertyType` / `openMethod.ReturnType`.
+      Reading through the funnel and stripping would need the deep strip that
+      Phase 3 adds.
+      - `ExternalClrOverrideResolver.SlotSignaturesMatch` and `TypeMatches`: CLR
+        override slots match by signature identity, and C# lets an override
+        differ from its base in annotations alone;
+      - `UserTokenResolver.TryGetSymbolicSubstituted*Return`: the IL stack
+        type of a symbolic-container MemberRef, used only to decide the
+        erasure widening.
+  - **Nine calls go to the Phase 4 gap member** (below). GSA0007 cannot see a
+    call to a named member, so `Adr0193SymbolicProjectionGapCallersTests`
+    pins its call sites. A new caller fails that test until it is reviewed,
+    and Phase 4 deletes the member along with the suppression.
+  - **The door-defining types' own calls** were triaged like any other:
+    - `TypeSymbol.ConstructedTypeArguments`, `ConstructedFrom`, `BaseType`, the
+      tuple element projection (`TryGetTupleTypeSymbol`) and
+      `GetClrElementPositions` use `TypeStructure`;
+    - `FromClrType`'s recursion stays inside the attributed door body;
+    - `ClrNullability`'s eight `FromClrType` calls sit inside its attributed
+      direct readers and walkers.
+- **Two more door paths, found while triaging.** The plan's door list was
+  claimed to be exhaustive, and it was not:
+  - `ImportedTypeSymbol.Get(Type)` is where `FromClrType` ends, and eight Core
+    calls reached it directly. It is now a door, with its own named escape
+    hatch, `ImportedTypeSymbol.GetWithoutNullability`, for callers that need the
+    imported symbol rather than `FromClrType`'s primitive and tuple mapping.
+    `ImportedTypeSymbol.GetConstructed` is deliberately not a door: its
+    nullability arrives in the symbolic arguments.
+  - `MemberLookup.MapOpenClrParameterTypeToSymbolic` was a public forwarding
+    wrapper (a by-ref peel around the door). Its five callers were routed
+    through the family's projection-plus-merge members, and the wrapper was
+    deleted.
+- **A projection escape hatch.** `MapOpenClrTypeToSymbolic` had no
+  nullability-free twin, and about a dozen callers project a *type-structure*
+  position through a symbolic receiver: an implemented `IEnumerable<T>`'s
+  argument, an interface or base type's arguments. Those have no declaration
+  `[Nullable]` to merge. `MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability`
+  substitutes exactly as the door does and states why. The analyzer matches
+  every escape hatch by shape: its name ends in `WithoutNullability` and it
+  takes a `NullabilityFreeReason`. So a new twin is checked without an analyzer
+  change, and so is its signature-accessor clause.
+- **The walker clause and its three named exceptions.** Inside a funnel member,
+  a direct `NullableTypeSymbol.Get` / `PlatformTypeSymbol.Get` is reported.
+  Three existing calls were legitimately not a classified position, and each
+  now goes through a named member instead:
+  - `NullableLifting.WrapValueTypeNullable`: a CLR `Nullable<V>` read as `V?`.
+    This is value optionality (ADR-0001), which the signature itself spells.
+    `FromClrType`, `SymbolFromFlagsOffset` and `MapOpenClrTypeToSymbolic` call it.
+  - `NullabilityImportRule.RestorePeeledNullable`: the merge peels its input's
+    own `?` to rebuild the core and puts it back. This is the rule's
+    `Unchanged` decision.
+  - `NullabilityImportRule.ApplyNullDefaultLift`: the direct parameter reader's
+    `null`-default lift (#4403). It is a G#-side inference, named rather than
+    passed off as an `Annotated` state.
+- **Analyzer scope.** Only `Core.csproj` and `Cs2Gs.Tests` reference
+  `InternalAnalyzers`. The rule reports only code in a `GSharp.Core.*`
+  namespace, so the reader-agreement harness and cs2gs's tests, which call the
+  doors on purpose, are not affected. A lambda or local function belongs to the
+  member that contains it. A property accessor is exempt when its property
+  carries the attribute. A method-group reference to a door is reported like
+  a call. The signature-accessor clause follows a local back through its
+  initializer, its assignments, a `foreach` collection or an `out var`
+  producer, within the same method. It treats any `ReturnType`,
+  `ReturnParameter`, `ParameterType`, `PropertyType`, `FieldType` or
+  `EventHandlerType` read on a `System.Reflection` type anywhere in the
+  argument as a signature position, including one reached through
+  `GetGenericArguments()` or `GetElementType()`.
+- **`ResolveInstanceReturnTypeFromReceiver` moved** into the family as
+  `MemberLookup.GetClrReceiverProjectedReturnTypeSymbol`, with its by-ref
+  sibling `GetClrReceiverProjectedParameterPointeeTypeSymbol`. Both now share
+  `GetClrOpenMethodReturnTypeSymbol` / `GetClrOpenParameterPointeeTypeSymbol`
+  (projection plus merge of an open signature position) with the rest of the
+  family. That also fixes a drift the old copy had: it merged a `ref T`
+  return against the by-ref type itself, the defect Phase 1 fixed in
+  `GetClrMethodReturnTypeSymbol` but not here. Two further family members
+  were added for pattern members: `GetClrMemberValueTypeSymbol` (open and
+  closed) for an enumerator's `Current`, and
+  `GetClrOpenParameterConversionTargetTypeSymbol` (below).
+- **`PreserveParameterTopLevelNullability`** is gone. Its classification moved
+  into `MemberLookup.GetClrOpenParameterConversionTargetTypeSymbol`, the
+  conversion-target projection that `ConversionClassifier`'s three
+  `TrySubstituteParameterType*` paths now share. It still merges only a
+  delegate-typed parameter's top-level `?`, by design. The full merge would
+  stamp a root `!` onto a projection with symbolic method type arguments, which
+  is the Phase 4 blocker. The constructor path now gets the same top-level `?`
+  its two siblings already had.
+- **The suppression covers one region, not one method.** The single
+  `#pragma warning disable GSA0007` wraps three adjacent `MemberLookup`
+  members that share the known gap:
+  - `ResolveCallReturnTypeFromSymbolicTypeArgs`, as planned;
+  - `ResolveByRefParameterPointeeFromSymbolicTypeArgs`, its by-ref sibling
+    for an inline `out var` (#4350). It was added after this ADR was written
+    and has the same unmerged projection;
+  - `MapOpenSignatureWithoutDeclarationMerge`, a named member that concentrates
+    the other symbolic-method-type-argument projections that need the merge
+    but cannot take it yet. These are the lambda and delegate-target
+    projections in `ExpressionBinder.Calls.Invocation.cs` and
+    `ExpressionBinder.Literals.cs`, and the `params` element in
+    `OverloadResolver.Arguments.cs`. Every one of their consumers tests the
+    result for `ImportedTypeSymbol` without peeling it, which is exactly the
+    blocker `b0c76053d` recorded.
+
+  Routing those nine calls to one member keeps the gap in one suppressed
+  place. Phase 4 then closes it by adding the merge in three members rather
+  than in four binder files.
+- **Real defects the triage found and fixed** (a declared `?` dropped by an
+  erased read). Each has a regression test in `Adr0193FunnelMergeTests`
+  (Core.Tests). Both tests were confirmed to fail with the old read restored.
+  - A duck-typed enumerator's `T? Current` bound the `for x in …` variable as
+    `T`. This affected the sync pattern
+    (`TryGetClrPatternEnumerableElementType` returned a bare CLR type and is
+    replaced by a member-returning `TryGetClrPatternEnumerableCurrentMember`),
+    and the same read in the async pattern and in the user-enumerable path
+    through a CLR enumerator.
+  - An awaiter's `string? GetResult()` awaited as `string` when the awaitable
+    carried no annotation wrapper.
+- **Unmerged projections that now take the merge.** Each is the same fix,
+  covered by the existing suites rather than by one new test each:
+  - a symbolic delegate's `Invoke` (`TryGetDelegateFunctionTypeFromOpenDefinition`);
+  - a symbolic receiver's static member;
+  - a static call on a symbolic class receiver;
+  - an indexer whose element only mentions the receiver's parameter;
+  - the structural-projection plan's CLR slots;
+  - a CLR operator's parameter and return types;
+  - an inline `out var` over a closed method.
+
+  The full `Core.Tests` and `Compiler.Tests` runs surfaced three consequences:
+  - The structural-projection diagnostics now name the slot's declared type.
+    `Box<T>.Value` is declared `T?`, so `Box[string].Value` is `string?`, and
+    `Issue4014SameGenericStructuralProjectionTests` expects `'string?'` where it
+    expected `'string'`.
+  - The symbolic `op_Implicit` search (`Memory<T>.op_Implicit(T[]? array)`)
+    matches by shape, so it drops each side's top-level `?`/`!` before its
+    exact comparison. The merged `[]T?` otherwise stopped matching a `[]T`
+    source (ILVerify `StackUnexpected` in `Issue3932GenericEmitSitesTests`).
+  - The interpolated-string-handler local takes a `params` handler array's
+    element, not the array.
+- **Deleted, not attributed:**
+  - `StatementBinder`'s private `MapOpenClrTypeToSymbolic` forwarding wrapper;
+  - the unused `MemberLookup.SubstituteOpenIndexerType`;
+  - `ExpressionBinder`'s `MapClrMemberType`;
+  - `Lowerer.FromClrMemberType`;
+  - `MemberLookup.TryGetClrPatternEnumerableElementType` and
+    `TryGetClrCurrentMemberType`, both replaced by member-returning forms;
+  - `EmitErasedObjectReturnWidening` no longer converts a reflected return at
+    all. It has a `Type` overload that tests for `System.Object` by full name,
+    exactly as `FromClrType` did.
+- **Door calls left in `src/Core`**, all inside funnel members (comments
+  excluded):
+  - 15 `TypeSymbol.FromClrType`;
+  - 34 `MapOpenClrTypeToSymbolic`, most of them the projection's own
+    recursion;
+  - 2 `ImportedTypeSymbol.Get`.
+
 ### Phase 3 — the query API and the full consumer migration
 
 - Add the rest of the query API to `TypeSymbol`, implemented on
@@ -1011,6 +1213,11 @@ something the plan left open:
   Phase 2 funnel, on **every** non-null return (including the
   `Task`/`ValueTask`/`IAsyncEnumerable` arm). The method becomes a
   `[NullabilityFunnel]` member, and the Phase 2 suppression is removed.
+  *Phase 2 addition:* the suppressed region also holds
+  `ResolveByRefParameterPointeeFromSymbolicTypeArgs` (its by-ref sibling for
+  an inline `out var`, #4350) and `MapOpenSignatureWithoutDeclarationMerge`,
+  through which the symbolic lambda/delegate-target projections and the
+  symbolic `params` element project. All three take the merge in this phase.
 - It is gated on **both** earlier results, because `b0c76053d` failed for two
   independent reasons: decision 1's open-slot ruling (via Phase 1's
   `ApplyOpenSlot`) is what keeps `Min()`/`Max()` on an unconstrained `T` from

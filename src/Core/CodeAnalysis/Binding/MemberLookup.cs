@@ -78,7 +78,7 @@ internal sealed class MemberLookup
 
     private static readonly ConditionalWeakTable<MethodInfo, MethodInfo> OpenMethodsByMappedMethod = new();
     private static readonly TypeSymbol SymbolicInferenceConflict =
-        TypeSymbol.FromClrType(typeof(SymbolicInferenceConflictMarker));
+        TypeSymbol.FromClrTypeWithoutNullability(typeof(SymbolicInferenceConflictMarker), NullabilityFreeReason.TypeLiteral);
 
     private readonly BinderContext binderCtx;
 
@@ -902,7 +902,7 @@ internal sealed class MemberLookup
                     && !iface.IsGenericTypeDefinition
                     && iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
                 {
-                    elementType = MapOpenClrTypeToSymbolic(iface.GetGenericArguments()[0], importedSym);
+                    elementType = MapOpenClrTypeToSymbolicWithoutNullability(iface.GetGenericArguments()[0], importedSym, NullabilityFreeReason.TypeStructure);
                     return true;
                 }
             }
@@ -910,7 +910,7 @@ internal sealed class MemberLookup
             if (TryResolveClrPatternAsyncEnumerator(importedSym.OpenDefinition, out _, out _, out var openCurrentMember)
                 && openCurrentMember != null)
             {
-                elementType = MapOpenClrTypeToSymbolic(GetClrMemberValueType(openCurrentMember), importedSym);
+                elementType = GetClrMemberValueTypeSymbol(openCurrentMember, importedSym.OpenDefinition, importedSym.TypeArguments);
                 return true;
             }
         }
@@ -927,7 +927,7 @@ internal sealed class MemberLookup
                 !iface.IsGenericTypeDefinition &&
                 iface.GetGenericTypeDefinition().FullName == "System.Collections.Generic.IAsyncEnumerable`1")
             {
-                elementType = TypeSymbol.FromClrType(iface.GetGenericArguments()[0]);
+                elementType = TypeSymbol.FromClrTypeWithoutNullability(iface.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
                 return true;
             }
         }
@@ -941,7 +941,7 @@ internal sealed class MemberLookup
         if (TryResolveClrPatternAsyncEnumerator(clr, out _, out _, out var currentMember)
             && currentMember != null)
         {
-            elementType = TypeSymbol.FromClrType(GetClrMemberValueType(currentMember));
+            elementType = GetClrMemberValueTypeSymbol(currentMember);
             return true;
         }
 
@@ -955,7 +955,7 @@ internal sealed class MemberLookup
     /// single optional argument such as <c>CancellationToken</c>), whose
     /// return type in turn exposes a parameterless <c>MoveNextAsync()</c>
     /// method and a <c>Current</c> member — all independent of any
-    /// interface. Mirrors <see cref="TryGetClrPatternEnumerableElementType"/>
+    /// interface. Mirrors <see cref="TryGetClrPatternEnumerableCurrentMember"/>
     /// (the sync <c>GetEnumerator()</c> pattern probe for #939/#990) for the
     /// async shape.
     /// </summary>
@@ -1034,7 +1034,7 @@ internal sealed class MemberLookup
     /// Looks up the <c>Current</c> member on a duck-typed CLR enumerator —
     /// preferring a property over a field — walking the type's transitive
     /// implemented interfaces in addition to the type itself. The async
-    /// counterpart to <see cref="TryGetClrCurrentMemberType"/>, which only
+    /// counterpart to <see cref="TryGetClrCurrentMember"/>, which only
     /// probes the type directly (sufficient for the sync pattern, whose
     /// enumerator is always concrete); kept separate so that call site is
     /// left untouched.
@@ -1182,20 +1182,23 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
-    /// Probes <paramref name="clrType"/> for the C#-style "duck-typed"
-    /// enumerable shape: a public instance <c>GetEnumerator()</c> returning
-    /// a type that exposes a <c>bool MoveNext()</c> and a <c>Current</c>
-    /// property/field.
+    /// Resolves the <c>Current</c> member of a duck-typed CLR enumerable's
+    /// enumerator (<c>GetEnumerator()</c> → <c>MoveNext()</c> / <c>Current</c>).
+    /// ADR-0193 Phase 2: this hands back the MEMBER, not its CLR type, so the
+    /// caller reads the element through the funnel
+    /// (<see cref="GetClrMemberValueTypeSymbol(MemberInfo)"/>) with the
+    /// declaration's nullability, rather than converting a bare
+    /// <c>PropertyType</c>.
     /// </summary>
-    /// <param name="clrType">The CLR type to probe.</param>
-    /// <param name="elementType">The element CLR type, on success.</param>
-    /// <returns><see langword="true"/> when the duck-typed shape matches.</returns>
-    public static bool TryGetClrPatternEnumerableElementType(Type clrType, out Type? elementType)
+    /// <param name="clrType">The enumerable CLR type (open or closed).</param>
+    /// <param name="current">The enumerator's <c>Current</c> property or field, on success.</param>
+    /// <returns><see langword="true"/> when the pattern matches.</returns>
+    public static bool TryGetClrPatternEnumerableCurrentMember(Type clrType, [NotNullWhen(true)] out MemberInfo? current)
     {
         var getEnumerator = ResolveGetEnumerator(clrType, out _);
         if (getEnumerator == null)
         {
-            elementType = null;
+            current = null;
             return false;
         }
 
@@ -1208,17 +1211,11 @@ internal sealed class MemberLookup
             enumeratorType, "MoveNext", Type.EmptyTypes);
         if (moveNext?.ReturnType.IsSameAs(typeof(bool)) != true)
         {
-            elementType = null;
+            current = null;
             return false;
         }
 
-        if (TryGetClrCurrentMemberType(enumeratorType, out elementType))
-        {
-            return true;
-        }
-
-        elementType = null;
-        return false;
+        return TryGetClrCurrentMember(enumeratorType, out current);
     }
 
     /// <summary>
@@ -1226,38 +1223,30 @@ internal sealed class MemberLookup
     /// preferring a property over a field, matching the canonical pattern.
     /// </summary>
     /// <param name="enumeratorType">The duck-typed enumerator type.</param>
-    /// <param name="elementType">The <c>Current</c> member's CLR type, on success.</param>
+    /// <param name="current">The <c>Current</c> property or field, on success.</param>
     /// <returns><see langword="true"/> when a <c>Current</c> member exists.</returns>
-    public static bool TryGetClrCurrentMemberType(Type enumeratorType, out Type? elementType)
+    public static bool TryGetClrCurrentMember(Type enumeratorType, [NotNullWhen(true)] out MemberInfo? current)
     {
-        var currentProperty = ClrTypeUtilities.SafeGetProperty(enumeratorType, "Current", BindingFlags.Instance | BindingFlags.Public);
-        if (currentProperty != null)
-        {
-            elementType = DereferenceByRefElement(currentProperty.PropertyType);
-            return true;
-        }
+        current = (MemberInfo?)ClrTypeUtilities.SafeGetProperty(enumeratorType, "Current", BindingFlags.Instance | BindingFlags.Public)
+            ?? (MemberInfo?)ClrTypeUtilities.SafeGetField(enumeratorType, "Current", BindingFlags.Instance | BindingFlags.Public)
 
-        var currentField = ClrTypeUtilities.SafeGetField(enumeratorType, "Current", BindingFlags.Instance | BindingFlags.Public);
-        if (currentField != null)
-        {
-            elementType = DereferenceByRefElement(currentField.FieldType);
-            return true;
-        }
-
-        // Issue #2859: an `IEnumerator[T]` declares `Current` on itself but a
-        // non-generic `IEnumerator` receiver (or an interface whose `Current`
-        // is inherited) needs the base-interface walk that `Type.GetProperty`
-        // skips for interface types.
-        var inheritedCurrent = SafeGetPropertyIncludingSelfAndInterfaces(enumeratorType, "Current");
-        if (inheritedCurrent != null)
-        {
-            elementType = DereferenceByRefElement(inheritedCurrent.PropertyType);
-            return true;
-        }
-
-        elementType = null;
-        return false;
+            // Issue #2859: an `IEnumerator[T]` declares `Current` on itself but a
+            // non-generic `IEnumerator` receiver (or an interface whose `Current`
+            // is inherited) needs the base-interface walk that `Type.GetProperty`
+            // skips for interface types.
+            ?? SafeGetPropertyIncludingSelfAndInterfaces(enumeratorType, "Current");
+        return current != null;
     }
+
+    /// <summary>
+    /// Issue #3501 / ADR-0193 Phase 2: a pattern enumerator's element — its
+    /// <c>Current</c> member's value, read through the funnel, and seen
+    /// through a <c>ref</c> (ADR-0056 §1 auto-dereference).
+    /// </summary>
+    /// <param name="valueType">The <c>Current</c> member's value type.</param>
+    /// <returns>The pointee for a by-ref member; the type unchanged otherwise.</returns>
+    public static TypeSymbol DereferenceByRefElement(TypeSymbol valueType)
+        => valueType is ByRefTypeSymbol byRef ? byRef.PointeeType : valueType;
 
     /// <summary>
     /// Issue #774: maps an open generic CLR <see cref="Type"/> (such as the
@@ -1287,6 +1276,7 @@ internal sealed class MemberLookup
     /// <param name="openClr">The open CLR type to map.</param>
     /// <param name="openImp">The receiver carrying symbolic type arguments.</param>
     /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
+    [NullabilityFunnel]
     public static TypeSymbol MapOpenClrTypeToSymbolic(Type? openClr, ImportedTypeSymbol? openImp)
         => MapOpenClrTypeToSymbolic(openClr, openImp?.OpenDefinition, openImp?.TypeArguments ?? ImmutableArray<TypeSymbol>.Empty);
 
@@ -1301,35 +1291,9 @@ internal sealed class MemberLookup
     /// <param name="openDefinition">The open generic definition that <paramref name="openClr"/>'s parameters bind against.</param>
     /// <param name="typeArguments">The symbolic arguments at the same ordinals as <paramref name="openDefinition"/>'s generic parameters.</param>
     /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
+    [NullabilityFunnel]
     public static TypeSymbol MapOpenClrTypeToSymbolic(Type? openClr, Type? openDefinition, ImmutableArray<TypeSymbol> typeArguments)
         => MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition: null, methodTypeArguments: default);
-
-    /// <summary>
-    /// Maps a CLR parameter's value type into the symbolic type model. CLR
-    /// <c>ref</c>/<c>out</c>/<c>in</c> parameters expose <c>T&amp;</c>, but
-    /// G# stores the pointee type and <see cref="RefKind"/> separately.
-    /// </summary>
-    /// <param name="openClr">The open CLR parameter type.</param>
-    /// <param name="openDefinition">The open generic declaring type, if any.</param>
-    /// <param name="typeArguments">The declaring type's symbolic arguments.</param>
-    /// <param name="openMethodDefinition">The open generic method, if any.</param>
-    /// <param name="methodTypeArguments">The method's symbolic arguments.</param>
-    /// <returns>The symbolic parameter value type.</returns>
-    public static TypeSymbol MapOpenClrParameterTypeToSymbolic(
-        Type? openClr,
-        Type? openDefinition,
-        ImmutableArray<TypeSymbol> typeArguments,
-        MethodInfo? openMethodDefinition = null,
-        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
-    {
-        var parameterType = openClr?.IsByRef == true ? openClr.GetElementType() : openClr;
-        return MapOpenClrTypeToSymbolic(
-            parameterType,
-            openDefinition,
-            typeArguments,
-            openMethodDefinition,
-            methodTypeArguments);
-    }
 
     /// <summary>
     /// Issue #833: extended mapping entry point that also substitutes
@@ -1348,6 +1312,7 @@ internal sealed class MemberLookup
     /// <param name="openMethodDefinition">The open generic <em>method</em> definition the parameters of <paramref name="openClr"/> may bind against. May be <see langword="null"/>.</param>
     /// <param name="methodTypeArguments">The symbolic arguments at the same ordinals as <paramref name="openMethodDefinition"/>'s generic parameters; may be default/empty.</param>
     /// <returns>The symbolic <see cref="TypeSymbol"/> projection.</returns>
+    [NullabilityFunnel]
     public static TypeSymbol MapOpenClrTypeToSymbolic(
         Type? openClr,
         Type? openDefinition,
@@ -1498,7 +1463,7 @@ internal sealed class MemberLookup
                 openMethodDefinition,
                 methodTypeArguments);
 
-            return NullableTypeSymbol.Get(mappedUnderlying);
+            return NullableLifting.WrapValueTypeNullable(mappedUnderlying);
         }
 
         if (openClr.IsGenericType)
@@ -1622,6 +1587,17 @@ internal sealed class MemberLookup
             isExpanded,
             out _);
 
+    // ADR-0193 Phase 2 (GSA0007): the one suppression the phase allows, for
+    // the one known gap it cannot close. Both members below project a
+    // signature position through SYMBOLIC method type arguments and return it
+    // with no declaration-nullability merge, so a concrete oblivious
+    // container returned (or `out`-bound) through a symbolically inferred
+    // generic call loses its `!`. Merging here is blocked on Phase 3: the
+    // symbolic-projection consumers do not peel `PlatformTypeSymbol`, which
+    // is why PR #4362 round 3 (`b0c76053d`) backed the merge out. Phase 4 of
+    // ADR-0193 (issue #4363) adds the merge, attributes both members
+    // `[NullabilityFunnel]` and deletes this pragma.
+#pragma warning disable GSA0007
     /// <summary>
     /// Issue #833 (sibling to #794 on the call-site argument side): when the
     /// imported generic method's open return type <em>contains</em> a method
@@ -1769,6 +1745,40 @@ internal sealed class MemberLookup
         var mapped = MapOpenClrTypeToSymbolic(openType, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
         return TypeSymbol.RequiresSymbolicProjection(mapped) ? mapped : null;
     }
+
+    /// <summary>
+    /// ADR-0193 Phase 2: the rest of the same known gap, in one place. The
+    /// symbolic lambda- and delegate-target projections (the binder's
+    /// <c>TryBuildSymbolicDelegateTarget*</c> and deferred-lambda paths)
+    /// project a delegate-typed signature position through symbolic type
+    /// arguments and read the literal's target shape off the result. They
+    /// need the declaration's <c>[Nullable]</c> merged — a
+    /// <c>Func&lt;string?, T&gt;</c> parameter's <c>string?</c> lives in the
+    /// PARAMETER's flags, not <c>Invoke</c>'s — but the merge stamps a root
+    /// <c>!</c> or <c>?</c> onto the projected delegate, and every one of those
+    /// consumers tests the result for <see cref="ImportedTypeSymbol"/> without
+    /// peeling it: exactly the blocker that keeps
+    /// <see cref="ResolveCallReturnTypeFromSymbolicTypeArgs"/> unmerged.
+    /// The params-array element projection over symbolic method type
+    /// arguments (<c>OverloadResolver.ExpandParamsArguments</c>) shares the
+    /// same blocker. Routing them here, rather than calling the door from
+    /// several binder files, keeps the gap to one suppressed region that
+    /// Phase 4 closes by adding the merge in this one member.
+    /// </summary>
+    /// <param name="openClr">The open signature type to project.</param>
+    /// <param name="openDefinition">The open declaring type, if any.</param>
+    /// <param name="typeArguments">The declaring type's symbolic arguments.</param>
+    /// <param name="openMethodDefinition">The open generic method, if any.</param>
+    /// <param name="methodTypeArguments">The method's symbolic arguments.</param>
+    /// <returns>The unmerged symbolic projection.</returns>
+    public static TypeSymbol MapOpenSignatureWithoutDeclarationMerge(
+        Type? openClr,
+        Type? openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments,
+        MethodInfo? openMethodDefinition = null,
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
+        => MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
+#pragma warning restore GSA0007
 
     /// <summary>
     /// Issue #833: build the per-MVar symbolic type-argument vector for an
@@ -2274,7 +2284,7 @@ internal sealed class MemberLookup
             for (var i = 0; i < parameters.Length; i++)
             {
                 var argumentType = argumentTypes[i];
-                var parameterSymbol = TypeSymbol.FromClrType(parameters[ownMapping?[i] ?? i].ParameterType);
+                var parameterSymbol = ClrNullability.GetParameterTypeSymbol(parameters[ownMapping?[i] ?? i]);
                 if (argumentType == null
                     || parameterSymbol == null
                     || !(Conversion.Classify(argumentType, parameterSymbol).Exists
@@ -2453,7 +2463,7 @@ internal sealed class MemberLookup
             for (var i = 0; i < parameters.Length; i++)
             {
                 var argumentType = argumentTypes[i];
-                var parameterSymbol = TypeSymbol.FromClrType(parameters[ownMapping?[i] ?? i].ParameterType);
+                var parameterSymbol = ClrNullability.GetParameterTypeSymbol(parameters[ownMapping?[i] ?? i]);
                 if (argumentType == null || parameterSymbol == null)
                 {
                     accepts = false;
@@ -3478,7 +3488,7 @@ internal sealed class MemberLookup
         if (eventArgsClr != null
             && string.Equals(eventArgsClr.FullName, typeof(EventArgs).FullName, StringComparison.Ordinal))
         {
-            return TypeSymbol.FromClrType(typeof(EventHandler));
+            return TypeSymbol.FromClrTypeWithoutNullability(typeof(EventHandler), NullabilityFreeReason.TypeLiteral);
         }
 
         var closedEventHandler = eventArgsClr == null
@@ -3606,7 +3616,7 @@ internal sealed class MemberLookup
             return false;
         }
 
-        delegateType = TypeSymbol.FromClrType(delegateClrType);
+        delegateType = TypeSymbol.FromClrTypeWithoutNullability(delegateClrType, NullabilityFreeReason.TypeStructure);
         return true;
     }
 
@@ -4846,6 +4856,44 @@ internal sealed class MemberLookup
     /// </summary>
     internal static void ClearCache() => methodsIncludingSelfAndInterfacesCache = new ConditionalWeakTable<Type, System.Collections.Concurrent.ConcurrentDictionary<string, IReadOnlyList<MethodInfo>>>();
 
+    /// <summary>
+    /// ADR-0193 §3: <see cref="MapOpenClrTypeToSymbolic(Type, ImportedTypeSymbol)"/>
+    /// for an audited, nullability-free position — the projection twin of
+    /// <see cref="TypeSymbol.FromClrTypeWithoutNullability"/>. It substitutes
+    /// the receiver's symbolic arguments exactly as the door does (so a
+    /// <c>string?</c> argument stays <c>string?</c>); what it states is that
+    /// the open CLR type is not a member signature position, so there is no
+    /// declaration <c>[Nullable]</c> to merge. GSA0007 reports it when its
+    /// argument is a signature accessor.
+    /// </summary>
+    /// <param name="openClr">The open CLR type to map.</param>
+    /// <param name="openImp">The receiver carrying symbolic type arguments.</param>
+    /// <param name="reason">Why no declaration nullability applies.</param>
+    /// <returns>The symbolic projection.</returns>
+    [NullabilityFunnel]
+    internal static TypeSymbol MapOpenClrTypeToSymbolicWithoutNullability(Type? openClr, ImportedTypeSymbol? openImp, NullabilityFreeReason reason)
+    {
+        _ = reason;
+        return MapOpenClrTypeToSymbolic(openClr, openImp);
+    }
+
+    /// <summary>
+    /// ADR-0193 §3: the open-definition overload of
+    /// <see cref="MapOpenClrTypeToSymbolicWithoutNullability(Type, ImportedTypeSymbol, NullabilityFreeReason)"/>.
+    /// </summary>
+    /// <param name="openClr">The open CLR type to map.</param>
+    /// <param name="openDefinition">The open generic definition the parameters bind against.</param>
+    /// <param name="typeArguments">The symbolic arguments.</param>
+    /// <param name="reason">Why no declaration nullability applies.</param>
+    /// <returns>The symbolic projection.</returns>
+    [NullabilityFunnel]
+    internal static TypeSymbol MapOpenClrTypeToSymbolicWithoutNullability(Type? openClr, Type? openDefinition, ImmutableArray<TypeSymbol> typeArguments, NullabilityFreeReason reason)
+    {
+        _ = reason;
+        return MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments);
+    }
+
+    [NullabilityFunnel]
     internal static TypeSymbol GetIndexerParameterTypeSymbol(
         TypeSymbol targetType,
         PropertyInfo closedIndexer,
@@ -4900,6 +4948,7 @@ internal sealed class MemberLookup
     /// information that CLR metadata cannot represent.
     /// </param>
     /// <returns>The property type after symbolic receiver substitution.</returns>
+    [NullabilityFunnel]
     internal static TypeSymbol GetClrPropertyTypeSymbol(
         TypeSymbol targetType,
         PropertyInfo closedProperty,
@@ -4997,6 +5046,7 @@ internal sealed class MemberLookup
     /// <param name="targetType">Imported receiver type.</param>
     /// <param name="closedField">Reflected field on the closed receiver.</param>
     /// <returns>Field type with receiver generic-argument nullability.</returns>
+    [NullabilityFunnel]
     internal static TypeSymbol GetClrFieldTypeSymbol(
         TypeSymbol targetType,
         FieldInfo closedField)
@@ -5032,10 +5082,69 @@ internal sealed class MemberLookup
         return ClrNullability.GetFieldTypeSymbol(closedField);
     }
 
+    /// <summary>
+    /// ADR-0193 Phase 2: the value type of a pattern member (an enumerator's
+    /// <c>Current</c> property or field) declared on an OPEN generic
+    /// definition, projected through the receiver's symbolic arguments with
+    /// the declaration's <c>[Nullable]</c> merged — the same projection-plus-merge
+    /// every <c>GetClr*</c> sibling does. The pattern probes used to project
+    /// the position raw, so a <c>T? Current</c> bound its loop variable as
+    /// <c>T</c>.
+    /// </summary>
+    /// <param name="openMember">The property or field on the open definition.</param>
+    /// <param name="openDefinition">The open definition the member's generic parameters bind against.</param>
+    /// <param name="typeArguments">The receiver's symbolic arguments.</param>
+    /// <returns>The projected, merged value type; <see cref="TypeSymbol.Error"/> for another member kind.</returns>
+    [NullabilityFunnel]
+    internal static TypeSymbol GetClrMemberValueTypeSymbol(
+        MemberInfo openMember,
+        Type? openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments)
+    {
+        Type valueType;
+        switch (openMember)
+        {
+            case PropertyInfo property:
+                valueType = property.PropertyType;
+                break;
+            case FieldInfo field:
+                valueType = field.FieldType;
+                break;
+            default:
+                return TypeSymbol.Error;
+        }
+
+        var layout = valueType.IsByRef
+            ? Invariant.Required(valueType.GetElementType(), "a by-ref member type has an element type")
+            : valueType;
+        var merged = NullableFlagsBuilder.MergeDeclarationNullability(
+            MapOpenClrTypeToSymbolic(layout, openDefinition, typeArguments),
+            layout,
+            ClrNullability.ReadNullableFlags(openMember, openMember.DeclaringType));
+        return valueType.IsByRef ? ByRefTypeSymbol.Get(merged) : merged;
+    }
+
+    /// <summary>
+    /// ADR-0193 Phase 2: the closed-member counterpart of
+    /// <see cref="GetClrMemberValueTypeSymbol(MemberInfo, Type, ImmutableArray{TypeSymbol})"/>:
+    /// a reflected pattern member's value type read through the direct
+    /// reader, so its declaration nullability is applied.
+    /// </summary>
+    /// <param name="member">The reflected property or field.</param>
+    /// <returns>The value type; <see cref="TypeSymbol.Error"/> for another member kind.</returns>
+    internal static TypeSymbol GetClrMemberValueTypeSymbol(MemberInfo member)
+        => member switch
+        {
+            PropertyInfo property => ClrNullability.GetPropertyTypeSymbol(property),
+            FieldInfo field => ClrNullability.GetFieldTypeSymbol(field),
+            _ => TypeSymbol.Error,
+        };
+
     /// <summary>Resolves an imported event handler type through a symbolic receiver/interface hierarchy.</summary>
     /// <param name="targetType">The symbolic imported receiver type.</param>
     /// <param name="closedEvent">The reflected event selected from the erased receiver.</param>
     /// <returns>The event handler type after symbolic receiver substitution.</returns>
+    [NullabilityFunnel]
     internal static TypeSymbol GetClrEventHandlerTypeSymbol(TypeSymbol targetType, EventInfo closedEvent)
     {
         if (GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported
@@ -5083,6 +5192,7 @@ internal sealed class MemberLookup
     /// </summary>
     /// <param name="closedEvent">The reflected event.</param>
     /// <returns>The handler type with declaration-site nullability applied.</returns>
+    [NullabilityFunnel]
     internal static TypeSymbol GetClrEventHandlerTypeSymbol(EventInfo closedEvent)
     {
         var handlerType = TypeSymbol.FromClrType(closedEvent.EventHandlerType);
@@ -5137,6 +5247,7 @@ internal sealed class MemberLookup
     /// <param name="targetType">The symbolic imported receiver type.</param>
     /// <param name="member">The reflected member reached through the receiver.</param>
     /// <returns>The symbolic declaring interface used to parent the emitted member reference.</returns>
+    [NullabilityFunnel]
     internal static TypeSymbol GetClrMemberDeclaringTypeSymbol(
         TypeSymbol targetType,
         MemberInfo member)
@@ -5176,6 +5287,7 @@ internal sealed class MemberLookup
     /// <param name="targetType">The symbolic imported receiver type.</param>
     /// <param name="closedMethod">The reflected method selected from the erased receiver.</param>
     /// <returns>The method return type after symbolic receiver substitution.</returns>
+    [NullabilityFunnel]
     internal static TypeSymbol GetClrMethodReturnTypeSymbol(
         TypeSymbol targetType,
         MethodInfo closedMethod)
@@ -5242,6 +5354,7 @@ internal sealed class MemberLookup
     /// <param name="closedMethod">The reflected method selected from the erased receiver.</param>
     /// <param name="parameterIndex">The zero-based parameter index.</param>
     /// <returns>The parameter type after symbolic receiver substitution.</returns>
+    [NullabilityFunnel]
     internal static TypeSymbol GetClrMethodParameterTypeSymbol(
         TypeSymbol targetType,
         MethodInfo closedMethod,
@@ -5305,6 +5418,263 @@ internal sealed class MemberLookup
             : reflectedType;
     }
 
+    /// <summary>
+    /// Issue #794 / ADR-0193 Phase 2: the receiver-projected return accessor
+    /// (formerly <c>ExpressionBinder.ResolveInstanceReturnTypeFromReceiver</c>,
+    /// moved into this family so every signature-position producer lives in
+    /// one place). When an instance call is dispatched against a receiver
+    /// whose <see cref="ImportedTypeSymbol"/> carries symbolic type arguments
+    /// (e.g. <c>List[T]</c>, <c>Dictionary[K, V]</c>) — including the open
+    /// in-scope type-parameter case from #313/#671 — substitute the open
+    /// declaring type's return type using the receiver's symbolic arguments.
+    /// Without this override the call's return type comes from the
+    /// type-erased closed shape (<c>List&lt;object&gt;.ToArray()</c> →
+    /// <c>object[]</c>), losing the symbolic projection (<c>T[]</c>).
+    /// Returns <see langword="null"/> when no override is needed so callers
+    /// keep their existing return-type derivation.
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type symbol.</param>
+    /// <param name="closedMethod">The closed method selected by overload resolution.</param>
+    /// <returns>The override return type symbol, or <see langword="null"/>.</returns>
+    [NullabilityFunnel]
+    internal static TypeSymbol? GetClrReceiverProjectedReturnTypeSymbol(TypeSymbol receiverType, MethodInfo? closedMethod)
+    {
+        if (GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp
+            || imp.OpenDefinition == null
+            || imp.TypeArguments.IsDefaultOrEmpty
+            || closedMethod == null)
+        {
+            return null;
+        }
+
+        var openMethod = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod);
+        if (openMethod == null)
+        {
+            return null;
+        }
+
+        var openReturn = openMethod.ReturnType;
+        if (openReturn == null || openReturn.IsSameAs(typeof(void)))
+        {
+            return null;
+        }
+
+        // Issue #3712 follow-up: the receiver only closes the DECLARING TYPE's
+        // parameters. When the selected method is itself generic its own
+        // (method-level) parameters must be substituted from the closed method,
+        // or the projection returns the open shape — `List<TOutput>` for
+        // `List[Token].ConvertAll(...)` — and, because this override is
+        // consulted BEFORE the plain CLR return type, that open shape became
+        // the call's bound type and every use of it reported GS0156.
+        return GetClrOpenMethodReturnTypeSymbol(
+            openMethod,
+            imp.OpenDefinition,
+            imp.TypeArguments,
+            BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod));
+    }
+
+    /// <summary>
+    /// Issue #1107: the by-ref-parameter counterpart of
+    /// <see cref="GetClrReceiverProjectedReturnTypeSymbol"/>. When a call is
+    /// dispatched against a receiver whose <see cref="ImportedTypeSymbol"/>
+    /// carries symbolic type arguments (e.g. <c>Dictionary[K, V]</c>),
+    /// substitute the open declaring type's parameter pointee type using the
+    /// receiver's symbolic arguments. Without this an inline <c>out var</c>
+    /// argument against a generic by-ref parameter (e.g. the <c>out TValue</c>
+    /// of <c>Dictionary&lt;K, V&gt;.TryGetValue</c>) would bind from the
+    /// type-erased closed shape (<c>out object</c>), losing the symbolic
+    /// projection (the same-compilation user element type) and reporting
+    /// <c>GS0158</c> on a subsequent member access of the out-var local.
+    /// Returns <see langword="null"/> when no override is needed so callers keep
+    /// their existing pointee derivation.
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type symbol.</param>
+    /// <param name="closedMethod">The closed method selected by overload resolution.</param>
+    /// <param name="paramIndex">The zero-based parameter position to recover.</param>
+    /// <returns>The override pointee type symbol, or <see langword="null"/>.</returns>
+    [NullabilityFunnel]
+    internal static TypeSymbol? GetClrReceiverProjectedParameterPointeeTypeSymbol(
+        TypeSymbol? receiverType,
+        MethodInfo? closedMethod,
+        int paramIndex)
+    {
+        if (receiverType == null
+            || GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp
+            || imp.OpenDefinition == null
+            || imp.TypeArguments.IsDefaultOrEmpty
+            || closedMethod == null
+            || paramIndex < 0)
+        {
+            return null;
+        }
+
+        var openMethod = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod);
+        if (openMethod == null)
+        {
+            return null;
+        }
+
+        var openParameters = openMethod.GetParameters();
+        if (paramIndex >= openParameters.Length)
+        {
+            return null;
+        }
+
+        // Issue #3712 follow-up (sibling of the return accessor above, #3705):
+        // substitute the method's OWN generic parameters too, so an `out`
+        // parameter of a generic method on a symbolically-constructed receiver
+        // (e.g. `Dictionary[K, V].TryAdd`-shaped generic members) does not
+        // project to the open method type parameter.
+        return GetClrOpenParameterPointeeTypeSymbol(
+            openParameters[paramIndex],
+            imp.OpenDefinition,
+            imp.TypeArguments,
+            openMethod,
+            BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod));
+    }
+
+    /// <summary>
+    /// ADR-0193 Phase 2: an OPEN method's return type projected through
+    /// symbolic type arguments with the declaration's <c>[Nullable]</c>
+    /// merged — the projection-plus-merge every receiver-projected return
+    /// reader shares. A <c>ref T</c> return is peeled before the merge and
+    /// re-wrapped after it: <c>[Nullable]</c> on a by-ref annotates the
+    /// pointee (the ADR-0193 §4 finding on <c>GetClrMethodReturnTypeSymbol</c>).
+    /// </summary>
+    /// <param name="openMethod">The method on the open definition.</param>
+    /// <param name="openDefinition">The open declaring type the type-level parameters bind against.</param>
+    /// <param name="typeArguments">The declaring type's symbolic arguments.</param>
+    /// <param name="methodTypeArguments">The method's own symbolic arguments; default when it is not generic.</param>
+    /// <returns>The projected, merged return type.</returns>
+    [NullabilityFunnel]
+    internal static TypeSymbol GetClrOpenMethodReturnTypeSymbol(
+        MethodInfo openMethod,
+        Type? openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments,
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
+    {
+        var openReturn = openMethod.ReturnType;
+        var layout = openReturn.IsByRef
+            ? Invariant.Required(openReturn.GetElementType(), "a by-ref return type has an element type")
+            : openReturn;
+        var merged = NullableFlagsBuilder.MergeDeclarationNullability(
+            MapOpenClrTypeToSymbolic(
+                layout,
+                openDefinition,
+                typeArguments,
+                methodTypeArguments.IsDefault ? null : openMethod,
+                methodTypeArguments),
+            layout,
+            ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod));
+        return openReturn.IsByRef ? ByRefTypeSymbol.Get(merged) : merged;
+    }
+
+    /// <summary>
+    /// ADR-0193 Phase 2: an OPEN parameter's value (pointee) type projected
+    /// through symbolic type arguments with the declaration's <c>[Nullable]</c>
+    /// merged. A by-ref parameter is peeled, as
+    /// the projection peels it — G# keeps the
+    /// pointee and the <see cref="RefKind"/> apart — and <c>[Nullable]</c> on a
+    /// by-ref annotates the pointee.
+    /// </summary>
+    /// <param name="openParameter">The parameter on the open method.</param>
+    /// <param name="openDefinition">The open declaring type the type-level parameters bind against.</param>
+    /// <param name="typeArguments">The declaring type's symbolic arguments.</param>
+    /// <param name="openMethod">The open generic method, when its own parameters are substituted.</param>
+    /// <param name="methodTypeArguments">The method's own symbolic arguments; default when none.</param>
+    /// <returns>The projected, merged parameter value type.</returns>
+    [NullabilityFunnel]
+    internal static TypeSymbol GetClrOpenParameterPointeeTypeSymbol(
+        ParameterInfo openParameter,
+        Type? openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments,
+        MethodInfo? openMethod = null,
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
+    {
+        var openType = openParameter.ParameterType;
+        var layout = openType.IsByRef
+            ? Invariant.Required(openType.GetElementType(), "a by-ref parameter type has an element type")
+            : openType;
+        return NullableFlagsBuilder.MergeDeclarationNullability(
+            MapOpenClrTypeToSymbolic(layout, openDefinition, typeArguments, openMethod, methodTypeArguments),
+            layout,
+            ClrNullability.ReadNullableFlags(openParameter, openParameter.Member));
+    }
+
+    /// <summary>
+    /// ADR-0193 Phase 2: <see cref="GetClrOpenParameterPointeeTypeSymbol"/>
+    /// with a by-ref parameter re-wrapped as a <see cref="ByRefTypeSymbol"/>,
+    /// the shape <see cref="MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol})"/>
+    /// gives a by-ref type.
+    /// </summary>
+    /// <param name="openParameter">The parameter on the open method.</param>
+    /// <param name="openDefinition">The open declaring type the type-level parameters bind against.</param>
+    /// <param name="typeArguments">The declaring type's symbolic arguments.</param>
+    /// <returns>The projected, merged parameter type.</returns>
+    internal static TypeSymbol GetClrOpenParameterTypeSymbol(
+        ParameterInfo openParameter,
+        Type? openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments)
+    {
+        var pointee = GetClrOpenParameterPointeeTypeSymbol(openParameter, openDefinition, typeArguments);
+        return openParameter.ParameterType.IsByRef ? ByRefTypeSymbol.Get(pointee) : pointee;
+    }
+
+    /// <summary>
+    /// ADR-0193 Phase 2: an OPEN parameter projected as an argument's
+    /// conversion target (formerly the projection in
+    /// <c>ConversionClassifier.TrySubstituteParameterType*</c> plus
+    /// <c>ConversionClassifier.PreserveParameterTopLevelNullability</c>, moved
+    /// inside the funnel). The by-ref pointee is projected through the
+    /// symbolic arguments, and only a delegate-typed parameter's top-level
+    /// <c>?</c> is merged from the declaration, so an argument may convert to
+    /// a stated-nullable callback slot.
+    /// <para>
+    /// This is deliberately <b>not</b> the full merge
+    /// <see cref="GetClrOpenParameterPointeeTypeSymbol"/> does. The full merge
+    /// would also stamp a concrete oblivious position's <c>!</c> onto a
+    /// projection with symbolic method type arguments, which the projection's
+    /// consumers do not peel yet — the same blocker as
+    /// <see cref="ResolveCallReturnTypeFromSymbolicTypeArgs"/>, lifted by
+    /// ADR-0193 Phase 3 and closed in Phase 4.
+    /// </para>
+    /// </summary>
+    /// <param name="openParameter">The parameter on the open method or constructor.</param>
+    /// <param name="openDefinition">The open declaring type the type-level parameters bind against.</param>
+    /// <param name="typeArguments">The declaring type's symbolic arguments.</param>
+    /// <param name="openMethod">The open generic method, when its own parameters are substituted.</param>
+    /// <param name="methodTypeArguments">The method's own symbolic arguments; default when none.</param>
+    /// <returns>The projected conversion target.</returns>
+    [NullabilityFunnel]
+    internal static TypeSymbol GetClrOpenParameterConversionTargetTypeSymbol(
+        ParameterInfo openParameter,
+        Type? openDefinition,
+        ImmutableArray<TypeSymbol> typeArguments,
+        MethodInfo? openMethod = null,
+        ImmutableArray<TypeSymbol?> methodTypeArguments = default)
+    {
+        var openType = openParameter.ParameterType;
+        var layout = openType.IsByRef
+            ? Invariant.Required(openType.GetElementType(), "a by-ref parameter type has an element type")
+            : openType;
+        var mapped = MapOpenClrTypeToSymbolic(layout, openDefinition, typeArguments, openMethod, methodTypeArguments);
+        if (mapped == TypeSymbol.Error
+            || mapped is NullableTypeSymbol
+            || !ClrTypeUtilities.IsDelegateType(openType))
+        {
+            return mapped;
+        }
+
+        // ADR-0193 Phase 1: classify, never compare bytes by hand. An empty
+        // array classifies as Oblivious.
+        var state = ClrNullability.ClassifyPosition(
+            ClrNullability.ReadNullableFlags(openParameter, openParameter.Member),
+            0);
+        return state == ClrNullabilityState.Annotated
+            ? NullabilityImportRule.ApplyConcrete(mapped, state)
+            : mapped;
+    }
+
     internal static MethodInfo GetImportedMethodForEmission(MethodInfo method)
         => OpenMethodsByMappedMethod.TryGetValue(method, out var openMethod) ? openMethod : method;
 
@@ -5335,7 +5705,7 @@ internal sealed class MemberLookup
             ? imported.TypeArguments
             : (imported.ClrType.IsGenericType
                 ? imported.ClrType.GetGenericArguments()
-                    .Select(TypeSymbol.FromClrType)
+                    .Select(argument => TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure))
                     .ToImmutableArray()
                 : ImmutableArray<TypeSymbol>.Empty);
 
@@ -5358,7 +5728,7 @@ internal sealed class MemberLookup
         if (declaringType.IsGenericType)
         {
             typeArguments = declaringType.GetGenericArguments()
-                .Select(TypeSymbol.FromClrType)
+                .Select(argument => TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure))
                 .ToImmutableArray();
             return true;
         }
@@ -5533,63 +5903,6 @@ internal sealed class MemberLookup
         return null;
     }
 
-    internal static TypeSymbol SubstituteOpenIndexerType(
-        ImportedTypeSymbol target,
-        Type openType,
-        Type closedType)
-    {
-        if (openType.IsGenericParameter
-            && openType.DeclaringMethod == null
-            && openType.GenericParameterPosition < target.TypeArguments.Length)
-        {
-            return target.TypeArguments[openType.GenericParameterPosition];
-        }
-
-        if (openType.IsByRef)
-        {
-            return ByRefTypeSymbol.Get(
-                SubstituteOpenIndexerType(target, openType.GetElementType()!, closedType.GetElementType()!));
-        }
-
-        if (openType.IsArray && openType.GetArrayRank() == 1
-            && closedType.IsArray && closedType.GetArrayRank() == 1)
-        {
-            return SliceTypeSymbol.Get(
-                SubstituteOpenIndexerType(target, openType.GetElementType()!, closedType.GetElementType()!));
-        }
-
-        if (openType.IsArray && openType.GetArrayRank() > 1
-            && closedType.IsArray
-            && closedType.GetArrayRank() == openType.GetArrayRank())
-        {
-            // Matching IsArray checks above establish non-null element types for both arrays.
-            return RectangularArrayTypeSymbol.Get(
-                SubstituteOpenIndexerType(target, openType.GetElementType()!, closedType.GetElementType()!),
-                openType.GetArrayRank());
-        }
-
-        if (openType.IsGenericType && closedType.IsGenericType)
-        {
-            var openArguments = openType.GetGenericArguments();
-            var closedArguments = closedType.GetGenericArguments();
-            if (openArguments.Length == closedArguments.Length)
-            {
-                var symbolicArguments = ImmutableArray.CreateBuilder<TypeSymbol>(openArguments.Length);
-                for (var i = 0; i < openArguments.Length; i++)
-                {
-                    symbolicArguments.Add(SubstituteOpenIndexerType(target, openArguments[i], closedArguments[i]));
-                }
-
-                return ImportedTypeSymbol.GetConstructed(
-                    closedType,
-                    openType.GetGenericTypeDefinition(),
-                    symbolicArguments.MoveToImmutable());
-            }
-        }
-
-        return TypeSymbol.FromClrType(closedType);
-    }
-
     internal static TypeSymbol? MergeInferredTypeArgument(TypeSymbol? existing, TypeSymbol? incoming)
         => MergeRecoveredTypeArgument(existing, incoming);
 
@@ -5686,10 +5999,11 @@ internal sealed class MemberLookup
             var builder = ImmutableArray.CreateBuilder<TypeSymbol>(candidateArguments.Length);
             foreach (var argument in candidateArguments)
             {
-                builder.Add(MapOpenClrTypeToSymbolic(
+                builder.Add(MapOpenClrTypeToSymbolicWithoutNullability(
                     argument,
                     source.OpenDefinition,
-                    source.TypeArguments));
+                    source.TypeArguments,
+                    NullabilityFreeReason.TypeStructure));
             }
 
             var projectedArguments = builder.MoveToImmutable();
@@ -5853,8 +6167,8 @@ internal sealed class MemberLookup
                 imported.OpenDefinition, "Current");
             if (openCurrent != null)
             {
-                TypeSymbol mapped = MapOpenClrTypeToSymbolic(
-                    openCurrent.PropertyType, imported.OpenDefinition, imported.TypeArguments);
+                TypeSymbol mapped = GetClrMemberValueTypeSymbol(
+                    openCurrent, imported.OpenDefinition, imported.TypeArguments);
                 if (mapped != null && mapped != TypeSymbol.Error)
                 {
                     elementType = mapped;
@@ -5863,7 +6177,7 @@ internal sealed class MemberLookup
             }
         }
 
-        elementType = TypeSymbol.FromClrType(current.PropertyType);
+        elementType = GetClrMemberValueTypeSymbol(current);
         return elementType != null && elementType != TypeSymbol.Error;
     }
 
@@ -6282,12 +6596,14 @@ internal sealed class MemberLookup
         var anyVariadic = false;
         foreach (var parameter in parameters)
         {
-            var mappedParam = MapOpenClrParameterTypeToSymbolic(
-                parameter.ParameterType,
+            // ADR-0193 Phase 2: merged like every other signature position.
+            // This projected the Invoke signature raw, so a delegate declared
+            // `string? F<T>(T x)` read as returning `string` here while the
+            // closed path read `string?`.
+            var mappedParam = GetClrOpenParameterPointeeTypeSymbol(
+                parameter,
                 openDefinition,
-                typeArguments,
-                openMethodDefinition: null,
-                methodTypeArguments: default);
+                typeArguments);
             if (mappedParam == null || mappedParam == TypeSymbol.Error)
             {
                 return false;
@@ -6310,12 +6626,10 @@ internal sealed class MemberLookup
         }
         else
         {
-            returnType = MapOpenClrTypeToSymbolic(
-                invoke.ReturnType,
+            returnType = GetClrOpenMethodReturnTypeSymbol(
+                invoke,
                 openDefinition,
-                typeArguments,
-                openMethodDefinition: null,
-                methodTypeArguments: default);
+                typeArguments);
             if (returnType == null || returnType == TypeSymbol.Error)
             {
                 return false;
@@ -7139,8 +7453,8 @@ internal sealed class MemberLookup
             // Re-resolve the truly-open method (both type- and method-level
             // parameters unbound) from the receiver's OWN open declaring type by
             // metadata-token match — the same recovery already used by
-            // `ExpressionBinder.Calls.TryGetOpenInstanceMethod` /
-            // `ResolveInstanceReturnTypeFromReceiver`.
+            // `MemberLookup.TryGetOpenInstanceMethod` /
+            // `GetClrReceiverProjectedReturnTypeSymbol`.
             var reopened = TryGetOpenMethodOnDeclaringType(receiverOpenDef, openMethod);
             if (reopened != null)
             {
@@ -8123,7 +8437,7 @@ internal sealed class MemberLookup
             clr,
             clr.GetGenericTypeDefinition(),
             clr.GetGenericArguments()
-                .Select(TypeSymbol.FromClrType)
+                .Select(argument => TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure))
                 .ToImmutableArray());
         return true;
     }
@@ -8440,7 +8754,7 @@ internal sealed class MemberLookup
             var lifted = ImmutableArray.CreateBuilder<TypeSymbol>(openArgs.Length);
             foreach (var oa in openArgs)
             {
-                lifted.Add(MapOpenClrTypeToSymbolic(oa, imp.OpenDefinition, imp.TypeArguments));
+                lifted.Add(MapOpenClrTypeToSymbolicWithoutNullability(oa, imp.OpenDefinition, imp.TypeArguments, NullabilityFreeReason.TypeStructure));
             }
 
             liftedArgs = lifted.MoveToImmutable();
@@ -8777,34 +9091,6 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
-    /// Returns the value type of a <c>Current</c> member resolved by
-    /// <see cref="TryResolveClrPatternAsyncEnumerator"/> — a property or a
-    /// field.
-    /// </summary>
-    /// <param name="member">The member to inspect.</param>
-    /// <returns>The member's value type.</returns>
-    private static Type? GetClrMemberValueType(MemberInfo member)
-    {
-        return member switch
-        {
-            PropertyInfo property => property.PropertyType,
-            FieldInfo field => field.FieldType,
-            _ => null,
-        };
-    }
-
-    /// <summary>
-    /// Issue #3501: a ref-struct enumerator's <c>Current</c> is <c>ref T</c>
-    /// (Span&lt;T&gt;.Enumerator), but the iteration VARIABLE observes the
-    /// pointee value — ADR-0056 §1 auto-dereference. The lowered <c>Current</c>
-    /// read applies the matching <c>BoundDereferenceExpression</c>.
-    /// </summary>
-    /// <param name="elementType">The reflected <c>Current</c> member type.</param>
-    /// <returns>The pointee type for a by-ref member; the type unchanged otherwise.</returns>
-    private static Type DereferenceByRefElement(Type elementType) =>
-        elementType.IsByRef ? elementType.GetElementType() ?? elementType : elementType;
-
-    /// <summary>
     /// Issue #3695: folds an event declaration's <c>[Nullable]</c> metadata
     /// into the symbolic handler type, mirroring the field path's
     /// <see cref="NullableFlagsBuilder.MergeDeclarationNullability"/> call.
@@ -8819,6 +9105,7 @@ internal sealed class MemberLookup
     /// <param name="openEvent">The event as declared on the open definition.</param>
     /// <param name="openDefinition">The open declaring type, for <c>[NullableContext]</c> lookup.</param>
     /// <returns>The handler type with declaration-site nullability applied.</returns>
+    [NullabilityFunnel]
     private static TypeSymbol ApplyEventDeclarationNullability(
         TypeSymbol mapped,
         EventInfo openEvent,
@@ -8837,6 +9124,76 @@ internal sealed class MemberLookup
         return merged is NullableTypeSymbol nullableHandler
             ? nullableHandler.UnderlyingType
             : merged;
+    }
+
+    /// <summary>
+    /// Issue #3712 follow-up: projects a closed generic method's own CLR type
+    /// arguments onto symbols, for use as the method-level substitution vector
+    /// of <see cref="MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, MethodInfo, ImmutableArray{TypeSymbol})"/>.
+    /// Returns <see langword="default"/> for a non-generic (or still open)
+    /// method, which leaves the method-level substitution disabled exactly as
+    /// before.
+    /// </summary>
+    /// <param name="closedMethod">The closed method selected by overload resolution.</param>
+    /// <returns>The per-MVar symbol vector, or default when there is nothing to substitute.</returns>
+    private static ImmutableArray<TypeSymbol?> BuildMethodTypeArgSymbolsFromClosedMethod(MethodInfo? closedMethod)
+    {
+        if (closedMethod == null
+            || !closedMethod.IsGenericMethod
+            || closedMethod.IsGenericMethodDefinition)
+        {
+            return default;
+        }
+
+        var closedTypeArgs = closedMethod.GetGenericArguments();
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol?>(closedTypeArgs.Length);
+        foreach (var closedTypeArg in closedTypeArgs)
+        {
+            // A closed method's type argument is a component of the closed
+            // MethodInfo, not a signature position: no nullability was ever
+            // recorded on the CLR Type.
+            builder.Add(MapOpenClrTypeToSymbolicWithoutNullability(closedTypeArg, openDefinition: null, typeArguments: default, NullabilityFreeReason.TypeStructure));
+        }
+
+        return builder.MoveToImmutable();
+    }
+
+    /// <summary>
+    /// Locates the open-generic-definition counterpart of <paramref name="closedMethod"/>
+    /// on <paramref name="openDefinition"/>. Match is by metadata token + module,
+    /// which is stable for methods on a constructed generic type (the
+    /// reflection layer reports the open token regardless of the closing).
+    /// </summary>
+    /// <param name="openDefinition">The open generic type definition.</param>
+    /// <param name="closedMethod">The closed method to project.</param>
+    /// <returns>The open method, or <see langword="null"/> when no match.</returns>
+    private static MethodInfo? TryGetOpenInstanceMethod(Type? openDefinition, MethodInfo? closedMethod)
+    {
+        if (openDefinition == null || closedMethod == null)
+        {
+            return null;
+        }
+
+        if (ClrTypeUtilities.AreSame(closedMethod.DeclaringType, openDefinition))
+        {
+            return closedMethod;
+        }
+
+        var token = closedMethod.MetadataToken;
+        var module = closedMethod.Module;
+        var bindingFlags = BindingFlags.Public
+            | BindingFlags.NonPublic
+            | BindingFlags.Instance
+            | BindingFlags.Static;
+        foreach (var candidate in openDefinition.GetMethods(bindingFlags))
+        {
+            if (candidate.MetadataToken == token && ReferenceEquals(candidate.Module, module))
+            {
+                return candidate;
+            }
+        }
+
+        return null;
     }
 
     /// <summary>

@@ -1952,7 +1952,10 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            element = TypeSymbol.FromClrType(resultClrType);
+            // ADR-0193 Phase 2: the awaiter's GetResult declaration, read
+            // through the funnel. This read `resultClrType` erased, so an
+            // awaiter declaring `string? GetResult()` awaited as `string`.
+            element = ClrNullability.GetReturnTypeSymbol(shape.GetResultMethod);
         }
 
         return true;
@@ -2569,7 +2572,7 @@ internal sealed partial class ExpressionBinder
                 && argumentIndex < arguments.Count
                 && OpenLiteralShapeConverts(
                     arguments[argumentIndex].Type,
-                    TypeSymbol.FromClrType(targetClrType));
+                    TypeSymbol.FromClrTypeWithoutNullability(targetClrType, NullabilityFreeReason.IdentityComparison));
         };
     }
 
@@ -2671,7 +2674,9 @@ internal sealed partial class ExpressionBinder
             var candidateOwner = userGroup.StaticOwnerType != null && candidate.StaticOwnerType is StructSymbol declaredOwner
                 ? TypeMemberModel.ResolveStaticMemberOwner(userGroup.StaticOwnerType, declaredOwner)
                 : null;
-            var targetParameterTypes = delegateParameterTypes.Select(TypeSymbol.FromClrType).ToArray();
+            var targetParameterTypes = delegateParameterTypes
+                .Select(type => TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.IdentityComparison))
+                .ToArray();
             if (!TryCloseMethodGroupCandidate(
                 candidate,
                 userGroup.Receiver,
@@ -3349,7 +3354,7 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
-            erasedParameters.Add(TypeSymbol.FromClrType(parameterClr));
+            erasedParameters.Add(TypeSymbol.FromClrTypeWithoutNullability(parameterClr, NullabilityFreeReason.CompilerProduced));
         }
 
         TypeSymbol erasedReturn;
@@ -3376,7 +3381,7 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
-            erasedReturn = TypeSymbol.FromClrType(returnClr);
+            erasedReturn = TypeSymbol.FromClrTypeWithoutNullability(returnClr, NullabilityFreeReason.CompilerProduced);
         }
 
         erased = FunctionTypeSymbol.Get(erasedParameters.ToImmutable(), erasedReturn).ClrType;

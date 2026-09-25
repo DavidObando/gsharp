@@ -262,7 +262,7 @@ internal static class EnumOperatorTable
             : null;
         if (clrUnderlying != null)
         {
-            return TypeSymbol.FromClrType(clrUnderlying);
+            return TypeSymbol.FromClrTypeWithoutNullability(clrUnderlying, NullabilityFreeReason.TypeStructure);
         }
 
         return null;

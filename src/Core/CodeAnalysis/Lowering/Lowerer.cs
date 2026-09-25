@@ -780,7 +780,7 @@ public sealed class Lowerer : BoundTreeRewriter
         // CLR type, so no special-casing is needed here beyond using the
         // real return type instead of a hardcoded `ValueTask`.
         var valueTaskBoolClr = moveNextAsync.ReturnType;
-        var valueTaskBoolType = TypeSymbol.FromClrType(valueTaskBoolClr);
+        var valueTaskBoolType = ClrNullability.GetReturnTypeSymbol(moveNextAsync).StripTopLevelReferenceNullability();
 
         // GetAsyncEnumerator's arity: either the interface's single optional
         // `CancellationToken` parameter, or the fully duck-typed parameterless
@@ -793,7 +793,7 @@ public sealed class Lowerer : BoundTreeRewriter
         }
         else
         {
-            var paramType = TypeSymbol.FromClrType(getAsyncEnumeratorParams[0].ParameterType);
+            var paramType = ClrNullability.GetParameterTypeSymbol(getAsyncEnumeratorParams[0]).StripTopLevelReferenceNullability();
             getEnumeratorArgs = ImmutableArray.Create<BoundExpression>(new BoundDefaultExpression(null, paramType));
         }
 
@@ -846,20 +846,20 @@ public sealed class Lowerer : BoundTreeRewriter
                 out _,
                 out var openCurrentMember))
         {
-            enumeratorType = MemberLookup.MapOpenClrTypeToSymbolic(openGetAsyncEnumerator.ReturnType, patternImp);
-            var openCurrentType = openCurrentMember switch
-            {
-                System.Reflection.PropertyInfo property => property.PropertyType,
-                System.Reflection.FieldInfo field => field.FieldType,
-                _ => null,
-            };
-            currentType = openCurrentType == null
-                ? valueVariable.Type
-                : MemberLookup.MapOpenClrTypeToSymbolic(openCurrentType, patternImp);
+            // ADR-0193 Phase 2: the lowered locals take the bare enumerator
+            // shape; the Current read takes the merged element the binder
+            // gave the loop variable (MemberLookup.TryGetAsyncEnumerableElementType).
+            enumeratorType = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
+                openGetAsyncEnumerator,
+                patternImp.OpenDefinition,
+                patternImp.TypeArguments).StripTopLevelReferenceNullability();
+            currentType = openCurrentMember is System.Reflection.PropertyInfo or System.Reflection.FieldInfo
+                ? MemberLookup.GetClrMemberValueTypeSymbol(openCurrentMember, patternImp.OpenDefinition, patternImp.TypeArguments)
+                : valueVariable.Type;
         }
         else
         {
-            enumeratorType = TypeSymbol.FromClrType(enumeratorClr);
+            enumeratorType = ClrNullability.GetReturnTypeSymbol(getAsyncEnumerator).StripTopLevelReferenceNullability();
             currentType = GetClrMemberType(currentMember);
         }
 
@@ -914,7 +914,7 @@ public sealed class Lowerer : BoundTreeRewriter
         }
 
         var valueTaskClr = disposeAsync.ReturnType;
-        var valueTaskType = TypeSymbol.FromClrType(valueTaskClr);
+        var valueTaskType = ClrNullability.GetReturnTypeSymbol(disposeAsync).StripTopLevelReferenceNullability();
         var disposeCall = new BoundImportedInstanceCallExpression(
             null,
             enumeratorExpr,
@@ -1087,8 +1087,8 @@ public sealed class Lowerer : BoundTreeRewriter
                     kvpClr.GetProperty("Value"),
                     "KeyValuePair<K, V> declares a public Value property");
 
-                TypeSymbol keyAccessType = TypeSymbol.FromClrType(keyProp.PropertyType);
-                TypeSymbol valueAccessType = TypeSymbol.FromClrType(valueProp.PropertyType);
+                TypeSymbol keyAccessType = ClrNullability.GetPropertyTypeSymbol(keyProp);
+                TypeSymbol valueAccessType = ClrNullability.GetPropertyTypeSymbol(valueProp);
                 if (kvpType is ImportedTypeSymbol kvpImp
                     && kvpImp.HasSubstitutableTypeArgument
                     && kvpImp.TypeArguments.Length == 2)
@@ -1345,7 +1345,7 @@ public sealed class Lowerer : BoundTreeRewriter
                 modifiers: null);
             if (getEnumerator != null)
             {
-                enumeratorType = TypeSymbol.FromClrType(getEnumerator.ReturnType);
+                enumeratorType = ClrNullability.GetReturnTypeSymbol(getEnumerator).StripTopLevelReferenceNullability();
                 getEnumeratorCall = new BoundImportedInstanceCallExpression(
                     null,
                     collection,
@@ -1362,7 +1362,7 @@ public sealed class Lowerer : BoundTreeRewriter
             var getEnumerator = MemberLookup.ResolveGetEnumerator(clrType, out _);
             if (getEnumerator != null)
             {
-                enumeratorType = TypeSymbol.FromClrType(getEnumerator.ReturnType);
+                enumeratorType = ClrNullability.GetReturnTypeSymbol(getEnumerator).StripTopLevelReferenceNullability();
                 getEnumeratorCall = new BoundImportedInstanceCallExpression(
                     null,
                     collection,
@@ -1486,10 +1486,11 @@ public sealed class Lowerer : BoundTreeRewriter
             return false;
         }
 
-        var elementSym = MemberLookup.MapOpenClrTypeToSymbolic(
+        var elementSym = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
             Invariant.Required(openElementClr, "an enumerable type has an element type"),
             openDef,
-            typeArguments);
+            typeArguments,
+            NullabilityFreeReason.TypeStructure);
         if (elementSym == TypeSymbol.Error)
         {
             return false;
@@ -1634,29 +1635,16 @@ public sealed class Lowerer : BoundTreeRewriter
         return false;
     }
 
-    private static TypeSymbol GetClrMemberType(System.Reflection.MemberInfo member)
-    {
-        return member switch
-        {
-            System.Reflection.PropertyInfo property => FromClrMemberType(property.PropertyType),
-            System.Reflection.FieldInfo field => FromClrMemberType(field.FieldType),
-            _ => TypeSymbol.Error,
-        };
-    }
-
     /// <summary>
-    /// Issue #3501: a ref-returning member (Span&lt;T&gt;.Enumerator's
-    /// <c>Current</c> is <c>ref T</c>) reflects as an <c>IsByRef</c> CLR type,
-    /// which <see cref="TypeSymbol.FromClrType"/> does not model. Wrap the
-    /// pointee in a <see cref="ByRefTypeSymbol"/> so ADR-0056 §1
-    /// auto-dereference sees a managed pointer and inserts the load-indirect.
+    /// Issue #3501 / ADR-0193 Phase 2: a pattern enumerator's <c>Current</c>
+    /// member read through the funnel, with its top-level reference
+    /// nullability dropped for the lowered access node. A ref-returning member
+    /// (Span&lt;T&gt;.Enumerator's <c>Current</c> is <c>ref T</c>) reads as a
+    /// <see cref="ByRefTypeSymbol"/>, so ADR-0056 §1 auto-dereference sees a
+    /// managed pointer and inserts the load-indirect.
     /// </summary>
-    private static TypeSymbol FromClrMemberType(System.Type clrType)
-    {
-        return clrType.IsByRef
-            ? ByRefTypeSymbol.Get(TypeSymbol.FromClrType(clrType.GetElementType()))
-            : TypeSymbol.FromClrType(clrType);
-    }
+    private static TypeSymbol GetClrMemberType(System.Reflection.MemberInfo member)
+        => MemberLookup.GetClrMemberValueTypeSymbol(member).StripTopLevelReferenceNullability();
 
     private BoundBlockStatement RewriteProtectedRegionEntries(BoundStatement statement)
     {
@@ -1683,7 +1671,7 @@ public sealed class Lowerer : BoundTreeRewriter
                             ImmutableArray.Create<BoundExpression>(new BoundLiteralExpression(
                                 null,
                                 DiagnosticDescriptors.NonVoidFallthroughGuardMessage)),
-                            TypeSymbol.FromClrType(exceptionType)),
+                            TypeSymbol.FromClrTypeWithoutNullability(exceptionType, NullabilityFreeReason.TypeLiteral)),
                         DiagnosticDescriptors.AllPathsMustReturn));
                 }
 

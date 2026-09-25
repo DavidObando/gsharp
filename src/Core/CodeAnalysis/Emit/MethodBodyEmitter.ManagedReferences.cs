@@ -31,7 +31,7 @@ internal sealed partial class MethodBodyEmitter
                     ? this.outer.memberRefs.GetFieldReference(field, access.StaticContainerType)
                     : this.outer.memberRefs.GetFieldReference(field);
                 declaringType = access.StaticContainerType
-                    ?? TypeSymbol.FromClrType(Invariant.Required(field.DeclaringType, "instance fields have a declaring type"));
+                    ?? TypeSymbol.FromClrTypeWithoutNullability(Invariant.Required(field.DeclaringType, "instance fields have a declaring type"), NullabilityFreeReason.TypeStructure);
                 break;
             default:
                 throw new InvalidOperationException("Persistent field identity requires a resolved instance field.");

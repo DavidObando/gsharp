@@ -143,7 +143,7 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
         var selected = objectRoot ? receiver : this.Capture(receiver, this.HandleType(receiver.Type, readOnly), readOnly);
         var selectedLocal = new LocalVariableSymbol("<>locationOwner" + this.counter++, false, selected.Type);
         var selectedRead = new BoundVariableExpression(null, selectedLocal);
-        var keyType = TypeSymbol.FromClrType(this.RequiredRuntimeType("Gsharp.Values.ManagedLocationKey"));
+        var keyType = TypeSymbol.FromClrTypeWithoutNullability(this.RequiredRuntimeType("Gsharp.Values.ManagedLocationKey"), NullabilityFreeReason.TypeLiteral);
         BoundExpression parentKey = objectRoot
             ? new BoundClrStaticCallExpression(
                 null,

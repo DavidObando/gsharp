@@ -61,7 +61,7 @@ internal sealed class DefaultInterpolatedStringHandlerShape
         MethodInfo? appendFormattedAlignFormat)
     {
         this.HandlerType = handlerType;
-        this.HandlerTypeSymbol = TypeSymbol.FromClrType(handlerType);
+        this.HandlerTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(handlerType, NullabilityFreeReason.TypeLiteral);
         this.Constructor = constructor;
         this.AppendLiteral = appendLiteral;
         this.ToStringAndClear = toStringAndClear;

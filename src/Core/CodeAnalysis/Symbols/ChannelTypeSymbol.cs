@@ -157,7 +157,7 @@ public sealed class ChannelTypeSymbol : TypeSymbol
 
                 if (imported.ClrType is { IsGenericType: true } closedShape)
                 {
-                    elementType = FromClrType(closedShape.GetGenericArguments()[0]);
+                    elementType = FromClrTypeWithoutNullability(closedShape.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
                     return elementType != null;
                 }
 
