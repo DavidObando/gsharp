@@ -46,6 +46,11 @@ internal static class NullForgivenessTelemetry
 
     private static readonly ConcurrentDictionary<string, int> Counts = new ConcurrentDictionary<string, int>();
 
+    // The dump path as it was when the exit hook was armed. Read once, so a
+    // host that changes or clears the variable before shutdown cannot make
+    // the hook write somewhere else, or fail on a null path.
+    private static readonly string DumpPath = System.Environment.GetEnvironmentVariable(DumpPathVariable);
+
     /// <summary>
     /// Initializes static members of the <see cref="NullForgivenessTelemetry"/> class.
     /// When <c>CS2GS_NULL_FORGIVENESS_TELEMETRY</c> names a file, the snapshot
@@ -56,7 +61,7 @@ internal static class NullForgivenessTelemetry
     /// </summary>
     static NullForgivenessTelemetry()
     {
-        if (!string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable(DumpPathVariable)))
+        if (!string.IsNullOrEmpty(DumpPath))
         {
             System.AppDomain.CurrentDomain.ProcessExit += WriteSnapshotOnExit;
         }
@@ -121,6 +126,6 @@ internal static class NullForgivenessTelemetry
             lines.Add(count.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\t" + reason);
         }
 
-        System.IO.File.WriteAllLines(System.Environment.GetEnvironmentVariable(DumpPathVariable), lines);
+        System.IO.File.WriteAllLines(DumpPath, lines);
     }
 }

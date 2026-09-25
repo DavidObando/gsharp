@@ -1644,9 +1644,11 @@ public sealed partial class CSharpToGSharpTranslator
                 // it, and so does an explicitly typed one whenever cs2gs drops
                 // the redundant type clause (issue #1737, `let name = n.Name`).
                 // Without the `!!` the local is `T!`, and every later use of
-                // it (`Wrap(name)`) would infer from `T!` in turn.
+                // it (`Wrap(name)`) would infer from `T!` in turn. A local
+                // whose emitted type is nullable keeps its type clause, so its
+                // initializer converts to `T?` with no inference and no check.
                 case EqualsValueClauseSyntax clause when LocalDeclarationOf(clause) != null:
-                    return true;
+                    return !this.LocalKeepsNullableTypeClause(clause);
 
                 // An element whose array or collection type is inferred from it.
                 case InitializerExpressionSyntax { Parent: ImplicitArrayCreationExpressionSyntax }:
@@ -1656,6 +1658,23 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return false;
             }
+        }
+
+        // ADR-0186 step 6 (PR 0): whether the local <paramref name="clause"/>
+        // initializes is emitted with a nullable type (`T?`): declared `T?` in
+        // C#, or promoted by cs2gs. Such a local keeps its type clause.
+        private bool LocalKeepsNullableTypeClause(EqualsValueClauseSyntax clause)
+        {
+            if (clause.Parent is not VariableDeclaratorSyntax declarator
+                || LocalDeclarationOf(clause) is not { } declaration
+                || declaration.Type.IsVar
+                || this.context.GetDeclaredSymbol(declarator) is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            return IsAnnotatedNullableReference(local.Type)
+                || this.ShouldPromoteToNullableReference(local);
         }
 
         // The local declaration whose initializer is <paramref name="clause"/>,

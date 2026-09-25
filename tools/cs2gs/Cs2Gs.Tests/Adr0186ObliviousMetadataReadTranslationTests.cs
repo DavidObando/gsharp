@@ -311,6 +311,41 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
     }
 
     /// <summary>
+    /// A local declared <c>T?</c> keeps its type clause, so its initializer is
+    /// not an inference position: <c>string? value = flag ? n.Name : null</c>
+    /// leaves <c>n.Name</c> bare, and a nil name flows into the local rather
+    /// than throwing.
+    /// </summary>
+    [Fact]
+    public void A_Nullable_Local_Leaves_Its_Initializer_Bare()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousNullableLocalLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static bool NameIsNil(Node n, bool flag)
+                {
+                    string? value = flag ? n.Name : null;
+                    return value == null;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Enable);
+
+        Assert.DoesNotContain("n.Name!!", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.NameIsNil(Node.Make(nil, nil), true)" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(true, result.Value);
+    }
+
+    /// <summary>
     /// A lambda passed where its delegate type is inferred keeps its result's
     /// <c>!!</c>: <c>Select(x =&gt; x.Name)</c> would otherwise infer
     /// <c>IEnumerable[string!]</c>, and <c>ToList()</c> a <c>List[string!]</c>
