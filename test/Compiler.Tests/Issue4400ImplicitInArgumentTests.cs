@@ -76,6 +76,8 @@ public class Issue4400ImplicitInArgumentTests
 
             public static int F(in System.Func<int, int> f) => f(2);
 
+            public static int Named(in int a, int b) => (a * 10) + b;
+
             public static string O(int x) => "value";
 
             public static string O(ref int x) => "ref";
@@ -503,6 +505,54 @@ public class Issue4400ImplicitInArgumentTests
             """,
             new[] { "2", "6", "12", "8", "25", "9", "10" },
         };
+
+        // Named arguments keep lexical evaluation order when an omitted-`in`
+        // rvalue is reordered into its parameter slot (free function, instance
+        // method, constructor); a side-effect-free lvalue stays in its slot.
+        yield return new object[]
+        {
+            "named-argument-order",
+            """
+            package P
+            import System
+
+            class Log {
+                var Text string = ""
+                func Mark(tag string, v int32) int32 {
+                    Text = Text + tag
+                    return v
+                }
+            }
+
+            class Sink {
+                var V int32 = 0
+                init() { }
+                init(in a int32, b int32) { V = a * 10 + b }
+                func Take(in a int32, b int32) int32 -> a * 10 + b
+            }
+
+            func Consume(in a int32, b int32) int32 -> a * 10 + b
+            func Consume2(a int32, in b int32) int32 -> a * 10 + b
+
+            let l1 = Log()
+            Console.WriteLine(Consume(b: l1.Mark("B", 2), a: l1.Mark("A", 1)))
+            Console.WriteLine(l1.Text)
+            let l2 = Log()
+            Console.WriteLine(Consume2(b: l2.Mark("B", 2), a: l2.Mark("A", 1)))
+            Console.WriteLine(l2.Text)
+            let l3 = Log()
+            Console.WriteLine(Sink().Take(b: l3.Mark("B", 2), a: l3.Mark("A", 1)))
+            Console.WriteLine(l3.Text)
+            let l4 = Log()
+            Console.WriteLine(Sink(b: l4.Mark("B", 2), a: l4.Mark("A", 1)).V)
+            Console.WriteLine(l4.Text)
+            var x = 7
+            let l5 = Log()
+            Console.WriteLine(Consume(b: l5.Mark("B", 2), a: x))
+            Console.WriteLine(l5.Text)
+            """,
+            new[] { "12", "BA", "12", "BA", "12", "BA", "12", "BA", "72", "B" },
+        };
     }
 
     /// <summary>
@@ -560,6 +610,14 @@ public class Issue4400ImplicitInArgumentTests
                 init() : base(33) { }
             }
 
+            class Log {
+                var Text string = ""
+                func Mark(tag string, v int32) int32 {
+                    Text = Text + tag
+                    return v
+                }
+            }
+
             func Fwd64(in x int64) int64 -> Api.S(x)
 
             var v int64 = 5
@@ -585,6 +643,9 @@ public class Issue4400ImplicitInArgumentTests
             Console.WriteLine(Api.S(default))
             Console.WriteLine(Api.F((x int32) -> x * 5))
             Console.WriteLine(Api.O(default))
+            let log = Log()
+            let named = Api.Named(b: log.Mark("B", 2), a: log.Mark("A", 1))
+            Console.WriteLine("${named} ${log.Text}")
             """;
 
         var tempDir = Directory.CreateTempSubdirectory("gs_4400_imp_").FullName;
@@ -600,7 +661,7 @@ public class Issue4400ImplicitInArgumentTests
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, $"the app must run. Exit {exit}:\n{output}");
             Assert.Equal(
-                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41", "1", "10", "value" },
+                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41", "1", "10", "value", "12 BA" },
                 SplitLines(output));
         }
         finally

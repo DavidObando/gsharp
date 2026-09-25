@@ -57,6 +57,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 internal sealed class ConversionClassifier
 {
+    // Issue #4400: name prefix of the readonly temp an implicit-`in` rvalue is
+    // spilled into (see CreateImplicitInReference / IsImplicitInTemp).
+    private const string ImplicitInTempPrefix = "<inArgument";
+
     // Issue #1482: the numeric-primitive set and widening lattice live in the
     // single authoritative `NumericWideningLattice` helper; this facade queries
     // it (via `NumericWideningLattice.IsNumericPrimitive`) instead of carrying a
@@ -2968,7 +2972,7 @@ internal sealed class ConversionClassifier
 
         var tempType = value.Type == TypeSymbol.Null || value.Type == TypeSymbol.Never ? parameterType : value.Type;
         var temp = new LocalVariableSymbol(
-            $"<inArgument{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+            $"{ImplicitInTempPrefix}{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
             isReadOnly: true,
             type: tempType);
         var spill = new BoundBlockExpression(
@@ -2977,6 +2981,15 @@ internal sealed class ConversionClassifier
             new BoundVariableExpression(value.Syntax, temp));
         return new BoundAddressOfExpression(value.Syntax, spill, unmanaged: false, isReadOnly: true);
     }
+
+    /// <summary>
+    /// Issue #4400: whether <paramref name="variable"/> is the readonly temp
+    /// <see cref="CreateImplicitInReference"/> spills an rvalue into.
+    /// </summary>
+    /// <param name="variable">The variable to test.</param>
+    /// <returns><see langword="true"/> for an implicit-<c>in</c> spill temp.</returns>
+    public static bool IsImplicitInTemp(VariableSymbol variable)
+        => variable is LocalVariableSymbol && variable.Name.StartsWith(ImplicitInTempPrefix, StringComparison.Ordinal);
 
     /// <summary>
     /// Issue #4400: the final by-ref check for an argument that a call path's
