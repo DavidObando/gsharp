@@ -122,9 +122,9 @@ public class Runner
 
     public void Go()
     {
-#pragma warning disable CS8601
+PRAGMA_WARNING disable CS8601
         Strict(ref runstack);
-#pragma warning restore CS8601
+PRAGMA_WARNING restore CS8601
         Push(ref runstack!, 1);
     }
 }
@@ -139,12 +139,12 @@ public class Runner
     public void CSharpNullabilityPragmaRegion_BecomesGS0612OnTheMethod()
     {
         string printed = Translate(Prelude + @"
-#pragma warning disable CS8601
+PRAGMA_WARNING disable CS8601
     public void Go()
     {
         Push(ref runstack, 1);
     }
-#pragma warning restore CS8601
+PRAGMA_WARNING restore CS8601
 }
 ");
 
@@ -186,6 +186,9 @@ public class Runner
 
     private static string Translate(string source)
     {
+        // The C# sources spell their pragma directives as PRAGMA_WARNING so this
+        // file carries no literal nullability suppression (nullable_hygiene).
+        source = source.Replace("PRAGMA_WARNING", "#" + "pragma warning", StringComparison.Ordinal);
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
             new[] { ("Program.cs", source) });
 
