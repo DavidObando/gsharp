@@ -48,8 +48,15 @@ internal sealed class AnalyzerRegistry
         // Issue #4436: several Roslyn kinds can map to one G# kind (a type,
         // declaration and recursive pattern are all a G# TypePattern), so one
         // registration naming them all must still dispatch each node once.
-        foreach (var kind in new HashSet<TKind>(kinds))
+        // First-seen order is kept so registration order stays deterministic.
+        var seen = new HashSet<TKind>();
+        foreach (var kind in kinds)
         {
+            if (!seen.Add(kind))
+            {
+                continue;
+            }
+
             if (!bucket.TryGetValue(kind, out var entries))
             {
                 entries = new List<AnalyzerActionEntry<TContext>>();
