@@ -135,10 +135,12 @@ for (const colorScheme of ['light', 'dark'] as const) {
       // theme's tokens for a couple of seconds after load, even though
       // data-theme and <body> are already correct (the CI trace shows the
       // article text painted #242126 on #19181c, then correcting itself).
-      // axe must not sample that window, so wait until every text-bearing
-      // element resolves the root's theme tokens and none of them reads (as
-      // axe does) the other theme's text colour. If the stale state never
-      // clears, this fails: users would see it too.
+      // axe must not sample that window, so wait until no text-bearing element
+      // on the page reads (as axe does) the other theme's text colour, and the
+      // article -- where the stale state was observed -- resolves the root's
+      // theme tokens. The token check is scoped to the article so a component
+      // that deliberately overrides a token elsewhere cannot wedge this wait.
+      // If the stale state never clears, this fails: users would see it too.
       await expect
         .poll(
           () =>
@@ -148,24 +150,26 @@ for (const colorScheme of ['light', 'dark'] as const) {
                 name,
                 rootStyle.getPropertyValue(name).trim(),
               ]);
+              const article = document.querySelector('article');
               const stale: string[] = [];
-              for (const element of document.body.querySelectorAll('*')) {
-                const hasText = [...element.childNodes].some(
-                  (node) => node.nodeType === Node.TEXT_NODE && node.textContent?.trim(),
-                );
-                if (!hasText) {
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+              let previous: Element | null = null;
+              for (let node = walker.nextNode(); node && stale.length < 5; node = walker.nextNode()) {
+                const element = node.parentElement;
+                if (!element || element === previous || !node.textContent?.trim()) {
                   continue;
                 }
+                previous = element;
                 const style = getComputedStyle(element);
-                const staleToken = tokens.find(
-                  ([name, value]) => style.getPropertyValue(name).trim() !== value,
-                );
+                const staleToken = article?.contains(element)
+                  ? tokens.find(([name, value]) => style.getPropertyValue(name).trim() !== value)
+                  : undefined;
                 const colors = [style.color, style.getPropertyValue('-webkit-text-fill-color')];
                 if (staleToken || colors.includes(otherText)) {
                   stale.push(`${element.tagName.toLowerCase()}: ${staleToken?.[0] ?? colors[0]}`);
                 }
               }
-              return stale.slice(0, 5);
+              return stale;
             }, colorScheme === 'dark' ? 'rgb(36, 33, 38)' : 'rgb(242, 237, 232)'),
           {
             message: `${colorScheme} theme fully applied before the accessibility scan: ${route}`,
