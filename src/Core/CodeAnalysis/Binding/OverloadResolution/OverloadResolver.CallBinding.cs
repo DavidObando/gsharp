@@ -1790,10 +1790,7 @@ internal sealed partial class OverloadResolver
             // Deliberately NOT applied on the `?(...)` branch above: that
             // branch already short-circuits on nil, so no coercion to non-null
             // occurs and §4 inserts nothing for a guarded access.
-            receiver = PlatformCoercion.InsertCheck(
-                receiver,
-                syntax.Identifier.Location,
-                "a delegate invocation target");
+            receiver = PlatformCoercion.CheckDelegateInvocationTarget(receiver, syntax.Identifier.Location);
 
             // The callback uses null to mean that no explicit type arguments were supplied.
             if (tryBindInheritedClrInstanceCall(receiver, delegateClrType, "Invoke", boundArguments.ToImmutable(), syntax, out var invokeCall, null, default, argumentNames))

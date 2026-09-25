@@ -2174,6 +2174,14 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, stream);
         }
 
+        // ADR-0186 §4: the asynchronous twin of the `for … in` source check
+        // (StatementBinder.Loops). A nil oblivious stream otherwise fails
+        // inside the lowered `GetAsyncEnumerator` call, unattributed.
+        stream = PlatformCoercion.InsertCheck(
+            stream,
+            syntax.Stream.Location,
+            "an 'await for' source");
+
         if (!MemberLookup.TryGetAsyncEnumerableElementType(stream.Type, out var elementType))
         {
             Diagnostics.ReportTypeIsNotAsyncEnumerable(syntax.Stream.Location, stream.Type ?? TypeSymbol.Error);

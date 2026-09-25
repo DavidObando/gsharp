@@ -37,7 +37,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// cannot see a regression in the old one.
 /// </para>
 /// </summary>
-public sealed class Adr0186PlatformTypeBindingTests
+public sealed partial class Adr0186PlatformTypeBindingTests
 {
     private const string Consumer = "Adr0186.Step2.Consumer";
     private const string Library = "Adr0186.Step2.Library";
@@ -143,11 +143,74 @@ public sealed class Adr0186PlatformTypeBindingTests
 
             public static T[] Same<T>(T[] values) => values;
 
-            public static Holder<T> Hold<T>(T value) => new Holder<T> { Value = value };        }
+            public static Holder<T> Hold<T>(T value) => new Holder<T> { Value = value };
+
+            // The receiver/value-position audit (issues #4323/#4325, and the
+            // Adr0186PlatformTypeBindingTests.PositionAudit fixture): one nil
+            // and one live source per remaining position shape.
+            public static Dictionary<string, int> NilTable() => null;
+
+            public static Slot NilSlot() => null;
+
+            public static Slot Slot2() => new Slot();
+
+            public static Fns EmptyFns() => new Fns();
+
+            public static Fns LiveFns() => new Fns { F = () => "F", P = () => "P" };
+
+            public static Fns NilFns() => null;
+
+            public static Func<string> StaticFn;
+
+            public static IAsyncEnumerable<int> NilStream() => null;
+
+            public static async IAsyncEnumerable<int> LiveStream()
+            {
+                yield return 1;
+                await System.Threading.Tasks.Task.Yield();
+                yield return 2;
+            }
+
+            public static IDisposable NilDisposable() => null;
+
+            public static Res Res2() => new Res();
+
+            public static System.Threading.Tasks.Task<string> NilTask() => null;
+
+            public static System.Threading.Tasks.Task<string> LiveTask()
+                => System.Threading.Tasks.Task.FromResult("T");
+
+            public static object NilObj() => null;
+
+            public static object Obj() => "O";
+        }
 
         public class Holder<T>
         {
             public T Value;
+        }
+
+        // A plain oblivious FIELD (not a property), for the field-store and
+        // field compound-assignment receiver shapes.
+        public class Slot
+        {
+            public string Text = "S";
+
+            public int Count;
+        }
+
+        // Delegate-typed members: invoking a member VALUE is a different
+        // binder path from invoking a local or a call result.
+        public class Fns
+        {
+            public Func<string> F;
+
+            public Func<string> P { get; set; }
+        }
+
+        public class Res : IDisposable
+        {
+            public void Dispose() => Console.WriteLine("disposed");
         }
 
         public class Nested

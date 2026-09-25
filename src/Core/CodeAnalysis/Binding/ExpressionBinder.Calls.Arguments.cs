@@ -971,7 +971,10 @@ internal sealed partial class ExpressionBinder
 
         if (syntax.NullableQuestionToken == null)
         {
-            return BindInvocation(delegateLoad);
+            // ADR-0186 §4: invoking a delegate-typed member VALUE is a
+            // delegate invocation target like `f()` (see
+            // PlatformCoercion.CheckDelegateInvocationTarget).
+            return BindInvocation(PlatformCoercion.CheckDelegateInvocationTarget(delegateLoad, syntax.Identifier.Location));
         }
 
         var captureName = "$ncap_" + (++binderCtx.NullConditionalCaptureCounter)
@@ -1125,7 +1128,11 @@ internal sealed partial class ExpressionBinder
         var underlyingDelegateClr = memberClrType;
 
         LocalVariableSymbol? capture = null;
-        BoundExpression invokeReceiver = delegateLoad;
+
+        // ADR-0186 §4: a nil oblivious delegate member is checked where it is
+        // invoked (see PlatformCoercion.CheckDelegateInvocationTarget); the
+        // `?(…)` form below replaces this receiver with its guarded capture.
+        BoundExpression invokeReceiver = PlatformCoercion.CheckDelegateInvocationTarget(delegateLoad, ce.Identifier.Location);
         if (ce.NullableQuestionToken != null)
         {
             var captureType = effectiveMemberType is NullableTypeSymbol nullableMember
@@ -1247,7 +1254,9 @@ internal sealed partial class ExpressionBinder
         var underlyingDelegateClr = memberClrType;
 
         LocalVariableSymbol? capture = null;
-        BoundExpression invokeReceiver = delegateLoad;
+
+        // ADR-0186 §4: as for the instance member above.
+        BoundExpression invokeReceiver = PlatformCoercion.CheckDelegateInvocationTarget(delegateLoad, ce.Identifier.Location);
         if (ce.NullableQuestionToken != null)
         {
             var captureType = effectiveMemberType is NullableTypeSymbol nullableMember

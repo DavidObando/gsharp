@@ -2601,6 +2601,18 @@ internal sealed partial class StatementBinder
             return new BoundExpressionStatement(syntax, initializer);
         }
 
+        // ADR-0186 §4/§5: named deconstruction reads each field off the
+        // initializer, so a platform `DPt!` is used as non-null here, exactly
+        // like the positional form's source (see the check in
+        // BindTupleDeconstructionStatement). The same call unwraps the value, which
+        // the symbol-kind test below needs: a platform wrapper is not a
+        // StructSymbol, so `let { X = x } = obliviousCall()` reported GS0164
+        // where `DPt` compiled.
+        initializer = PlatformCoercion.InsertCheck(
+            initializer,
+            syntax.Initializer.Location,
+            "a deconstruction source");
+
         if (!(initializer.Type is StructSymbol structType) || (!structType.IsData && !structType.IsInline))
         {
             Diagnostics.ReportDeconstructionRequiresTupleOrDataStruct(syntax.OpenBraceToken.Location, initializer.Type);
