@@ -270,6 +270,107 @@ g.Fire(""a"")
     }
 
     /// <summary>
+    /// Issue #4391, across an <c>await</c>: a subscription whose receiver or
+    /// handler is awaited is split by the async spiller, which rebuilds the
+    /// subscription node; the rebuilt node keeps the substituted event type
+    /// (<c>EventHandler[Item]</c>, <c>EventHandler[T]</c> in a generic
+    /// function) the binder chose.
+    /// </summary>
+    [Fact]
+    public void GenericSourceEvent_SpilledAcrossAwait_RunsLikeCSharp()
+    {
+        const string source = @"
+package P
+import System
+import System.Threading.Tasks
+
+open class GB[T] {
+    event Got EventHandler[T]?
+    func Fire(v T) { Got?.Invoke(this, v) }
+}
+
+class Item {
+    var Name string = ""item""
+}
+
+async func GetG(g GB[Item]) GB[Item] {
+    await Task.Yield()
+    return g
+}
+
+async func GetH() EventHandler[Item] {
+    await Task.Yield()
+    return func (s object?, e Item) { Console.WriteLine(""awaited handler ${e.Name}"") }
+}
+
+async func Go(g GB[Item]) {
+    (await GetG(g)).Got += func (s object?, e Item) { Console.WriteLine(""awaited receiver ${e.Name}"") }
+    g.Got += await GetH()
+}
+
+async func GoGeneric[T](g GB[T], label string) {
+    await Task.Yield()
+    (await Task.FromResult(g)).Got += func (s object?, e T) { Console.WriteLine(""generic $label"") }
+}
+
+let g = GB[Item]()
+Go(g).Wait()
+GoGeneric(g, ""x"").Wait()
+g.Fire(Item())
+";
+
+        const string csSource = """
+            using System;
+            using System.Threading.Tasks;
+
+            class GB<T>
+            {
+                public event EventHandler<T>? Got;
+                public void Fire(T v) { Got?.Invoke(this, v); }
+            }
+
+            class Item { public string Name = "item"; }
+
+            static class Program
+            {
+                static async Task<GB<Item>> GetG(GB<Item> g) { await Task.Yield(); return g; }
+
+                static async Task<EventHandler<Item>> GetH()
+                {
+                    await Task.Yield();
+                    return (s, e) => Console.WriteLine($"awaited handler {e.Name}");
+                }
+
+                static async Task Go(GB<Item> g)
+                {
+                    (await GetG(g)).Got += (s, e) => Console.WriteLine($"awaited receiver {e.Name}");
+                    g.Got += await GetH();
+                }
+
+                static async Task GoGeneric<T>(GB<T> g, string label)
+                {
+                    await Task.Yield();
+                    (await Task.FromResult(g)).Got += (s, e) => Console.WriteLine($"generic {label}");
+                }
+
+                static void Main()
+                {
+                    var g = new GB<Item>();
+                    Go(g).Wait();
+                    GoGeneric(g, "x").Wait();
+                    g.Fire(new Item());
+                }
+            }
+            """;
+
+        AssertMatchesCSharp(
+            "spilled-generic-event",
+            source,
+            csSource,
+            new[] { "awaited receiver item", "awaited handler item", "generic x" });
+    }
+
+    /// <summary>
     /// Issue #4393: a base method group converted to a delegate directly in a
     /// member body observes the base implementation, in a generic class, a
     /// non-generic class, a class closing a generic base, across an
