@@ -39,6 +39,8 @@ public sealed class Issue4425ImportedNullableTypeParameterInferenceTests
 
             public static T Id<T>(T? value) => value!;
 
+            public static T Identity<T>(T value) => value;
+
             public static T Val<T>(T? value) where T : struct => value ?? default;
         }
         """;
@@ -103,6 +105,27 @@ public sealed class Issue4425ImportedNullableTypeParameterInferenceTests
             """
             func Run(maybe string?) int32 -> Inv.Required(maybe).Length
             """);
+    }
+
+    /// <summary>
+    /// Control for the rule's <c>Unchanged</c> cell on the reference side: a
+    /// plain, unannotated <c>T</c> slot given a <c>string?</c> infers
+    /// <c>T := string?</c>, so the result stays nullable and cannot be narrowed.
+    /// Only an annotated <c>T?</c> slot strips the argument's <c>?</c>.
+    /// </summary>
+    [Fact]
+    public void Imported_UnannotatedSlot_NullableReferenceArgument_StaysNullable()
+    {
+        AssertCompiles(
+            """
+            func Run(maybe string?) string? -> Inv.Identity(maybe)
+            """);
+
+        var narrowed = Compile(
+            """
+            func Run(maybe string?) string -> Inv.Identity(maybe)
+            """);
+        Assert.False(narrowed.Success, "T := string? must not be narrowed to string");
     }
 
     /// <summary>
