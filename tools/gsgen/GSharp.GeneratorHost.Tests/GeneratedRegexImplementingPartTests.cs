@@ -51,11 +51,13 @@ partial class P {
         this.output = output;
     }
 
-    // The patterns span the generator's shapes: a simple loop and captures
-    // with options.
+    // The patterns span the generator's shapes: a simple loop, captures with
+    // options, and a backtracking alternation whose C# passes
+    // `ref base.runstack!` (a by-ref argument under `!`).
     [Theory]
     [InlineData(@"""\\d+""", "a1")]
     [InlineData(@"""^(?<y>\\d{4})-(?<m>\\d{2})$"", RegexOptions.IgnoreCase", "2024-05")]
+    [InlineData(@"""(foo|ba+r)+\\w*?baz"", RegexOptions.CultureInvariant | RegexOptions.IgnoreCase", "xxFOObaarQQbaz")]
     public void RealRegexGenerator_BackTranslatesToAnImplementingPart_ThatCompilesAndRuns(string arguments, string match)
     {
         string userSource = UserSourceTemplate.Replace("ARGUMENTS", arguments, StringComparison.Ordinal);

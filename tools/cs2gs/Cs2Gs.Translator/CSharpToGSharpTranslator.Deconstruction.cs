@@ -1411,7 +1411,7 @@ public sealed partial class CSharpToGSharpTranslator
                 value = new UnaryExpression(
                     "&",
                     this.TranslateWithBlockSpillSeam(
-                        () => this.TranslateExpression(argument.Expression)));
+                        () => WithoutNonNullAssertion(this.TranslateExpression(argument.Expression))));
             }
             else
             {
