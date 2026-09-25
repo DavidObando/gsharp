@@ -7214,7 +7214,7 @@ internal sealed class MemberLookup
             {
                 UnifyForMethodTypeArgs(
                     openParams[i].ParameterType,
-                    symbolicArgTypes[i],
+                    OpenSlotInferenceArgument(openParams[i], symbolicArgTypes[i]),
                     openMethod,
                     bounds,
                     ArgumentBoundKind(i));
@@ -7237,7 +7237,7 @@ internal sealed class MemberLookup
             {
                 UnifyForMethodTypeArgs(
                     openParams[i].ParameterType,
-                    symbolicArgTypes[i],
+                    OpenSlotInferenceArgument(openParams[i], symbolicArgTypes[i]),
                     openMethod,
                     bounds,
                     ArgumentBoundKind(i));
@@ -7245,6 +7245,34 @@ internal sealed class MemberLookup
         }
 
         return FixSymbolicMethodTypeArguments(bounds, out requiresRecoveredInference);
+    }
+
+    /// <summary>
+    /// The argument a top-level parameter contributes to method type-argument
+    /// inference. When the parameter is a bare method type parameter the
+    /// declaration annotates (<c>T? value</c>), a <c>X?</c> argument infers
+    /// <c>T := X</c>, as in C#, rather than <c>T := X?</c>, which would make
+    /// <c>Invariant.Required(p.DeclaringType, …)</c> return <c>Type?</c>.
+    /// <see cref="NullabilityImportRule.InferOpenSlotArgument"/> decides it, as
+    /// the inverse of the rule that widens the same slot on the way in. A
+    /// source method's parameter is already typed <c>T?</c> and unifies
+    /// through the nullable wrapper, so only imported methods need this.
+    /// </summary>
+    /// <param name="openParameter">The open definition's parameter.</param>
+    /// <param name="argument">The argument's symbolic type.</param>
+    /// <returns>The type to unify against the parameter's CLR type.</returns>
+    private static TypeSymbol? OpenSlotInferenceArgument(ParameterInfo openParameter, TypeSymbol? argument)
+    {
+        if (argument is not NullableTypeSymbol
+            || openParameter.ParameterType is not { IsGenericParameter: true, DeclaringMethod: not null })
+        {
+            return argument;
+        }
+
+        var declaredState = ClrNullability.GetParameterTypeSymbol(openParameter) is NullableTypeSymbol
+            ? ClrNullabilityState.Annotated
+            : ClrNullabilityState.NotAnnotated;
+        return NullabilityImportRule.InferOpenSlotArgument(argument, declaredState);
     }
 
     private static TypeSymbol?[] FixSymbolicMethodTypeArguments(
