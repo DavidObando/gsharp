@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Reflection;
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -70,7 +71,8 @@ public abstract class BoundPropertyReferenceOperationExpression : BoundExpressio
             return null;
         }
 
-        if (importedProperty == null)
+        var cached = Volatile.Read(ref importedProperty);
+        if (cached == null)
         {
             var symbol = new PropertySymbol(
                 property.Name,
@@ -86,9 +88,11 @@ public abstract class BoundPropertyReferenceOperationExpression : BoundExpressio
                 symbol.AnchorContainingType(ImportedTypeSymbol.Get(declaringType));
             }
 
-            importedProperty = symbol;
+            // Analyzers may run concurrently: publish the first symbol built,
+            // so every reader sees one fully constructed instance.
+            cached = Interlocked.CompareExchange(ref importedProperty, symbol, null) ?? symbol;
         }
 
-        return importedProperty;
+        return cached;
     }
 }

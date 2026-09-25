@@ -55,9 +55,9 @@ public abstract class BoundNode
     {
         get
         {
-            var collector = new ChildCollector(this);
+            var collector = new NodeCollector(this, recurse: false);
             collector.Visit(this);
-            return collector.Children.ToImmutable();
+            return collector.Nodes.ToImmutable();
         }
     }
 
@@ -68,14 +68,11 @@ public abstract class BoundNode
     /// <returns>The descendants, excluding this node.</returns>
     public IEnumerable<BoundNode> Descendants()
     {
-        var pending = new Stack<BoundNode>();
-        PushChildren(pending, this);
-        while (pending.Count > 0)
-        {
-            var current = pending.Pop();
-            yield return current;
-            PushChildren(pending, current);
-        }
+        // One walk over the whole subtree, in pre-order: the same order as
+        // recursing through ChildNodes, without building a child list per node.
+        var collector = new NodeCollector(this, recurse: true);
+        collector.Visit(this);
+        return collector.Nodes.ToImmutable();
     }
 
     /// <summary>
@@ -116,29 +113,24 @@ public abstract class BoundNode
         }
     }
 
-    private static void PushChildren(Stack<BoundNode> pending, BoundNode node)
-    {
-        var children = node.ChildNodes;
-        for (var i = children.Length - 1; i >= 0; i--)
-        {
-            pending.Push(children[i]);
-        }
-    }
-
     /// <summary>
-    /// Records the statements, expressions and patterns one level below a
-    /// root, by letting the default walker recurse from the root only.
+    /// Records the statements, expressions and patterns below a root, in the
+    /// order the default walker visits them: one level below it
+    /// (<c>recurse: false</c>), or the whole subtree in pre-order
+    /// (<c>recurse: true</c>).
     /// </summary>
-    private sealed class ChildCollector : BoundTreeWalker
+    private sealed class NodeCollector : BoundTreeWalker
     {
         private readonly BoundNode root;
+        private readonly bool recurse;
 
-        public ChildCollector(BoundNode root)
+        public NodeCollector(BoundNode root, bool recurse)
         {
             this.root = root;
+            this.recurse = recurse;
         }
 
-        public ImmutableArray<BoundNode>.Builder Children { get; } = ImmutableArray.CreateBuilder<BoundNode>();
+        public ImmutableArray<BoundNode>.Builder Nodes { get; } = ImmutableArray.CreateBuilder<BoundNode>();
 
         public override void VisitStatement(BoundStatement? node)
         {
@@ -164,8 +156,9 @@ public abstract class BoundNode
             }
         }
 
-        // True only for the root, whose children the base walker then visits;
-        // every other node is recorded as a child and not descended into.
+        // Whether the base walker descends into the node. The root is never
+        // recorded; any other node is recorded, and descended into only when
+        // collecting the whole subtree.
         private bool Take(BoundNode? node)
         {
             if (node == null)
@@ -178,8 +171,8 @@ public abstract class BoundNode
                 return true;
             }
 
-            Children.Add(node);
-            return false;
+            Nodes.Add(node);
+            return recurse;
         }
     }
 }

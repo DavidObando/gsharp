@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Reflection;
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -65,10 +66,13 @@ public abstract class BoundMethodReferenceOperationExpression : BoundExpression
             return null;
         }
 
-        return importedMethod ??= new ImportedFunctionSymbol(
+        // Analyzers may run concurrently: publish the first symbol built, so
+        // every reader sees one fully constructed instance.
+        var built = new ImportedFunctionSymbol(
             method.Name,
             new ImportedClassSymbol(method.DeclaringType ?? typeof(object), declaration: null),
             method,
             declaration: null);
+        return Interlocked.CompareExchange(ref importedMethod, built, null) ?? built;
     }
 }

@@ -174,6 +174,7 @@ public sealed class PropertySymbol : Symbol
         get => getterSymbol;
         set
         {
+            ReleaseAccessor(getterSymbol, value);
             getterSymbol = value;
             if (value != null)
             {
@@ -191,6 +192,7 @@ public sealed class PropertySymbol : Symbol
         get => setterSymbol;
         set
         {
+            ReleaseAccessor(setterSymbol, value);
             setterSymbol = value;
             if (value != null)
             {
@@ -312,5 +314,17 @@ public sealed class PropertySymbol : Symbol
     internal void RepointDeclaration(PropertyDeclarationSyntax declaration)
     {
         Declaration = declaration;
+    }
+
+    // An accessor that is replaced or removed stops naming this property as
+    // its associated symbol, unless it is being assigned again.
+    private void ReleaseAccessor(FunctionSymbol? previous, FunctionSymbol? next)
+    {
+        if (previous != null
+            && !ReferenceEquals(previous, next)
+            && ReferenceEquals(previous.AssociatedSymbol, this))
+        {
+            previous.AssociatedSymbol = null;
+        }
     }
 }
