@@ -252,6 +252,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         void Use(MethodInfo method, PropertyInfo property, FieldInfo field, EventInfo evt)
         {
             _ = [|TypeSymbol.FromClrTypeWithoutNullability(method.ReturnType, NullabilityFreeReason.TypeStructure)|];
+            _ = [|TypeSymbol.FromClrTypeWithoutNullability(reason: NullabilityFreeReason.TypeStructure, t: method.ReturnType)|];
             _ = [|TypeSymbol.FromClrTypeWithoutNullability(method.ReturnParameter.ParameterType, NullabilityFreeReason.TypeStructure)|];
             _ = [|TypeSymbol.FromClrTypeWithoutNullability(method.GetParameters()[0].ParameterType.GetElementType(), NullabilityFreeReason.TypeStructure)|];
             _ = [|TypeSymbol.FromClrTypeWithoutNullability(property.PropertyType.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure)|];
@@ -288,6 +289,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         return AnalyzerTestHelper.AssertDiagnosticsAsync(
             new NullabilityFunnelAnalyzer(),
             Source,
+            "GSA0007",
             "GSA0007",
             "GSA0007",
             "GSA0007",

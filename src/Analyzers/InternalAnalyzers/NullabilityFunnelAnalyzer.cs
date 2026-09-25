@@ -70,7 +70,11 @@ public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
     private static void AnalyzeInvocation(OperationAnalysisContext context)
     {
         var invocation = (IInvocationOperation)context.Operation;
-        Analyze(context, invocation.TargetMethod, invocation, invocation.Arguments.Length > 0 ? invocation.Arguments[0].Value : null);
+
+        // By formal ordinal, not source order: a named argument can be written
+        // out of declaration order (`reason: …, clrType: x.ReturnType`).
+        var typeArgument = invocation.Arguments.FirstOrDefault(a => a.Parameter?.Ordinal == 0)?.Value;
+        Analyze(context, invocation.TargetMethod, invocation, typeArgument);
     }
 
     private static void AnalyzeMethodReference(OperationAnalysisContext context)

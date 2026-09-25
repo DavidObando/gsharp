@@ -30,14 +30,18 @@ public sealed class Adr0193SymbolicProjectionGapCallersTests
     public void EveryCallerOfTheGapMemberIsListed()
     {
         var root = Path.Combine(TestSource.Root, "src", "Core", "CodeAnalysis");
-        var call = new Regex(@"\bMapOpenSignatureWithoutDeclarationMerge\(", RegexOptions.CultureInvariant);
+        var call = new Regex(@"\bMapOpenSignatureWithoutDeclarationMerge\s*\(", RegexOptions.CultureInvariant);
+        var definition = new Regex(@"\bTypeSymbol\s+MapOpenSignatureWithoutDeclarationMerge\s*\(", RegexOptions.CultureInvariant);
+        var lineComment = new Regex(@"//[^\n]*", RegexOptions.CultureInvariant);
         var actual = Directory.EnumerateFiles(root, "*.cs", SearchOption.AllDirectories)
-            .Select(path => (
-                Path: Path.GetRelativePath(root, path).Replace('\\', '/'),
-                Count: File.ReadLines(path)
-                    .Where(line => !line.TrimStart().StartsWith("//", StringComparison.Ordinal))
-                    .Where(line => !line.Contains("public static TypeSymbol MapOpenSignatureWithoutDeclarationMerge(", StringComparison.Ordinal))
-                    .Sum(line => call.Matches(line).Count)))
+            .Select(path =>
+            {
+                // Whole-file scan, so a call split across lines still counts.
+                var code = lineComment.Replace(File.ReadAllText(path), string.Empty);
+                return (
+                    Path: Path.GetRelativePath(root, path).Replace('\\', '/'),
+                    Count: call.Matches(code).Count - definition.Matches(code).Count);
+            })
             .Where(entry => entry.Count > 0)
             .Select(entry => $"{entry.Path} x{entry.Count}")
             .OrderBy(entry => entry, StringComparer.Ordinal)

@@ -36,6 +36,30 @@ public sealed class Adr0193FunnelMergeTests
                 }
             }
 
+            public struct NullableEnumerator
+            {
+                private int index;
+
+                public bool MoveNext() => index++ < 1;
+
+                public string? Current => null;
+            }
+
+            public sealed class NullableAsyncItems
+            {
+                public AsyncEnumerator GetAsyncEnumerator() => new AsyncEnumerator();
+
+                public struct AsyncEnumerator
+                {
+                    private int index;
+
+                    public System.Threading.Tasks.ValueTask<bool> MoveNextAsync()
+                        => new System.Threading.Tasks.ValueTask<bool>(index++ < 1);
+
+                    public string? Current => null;
+                }
+            }
+
             public sealed class NullableAwaitable
             {
                 public Awaiter GetAwaiter() => new Awaiter();
@@ -60,6 +84,38 @@ public sealed class Adr0193FunnelMergeTests
 
             func Take(items NullableItems) {
                 for item in items {
+                    let s string = item
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void AsyncPatternEnumeratorCurrentKeepsItsDeclaredNullability()
+    {
+        AssertNullableStringRejected("""
+            import Adr0193Contracts
+
+            async func Take(items NullableAsyncItems) {
+                await for item in items {
+                    let s string = item
+                }
+            }
+            """);
+    }
+
+    [Fact]
+    public void UserEnumerableThroughAClrEnumeratorKeepsItsDeclaredNullability()
+    {
+        AssertNullableStringRejected("""
+            import Adr0193Contracts
+
+            class Bag {
+                func GetEnumerator() NullableEnumerator -> NullableEnumerator()
+            }
+
+            func Take(bag Bag) {
+                for item in bag {
                     let s string = item
                 }
             }
