@@ -9331,17 +9331,13 @@ public sealed class Binder
         // with a `?` right after `]` and handled by the outer NullableTypeSymbol
         // wrap in BindTypeClause. Element-nullable arrays stay indexable (the
         // array itself is non-nil), reading/writing `T?`.
+        // ADR-0186 §9: an array or slice element is a nested position, so an
+        // oblivious scope leaves it as written (`[]string` there is
+        // `[]!string`); only the array itself, as the slot's top level, is
+        // made platform by BindTypeClause.
         if (syntax.IsNullable)
         {
             element = NullableTypeSymbol.Get(element);
-        }
-        else
-        {
-            // ADR-0186 §9: an array or slice element is always a position,
-            // whatever the array itself is written for, so `[]string` inside
-            // an oblivious scope is `[]string!`. The element of `[]T` is not a
-            // clause of its own, so BindTypeClause's hook cannot see it.
-            element = ObliviousScope.ApplyToElement(syntax, element);
         }
 
         if (syntax.IsSlice)
@@ -9463,12 +9459,10 @@ public sealed class Binder
 
             // ADR-0186 §9: inside an oblivious scope (`--nullability=oblivious`
             // or an enclosing `@Oblivious`), an unadorned reference type
-            // written in a value position means `T!`. Every nested position
-            // of a written type is bound through this same method, so one
-            // hook reaches type arguments, elements and function-type
-            // signatures too; `ApplyArraySuffix` covers the one element that
-            // is not a clause of its own. A `?` already applied above wins —
-            // `ObliviousScope.Wrap` leaves a `T?` alone.
+            // written as the top level of a value position means `T!`.
+            // Nested positions are bound through this same method but stay
+            // as written (ObliviousScope.IsValuePosition). A `?` already
+            // applied above wins — `ObliviousScope.Wrap` leaves a `T?` alone.
             return ObliviousScope.ApplyToClause(syntax, bound);
         }
         finally
