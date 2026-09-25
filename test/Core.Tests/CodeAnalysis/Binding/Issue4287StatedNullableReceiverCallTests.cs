@@ -86,6 +86,15 @@ public sealed class Issue4287StatedNullableReceiverCallTests
     [InlineData("func use(n int32?) int32 { return n.GetValueOrDefault() }", "    Console.WriteLine(use(nil))", "0")]
     [InlineData("func (s string?) OrDash() string { return s ?? \"-\" }\nfunc use(s string?) string { return s.OrDash() }", "    Console.WriteLine(use(nil))", "-")]
     [InlineData("class Holder {\n    let name string? = \"n\"\n    func Use() string { return this.name?.ToUpper() ?? \"-\" }\n}", "    Console.WriteLine(Holder().Use())", "N")]
+
+    // A nil test on a STABLE (`let`) field narrows it for the rest of the
+    // condition (ADR-0069), by bare name and through `this.`, exactly as a
+    // member read through it is narrowed. This is the self-migrated
+    // `AsyncBoundTreeQueries` shape: `memo != nil && memo.TryGetValue(…)`.
+    [InlineData("class Holder {\n    let memo Dictionary[string, bool]? = Dictionary[string, bool]()\n    func Use() bool { return memo != nil && memo.TryGetValue(\"k\", out var c) }\n}", "    Console.WriteLine(Holder().Use())", "False")]
+    [InlineData("class Holder {\n    let memo Dictionary[string, bool]? = Dictionary[string, bool]()\n    func Use() bool { return this.memo != nil && this.memo.TryGetValue(\"k\", out var c) }\n}", "    Console.WriteLine(Holder().Use())", "False")]
+    [InlineData("class Holder {\n    let memo Dictionary[string, bool]? = nil\n    func Use() int32 { if memo != nil { return memo.Count }\n        return -1 }\n}", "    Console.WriteLine(Holder().Use())", "-1")]
+    [InlineData("func use(l List[int32]?) bool { return l != nil && l.Contains(1) }", "    Console.WriteLine(use(List[int32]{1}))", "True")]
     public void The_Remedies_And_NilSafe_Receivers_Still_Compile_And_Run(string declarations, string body, string expected)
     {
         var result = EmittedOracle.Evaluate(Source(declarations, body));
