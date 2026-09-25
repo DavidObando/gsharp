@@ -3733,11 +3733,10 @@ internal sealed partial class ExpressionBinder
                     typeArgSymbols)
                 && effectiveReceiverSyntax != null)
             {
-                var receiverName = effectiveReceiverSyntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
-                    receiverStart ?? effectiveReceiverSyntax.Span.Start,
-                    effectiveReceiverSyntax.Span.End));
-                receiverName = string.Join(" ", receiverName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
-                Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
+                Diagnostics.ReportUnableToFindFunction(
+                    ce.Location,
+                    methodName,
+                    DescribeCallReceiver(receiver, effectiveReceiverSyntax, receiverStart));
             }
             else if (!TryReportValueNullableByRefArgument(ce, arguments, receiver?.Type?.ClrType, methodName))
             {
@@ -4143,6 +4142,15 @@ internal sealed partial class ExpressionBinder
                             && TryPreferBetterExtensionOverClrInstanceMethod(receiver, methodName, method, argTypes, arguments, ce, argumentNames, out var betterExtensionCall))
                         {
                             return betterExtensionCall;
+                        }
+
+                        // Issue #4287: an instance method on a stated `T?`
+                        // receiver needs a guard first (see
+                        // TryReportStatedNullableReceiverCall).
+                        if (receiver != null
+                            && TryReportStatedNullableReceiverCall(receiver, receiverSyntax, receiverStart, ce))
+                        {
+                            return new BoundErrorExpression(null);
                         }
 
                         // Issue #977: now that the overload is chosen, re-bind
@@ -4562,6 +4570,81 @@ internal sealed partial class ExpressionBinder
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #4287: whether an imported CLR instance method, already selected
+    /// against a receiver's underlying type, is being called on a receiver
+    /// somebody STATED is a nilable reference (<c>T?</c>). If so, reports
+    /// GS0159 ("receiver may be nil"), the same diagnostic a G#-declared
+    /// method gets on that receiver.
+    /// <para>
+    /// This is the call-path twin of <c>CanBindClrInstanceMember</c>, which
+    /// rejects a stated <c>T?</c> for member reads and writes (#4356/#4390)
+    /// but was never consulted for calls. The receiver's <c>ClrType</c> is
+    /// the underlying type's, so without this test <c>this.name.ToUpper()</c>
+    /// on a <c>string?</c> bound directly and threw a bare
+    /// <c>NullReferenceException</c> on nil.
+    /// </para>
+    /// <para>
+    /// It runs <em>after</em> selection, so it changes which calls are
+    /// accepted and never which member is chosen. A name that no instance
+    /// method matches still falls through to the extension paths, where an
+    /// extension declared over the nilable type is legal. A value-type
+    /// <c>T?</c> is not affected: its members live on
+    /// <c>Nullable&lt;T&gt;</c> itself and are safe to call on nil. A platform
+    /// <c>T!</c> never reaches here as a <see cref="NullableTypeSymbol"/>;
+    /// ADR-0186 §4's attributed check handles it.
+    /// </para>
+    /// </summary>
+    /// <param name="receiver">The bound receiver.</param>
+    /// <param name="receiverSyntax">The receiver's syntax, when the caller has it.</param>
+    /// <param name="receiverStart">The receiver text's start, when it differs from the syntax's.</param>
+    /// <param name="ce">The call.</param>
+    /// <returns><see langword="true"/> when GS0159 was reported.</returns>
+    private bool TryReportStatedNullableReceiverCall(
+        BoundExpression receiver,
+        ExpressionSyntax? receiverSyntax,
+        int? receiverStart,
+        CallExpressionSyntax ce)
+    {
+        if (receiver.Type is not NullableTypeSymbol nullableReceiver
+            || nullableReceiver.UnderlyingType.ClrType is not { IsValueType: false })
+        {
+            return false;
+        }
+
+        Diagnostics.ReportUnableToFindFunction(
+            ce.Location,
+            ce.Identifier.ValueText,
+            DescribeCallReceiver(receiver, receiverSyntax, receiverStart));
+        return true;
+    }
+
+    /// <summary>
+    /// Renders a call receiver for the GS0159 "may be nil" message: its
+    /// source text with whitespace collapsed, or its type when no syntax is
+    /// in reach (for example, an intermediate in a chained call).
+    /// </summary>
+    /// <param name="receiver">The bound receiver.</param>
+    /// <param name="receiverSyntax">The receiver's syntax, when the caller has it.</param>
+    /// <param name="receiverStart">The receiver text's start, when it differs from the syntax's.</param>
+    /// <returns>The receiver description.</returns>
+    private static string DescribeCallReceiver(
+        BoundExpression receiver,
+        SyntaxNode? receiverSyntax,
+        int? receiverStart)
+    {
+        var syntax = receiverSyntax ?? receiver.Syntax;
+        if (syntax == null)
+        {
+            return "a " + (receiver.Type?.ToDisplayString(DisplayFormat.Minimal) ?? "nilable") + " value";
+        }
+
+        var text = syntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
+            receiverStart ?? syntax.Span.Start,
+            syntax.Span.End));
+        return string.Join(" ", text.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
     }
 
     private bool IsApplicableNullableUnderlyingCall(

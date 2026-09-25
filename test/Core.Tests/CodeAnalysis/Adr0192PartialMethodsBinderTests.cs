@@ -138,7 +138,7 @@ partial class Widget {
 
 let t = typeof(Widget)
 let m = t.GetMethod(""Describe"")
-System.Console.WriteLine(m.GetCustomAttributes(typeof(System.Diagnostics.ConditionalAttribute), false).Length)
+System.Console.WriteLine(m!!.GetCustomAttributes(typeof(System.Diagnostics.ConditionalAttribute), false).Length)
 
 let w = Widget()
 System.Console.WriteLine(w.Describe())
@@ -593,7 +593,7 @@ partial class Marked {
 
 let t = typeof(Marked)
 let m = t.GetMethod(""Legacy"")
-Console.WriteLine(m.GetCustomAttributes(typeof(ObsoleteAttribute), false).Length)
+Console.WriteLine(m!!.GetCustomAttributes(typeof(ObsoleteAttribute), false).Length)
 ";
         var output = CompileLoadInvokeCaptureStdout(source, "Adr0192-DeclaringAttribute");
         Assert.Contains("1", output);
@@ -622,8 +622,8 @@ partial class Marked {
 
 let t = typeof(Marked)
 let m = t.GetMethod(""Legacy"")
-Console.WriteLine(m.GetCustomAttributes(typeof(ObsoleteAttribute), false).Length)
-Console.WriteLine(m.GetCustomAttributes(typeof(System.Diagnostics.ConditionalAttribute), false).Length)
+Console.WriteLine(m!!.GetCustomAttributes(typeof(ObsoleteAttribute), false).Length)
+Console.WriteLine(m!!.GetCustomAttributes(typeof(System.Diagnostics.ConditionalAttribute), false).Length)
 ";
         var output = CompileLoadInvokeCaptureStdout(source, "Adr0192-UnionedAttributes");
         var lines = NonEmptyLines(output);
