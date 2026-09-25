@@ -1533,7 +1533,13 @@ public sealed partial class CSharpToGSharpTranslator
             // promotion — so asserting there would reintroduce the throw this
             // change removes, one frame down. Narrowly scoped to that one new
             // promotion; every other value position keeps its existing bytes.
+            // A conditional or switch-expression arm flows into the whole
+            // expression's target (FindContextualValueTarget). When that target
+            // accepts nil — `string? x = c ? null : a.Name`, a return of a
+            // method cs2gs widened to `T?` — asserting the arm would turn the
+            // nil C# happily stores into a throw.
             if (!this.IsPureForwardingPromotedTarget(targetSymbol)
+                && !(IsBranchArm(value) && this.NullForgivingTargetAcceptsNil(targetType, targetSymbol))
                 && !this.IsActivePatternBinding(value)
                 && !this.LambdaResultFeedsNullableObservedInvocation(value)
                 && this.ReceiverNeedsNullForgiveness(value))
@@ -2808,14 +2814,55 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)
+        // Whether `value` is (through parentheses) an arm of a conditional or a
+        // switch expression, the walk FindContextualValueTarget climbs.
+        private static bool IsBranchArm(ExpressionSyntax value)
         {
             SyntaxNode current = value;
-            while (current.Parent is ParenthesizedExpressionSyntax
-                or ConditionalExpressionSyntax
-                or SwitchExpressionArmSyntax)
+            while (current.Parent is ParenthesizedExpressionSyntax)
             {
                 current = current.Parent;
+            }
+
+            return current.Parent switch
+            {
+                ConditionalExpressionSyntax conditional =>
+                    conditional.WhenTrue == current || conditional.WhenFalse == current,
+                SwitchExpressionArmSyntax arm => arm.Expression == current,
+                _ => false,
+            };
+        }
+
+        private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)
+        {
+            // A conditional or switch-expression ARM has no target of its own:
+            // it flows into whatever the whole `?:` / `switch` flows into, so the
+            // walk climbs to the outermost branching expression. `isBranchArm`
+            // records that it did.
+            SyntaxNode current = value;
+            bool isBranchArm = false;
+            while (true)
+            {
+                if (current.Parent is ParenthesizedExpressionSyntax)
+                {
+                    current = current.Parent;
+                }
+                else if (current.Parent is ConditionalExpressionSyntax conditional
+                    && (conditional.WhenTrue == current || conditional.WhenFalse == current))
+                {
+                    current = conditional;
+                    isBranchArm = true;
+                }
+                else if (current.Parent is SwitchExpressionArmSyntax { Parent: SwitchExpressionSyntax switchExpression } arm
+                    && arm.Expression == current)
+                {
+                    current = switchExpression;
+                    isBranchArm = true;
+                }
+                else
+                {
+                    break;
+                }
             }
 
             ISymbol target = current.Parent switch
@@ -2826,6 +2873,28 @@ public sealed partial class CSharpToGSharpTranslator
                     this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod,
                 _ => null,
             };
+
+            // An arm's effective target is the sink of the whole expression — a
+            // local, field, property, assignment target or parameter — and
+            // the type is the one that sink declares, which cs2gs may have
+            // widened to `T?` (TargetWillRemainNonNullableReference reads it
+            // off the symbol). The arm's own converted type is only the C#
+            // conditional's type, which in oblivious code never says `?`.
+            if (target == null && isBranchArm && this.ResolveValueSink(value) is { } sink)
+            {
+                ITypeSymbol sinkType = sink switch
+                {
+                    ILocalSymbol local => local.Type,
+                    IFieldSymbol field => field.Type,
+                    IPropertySymbol property => property.Type,
+                    IParameterSymbol parameter => parameter.Type,
+                    _ => null,
+                };
+                if (sinkType != null)
+                {
+                    return (sinkType, sink);
+                }
+            }
 
             // Issue #4356: an async LAMBDA's target is its delegate's Invoke, which
             // is never itself `async`; the effective result is the envelope's
