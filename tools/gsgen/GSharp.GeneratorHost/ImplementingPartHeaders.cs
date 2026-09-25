@@ -259,8 +259,11 @@ internal static class ImplementingPartHeaders
                 continue;
             }
 
-            string target = string.Join(".", import.Identifiers.Select(identifier => identifier.ValueText));
-            string alias = import.AliasIdentifier?.ValueText;
+            // The G# spelling, escapes kept (`$class`): this text is printed
+            // into the .g.gs as written, and cs2gs spells its own imports the
+            // same way. ValueText would drop the `$` and print a keyword.
+            string target = string.Join(".", import.Identifiers.Select(identifier => identifier.Text));
+            string alias = import.AliasIdentifier?.Text;
             if (alias == null)
             {
                 if (!string.Equals(target, unit.Package, StringComparison.Ordinal)
@@ -273,7 +276,7 @@ internal static class ImplementingPartHeaders
                 continue;
             }
 
-            if (!headerIdentifiers.Contains(alias))
+            if (!headerIdentifiers.Contains(import.AliasIdentifier.ValueText))
             {
                 continue;
             }
@@ -324,15 +327,41 @@ internal static class ImplementingPartHeaders
         return null;
     }
 
+    // The identifiers the header REFERENCES (in types, default values and
+    // annotations), by value. The names it DECLARES (the method, its
+    // parameters, its type parameters) cannot refer to an alias, so they are
+    // left out: an unused alias that happens to share a parameter's name is
+    // not needed, and must not be copied or reported as a clash.
     private static HashSet<string> HeaderIdentifiers(FunctionDeclarationSyntax declaration)
     {
         TextSpan header = HeaderSpan(declaration);
+        var declaredNames = new HashSet<int> { declaration.Identifier.Span.Start };
+        foreach (ParameterSyntax parameter in declaration.Parameters)
+        {
+            if (parameter.Identifier != null)
+            {
+                declaredNames.Add(parameter.Identifier.Span.Start);
+            }
+        }
+
+        if (declaration.TypeParameterList != null)
+        {
+            foreach (TypeParameterSyntax typeParameter in declaration.TypeParameterList.Parameters)
+            {
+                declaredNames.Add(typeParameter.Identifier.Span.Start);
+            }
+        }
+
         var identifiers = new HashSet<string>(StringComparer.Ordinal);
-        CollectIdentifiers(declaration, header, identifiers);
+        CollectIdentifiers(declaration, header, declaredNames, identifiers);
         return identifiers;
     }
 
-    private static void CollectIdentifiers(SyntaxNode node, TextSpan header, HashSet<string> identifiers)
+    private static void CollectIdentifiers(
+        SyntaxNode node,
+        TextSpan header,
+        HashSet<int> declaredNames,
+        HashSet<string> identifiers)
     {
         foreach (SyntaxNode child in node.GetChildren())
         {
@@ -343,7 +372,7 @@ internal static class ImplementingPartHeaders
 
             if (child is SyntaxToken token)
             {
-                if (token.Kind == SyntaxKind.IdentifierToken)
+                if (token.Kind == SyntaxKind.IdentifierToken && !declaredNames.Contains(token.Span.Start))
                 {
                     identifiers.Add(token.ValueText);
                 }
@@ -351,7 +380,7 @@ internal static class ImplementingPartHeaders
                 continue;
             }
 
-            CollectIdentifiers(child, header, identifiers);
+            CollectIdentifiers(child, header, declaredNames, identifiers);
         }
     }
 

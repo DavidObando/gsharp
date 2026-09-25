@@ -262,6 +262,72 @@ partial class Calc {
         Assert.Contains("partial func Greet(name string = \"a  b\") int32", run.Files.Single().Source, StringComparison.Ordinal);
     }
 
+    // Copilot review (#4430): an alias import copied for the header keeps its
+    // G# spelling. The target's `$class` segment is a keyword escape; spelled
+    // by value it printed `import K = class.Mark`, which does not parse.
+    // The alias names a parameter annotation, which the generated
+    // implementation does not restate, so the header must be copied.
+    [Fact]
+    public void CopiedAliasImport_KeepsKeywordEscapes()
+    {
+        const string KeywordPackage = @"package $class
+
+class Mark : System.Attribute {
+}
+";
+        const string UserSource = @"package App
+
+import K = $class.Mark
+
+partial class Calc {
+    shared {
+        public partial func Twice(@K count int32) int32;
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { KeywordPackage, UserSource }, new PartialImplementationGenerator(renameParameters: false));
+
+        string generated = run.Files.Single().Source;
+        Assert.Contains("import K = $class.Mark", generated, StringComparison.Ordinal);
+        Assert.Contains("public partial func Twice(@K count int32) int32", generated, StringComparison.Ordinal);
+        Assert.Equal(42, Invoke(run.Type("Calc"), "Twice", 21));
+    }
+
+    // Copilot review (#4430): only the names a header REFERENCES can need an
+    // alias. Two files of one partial class carry unused aliases named like
+    // their parameter (`count`) that disagree; neither header uses them, so
+    // both headers are copied and nothing is reported.
+    [Fact]
+    public void UnusedAliasNamedLikeAParameter_IsNotRequired()
+    {
+        const string First = @"package App
+
+import count = System.Text
+
+partial class Calc {
+    shared {
+        public partial func Twice(count int) int;
+    }
+}
+";
+        const string Second = @"package App
+
+import count = System.IO
+
+partial class Calc {
+    shared {
+        public partial func Thrice(count int) int;
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { First, Second }, new PartialImplementationGenerator(renameParameters: false));
+
+        string generated = run.Files.Single().Source;
+        Assert.Contains("public partial func Twice(count int) int", generated, StringComparison.Ordinal);
+        Assert.Contains("public partial func Thrice(count int) int", generated, StringComparison.Ordinal);
+        Assert.DoesNotContain("import count", generated, StringComparison.Ordinal);
+    }
+
     // A generated implementation whose parameter names differ from the
     // declaring part's must not pair silently: copying the header would rebind
     // the body to the wrong names, so the header is left as generated, gsgen
@@ -460,6 +526,20 @@ namespace Lib.B { internal static class Second { public static int V => 2; } }
     {
         Assert.Empty(result.Failures);
         Assert.Empty(result.GeneratorDiagnostics);
+        foreach (GeneratorHostDiagnostic diagnostic in result.HostDiagnostics)
+        {
+            this.output.WriteLine(diagnostic.Id + ": " + diagnostic.Message);
+        }
+
+        if (result.HostDiagnostics.Count > 0)
+        {
+            foreach ((string hintName, string source) in result.GeneratedGsFiles)
+            {
+                this.output.WriteLine("// " + hintName);
+                this.output.WriteLine(source);
+            }
+        }
+
         Assert.Empty(result.HostDiagnostics);
 
         var files = new List<GeneratedFile>();
@@ -592,9 +672,12 @@ namespace Lib.B { internal static class Second { public static int V => 2; } }
                     // A string parameter is restated with the default "a b"
                     // (single space), whatever the definition says.
                     string parameters = string.Join(", ", method.Parameters.Select((parameter, i) =>
-                        parameter.Type.SpecialType == SpecialType.System_String
-                            ? "string " + names[i] + " = \"a b\""
-                            : "int " + names[i]));
+                        parameter.Type.SpecialType switch
+                        {
+                            SpecialType.System_String => "string " + names[i] + " = \"a b\"",
+                            SpecialType.System_Int32 => "int " + names[i],
+                            _ => parameter.Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) + " " + names[i],
+                        }));
                     string body = method.Parameters.Any(parameter => parameter.Type.SpecialType != SpecialType.System_Int32)
                         ? "42"
                         : names.Count == 1 ? names[0] + " * 2" : names[0] + " - " + names[1];

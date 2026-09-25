@@ -211,17 +211,25 @@ degrades in the stub (§B) and may reduce what attribute-driven generators match
 - **Degraded / unsupported:** generators inspecting method **bodies** or
   C#-syntax trivia (stubs have no bodies), generators keying on C#-only syntax
   shapes, interceptors and other csc-only hooks, VB generators.
-- **Discoverability:** `gsgen` emits a per-build summary (generators discovered,
-  run, skipped, crashed, documents produced), plus `GS9206` info when a
-  generator produced zero output while its triggering attribute appears in user
-  code, and `GS9207` per-document back-translation gaps (reusing cs2gs triage
-  records). Host/generator failures use `GS9200`–`GS9219` (verified free):
-  `GS9200` non-structured exit, `GS9201` parse-fatal input, `GS9202` stub
-  re-parse failure (host bug), `GS9203` generator threw, `GS9204` unspellable
-  signature type, `GS9205` analyzer load failure, `GS9206` generator matched
-  nothing, `GS9207` back-translation gap, `GS9208` a generated implementing
-  part that cannot take its declaring part's header (see the 2026-09-24
-  amendment).
+- **Discoverability:** `gsgen` was to emit a per-build summary (generators
+  discovered, run, skipped, crashed, documents produced), plus `GS9206` info
+  when a generator produced zero output while its triggering attribute appears
+  in user code, and per-document back-translation gaps (reusing cs2gs triage
+  records). Host/generator diagnostics use `GS9200`–`GS9219` (verified free).
+  As built (2026-09-24):
+  - emitted: `GS9200` non-structured exit, `GS9203` generator threw or failed
+    to load, `GS9204` unspellable signature type, `GS9207` a note about the
+    invocation (an ignored or malformed argument), and `GS9208` a generated
+    implementing part that cannot take its declaring part's header (see the
+    2026-09-24 amendment);
+  - reserved, not emitted: `GS9201` parse-fatal input, `GS9202` stub re-parse
+    failure (host bug), `GS9205` analyzer load failure (reported as `GS9203`),
+    `GS9206` generator matched nothing.
+
+  The per-build summary and a back-translation-gap diagnostic are not
+  implemented; a back-translation gap surfaces as a gsc error in the
+  generated `.g.gs`. The diagnostics references (`docs/diagnostics.md`) list
+  the same assignments.
 
 ### I. Determinism contract
 
@@ -512,7 +520,7 @@ block. Three rules extend §B–§D:
 - Negative: the SDK gains a second `ResolvePackageAssets` invocation with a
   divergent `ProjectLanguage` — unconventional and exposed to SDK-version drift;
   it must be e2e-covered on every SDK bump. `gsgen`'s pinned Roslyn version
-  bounds which generator packages can load (`GS9205`).
+  bounds which generator packages can load (a load failure is `GS9203`).
 - Negative: LS regeneration rebuilds the stub compilation per debounced edit;
   large projects may need save-only triggering if per-keystroke is too hot.
 - Constraint: depends on ADR-0144 partial types (generated parts augment user
@@ -523,8 +531,9 @@ block. Three rules extend §B–§D:
 
 Generators inspecting method bodies, C#-syntax shapes, or csc-only hooks
 (interceptors) are not supported — the stub carries declarations only. This is a
-deliberate boundary, surfaced to developers via the per-build summary and
-`GS9206`/`GS9207`, not a silent degradation.
+deliberate boundary: a generator that needs more fails loudly, through its own
+diagnostics, `GS9203`, or gsc errors in the generated `.g.gs`, not through a
+silent degradation.
 
 ## Alternatives considered
 
