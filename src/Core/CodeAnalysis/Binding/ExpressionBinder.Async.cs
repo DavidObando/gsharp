@@ -130,6 +130,187 @@ internal sealed partial class ExpressionBinder
         return BaseEventKind.None;
     }
 
+    /// <summary>
+    /// Issue #4394: the accessibility gate every source-event subscription
+    /// (<c>obj.E += h</c>, <c>E += h</c>, <c>T.E += h</c> through a class
+    /// constraint) shares with <c>base.E += h</c>. Reports the usual
+    /// inaccessible-member diagnostic when <paramref name="ev"/>, declared on
+    /// <paramref name="declaringType"/>, cannot be reached from the current
+    /// function, and binds the handler so its own errors still surface.
+    /// </summary>
+    /// <param name="ev">The event being subscribed to.</param>
+    /// <param name="declaringType">The class that declares the event (not the receiver's static type).</param>
+    /// <param name="eventName">The event-name syntax, for the diagnostic location.</param>
+    /// <param name="handler">The handler expression.</param>
+    /// <returns><see langword="true"/> when the event is inaccessible and a diagnostic was reported.</returns>
+    private bool ReportInaccessibleSourceEvent(EventSymbol ev, StructSymbol declaringType, NameExpressionSyntax eventName, ExpressionSyntax handler)
+    {
+        if (AccessibilityChecker.IsAccessible(ev.Accessibility, declaringType, function))
+        {
+            return false;
+        }
+
+        Diagnostics.ReportMemberInaccessible(eventName.Location, ev.Name, declaringType.Name, ev.Accessibility);
+        _ = BindExpression(handler);
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4394: when the visible-member probe of an imported receiver finds
+    /// no event named <paramref name="eventName"/>, looks again including
+    /// non-public members. An event found only that way exists but is not
+    /// visible to every caller:
+    /// <list type="bullet">
+    ///   <item>a <c>protected</c> accessor is callable from a class that
+    ///   derives from the event's declaring type, through a receiver of that
+    ///   class (<c>this.E += h</c>), as in C#; the event is returned for
+    ///   ordinary binding;</item>
+    ///   <item>otherwise (<c>private</c>, another assembly's <c>internal</c>,
+    ///   or <c>protected</c> from an unrelated class) it gets the
+    ///   inaccessible-member diagnostic rather than "cannot find member", and
+    ///   <paramref name="reported"/> is set.</item>
+    /// </list>
+    /// </summary>
+    /// <param name="receiverClrType">The receiver's CLR type.</param>
+    /// <param name="receiver">The bound instance receiver, or <see langword="null"/> for a static event.</param>
+    /// <param name="isAdd">Whether this is <c>+=</c> (the add accessor) or <c>-=</c> (remove).</param>
+    /// <param name="eventName">The event-name syntax.</param>
+    /// <param name="handler">The handler expression.</param>
+    /// <param name="reported">Set when an inaccessible event was found and reported.</param>
+    /// <returns>The event, when the current class may subscribe to it through <paramref name="receiver"/>.</returns>
+    private EventInfo? ResolveNonPublicClrEvent(
+        Type receiverClrType,
+        BoundExpression? receiver,
+        bool isAdd,
+        NameExpressionSyntax eventName,
+        ExpressionSyntax handler,
+        out bool reported)
+    {
+        reported = false;
+
+        // Walk the declared members level by level: reflection never returns
+        // a base class's private members through a derived type.
+        var name = eventName.IdentifierToken.ValueText;
+        var declared = BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.DeclaredOnly
+            | (receiver == null ? BindingFlags.Static : BindingFlags.Instance);
+        EventInfo? hidden = null;
+        for (var level = receiverClrType; level != null && hidden == null; level = level.BaseType)
+        {
+            hidden = ClrTypeUtilities.SafeGetEvent(level, name, declared);
+        }
+
+        if (hidden == null)
+        {
+            return null;
+        }
+
+        // The accessor this subscription calls decides, not the one the
+        // visible-member probe filtered on (metadata may give add and remove
+        // different accessibilities).
+        var accessor = isAdd ? hidden.AddMethod : hidden.RemoveMethod;
+        if (IsCallableClrEventAccessor(accessor, hidden.DeclaringType, receiver))
+        {
+            return hidden;
+        }
+
+        Diagnostics.ReportMemberInaccessible(
+            eventName.Location,
+            hidden.Name,
+            hidden.DeclaringType?.Name ?? name,
+            ClrEventAccessorAccessibility(accessor));
+        _ = BindExpression(handler);
+        reported = true;
+        return null;
+    }
+
+    /// <summary>
+    /// Issue #4394: the one decision whether an imported event's add or
+    /// remove accessor may be called here through <paramref name="receiver"/>:
+    /// it exists, and it is visible to this compilation (public, or a friend
+    /// assembly's internal) or reachable as a <c>protected</c> member of a
+    /// base class (<see cref="IsFamilyAccessibleClrEvent"/>). Metadata may
+    /// omit an accessor or give add and remove different accessibilities, so
+    /// each subscription asks about the accessor it calls.
+    /// </summary>
+    /// <param name="accessor">The add or remove accessor, if any.</param>
+    /// <param name="declaringType">The event's declaring type.</param>
+    /// <param name="receiver">The bound instance receiver, or <see langword="null"/> for a static event.</param>
+    /// <returns><see langword="true"/> when the accessor may be called.</returns>
+    private bool IsCallableClrEventAccessor(MethodInfo? accessor, Type? declaringType, BoundExpression? receiver)
+        => accessor != null
+            && (ClrMemberVisibility.IsVisible(accessor, CanAccessInternalsOf(declaringType))
+                || IsFamilyAccessibleClrEvent(accessor, declaringType, receiver));
+
+    /// <summary>
+    /// Whether the current class may call <paramref name="accessor"/>, a
+    /// <c>protected</c> accessor of an event declared on
+    /// <paramref name="declaringType"/>, through <paramref name="receiver"/>:
+    /// the class derives from the declaring type and, for an instance event,
+    /// the receiver is of the current class (or a class derived from it), the
+    /// C# rule for protected instance access.
+    /// </summary>
+    private bool IsFamilyAccessibleClrEvent(MethodInfo accessor, Type? declaringType, BoundExpression? receiver)
+    {
+        if (!ClrMemberVisibility.IsVisibleFromDerived(accessor, CanAccessInternalsOf(declaringType))
+            || declaringType == null
+            || GetFamilyAccessBase() is not { } familyBase
+            || !IsSameOrDerivedClrType(familyBase, declaringType))
+        {
+            return false;
+        }
+
+        if (receiver == null)
+        {
+            return true;
+        }
+
+        var enclosing = (function?.ReceiverType ?? GetEffectiveThisParameter()?.Type) as StructSymbol;
+        if (enclosing == null || receiver.Type is not StructSymbol receiverClass)
+        {
+            return false;
+        }
+
+        var enclosingDefinition = enclosing.Definition ?? enclosing;
+        foreach (var level in receiverClass.GetHierarchy())
+        {
+            if (ReferenceEquals(level.Definition ?? level, enclosingDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool IsSameOrDerivedClrType(Type type, Type ancestor)
+    {
+        var ancestorDefinition = ancestor.IsGenericType ? ancestor.GetGenericTypeDefinition() : ancestor;
+        for (Type? current = type; current != null; current = current.BaseType)
+        {
+            var currentDefinition = current.IsGenericType ? current.GetGenericTypeDefinition() : current;
+            if (current.IsSameAs(ancestor) || currentDefinition.IsSameAs(ancestorDefinition))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    /// <summary>
+    /// The G# accessibility that names why an imported event accessor is out of
+    /// reach, for the inaccessible-member diagnostic: <c>protected</c> (GS0379)
+    /// for an accessor a derived class could call, <c>private</c> (GS0472)
+    /// for one that no code outside its assembly can call (<c>private</c>,
+    /// <c>internal</c>, <c>private protected</c>).
+    /// </summary>
+    /// <param name="accessor">The add or remove accessor, if any.</param>
+    /// <returns>The accessibility to report.</returns>
+    private static Accessibility ClrEventAccessorAccessibility(MethodInfo? accessor)
+        => accessor != null && (accessor.IsFamily || accessor.IsFamilyOrAssembly)
+            ? Accessibility.Protected
+            : Accessibility.Private;
+
     private BoundExpression BindEventSubscriptionExpression(EventSubscriptionExpressionSyntax syntax)
     {
         // Bare identifier `EventName += handler` / `EventName -= handler`:
@@ -523,13 +704,28 @@ internal sealed partial class ExpressionBinder
             // Check for user-defined event on a StructSymbol before falling through to CLR reflection.
             // ADR-0112 A5: TryGetEvent walks the base chain, so inherited instance
             // events on `open class` bases now resolve (parity with the bare-`this`
-            // path in BindBareEventOrCompoundAssignment). The owner symbol remains
-            // `userStruct` (the receiver's static type) to preserve the bound-node shape.
+            // path in BindBareEventOrCompoundAssignment).
             // Non-+/- operators (issue #2154) can never be an event.
-            if (isEventCapableOperator && boundReceiver.Type is StructSymbol userStruct && TypeMemberModel.TryGetEvent(userStruct, eventName, out var ev))
+            //
+            // The owner is the declaring class as the receiver's hierarchy
+            // instantiates it, as on the `base.E` and static paths:
+            // - issue #4394: the accessibility check needs the declaring
+            //   class (a private event is not reachable from an unrelated or
+            //   derived class);
+            // - issue #4391: the handler type is the event's type with that
+            //   construction's type arguments (`g.Got += h` on a `GB[string]`
+            //   takes an `EventHandler[string]`, not `EventHandler[T]`), and
+            //   the emitted add/remove reference is parented at it.
+            if (isEventCapableOperator && boundReceiver.Type is StructSymbol userStruct && TypeMemberModel.TryGetEvent(userStruct, eventName, out var ev, out var eventOwner))
             {
-                var userHandler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
-                return new BoundEventSubscriptionExpression(null, boundReceiver, userStruct, ev, userHandler, isAdd);
+                if (ReportInaccessibleSourceEvent(ev, eventOwner, eventNameSyntax, syntax.Value))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
+                var eventType = eventOwner.SubstituteMemberType(ev.Type) ?? ev.Type;
+                var userHandler = BindEventSubscriptionHandler(syntax.Value, eventType);
+                return new BoundEventSubscriptionExpression(null, boundReceiver, eventOwner, ev, userHandler, isAdd, eventType);
             }
 
             // Issue #2519: a class-constrained type parameter exposes the same
@@ -538,16 +734,26 @@ internal sealed partial class ExpressionBinder
             // constraint as the event owner while the receiver remains T.
             if (isEventCapableOperator
                 && boundReceiver.Type is TypeParameterSymbol { ClassConstraint: StructSymbol classConstraint }
-                && TypeMemberModel.TryGetEvent(classConstraint, eventName, out var constrainedUserEvent))
+                && TypeMemberModel.TryGetEvent(classConstraint, eventName, out var constrainedUserEvent, out var constrainedEventOwner))
             {
-                var constrainedHandler = BindEventSubscriptionHandler(syntax.Value, constrainedUserEvent.Type);
+                if (ReportInaccessibleSourceEvent(constrainedUserEvent, constrainedEventOwner, eventNameSyntax, syntax.Value))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
+                // As on the `obj.E` path: the declaring construction supplies
+                // the handler type (`EventHandler[string]` for a `GB[string]`
+                // constraint, issue #4391) and parents the accessor call.
+                var constrainedEventType = constrainedEventOwner.SubstituteMemberType(constrainedUserEvent.Type) ?? constrainedUserEvent.Type;
+                var constrainedHandler = BindEventSubscriptionHandler(syntax.Value, constrainedEventType);
                 return new BoundEventSubscriptionExpression(
                     null,
                     boundReceiver,
-                    classConstraint,
+                    constrainedEventOwner,
                     constrainedUserEvent,
                     constrainedHandler,
-                    isAdd);
+                    isAdd,
+                    constrainedEventType);
             }
 
             // ADR-0149 follow-up (issue #2370): event subscription through an
@@ -717,7 +923,39 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
-            Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
+            // Issue #4394: an event that exists but is not public is either
+            // a protected event the current class inherits (subscribable
+            // through its own instance, as in C#) or out of reach, which is
+            // "inaccessible", not "cannot find member".
+            if (isEventCapableOperator && receiverClrType != null)
+            {
+                eventInfo = ResolveNonPublicClrEvent(receiverClrType, boundReceiver, isAdd, eventNameSyntax, syntax.Value, out var reportedInaccessible);
+                if (reportedInaccessible)
+                {
+                    return new BoundErrorExpression(null);
+                }
+            }
+
+            if (eventInfo == null)
+            {
+                Diagnostics.ReportUnableToFindMember(eventNameSyntax.Location, eventName);
+                return new BoundErrorExpression(null);
+            }
+        }
+
+        // Issue #4394: the visibility probe above admits an event by its add
+        // accessor; `-=` calls the remove accessor, which metadata can declare
+        // with a different accessibility. The same predicate as the
+        // non-public path decides, for the accessor this subscription calls.
+        var subscriptionAccessor = isAdd ? eventInfo.AddMethod : eventInfo.RemoveMethod;
+        if (!IsCallableClrEventAccessor(subscriptionAccessor, eventInfo.DeclaringType, boundReceiver))
+        {
+            Diagnostics.ReportMemberInaccessible(
+                eventNameSyntax.Location,
+                eventInfo.Name,
+                eventInfo.DeclaringType?.Name ?? eventName,
+                ClrEventAccessorAccessibility(subscriptionAccessor));
+            _ = BindExpression(syntax.Value);
             return new BoundErrorExpression(null);
         }
 

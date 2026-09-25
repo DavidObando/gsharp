@@ -905,14 +905,15 @@ public static class SpillSequenceSpiller
                                 eventSub.StructType,
                                 eventSub.Event,
                                 handler,
-                                eventSub.IsAdd));
+                                eventSub.IsAdd,
+                                eventSub.EventType));
                     }
 
                     return SpillTwoOperand(
                         eventSub,
                         eventSub.Receiver,
                         eventSub.Handler,
-                        (recv, handler) => new BoundEventSubscriptionExpression(null, recv, eventSub.StructType, eventSub.Event, handler, eventSub.IsAdd));
+                        (recv, handler) => new BoundEventSubscriptionExpression(null, recv, eventSub.StructType, eventSub.Event, handler, eventSub.IsAdd, eventSub.EventType));
 
                 case BoundFieldAccessExpression fieldAccess:
                     return SpillFieldAccess(fieldAccess);

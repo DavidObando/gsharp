@@ -583,6 +583,51 @@ public static class TypeMemberModel
         return false;
     }
 
+    /// <summary>
+    /// Tries to find an instance event named <paramref name="name"/> on
+    /// <paramref name="type"/>, walking the base chain, and reports the
+    /// construction of the class that declares it as
+    /// <paramref name="type"/>'s hierarchy instantiates it
+    /// (<c>GB[string]</c> for an event of <c>GB[T]</c> reached through
+    /// <c>D : GB[string]</c>).
+    /// </summary>
+    /// <remarks>
+    /// Issue #4394: an accessibility check needs the declaring class, not the
+    /// receiver's static type (a <c>private</c> event of a base is not
+    /// accessible from the derived class). Issue #4391: the declaring
+    /// construction also supplies the event's handler type with the class's
+    /// type parameters replaced (<c>EventHandler[string]</c>, not
+    /// <c>EventHandler[T]</c>).
+    /// </remarks>
+    /// <param name="type">The receiver's static type.</param>
+    /// <param name="name">The event name.</param>
+    /// <param name="event">The found event on success.</param>
+    /// <param name="declaringType">The declaring class's construction on success.</param>
+    /// <returns>True if found.</returns>
+    public static bool TryGetEvent(
+        StructSymbol type,
+        string name,
+        [NotNullWhen(true)] out EventSymbol? @event,
+        [NotNullWhen(true)] out StructSymbol? declaringType)
+    {
+        foreach (var c in GetHierarchy(type))
+        {
+            foreach (var e in c.Events)
+            {
+                if (e.Name == name)
+                {
+                    @event = e;
+                    declaringType = ResolveStaticMemberOwner(type, c);
+                    return true;
+                }
+            }
+        }
+
+        @event = null;
+        declaringType = null;
+        return false;
+    }
+
     /// <summary>Tries to find a static event named <paramref name="name"/> on <paramref name="type"/>.</summary>
     /// <param name="type">The type to resolve against.</param>
     /// <param name="name">The event name.</param>

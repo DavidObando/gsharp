@@ -1520,29 +1520,28 @@ internal sealed partial class ExpressionBinder
         var isEventOperator = isAdd || syntax.OperatorToken.Kind == SyntaxKind.MinusEqualsToken;
 
         // Try implicit `this` event: walk the receiver type's events (including inherited).
-        // ADR-0112 A5: intentionally NOT routed through TypeMemberModel.TryGetEvent —
-        // that helper returns only the event, not the declaring base level, whereas
-        // this bound node must carry the *declaring* type `t` as its owner. Collapsing
-        // into TryGetEvent(receiverStruct, …) would change the owner from the declaring
-        // base to the derived type, breaking bound-node parity. Left as a manual walk.
+        // ADR-0112 A5: the bound node carries the *declaring* class as its
+        // owner, which is what the owner-returning TypeMemberModel.TryGetEvent
+        // overload reports: that class as the receiver's hierarchy
+        // instantiates it, so an event of a generic base (`GB[T]`, inherited
+        // through `D : GB[string]`) takes an `EventHandler[string]` handler
+        // (issue #4391) and a private base event is reported rather than
+        // subscribed to (issue #4394).
         if (isEventOperator
             && function?.ThisParameter != null
             && function.ReceiverType is StructSymbol receiverStruct
-            && !SourceValueMemberPrecedesInheritedEvent(receiverStruct, name))
+            && !SourceValueMemberPrecedesInheritedEvent(receiverStruct, name)
+            && TypeMemberModel.TryGetEvent(receiverStruct, name, out var ev, out var eventOwner))
         {
-            foreach (var t in receiverStruct.GetHierarchy())
+            if (ReportInaccessibleSourceEvent(ev, eventOwner, bareName, syntax.Value))
             {
-                if (!t.Events.IsDefaultOrEmpty)
-                {
-                    var ev = t.Events.FirstOrDefault(e => e.Name == name);
-                    if (ev != null)
-                    {
-                        var receiver = new BoundVariableExpression(null, function.ThisParameter);
-                        var handler = BindEventSubscriptionHandler(syntax.Value, ev.Type);
-                        return new BoundEventSubscriptionExpression(null, receiver, t, ev, handler, isAdd);
-                    }
-                }
+                return new BoundErrorExpression(null);
             }
+
+            var receiver = new BoundVariableExpression(null, function.ThisParameter);
+            var eventType = eventOwner.SubstituteMemberType(ev.Type) ?? ev.Type;
+            var handler = BindEventSubscriptionHandler(syntax.Value, eventType);
+            return new BoundEventSubscriptionExpression(null, receiver, eventOwner, ev, handler, isAdd, eventType);
         }
 
         // Issue #3907 / #3911: the STATIC counterpart of the walk above — a
