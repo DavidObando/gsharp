@@ -1533,6 +1533,31 @@ public sealed partial class CSharpToGSharpTranslator
             // promotion — so asserting there would reintroduce the throw this
             // change removes, one frame down. Narrowly scoped to that one new
             // promotion; every other value position keeps its existing bytes.
+            //
+            // A conditional or switch-expression arm flows into the whole
+            // expression. Asserting one arm cannot make the whole non-null when
+            // the whole already accepts or observes nil, and it would turn the
+            // nil C# happily passes on into a throw. That is the case when:
+            //   - another arm is itself nil, so the whole is `T?` in G#
+            //     whatever consumes it (BranchResultAcceptsNil);
+            //   - the whole is the operand of a nil-observing construct: the
+            //     left of `??`, a `?.` receiver, or a `== null` / `is null` test
+            //     (also BranchResultAcceptsNil);
+            //   - the whole's effective target (FindContextualValueTarget)
+            //     accepts nil: a local, field, property or parameter cs2gs
+            //     widened to `T?`, or a return of such a method;
+            //   - that target is an INFERRED generic parameter, which G#
+            //     re-infers from the emitted argument
+            //     (IsInferredGenericParameterTarget).
+            if (IsBranchArm(value)
+                && (BranchResultAcceptsNil(value, out ExpressionSyntax branch)
+                    || this.NullForgivingTargetAcceptsNil(targetType, targetSymbol)
+                    || (targetSymbol is IParameterSymbol parameterTarget
+                        && IsInferredGenericParameterTarget(parameterTarget, branch))))
+            {
+                return translated;
+            }
+
             if (!this.IsPureForwardingPromotedTarget(targetSymbol)
                 && !this.IsActivePatternBinding(value)
                 && !this.LambdaResultFeedsNullableObservedInvocation(value)
@@ -2808,14 +2833,159 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)
+        // Whether `local` is declared `var` (its G# type is inferred from its
+        // initializer rather than spelled).
+        private static bool IsImplicitlyTypedLocal(ILocalSymbol local) =>
+            local.DeclaringSyntaxReferences.Any(reference =>
+                reference.GetSyntax() is VariableDeclaratorSyntax
+                {
+                    Parent: VariableDeclarationSyntax { Type.IsVar: true },
+                });
+
+        // Whether `value` is (through parentheses) an arm of a conditional or a
+        // switch expression, the walk FindContextualValueTarget climbs.
+        private static bool IsBranchArm(ExpressionSyntax value)
         {
             SyntaxNode current = value;
-            while (current.Parent is ParenthesizedExpressionSyntax
-                or ConditionalExpressionSyntax
-                or SwitchExpressionArmSyntax)
+            while (current.Parent is ParenthesizedExpressionSyntax)
             {
                 current = current.Parent;
+            }
+
+            return current.Parent switch
+            {
+                ConditionalExpressionSyntax conditional =>
+                    conditional.WhenTrue == current || conditional.WhenFalse == current,
+                SwitchExpressionArmSyntax arm => arm.Expression == current,
+                _ => false,
+            };
+        }
+
+        // Whether the branching expression `value` is an arm of — climbed
+        // through parentheses and nested arms to the outermost one, returned in
+        // `branch` — is nil-valued or nil-observing as a whole, so no arm's `!!`
+        // can serve any purpose:
+        //   - some arm at any level is a `null`/`default` literal, so the whole
+        //     is `T?` in G#, and anything it flows into must accept nil;
+        //   - or the whole is the left operand of `??`, a `?.` receiver, an
+        //     operand of `== null` / `!= null`, or tested with `is null`.
+        private static bool BranchResultAcceptsNil(ExpressionSyntax value, out ExpressionSyntax branch)
+        {
+            bool hasNilArm = false;
+            SyntaxNode current = value;
+            while (true)
+            {
+                if (current.Parent is ParenthesizedExpressionSyntax
+                    or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
+                {
+                    // `!` has no runtime meaning: the arm still flows wherever
+                    // the suppressed expression flows.
+                    current = current.Parent;
+                }
+                else if (current.Parent is ConditionalExpressionSyntax conditional
+                    && (conditional.WhenTrue == current || conditional.WhenFalse == current))
+                {
+                    hasNilArm |= IsNilArm(conditional.WhenTrue) || IsNilArm(conditional.WhenFalse);
+                    current = conditional;
+                }
+                else if (current.Parent is SwitchExpressionArmSyntax { Parent: SwitchExpressionSyntax switchExpression } arm
+                    && arm.Expression == current)
+                {
+                    hasNilArm |= switchExpression.Arms.Any(candidate => IsNilArm(candidate.Expression));
+                    current = switchExpression;
+                }
+                else
+                {
+                    break;
+                }
+            }
+
+            branch = (ExpressionSyntax)current;
+            if (hasNilArm)
+            {
+                return true;
+            }
+
+            return current.Parent switch
+            {
+                BinaryExpressionSyntax coalesce when coalesce.IsKind(SyntaxKind.CoalesceExpression) =>
+                    coalesce.Left == current,
+                ConditionalAccessExpressionSyntax conditionalAccess => conditionalAccess.Expression == current,
+                BinaryExpressionSyntax equality
+                    when equality.IsKind(SyntaxKind.EqualsExpression) || equality.IsKind(SyntaxKind.NotEqualsExpression) =>
+                        IsNullOrSuppressedNull(equality.Left == current ? equality.Right : equality.Left),
+                IsPatternExpressionSyntax isPattern => isPattern.Expression == current && IsNullConstantPattern(isPattern.Pattern),
+                _ => false,
+            };
+
+            static bool IsNilArm(ExpressionSyntax arm)
+            {
+                while (arm is ParenthesizedExpressionSyntax parenthesized)
+                {
+                    arm = parenthesized.Expression;
+                }
+
+                return IsNullOrSuppressedNull(arm)
+                    || arm.IsKind(SyntaxKind.DefaultLiteralExpression);
+            }
+        }
+
+        private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)
+        {
+            // A C# `!` has no runtime meaning, so an arm under one still flows
+            // into the suppressed expression's sink, and that sink is the
+            // target when it accepts nil (`string chosen = (c ? a : b)!;` with
+            // `chosen` widened to `T?`). Otherwise the `!` is where the value
+            // is asserted, so the arm keeps the target it has below it and the
+            // `!` itself becomes the one `!!`.
+            (ITypeSymbol Type, ISymbol Symbol) climbed =
+                this.FindContextualValueTarget(value, climbSuppression: true, out bool crossedSuppression);
+            return !crossedSuppression || this.NullForgivingTargetAcceptsNil(climbed.Type, climbed.Symbol)
+                ? climbed
+                : this.FindContextualValueTarget(value, climbSuppression: false, out _);
+        }
+
+        private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(
+            ExpressionSyntax value,
+            bool climbSuppression,
+            out bool crossedSuppression)
+        {
+            crossedSuppression = false;
+
+            // A conditional or switch-expression ARM has no target of its own:
+            // it flows into whatever the whole `?:` / `switch` flows into, so the
+            // walk climbs to the outermost branching expression. `isBranchArm`
+            // records that it did.
+            SyntaxNode current = value;
+            bool isBranchArm = false;
+            while (true)
+            {
+                if (current.Parent is ParenthesizedExpressionSyntax)
+                {
+                    current = current.Parent;
+                }
+                else if (climbSuppression
+                    && current.Parent is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
+                {
+                    current = current.Parent;
+                    crossedSuppression = true;
+                }
+                else if (current.Parent is ConditionalExpressionSyntax conditional
+                    && (conditional.WhenTrue == current || conditional.WhenFalse == current))
+                {
+                    current = conditional;
+                    isBranchArm = true;
+                }
+                else if (current.Parent is SwitchExpressionArmSyntax { Parent: SwitchExpressionSyntax switchExpression } arm
+                    && arm.Expression == current)
+                {
+                    current = switchExpression;
+                    isBranchArm = true;
+                }
+                else
+                {
+                    break;
+                }
             }
 
             ISymbol target = current.Parent switch
@@ -2826,6 +2996,40 @@ public sealed partial class CSharpToGSharpTranslator
                     this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod,
                 _ => null,
             };
+
+            // An arm's effective target is the sink of the whole expression — a
+            // local, field, property, assignment target or parameter — and
+            // the type is the one that sink declares, which cs2gs may have
+            // widened to `T?` (TargetWillRemainNonNullableReference reads it
+            // off the symbol). The arm's own converted type is only the C#
+            // conditional's type, which in oblivious code never says `?`.
+            //
+            // A `var` local is not a target: in nullable-enabled C# its type is
+            // always annotated, but in G# it is inferred from the emitted value,
+            // so leaving the arm bare would make the local `T?` and move the
+            // failure to its next use. It is a target only when cs2gs itself
+            // widens it (it then emits the `T?` clause).
+            if (target == null
+                && isBranchArm
+                && this.ResolveValueSink((ExpressionSyntax)current) is { } sink
+                && !(sink is ILocalSymbol inferredLocal
+                    && IsImplicitlyTypedLocal(inferredLocal)
+                    && !this.ShouldPromoteToNullableReference(inferredLocal)
+                    && !this.IsUsedAsNullable(inferredLocal, this.GetNullabilityScope(inferredLocal))))
+            {
+                ITypeSymbol sinkType = sink switch
+                {
+                    ILocalSymbol local => local.Type,
+                    IFieldSymbol field => field.Type,
+                    IPropertySymbol property => property.Type,
+                    IParameterSymbol parameter => parameter.Type,
+                    _ => null,
+                };
+                if (sinkType != null)
+                {
+                    return (sinkType, sink);
+                }
+            }
 
             // Issue #4356: an async LAMBDA's target is its delegate's Invoke, which
             // is never itself `async`; the effective result is the envelope's

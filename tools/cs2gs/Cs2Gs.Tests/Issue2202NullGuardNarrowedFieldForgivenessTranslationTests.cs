@@ -115,8 +115,32 @@ namespace Demo
     [Fact]
     public void Ternary_NullCheck_WhenFalseArm_AssertsNonNullFieldUse()
     {
-        // `F == null ? "default" : F` — F is provably non-null in the
-        // when-false arm.
+        // `F == null ? "0" : F` — F is provably non-null in the when-false
+        // arm, and the whole conditional flows into `int.Parse(string)`, a
+        // non-null metadata parameter, so the arm must be asserted.
+        string printed = TranslateOblivious(@"
+namespace Demo
+{
+    public class Holder
+    {
+        public string F { get; set; }
+
+        public int Get()
+        {
+            return int.Parse(F == null ? ""0"" : F);
+        }
+    }
+}");
+
+        Assert.Contains("F!!", printed);
+    }
+
+    [Fact]
+    public void Ternary_NullCheck_IntoWidenedReturn_StaysBare()
+    {
+        // The same guarded arm returned from a method the whole-program taint
+        // widens to `string?` (it returns the tainted F): the arm's effective
+        // target is that nullable return, so it needs no assertion.
         string printed = TranslateOblivious(@"
 namespace Demo
 {
@@ -131,14 +155,15 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("F!!", printed);
+        Assert.Contains("func Get() string?", printed);
+        Assert.DoesNotContain("F!!", printed);
     }
 
     [Fact]
     public void Ternary_NonNullCheck_WhenTrueArm_AssertsNonNullFieldUse()
     {
-        // `F != null ? F : "default"` — F is provably non-null in the
-        // when-true arm.
+        // `F != null ? F : "0"` — F is provably non-null in the when-true
+        // arm, which flows into the non-null `int.Parse(string)` parameter.
         string printed = TranslateOblivious(@"
 namespace Demo
 {
@@ -146,9 +171,9 @@ namespace Demo
     {
         public string F { get; set; }
 
-        public string Get()
+        public int Get()
         {
-            return F != null ? F : ""default"";
+            return int.Parse(F != null ? F : ""0"");
         }
     }
 }");
