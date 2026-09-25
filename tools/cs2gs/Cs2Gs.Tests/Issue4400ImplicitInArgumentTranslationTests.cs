@@ -87,6 +87,8 @@ public class Issue4400ImplicitInArgumentTranslationTests
                 Func<int, int> f = v => Scale(v * 3);
                 Console.WriteLine(f(2));
                 Console.WriteLine(box.ViaMembers());
+                const int c = 4;
+                Console.WriteLine(Scale(c));
             }
         }
         """;
@@ -112,7 +114,7 @@ public class Issue4400ImplicitInArgumentTranslationTests
             (string dllPath, string stdout, int exit) = CompileAndRun(workDir, printed);
             Assert.True(exit == 0, "Translated program must run. Output:\n" + stdout + "\n\nTranslated G#:\n" + printed);
             Assert.Equal(
-                new[] { "6", "8", "4", "7", "14", "8", "12", "22" },
+                new[] { "6", "8", "4", "7", "14", "8", "12", "22", "8" },
                 stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToArray());
 
             IlVerifyResult result = new IlVerifyRunner().Verify(dllPath);

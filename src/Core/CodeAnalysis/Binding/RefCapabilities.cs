@@ -289,7 +289,8 @@ internal static class RefCapabilities
                 !Binder.IsReferenceTypeForConstraint(receiver.Type) && receiver.NarrowedType == null,
             BoundVariableExpression variable =>
                 (variable.NarrowedType == null || variable.NarrowedType == variable.Variable.Type)
-                && variable.Variable is not GlobalVariableSymbol { IsConst: true },
+                && variable.Variable is not GlobalVariableSymbol { IsConst: true }
+                && variable.Variable is not LocalVariableSymbol { IsConst: true },
 
             // A `const` field has no storage: lowering folds it to a literal.
             BoundFieldAccessExpression { Field.IsConst: true } => false,

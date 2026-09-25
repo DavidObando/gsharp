@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Documentation;
@@ -1089,7 +1090,7 @@ internal sealed partial class OverloadResolver
     // Issue #4400: recognises the spill ConversionClassifier.CreateImplicitInReference
     // builds for an rvalue at an `in` slot — `&{ let <inArgumentN> = value; <inArgumentN> }`
     // — and returns the spilled value.
-    private static bool TryGetImplicitInSpilledValue(BoundExpression argument, out BoundExpression? value)
+    private static bool TryGetImplicitInSpilledValue(BoundExpression argument, [NotNullWhen(true)] out BoundExpression? value)
     {
         if (argument is BoundAddressOfExpression { Operand: BoundBlockExpression block }
             && block.Statements is [BoundVariableDeclaration { Variable: var temp, Initializer: { } initializer }]
@@ -1098,6 +1099,33 @@ internal sealed partial class OverloadResolver
             && ConversionClassifier.IsImplicitInTemp(temp))
         {
             value = initializer;
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
+    // Issue #4400: the value a reordered named `in` argument is captured as,
+    // in source order. An implicit-`in` spill captures its spilled value. A
+    // readonly (`in`) address whose own evaluation is observable
+    // (`GetHolder().Field`, `xs[next()]`) captures the value it addresses: the
+    // receiver/index then run in source order, at the cost of the callee
+    // seeing a copy instead of the storage — a readonly reference is only
+    // distinguishable from a copy if that storage changes during the call. A
+    // by-ref local cannot hold the address instead, because a named-argument
+    // temp may have to survive an `await` in a later argument.
+    private static bool TryGetInArgumentCaptureValue(BoundExpression argument, [NotNullWhen(true)] out BoundExpression? value)
+    {
+        if (TryGetImplicitInSpilledValue(argument, out value))
+        {
+            return true;
+        }
+
+        if (argument is BoundAddressOfExpression { IsReadOnly: true, IsUnmanaged: false } readOnlyAddress
+            && GSharp.Core.CodeAnalysis.Lowering.SideEffectAnalyzer.HasObservableSideEffect(readOnlyAddress))
+        {
+            value = readOnlyAddress.Operand;
             return true;
         }
 
@@ -1134,14 +1162,15 @@ internal sealed partial class OverloadResolver
 
             reordered |= parameterIndex != sourceIndex;
 
-            // Issue #4400: an implicit-`in` spill is captured by value below,
-            // and an address with no side effects (a local's, a field of a
-            // local's) is order-independent and stays in its slot. Only an
-            // address whose evaluation is observable still forgoes reordering.
+            // Issue #4400: an `in` argument is captured by value below (see
+            // TryGetInArgumentCaptureValue), and an address with no side
+            // effects (a local's, a field of a local's) is order-independent
+            // and stays in its slot. Only a `ref`/`out` address whose
+            // evaluation is observable still forgoes reordering.
             if (!hasHandlerSourceForwarding &&
                 parameterOrderedArguments[slot] is
                     BoundAddressOfExpression or BoundConditionalAddressExpression &&
-                !TryGetImplicitInSpilledValue(parameterOrderedArguments[slot], out _) &&
+                !TryGetInArgumentCaptureValue(parameterOrderedArguments[slot], out _) &&
                 GSharp.Core.CodeAnalysis.Lowering.SideEffectAnalyzer.HasObservableSideEffect(parameterOrderedArguments[slot]))
             {
                 return parameterOrderedArguments;
@@ -1162,13 +1191,14 @@ internal sealed partial class OverloadResolver
             var slot = parameterOffset + sourceToParameterMapping[sourceIndex];
             BoundExpression argument = parameterOrderedArguments[slot];
 
-            // Issue #4400: an implicit-`in` rvalue evaluates its VALUE here, in
-            // source order, into the named-argument temp whose address is
-            // passed; a side-effect-free address needs no capture at all.
-            var implicitInSpill = TryGetImplicitInSpilledValue(argument, out var spilledValue);
-            if (implicitInSpill)
+            // Issue #4400: an `in` argument evaluates its VALUE here, in source
+            // order, into the named-argument temp whose address is passed; a
+            // side-effect-free address needs no capture at all.
+            var implicitInSpill = false;
+            if (TryGetInArgumentCaptureValue(argument, out var spilledValue))
             {
-                argument = spilledValue!;
+                argument = spilledValue;
+                implicitInSpill = true;
             }
             else if (argument is BoundAddressOfExpression or BoundConditionalAddressExpression
                 && !GSharp.Core.CodeAnalysis.Lowering.SideEffectAnalyzer.HasObservableSideEffect(argument))

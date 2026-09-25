@@ -405,6 +405,10 @@ public class Issue4400ImplicitInArgumentTests
                 let ref readonly ro = v
                 return Inner(r) + Inner(ro)
             }
+            func WithConst() int32 {
+                const k = 3
+                return Inner(k)
+            }
 
             struct S {
                 var V int32
@@ -419,8 +423,9 @@ public class Issue4400ImplicitInArgumentTests
             Console.WriteLine(ViaRef(&v))
             Console.WriteLine(ViaOut(out o))
             Console.WriteLine(S{V: 7}.Fwd(S{V: 9}))
+            Console.WriteLine(WithConst())
             """,
-            new[] { "22", "22", "11", "5", "9" },
+            new[] { "22", "22", "11", "5", "9", "4" },
         };
 
         // Arguments bound on the side paths that skip the ref-kind check: an
@@ -516,11 +521,20 @@ public class Issue4400ImplicitInArgumentTests
             package P
             import System
 
+            class Holder {
+                var F int32 = 5
+            }
+
             class Log {
                 var Text string = ""
+                let H Holder = Holder()
                 func Mark(tag string, v int32) int32 {
                     Text = Text + tag
                     return v
+                }
+                func Hold() Holder {
+                    Text = Text + "H"
+                    return H
                 }
             }
 
@@ -550,8 +564,14 @@ public class Issue4400ImplicitInArgumentTests
             let l5 = Log()
             Console.WriteLine(Consume(b: l5.Mark("B", 2), a: x))
             Console.WriteLine(l5.Text)
+            let l6 = Log()
+            Console.WriteLine(Consume(b: l6.Mark("B", 2), a: l6.Hold().F))
+            Console.WriteLine(l6.Text)
+            let l7 = Log()
+            Console.WriteLine(Consume(b: l7.Mark("B", 2), a: in l7.Hold().F))
+            Console.WriteLine(l7.Text)
             """,
-            new[] { "12", "BA", "12", "BA", "12", "BA", "12", "BA", "72", "B" },
+            new[] { "12", "BA", "12", "BA", "12", "BA", "12", "BA", "72", "B", "52", "BH", "52", "BH" },
         };
     }
 

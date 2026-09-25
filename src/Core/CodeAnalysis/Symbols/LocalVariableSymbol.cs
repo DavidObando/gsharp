@@ -49,6 +49,13 @@ public class LocalVariableSymbol : VariableSymbol
     /// </summary>
     public virtual RefKind RefKind { get; set; }
 
+    /// <summary>
+    /// Gets or sets a value indicating whether this local is a folded
+    /// compile-time <c>const</c> binding (issue #216). Such a local has no IL
+    /// slot — every read is inlined — so it has no address (issue #4400).
+    /// </summary>
+    internal bool IsConst { get; set; }
+
     internal BoundExpression? ManagedReferenceOrigin { get; set; }
 
     internal LocalVariableSymbol? ManagedReferenceStorage { get; set; }

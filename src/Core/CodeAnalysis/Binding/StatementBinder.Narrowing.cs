@@ -1877,6 +1877,10 @@ internal sealed partial class StatementBinder
                 {
                     global.SetConstantValue(constValue);
                 }
+                else if (declaredVariable is LocalVariableSymbol constLocal)
+                {
+                    constLocal.IsConst = true;
+                }
             }
             else if (declaredVariable is GlobalVariableSymbol
                 && convertedInitializer is not BoundErrorExpression)

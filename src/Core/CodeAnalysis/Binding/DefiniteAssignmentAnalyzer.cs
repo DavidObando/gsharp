@@ -1248,6 +1248,15 @@ internal static class DefiniteAssignmentAnalyzer
         SyntaxNode? callSyntax,
         ExpressionFlowContext? flowContext)
     {
+        // Issue #4400: an `in` argument — written `in x` or passed implicitly —
+        // only lets the callee READ the storage, so it is analyzed exactly as a
+        // value read of the operand (the same checks `f(x)` gets).
+        if (refKind == RefKind.In && argument is BoundAddressOfExpression inAddress)
+        {
+            ProcessExpression(inAddress.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext);
+            return;
+        }
+
         if (refKind != RefKind.None
             && argument is BoundAddressOfExpression address
             && TryGetSingleAddressedVariable(address.Operand, out var variable))

@@ -2068,7 +2068,7 @@ public sealed partial class CSharpToGSharpTranslator
         // of the parameter type (GS0154 / GS9001).
         private bool PassesInArgumentWithoutConversion(ArgumentSyntax argument) =>
             this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } parameter, Value: { } value }
-            && value is ILocalReferenceOperation
+            && value is ILocalReferenceOperation { Local.IsConst: false }
                 or IParameterReferenceOperation
                 or IFieldReferenceOperation { Field.IsConst: false }
             && SymbolEqualityComparer.Default.Equals(value.Type, parameter.Type);
