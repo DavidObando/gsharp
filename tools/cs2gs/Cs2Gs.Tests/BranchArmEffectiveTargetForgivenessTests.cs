@@ -106,10 +106,8 @@ namespace App
     /// the arm bare when the member is declared in another project of the run:
     /// a conditional or switch into a widened local, a return from a widened
     /// method, an expression-bodied member, an assignment, the left operand of
-    /// <c>??</c>, a <c>?.</c> receiver, a <c>== null</c> / <c>is null</c> test
-    /// (including a wrapped <c>(null!)</c>), a widened local reached through a
-    /// null-forgiving <c>!</c>, and an inferred generic parameter, which G#
-    /// re-infers from the argument.
+    /// <c>??</c>, a <c>?.</c> receiver, and a <c>== null</c> / <c>is null</c>
+    /// test (including a wrapped <c>(null!)</c>).
     /// </summary>
     [Fact]
     public void NullableEffectiveTarget_ArmsStayBare()
@@ -158,11 +156,33 @@ namespace App
 
         public static bool Tested(Model.Arg argument, int i) => (i switch { 0 => argument.Value, _ => argument.Name }) is null;
 
+        public static bool ComparedWrapped(Model.Arg argument, int i) => (i >= 0 ? argument.Value : argument.Name) == (null!);
+    }
+}";
+        string printed = TranslateCrossProject(app);
+
+        // No assertion anywhere: not on an arm, and not moved around the
+        // whole branching expression either.
+        Assert.DoesNotContain("!!", printed);
+    }
+
+    /// <summary>
+    /// The arm stays bare for an inferred generic parameter and for a widened
+    /// local reached through a C# <c>!</c>. In both, a whole-value <c>!!</c> is
+    /// still emitted by a different bridge (the argument bridge, and the
+    /// translated <c>!</c>). That is #4452, so this test pins only the arm.
+    /// </summary>
+    [Fact]
+    public void InferredGenericAndSuppressedLocal_ArmsStayBare()
+    {
+        const string app = @"
+namespace App
+{
+    public static class Use
+    {
         public static T Id<T>(T value) => value;
 
         public static string Inferred(Model.Arg argument, int i) => Id(i > 0 ? argument.Value : argument.Name);
-
-        public static bool ComparedWrapped(Model.Arg argument, int i) => (i >= 0 ? argument.Value : argument.Name) == (null!);
 
         public static int Suppressed(Model.Arg argument, bool flag)
         {
@@ -174,6 +194,7 @@ namespace App
         string printed = TranslateCrossProject(app);
 
         Assert.DoesNotContain("argument.Name!!", printed);
+        Assert.DoesNotContain("argument.Value!!", printed);
     }
 
     /// <summary>
