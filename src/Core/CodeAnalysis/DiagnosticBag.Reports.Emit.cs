@@ -495,10 +495,11 @@ public sealed partial class DiagnosticBag
     /// extension function, ref-returning function (ADR-0086 §1).
     /// </summary>
     /// <param name="location">The function-identifier location.</param>
+    /// <param name="attributeName">The P/Invoke attribute used: <c>DllImport</c> or <c>LibraryImport</c>.</param>
     /// <param name="functionName">The declared function name.</param>
     /// <param name="reason">A short reason for the rejection.</param>
-    public void ReportDllImportInvalidFunctionShape(TextLocation location, string functionName, string reason)
-    => Report(location, DiagnosticDescriptors.DllImportInvalidFunctionShape, functionName, reason);
+    public void ReportDllImportInvalidFunctionShape(TextLocation location, string attributeName, string functionName, string reason)
+    => Report(location, DiagnosticDescriptors.DllImportInvalidFunctionShape, attributeName, functionName, reason);
 
     /// <summary>
     /// Reports GS0327 when a <c>CharSet:</c> argument to <c>@DllImport</c> is

@@ -185,6 +185,13 @@ public sealed partial class CSharpToGSharpTranslator
                     // partial-property definition is elided outright.
                     if (propertySymbol is { IsPartialDefinition: true })
                     {
+                        // Issue #4370: unless the implementation is generated
+                        // code this run does not translate — then the property
+                        // would vanish, so say so.
+                        this.ReportGeneratedPartialImplementation(
+                            property,
+                            propertySymbol,
+                            propertySymbol.PartialImplementationPart);
                         break;
                     }
 
@@ -1175,7 +1182,8 @@ public sealed partial class CSharpToGSharpTranslator
             Receiver forcedReceiver = null,
             INamedTypeSymbol ownedExtensionTarget = null,
             bool forceExtensionReceiver = false,
-            IMethodSymbol declaringPartSignature = null)
+            IMethodSymbol declaringPartSignature = null,
+            bool isNativeImportDefinition = false)
         {
             var symbol = declaringPartSignature ?? this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
@@ -1226,8 +1234,22 @@ public sealed partial class CSharpToGSharpTranslator
             //     so the member is emitted exactly once. This also covers the
             //     issue #1910 partial-TYPE merge, whose merged member list may
             //     contain both the defining and implementing method nodes.
-            if (symbol != null && symbol.IsPartialDefinition)
+            //
+            // Issue #4370: a `[LibraryImport]` definition is the exception —
+            // its implementation is generator output cs2gs never translates,
+            // and gsc spells the import natively as a body-less
+            // `@LibraryImport` func (see CSharpToGSharpTranslator.LibraryImport.cs),
+            // so the DEFINITION translates and the generated implementation
+            // does not. Any other definition whose implementation is
+            // untranslated generated code is reported, never silently
+            // dropped.
+            if (symbol != null && symbol.IsPartialDefinition && !isNativeImportDefinition)
             {
+                if (isOrdinaryMemberPosition && IsLibraryImportDefinition(symbol))
+                {
+                    return this.TranslateLibraryImportDefinition(node, ownerKind, symbol);
+                }
+
                 if (isOrdinaryMemberPosition
                     && this.IsEmittablePartialMethodPair(symbol, ownerKind, out _))
                 {
@@ -1237,6 +1259,13 @@ public sealed partial class CSharpToGSharpTranslator
                         declaringPartSignature: symbol.PartialImplementationPart);
                 }
 
+                this.ReportGeneratedPartialImplementation(node, symbol, symbol.PartialImplementationPart);
+                return (null, false);
+            }
+
+            if (symbol?.PartialDefinitionPart is IMethodSymbol importDefinition
+                && IsLibraryImportDefinition(importDefinition))
+            {
                 return (null, false);
             }
 
@@ -1577,6 +1606,12 @@ public sealed partial class CSharpToGSharpTranslator
             // `async` func returning `Task` cannot `return` a value.
             bool isEmittedAsync = !isAnalyzerHarness && !isEmittedSuspend && symbol != null && symbol.IsAsync;
 
+            // Issue #4370: a `[LibraryImport]` definition's import arguments
+            // are re-spelled from their constant values.
+            List<AttributeUse> methodAttributes = isNativeImportDefinition
+                ? this.MapLibraryImportMethodAttributes(node, symbol)
+                : this.MapAttributes(node.AttributeLists);
+
             // ADR-0192 §C: method-level attributes are unioned across the
             // parts by gsc, so each part carries only its OWN — `node` is the
             // C# definition for the declaring part (the pre-ADR-0192
@@ -1593,7 +1628,7 @@ public sealed partial class CSharpToGSharpTranslator
                 isOpen: isOpen,
                 isOverride: isOverride,
                 isAsync: isEmittedAsync,
-                attributes: this.MapAttributes(node.AttributeLists),
+                attributes: methodAttributes,
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfaceType,
                 isRefReturn: symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly),

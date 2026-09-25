@@ -1542,28 +1542,6 @@ internal sealed partial class DeclarationBinder
                     // is only valid as an `open` member of an `open` class — any
                     // other shape (a non-`open` bodyless method, or one inside a
                     // non-`open` class) is reported with GS0388.
-                    if (methodSyntax.HasSemicolonBody)
-                    {
-                        methodSymbol.IsAbstract = true;
-
-                        // ADR-0192 / issue #4301: a body-less method that also
-                        // carries `partial` is the DECLARING part of a partial
-                        // method that PartialMethodMerger could not pair with an
-                        // implementing part — it has already been reported with
-                        // GS0609 (or GS0610). It reaches here only as error
-                        // recovery, so the symbol stays abstract (the body
-                        // binder must still skip the absent body) but GS0388 is
-                        // suppressed: the user's mistake is the missing
-                        // implementation, not a missing `open`.
-                        if ((!methodSyntax.IsOpen || !structSymbol.IsOpen) && !methodSyntax.IsPartial)
-                        {
-                            Diagnostics.ReportAbstractMethodRequiresOpenClass(
-                                methodSyntax.Identifier.Location,
-                                methodName,
-                                structSymbol.Name);
-                        }
-                    }
-
                     Binder.AttachDocumentation(methodSymbol, methodSyntax);
 
                     if (!methodSyntax.Annotations.IsDefaultOrEmpty)
@@ -1577,6 +1555,37 @@ internal sealed partial class DeclarationBinder
                         methodSymbol.SetAttributes(methodAttributes);
                         ValidateInlineDataNilArguments(methodAttributes, methodSymbol.Parameters);
                         ValidateUnscopedRefPlacement(methodSymbol);
+                    }
+
+                    // Issue #4370: the CLR represents every P/Invoke as a
+                    // static method, so `@DllImport` / `@LibraryImport` on an
+                    // instance method is rejected with GS0326 (pointing at the
+                    // `shared { }` block). The attribute is checked AFTER
+                    // binding annotations so the body-less form reports that
+                    // one precise error instead of GS0388's misleading
+                    // "abstract method must be open" below.
+                    var isInstancePInvoke = PInvokeBinder.ReportPInvokeOnInstanceMethod(methodSymbol, methodSyntax, Diagnostics);
+
+                    if (methodSyntax.HasSemicolonBody)
+                    {
+                        methodSymbol.IsAbstract = true;
+
+                        // ADR-0192 / issue #4301: a body-less method that also
+                        // carries `partial` is the DECLARING part of a partial
+                        // method that PartialMethodMerger could not pair with an
+                        // implementing part — it has already been reported with
+                        // GS0609 (or GS0610). It reaches here only as error
+                        // recovery, so the symbol stays abstract (the body
+                        // binder must still skip the absent body) but GS0388 is
+                        // suppressed: the user's mistake is the missing
+                        // implementation, not a missing `open`.
+                        if ((!methodSyntax.IsOpen || !structSymbol.IsOpen) && !methodSyntax.IsPartial && !isInstancePInvoke)
+                        {
+                            Diagnostics.ReportAbstractMethodRequiresOpenClass(
+                                methodSyntax.Identifier.Location,
+                                methodName,
+                                structSymbol.Name);
+                        }
                     }
 
                     var nullableSequenceSpecializations = ExpandNullableSequenceIteratorSpecializations(methodSymbol);
@@ -2870,6 +2879,11 @@ internal sealed partial class DeclarationBinder
                     // GS0325 ("only @DllImport functions may use a ';' body
                     // marker") would be a misleading second error.
                     var isStaticPInvoke = PInvokeBinder.TryAttachPInvokeMetadata(methodSymbol, methodSyntax, Diagnostics);
+                    if (isStaticPInvoke)
+                    {
+                        PInvokeBinder.ReportPInvokeInGenericType(methodSymbol, structSymbol, methodSyntax, Diagnostics);
+                    }
+
                     if (!isStaticPInvoke && methodSyntax.HasSemicolonBody && !methodSyntax.IsPartial)
                     {
                         Diagnostics.ReportSemicolonBodyRequiresDllImport(methodSyntax.Identifier.Location, methodSymbol.Name);

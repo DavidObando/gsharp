@@ -58,6 +58,7 @@ internal static class PInvokeBinder
 
         var isLibraryImport = libraryImport != null && dllImport == null;
         var attribute = isLibraryImport ? libraryImport : (dllImport ?? libraryImport);
+        var attributeName = isLibraryImport ? "LibraryImport" : "DllImport";
 
         // Validate function shape: no body, no instance/static-receiver,
         // no async, no generic, no extension, no ref-return. These rules
@@ -70,22 +71,22 @@ internal static class PInvokeBinder
 
         if (function.IsAsync)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "async functions are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "async functions are not supported");
         }
 
         if (function.IsGeneric)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "generic functions are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "generic functions are not supported");
         }
 
         if (function.IsExtension)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "extension functions are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "extension functions are not supported");
         }
 
         if (function.IsInstanceMethod)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "instance methods are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "instance methods are not supported");
         }
 
         // ADR-0086 / issue #1203: a P/Invoke declared inside a class's
@@ -95,7 +96,7 @@ internal static class PInvokeBinder
         // the supported shape — it is no longer rejected here.
         if (function.ReturnRefKind != RefKind.None)
         {
-            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, function.Name, "ref-returning functions are not supported");
+            diagnostics.ReportDllImportInvalidFunctionShape(identifierLocation, attributeName, function.Name, "ref-returning functions are not supported");
         }
 
         // ADR-0094 / issue #760: parameter ref-kinds (`ref`/`out`/`in`) are now
@@ -1072,6 +1073,67 @@ internal static class PInvokeBinder
         {
             return false;
         }
+    }
+
+    /// <summary>
+    /// Issue #4370: reports GS0326 when an INSTANCE method of a class or
+    /// struct carries <c>@DllImport</c> or <c>@LibraryImport</c>. The CLR
+    /// represents every P/Invoke as a static method (C# requires
+    /// <c>static</c> too), so the G# spelling is a member of the type's
+    /// <c>shared { }</c> block.
+    /// </summary>
+    /// <param name="method">The instance method, with its attributes bound.</param>
+    /// <param name="syntax">The originating function declaration.</param>
+    /// <param name="diagnostics">The diagnostics bag for this binder.</param>
+    /// <returns><c>true</c> when the method carries a P/Invoke attribute (and was reported).</returns>
+    internal static bool ReportPInvokeOnInstanceMethod(
+        FunctionSymbol method,
+        FunctionDeclarationSyntax syntax,
+        DiagnosticBag diagnostics)
+    {
+        var isDllImport = KnownAttributes.FindDllImport(method.Attributes) != null;
+        if (!isDllImport && KnownAttributes.FindLibraryImport(method.Attributes) == null)
+        {
+            return false;
+        }
+
+        diagnostics.ReportDllImportInvalidFunctionShape(
+            syntax.Identifier.Location,
+            isDllImport ? "DllImport" : "LibraryImport",
+            method.Name,
+            "instance methods are not supported; P/Invoke methods are static, so declare it inside the type's 'shared { }' block");
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4370: reports GS0326 when a <c>shared</c>-block P/Invoke
+    /// (<paramref name="function"/>, already confirmed a P/Invoke) belongs to
+    /// a generic type or a type nested in one. The CLR refuses to load a
+    /// P/Invoke method whose declaring type is generic (csc reports CS7042
+    /// for the same shape), so this is a compile-time error rather than a
+    /// TypeLoadException at first call.
+    /// </summary>
+    /// <param name="function">The <c>shared</c>-block P/Invoke method.</param>
+    /// <param name="owner">The declaring class or struct.</param>
+    /// <param name="syntax">The originating function declaration.</param>
+    /// <param name="diagnostics">The diagnostics bag for this binder.</param>
+    internal static void ReportPInvokeInGenericType(
+        FunctionSymbol function,
+        StructSymbol owner,
+        FunctionDeclarationSyntax syntax,
+        DiagnosticBag diagnostics)
+    {
+        if (owner.TypeParameters.IsDefaultOrEmpty
+            && StructSymbol.CollectEnclosingTypeParameters(owner).IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        diagnostics.ReportDllImportInvalidFunctionShape(
+            syntax.Identifier.Location,
+            KnownAttributes.FindDllImport(function.Attributes) != null ? "DllImport" : "LibraryImport",
+            function.Name,
+            "members of generic types are not supported");
     }
 
     /// <summary>
