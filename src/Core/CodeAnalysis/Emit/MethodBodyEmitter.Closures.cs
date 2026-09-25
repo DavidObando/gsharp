@@ -470,19 +470,6 @@ internal sealed partial class MethodBodyEmitter
     }
 
     /// <summary>
-    /// Emits the shared prologue of a user method-group-to-delegate
-    /// conversion: it resolves the function pointer token and leaves the
-    /// delegate-constructor operands on the stack — <c>ldnull; ldftn ftn</c>
-    /// for a static group, or <c>&lt;receiver&gt;; [box]; dup; ldvirtftn ftn</c>
-    /// / <c>&lt;receiver&gt;; [box]; ldftn ftn</c> for an instance group — ready
-    /// for the caller's <c>newobj &lt;Delegate&gt;::.ctor(object, IntPtr)</c>.
-    /// Both the named-delegate path (<see cref="EmitMethodGroupToNamedDelegate"/>)
-    /// and the synthesized/CLR-delegate path
-    /// (<see cref="EmitMethodGroup(BoundMethodGroupExpression, Type)"/>) share
-    /// this single implementation so the #1397 interface-receiver ldvirtftn and
-    /// #1467 generic-receiver token handling live in exactly one place.
-    /// </summary>
-    /// <summary>
     /// Issue #4393: the type a method group's function token is parented at:
     /// the function's declaring class as <paramref name="receiver"/>'s
     /// hierarchy instantiates it (<c>Base[string]</c> for a receiver
@@ -506,6 +493,19 @@ internal sealed partial class MethodBodyEmitter
             definition => ReferenceEquals(definition, declaringDefinition)) ?? declaring;
     }
 
+    /// <summary>
+    /// Emits the shared prologue of a user method-group-to-delegate
+    /// conversion: it resolves the function pointer token and leaves the
+    /// delegate-constructor operands on the stack — <c>ldnull; ldftn ftn</c>
+    /// for a static group, or <c>&lt;receiver&gt;; [box]; dup; ldvirtftn ftn</c>
+    /// / <c>&lt;receiver&gt;; [box]; ldftn ftn</c> for an instance group — ready
+    /// for the caller's <c>newobj &lt;Delegate&gt;::.ctor(object, IntPtr)</c>.
+    /// Both the named-delegate path (<see cref="EmitMethodGroupToNamedDelegate"/>)
+    /// and the synthesized/CLR-delegate path
+    /// (<see cref="EmitMethodGroup(BoundMethodGroupExpression, Type)"/>) share
+    /// this single implementation so the #1397 interface-receiver ldvirtftn and
+    /// #1467 generic-receiver token handling live in exactly one place.
+    /// </summary>
     private void EmitMethodGroupTarget(BoundMethodGroupExpression methodGroup)
     {
         var function = Invariant.Required(
