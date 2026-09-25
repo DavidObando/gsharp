@@ -211,7 +211,13 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
             diagnostics.ReportSelectCancelledArmNeedsContext(syntax.Keyword.Location);
         }
 
-        return rewritten;
+        // A suspending instance method imported from another assembly takes
+        // the context as a trailing optional parameter this compilation never
+        // bound; supply it so cancellation crosses the assembly boundary, on
+        // an ordinary call and on `base.M()` alike (issue #4392).
+        return Ambient is { } ambient
+            ? ChannelRuntimeBinder.SupplyImportedContext(rewritten, ambient)
+            : rewritten;
     }
 
     /// <inheritdoc/>

@@ -772,29 +772,7 @@ internal sealed class ChannelRuntimeBinder
     /// <returns>The call with the context supplied, or <paramref name="call"/> when it takes none.</returns>
     public static BoundExpression SupplyImportedContext(BoundImportedCallExpression call, BoundExpression context)
     {
-        if (!ImportedFunctionSymbol.IsSuspendingMethod(call.Function.Method))
-        {
-            return call;
-        }
-
-        var parameters = call.Function.Method.GetParameters();
-        if (parameters.Length == 0
-            || parameters[^1].ParameterType.FullName != "Gsharp.Concurrency.Context"
-            || parameters[^1].Name != FunctionSymbol.HiddenContextParameterName)
-        {
-            return call;
-        }
-
-        ImmutableArray<BoundExpression> arguments;
-        if (call.Arguments.Length == parameters.Length - 1)
-        {
-            arguments = call.Arguments.Add(context);
-        }
-        else if (call.Arguments.Length == parameters.Length && call.Arguments[^1] is BoundDefaultExpression or BoundLiteralExpression)
-        {
-            arguments = call.Arguments.SetItem(call.Arguments.Length - 1, context);
-        }
-        else
+        if (!TryAppendImportedContext(call.Function.Method, call.Arguments, context, out var arguments))
         {
             return call;
         }
@@ -806,6 +784,36 @@ internal sealed class ChannelRuntimeBinder
             call.ArgumentRefKinds,
             call.TypeArgumentSymbols,
             call.StaticContainerType);
+    }
+
+    /// <summary>
+    /// ADR-0174 D7, the cross-assembly half for instance methods (issue #4392):
+    /// supplies the ambient context to a call on an imported suspending
+    /// instance method, ordinary or through <c>base</c>, exactly as
+    /// <see cref="SupplyImportedContext(BoundImportedCallExpression, BoundExpression)"/>
+    /// does for a static one.
+    /// </summary>
+    /// <param name="call">An imported instance call.</param>
+    /// <param name="context">The ambient context.</param>
+    /// <returns>The call with the context supplied, or <paramref name="call"/> when it takes none.</returns>
+    public static BoundExpression SupplyImportedContext(BoundImportedInstanceCallExpression call, BoundExpression context)
+    {
+        if (!TryAppendImportedContext(call.Method, call.Arguments, context, out var arguments))
+        {
+            return call;
+        }
+
+        return new BoundImportedInstanceCallExpression(
+            call.Syntax,
+            call.Receiver,
+            call.Method,
+            call.Type,
+            arguments,
+            call.ArgumentRefKinds,
+            call.TypeArgumentSymbols,
+            call.ConstrainedReceiverTypeParameter,
+            call.ConstrainedInterfaceType,
+            call.IsNonVirtualBaseCall);
     }
 
     /// <summary>Recovers the direction a facade call was bound with from its carrier parameter.</summary>
@@ -1092,5 +1100,40 @@ internal sealed class ChannelRuntimeBinder
             ? references.MapClrTypeToReferences(clr)
             : references.GetCoreType("System.Object");
         return (closed, true);
+    }
+
+    private static bool TryAppendImportedContext(
+        System.Reflection.MethodInfo method,
+        ImmutableArray<BoundExpression> callArguments,
+        BoundExpression context,
+        out ImmutableArray<BoundExpression> arguments)
+    {
+        arguments = callArguments;
+        if (!ImportedFunctionSymbol.IsSuspendingMethod(method))
+        {
+            return false;
+        }
+
+        var parameters = method.GetParameters();
+        if (parameters.Length == 0
+            || parameters[^1].ParameterType.FullName != "Gsharp.Concurrency.Context"
+            || parameters[^1].Name != FunctionSymbol.HiddenContextParameterName)
+        {
+            return false;
+        }
+
+        if (callArguments.Length == parameters.Length - 1)
+        {
+            arguments = callArguments.Add(context);
+            return true;
+        }
+
+        if (callArguments.Length == parameters.Length && callArguments[^1] is BoundDefaultExpression or BoundLiteralExpression)
+        {
+            arguments = callArguments.SetItem(callArguments.Length - 1, context);
+            return true;
+        }
+
+        return false;
     }
 }

@@ -1280,7 +1280,7 @@ open class A {
         return <-ch
     }
 
-    func Put(ch chan[string], s string) {
+    open func Put(ch chan[string], s string) {
         ch <- s
     }
 }
@@ -1321,7 +1321,14 @@ class B : A {
         return base.Receive(ch)
     }
 
-    suspend func GoPlain(ch chan[string]) {
+    override func Put(ch chan[string], s string) {
+        ch <- ""override""
+    }
+
+    // A plain member, so only the `go` operand (not a state-machine body)
+    // makes the base call need a forwarder; `Put` is virtual, so a base call
+    // on the goroutine closure's captured `this` would not verify.
+    func GoPlain(ch chan[string]) {
         go base.Put(ch, ""put"")
     }
 }
