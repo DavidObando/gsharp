@@ -22,8 +22,8 @@ namespace Cs2Gs.Tests;
 /// Translator-fidelity tests for issue #2429: an object/struct-initializer
 /// MEMBER VALUE (<c>Type{Member: expr}</c> / <c>Type(args){Member: expr}</c>)
 /// and a COLLECTION-INITIALIZER element/<c>Add</c>-argument (bare, keyed, or
-/// indexed) do not receive the oblivious EXTERNAL (metadata, no nullable
-/// context) null-forgiveness already implemented for a direct RETURN (#2202),
+/// indexed) did not receive the oblivious EXTERNAL (metadata, no nullable
+/// context) null-forgiveness then implemented for a direct RETURN (#2202),
 /// an explicit-typed LOCAL declaration's initializer (#2425), and a plain
 /// REASSIGNMENT statement (#2427). This is the exact real-world Oahu.Core
 /// shape surfaced by #2429:
@@ -53,6 +53,16 @@ namespace Cs2Gs.Tests;
 /// delegates to the shared bridge, and <c>TranslateCollectionInitializerElements</c>
 /// (which previously had NO forgiveness at all) routes all three collection-
 /// element shapes through it too.
+/// </para>
+/// <para>
+/// The oblivious EXTERNAL signal needed <c>!!</c> because gsc used to import
+/// such a member as <c>T?</c> (ADR-0136). Since ADR-0186 step 3 gsc imports it
+/// as the platform type <c>T!</c> and checks it itself, so the external-member
+/// tests now pin that cs2gs emits no <c>!!</c> (ADR-0186 step 6, PR 0). A
+/// taint-promoted SIBLING-PROJECT source member is still a real <c>T?</c> and
+/// keeps its <c>!!</c>. The test names (<c>…IsForgiven</c>) predate ADR-0186
+/// step 6 and are kept for issue traceability; the assertions state the
+/// current contract.
 /// </para>
 /// </summary>
 public class Issue2429InitializerObliviousExternalForgivenessTranslationTests
@@ -474,7 +484,7 @@ namespace Demo
 
     /// <summary>
     /// Negative/scope control: the TARGET member is already nullable-annotated
-    /// (<c>string?</c>) and so already accepts a <c>T?</c> value unchanged —
+    /// (<c>string?</c>) and so accepts the oblivious value unchanged —
     /// nothing to forgive.
     /// </summary>
     [Fact]
@@ -590,9 +600,10 @@ namespace Demo
     }
 
     /// <summary>
-    /// A nullable-enabled consumer still needs the bridge because gsc maps the
-    /// imported producer's oblivious contract to <c>T?</c> independently of the
-    /// consumer's nullable context.
+    /// A nullable-enabled consumer gets the same result: gsc maps the imported
+    /// producer's oblivious contract independently of the consumer's nullable
+    /// context (formerly to <c>T?</c>, now to <c>T!</c>), so no <c>!!</c> is
+    /// emitted.
     /// </summary>
     [Fact]
     public void ObjectInitializerLiteral_NullableEnabledConsumer_IsForgiven()
@@ -645,8 +656,9 @@ namespace Demo
 
     /// <summary>
     /// Direct-return/object-initializer parity: assigning the identical
-    /// oblivious external call to an object-initializer member gets exactly
-    /// the same single <c>!!</c> a direct return of that call would.
+    /// oblivious external call to an object-initializer member and returning it
+    /// directly agree, and neither needs a <c>!!</c> (both used to carry exactly
+    /// one).
     /// </summary>
     [Fact]
     public void ObjectInitializerMember_MatchesDirectReturnForgivenessCount()

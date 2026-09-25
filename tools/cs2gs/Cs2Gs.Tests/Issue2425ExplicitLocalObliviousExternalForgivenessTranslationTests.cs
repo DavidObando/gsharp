@@ -21,23 +21,28 @@ namespace Cs2Gs.Tests;
 /// Translator-fidelity tests for issue #2425: an explicit-typed local declared
 /// `T x = external.ObliviousReturn();` — where the declared type equals the
 /// initializer's natural type (the common case that omits the type clause
-/// entirely, ADR-0115 §B.3) — drops null forgiveness for an oblivious EXTERNAL
-/// (metadata, no nullable context) member result. Issue #2202's value-read logic
-/// already asserts `!!` on a DIRECT return of such a member
+/// entirely, ADR-0115 §B.3) — used to drop null forgiveness for an oblivious
+/// EXTERNAL (metadata, no nullable context) member result. Issue #2202's
+/// value-read logic asserted `!!` on a DIRECT return of such a member
 /// (`return external.ObliviousReturn();`), but issue #1737's explicit-local
 /// type-retention decision only consults the whole-program SAME/SIBLING-source
 /// taint fixpoint (issue #2412), which an EXTERNAL symbol can never seed an edge
-/// in. So the explicit type is dropped, gsc infers the local as `T?` (per its own
-/// unannotated-external-import rule, issue #1354), and a later `return
-/// codeVerifier;` has no external symbol left at the read site to trigger
-/// forgiveness (GS0156) — exactly the real-world `Oahu.Core`
+/// in. So the explicit type was dropped, gsc inferred the local as `T?` (its
+/// then unannotated-external-import rule, issue #1354, ADR-0136), and a later
+/// `return codeVerifier;` had no external symbol left at the read site to
+/// trigger forgiveness (GS0156) — exactly the real-world `Oahu.Core`
 /// `Login.CreateCodeVerifier` shape (`string codeVerifier =
-/// tokenBytes.ToUrlBase64String(); return codeVerifier;`).
+/// tokenBytes.ToUrlBase64String(); return codeVerifier;`). The #2425 fix
+/// asserted `!!` at the INITIALIZER so the local inferred a non-null type.
 ///
-/// The fix asserts `!!` at the INITIALIZER (mirroring the direct-return fix)
-/// instead of retaining an explicit `T?` type, so the local infers the intended
-/// non-null type from the start and every later use (return/argument/
-/// assignment) needs no further special-casing.
+/// <para>
+/// Since ADR-0186 step 3 gsc imports the oblivious result as the platform type
+/// `T!`, so the local infers `T!` and gsc checks it wherever it is used as
+/// non-null. These tests now pin that cs2gs emits no `!!` at the initializer or
+/// at later uses (ADR-0186 step 6, PR 0). The test names (`…Forgiven…`)
+/// predate ADR-0186 step 6 and are kept for issue traceability; the assertions
+/// state the current contract.
+/// </para>
 /// </summary>
 public class Issue2425ExplicitLocalObliviousExternalForgivenessTranslationTests
 {
@@ -69,9 +74,8 @@ namespace Demo
         Assert.DoesNotContain("let codeVerifier = tokenBytes.ToUrlBase64String()!!", printed);
         Assert.Contains("return codeVerifier", printed);
 
-        // Parity: the local's declaration absorbs the SAME single forgiveness a
-        // direct return would need — the later `return codeVerifier` must not
-        // need (or get) a second one.
+        // Parity with a direct return: the later `return codeVerifier` gets no
+        // `!!` either; gsc checks the `T!` local at that return itself.
         Assert.DoesNotContain("return codeVerifier!!", printed);
     }
 
@@ -196,10 +200,10 @@ namespace Demo
     }
 
     /// <summary>
-    /// Positive test: a parenthesized initializer resolves the same underlying
-    /// symbol (Roslyn's <c>GetSymbolInfo</c> sees through parentheses), so the
-    /// forgiveness still applies — matching the direct-return path's behavior
-    /// for the identical shape.
+    /// A parenthesized initializer resolves the same underlying symbol (Roslyn's
+    /// <c>GetSymbolInfo</c> sees through parentheses), so it is treated like the
+    /// bare call: emitted with no <c>!!</c>, matching the direct-return path's
+    /// behavior for the identical shape.
     /// </summary>
     [Fact]
     public void ParenthesizedInitializer_ForgivenAtInitialization()
@@ -304,8 +308,8 @@ namespace Demo
     }
 
     /// <summary>
-    /// A `var` local also needs forgiveness at its oblivious external initializer
-    /// so G# infers the same non-null type that C# does.
+    /// A `var` local initialized from an oblivious external member is also
+    /// emitted with no `!!`; G# infers the platform type `T!` for it.
     /// </summary>
     [Fact]
     public void VarLocal_IsForgivenAtInitializer()
@@ -390,8 +394,9 @@ namespace Demo
     }
 
     /// <summary>
-    /// A nullable-enabled consumer still sees a nullable-oblivious producer's
-    /// unannotated reference return as T? in G#, so it needs the same bridge.
+    /// A nullable-enabled consumer of a nullable-oblivious producer gets the same
+    /// result: gsc used to import the unannotated return as `T?` regardless of the
+    /// consumer's context, and now imports it as `T!`, so no `!!` is emitted.
     /// </summary>
     [Fact]
     public void NullableEnabledCompilation_IsForgiven()
@@ -418,9 +423,8 @@ namespace Demo
 
     /// <summary>
     /// Direct-return parity: an explicit local later returned and a direct
-    /// return of the identical call both end up with exactly one <c>!!</c>
-    /// bridging the same oblivious external member — the local-declaration fix
-    /// reproduces the #2202 direct-return outcome rather than a different one.
+    /// return of the identical call agree, and neither needs a <c>!!</c> for
+    /// the oblivious external member (both used to carry exactly one).
     /// </summary>
     [Fact]
     public void ExplicitLocalThenReturn_MatchesDirectReturnForgivenessCount()
