@@ -1234,6 +1234,13 @@ public sealed partial class CSharpToGSharpTranslator
             //     so the member is emitted exactly once. This also covers the
             //     issue #1910 partial-TYPE merge, whose merged member list may
             //     contain both the defining and implementing method nodes.
+            //   * ADR-0192 follow-on 2 (gsgen only,
+            //     `emitGeneratedImplementingParts`): an implementation whose
+            //     definition is in a tree this run does not emit — the stub
+            //     rendered from the user's G# declaring part — is a G#
+            //     implementing part, `partial func` with its body (see
+            //     IsGeneratedImplementingPart). The definition is never
+            //     translated there.
             //
             // Issue #4370: a `[LibraryImport]` definition is the exception —
             // its implementation is generator output cs2gs never translates,
@@ -1281,6 +1288,16 @@ public sealed partial class CSharpToGSharpTranslator
                 || (isOrdinaryMemberPosition
                     && symbol?.PartialDefinitionPart is IMethodSymbol partialDefinition
                     && this.IsEmittablePartialMethodPair(partialDefinition, ownerKind, out _));
+
+            // ADR-0192 follow-on 2: an implementing part whose declaring part
+            // is the user's own G# (gsgen's stub), not a tree this run emits.
+            // It pairs with no translated part, so it is not a tentative pair:
+            // no PartialPairKey, and its parameters are spelled from the
+            // implementation alone (reconciling would map the stub's
+            // parameter syntax into this file).
+            bool isGeneratedImplementingPart = !isPartialPart
+                && isOrdinaryMemberPosition
+                && this.IsGeneratedImplementingPart(symbol, ownerKind);
 
             // Issue #1911 / #2010 / ADR-0149: C# `string IGreeter.Greet() { ... }`
             // (explicit interface implementation) has no direct G# surface
@@ -1634,7 +1651,7 @@ public sealed partial class CSharpToGSharpTranslator
                 isRefReturn: symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly),
                 isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true,
                 isSuspend: isEmittedSuspend,
-                isPartial: isPartialPart,
+                isPartial: isPartialPart || isGeneratedImplementingPart,
                 partialPairKey: isPartialPart ? PartialPairKeyOf(symbol) : null);
 
             return (method, isStatic);
@@ -1767,6 +1784,52 @@ public sealed partial class CSharpToGSharpTranslator
 
             implementationNode = implNode;
             return true;
+        }
+
+        /// <summary>
+        /// ADR-0192 follow-on 2: whether <paramref name="implementation"/> is a
+        /// C# partial method implementation whose definition lives in a tree
+        /// this translation does not emit — in gsgen, the stub rendered from
+        /// the user's hand-written G# declaring part — so it translates to a
+        /// G# implementing part (<c>partial func</c> with its body) that pairs
+        /// with that declaring part at build time. Only with
+        /// <c>emitGeneratedImplementingParts</c> on; every other caller keeps
+        /// the ordinary-method shape. When both parts are in emitted trees
+        /// this returns <see langword="false"/>, and the pair follows the
+        /// ADR-0143 rules (<see cref="IsEmittablePartialMethodPair"/>).
+        /// </summary>
+        /// <param name="implementation">The method being translated.</param>
+        /// <param name="ownerKind">The G# kind of the containing type.</param>
+        /// <returns><see langword="true"/> to emit the method as an implementing part.</returns>
+        private bool IsGeneratedImplementingPart(IMethodSymbol implementation, TypeDeclarationKind ownerKind)
+        {
+            if (!this.emitGeneratedImplementingParts
+                || !this.preservePartialParts
+                || ownerKind is not (TypeDeclarationKind.Class or TypeDeclarationKind.Struct)
+                || implementation?.PartialDefinitionPart is not IMethodSymbol definition)
+            {
+                return false;
+            }
+
+            // Shapes G# cannot spell as a partial method (ADR-0192 §F), as in
+            // IsEmittablePartialMethodPair.
+            if (definition.IsExtensionMethod
+                || implementation.IsExtern
+                || implementation.ExplicitInterfaceImplementations.Length > 0
+                || (this.entryType != null
+                    && SymbolEqualityComparer.Default.Equals(
+                        definition.ContainingType?.OriginalDefinition,
+                        this.entryType.OriginalDefinition)))
+            {
+                return false;
+            }
+
+            if (definition.DeclaringSyntaxReferences.Length != 1)
+            {
+                return false;
+            }
+
+            return !this.IsTranslatedByThisRun(definition.DeclaringSyntaxReferences[0].SyntaxTree);
         }
 
         // Both parts are built from the implementation's symbol, so its

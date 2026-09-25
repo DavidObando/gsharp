@@ -1127,7 +1127,7 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol original = method.ReducedFrom ?? method;
             return original.Parameters[0].RefKind == RefKind.Ref
                     || original.Parameters[0].RefKind == RefKind.Out
-                ? new UnaryExpression("&", receiver)
+                ? AddressOf(receiver)
                 : receiver;
         }
 
@@ -1770,6 +1770,42 @@ public sealed partial class CSharpToGSharpTranslator
                     value);
         }
 
+        /// <summary>
+        /// The G# address of <paramref name="operand"/> (<c>&amp;x</c>), the form
+        /// every by-reference position takes: <c>ref</c>/<c>out</c>/<c>in</c>
+        /// arguments, <c>&amp;</c> in unsafe code, and ref aliases.
+        /// </summary>
+        /// <param name="operand">The translated variable.</param>
+        /// <returns>The address-of expression.</returns>
+        private static GExpression AddressOf(GExpression operand) =>
+            new UnaryExpression("&", WithoutNonNullAssertion(operand));
+
+        /// <summary>
+        /// Drops a non-null assertion from a by-reference operand. <c>x!!</c> is
+        /// a value, not a variable, so <c>&amp;x!!</c> is rejected (GS9001);
+        /// and the C# <c>!</c> it usually comes from (<c>ref x!</c>) only
+        /// silences a warning, never changing the variable referenced.
+        /// </summary>
+        /// <param name="operand">The translated by-reference operand.</param>
+        /// <returns>The operand without an outermost <c>!!</c>.</returns>
+        private static GExpression WithoutNonNullAssertion(GExpression operand)
+        {
+            if (operand is NonNullAssertionExpression assertion)
+            {
+                return WithoutNonNullAssertion(assertion.Operand);
+            }
+
+            if (operand is ParenthesizedExpression parenthesized)
+            {
+                GExpression inner = WithoutNonNullAssertion(parenthesized.Inner);
+                return ReferenceEquals(inner, parenthesized.Inner)
+                    ? operand
+                    : new ParenthesizedExpression(inner);
+            }
+
+            return operand;
+        }
+
         private GExpression TranslateArgumentValue(ArgumentSyntax argument)
         {
             SyntaxKind refKind = argument.RefKindKeyword.Kind();
@@ -1781,7 +1817,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         DiscardDesignationSyntax => new OutArgumentExpression("out", "_"),
                         SingleVariableDesignationSyntax single => this.TranslateOutVarDesignation(single),
-                        _ => new UnaryExpression("&", this.TranslateExpression(argument.Expression)),
+                        _ => AddressOf(this.TranslateExpression(argument.Expression)),
                     };
                 }
 
@@ -1790,19 +1826,19 @@ public sealed partial class CSharpToGSharpTranslator
                     return new OutArgumentExpression("out", "_");
                 }
 
-                GExpression translatedExisting = this.TranslateExpression(argument.Expression);
+                GExpression translatedExisting = WithoutNonNullAssertion(this.TranslateExpression(argument.Expression));
                 if (translatedExisting is IdentifierExpression identifier)
                 {
                     return new OutArgumentExpression("out", identifier.Name);
                 }
 
                 // Non-identifier lvalues keep the universal address form.
-                return new UnaryExpression("&", translatedExisting);
+                return AddressOf(translatedExisting);
             }
 
             if (refKind == SyntaxKind.RefKeyword)
             {
-                return new UnaryExpression("&", this.TranslateExpression(argument.Expression));
+                return AddressOf(this.TranslateExpression(argument.Expression));
             }
 
             // ADR-0060: G# requires the `in` modifier at call sites of
@@ -1815,10 +1851,10 @@ public sealed partial class CSharpToGSharpTranslator
             // any ref-kind parameter.
             if (refKind == SyntaxKind.InKeyword || this.TargetsSourceDeclaredInParameter(argument))
             {
-                GExpression translatedIn = this.TranslateExpression(argument.Expression);
+                GExpression translatedIn = WithoutNonNullAssertion(this.TranslateExpression(argument.Expression));
                 return translatedIn is IdentifierExpression inIdentifier
                     ? new OutArgumentExpression("in", inIdentifier.Name)
-                    : new UnaryExpression("&", translatedIn);
+                    : AddressOf(translatedIn);
             }
 
             // A declared-nullable reference argument that C# flow analysis has
