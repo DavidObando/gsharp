@@ -82,9 +82,10 @@ public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
             {
                 if (node is IVariableDeclaratorOperation declarator)
                 {
-                    if (declarator.Initializer != null)
+                    var initializer = declarator.Initializer;
+                    if (initializer != null)
                     {
-                        AddSource(sources, declarator.Symbol, declarator.Initializer.Value);
+                        AddSource(sources, declarator.Symbol, initializer.Value);
                     }
                 }
                 else if (node is IAssignmentOperation assignment)
@@ -175,11 +176,17 @@ public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeMethodGroup(
         OperationBlockAnalysisContext context,
-        ISymbol target,
+        ISymbol? target,
         IOperation reference,
         bool isFunnel,
         bool isImportRule)
     {
+        // G#'s method-group surface reports no method for an empty group.
+        if (target == null)
+        {
+            return;
+        }
+
         // A method group (`.Select(TypeSymbol.FromClrType)`) calls the door on
         // arguments the analyzer cannot see, so it is reported as a call. The
         // escape hatch passed as a group is reported too: its argument is
@@ -329,8 +336,14 @@ public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
         return false;
     }
 
-    private static bool IsSignatureAccessor(ISymbol property)
+    private static bool IsSignatureAccessor(ISymbol? property)
     {
+        // G#'s property-read surface reports no property for a field read.
+        if (property == null)
+        {
+            return false;
+        }
+
         var name = property.Name;
         return (name == "ReturnType"
                 || name == "ReturnParameter"

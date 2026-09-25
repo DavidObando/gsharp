@@ -1061,8 +1061,8 @@ something the plan left open:
   `System.Reflection` type anywhere in the argument as a signature position,
   including one reached through `GetGenericArguments()` or `GetElementType()`.
   The rule is written against the analyzer surface that ADR-0169
-  self-migrates: an operation-block action, `DescendantsAndSelf()`, and
-  symbol reads by `Name` and `ContainingType`.
+  self-migrates (as extended by #4436): an operation-block action,
+  `DescendantsAndSelf()`, and symbol reads by `Name` and `ContainingType`.
 - **`ResolveInstanceReturnTypeFromReceiver` moved** into the family as
   `MemberLookup.GetClrReceiverProjectedReturnTypeSymbol`, with its by-ref
   sibling `GetClrReceiverProjectedParameterPointeeTypeSymbol`. Both now share
@@ -1151,8 +1151,15 @@ something the plan left open:
   `IMethodSymbol.AssociatedSymbol` (member resolution). GSA0008 will exceed it
   too (`IIsTypeOperation`, the pattern operations, `ITypeOfOperation`).
   Restricting the rules to the mapped surface would open the holes §3 exists
-  to close, so the resolution is a decision about the two ADRs, not about the
-  rules. It is pending with the repository owner on PR #4427.
+  to close, so the map was extended instead: the repository owner chose that
+  resolution, and issue #4436 (PR #4441) adds the G# analogues and the cs2gs
+  rows for everything listed above, including GSA0008's type-test surface.
+  **The funnel analyzers therefore depend on the ADR-0169 map.** A new
+  Roslyn API in GSA0007/GSA0008 (or GSA0009) needs its map row, its G#
+  analogue and a parity test in the same change, or the hot-core guard fails
+  at translation. The parity fixture
+  (`tools/cs2gs/Cs2Gs.Tests/Fixtures/Adr0169FunnelSurface/FunnelSurfaceAnalyzer.cs`)
+  is a copy of GSA0007's body and must be kept identical to it.
 - **Deleted, not attributed:**
   - `StatementBinder`'s private `MapOpenClrTypeToSymbolic` forwarding wrapper;
   - the unused `MemberLookup.SubstituteOpenIndexerType`;
