@@ -588,15 +588,18 @@ and it is covered by its own test.
    `samples/GeneratedRegex` builds this through the packed SDK and runs it
    (`e2etests/generated-regex-e2e.sh`).
 
-   **Known gap** (2026-09-24): a pattern that backtracks inside a loop, such as
-   `(foo|ba+r)+\w*?baz`, does not build through the SDK. The generator passes
-   `ref base.runstack!`, a field the reference pack annotates `int[]?`, to a
-   `ref int[]` helper. G# has no spelling for that `!` on a by-ref argument, so
-   cs2gs emits `&base.runstack`, and gsc rejects it (GS0154). The same code
-   compiles in-process against the runtime implementation assemblies, which
-   is why the GeneratorHost tests pass. Closing the gap needs a gsc decision on
-   by-ref arguments from nullable storage. The e2e script pins the current
-   error so it fails once the gap closes.
+   **Known gap, closed by #4422** (2026-09-24, closed 2026-09-25): a pattern
+   that backtracks inside a loop, such as `(foo|ba+r)+\w*?baz`, did not build
+   through the SDK. The generator passes `ref base.runstack!`, a field the
+   reference pack annotates `int[]?`, to a `ref int[]` helper. G# has no
+   spelling for that `!` on a by-ref argument, so cs2gs emits
+   `&base.runstack`, and gsc rejected it (GS0154). Since #4422 gsc accepts
+   by-ref storage that differs from the parameter only in reference
+   nullability, with the warning GS0612, as C# does; cs2gs carries the
+   generator's `!` across as a statement-scoped
+   `@SuppressDiagnostic("GS0612")` (ADR-0175 amendment), so the runner builds
+   with no diagnostics. The pattern is now an ordinary case in
+   `samples/GeneratedRegex`.
 3. **Retire `TryTranslateGeneratedRegex`'s `__generatedRegex_` family** once (1)
    and (2) land — the actual close of issue #4301.
 4. **Partial properties** (§F), if a native scenario asks for them.
