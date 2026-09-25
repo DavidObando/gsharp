@@ -150,4 +150,21 @@ public class DocumentSyncHandlerTests
         var gs0612 = Assert.Single(diagnostics, d => d.Message.Contains("differs from the parameter type", System.StringComparison.Ordinal));
         Assert.Equal(6, gs0612.Range.Start.Line);
     }
+
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void ComputeDiagnostics_HonoursSuppressDiagnosticForParserWarnings(bool skipBinding)
+    {
+        // Review finding (#4422): gsc drops a parser warning inside an
+        // @SuppressDiagnostic scope, and the language server must too.
+        const string source = "@SuppressDiagnostic(\"GS0303\")\n"
+            + "func Quiet(cb func(int32) int32) int32 -> cb(1)\n"
+            + "func Loud(cb func(int32) int32) int32 -> cb(1)\n";
+
+        var diagnostics = DocumentSyncHandler.ComputeDiagnostics(source, skipBinding).Diagnostics;
+
+        var deprecated = Assert.Single(diagnostics, d => d.Message.Contains("is deprecated", System.StringComparison.Ordinal));
+        Assert.Equal(2, deprecated.Range.Start.Line);
+    }
 }

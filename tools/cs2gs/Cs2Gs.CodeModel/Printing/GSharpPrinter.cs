@@ -2644,12 +2644,18 @@ public static class GSharpPrinter
         BlockStatement body = constructor.Body;
         if (constructor.DelegatingArguments != null)
         {
-            var statements = new List<GStatement>
+            GStatement delegation = new ExpressionStatement(new InvocationExpression(
+                new IdentifierExpression("init"),
+                constructor.DelegatingArguments));
+            if (constructor.DelegatingSuppressedDiagnostics.Count > 0)
             {
-                new ExpressionStatement(new InvocationExpression(
-                    new IdentifierExpression("init"),
-                    constructor.DelegatingArguments)),
-            };
+                delegation = new BlockStatement(new List<GStatement> { delegation })
+                {
+                    SuppressedDiagnostics = constructor.DelegatingSuppressedDiagnostics,
+                };
+            }
+
+            var statements = new List<GStatement> { delegation };
             statements.AddRange(body.Statements);
             body = new BlockStatement(statements, body.IsUnsafe, body.IsChecked, body.IsUnchecked);
         }

@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Generic;
 
 namespace Cs2Gs.CodeModel.Ast;
@@ -456,6 +457,14 @@ public sealed class ConstructorDeclaration : GMember
     /// the first effective body statement, preserving their evaluation order.
     /// </summary>
     public IReadOnlyList<GExpression> DelegatingArguments { get; }
+
+    /// <summary>
+    /// Gets or sets the diagnostic identifiers the delegation call
+    /// (<c>init(args)</c>) must suppress (issue #4422). When non-empty the call
+    /// is printed inside an ADR-0175 <c>@SuppressDiagnostic("ID") { … }</c>
+    /// block, which scopes the suppression to that one call.
+    /// </summary>
+    public IReadOnlyList<string> DelegatingSuppressedDiagnostics { get; set; } = Array.Empty<string>();
 
     /// <summary>Gets the constructor parameters.</summary>
     public IReadOnlyList<Parameter> Parameters { get; }

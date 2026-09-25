@@ -79,7 +79,7 @@ suppressed. The check uses the diagnostic's own severity before `/warnaserror`
 promotion, so a suppressed warning stays suppressed under
 `<TreatWarningsAsErrors>`. cs2gs emits `@SuppressDiagnostic("GS0612")` where it
 drops a C# `!` from a by-reference argument (`ref x!`), and for a
-`#pragma warning disable CS8600`/`CS8601`/`CS8620` region that covers a whole
+`#pragma warning disable CS8600`/`CS8601`/`CS8604`/`CS8620` region that covers a whole
 declaration.
 
 **Example `.gsproj` snippet:**

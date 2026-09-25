@@ -153,6 +153,144 @@ PRAGMA_WARNING restore CS8601
         AssertCompilesWithoutGS0612(printed);
     }
 
+    [Theory]
+    // `out var` in a condition: `v` is visible after the `if`.
+    [InlineData(@"
+    private static bool TryGet(ref int[] stack, out int v) { v = stack.Length; return true; }
+
+    public int Go()
+    {
+        if (!TryGet(ref runstack!, out var v)) return 0;
+        return v;
+    }")]
+    // `out var` in an expression statement: `n` is visible after it.
+    [InlineData(@"
+    private static void Fill(ref int[] stack, out int n) { n = stack.Length; }
+
+    public int Go()
+    {
+        Fill(ref runstack!, out var n);
+        return n;
+    }")]
+    // A pattern variable declared in a condition.
+    [InlineData(@"
+    public int Go()
+    {
+        if (Take(ref runstack!) is not int k) return 0;
+        return k;
+    }")]
+    public void StatementDeclaringAVariableVisibleAfterIt_IsNotWrapped(string members)
+    {
+        // Review finding: a block around the statement hid the variable from
+        // the statements after it. Such a statement is left unsuppressed (the
+        // warning stays visible) rather than broken.
+        string printed = Translate(Prelude + members + "\n}\n");
+
+        Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal);
+        var diagnostics = Compile(printed);
+        Assert.Contains(diagnostics, d => d.Id == "GS0612");
+    }
+
+    [Fact]
+    public void UsingDeclaration_IsNotAnnotated()
+    {
+        // Review finding: `@SuppressDiagnostic(...) using let d` is rejected by
+        // gsc, and a block would dispose `d` early. Left unsuppressed.
+        string printed = Translate(Prelude + @"
+    private static System.IO.MemoryStream Make(ref int[] stack) => new System.IO.MemoryStream(stack.Length);
+
+    public long Go()
+    {
+        using var d = Make(ref runstack!);
+        return d.Capacity;
+    }
+}
+");
+
+        Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal);
+        var diagnostics = Compile(printed);
+        Assert.Contains(diagnostics, d => d.Id == "GS0612");
+    }
+
+    [Fact]
+    public void MetadataCallee_GetsNoSuppression()
+    {
+        // Review finding: gsc never reports GS0612 at an imported callee, and
+        // an unneeded block can hide a variable the statement declares.
+        string printed = Translate(@"
+#nullable enable
+using System.Collections.Generic;
+using System.Threading;
+
+public class Cache
+{
+    private string? name;
+    private Dictionary<string, int>? cache = new Dictionary<string, int>();
+
+    public int Go(string k)
+    {
+        Interlocked.Exchange(ref name!, ""x"");
+        if (!Volatile.Read(ref cache!).TryGetValue(k, out var v)) return 0;
+        return v;
+    }
+}
+");
+
+        Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal);
+        AssertCompilesWithoutGS0612(printed);
+    }
+
+    [Fact]
+    public void ThisInitializer_WrapsTheDelegationCall()
+    {
+        // Review finding: `: this(Take(ref x!))` was left unsuppressed. It
+        // prints as the body's first statement `init(...)`, which gsc accepts
+        // inside the block form, so the suppression covers just that call.
+        string printed = Translate(@"
+#nullable enable
+public class Runner
+{
+    private static int[]? shared = new int[] { 1 };
+
+    private static int Take(ref int[] stack) => stack.Length;
+
+    public Runner(int n) { }
+
+    public Runner() : this(Take(ref shared!)) { }
+}
+");
+
+        Assert.Contains("@SuppressDiagnostic(\"GS0612\") {", printed, StringComparison.Ordinal);
+        Assert.Matches(@"@SuppressDiagnostic\(""GS0612""\) \{\s*init\(Take\(&shared\)\)\s*\}", printed);
+        AssertCompilesWithoutGS0612(printed);
+    }
+
+    [Fact]
+    public void BaseInitializer_IsLeftUnsuppressed()
+    {
+        // `: base(...)` stays in the constructor header, where no block fits;
+        // an annotation on the constructor would widen over its body.
+        string printed = Translate(@"
+#nullable enable
+public class Base
+{
+    public Base(int n) { }
+}
+
+public class Runner : Base
+{
+    private static int[]? shared = new int[] { 1 };
+
+    private static int Take(ref int[] stack) => stack.Length;
+
+    public Runner() : base(Take(ref shared!)) { }
+}
+");
+
+        Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal);
+        Assert.Contains(Compile(printed), d => d.Id == "GS0612");
+    }
+
     private static void AssertCompilesWithoutGS0612(string printed)
     {
         var diagnostics = Compile(printed);

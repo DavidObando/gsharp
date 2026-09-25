@@ -1839,7 +1839,17 @@ public sealed partial class CSharpToGSharpTranslator
                 operand = inner.Expression;
             }
 
-            ITypeSymbol parameterType = this.GetArgumentParameter(argument)?.Type;
+            // gsc reports GS0612 only at a G# callee; an imported (metadata)
+            // method's by-ref parameters keep their CLR matching rules, so a
+            // suppression there would be dead, and its block could hide a
+            // variable the statement declares.
+            IParameterSymbol boundParameter = this.GetArgumentParameter(argument);
+            if (boundParameter?.ContainingSymbol is { } callee && callee.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            ITypeSymbol parameterType = boundParameter?.Type;
             ITypeSymbol storageType = this.context.GetSymbolInfo(operand).Symbol switch
             {
                 IFieldSymbol field => field.Type,

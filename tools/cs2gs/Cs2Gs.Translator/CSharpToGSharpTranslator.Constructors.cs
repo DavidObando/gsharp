@@ -522,6 +522,12 @@ public sealed partial class CSharpToGSharpTranslator
 
             List<GExpression> baseArguments = null;
             List<GExpression> delegatingArguments = null;
+
+            // Issue #4422: a `ref x!` in the initializer collects its GS0612
+            // suppression here, not into the member-level set.
+            HashSet<string> outerSuppressions = this.state.PendingStatementSuppressions;
+            var initializerSuppressions = new HashSet<string>(StringComparer.Ordinal);
+            this.state.PendingStatementSuppressions = initializerSuppressions;
             if (node.Initializer != null)
             {
                 if (node.Initializer.ThisOrBaseKeyword.IsKind(SyntaxKind.BaseKeyword))
@@ -542,6 +548,8 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            this.state.PendingStatementSuppressions = outerSuppressions;
+
             BlockStatement body = this.TranslateBody(node, $"constructor on '{node.Identifier.Text}'");
 
             if (delegatingArguments == null && propertyCtorInits != null && propertyCtorInits.Count > 0)
@@ -559,13 +567,26 @@ public sealed partial class CSharpToGSharpTranslator
                 body = new BlockStatement(statements);
             }
 
-            return new ConstructorDeclaration(
+            var constructorDeclaration = new ConstructorDeclaration(
                 parameters,
                 body,
                 baseArguments: baseArguments,
                 visibility: MapVisibility(symbol, this.context, node),
                 attributes: this.MapAttributes(node.AttributeLists),
                 delegatingArguments: delegatingArguments);
+
+            // A `: this(...)` delegation prints as the body's first statement,
+            // `init(args)`, so its suppression wraps just that call. A
+            // `: base(...)` chain stays in the header, where no block fits and
+            // an annotation on the constructor would widen over its body: it
+            // is left unsuppressed.
+            if (delegatingArguments != null && initializerSuppressions.Count > 0)
+            {
+                constructorDeclaration.DelegatingSuppressedDiagnostics =
+                    initializerSuppressions.OrderBy(id => id, StringComparer.Ordinal).ToList();
+            }
+
+            return constructorDeclaration;
         }
 
         private List<GExpression> TranslateConstructorInitializerArguments(
@@ -3283,7 +3304,7 @@ public sealed partial class CSharpToGSharpTranslator
                     AttachSourceComments(core.FirstOrDefault(), statement);
                     this.SanitizeDocParamComments(core.FirstOrDefault(), statement);
                     AttachTrailingComment(core.LastOrDefault(), statement);
-                    return ApplyStatementSuppressions(core, suppressions);
+                    return ApplyStatementSuppressions(core, DeclaresVariableVisibleAfter(statement) ? null : suppressions);
                 }
 
                 var combined = new List<GStatement>(spillPrologue);
@@ -3291,7 +3312,7 @@ public sealed partial class CSharpToGSharpTranslator
                 AttachSourceComments(combined[0], statement);
                 this.SanitizeDocParamComments(combined[0], statement);
                 AttachTrailingComment(combined[^1], statement);
-                return ApplyStatementSuppressions(combined, suppressions);
+                return ApplyStatementSuppressions(combined, DeclaresVariableVisibleAfter(statement) ? null : suppressions);
             }
             finally
             {
@@ -3318,7 +3339,7 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>The output with the suppressions applied.</returns>
         private static List<GStatement> ApplyStatementSuppressions(List<GStatement> statements, HashSet<string> suppressions)
         {
-            if (suppressions.Count == 0 || statements.Count == 0)
+            if (suppressions == null || suppressions.Count == 0 || statements.Count == 0)
             {
                 return statements;
             }
@@ -3332,7 +3353,14 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     case LocalDeclarationStatement local:
                         FlushSuppressedRun(run, result, ids);
-                        local.SuppressedDiagnostics = ids;
+
+                        // gsc accepts no annotation on a `using` declaration,
+                        // and a block would dispose the resource early.
+                        if (!local.IsUsing)
+                        {
+                            local.SuppressedDiagnostics = ids;
+                        }
+
                         result.Add(local);
                         break;
                     case LabeledStatement or LocalFunctionStatement or TupleDeconstructionStatement or MultiAssignmentStatement or DeferStatement:
@@ -3347,6 +3375,31 @@ public sealed partial class CSharpToGSharpTranslator
 
             FlushSuppressedRun(run, result, ids);
             return result;
+        }
+
+        /// <summary>
+        /// Issue #4422: whether a C# statement other than a local declaration
+        /// introduces a variable that stays in scope after it — an
+        /// <c>out var</c>, a pattern variable, or any other declaration
+        /// expression outside a nested statement or lambda. C# lets such a
+        /// variable leak into the enclosing block (<c>if (!TryGet(out var v))
+        /// return; use(v);</c>), so the statement cannot be wrapped in a
+        /// suppression block without hiding it. It is left unsuppressed.
+        /// </summary>
+        /// <param name="statement">The C# statement.</param>
+        /// <returns><see langword="true"/> when a block would hide a variable.</returns>
+        private static bool DeclaresVariableVisibleAfter(StatementSyntax statement)
+        {
+            if (statement is LocalDeclarationStatementSyntax)
+            {
+                // Annotated in place, never wrapped.
+                return false;
+            }
+
+            return statement
+                .DescendantNodes(node => node == statement
+                    || (node is not StatementSyntax && node is not AnonymousFunctionExpressionSyntax))
+                .Any(node => node is SingleVariableDesignationSyntax or ParenthesizedVariableDesignationSyntax);
         }
 
         private static void FlushSuppressedRun(List<GStatement> run, List<GStatement> result, List<string> ids)

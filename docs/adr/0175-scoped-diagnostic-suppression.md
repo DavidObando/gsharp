@@ -233,11 +233,18 @@ suppression.
   the one statement the `!` covered: the block form around an ordinary
   statement; the annotation on a local declaration, since a block would hide
   the local from later statements; the member annotation for an
-  expression-bodied member, whose body is that one expression. A statement
-  that declares something else visible later (a label, a local function, a
-  deconstruction) or a `defer` is left unsuppressed rather than widened. In
-  addition, a `#pragma warning disable` region naming `CS8600`, `CS8601` or
-  `CS8620` (the csc nullability warnings a by-reference argument raises) that
+  expression-bodied member, whose body is that one expression; a block around
+  the `init(args)` call a `: this(...)` initializer prints as. The suppression
+  is emitted only at a G#-translated (source) callee: gsc never reports GS0612
+  at an imported one. A statement is left unsuppressed rather than widened or
+  broken when a block would change its meaning: it declares a variable
+  visible after it (an `out var`, a pattern variable, a deconstruction, a
+  label, a local function), it is a `using` declaration (gsc takes no
+  annotation there, and a block would dispose early) or a `defer`, or it is a
+  `: base(...)` initializer, which stays in the constructor header. In
+  addition, a `#pragma warning disable` region naming `CS8600`, `CS8601`,
+  `CS8604` or `CS8620` (the csc nullability warnings a by-reference argument
+  raises) that
   covers a whole declaration translates to `@SuppressDiagnostic("GS0612")`,
   through the same `AttachPragmaSuppressions` rule as `GSA` identifiers. No
   other `CS` identifier maps: gsc's other nullability checks are errors.

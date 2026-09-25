@@ -110,7 +110,9 @@ public static class DocumentSyncHandler
 
         var diagnostics = new List<Diagnostic>();
 
-        foreach (var d in syntaxTree.Diagnostics)
+        // ADR-0175 amendment (#4422): parser warnings honour @SuppressDiagnostic
+        // exactly as gsc's EmitResult does.
+        foreach (var d in compilation.ApplySourceSuppressions(syntaxTree.Diagnostics))
         {
             diagnostics.Add(BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
         }

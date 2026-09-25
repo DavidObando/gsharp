@@ -24,7 +24,7 @@ namespace Cs2Gs.Translator;
 /// (<c>SA####</c>), the C# compiler (<c>CS####</c>), and the Roslyn ecosystem
 /// (<c>CA####</c>, <c>IDE####</c>, <c>VSTHRD###</c>, <c>RS####</c>) — so
 /// carrying them would emit annotations that suppress nothing. The one exception
-/// (issue #4422): CS8600, CS8601 and CS8620, the csc nullability warnings that
+/// (issue #4422): CS8600, CS8601, CS8604 and CS8620, the csc nullability warnings that
 /// gsc reports at a by-reference argument as GS0612, translate to
 /// <c>@SuppressDiagnostic("GS0612")</c>.
 /// </summary>
@@ -33,11 +33,12 @@ public sealed partial class CSharpToGSharpTranslator
     private sealed partial class DeclarationVisitor
     {
         // Issue #4422: CS8600 (possible null converted to a non-null type),
-        // CS8601 (possible null reference assignment) and CS8620 (nullability
+        // CS8601 (possible null reference assignment), CS8604 (possible null
+        // argument, the `in` direction) and CS8620 (nullability
         // differs in a nested type argument) — the csc warnings that match
         // gsc's GS0612 at a by-reference argument.
         private static readonly HashSet<string> CSharpNullabilityIdsForGs0612 =
-            new HashSet<string>(StringComparer.Ordinal) { "CS8600", "CS8601", "CS8620" };
+            new HashSet<string>(StringComparer.Ordinal) { "CS8600", "CS8601", "CS8604", "CS8620" };
 
         /// <summary>
         /// Appends a <c>@SuppressDiagnostic</c> annotation to
