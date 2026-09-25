@@ -199,7 +199,7 @@ public sealed class GSharpAnalyzerDriver
             {
                 cancellationToken.ThrowIfCancellationRequested();
                 var tree = field.Declaration?.SyntaxTree
-                    ?? initializer.DescendantsAndSelf().Select(node => node.Syntax).FirstOrDefault(syntax => syntax != null)?.SyntaxTree;
+                    ?? initializer.FirstAnchoredSyntax()?.SyntaxTree;
                 DispatchBoundBody(field, initializer, tree);
             }
         }
@@ -226,7 +226,7 @@ public sealed class GSharpAnalyzerDriver
     private static SyntaxTree? ProvenanceTree(FunctionSymbol function, BoundBlockStatement body)
         => function.Declaration?.SyntaxTree
             ?? (function.AssociatedSymbol as PropertySymbol)?.Declaration?.SyntaxTree
-            ?? body.DescendantsAndSelf().Select(node => node.Syntax).FirstOrDefault(syntax => syntax != null)?.SyntaxTree;
+            ?? body.FirstAnchoredSyntax()?.SyntaxTree;
 
     private void DispatchSemanticModels()
     {

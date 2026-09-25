@@ -33,6 +33,8 @@ public enum ForRangeKind
 /// </summary>
 public sealed class BoundForRangeStatement : BoundLoopStatement
 {
+    private System.Collections.Immutable.ImmutableArray<VariableSymbol> locals;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundForRangeStatement"/> class.
     /// </summary>
@@ -79,9 +81,22 @@ public sealed class BoundForRangeStatement : BoundLoopStatement
     /// <see cref="ValueVariable"/>.
     /// </summary>
     public System.Collections.Immutable.ImmutableArray<VariableSymbol> Locals
-        => KeyVariable is { } key
-            ? System.Collections.Immutable.ImmutableArray.Create(key, ValueVariable)
-            : System.Collections.Immutable.ImmutableArray.Create(ValueVariable);
+    {
+        get
+        {
+            // Both variables are fixed at construction, so the array is built
+            // once. A default ImmutableArray is the "not yet built" marker.
+            if (locals.IsDefault)
+            {
+                var built = KeyVariable is { } key
+                    ? System.Collections.Immutable.ImmutableArray.Create(key, ValueVariable)
+                    : System.Collections.Immutable.ImmutableArray.Create(ValueVariable);
+                System.Collections.Immutable.ImmutableInterlocked.InterlockedInitialize(ref locals, built);
+            }
+
+            return locals;
+        }
+    }
 
     /// <summary>Gets the collection expression.</summary>
     public BoundExpression Collection { get; }

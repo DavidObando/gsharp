@@ -66,6 +66,11 @@ public abstract class BoundMethodReferenceOperationExpression : BoundExpression
             return null;
         }
 
+        if (Volatile.Read(ref importedMethod) is { } cached)
+        {
+            return cached;
+        }
+
         // Analyzers may run concurrently: publish the first symbol built, so
         // every reader sees one fully constructed instance.
         var built = new ImportedFunctionSymbol(

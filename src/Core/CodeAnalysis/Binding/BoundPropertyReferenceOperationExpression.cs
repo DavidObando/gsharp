@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Linq;
 using System.Reflection;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -77,7 +78,7 @@ public abstract class BoundPropertyReferenceOperationExpression : BoundExpressio
             var symbol = new PropertySymbol(
                 property.Name,
                 type,
-                Accessibility.Public,
+                AccessibilityOf(property),
                 hasGetter: property.CanRead,
                 hasSetter: property.CanWrite,
                 isAutoProperty: false,
@@ -94,5 +95,28 @@ public abstract class BoundPropertyReferenceOperationExpression : BoundExpressio
         }
 
         return cached;
+    }
+
+    // The most accessible of the property's accessors, as C# reports a
+    // property's declared accessibility.
+    private static Accessibility AccessibilityOf(PropertyInfo property)
+    {
+        var accessors = property.GetAccessors(nonPublic: true);
+        if (accessors.Any(a => a.IsPublic))
+        {
+            return Accessibility.Public;
+        }
+
+        if (accessors.Any(a => a.IsFamily || a.IsFamilyOrAssembly))
+        {
+            return Accessibility.Protected;
+        }
+
+        if (accessors.Any(a => a.IsAssembly || a.IsFamilyAndAssembly))
+        {
+            return Accessibility.Internal;
+        }
+
+        return Accessibility.Private;
     }
 }

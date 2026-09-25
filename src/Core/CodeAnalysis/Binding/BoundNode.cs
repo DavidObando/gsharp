@@ -14,6 +14,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public abstract class BoundNode
 {
+    private ImmutableArray<BoundNode> descendants;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundNode"/> class.
     /// </summary>
@@ -80,9 +82,18 @@ public abstract class BoundNode
     {
         // One walk over the whole subtree, in pre-order: the same order as
         // recursing through ChildNodes, without building a child list per node.
-        var collector = new NodeCollector(this, recurse: true);
-        collector.Visit(this);
-        return collector.Nodes.ToImmutable();
+        // A bound tree does not change once built, so the list is built once
+        // per node and reused by every later query over it.
+        var cached = descendants;
+        if (cached.IsDefault)
+        {
+            var collector = new NodeCollector(this, recurse: true);
+            collector.Visit(this);
+            ImmutableInterlocked.InterlockedInitialize(ref descendants, collector.Nodes.ToImmutable());
+            cached = descendants;
+        }
+
+        return cached;
     }
 
     /// <summary>
@@ -110,6 +121,23 @@ public abstract class BoundNode
     }
 
     /// <summary>
+    /// The syntax of the first node, in pre-order, that has one. Stops at the
+    /// first hit rather than listing the subtree.
+    /// </summary>
+    /// <returns>The first anchored syntax, or null.</returns>
+    internal SyntaxNode? FirstAnchoredSyntax()
+    {
+        if (Syntax is { } own)
+        {
+            return own;
+        }
+
+        var finder = new FirstSyntaxFinder();
+        finder.Visit(this);
+        return finder.Found;
+    }
+
+    /// <summary>
     /// Anchors this node to <paramref name="syntax"/> if it has no anchor yet.
     /// Idempotent by construction — an existing anchor is never replaced — so
     /// re-binding or body-cache reuse cannot change an observed location.
@@ -120,6 +148,47 @@ public abstract class BoundNode
         if (Syntax is null && syntax is not null)
         {
             Syntax = syntax;
+        }
+    }
+
+    private sealed class FirstSyntaxFinder : BoundTreeWalker
+    {
+        public SyntaxNode? Found { get; private set; }
+
+        public override void VisitStatement(BoundStatement? node)
+        {
+            if (Look(node))
+            {
+                base.VisitStatement(node);
+            }
+        }
+
+        public override void VisitExpression(BoundExpression? node)
+        {
+            if (Look(node))
+            {
+                base.VisitExpression(node);
+            }
+        }
+
+        public override void VisitPattern(BoundPattern? node)
+        {
+            if (Look(node))
+            {
+                base.VisitPattern(node);
+            }
+        }
+
+        // Whether to keep descending: false once anything has been found.
+        private bool Look(BoundNode? node)
+        {
+            if (Found != null || node == null)
+            {
+                return false;
+            }
+
+            Found = node.Syntax;
+            return Found == null;
         }
     }
 
