@@ -156,7 +156,9 @@ partial class Patterns {
 }
 ```
 
-`gsgen` writes the generated body as an implementing part (`partial func` with a body) spelled with your declaring part's header, so any spelling of the signature that binds works. The generator's helper types stay in their own package, `System.Text.RegularExpressions.Generated` for the Regex generator, so they cannot collide with your types. See [`samples/GeneratedRegex`](https://github.com/DavidObando/gsharp/tree/main/samples/GeneratedRegex).
+`gsgen` writes the generated body as an implementing part (`partial func` with a body) spelled with your declaring part's header, so a signature spelled differently from the generated C# still pairs: `System.Text.RegularExpressions.Regex` or `Regex`, `int` or `int32`. Two limits apply:
+- overloads with the same name and parameter count in one type keep the generated spelling, so spell those the way the generated code does;
+- parameter names must match the generator's, which normally copies them from your declaration. A mismatch is reported as `GS9208`. The generator's helper types stay in their own package, `System.Text.RegularExpressions.Generated` for the Regex generator, so they cannot collide with your types. See [`samples/GeneratedRegex`](https://github.com/DavidObando/gsharp/tree/main/samples/GeneratedRegex).
 
 Stray `.cs` `Compile` items produced by other MSBuild targets are partitioned out before `gsc` sees them and are translated through the same `gsgen` pipeline.
 

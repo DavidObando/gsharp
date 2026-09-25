@@ -446,7 +446,13 @@ block. Three rules extend §B–§D:
   namespaces is split into one `.g.gs` per namespace, the way `cs2gs migrate`'s
   repository layout splits a source file (`TranslateStage`, `packageFilter`).
   The first unit, with the fewest dots in its namespace, keeps the hint-name
-  file. Each other unit is written to `{hint}.{Package_With_Underscores}.g.gs`.
+  file. It also takes the document's global-namespace declarations (and any
+  top-level statements), which the unsplit translation hoisted into a package
+  too; without that they would match no unit and vanish. Each other unit is
+  written to `{hint}.{Package_With_Underscores}.g.gs`. When a generator hint
+  name already owns that file, the split unit gets a `.split` marker instead
+  (`{hint}.{Package}.split.g.gs`), so the plain name never depends on write
+  order.
   Translated as one unit, the Regex generator's file put its helper types
   (`Digits_0`, `Utilities`, `RunnerFactory`, the `IndexOfAny*` extension
   funcs) in the user's package, where a user type named `Utilities` collided
@@ -477,15 +483,21 @@ block. Three rules extend §B–§D:
   - a parameter name differs, because the body refers to the generated
     names and copying the header would rebind it to other parameters; or
   - an alias the header needs is already bound to a different target in the
-    `.g.gs`.
+    `.g.gs`: by the generated code, or by another user file whose declaring
+    part's header was copied into the same `.g.gs`. A partial class split
+    across files that alias one name differently hits this, because a `.g.gs`
+    has one import scope. The message names both sources.
 
-  gsc then reports the mismatch as GS0611, so nothing pairs silently.
+  gsc then reports the two parts as mismatched, so nothing pairs silently.
 
   Limits:
   - Overloads with the same name and parameter count in one type are not told
     apart, so their headers stay as generated.
   - A copied namespace import can make a name in the generated body
     ambiguous. gsc reports that as an error; it is never silently bound.
+  - Conflicting aliases across a partial class's files are reported, not
+    resolved (for example by qualifying the alias target in the copied
+    header).
 
 ## Consequences
 
