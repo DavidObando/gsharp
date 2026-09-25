@@ -346,11 +346,83 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
     }
 
     /// <summary>
+    /// A <c>var</c> local that cs2gs emits with a nullable type clause (here
+    /// because it is compared with <c>null</c>, so it becomes
+    /// <c>let name string? = n.Name</c>) leaves its initializer bare too, so
+    /// the null check sees a nil name instead of a throw. The initializer
+    /// then targets a <c>T?</c> clause, so no bridge is ever considered.
+    /// </summary>
+    [Fact]
+    public void A_Var_Local_Emitted_Nullable_Leaves_Its_Initializer_Bare()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousVarNullableLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static bool NameIsNil(Node n)
+                {
+                    var name = n.Name;
+                    if (name == null)
+                    {
+                        return true;
+                    }
+
+                    return false;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+
+        Assert.DoesNotContain("n.Name!!", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.NameIsNil(Node.Make(nil, nil))" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(true, result.Value);
+    }
+
+    /// <summary>
     /// A lambda passed where its delegate type is inferred keeps its result's
     /// <c>!!</c>: <c>Select(x =&gt; x.Name)</c> would otherwise infer
     /// <c>IEnumerable[string!]</c>, and <c>ToList()</c> a <c>List[string!]</c>
     /// that the declared <c>List[string]</c> does not accept (GS0155).
     /// </summary>
+    /// <summary>
+    /// A frozen read inside a conditional that <c>??</c> then absorbs is not
+    /// asserted either: a nil name reaches the fallback, as in C#.
+    /// </summary>
+    [Fact]
+    public void A_Read_Absorbed_By_A_Coalesce_Reaches_The_Fallback()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousCoalesceLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static string Pick(Node n, bool flag)
+                {
+                    return (flag ? n.Name : "") ?? "fallback";
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+        Assert.DoesNotContain("n.Name!!", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.Pick(Node.Make(nil, nil), true)" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal("fallback", result.Value);
+    }
+
     [Fact]
     public void A_Lambda_Whose_Type_Is_Inferred_Keeps_Its_Result_Assertion()
     {
