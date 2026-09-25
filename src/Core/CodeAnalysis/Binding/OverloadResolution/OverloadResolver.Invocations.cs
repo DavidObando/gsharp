@@ -726,7 +726,7 @@ internal sealed partial class OverloadResolver
                     else if (address.Operand.Type != TypeSymbol.Error
                         && !conversions.CheckByRefArgumentStorage(argumentLocation, parameter, address.Operand.Type, parameter.Type))
                     {
-                        Diagnostics.ReportWrongArgumentType(argumentLocation, parameter.Name, parameter.Type, address.Operand.Type);
+                        conversions.ReportByRefStorageMismatch(argumentLocation, parameter.Name, parameter.Type, address.Operand.Type);
                         hasErrors = true;
                     }
                 }
@@ -735,7 +735,7 @@ internal sealed partial class OverloadResolver
                     if (conditionalAddress.PointeeType != TypeSymbol.Error
                         && !conversions.CheckByRefArgumentStorage(argumentLocation, parameter, conditionalAddress.PointeeType, parameter.Type))
                     {
-                        Diagnostics.ReportWrongArgumentType(argumentLocation, parameter.Name, parameter.Type, conditionalAddress.PointeeType);
+                        conversions.ReportByRefStorageMismatch(argumentLocation, parameter.Name, parameter.Type, conditionalAddress.PointeeType);
                         hasErrors = true;
                     }
                 }

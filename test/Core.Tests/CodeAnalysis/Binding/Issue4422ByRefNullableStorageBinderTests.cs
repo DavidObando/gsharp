@@ -235,4 +235,131 @@ Console.WriteLine(Runner().Go())
         Assert.Empty(result.Diagnostics);
         Assert.Equal("8", result.Output.Trim());
     }
+
+    [Fact]
+    public void OverloadResolution_PrefersTheExactStorageType()
+    {
+        // Review finding: selection ignored the by-ref storage rule, so
+        // `int32?` storage picked `ref int32` and then failed with GS0154
+        // (on main it compiled to unverifiable IL), and `string?` storage
+        // picked `ref string` with a GS0612 where C# picks the exact match.
+        // Each declaration order is covered, for every call shape.
+        var result = EmittedOracle.Evaluate(@"
+func P(ref x int32) { Console.WriteLine(""p int32"") }
+func P(ref x int32?) { Console.WriteLine(""p int32?"") }
+func R(ref x int32?) { Console.WriteLine(""r int32?"") }
+func R(ref x int32) { Console.WriteLine(""r int32"") }
+func Q(ref s string) { Console.WriteLine(""q string"") }
+func Q(ref s string?) { Console.WriteLine(""q string?"") }
+
+class K {
+    init() {}
+    init(ref x int32) { Console.WriteLine(""ctor int32"") }
+    init(ref x int32?) { Console.WriteLine(""ctor int32?"") }
+    func M(ref x int32?) { Console.WriteLine(""m int32?"") }
+    func M(ref x int32) { Console.WriteLine(""m int32"") }
+    func N(ref s string) { Console.WriteLine(""n string"") }
+    func N(ref s string?) { Console.WriteLine(""n string?"") }
+}
+
+var a int32? = 1
+var b int32 = 1
+var s string? = nil
+var t string = """"
+P(&a)
+P(&b)
+R(&a)
+R(&b)
+Q(&s)
+Q(&t)
+K().M(&a)
+K().M(&b)
+K().N(&s)
+K().N(&t)
+let k1 = K(&a)
+let k2 = K(&b)
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(
+            new[]
+            {
+                "p int32?", "p int32", "r int32?", "r int32", "q string?", "q string",
+                "m int32?", "m int32", "n string?", "n string", "ctor int32?", "ctor int32",
+            },
+            result.Output.Trim().Split('\n').Select(l => l.Trim()).ToArray());
+    }
+
+    [Theory]
+    [InlineData("var a int32? = 1\nP(&a)", "func P(ref x int32) {}")]
+    [InlineData("var a int32 = 1\nP(&a)", "func P(ref x int32?) {}")]
+    [InlineData("var a int32? = 1\nK().M(&a)", "class K {\n init() {}\n func M(ref x int32) {}\n}")]
+    [InlineData("var a int32? = 1\nlet k = K(&a)", "class K {\n init(ref x int32) {}\n}")]
+    public void ValueTypeNullableMismatch_ExplainsTheRuntimeType(string body, string declarations)
+    {
+        var result = EmittedOracle.Evaluate(declarations + "\n" + body);
+
+        var error = Assert.Single(result.Diagnostics, d => d.Id == "GS0154");
+        Assert.Contains("'int32?' is a Nullable<int32>, a different runtime type", error.Message, System.StringComparison.Ordinal);
+        Assert.DoesNotContain("*int32", error.Message, System.StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("var x int32? = 41\nInterlocked.Increment(&x)", "location")]
+    [InlineData("var x int32? = 41\nInt32.TryParse(\"5\", &x)", "result")]
+    public void ClrCallee_ValueTypeNullableStorage_IsGS0154(string body, string parameterName)
+    {
+        // Review finding: an imported `ref int` accepted `&int32?` storage (the
+        // address's CLR type was built from the relayed `int32`) and emitted
+        // IL that ILVerify rejects; the program printed 41 twice.
+        var result = EmittedOracle.Evaluate("import System.Threading\n" + body);
+
+        var error = Assert.Single(result.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Equal("GS0154", error.Id);
+        Assert.Contains("'" + parameterName + "'", error.Message, System.StringComparison.Ordinal);
+        Assert.Contains("Nullable<int32>", error.Message, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClrCallee_ValueStorageAtNullableRefParameter_IsGS0154()
+    {
+        using var fixture = new CSharpFixture("""
+            namespace Issue4422NullableRefFixture
+            {
+                public static class Bumper
+                {
+                    public static void Bump(ref int? x) { x = (x ?? 0) + 1; }
+                }
+            }
+            """);
+        var result = EmittedOracle.Evaluate(
+            "import Issue4422NullableRefFixture\nvar y int32 = 1\nBumper.Bump(&y)\nvar z int32? = 1\nBumper.Bump(&z)\nConsole.WriteLine(z)",
+            new[] { fixture.AssemblyPath });
+
+        var error = Assert.Single(result.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Equal("GS0154", error.Id);
+        Assert.Contains("'x'", error.Message, System.StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ClrCallee_ReferenceNullableStorage_StaysSilent()
+    {
+        // Reference nullability at an imported by-ref parameter is unchanged:
+        // no GS0612, no error.
+        var result = EmittedOracle.Evaluate(@"
+import System.Threading
+
+var arr []?int32 = []int32{1}
+Array.Resize(&arr, 3)
+var o string? = nil
+Interlocked.Exchange(&o, ""a"")
+Interlocked.CompareExchange(&o, ""b"", ""a"")
+var y int32 = 1
+Interlocked.Increment(&y)
+Console.WriteLine(""${arr!!.Length} ${Volatile.Read(&o)} $y"")
+");
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("3 b 2", result.Output.Trim());
+    }
 }

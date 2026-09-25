@@ -2382,7 +2382,7 @@ internal sealed partial class OverloadResolver
                     if (operandType != TypeSymbol.Error
                         && !conversions.CheckByRefArgumentStorage(refArgumentLocation, parameter, operandType, refParameterType))
                     {
-                        Diagnostics.ReportWrongArgumentType(
+                        conversions.ReportByRefStorageMismatch(
                             refArgumentLocation,
                             parameter.Name,
                             refParameterType,
@@ -2400,7 +2400,7 @@ internal sealed partial class OverloadResolver
                             pointeeType,
                             Invariant.Required(expectedType, "a bound parameter has a target type")))
                     {
-                        Diagnostics.ReportWrongArgumentType(
+                        conversions.ReportByRefStorageMismatch(
                             Invariant.Required(parameterSyntax[i], "a conditional ref argument has source syntax").Location,
                             parameter.Name,
                             Invariant.Required(expectedType, "a bound parameter has a target type"),

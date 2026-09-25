@@ -107,6 +107,53 @@ internal static class ByRefStorageMatching
     }
 
     /// <summary>
+    /// Issue #4422: the storage a by-reference argument addresses — the
+    /// operand of <c>&amp;x</c> or the shared pointee of a conditional
+    /// address — when it is known. An unresolved inline <c>out var</c> has
+    /// the error type and is not known yet.
+    /// </summary>
+    /// <param name="argument">The bound argument.</param>
+    /// <returns>The storage type, or <see langword="null"/>.</returns>
+    public static TypeSymbol? TryGetStorageType(BoundExpression? argument)
+    {
+        var storageType = argument switch
+        {
+            BoundAddressOfExpression address => address.Operand?.Type,
+            BoundConditionalAddressExpression conditional => conditional.PointeeType,
+            _ => null,
+        };
+        return storageType == TypeSymbol.Error ? null : storageType;
+    }
+
+    /// <summary>
+    /// Issue #4422: how well a by-reference argument's storage fits a candidate
+    /// parameter, for overload ranking. An exact match is an identity; a match
+    /// that differs only in reference nullability (a GS0612 warning) ranks
+    /// below it, as C#'s betterness prefers the exact <c>ref string?</c> over
+    /// <c>ref string</c> for <c>string?</c> storage. A platform (<c>T!</c>)
+    /// storage prefers the non-null parameter, ADR-0186 §3's tie-break.
+    /// </summary>
+    /// <param name="storageType">The storage type.</param>
+    /// <param name="parameterType">The (substituted) parameter type.</param>
+    /// <returns><see langword="null"/> when the storage does not fit at all;
+    /// otherwise <see langword="true"/> for an exact fit.</returns>
+    public static bool? IsExactStorageMatch(TypeSymbol storageType, TypeSymbol parameterType)
+    {
+        if (!AreSameStorageType(storageType, parameterType, out var storageNullable, out var parameterNullable, out var nestedMismatch))
+        {
+            return null;
+        }
+
+        if (storageNullable || parameterNullable || nestedMismatch)
+        {
+            return false;
+        }
+
+        return !(storageType.ReferenceNullability == ReferenceNullabilityKind.Platform
+            && parameterType.ReferenceNullability == ReferenceNullabilityKind.Nullable);
+    }
+
+    /// <summary>
     /// Whether <paramref name="storage"/> and <paramref name="parameter"/>, both
     /// already stripped of a top-level reference-nullability wrapper, denote
     /// one runtime type.

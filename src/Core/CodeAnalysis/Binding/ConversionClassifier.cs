@@ -2861,8 +2861,13 @@ internal sealed class ConversionClassifier
                     return argument;
                 }
 
-                // Fall through: type mismatch on the address-of operand. Surface
-                // the standard "cannot convert" diagnostic via BindConversion.
+                // Issue #4422: report the mismatch against the storage type
+                // rather than letting BindConversion report the `*T` address.
+                if (operandType != null)
+                {
+                    ReportByRefStorageMismatch(location, parameter.Name, expectedType, operandType);
+                    return new BoundErrorExpression(argument.Syntax);
+                }
             }
             else if (argument is BoundConditionalAddressExpression condAddr)
             {
@@ -2876,6 +2881,9 @@ internal sealed class ConversionClassifier
                 {
                     return argument;
                 }
+
+                ReportByRefStorageMismatch(location, parameter.Name, expectedType, pointeeType);
+                return new BoundErrorExpression(argument.Syntax);
             }
             else if (argument is BoundInterpolatedStringExpression { Handler: not null })
             {
@@ -2967,6 +2975,34 @@ internal sealed class ConversionClassifier
         }
 
         return true;
+    }
+
+    /// <summary>
+    /// Issue #4422: reports GS0154 for by-reference storage the gate rejected,
+    /// naming the storage type (not the <c>*T</c> address type). When the
+    /// only difference is value-type nullability (<c>int32?</c> storage at
+    /// <c>ref int32</c>, or the reverse) the text says the two are different
+    /// runtime types.
+    /// </summary>
+    /// <param name="location">The argument's location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    /// <param name="parameterType">The (substituted) parameter type.</param>
+    /// <param name="storageType">The storage type.</param>
+    public void ReportByRefStorageMismatch(TextLocation location, string parameterName, TypeSymbol parameterType, TypeSymbol storageType)
+    {
+        if (IsValueNullableOf(storageType, parameterType) || IsValueNullableOf(parameterType, storageType))
+        {
+            Diagnostics.ReportWrongValueNullableByRefArgument(location, parameterName, parameterType, storageType);
+            return;
+        }
+
+        Diagnostics.ReportWrongArgumentType(location, parameterName, parameterType, storageType);
+
+        static bool IsValueNullableOf(TypeSymbol nullable, TypeSymbol other)
+            => nullable is NullableTypeSymbol valueNullable
+                && NullableLifting.IsAnyValueTypeNullable(valueNullable)
+                && other is not NullableTypeSymbol
+                && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(valueNullable.UnderlyingType, other);
     }
 
     /// <summary>

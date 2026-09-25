@@ -374,6 +374,24 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualType);
 
     /// <summary>
+    /// Issue #4422: GS0154 for a by-reference argument whose storage is a
+    /// value-type <c>V?</c> at a <c>V</c> parameter (or the reverse). The text
+    /// says why: <c>V?</c> is <c>Nullable&lt;V&gt;</c>, a different runtime
+    /// type, not an annotation.
+    /// </summary>
+    /// <param name="location">The argument's location.</param>
+    /// <param name="name">The parameter name.</param>
+    /// <param name="parameterType">The parameter's pointee type.</param>
+    /// <param name="storageType">The argument's storage type.</param>
+    public void ReportWrongValueNullableByRefArgument(TextLocation location, string name, TypeSymbol parameterType, TypeSymbol storageType)
+    {
+        var nullableSide = storageType is NullableTypeSymbol storageNullable ? storageNullable : parameterType as NullableTypeSymbol;
+        var underlying = nullableSide?.UnderlyingType ?? storageType;
+        var reason = $"{storageType}' — '{underlying}?' is a Nullable<{underlying}>, a different runtime type from '{underlying}";
+        Report(location, DiagnosticDescriptors.WrongArgumentType, name, parameterType, reason);
+    }
+
+    /// <summary>
     /// Issue #4422: GS0612 — a by-reference argument's storage type differs
     /// from the parameter type only in reference nullability.
     /// </summary>

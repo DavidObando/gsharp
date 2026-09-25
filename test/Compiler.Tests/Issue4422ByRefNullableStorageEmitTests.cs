@@ -196,6 +196,126 @@ Console.WriteLine(n)
         }
     }
 
+    /// <summary>
+    /// Overloads that differ only in the by-ref parameter's nullability select
+    /// the exact storage type, as C# does, for free functions, methods and
+    /// constructors, and the selected call verifies. Before the review fix,
+    /// <c>int32?</c> storage selected <c>ref int32</c>.
+    /// </summary>
+    [Fact]
+    public void OverloadsOnByRefNullability_SelectTheExactStorageAndVerify()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4422_overload_").FullName;
+        try
+        {
+            const string source = @"
+package P
+import System
+
+func P(ref x int32) { x = x + 1 }
+func P(ref x int32?) { x = 10 }
+func Q(ref s string) { s = ""q"" }
+func Q(ref s string?) { s = ""q?"" }
+
+class K {
+    var v int32 = 0
+    init() {}
+    init(ref x int32?) { x = 20 }
+    init(ref x int32) { x = x + 2 }
+    func M(ref x int32?) { x = 30 }
+    func M(ref x int32) { x = x + 3 }
+}
+
+var a int32? = 1
+var b int32 = 1
+var s string? = nil
+P(&a)
+P(&b)
+Q(&s)
+Console.WriteLine(""${a!!} $b ${s!!}"")
+K().M(&a)
+K().M(&b)
+Console.WriteLine(""${a!!} $b"")
+let k1 = K(&a)
+let k2 = K(&b)
+Console.WriteLine(""${a!!} $b"")
+";
+            var outPath = Path.Combine(tempDir, "overload.dll");
+            var (exit, log) = Compile(tempDir, source, outPath);
+            Assert.True(exit == 0, "the exact by-ref overload must be selected:\n" + log);
+            Assert.DoesNotContain("GS0612", log, StringComparison.Ordinal);
+
+            IlVerifier.Verify(outPath);
+            var (runExit, output) = RunDotnet(outPath);
+            Assert.True(runExit == 0, $"program must run. Exit {runExit}:\n{output}");
+            Assert.Equal(
+                new[] { "10 2 q?", "30 5", "20 7" },
+                output.Split('\n').Select(line => line.Trim()).Where(line => line.Length > 0).ToArray());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// An imported <c>ref int</c> parameter must not take <c>&amp;int32?</c>
+    /// storage: on main <c>Interlocked.Increment(&amp;x)</c> and
+    /// <c>Int32.TryParse("5", &amp;x)</c> compiled, ILVerify reported the
+    /// address of a <c>Nullable`1</c> where an <c>Int32</c> was expected, and
+    /// the program printed 41 twice. Reference-type nullability at imported
+    /// by-ref parameters is unchanged, and those calls still verify and run.
+    /// </summary>
+    [Fact]
+    public void ClrByRefCallees_RejectValueNullableStorage_AndKeepReferenceNullability()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4422_clr_").FullName;
+        try
+        {
+            const string rejected = @"
+package P
+import System
+import System.Threading
+
+var x int32? = 41
+Interlocked.Increment(&x)
+Int32.TryParse(""5"", &x)
+Console.WriteLine(x)
+";
+            var (rejectExit, rejectLog) = Compile(tempDir, rejected, Path.Combine(tempDir, "rejected.dll"));
+            Assert.True(rejectExit != 0, "&int32? must not reach an imported ref int:\n" + rejectLog);
+            Assert.Equal(2, CountOccurrences(rejectLog, "error GS0154"));
+
+            const string accepted = @"
+package P
+import System
+import System.Threading
+
+var arr []?int32 = []int32{1}
+Array.Resize(&arr, 3)
+var o string? = nil
+Interlocked.Exchange(&o, ""a"")
+Interlocked.CompareExchange(&o, ""b"", ""a"")
+var y int32 = 41
+Interlocked.Increment(&y)
+Console.WriteLine(""${arr!!.Length} ${Volatile.Read(&o)} $y"")
+";
+            var outPath = Path.Combine(tempDir, "accepted.dll");
+            var (exit, log) = Compile(tempDir, accepted, outPath);
+            Assert.True(exit == 0, log);
+            Assert.DoesNotContain("GS0612", log, StringComparison.Ordinal);
+
+            IlVerifier.Verify(outPath);
+            var (runExit, output) = RunDotnet(outPath);
+            Assert.True(runExit == 0, $"program must run. Exit {runExit}:\n{output}");
+            Assert.Equal("3 b 42", output.Trim());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static string EmitFixture(string tempDir)
     {
         var references = TrustedPlatformAssemblies().Select(path => MetadataReference.CreateFromFile(path));

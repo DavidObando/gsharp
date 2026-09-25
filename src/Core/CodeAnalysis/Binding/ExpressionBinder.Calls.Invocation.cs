@@ -3405,6 +3405,11 @@ internal sealed partial class ExpressionBinder
                 return new BoundErrorExpression(ce);
             }
 
+            if (TryReportValueNullableByRefArgument(ce, arguments, classSymbol.ClassType, methodName))
+            {
+                return new BoundErrorExpression(null);
+            }
+
             Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             return new BoundErrorExpression(null);
         }
@@ -3734,7 +3739,7 @@ internal sealed partial class ExpressionBinder
                 receiverName = string.Join(" ", receiverName.Split((char[]?)null, StringSplitOptions.RemoveEmptyEntries));
                 Diagnostics.ReportUnableToFindFunction(ce.Location, methodName, receiverName);
             }
-            else
+            else if (!TryReportValueNullableByRefArgument(ce, arguments, receiver?.Type?.ClrType, methodName))
             {
                 Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
             }
@@ -4362,8 +4367,85 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        if (TryReportValueNullableByRefArgument(ce, arguments, receiver?.Type?.ClrType, methodName))
+        {
+            return new BoundErrorExpression(null);
+        }
+
         Diagnostics.ReportUnableToFindFunction(ce.Location, methodName);
         return new BoundErrorExpression(null);
+    }
+
+    /// <summary>
+    /// Issue #4422: before an imported call falls back to "cannot find
+    /// function", names the real reason when an argument addresses
+    /// value-type <c>V?</c> storage (a <c>Nullable&lt;V&gt;</c>) and a
+    /// same-named, same-arity candidate takes that position as <c>ref V</c>
+    /// (or <c>out</c>/<c>in</c>). The two are different runtime types, so no
+    /// candidate applied; reporting GS0154 against that parameter says why.
+    /// </summary>
+    /// <param name="ce">The call syntax.</param>
+    /// <param name="arguments">The bound arguments, in source order.</param>
+    /// <param name="declaringType">The CLR type whose methods were searched, if known.</param>
+    /// <param name="methodName">The method name.</param>
+    /// <returns><see langword="true"/> when GS0154 was reported.</returns>
+    private bool TryReportValueNullableByRefArgument(
+        CallExpressionSyntax ce,
+        ImmutableArray<BoundExpression> arguments,
+        Type? declaringType,
+        string methodName)
+    {
+        if (declaringType == null)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            if (arguments[i] is not BoundAddressOfExpression { Operand.Type: { } storage }
+                || NullableLifting.GetEffectiveClrType(storage) is not { IsValueType: true } storageClr)
+            {
+                continue;
+            }
+
+            // The storage is `V?` (look for `ref V`) or a plain `V` (look for
+            // `ref V?`).
+            var storageIsNullable = NullableLifting.IsValueTypeNullableClr(storageClr);
+            var wantedClr = storageIsNullable ? storageClr.GetGenericArguments()[0] : storageClr;
+
+            foreach (var method in declaringType.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static | BindingFlags.Instance))
+            {
+                if (!string.Equals(method.Name, methodName, StringComparison.Ordinal))
+                {
+                    continue;
+                }
+
+                var parameters = method.GetParameters();
+                if (parameters.Length != arguments.Length
+                    || !parameters[i].ParameterType.IsByRef
+                    || parameters[i].ParameterType.GetElementType() is not { } element
+                    || NullableLifting.IsValueTypeNullableClr(element) == storageIsNullable)
+                {
+                    continue;
+                }
+
+                var elementValue = storageIsNullable ? element : element.GetGenericArguments()[0];
+                if (!ClrTypeUtilities.AreSame(elementValue, wantedClr))
+                {
+                    continue;
+                }
+
+                var location = i < ce.Arguments.Count ? ce.Arguments[i].Location : ce.Location;
+                Diagnostics.ReportWrongValueNullableByRefArgument(
+                    location,
+                    parameters[i].Name ?? "value",
+                    ClrNullability.GetParameterTypeSymbol(parameters[i]),
+                    storage);
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool ContainsNestedNullType(TypeSymbol type)

@@ -1267,6 +1267,14 @@ internal sealed partial class OverloadResolver
                     convertedArguments.Add(argument);
                     continue;
                 }
+
+                if (pointee != null)
+                {
+                    conversions.ReportByRefStorageMismatch(refArgumentLocation, parameter.Name, paramType, pointee);
+                    hasErrors = true;
+                    convertedArguments.Add(argument);
+                    continue;
+                }
             }
             else if (parameter.RefKind != RefKind.None && argument is BoundConditionalAddressExpression condAddrCtor)
             {
@@ -1278,6 +1286,11 @@ internal sealed partial class OverloadResolver
                     convertedArguments.Add(argument);
                     continue;
                 }
+
+                conversions.ReportByRefStorageMismatch(refArgumentLocation, parameter.Name, paramType, pointee);
+                hasErrors = true;
+                convertedArguments.Add(argument);
+                continue;
             }
 
             var argLocation = i < parameterSyntax.Length && parameterSyntax[i] != null
@@ -2387,6 +2400,14 @@ internal sealed partial class OverloadResolver
                     convertedArgs.Add(argument);
                     continue;
                 }
+
+                if (pointee != null)
+                {
+                    conversions.ReportByRefStorageMismatch(argLocation, parameter.Name, parameter.Type, pointee);
+                    hadErrors = true;
+                    convertedArgs.Add(argument);
+                    continue;
+                }
             }
             else if (parameter.RefKind != RefKind.None && argument is BoundConditionalAddressExpression condAddrInit)
             {
@@ -2398,6 +2419,11 @@ internal sealed partial class OverloadResolver
                     convertedArgs.Add(argument);
                     continue;
                 }
+
+                conversions.ReportByRefStorageMismatch(argLocation, parameter.Name, parameter.Type, pointee);
+                hadErrors = true;
+                convertedArgs.Add(argument);
+                continue;
             }
             else if (parameter.RefKind == RefKind.In)
             {
