@@ -1276,8 +1276,14 @@ internal sealed partial class OverloadResolver
             // order, into the named-argument temp whose address is passed; a
             // plain variable's address needs no capture at all.
             var implicitInSpill = false;
+            TypeSymbol? captureType = null;
             if (TryGetInArgumentCaptureValue(argument, out var spilledValue))
             {
+                // The capture temp takes the SLOT's pointee type, not the
+                // value's: an implicit-`in` spill may hold a narrower value
+                // (`FormattableString` at `in IFormattable`) whose own type
+                // would make the passed address `FormattableString&`.
+                captureType = TypeSymbol.TryGetPointeeType(argument.Type, out var slotPointee) ? slotPointee : null;
                 argument = spilledValue;
                 implicitInSpill = true;
             }
@@ -1335,7 +1341,7 @@ internal sealed partial class OverloadResolver
             var temp = new LocalVariableSymbol(
                 $"<>namedArg{sourceIndex}",
                 isReadOnly: true,
-                argument.Type);
+                captureType ?? argument.Type);
             evaluations.Add(new BoundVariableDeclaration(argument.Syntax, temp, argument));
             BoundExpression tempLoad = new BoundVariableExpression(argument.Syntax, temp);
             sourceCaptures[sourceIndex] = tempLoad;

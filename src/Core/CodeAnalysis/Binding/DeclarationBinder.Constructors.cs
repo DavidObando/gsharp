@@ -708,11 +708,18 @@ internal sealed partial class DeclarationBinder
             return null;
         }
 
+        // Keep every symbolic shape the receiver projection keeps
+        // (ConversionClassifier.TrySubstituteParameterTypeFromReceiver): a
+        // type parameter or same-compilation type in the pointee, or a base
+        // type argument whose nullability, fixed length or tuple names the
+        // erased closed signature cannot carry (`Base[string?]`, `Base[[3]int32]`).
         var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(openPointee, openBaseDefinition, baseTypeArguments);
-        return mapped != TypeSymbol.Error
-            && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
-            ? mapped
-            : null;
+        var keepsSymbolicShape = TypeSymbol.ContainsTypeParameter(mapped)
+            || TypeSymbol.ContainsSameCompilationUserType(mapped)
+            || baseTypeArguments.Any(static argument => TypeSymbol.RequiresSymbolicProjection(argument)
+                || TypeSymbol.ContainsFixedLengthArray(argument)
+                || argument is TupleTypeSymbol);
+        return mapped != TypeSymbol.Error && keepsSymbolicShape ? mapped : null;
     }
 
     private BoundExpression BindConstructorInitializerArgument(ExpressionSyntax syntax)

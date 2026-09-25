@@ -693,6 +693,7 @@ public class Issue4400ImplicitInArgumentTests
             }
 
             func Opt(in s string?, b int32) string -> "${s ?? "nil"}${b}"
+            func FN(b int32, in x IFormattable) string -> "${b}:${x.ToString(nil, nil)}"
 
             delegate D(in f (int32) -> int32) int32;
 
@@ -702,8 +703,9 @@ public class Issue4400ImplicitInArgumentTests
             Console.WriteLine(Opt(b: 2, s: nil))
             var d D = (in f (int32) -> int32) -> f(3)
             Console.WriteLine(d((x) -> x * 7))
+            Console.WriteLine(FN(x: "n=${n}", b: 1))
             """,
-            new[] { "n=5", "k=5", "nil2", "21" },
+            new[] { "n=5", "k=5", "nil2", "21", "1:n=5" },
         };
 
         // Named arguments keep lexical evaluation order when an omitted-`in`
@@ -918,6 +920,10 @@ public class Issue4400ImplicitInArgumentTests
                 init(p Pt) : base(p) { }
             }
 
+            class DerivedS : GenBase[string?] {
+                init(s string?) : base(s) { }
+            }
+
             func Open[T](b GenBox[T], v T) T -> b.Take(v)
             func OpenStatic[T](v T) T -> GenBox[T].STake(v)
             func OpenCtor[T](v T) T -> GenHolder[T](v).Value
@@ -936,6 +942,8 @@ public class Issue4400ImplicitInArgumentTests
             Console.WriteLine(Derived[int32](6).Describe())
             Console.WriteLine(DerivedPt(p).Describe())
             Console.WriteLine(OpenIface(GenPick[Pt](), p).X)
+            let maybe string? = "q"
+            Console.WriteLine(DerivedS(maybe).Describe())
             """;
 
         var tempDir = Directory.CreateTempSubdirectory("gs_4400_gen_").FullName;
@@ -951,7 +959,7 @@ public class Issue4400ImplicitInArgumentTests
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, $"the app must run. Exit {exit}:\n{output}");
             Assert.Equal(
-                new[] { "3", "5", "5", "5", "4", "5", "5", "5", "Pt(5)", "6", "Pt(5)", "5" },
+                new[] { "3", "5", "5", "5", "4", "5", "5", "5", "Pt(5)", "6", "Pt(5)", "5", "q" },
                 SplitLines(output));
         }
         finally

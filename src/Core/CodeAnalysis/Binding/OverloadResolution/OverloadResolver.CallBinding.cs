@@ -2330,7 +2330,8 @@ internal sealed partial class OverloadResolver
                         // `in FormattableString` parameter is re-lowered to
                         // the formattable first, exactly as a by-value one is.
                         var inValue = argument;
-                        if (argSyntax is InterpolatedStringExpressionSyntax interpolatedInArg
+                        if (argSyntax != null
+                            && UnwrapNamedArgumentValue(argSyntax) is InterpolatedStringExpressionSyntax interpolatedInArg
                             && expectedType != null
                             && isFormattableStringTargetType(expectedType))
                         {
