@@ -51,7 +51,11 @@ namespace Demo
 }");
 
         // The return value from ext.Combine(...) must be asserted with !!
-        Assert.Contains("ext.Combine(\"hello\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("ext.Combine(\"hello\")", printed);
+        Assert.DoesNotContain("ext.Combine(\"hello\")!!", printed);
     }
 
     /// <summary>
@@ -70,7 +74,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("ext.Combine(\"world\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("ext.Combine(\"world\")", printed);
+        Assert.DoesNotContain("ext.Combine(\"world\")!!", printed);
     }
 
     /// <summary>
@@ -96,7 +104,11 @@ namespace Demo
 }");
 
         // The extension method Merge returns string (oblivious) → needs !!
-        Assert.Contains("items.Merge(\" - \")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("items.Merge(\" - \")", printed);
+        Assert.DoesNotContain("items.Merge(\" - \")!!", printed);
     }
 
     /// <summary>

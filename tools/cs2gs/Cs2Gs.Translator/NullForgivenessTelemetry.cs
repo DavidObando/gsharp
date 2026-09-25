@@ -42,7 +42,25 @@ namespace Cs2Gs.Translator;
 /// </summary>
 internal static class NullForgivenessTelemetry
 {
+    private const string DumpPathVariable = "CS2GS_NULL_FORGIVENESS_TELEMETRY";
+
     private static readonly ConcurrentDictionary<string, int> Counts = new ConcurrentDictionary<string, int>();
+
+    /// <summary>
+    /// Initializes static members of the <see cref="NullForgivenessTelemetry"/> class.
+    /// When <c>CS2GS_NULL_FORGIVENESS_TELEMETRY</c> names a file, the snapshot
+    /// is written there (one <c>count&lt;TAB&gt;reason</c> line per rule) when
+    /// the process exits. ADR-0186 step 6 uses it for a whole-corpus per-rule
+    /// count: set it for <c>build/run-cs2gs-selfmig-migrate.sh</c>. Unset, the
+    /// class behaves exactly as before.
+    /// </summary>
+    static NullForgivenessTelemetry()
+    {
+        if (!string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable(DumpPathVariable)))
+        {
+            System.AppDomain.CurrentDomain.ProcessExit += WriteSnapshotOnExit;
+        }
+    }
 
     /// <summary>
     /// Records one occurrence of <paramref name="reason"/> and returns
@@ -84,4 +102,15 @@ internal static class NullForgivenessTelemetry
     /// so nothing else resets this).
     /// </summary>
     public static void Reset() => Counts.Clear();
+
+    private static void WriteSnapshotOnExit(object sender, System.EventArgs e)
+    {
+        var lines = new List<string>();
+        foreach ((string reason, int count) in Snapshot())
+        {
+            lines.Add(count.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\t" + reason);
+        }
+
+        System.IO.File.WriteAllLines(System.Environment.GetEnvironmentVariable(DumpPathVariable), lines);
+    }
 }

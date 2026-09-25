@@ -474,6 +474,7 @@ public sealed partial class CSharpToGSharpTranslator
             // never on a method group.
             if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol invokedMethod
                 && invokedMethod.MethodKind == MethodKind.DelegateInvoke
+                && !this.PlatformTypedImportNeedsNoBridge(invocation.Expression)
                 && (this.ReceiverNeedsNullForgiveness(
                         invocation.Expression,
                         isDereferenceReceiver: true)
@@ -3225,8 +3226,11 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol targetType,
             ISymbol targetSymbolForPromotionCheck)
         {
+            // ADR-0186 step 6 (PR 0): a `T!` element or member value is checked
+            // by gsc at the non-null target.
             if (translatedValue is NonNullAssertionExpression
                 || IsNullOrSuppressedNull(valueExpression)
+                || this.PlatformTypedImportNeedsNoBridge(valueExpression)
                 || !this.TargetWillRemainNonNullableReference(
                     targetType,
                     targetSymbolForPromotionCheck))

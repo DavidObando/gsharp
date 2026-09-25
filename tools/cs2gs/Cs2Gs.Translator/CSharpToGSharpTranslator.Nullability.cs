@@ -1680,6 +1680,11 @@ public sealed partial class CSharpToGSharpTranslator
             // of the read-side rule `IsImportedObliviousNullableMember` has
             // applied since issue #2113.
             //
+            // ADR-0186 step 3 changed gsc's reading of such a target from `T?`
+            // to the platform type `T!`. The answer here is unchanged: `T? → T!`
+            // is an identity conversion (§3), so a nullable value still needs
+            // no bridge.
+            //
             // Getting this backwards is not a readability wart: `x!!` is a
             // RUNTIME assertion in G# (it lowers to `dup; brtrue; pop; newobj
             // NullReferenceException; throw`), unlike C#'s erased `x!`, so a

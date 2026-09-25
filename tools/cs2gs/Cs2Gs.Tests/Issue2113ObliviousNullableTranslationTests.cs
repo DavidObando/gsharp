@@ -146,7 +146,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("for x in ext.Get()!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("for x in ext.Get()", printed);
+        Assert.DoesNotContain("for x in ext.Get()!!", printed);
     }
 
     [Fact]

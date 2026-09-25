@@ -62,7 +62,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let codeVerifier = tokenBytes.ToUrlBase64String()!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let codeVerifier = tokenBytes.ToUrlBase64String()", printed);
+        Assert.DoesNotContain("let codeVerifier = tokenBytes.ToUrlBase64String()!!", printed);
         Assert.Contains("return codeVerifier", printed);
 
         // Parity: the local's declaration absorbs the SAME single forgiveness a
@@ -87,7 +91,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
+        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
     }
 
     [Fact]
@@ -106,7 +114,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ExtLib.StaticCombine(\"hello\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let result = ExtLib.StaticCombine(\"hello\")", printed);
+        Assert.DoesNotContain("let result = ExtLib.StaticCombine(\"hello\")!!", printed);
     }
 
     [Fact]
@@ -125,7 +137,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ext.Field!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let result = ext.Field", printed);
+        Assert.DoesNotContain("let result = ext.Field!!", printed);
     }
 
     [Fact]
@@ -144,7 +160,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ext.Prop!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let result = ext.Prop", printed);
+        Assert.DoesNotContain("let result = ext.Prop!!", printed);
     }
 
     /// <summary>
@@ -197,7 +217,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = (ext.Combine(\"hello\"))!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let result = (ext.Combine(\"hello\"))", printed);
+        Assert.DoesNotContain("let result = (ext.Combine(\"hello\"))!!", printed);
     }
 
     [Fact]
@@ -216,8 +240,13 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let a = ext.Combine(\"x\")!!", printed);
-        Assert.Contains("let b = ext.Combine(\"y\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let a = ext.Combine(\"x\")", printed);
+        Assert.DoesNotContain("let a = ext.Combine(\"x\")!!", printed);
+        Assert.Contains("let b = ext.Combine(\"y\")", printed);
+        Assert.DoesNotContain("let b = ext.Combine(\"y\")!!", printed);
     }
 
     [Fact]
@@ -238,7 +267,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
+        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
         Assert.Contains("this.Sink(result)", printed);
         Assert.DoesNotContain("this.Sink(result!!)", printed);
     }
@@ -261,7 +294,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
+        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
         Assert.Contains("other = result", printed);
         Assert.DoesNotContain("other = result!!", printed);
     }
@@ -286,7 +323,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
+        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
     }
 
     /// <summary>
@@ -368,7 +409,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
+        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
     }
 
     /// <summary>
@@ -407,8 +452,11 @@ namespace Demo
 
         int CountForgiveness(string printed) => printed.Split("!!").Length - 1;
 
-        Assert.Equal(1, CountForgiveness(viaLocal));
-        Assert.Equal(1, CountForgiveness(direct));
+        // ADR-0186 step 6 (PR 0): both shapes still agree. Neither needs a
+        // `!!` now: gsc reads the oblivious metadata result as `T!` and
+        // checks it at the non-null coercion itself.
+        Assert.Equal(0, CountForgiveness(viaLocal));
+        Assert.Equal(0, CountForgiveness(direct));
     }
 
     /// <summary>

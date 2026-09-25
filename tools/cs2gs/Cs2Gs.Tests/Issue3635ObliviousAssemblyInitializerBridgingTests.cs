@@ -62,7 +62,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Name!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Name", printed);
+        Assert.DoesNotContain("Ext.Name!!", printed);
     }
 
     [Fact]
@@ -79,7 +83,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Items()!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Items()", printed);
+        Assert.DoesNotContain("Ext.Items()!!", printed);
     }
 
     [Fact]
@@ -96,7 +104,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Title!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Title", printed);
+        Assert.DoesNotContain("Ext.Title!!", printed);
     }
 
     [Fact]
@@ -115,7 +127,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Items()!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Items()", printed);
+        Assert.DoesNotContain("Ext.Items()!!", printed);
     }
 
     [Fact]
@@ -137,7 +153,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Name!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Name", printed);
+        Assert.DoesNotContain("Ext.Name!!", printed);
     }
 
     [Fact]
@@ -158,7 +178,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Items()!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Items()", printed);
+        Assert.DoesNotContain("Ext.Items()!!", printed);
     }
 
     [Fact]
@@ -176,7 +200,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Name!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Name", printed);
+        Assert.DoesNotContain("Ext.Name!!", printed);
     }
 
     [Fact]
