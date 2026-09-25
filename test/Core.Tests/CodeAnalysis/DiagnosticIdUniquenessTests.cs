@@ -185,6 +185,10 @@ public class DiagnosticIdUniquenessTests
             // regardless of the receiver's owning package or kind.
             ["GS0103"] = "Retired",
 
+            // Retired by issue #4400: an argument without `in` at an `in`
+            // parameter is passed by readonly reference, as in C#.
+            ["GS0242"] = "Retired",
+
             // Retired when non-loop labels became valid goto targets.
             ["GS0294"] = "Retired",
 

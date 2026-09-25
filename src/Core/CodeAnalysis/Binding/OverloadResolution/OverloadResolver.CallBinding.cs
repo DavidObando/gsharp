@@ -2311,13 +2311,16 @@ internal sealed partial class OverloadResolver
                 {
                     if (parameter.RefKind == RefKind.In && argRefKind == RefKind.None)
                     {
-                        // GS0242 (error): `in` without the explicit modifier. ADR-0060
-                        // says we do NOT silently spill a value to a temp, and no
-                        // downstream type error is guaranteed to fire, so the diagnostic
-                        // itself carries error severity (issue #3501: it was a warning,
-                        // and the mis-bound argument reached the emitter as GS9998).
-                        Diagnostics.ReportInArgumentMissingInModifier(argSyntax?.Location ?? syntax.Location, i + 1, parameter.Name);
-                        hasErrors = true;
+                        // Issue #4400 (ADR-0060 amendment): `in` without the
+                        // call-site modifier passes a readonly reference, as in
+                        // C# — the lvalue's own address, or a spilled temp's.
+                        var implicitIn = conversions.BindImplicitInArgument(
+                            argSyntax?.Location ?? syntax.Location,
+                            argument,
+                            Invariant.Required(expectedType, "a bound parameter has a target type"),
+                            parameter);
+                        boundArguments[i] = implicitIn;
+                        hasErrors |= implicitIn is BoundErrorExpression;
                         continue;
                     }
 

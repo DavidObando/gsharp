@@ -686,18 +686,19 @@ internal sealed partial class OverloadResolver
                 {
                     if (parameter.RefKind == RefKind.In && argumentRefKind == RefKind.None)
                     {
-                        Diagnostics.ReportInArgumentMissingInModifier(argumentLocation, i + 1, parameter.Name);
-                    }
-                    else
-                    {
-                        Diagnostics.ReportRefKindMismatch(
-                            argumentLocation,
-                            i + 1,
-                            parameter.Name,
-                            refKindToString(parameter.RefKind),
-                            refKindToString(argumentRefKind));
+                        // Issue #4400: pass a readonly reference, as in C#.
+                        var implicitIn = conversions.BindImplicitInArgument(argumentLocation, argument, parameter.Type, parameter);
+                        hasErrors |= implicitIn is BoundErrorExpression;
+                        converted.Add(implicitIn);
+                        continue;
                     }
 
+                    Diagnostics.ReportRefKindMismatch(
+                        argumentLocation,
+                        i + 1,
+                        parameter.Name,
+                        refKindToString(parameter.RefKind),
+                        refKindToString(argumentRefKind));
                     hasErrors = true;
                     converted.Add(argument);
                     continue;
@@ -1425,7 +1426,7 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
-            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
+            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1], i + 1));
         }
 
         // Issue #1931: stash the extension function's own (explicit or
@@ -1924,7 +1925,7 @@ internal sealed partial class OverloadResolver
         continue;
             }
 
-            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
+            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset], i + 1));
         }
 
         // Issue #1931: stash the method's own (explicit or inferred) type

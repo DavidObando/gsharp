@@ -1275,6 +1275,18 @@ internal sealed partial class OverloadResolver
                 ? Invariant.Required(parameterSyntax[i], "an explicit constructor argument has source syntax").Location
                 : syntax.Identifier.Location;
 
+            // Issue #4400: a plain argument at an `in` constructor parameter is
+            // passed by readonly reference, as in C#.
+            if (parameter.RefKind == RefKind.In
+                && argument is not BoundAddressOfExpression
+                && argument is not BoundConditionalAddressExpression)
+            {
+                var implicitIn = conversions.BindImplicitInArgument(argLocation, argument, paramType, parameter);
+                hasErrors |= implicitIn is BoundErrorExpression;
+                convertedArguments.Add(implicitIn);
+                continue;
+            }
+
             if (argument is BoundErrorExpression { Syntax: LambdaExpressionSyntax deferredLambda }
                 && bindLambdaWithTarget != null
                 && MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(paramType, out var deferredTarget)
@@ -2359,6 +2371,15 @@ internal sealed partial class OverloadResolver
                     convertedArgs.Add(argument);
                     continue;
                 }
+            }
+            else if (parameter.RefKind == RefKind.In)
+            {
+                // Issue #4400: a plain argument at an `in` parameter of the
+                // chained constructor is passed by readonly reference.
+                var implicitIn = conversions.BindImplicitInArgument(argLocation, argument, parameter.Type, parameter);
+                hadErrors |= implicitIn is BoundErrorExpression;
+                convertedArgs.Add(implicitIn);
+                continue;
             }
 
             // Issue #2069: force the wrap for a func/arrow literal argument

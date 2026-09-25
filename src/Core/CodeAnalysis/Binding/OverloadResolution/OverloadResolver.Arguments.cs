@@ -1622,8 +1622,10 @@ internal sealed partial class OverloadResolver
                 }
             }
 
-            // For imported `in`: accept either &expr or plain value — the
-            // ADR-0039 emit path spills a value to a temp for CLR interop.
+            // For imported `in`: accept either &expr or a plain value. Issue
+            // #4400: the CLR argument conversions have already rewritten a
+            // plain value into a readonly reference (the lvalue's own address,
+            // or a spilled temp's); the emitter has no value fallback.
         }
     }
 

@@ -1967,7 +1967,7 @@ internal sealed partial class StatementBinder
         if (!isReadOnly && RefCapabilities.IsReadOnlyStorage(initializer))
         {
             // Aliasing a read-only binding would let the alias mutate it; mirror
-            // the existing `&readonly` rejection (GS9005 / GS0242 for `in`).
+            // the existing `&readonly` rejection (GS9005 / GS0237 for `in`).
             if (initializer is BoundVariableExpression { Variable: ParameterSymbol inParam } && inParam.RefKind == RefKind.In)
             {
                 Diagnostics.ReportCannotAssignToInParameter(refModifierLoc, inParam.Name);

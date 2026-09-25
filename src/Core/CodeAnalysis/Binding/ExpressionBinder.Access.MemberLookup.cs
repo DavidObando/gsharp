@@ -2868,6 +2868,21 @@ internal sealed partial class ExpressionBinder
         for (var i = 0; i < arguments.Length; i++)
         {
             var parameterType = MemberLookup.GetIndexerParameterTypeSymbol(targetType, indexer, i);
+
+            // Issue #4400: an `in` index parameter takes a readonly reference;
+            // the plain index argument is converted to the pointee and passed
+            // by address (an lvalue's own, or a spilled temp's), as in C#.
+            var indexParameters = indexer.GetIndexParameters();
+            if (i < indexParameters.Length
+                && ConversionClassifier.IsImplicitInClrArgument(arguments[i], indexParameters[i]))
+            {
+                var inPointee = TypeSymbol.TryGetPointeeType(parameterType, out var substitutedPointee)
+                    ? substitutedPointee
+                    : ConversionClassifier.GetImplicitInClrPointeeType(indexParameters[i], i, method: null, receiverType: null, symbolicMethodTypeArgs: default);
+                converted.Add(conversions.BindImplicitInArgument(diagnosticLocation, arguments[i], inPointee, parameter: null));
+                continue;
+            }
+
             converted.Add(conversions.BindConversion(diagnosticLocation, arguments[i], parameterType));
         }
 
@@ -4824,7 +4839,7 @@ internal sealed partial class ExpressionBinder
                 method: method,
                 receiverType: constraintType,
                 symbolicMethodTypeArgs: symbolicMethodTypeArgs)
-            : arguments;
+            : conversions.BindImplicitInClrArguments(arguments, parameters, callSyntax, downstreamMapping);
         var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
         if (resolution.IsExpanded)
         {

@@ -1841,20 +1841,31 @@ public sealed partial class CSharpToGSharpTranslator
                 return AddressOf(this.TranslateExpression(argument.Expression));
             }
 
-            // ADR-0060: G# requires the `in` modifier at call sites of
-            // source-declared functions (GS0242, an error — the binder never
-            // silently spills), so an explicit C# `in x` argument keeps its
-            // keyword and an implicit one targeting a source-declared `in`
-            // parameter gains it. Imported CLR targets keep the plain value —
-            // that path spills to a temp itself. Non-identifier lvalues use
-            // the universal `&expr` back-compat form the binder accepts at
-            // any ref-kind parameter.
+            // ADR-0060: an explicit C# `in x` argument keeps its keyword, and
+            // an implicit one naming a variable that targets a source-declared
+            // `in` parameter gains it. Non-identifier explicit lvalues use the
+            // universal `&expr` back-compat form the binder accepts at any
+            // ref-kind parameter. Issue #4400: any other implicit argument
+            // stays a plain value — gsc now binds it like C#, taking an
+            // lvalue's address or spilling an rvalue to a readonly temp, so
+            // `Scale(x + 1)` must not become the non-lvalue `&(x + 1)`.
+            // Imported CLR targets keep the plain value too.
             if (refKind == SyntaxKind.InKeyword || this.TargetsSourceDeclaredInParameter(argument))
             {
-                GExpression translatedIn = WithoutNonNullAssertion(this.TranslateExpression(argument.Expression));
-                return translatedIn is IdentifierExpression inIdentifier
-                    ? new OutArgumentExpression("in", inIdentifier.Name)
-                    : AddressOf(translatedIn);
+                GExpression translated = this.TranslateExpression(argument.Expression);
+                GExpression translatedIn = WithoutNonNullAssertion(translated);
+                if (translatedIn is IdentifierExpression inIdentifier
+                    && (refKind == SyntaxKind.InKeyword || this.PassesInArgumentWithoutConversion(argument)))
+                {
+                    return new OutArgumentExpression("in", inIdentifier.Name);
+                }
+
+                // An implicit non-variable argument stays a plain value (its
+                // `!!` is a valid value assertion); only an explicit `in`
+                // needs the address form.
+                return refKind == SyntaxKind.InKeyword
+                    ? AddressOf(translatedIn)
+                    : translated;
             }
 
             // A declared-nullable reference argument that C# flow analysis has
@@ -2041,13 +2052,22 @@ public sealed partial class CSharpToGSharpTranslator
 
         // ADR-0060: whether this argument binds (implicitly, in C#) to an `in`
         // parameter of a SOURCE-declared method — one that migrates to a G#
-        // func whose call sites must spell the `in` modifier (GS0242).
-        // Metadata-imported targets are excluded: the imported-call path
-        // accepts a plain value and spills it to a temp itself.
+        // func, where a variable argument keeps the explicit `in` spelling.
+        // Metadata-imported targets are excluded: like any plain argument
+        // (issue #4400), gsc passes them by implicit readonly reference.
         private bool TargetsSourceDeclaredInParameter(ArgumentSyntax argument) =>
             this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } parameter }
             && parameter.RefKind == RefKind.In
             && !parameter.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty;
+
+        // Issue #4400: C# passes an implicit `in` variable by reference only
+        // when it already has the parameter's type; a converted argument
+        // (`int` local at an `in long` parameter) is converted and spilled, so
+        // it must stay a plain value rather than become `in x` (GS0154).
+        private bool PassesInArgumentWithoutConversion(ArgumentSyntax argument) =>
+            this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } parameter, Value: { } value }
+            && value is not IConversionOperation { IsImplicit: true }
+            && SymbolEqualityComparer.Default.Equals(value.Type, parameter.Type);
 
         // Issue #3414: Roslyn has already fixed the converted delegate signature
         // at a direct argument. Preserve it when the callable's natural signature

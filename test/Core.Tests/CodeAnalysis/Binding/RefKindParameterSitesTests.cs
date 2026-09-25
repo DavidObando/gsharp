@@ -149,17 +149,18 @@ func Bad[T](callback InAction[T], ref value T) {
             Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS0155");
         }
 
+        // Issue #4400: omitting `in` at a delegate's `in` parameter binds
+        // like C# (a readonly reference), so it is not a ref-kind mismatch.
         var missingIn = Evaluate(@"
 package InDelegateMissingModifier
 
-delegate InAction(in value int32);
-var callback InAction = (in value int32) -> { }
-var value = 0
+delegate InAction(in value int32) int32;
+var callback InAction = (in value int32) -> value * 2
+var value = 21
 callback(value)
-0
 ");
-        Assert.Contains(missingIn.Diagnostics, d => d.Id == "GS0242");
-        Assert.DoesNotContain(missingIn.Diagnostics, d => d.Id == "GS0155");
+        Assert.Empty(missingIn.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(42, missingIn.Value);
     }
 
     [Fact]
@@ -318,22 +319,22 @@ class MyParser : IParser {
     }
 
     [Fact]
-    public void InParameter_MissingCallSiteModifier_IsHardError()
+    public void InParameter_MissingCallSiteModifier_PassesReadOnlyReference()
     {
-        // Issue #3501: GS0242 was a warning, and the single-candidate user
-        // function path produced no follow-up type error — the mis-bound
-        // argument reached the emitter as an internal GS9998. The diagnostic
-        // itself now carries error severity (ADR-0060: no silent spill).
+        // Issue #4400 (ADR-0060 amendment): omitting `in` at the call site
+        // binds like C# — the lvalue's own address, or a spilled temp for an
+        // rvalue — instead of the former GS0242 error (issue #3501 had made it
+        // an error because the argument reached the emitter as GS9998).
         var result = Evaluate(@"
 func Take(in f int32) int32 {
     return f * 2
 }
 
 let x = 3
-Take(x)
+Take(x) + Take(x + 1)
 ");
-        Assert.Contains(result.Diagnostics, d => d.Id == "GS0242" && d.IsError);
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9998");
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(14, result.Value);
     }
 
     [Fact]

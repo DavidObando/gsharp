@@ -18,8 +18,8 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Issue #3501 residual-synthetic burn-down: <c>goto default</c> to a
 /// do-nothing arm prints as a native <c>break</c> (no <c>__gotoDefault</c>
-/// label pair), and an implicit C# <c>in</c> argument to a source-declared
-/// method gains the modifier G# requires (GS0242 is an error).
+/// label pair), and an implicit C# <c>in</c> variable argument to a
+/// source-declared method gains the <c>in</c> modifier (optional since #4400).
 /// </summary>
 public class Issue3501ResidualSyntheticRetargetTests
 {
