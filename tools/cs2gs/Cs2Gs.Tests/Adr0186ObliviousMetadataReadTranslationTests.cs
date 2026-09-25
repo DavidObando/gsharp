@@ -349,7 +349,8 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
     /// <summary>
     /// A lambda converted to an oblivious delegate (<c>Reader</c>, whose Invoke
     /// returns <c>string!</c>) has a fixed result type too, so its result stays
-    /// bare, and a nil name is returned rather than thrown.
+    /// bare, and a nil name is returned rather than thrown. That holds for a
+    /// lambda reached through a conditional as well.
     /// </summary>
     [Fact]
     public void A_Lambda_With_An_Oblivious_Target_Return_Leaves_Its_Result_Bare()
@@ -366,6 +367,12 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
                     Reader read = () => n.Name;
                     return read() == null;
                 }
+
+                public static bool ChosenNameIsNil(Node n, bool flag)
+                {
+                    Reader read = flag ? (() => n.Name) : (() => "");
+                    return read() == null;
+                }
             }
             """,
             MetadataReference.CreateFromFile(libraryPath),
@@ -374,7 +381,7 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
         Assert.DoesNotContain("n.Name!!", printed, StringComparison.Ordinal);
 
         EmittedOracleResult result = EmittedOracle.Evaluate(
-            new[] { printed + Environment.NewLine + "Use.NameIsNil(Node.Make(nil, nil))" },
+            new[] { printed + Environment.NewLine + "Use.NameIsNil(Node.Make(nil, nil)) && Use.ChosenNameIsNil(Node.Make(nil, nil), true)" },
             new EmittedOracleOptions { References = new[] { libraryPath } });
         Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
         Assert.Equal(true, result.Value);

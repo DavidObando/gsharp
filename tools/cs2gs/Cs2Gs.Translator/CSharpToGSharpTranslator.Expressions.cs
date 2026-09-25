@@ -1577,7 +1577,9 @@ public sealed partial class CSharpToGSharpTranslator
         private bool PlatformTypedImportNeedsNoBridge(ExpressionSyntax value) =>
             this.ReadsPlatformTypedImport(value) && !this.ValueFeedsTypeInference(value);
 
-        private bool ValueFeedsTypeInference(ExpressionSyntax value)
+        // The outermost expression whose value is `value` passed through
+        // unchanged: parentheses, a conditional or switch arm, and `??`.
+        private static SyntaxNode SkipValuePreservingParents(SyntaxNode value)
         {
             SyntaxNode node = value;
             while (node.Parent is ParenthesizedExpressionSyntax
@@ -1589,6 +1591,12 @@ public sealed partial class CSharpToGSharpTranslator
                 node = node.Parent;
             }
 
+            return node;
+        }
+
+        private bool ValueFeedsTypeInference(ExpressionSyntax value)
+        {
+            SyntaxNode node = SkipValuePreservingParents(value);
             switch (node.Parent)
             {
                 // An argument to a parameter whose type mentions a method type
@@ -1662,11 +1670,11 @@ public sealed partial class CSharpToGSharpTranslator
         // exactly when it sits in an inference position itself.
         private bool LambdaTypeIsInferred(AnonymousFunctionExpressionSyntax lambda)
         {
-            SyntaxNode node = lambda;
-            while (node.Parent is ParenthesizedExpressionSyntax)
-            {
-                node = node.Parent;
-            }
+            // The same walk ValueFeedsTypeInference makes, so a lambda inside
+            // a conditional (`Reader read = flag ? (() => n.Name) : …`) reaches
+            // the local's declared type here and is not mistaken for an
+            // inferred local.
+            SyntaxNode node = SkipValuePreservingParents(lambda);
 
             if (node.Parent is EqualsValueClauseSyntax
                 {
