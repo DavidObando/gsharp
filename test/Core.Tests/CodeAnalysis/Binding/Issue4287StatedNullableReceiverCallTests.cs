@@ -59,6 +59,13 @@ public sealed class Issue4287StatedNullableReceiverCallTests
     [InlineData("class MyError : Exception {\n    init() : base(\"m\") { }\n}\nfunc use(e MyError?) Exception { return e.GetBaseException() }", "")]
     [InlineData("func use[T class](x T?) string { return x.ToString() }", "")]
 
+    // The fallbacks that run AFTER instance-method selection fails: an
+    // imported interface's implicit System.Object members, and a
+    // delegate-typed member invoked through the receiver.
+    [InlineData("func use(d IDisposable?) string { return d.ToString() }", "")]
+    [InlineData("func use(d IDisposable?) int32 { return d.GetHashCode() }", "")]
+    [InlineData("class Holder {\n    var F Func[string] = func() string { return \"f\" }\n}\nfunc use(h Holder?) string { return h.F() }", "")]
+
     // Cases 5, 11 and 12: a stated `string?` return, chained with no syntax
     // of its own for the receiver.
     [InlineData("", "    Console.WriteLine(Path.GetDirectoryName(\"/\").ToUpper())")]

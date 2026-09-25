@@ -4286,7 +4286,12 @@ internal sealed partial class ExpressionBinder
         if (receiver != null
             && TryBindClrDelegateMemberInvocation(receiver, clrType, methodName, arguments, ce, argumentNames, out var delegateMemberCall))
         {
-            return delegateMemberCall;
+            // Issue #4287: loading the delegate member dereferences the
+            // receiver, and this fallback runs after the instance-method gate,
+            // so it applies the gate itself (`x.F()` on an `Fns?`).
+            return TryReportStatedNullableReceiverCall(receiver, receiverSyntax, receiverStart, ce)
+                ? new BoundErrorExpression(null)
+                : delegateMemberCall;
         }
 
         // Phase 3.B.6 / ADR-0019: extension function fallback. After all
@@ -4329,7 +4334,14 @@ internal sealed partial class ExpressionBinder
         if (clrType is { IsInterface: true }
             && TryBindInterfaceObjectMemberCall(receiver!, methodName, arguments, ce, argumentNames, out var importedIfaceObjectCall))
         {
-            return importedIfaceObjectCall;
+            // Issue #4287: this fallback selects a System.Object member for an
+            // imported interface receiver AFTER the instance-method gate above,
+            // so it applies the same gate itself: `d.ToString()` on an
+            // `IDisposable?` is a call on a stated `T?` receiver like any other.
+            // (receiver: non-null here, per the note above.)
+            return receiver != null && TryReportStatedNullableReceiverCall(receiver, receiverSyntax, receiverStart, ce)
+                ? new BoundErrorExpression(null)
+                : importedIfaceObjectCall;
         }
 
         // Issue #4013: before falling back to the generic "Cannot find
