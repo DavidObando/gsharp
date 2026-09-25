@@ -203,6 +203,123 @@ public class Issue4400ImplicitInArgumentTests
         }
         """;
 
+    private const string NamedOrderTwinSource = """
+        public static class OrderTwin
+        {
+            private sealed class H
+            {
+                public int F;
+
+                public H(int f)
+                {
+                    F = f;
+                }
+            }
+
+            private sealed class S
+            {
+                public H h = new H(5);
+                public int[] xs = { 10, 20 };
+                public int i;
+                public int[] arr = { 1, 2 };
+                public int v = 3;
+            }
+
+            private static int Consume(int b, in int a) => (a * 100) + b;
+
+            private static int Reassign(S s)
+            {
+                s.h = new H(7);
+                return 1;
+            }
+
+            private static int Bump(S s)
+            {
+                s.i = 1;
+                s.xs = new[] { 30, 40 };
+                return 2;
+            }
+
+            private static int Swap(S s)
+            {
+                s.arr[0] = 99;
+                s.arr = new[] { 50, 60 };
+                return 3;
+            }
+
+            private static int SetV(S s)
+            {
+                s.v = 8;
+                return 4;
+            }
+
+            public static string Run()
+            {
+                var s = new S();
+                int r1 = Consume(a: s.h.F, b: Reassign(s));
+                int r2 = Consume(a: s.xs[s.i], b: Bump(s));
+                ref int r = ref s.arr[0];
+                int r3 = Consume(a: r, b: Swap(s));
+                int r4 = Consume(a: s.v, b: SetV(s));
+                return $"{r1} {r2} {r3} {r4}";
+            }
+        }
+        """;
+
+    private const string NamedOrderSource = """
+        package P
+        import System
+
+        class H {
+            var F int32 = 0
+            init(f int32) { F = f }
+        }
+
+        class S {
+            var h H = H(5)
+            var xs []int32 = []int32{10, 20}
+            var i int32 = 0
+            var arr []int32 = []int32{1, 2}
+            var v int32 = 3
+        }
+
+        func Consume(b int32, in a int32) int32 -> a * 100 + b
+
+        func Reassign(s S) int32 {
+            s.h = H(7)
+            return 1
+        }
+
+        func Bump(s S) int32 {
+            s.i = 1
+            s.xs = []int32{30, 40}
+            return 2
+        }
+
+        func Swap(s S) int32 {
+            s.arr[0] = 99
+            s.arr = []int32{50, 60}
+            return 3
+        }
+
+        func SetV(s S) int32 {
+            s.v = 8
+            return 4
+        }
+
+        func Run() string {
+            let s = S()
+            let r1 = Consume(a: s.h.F, b: Reassign(s))
+            let r2 = Consume(a: s.xs[s.i], b: Bump(s))
+            var ref r = s.arr[0]
+            let r3 = Consume(a: r, b: Swap(s))
+            let r4 = Consume(a: s.v, b: SetV(s))
+            return "${r1} ${r2} ${r3} ${r4}"
+        }
+
+        Console.WriteLine(Run())
+        """;
+
     private const string AliasingSource = """
         package P
         import System
@@ -843,6 +960,50 @@ public class Issue4400ImplicitInArgumentTests
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, $"the app must run. Exit {exit}:\n{output}");
             Assert.Equal(new[] { "21", "35" }, SplitLines(output));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Reordered named arguments select an `in` argument's storage in SOURCE
+    /// order, as C# does, even when a later argument reassigns the field
+    /// receiver or the array/index that selects it; a `ref` local keeps
+    /// aliasing the storage it was bound to. Checked against the C# twin.
+    /// </summary>
+    [Fact]
+    public void NamedArgumentStorageSelection_MatchesCSharp()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4400_order_").FullName;
+        try
+        {
+            var twinPath = CompileCSharp(tempDir, "OrderTwin", NamedOrderTwinSource);
+            var context = new AssemblyLoadContext("gs_4400_order_twin", isCollectible: true);
+            string expected;
+            try
+            {
+                using var twinImage = new MemoryStream(File.ReadAllBytes(twinPath));
+                var twin = context.LoadFromStream(twinImage);
+                var run = twin.GetType("OrderTwin", throwOnError: true)!.GetMethod("Run", BindingFlags.Public | BindingFlags.Static)!;
+                expected = (string)run.Invoke(null, null)!;
+            }
+            finally
+            {
+                context.Unload();
+            }
+
+            Assert.Equal("501 1002 9903 804", expected);
+
+            var appPath = Path.Combine(tempDir, "Order.dll");
+            var log = Compile(tempDir, NamedOrderSource, appPath);
+            Assert.True(File.Exists(appPath), $"the ordering program must compile. Log:\n{log}");
+            IlVerifier.Verify(appPath);
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, $"the ordering program must run. Exit {exit}:\n{output}");
+            Assert.Equal(expected, output.Trim());
         }
         finally
         {

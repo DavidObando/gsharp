@@ -1107,14 +1107,15 @@ internal sealed partial class OverloadResolver
     }
 
     // Issue #4400: the value a reordered named `in` argument is captured as,
-    // in source order. An implicit-`in` spill captures its spilled value. A
-    // readonly (`in`) address whose own evaluation is observable
-    // (`GetHolder().Field`, `xs[next()]`) captures the value it addresses: the
-    // receiver/index then run in source order, at the cost of the callee
-    // seeing a copy instead of the storage — a readonly reference is only
-    // distinguishable from a copy if that storage changes during the call. A
-    // by-ref local cannot hold the address instead, because a named-argument
-    // temp may have to survive an `await` in a later argument.
+    // in source order, when its storage can neither stay put (see
+    // IsFixedStorageAddress) nor be re-addressed from captured inputs (see
+    // TryGetAddressInputs). An implicit-`in` spill captures its spilled value;
+    // any other readonly (`in`) address — a ref-returning call's, a
+    // dereference's — captures the value it addresses, so it still runs in
+    // source order. The cost is that the callee sees a copy of that storage,
+    // which a readonly reference only reveals if the storage changes during
+    // the call. A by-ref local cannot hold the address instead, because a
+    // named-argument temp may have to survive an `await` in a later argument.
     private static bool TryGetInArgumentCaptureValue(BoundExpression argument, [NotNullWhen(true)] out BoundExpression? value)
     {
         if (TryGetImplicitInSpilledValue(argument, out value))
@@ -1123,7 +1124,8 @@ internal sealed partial class OverloadResolver
         }
 
         if (argument is BoundAddressOfExpression { IsReadOnly: true, IsUnmanaged: false } readOnlyAddress
-            && GSharp.Core.CodeAnalysis.Lowering.SideEffectAnalyzer.HasObservableSideEffect(readOnlyAddress))
+            && !IsFixedStorageAddress(readOnlyAddress)
+            && !TryGetAddressInputs(readOnlyAddress, out _, out _))
         {
             value = readOnlyAddress.Operand;
             return true;
@@ -1131,6 +1133,71 @@ internal sealed partial class OverloadResolver
 
         value = null;
         return false;
+    }
+
+    // Issue #4400: an address whose storage no later argument can redirect —
+    // a variable (reassigning it changes the value at that same storage,
+    // which the callee then sees exactly as in C#), a static field, or a
+    // value-type field chain rooted in such storage — may stay in its
+    // parameter slot when the arguments are reordered.
+    private static bool IsFixedStorageAddress(BoundExpression argument)
+        => argument is BoundAddressOfExpression { IsUnmanaged: false } address && IsFixedStorage(address.Operand);
+
+    private static bool IsFixedStorage(BoundExpression operand)
+        => operand switch
+        {
+            BoundVariableExpression => true,
+            BoundFieldAccessExpression { Receiver: null } => true,
+            BoundFieldAccessExpression { Receiver: { } receiver }
+                when !Binder.IsReferenceTypeForConstraint(receiver.Type) => IsFixedStorage(receiver),
+            _ => false,
+        };
+
+    // Issue #4400: the inputs that select an address's storage — a reference
+    // receiver (`h` in `h.F`) or an array and its index (`xs[i]`). Capturing
+    // them in source order and re-taking the address from the captured values
+    // passes exactly the storage C# passes, even when a later argument
+    // reassigns `h`, `xs` or `i`, and keeps the aliasing.
+    private static bool TryGetAddressInputs(
+        BoundExpression argument,
+        [NotNullWhen(true)] out BoundAddressOfExpression? address,
+        out ImmutableArray<BoundExpression> inputs)
+    {
+        if (argument is BoundAddressOfExpression { IsUnmanaged: false } candidate)
+        {
+            switch (candidate.Operand)
+            {
+                case BoundFieldAccessExpression { Receiver: { } receiver }
+                    when Binder.IsReferenceTypeForConstraint(receiver.Type):
+                    address = candidate;
+                    inputs = ImmutableArray.Create(receiver);
+                    return true;
+                case BoundIndexExpression { IsArrayBackedElementAccess: true, Indices.Length: 1 } element:
+                    address = candidate;
+                    inputs = ImmutableArray.Create(element.Target, element.Indices[0]);
+                    return true;
+            }
+        }
+
+        address = null;
+        inputs = default;
+        return false;
+    }
+
+    // Issue #4400: re-roots an address on captured inputs.
+    private sealed class CapturedInputRewriter : BoundTreeRewriter
+    {
+        private readonly Dictionary<BoundExpression, BoundExpression> replacements;
+
+        public CapturedInputRewriter(Dictionary<BoundExpression, BoundExpression> replacements)
+        {
+            this.replacements = replacements;
+        }
+
+        public BoundExpression Rewrite(BoundExpression expression) => RewriteExpression(expression);
+
+        protected override BoundExpression RewriteExpression(BoundExpression node)
+            => replacements.TryGetValue(node, out var replacement) ? replacement : base.RewriteExpression(node);
     }
 
     private static ImmutableArray<BoundExpression> PreserveMappedArgumentEvaluationOrder(
@@ -1162,16 +1229,17 @@ internal sealed partial class OverloadResolver
 
             reordered |= parameterIndex != sourceIndex;
 
-            // Issue #4400: an `in` argument is captured by value below (see
-            // TryGetInArgumentCaptureValue), and an address with no side
-            // effects (a local's, a field of a local's) is order-independent
-            // and stays in its slot. Only a `ref`/`out` address whose
-            // evaluation is observable still forgoes reordering.
+            // Issue #4400: an address stays in its slot when its storage is
+            // fixed, is re-taken from inputs captured in source order when a
+            // receiver/index selects it, and an `in` one is otherwise captured
+            // by value. Only a remaining `ref`/`out` address still forgoes
+            // reordering, as before.
             if (!hasHandlerSourceForwarding &&
                 parameterOrderedArguments[slot] is
                     BoundAddressOfExpression or BoundConditionalAddressExpression &&
                 !TryGetInArgumentCaptureValue(parameterOrderedArguments[slot], out _) &&
-                GSharp.Core.CodeAnalysis.Lowering.SideEffectAnalyzer.HasObservableSideEffect(parameterOrderedArguments[slot]))
+                !IsFixedStorageAddress(parameterOrderedArguments[slot]) &&
+                !TryGetAddressInputs(parameterOrderedArguments[slot], out _, out _))
             {
                 return parameterOrderedArguments;
             }
@@ -1193,17 +1261,37 @@ internal sealed partial class OverloadResolver
 
             // Issue #4400: an `in` argument evaluates its VALUE here, in source
             // order, into the named-argument temp whose address is passed; a
-            // side-effect-free address needs no capture at all.
+            // plain variable's address needs no capture at all.
             var implicitInSpill = false;
             if (TryGetInArgumentCaptureValue(argument, out var spilledValue))
             {
                 argument = spilledValue;
                 implicitInSpill = true;
             }
-            else if (argument is BoundAddressOfExpression or BoundConditionalAddressExpression
-                && !GSharp.Core.CodeAnalysis.Lowering.SideEffectAnalyzer.HasObservableSideEffect(argument))
+            else if (IsFixedStorageAddress(argument))
             {
                 replacements[slot] = argument;
+                continue;
+            }
+            else if (TryGetAddressInputs(argument, out var inputAddress, out var inputs))
+            {
+                var inputTemps = new Dictionary<BoundExpression, BoundExpression>(ReferenceEqualityComparer.Instance);
+                for (var inputIndex = 0; inputIndex < inputs.Length; inputIndex++)
+                {
+                    var input = inputs[inputIndex];
+                    var inputTemp = new LocalVariableSymbol(
+                        $"<>namedArg{sourceIndex}_{inputIndex}",
+                        isReadOnly: true,
+                        input.Type);
+                    evaluations.Add(new BoundVariableDeclaration(input.Syntax, inputTemp, input));
+                    inputTemps[input] = new BoundVariableExpression(input.Syntax, inputTemp);
+                }
+
+                replacements[slot] = new BoundAddressOfExpression(
+                    inputAddress.Syntax,
+                    new CapturedInputRewriter(inputTemps).Rewrite(inputAddress.Operand),
+                    unmanaged: false,
+                    inputAddress.IsReadOnly);
                 continue;
             }
 
