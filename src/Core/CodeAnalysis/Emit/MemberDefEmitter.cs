@@ -1240,6 +1240,27 @@ internal sealed class MemberDefEmitter
     /// </summary>
     private EntityHandle GetEventTypeHandle(TypeSymbol type)
     {
+        // Issue #4391: a field-like event is usually declared nullable
+        // (`event E EventHandler[T]?`). The `?` / `!` wrapper is a G#
+        // annotation only, so peel it before choosing the token; otherwise
+        // none of the branches below match and the wrapper's erased ClrType
+        // (`EventHandler<object>`) becomes the accessor's castclass token.
+        while (type is NullableTypeSymbol or PlatformTypeSymbol)
+        {
+            type = type is NullableTypeSymbol nullable
+                ? nullable.UnderlyingType
+                : ((PlatformTypeSymbol)type).UnderlyingType;
+        }
+
+        // Issue #4391: a type that mentions an in-scope type parameter
+        // (`EventHandler[T]` on `GB[T]`) has only an erased runtime ClrType;
+        // encode it as a TypeSpec (`EventHandler`1<!T>`) so the castclass
+        // token matches the CAS-loop locals and the backing field.
+        if (TypeSymbol.ContainsTypeParameter(type))
+        {
+            return this.GetEventTypeSpecHandle(type);
+        }
+
         if (type is FunctionTypeSymbol fnType)
         {
             var clrType = fnType.ClrType;
