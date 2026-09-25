@@ -388,8 +388,18 @@ public sealed partial class DiagnosticBag
         var nullableSide = storageType is NullableTypeSymbol storageNullable ? storageNullable : parameterType as NullableTypeSymbol;
         var underlying = nullableSide?.UnderlyingType ?? storageType;
         var reason = $"{storageType}' — '{underlying}?' is a Nullable<{underlying}>, a different runtime type from '{underlying}";
-        Report(location, DiagnosticDescriptors.WrongArgumentType, name, parameterType, reason);
+        ReportWrongArgumentType(location, name, parameterType, reason);
     }
+
+    /// <summary>
+    /// GS0154 with the given text in place of the argument type.
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="name">The parameter name.</param>
+    /// <param name="expectedType">The expected type.</param>
+    /// <param name="actualDescription">The argument type, with any explanation.</param>
+    public void ReportWrongArgumentType(TextLocation location, string name, TypeSymbol expectedType, string actualDescription)
+    => Report(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualDescription);
 
     /// <summary>
     /// Issue #4422: GS0612 — a by-reference argument's storage type differs

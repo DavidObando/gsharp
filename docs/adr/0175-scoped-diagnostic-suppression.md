@@ -164,7 +164,8 @@ attach.
   (Roslyn's IDE0079 exists for this), and the driver already has the
   information — it knows which scopes matched. Deferred as a separate,
   opt-in diagnostic rather than bundled into the fix for a red gate.
-- **Compiler (`GS####`) diagnostics.** The scope check runs in the
+- **Compiler (`GS####`) diagnostics.** *(Taken for warnings by the
+  2026-09-25 amendment below.)* The scope check runs in the
   analyzer driver, so today `@SuppressDiagnostic` covers analyzer
   diagnostics only. Extending it to `gsc`'s own diagnostics is a
   mechanical follow-up (the same map, consulted in
@@ -198,6 +199,48 @@ range into the block form is a follow-up, unexercised by the corpus.
   gains one branch; `GSharpAnalyzerDriver` gains one filter.
 - The remaining ~542 non-`GSA` pragmas keep being dropped — now
   deliberately and documented, rather than by omission.
+
+## Amendment (2026-09-25): compiler warnings (issue #4422)
+
+The "Compiler (`GS####`) diagnostics" item deferred above is now taken.
+Issue #4422 made a by-reference argument whose storage differs from the
+parameter only in reference nullability (`&base.runstack`, `int[]?` at
+`ref []int32`) legal with a new warning, GS0612, as C# does. C# code often
+silences that warning with `!` (`ref base.runstack!`, which the
+`[GeneratedRegex]` generator emits), and G# has no spelling for `!` on a
+variable, so the migrated call needed a way to carry the author's
+suppression.
+
+- **Where the check lives.** Not in `Program.ApplySuppressPromote`, as this
+  ADR first suggested: that would have been a gsc-only copy. The map is built
+  once per compilation (`Compilation.DiagnosticSuppressions`) and applied by
+  `Compilation.ApplySourceSuppressions`, which every `EmitResult` passes
+  through. The language server, which assembles diagnostics from
+  `GlobalScope` and `BoundProgram` itself, calls the same method, and the
+  analyzer driver now reads the same map instead of building its own. gsc,
+  the language server, the emitted-program host and the test oracles
+  therefore share one implementation.
+- **Warnings only.** A compiler diagnostic whose severity is `Error` is never
+  suppressed, matching C#'s `#pragma warning disable`, which cannot hide
+  errors either. (Analyzer diagnostics keep the original rule: `GSA0005` is an
+  error and stays suppressible, because an analyzer's severity is a policy
+  choice, not a language rule.) The severity tested is the descriptor's own,
+  before `/gsdiag` or `/warnaserror` promotion, so a suppressed warning stays
+  suppressed under warnings-as-errors.
+- **cs2gs.** When cs2gs drops a C# `!` from a `ref`/`out`/`in` argument, and
+  Roslyn shows the storage and parameter types differ (including
+  nullability), it emits `@SuppressDiagnostic("GS0612")` with the scope of
+  the one statement the `!` covered: the block form around an ordinary
+  statement; the annotation on a local declaration, since a block would hide
+  the local from later statements; the member annotation for an
+  expression-bodied member, whose body is that one expression. A statement
+  that declares something else visible later (a label, a local function, a
+  deconstruction) or a `defer` is left unsuppressed rather than widened. In
+  addition, a `#pragma warning disable` region naming `CS8600`, `CS8601` or
+  `CS8620` (the csc nullability warnings a by-reference argument raises) that
+  covers a whole declaration translates to `@SuppressDiagnostic("GS0612")`,
+  through the same `AttachPragmaSuppressions` rule as `GSA` identifiers. No
+  other `CS` identifier maps: gsc's other nullability checks are errors.
 
 ## Alternatives considered
 

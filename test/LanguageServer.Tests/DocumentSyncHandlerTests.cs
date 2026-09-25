@@ -129,4 +129,25 @@ public class DocumentSyncHandlerTests
         // proving the newer compilation was neither corrupted nor left bound to stale content.
         Assert.DoesNotContain(currentCompilation.GlobalScope.Diagnostics, d => d.Message.Contains("Not all code paths", System.StringComparison.Ordinal));
     }
+
+    [Fact]
+    public void ComputeDiagnostics_HonoursSuppressDiagnosticForCompilerWarnings()
+    {
+        // ADR-0175 amendment (issue #4422): the language server reports what
+        // gsc reports — a GS0612 inside an @SuppressDiagnostic("GS0612") block
+        // is dropped, the same warning outside it is not.
+        const string source = "func R(ref s string) { s = \"r\" }\n"
+            + "func F() {\n"
+            + "    var a string? = nil\n"
+            + "    @SuppressDiagnostic(\"GS0612\") {\n"
+            + "        R(&a)\n"
+            + "    }\n"
+            + "    R(&a)\n"
+            + "}\n";
+
+        var diagnostics = DocumentSyncHandler.ComputeDiagnostics(source, skipBinding: false).Diagnostics;
+
+        var gs0612 = Assert.Single(diagnostics, d => d.Message.Contains("differs from the parameter type", System.StringComparison.Ordinal));
+        Assert.Equal(6, gs0612.Range.Start.Line);
+    }
 }

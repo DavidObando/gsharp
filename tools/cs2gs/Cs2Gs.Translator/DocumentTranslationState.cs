@@ -195,6 +195,14 @@ internal sealed class DocumentTranslationState
     // unrelated enclosing scope.
     public List<GStatement> PendingSpillPrologue { get; set; }
 
+    // Issue #4422: the G# diagnostic identifiers the statement currently being
+    // translated must suppress, because a C# `!` that silenced a nullability
+    // warning was dropped from a by-reference argument (`ref x!` becomes `&x`,
+    // and gsc reports GS0612 where csc was told not to warn). Each statement
+    // opens a fresh set and wraps its own output in the ADR-0175 block form;
+    // an expression-bodied member collects into the member-level set instead.
+    public HashSet<string> PendingStatementSuppressions { get; set; }
+
     // Storage for reordered out declarations belongs to the enclosing statement
     // or expression body, outside nested argument/null-guard evaluation seams.
     // Lambda/local-function boundaries suspend this declaration seam as well.

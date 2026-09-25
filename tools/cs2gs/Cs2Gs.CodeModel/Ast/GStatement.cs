@@ -54,6 +54,13 @@ public sealed class BlockStatement : GStatement
     /// introducing an unchecked arithmetic context (issue #1881).
     /// </summary>
     public bool IsUnchecked { get; }
+
+    /// <summary>
+    /// Gets or sets the diagnostic identifiers an ADR-0175
+    /// <c>@SuppressDiagnostic("ID") { … }</c> block form suppresses (issue
+    /// #4422). Empty for an ordinary block. Printed only in statement position.
+    /// </summary>
+    public IReadOnlyList<string> SuppressedDiagnostics { get; set; } = Array.Empty<string>();
 }
 
 /// <summary>
@@ -135,6 +142,13 @@ public sealed class LocalDeclarationStatement : GStatement
 
     /// <summary>Gets a value indicating whether the alias prohibits writes.</summary>
     public bool IsReadOnlyRefAlias { get; }
+
+    /// <summary>
+    /// Gets or sets the diagnostic identifiers an ADR-0175
+    /// <c>@SuppressDiagnostic("ID")</c> annotation on this declaration
+    /// suppresses (issue #4422). Empty for an ordinary declaration.
+    /// </summary>
+    public IReadOnlyList<string> SuppressedDiagnostics { get; set; } = Array.Empty<string>();
 }
 
 /// <summary>

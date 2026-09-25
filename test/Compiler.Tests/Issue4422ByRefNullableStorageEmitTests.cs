@@ -316,6 +316,54 @@ Console.WriteLine(""${arr!!.Length} ${Volatile.Read(&o)} $y"")
         }
     }
 
+    /// <summary>
+    /// ADR-0175 amendment: gsc honours an <c>@SuppressDiagnostic("GS0612")</c>
+    /// scope before it applies <c>/warnaserror</c>, so the suppressed call
+    /// builds while the same call outside the scope is promoted to an error.
+    /// </summary>
+    [Fact]
+    public void SuppressedGS0612_SurvivesWarnAsError_AndTheUnsuppressedOneDoesNot()
+    {
+        var tempDir = Directory.CreateTempSubdirectory("gs_4422_suppress_").FullName;
+        try
+        {
+            const string callee = @"
+package P
+import System
+
+func R(ref s string) { s = ""r"" }
+
+var a string? = nil
+";
+            const string suppressed = callee + @"
+@SuppressDiagnostic(""GS0612"") {
+    R(&a)
+}
+Console.WriteLine(a)
+";
+            var outPath = Path.Combine(tempDir, "suppressed.dll");
+            var (exit, log) = Compile(tempDir, suppressed, outPath, extraOption: "/warnaserror");
+            Assert.True(exit == 0, "a suppressed GS0612 must not be promoted by /warnaserror:\n" + log);
+            Assert.DoesNotContain("GS0612", log, StringComparison.Ordinal);
+            IlVerifier.Verify(outPath);
+            var (runExit, output) = RunDotnet(outPath);
+            Assert.True(runExit == 0, output);
+            Assert.Equal("r", output.Trim());
+
+            const string unsuppressed = callee + @"
+R(&a)
+Console.WriteLine(a)
+";
+            var (failExit, failLog) = Compile(tempDir, unsuppressed, Path.Combine(tempDir, "unsuppressed.dll"), extraOption: "/warnaserror");
+            Assert.True(failExit != 0, failLog);
+            Assert.Contains("error GS0612", failLog, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static string EmitFixture(string tempDir)
     {
         var references = TrustedPlatformAssemblies().Select(path => MetadataReference.CreateFromFile(path));
@@ -347,7 +395,8 @@ Console.WriteLine(""${arr!!.Length} ${Volatile.Read(&o)} $y"")
         string tempDir,
         string source,
         string outPath,
-        string extraReference = null)
+        string extraReference = null,
+        string extraOption = null)
     {
         var srcPath = Path.Combine(tempDir, "Program.gs");
         File.WriteAllText(srcPath, source);
@@ -358,6 +407,11 @@ Console.WriteLine(""${arr!!.Length} ${Volatile.Read(&o)} $y"")
             "/target:exe",
             "/targetframework:net10.0",
         };
+        if (extraOption != null)
+        {
+            args.Add(extraOption);
+        }
+
         foreach (var reference in TrustedPlatformAssemblies())
         {
             args.Add("/reference:" + reference);

@@ -3269,9 +3269,12 @@ public sealed partial class CSharpToGSharpTranslator
         {
             List<GStatement> outerSpillPrologue = this.state.PendingSpillPrologue;
             List<GStatement> outerOutDeclarations = this.state.FunctionArgumentOutDeclarations;
+            HashSet<string> outerSuppressions = this.state.PendingStatementSuppressions;
             var spillPrologue = new List<GStatement>();
+            var suppressions = new HashSet<string>(StringComparer.Ordinal);
             this.state.PendingSpillPrologue = spillPrologue;
             this.state.FunctionArgumentOutDeclarations = spillPrologue;
+            this.state.PendingStatementSuppressions = suppressions;
             try
             {
                 List<GStatement> core = this.TranslateStatementCore(statement).ToList();
@@ -3280,7 +3283,7 @@ public sealed partial class CSharpToGSharpTranslator
                     AttachSourceComments(core.FirstOrDefault(), statement);
                     this.SanitizeDocParamComments(core.FirstOrDefault(), statement);
                     AttachTrailingComment(core.LastOrDefault(), statement);
-                    return core;
+                    return ApplyStatementSuppressions(core, suppressions);
                 }
 
                 var combined = new List<GStatement>(spillPrologue);
@@ -3288,13 +3291,82 @@ public sealed partial class CSharpToGSharpTranslator
                 AttachSourceComments(combined[0], statement);
                 this.SanitizeDocParamComments(combined[0], statement);
                 AttachTrailingComment(combined[^1], statement);
-                return combined;
+                return ApplyStatementSuppressions(combined, suppressions);
             }
             finally
             {
                 this.state.PendingSpillPrologue = outerSpillPrologue;
                 this.state.FunctionArgumentOutDeclarations = outerOutDeclarations;
+                this.state.PendingStatementSuppressions = outerSuppressions;
             }
+        }
+
+        /// <summary>
+        /// Issue #4422: gives one translated C# statement the ADR-0175
+        /// suppressions its by-reference arguments need, with a scope no wider
+        /// than that statement. A local declaration carries the annotation
+        /// itself (wrapping it in a block would hide the local from the
+        /// statements after it); every other run of statements is wrapped in
+        /// the <c>@SuppressDiagnostic("ID") { … }</c> block form. A statement
+        /// that declares something else visible to later statements (a label,
+        /// a local function, a deconstructing declaration), or a <c>defer</c>
+        /// whose timing a block would change, is left unsuppressed rather than
+        /// widened: the result is a visible warning, never a hidden one.
+        /// </summary>
+        /// <param name="statements">The statement's translated output.</param>
+        /// <param name="suppressions">The identifiers to suppress.</param>
+        /// <returns>The output with the suppressions applied.</returns>
+        private static List<GStatement> ApplyStatementSuppressions(List<GStatement> statements, HashSet<string> suppressions)
+        {
+            if (suppressions.Count == 0 || statements.Count == 0)
+            {
+                return statements;
+            }
+
+            var ids = suppressions.OrderBy(id => id, StringComparer.Ordinal).ToList();
+            var result = new List<GStatement>(statements.Count);
+            var run = new List<GStatement>();
+            foreach (GStatement statement in statements)
+            {
+                switch (statement)
+                {
+                    case LocalDeclarationStatement local:
+                        FlushSuppressedRun(run, result, ids);
+                        local.SuppressedDiagnostics = ids;
+                        result.Add(local);
+                        break;
+                    case LabeledStatement or LocalFunctionStatement or TupleDeconstructionStatement or MultiAssignmentStatement or DeferStatement:
+                        FlushSuppressedRun(run, result, ids);
+                        result.Add(statement);
+                        break;
+                    default:
+                        run.Add(statement);
+                        break;
+                }
+            }
+
+            FlushSuppressedRun(run, result, ids);
+            return result;
+        }
+
+        private static void FlushSuppressedRun(List<GStatement> run, List<GStatement> result, List<string> ids)
+        {
+            if (run.Count == 0)
+            {
+                return;
+            }
+
+            // A lone comment or other raw line needs no scope.
+            if (run.TrueForAll(statement => statement is RawStatement))
+            {
+                result.AddRange(run);
+            }
+            else
+            {
+                result.Add(new BlockStatement(new List<GStatement>(run)) { SuppressedDiagnostics = ids });
+            }
+
+            run.Clear();
         }
 
         private IEnumerable<GStatement> TranslateStatementCore(StatementSyntax statement)

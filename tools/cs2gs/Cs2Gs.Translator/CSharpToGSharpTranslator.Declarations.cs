@@ -1560,6 +1560,11 @@ public sealed partial class CSharpToGSharpTranslator
                 // can as well. Resolve either through that tree's semantic model.
                 using IDisposable modelScope = this.context.UseSemanticModelFor(member.SyntaxTree);
                 bool attachedMemberComments = false;
+
+                // Issue #4422: a by-reference `x!` outside any statement (an
+                // expression-bodied member) collects its GS0612 suppression here.
+                var memberSuppressions = new HashSet<string>(StringComparer.Ordinal);
+                this.state.PendingStatementSuppressions = memberSuppressions;
                 foreach ((GMember translated, bool isStatic) in this.TranslateMember(
                     member,
                     kind.Value,
@@ -1583,6 +1588,8 @@ public sealed partial class CSharpToGSharpTranslator
                         AttachPragmaSuppressions(translated, member);
                         attachedMemberComments = true;
                     }
+
+                    AttachExpressionBodySuppressions(translated, member, memberSuppressions);
 
                     // Issue #3501: a member translation may DROP its output (a
                     // reported gap, e.g. the second colliding explicit-interface
