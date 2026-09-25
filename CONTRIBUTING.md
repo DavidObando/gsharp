@@ -121,4 +121,6 @@ Automated contributors follow the same rules. Preserve Oahu, Oats,
 Claude Code, or other provenance labels when applicable; automation does not
 replace maintainer responsibility for the merge. A self-review may record
 `MERGEABLE`, `BLOCKER`, `SHOULD-FIX`, or `NIT`; resolve blockers and file
-intentional residual work instead of dropping it.
+intentional residual work instead of dropping it. [`CLAUDE.md`](CLAUDE.md)
+collects the operational details for agents: the review loop, CI gate
+behaviour, local-environment hazards, and nullability-architecture rules.
