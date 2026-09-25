@@ -252,6 +252,12 @@ internal static class ImplementingPartHeaders
     {
         string file = declaring.SyntaxTree.Text.FileName;
         HashSet<string> headerIdentifiers = HeaderIdentifiers(declaring);
+
+        // Built transactionally: this header's imports and alias origins are
+        // collected locally and merged only when no alias clashes, so a header
+        // that is not copied leaves no stale alias to block a later one.
+        var pendingImports = new List<ImportDirective>();
+        var pendingOrigins = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (MemberSyntax member in declaring.SyntaxTree.Root.Members)
         {
             if (member is not ImportSyntax import)
@@ -268,9 +274,10 @@ internal static class ImplementingPartHeaders
             {
                 if (!string.Equals(target, unit.Package, StringComparison.Ordinal)
                     && !HasImport(unit.Imports, target, null)
-                    && !HasImport(missingImports, target, null))
+                    && !HasImport(missingImports, target, null)
+                    && !HasImport(pendingImports, target, null))
                 {
-                    missingImports.Add(new ImportDirective(target));
+                    pendingImports.Add(new ImportDirective(target));
                 }
 
                 continue;
@@ -281,20 +288,29 @@ internal static class ImplementingPartHeaders
                 continue;
             }
 
-            string existing = AliasTarget(unit.Imports, alias) ?? AliasTarget(missingImports, alias);
+            string existing = AliasTarget(unit.Imports, alias)
+                ?? AliasTarget(missingImports, alias)
+                ?? AliasTarget(pendingImports, alias);
             if (existing == null)
             {
-                missingImports.Add(new ImportDirective(target, alias));
-                aliasOrigins[alias] = file;
+                pendingImports.Add(new ImportDirective(target, alias));
+                pendingOrigins[alias] = file;
             }
             else if (!string.Equals(existing, target, StringComparison.Ordinal))
             {
                 string origin = aliasOrigins.TryGetValue(alias, out string otherFile)
+                    || pendingOrigins.TryGetValue(alias, out otherFile)
                     ? $"the header of another partial method, from '{otherFile}', needs it as '{existing}'"
                     : $"the generated code imports it as '{existing}'";
                 return $"it needs 'import {alias} = {target}' from '{file}', but {origin}, "
                     + "and the generated file has one import scope";
             }
+        }
+
+        missingImports.AddRange(pendingImports);
+        foreach (KeyValuePair<string, string> origin in pendingOrigins)
+        {
+            aliasOrigins[origin.Key] = origin.Value;
         }
 
         return null;

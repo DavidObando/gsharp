@@ -472,6 +472,68 @@ partial class P {
         Assert.DoesNotContain("the generated code", diagnostic.Message, StringComparison.Ordinal);
     }
 
+    // PR #4430 review: a header that is not copied (its alias `R` clashes)
+    // must not leave its other alias (`Q`) committed, or a later valid header
+    // needing a different `Q` gets a spurious GS9208 and loses its copy.
+    [Fact]
+    public void RejectedHeader_LeavesNoStaleAliasForALaterHeader()
+    {
+        const string First = @"package App
+
+import R = System.Text.RegularExpressions
+
+partial class P {
+    shared {
+        private partial func A() R.Regex;
+    }
+}
+";
+        const string Second = @"package App
+
+import Q = System.Text
+import R = System.Text
+
+partial class P {
+    shared {
+        private partial func B(q Q.StringBuilder) R.RegularExpressions.Regex;
+    }
+}
+";
+        const string Third = @"package App
+
+import Q = System.Text.RegularExpressions
+
+partial class P {
+    shared {
+        private partial func C() Q.Regex;
+    }
+}
+";
+        const string Generated = @"namespace App
+{
+    partial class P
+    {
+        private static partial System.Text.RegularExpressions.Regex A() => default;
+        private static partial System.Text.RegularExpressions.Regex B(System.Text.StringBuilder q) => default;
+        private static partial System.Text.RegularExpressions.Regex C() => default;
+    }
+}
+";
+        GeneratorHostResult result = GeneratorHostRunner.Run(
+            new Compilation(ParseUser(new[] { First, Second, Third }).ToArray()),
+            CSharpProjectLoader.RuntimeReferences(),
+            new IIncrementalGenerator[] { new FixedSourceGenerator(("Impl.g.cs", Generated)) });
+
+        foreach (GeneratorHostDiagnostic reported in result.HostDiagnostics)
+        {
+            this.output.WriteLine($"{reported.Location.FileName}: {reported.Message}");
+        }
+
+        GeneratorHostDiagnostic diagnostic = Assert.Single(result.HostDiagnostics);
+        Assert.Equal("GS9208", diagnostic.Id);
+        Assert.Equal("User1.gs", diagnostic.Location.FileName);
+    }
+
     // ADR-0192 follow-on 2 review: a generated document with two or more
     // named namespaces is split into one unit per namespace, and its
     // global-namespace declarations must land in one of them (the first, as
