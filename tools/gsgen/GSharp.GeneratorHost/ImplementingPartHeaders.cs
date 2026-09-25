@@ -8,6 +8,7 @@ using System.Linq;
 using System.Text;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
@@ -118,8 +119,7 @@ internal static class ImplementingPartHeaders
 
             FunctionDeclarationSyntax declaring = definition.Declaration;
             string declaringHeader = HeaderText(declaring);
-            string implementingHeader = HeaderText(implementing);
-            if (NormalizeWhitespace(declaringHeader) == NormalizeWhitespace(implementingHeader))
+            if (HeaderSignature(declaring) == HeaderSignature(implementing))
             {
                 continue;
             }
@@ -168,7 +168,8 @@ internal static class ImplementingPartHeaders
     }
 
     // The declaring part an implementing part pairs with: same package, same
-    // top-level type (the stub renders only top-level types), same name and
+    // top-level type (the stub renders only top-level types; `P` and `P[T]`
+    // are different types, so the arity is part of it), same name and
     // parameter count. Overloads of one name with the same parameter count
     // cannot be told apart by spelling (their types are what differs), so an
     // ambiguous match copies nothing and the generated header stands.
@@ -184,12 +185,14 @@ internal static class ImplementingPartHeaders
         }
 
         string typeName = owner.Identifier.ValueText;
+        int typeArity = owner.TypeParameterList?.Parameters.Count ?? 0;
         string name = implementing.Identifier.ValueText;
         StubPartialDefinition match = null;
         foreach (StubPartialDefinition definition in definitions)
         {
             if (string.Equals(definition.PackageName ?? string.Empty, package ?? string.Empty, StringComparison.Ordinal)
                 && string.Equals(definition.TypeName, typeName, StringComparison.Ordinal)
+                && definition.TypeArity == typeArity
                 && string.Equals(definition.Declaration.Identifier.ValueText, name, StringComparison.Ordinal)
                 && definition.Declaration.Parameters.Count == implementing.Parameters.Count)
             {
@@ -383,25 +386,26 @@ internal static class ImplementingPartHeaders
         return TextSpan.FromBounds(start, end);
     }
 
-    private static string NormalizeWhitespace(string text)
+    // The header's tokens as gsc's pairing check compares them
+    // (PartialMethodMerger.TokenSignature): trivia between tokens is
+    // ignored, but every token keeps its own text, so string defaults "a b"
+    // and "a  b" differ. Built from the header's children in source order.
+    private static string HeaderSignature(FunctionDeclarationSyntax declaration)
     {
-        var builder = new StringBuilder(text.Length);
-        bool pendingSpace = false;
-        foreach (char c in text)
+        TextSpan header = HeaderSpan(declaration);
+        var children = new List<SyntaxNode>();
+        foreach (SyntaxNode child in declaration.GetChildren())
         {
-            if (char.IsWhiteSpace(c))
+            if (child.Span.Start >= header.Start && child.Span.End <= header.End && child.Span.Length > 0)
             {
-                pendingSpace = builder.Length > 0;
-                continue;
+                children.Add(child);
             }
+        }
 
-            if (pendingSpace)
-            {
-                builder.Append(' ');
-                pendingSpace = false;
-            }
-
-            builder.Append(c);
+        var builder = new StringBuilder();
+        foreach (SyntaxNode child in children.OrderBy(node => node.Span.Start))
+        {
+            builder.Append(PartialMethodMerger.TokenSignature(child));
         }
 
         return builder.ToString();

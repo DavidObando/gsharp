@@ -90,7 +90,8 @@ public static class SnippetTranslator
             string package = packages.Count > 1 ? packages[unitIndex] : null;
             var translator = new CSharpToGSharpTranslator(
                 packageFilter: package,
-                includeFileAttributes: unitIndex == 0);
+                includeFileAttributes: unitIndex == 0,
+                includeGlobalNamespace: unitIndex == 0);
             var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
             printedUnits.Add(GSharpPrinter.Print(translator.TranslateDocument(document, context)));
             foreach (TranslationDiagnostic reported in context.Diagnostics)

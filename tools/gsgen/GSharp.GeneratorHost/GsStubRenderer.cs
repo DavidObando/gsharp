@@ -286,7 +286,7 @@ public sealed class GsStubRenderer
                 && method.Declaration is { } declaration
                 && ClassifyPartialShape(method, isPartialType) == PartialShape.Definition)
             {
-                partialDefinitions.Add(new StubPartialDefinition(owner.PackageName, owner.Name, declaration));
+                partialDefinitions.Add(new StubPartialDefinition(owner.PackageName, owner.Name, owner.TypeParameters.Length, declaration));
             }
         }
     }

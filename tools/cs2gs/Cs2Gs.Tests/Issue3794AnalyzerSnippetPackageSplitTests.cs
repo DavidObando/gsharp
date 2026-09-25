@@ -270,6 +270,35 @@ namespace GSharp.Core.CodeAnalysis.Binding
     }
 
     /// <summary>
+    /// A global-namespace declaration in a multi-namespace snippet belongs to
+    /// no package filter, so it lands in the first unit, exactly once, instead
+    /// of vanishing from every unit.
+    /// </summary>
+    [Fact]
+    public void MultiNamespaceSnippet_KeepsGlobalDeclarationsInTheFirstUnit()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate("""
+namespace First.Space
+{
+    public class Alpha { }
+}
+
+namespace Second.Space
+{
+    public class Beta { }
+}
+
+public class GlobalGamma { }
+""");
+
+        Assert.NotNull(result.GsWithMarkers);
+        string[] units = SplitUnits(result.GsWithMarkers);
+        Assert.Equal(2, units.Length);
+        Assert.Contains("class GlobalGamma", units[0], StringComparison.Ordinal);
+        Assert.DoesNotContain("class GlobalGamma", units[1], StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// A single-namespace snippet is still exactly one unit — the separator
     /// never appears where it is not needed, so every hand-written G# analyzer
     /// test and every already-passing migrated one is untouched.

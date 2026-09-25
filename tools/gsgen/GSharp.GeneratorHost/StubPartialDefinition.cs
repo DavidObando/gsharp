@@ -18,11 +18,13 @@ public sealed class StubPartialDefinition
     /// </summary>
     /// <param name="packageName">The owning type's package, or <see langword="null"/> for none.</param>
     /// <param name="typeName">The owning top-level type's name.</param>
+    /// <param name="typeArity">The owning type's number of type parameters (<c>P</c> and <c>P[T]</c> are different types).</param>
     /// <param name="declaration">The declaring part's syntax, in the user's file.</param>
-    public StubPartialDefinition(string packageName, string typeName, FunctionDeclarationSyntax declaration)
+    public StubPartialDefinition(string packageName, string typeName, int typeArity, FunctionDeclarationSyntax declaration)
     {
         PackageName = packageName;
         TypeName = typeName;
+        TypeArity = typeArity;
         Declaration = declaration;
     }
 
@@ -31,6 +33,9 @@ public sealed class StubPartialDefinition
 
     /// <summary>Gets the owning top-level type's name.</summary>
     public string TypeName { get; }
+
+    /// <summary>Gets the owning type's number of type parameters.</summary>
+    public int TypeArity { get; }
 
     /// <summary>Gets the declaring part's syntax, in the user's file.</summary>
     public FunctionDeclarationSyntax Declaration { get; }

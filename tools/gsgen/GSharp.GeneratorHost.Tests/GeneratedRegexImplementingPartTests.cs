@@ -214,6 +214,54 @@ partial class Calc {
         Assert.Equal(42, Invoke(run.Type("Calc"), "Twice", 21));
     }
 
+    // Copilot review (#4430): the owning type's generic arity is part of the
+    // match. `P` and `P[T]` both declare `Twice` with one parameter; matched on
+    // name alone, each implementation fits both declaring parts, nothing is
+    // copied, and the `int` headers fail to pair with the generated `int32`.
+    [Fact]
+    public void SameNamedTypesOfDifferentArity_EachGetTheirOwnHeader()
+    {
+        const string UserSource = @"package App
+
+partial class Calc {
+    shared {
+        public partial func Twice(count int) int;
+    }
+}
+
+partial class Calc[T] {
+    shared {
+        public partial func Twice(count int) int;
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { UserSource }, new PartialImplementationGenerator(renameParameters: false));
+
+        Assert.Equal(2, CountOccurrences(run.Files.Single().Source, "public partial func Twice(count int) int"));
+        Assert.Equal(42, Invoke(run.Assembly.GetTypes().Single(type => type.Name == "Calc"), "Twice", 21));
+    }
+
+    // Copilot review (#4430): headers are compared token by token, the way
+    // gsc's pairing check compares them, so whitespace inside a literal
+    // counts. The generated default "a b" and the declared "a  b" differ, so
+    // the declared header is copied; a character-level whitespace collapse
+    // treated them as equal, skipped the copy, and gsc reported GS0611.
+    [Fact]
+    public void LiteralWhitespace_InADefaultValue_IsNotNormalizedAway()
+    {
+        const string UserSource = @"package App
+
+partial class Calc {
+    shared {
+        partial func Greet(name string = ""a  b"") int32;
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { UserSource }, new PartialImplementationGenerator(renameParameters: false));
+
+        Assert.Contains("partial func Greet(name string = \"a  b\") int32", run.Files.Single().Source, StringComparison.Ordinal);
+    }
+
     // A generated implementation whose parameter names differ from the
     // declaring part's must not pair silently: copying the header would rebind
     // the body to the wrong names, so the header is left as generated, gsgen
@@ -540,10 +588,21 @@ namespace Lib.B { internal static class Second { public static int V => 2; } }
                     List<string> names = method.Parameters
                         .Select(parameter => this.renameParameters ? parameter.Name + "Renamed" : parameter.Name)
                         .ToList();
-                    string parameters = string.Join(", ", method.Parameters.Select((parameter, i) => "int " + names[i]));
-                    string body = names.Count == 1 ? names[0] + " * 2" : names[0] + " - " + names[1];
+
+                    // A string parameter is restated with the default "a b"
+                    // (single space), whatever the definition says.
+                    string parameters = string.Join(", ", method.Parameters.Select((parameter, i) =>
+                        parameter.Type.SpecialType == SpecialType.System_String
+                            ? "string " + names[i] + " = \"a b\""
+                            : "int " + names[i]));
+                    string body = method.Parameters.Any(parameter => parameter.Type.SpecialType != SpecialType.System_Int32)
+                        ? "42"
+                        : names.Count == 1 ? names[0] + " * 2" : names[0] + " - " + names[1];
+                    string typeParameters = method.ContainingType.TypeParameters.Length == 0
+                        ? string.Empty
+                        : "<" + string.Join(", ", method.ContainingType.TypeParameters.Select(parameter => parameter.Name)) + ">";
                     builder.Append("namespace ").Append(method.ContainingNamespace.ToDisplayString()).AppendLine(" {")
-                        .Append("partial class ").Append(method.ContainingType.Name).AppendLine(" {")
+                        .Append("partial class ").Append(method.ContainingType.Name).Append(typeParameters).AppendLine(" {")
                         .Append("    public static partial int ").Append(method.Name)
                         .Append('(').Append(parameters).Append(") => ").Append(body).AppendLine(";")
                         .AppendLine("}")

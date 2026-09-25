@@ -23,6 +23,10 @@
          step 6, ADR-0193 Phase 5). The assembly name, not the project name:
          build/gsharp.build.props prefixes every assembly with `GSharp.`. -->
     <InternalsVisibleTo Include="GSharp.Cs2Gs.Translator" />
+    <!-- ADR-0192 follow-on 2: gsgen compares a generated implementing part's
+         header with its declaring part's through PartialMethodMerger's own
+         token normalization, so the two comparisons cannot drift. -->
+    <InternalsVisibleTo Include="GSharp.GSharp.GeneratorHost" />
   </ItemGroup>
 
   <ItemGroup>
