@@ -111,6 +111,34 @@ Console.WriteLine(""${s!!} ${l.Count} ${n[0]!!}"")
     }
 
     [Fact]
+    public void Overloads_WarnOnceForTheSelectedCandidate()
+    {
+        // Both candidates take the same `ref string`, so the gate would fire
+        // twice if it ran per candidate rather than on the selected one.
+        // (Overloads that differ only in a by-ref pointee type are GS0266 on
+        // main for exact types too, so they are not the shape tested here.)
+        var result = EmittedOracle.Evaluate(@"
+func Pick(ref s string, n int32) { s = ""int"" }
+func Pick(ref s string, t string) { s = ""string"" }
+
+class Box {
+    func Pick(ref s string, n int32) { s = ""method-int"" }
+    func Pick(ref s string, t string) { s = ""method-string"" }
+}
+
+var s string? = nil
+Pick(&s, ""x"")
+Console.WriteLine(s)
+Box().Pick(&s, 1)
+Console.WriteLine(s)
+");
+
+        Assert.DoesNotContain(result.Diagnostics, d => d.Severity == DiagnosticSeverity.Error);
+        Assert.Equal(2, result.Diagnostics.Count(d => d.Id == "GS0612"));
+        Assert.Equal(new[] { "string", "method-int" }, result.Output.Trim().Split('\n').Select(l => l.Trim()).ToArray());
+    }
+
+    [Fact]
     public void MethodAndConstructorCallees_UseTheSameGate()
     {
         var result = EmittedOracle.Evaluate(@"
