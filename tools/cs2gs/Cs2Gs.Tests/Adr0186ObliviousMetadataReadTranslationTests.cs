@@ -57,6 +57,16 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
             {
                 return new System.Collections.Generic.List<T> { value };
             }
+
+            public static bool IsNil<T>(T value) where T : class
+            {
+                return value == null;
+            }
+        }
+
+        public class Holder
+        {
+            public Node Child;
         }
         """;
 
@@ -223,6 +233,72 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
             new EmittedOracleOptions { References = new[] { libraryPath } });
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1, result.Value);
+    }
+
+    /// <summary>
+    /// Explicit type arguments leave nothing to infer, so the inference
+    /// carve-out does not apply: <c>IsNil&lt;string&gt;(n.Name)</c> stays bare.
+    /// With the old <c>!!</c>, a nil name threw instead of reaching the
+    /// callee, which C# never did. The oracle passes a nil and expects
+    /// <c>true</c>.
+    /// </summary>
+    [Fact]
+    public void Explicit_Type_Arguments_Do_Not_Keep_The_Assertion()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousExplicitLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static bool NameIsNil(Node n)
+                {
+                    return Wrapping.IsNil<string>(n.Name);
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+
+        Assert.DoesNotContain("!!", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.NameIsNil(Node.Make(nil, nil))" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(true, result.Value);
+    }
+
+    /// <summary>
+    /// An unqualified inherited member used as an assignment-target receiver
+    /// (<c>Child.Name = value</c>, where <c>Child</c> comes from an oblivious
+    /// base class) is the same platform-typed read, so it stays bare too.
+    /// </summary>
+    [Fact]
+    public void An_Inherited_Oblivious_Member_As_An_Assignment_Receiver_Is_Left_Bare()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousInheritedLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public class Derived : Holder
+            {
+                public void Rename(string value)
+                {
+                    Child.Name = value;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+
+        Assert.DoesNotContain("!!", printed, StringComparison.Ordinal);
+        Assert.Contains("this.Child.Name = value", printed, StringComparison.Ordinal);
+
+        using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
+        TranslationTestValidation.AssertBinds(resolver, printed);
     }
 
     private static string Translate(

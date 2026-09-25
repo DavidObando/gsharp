@@ -1592,9 +1592,16 @@ public sealed partial class CSharpToGSharpTranslator
             switch (node.Parent)
             {
                 // An argument to a parameter whose type mentions a method type
-                // parameter the call infers. An argument nothing binds (a
-                // dynamic call) is treated the same way.
+                // parameter the call infers. Explicit type arguments
+                // (`Keep<string?>(x)`) leave nothing to infer. An argument
+                // nothing binds (a dynamic call) is treated as inferring.
                 case ArgumentSyntax argument:
+                    if (argument.Parent?.Parent is InvocationExpressionSyntax { Expression: { } callee }
+                        && HasExplicitTypeArguments(callee))
+                    {
+                        return false;
+                    }
+
                     IParameterSymbol parameter = (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)?.Parameter;
                     return parameter == null
                         || (parameter.ContainingSymbol is IMethodSymbol { IsGenericMethod: true }
@@ -1612,7 +1619,8 @@ public sealed partial class CSharpToGSharpTranslator
                 // the method type parameter itself (`x.Also(...)` with
                 // `Also<T>(this T self)`), which infers `T!` from it.
                 case MemberAccessExpressionSyntax memberAccess when memberAccess.Expression == node:
-                    return this.context.GetSymbolInfo(memberAccess).Symbol is IMethodSymbol { ReducedFrom: { } unreduced }
+                    return !HasExplicitTypeArguments(memberAccess)
+                        && this.context.GetSymbolInfo(memberAccess).Symbol is IMethodSymbol { ReducedFrom: { } unreduced }
                         && unreduced.Parameters.Length > 0
                         && unreduced.Parameters[0].Type is ITypeParameterSymbol receiverParameter
                         && receiverParameter.TypeParameterKind == TypeParameterKind.Method;

@@ -50,7 +50,6 @@ namespace Demo
     }
 }");
 
-        // The return value from ext.Combine(...) must be asserted with !!
         // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
         // type `T!` and checks it itself at this coercion, so cs2gs no longer
         // emits `!!` here (a `!!` on `T!` only duplicated that check).
@@ -103,7 +102,6 @@ namespace Demo
     }
 }");
 
-        // The extension method Merge returns string (oblivious) → needs !!
         // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
         // type `T!` and checks it itself at this coercion, so cs2gs no longer
         // emits `!!` here (a `!!` on `T!` only duplicated that check).

@@ -2137,8 +2137,11 @@ public sealed partial class CSharpToGSharpTranslator
                         new ThisExpression(),
                         this.EmittedName(receiverId, receiverId.Identifier));
 
-                    if (this.ReceiverNeedsNullForgiveness(receiverId, isDereferenceReceiver: true) ||
-                        this.ReceiverIsNullableReferenceFieldOrProperty(receiverId))
+                    // ADR-0186 step 6 (PR 0): an inherited oblivious-metadata
+                    // member is `T!`, which gsc checks itself.
+                    if (!this.PlatformTypedImportNeedsNoBridge(receiverId) &&
+                        (this.ReceiverNeedsNullForgiveness(receiverId, isDereferenceReceiver: true) ||
+                        this.ReceiverIsNullableReferenceFieldOrProperty(receiverId)))
                     {
                         qualifiedReceiver = EnsureNonNullAssertion(qualifiedReceiver);
                     }
