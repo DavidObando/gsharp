@@ -2212,16 +2212,26 @@ public sealed class Conversion
     /// widening, and nullable lifts ride the general implicit lattice but
     /// require a real coercion at the boundary, which neither CLR delegate
     /// variance nor a target-typed <c>ldftn</c>+<c>newobj</c> binding can
-    /// perform.
+    /// perform. Reference nullability wrappers are ignored only when deciding
+    /// whether each slot is reference-like; the annotated types still drive
+    /// conversion classification so nullable-to-non-nullable stays rejected.
     /// </summary>
     /// <param name="from">The value-producing side of the slot.</param>
     /// <param name="to">The value-consuming side of the slot.</param>
     /// <returns><see langword="true"/> for a strict implicit reference conversion.</returns>
     internal static bool IsImplicitReferenceVariantSlot(TypeSymbol from, TypeSymbol to)
     {
-        if (from == null || to == null
-            || from == TypeSymbol.Void || to == TypeSymbol.Void
-            || !IsReferenceLikeTarget(from) || !IsReferenceLikeTarget(to))
+        if (from == null || to == null)
+        {
+            return false;
+        }
+
+        var referenceFrom = UnwrapReferenceNullable(from);
+        var referenceTo = UnwrapReferenceNullable(to);
+        if (from == TypeSymbol.Void || to == TypeSymbol.Void
+            || referenceFrom == null || referenceTo == null
+            || !IsReferenceLikeTarget(referenceFrom)
+            || !IsReferenceLikeTarget(referenceTo))
         {
             return false;
         }
@@ -4552,11 +4562,8 @@ public sealed class Conversion
             // honor. Prefer the recovered symbolic delegate-side type (the
             // real `Derived`) over the erased CLR one (`object`) so this
             // works for a same-compilation delegate element type too.
-            // `IsImplicitReferenceVariantSlot`/`IsReferenceLikeTarget` don't
-            // unwrap a `NullableTypeSymbol` (`Base?`), so unwrap here before
-            // asking — CLR reference variance doesn't distinguish `Base`
-            // from `Base?` anyway (every reference type is nullable at the
-            // CLR level regardless of G#'s own annotation).
+            // `IsImplicitReferenceVariantSlot` preserves nullability during
+            // classification; this CLR delegate path intentionally erases it.
             if (fnParamType != null
                 && IsImplicitReferenceVariantSlot(
                     UnwrapNullableForVariance(symbolicParamTypes[i]) ?? TypeSymbol.FromClrTypeWithoutNullability(invokeParamTypes[i], NullabilityFreeReason.IdentityComparison),
