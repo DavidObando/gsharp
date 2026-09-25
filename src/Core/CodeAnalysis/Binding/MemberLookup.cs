@@ -2880,6 +2880,16 @@ internal sealed class MemberLookup
             return false;
         }
 
+        // Issue #4444, ADR-0186 §1: `T!` has `T`'s signature, so it erases
+        // exactly as `T` does. Over a G#-declared type the wrapper's ClrType is
+        // null, and no arm below matched it, so the projection failed and the
+        // imported call it gated (`Enumerable.Repeat(n, 2)` with `n Node!`)
+        // reported GS0159.
+        if (t is PlatformTypeSymbol platform)
+        {
+            return TryProjectErasedClrType(platform.UnderlyingType, out erased);
+        }
+
         if (t is ImportedTypeSymbol imported)
         {
             var openDefinition = imported.OpenDefinition;
