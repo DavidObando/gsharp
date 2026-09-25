@@ -64,6 +64,12 @@ public partial class TypeSymbol
                 case PlatformTypeSymbol:
                     return ReferenceNullabilityKind.Platform;
                 case NullabilityAnnotatedTypeSymbol annotated:
+                    // The walkers express byte 0's state as the wrapper AROUND
+                    // this symbol, so the top-level answer is the wrapper's.
+                    // A bare annotated symbol reads as its base. Decoding byte
+                    // 0 here instead is a Phase 3 query-API precision item
+                    // (#4363): the event readers strip only the outer `?`, so
+                    // the byte and the wrapper disagree today.
                     return annotated.BaseType.ReferenceNullability;
                 case ByRefTypeSymbol byRef:
                     // A by-ref contributes no nullability position of its own;
