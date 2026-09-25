@@ -136,10 +136,12 @@ for (const colorScheme of ['light', 'dark'] as const) {
       // data-theme and <body> are already correct (the CI trace shows the
       // article text painted #242126 on #19181c, then correcting itself).
       // axe must not sample that window, so wait until no text-bearing element
-      // on the page reads (as axe does) the other theme's text colour, and the
-      // article -- where the stale state was observed -- resolves the root's
-      // theme tokens. The token check is scoped to the article so a component
-      // that deliberately overrides a token elsewhere cannot wedge this wait.
+      // rendered on the page reads (as axe does) the other theme's text
+      // colour, and the article element itself -- where the stale state was
+      // observed -- resolves the root's theme tokens. Only the article element
+      // is token-checked, not its descendants, so a component that deliberately
+      // overrides a token (a callout, say) cannot wedge this wait; hidden
+      // content is skipped because axe ignores it too.
       // If the stale state never clears, this fails: users would see it too.
       await expect
         .poll(
@@ -150,8 +152,17 @@ for (const colorScheme of ['light', 'dark'] as const) {
                 name,
                 rootStyle.getPropertyValue(name).trim(),
               ]);
-              const article = document.querySelector('article');
               const stale: string[] = [];
+              const article = document.querySelector('article');
+              if (article) {
+                const articleStyle = getComputedStyle(article);
+                const staleToken = tokens.find(
+                  ([name, value]) => articleStyle.getPropertyValue(name).trim() !== value,
+                );
+                if (staleToken) {
+                  stale.push(`article: ${staleToken[0]}`);
+                }
+              }
               const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
               let previous: Element | null = null;
               for (let node = walker.nextNode(); node && stale.length < 5; node = walker.nextNode()) {
@@ -160,13 +171,13 @@ for (const colorScheme of ['light', 'dark'] as const) {
                   continue;
                 }
                 previous = element;
+                if (!element.checkVisibility({visibilityProperty: true}) || element.closest('[aria-hidden="true"]')) {
+                  continue;
+                }
                 const style = getComputedStyle(element);
-                const staleToken = article?.contains(element)
-                  ? tokens.find(([name, value]) => style.getPropertyValue(name).trim() !== value)
-                  : undefined;
                 const colors = [style.color, style.getPropertyValue('-webkit-text-fill-color')];
-                if (staleToken || colors.includes(otherText)) {
-                  stale.push(`${element.tagName.toLowerCase()}: ${staleToken?.[0] ?? colors[0]}`);
+                if (colors.includes(otherText)) {
+                  stale.push(`${element.tagName.toLowerCase()}: ${colors[0]}`);
                 }
               }
               return stale;
@@ -174,6 +185,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
           {
             message: `${colorScheme} theme fully applied before the accessibility scan: ${route}`,
             timeout: 10000,
+            intervals: [250, 500, 1000],
           },
         )
         .toEqual([]);
