@@ -166,7 +166,7 @@ public sealed class GSharpAnalyzerDriver
         foreach (var (function, body) in program.Functions)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var isGenerated = function.Declaration is { } declaration && IsGeneratedTree(declaration.SyntaxTree);
+            var isGenerated = ProvenanceTree(function, body) is { } tree && IsGeneratedTree(tree);
             new DispatchingBoundTreeWalker(this, function, isGenerated).Visit(body);
         }
 
@@ -183,7 +183,8 @@ public sealed class GSharpAnalyzerDriver
         foreach (var (function, body) in program.Functions)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var isGenerated = function.Declaration is { } declaration && IsGeneratedTree(declaration.SyntaxTree);
+
+            var isGenerated = ProvenanceTree(function, body) is { } tree && IsGeneratedTree(tree);
             foreach (var entry in registry.BoundBodyActions)
             {
                 if (SkipsGenerated(entry.Owner, isGenerated))
@@ -196,6 +197,14 @@ public sealed class GSharpAnalyzerDriver
             }
         }
     }
+
+    // The tree a function body came from. A property accessor is synthesized
+    // with no declaration of its own, so it takes its property's; failing
+    // that, the first anchored node in the body says where it was written.
+    private static SyntaxTree? ProvenanceTree(FunctionSymbol function, BoundBlockStatement body)
+        => function.Declaration?.SyntaxTree
+            ?? (function.AssociatedSymbol as PropertySymbol)?.Declaration?.SyntaxTree
+            ?? body.DescendantsAndSelf().Select(node => node.Syntax).FirstOrDefault(syntax => syntax != null)?.SyntaxTree;
 
     private void DispatchSemanticModels()
     {

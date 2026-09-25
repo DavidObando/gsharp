@@ -49,7 +49,17 @@ public abstract class BoundNode
     /// <c>IOperation.ChildOperations</c> analogue (ADR-0169, issue #4436).
     /// Helper nodes that are not themselves statements, expressions or
     /// patterns (a switch arm, a catch clause) are transparent: their own
-    /// children are listed in their place.
+    /// children are listed in their place. Three shapes follow Roslyn's
+    /// operation tree rather than the compiler walker:
+    /// <list type="bullet">
+    /// <item>a function literal's child is its body, as an
+    /// <c>IAnonymousFunctionOperation</c>'s is (the walker treats the body as
+    /// a separate scope and does not enter it);</item>
+    /// <item>an assignment's children are its target, then its value;</item>
+    /// <item>a plain <c>x is T</c> has only its operand as a child, as an
+    /// <c>IIsTypeOperation</c> does; the type pattern G# binds under it is not
+    /// listed.</item>
+    /// </list>
     /// </summary>
     public ImmutableArray<BoundNode> ChildNodes
     {
@@ -142,10 +152,20 @@ public abstract class BoundNode
 
         public override void VisitExpression(BoundExpression? node)
         {
-            if (Take(node))
+            if (!Take(node))
             {
-                base.VisitExpression(node);
+                return;
             }
+
+            // The walker leaves a function literal opaque; the operation tree
+            // does not.
+            if (node is BoundFunctionLiteralExpression literal)
+            {
+                VisitStatement(literal.Body);
+                return;
+            }
+
+            base.VisitExpression(node);
         }
 
         public override void VisitPattern(BoundPattern? node)
@@ -154,6 +174,23 @@ public abstract class BoundNode
             {
                 base.VisitPattern(node);
             }
+        }
+
+        protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
+        {
+            VisitExpression(node.Target);
+            VisitExpression(node.Value);
+        }
+
+        protected override void VisitIsExpression(BoundIsExpression node)
+        {
+            if (node.IsSimpleTypeTest)
+            {
+                VisitExpression(node.Expression);
+                return;
+            }
+
+            base.VisitIsExpression(node);
         }
 
         // Whether the base walker descends into the node. The root is never

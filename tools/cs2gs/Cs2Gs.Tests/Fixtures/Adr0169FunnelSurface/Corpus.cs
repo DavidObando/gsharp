@@ -45,6 +45,10 @@ namespace GSharp.Core.CodeAnalysis.Binding
             return read(type);
         }
 
+        // Reported: a door in a lambda, outside the funnel. The lambda is
+        // part of the member's operation block.
+        public Func<Type, TypeSymbol> InLambda() => t => TypeSymbol.FromClrType(t);
+
         // Reported: a wrapper factory inside a funnel member.
         [NullabilityFunnel]
         public TypeSymbol Wrap(Type type) => NullableTypeSymbol.Get(TypeSymbol.FromClrType(type));

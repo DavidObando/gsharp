@@ -1538,6 +1538,8 @@ public sealed partial class CSharpToGSharpTranslator
             var arguments = new List<GExpression>();
             var expanded = false;
             var unexpandable = false;
+            var guardsIsType = false;
+            var handlerIndex = -1;
             foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
             {
                 if (argument.Expression is MemberAccessExpressionSyntax kindAccess
@@ -1546,6 +1548,7 @@ public sealed partial class CSharpToGSharpTranslator
                     && RoslynAnalyzerApiMap.TryMapOperationKindDispatch(kindField.Name, out string[] boundNodeKinds))
                 {
                     expanded = true;
+                    guardsIsType |= kindField.Name == "IsType";
                     foreach (string boundNodeKind in boundNodeKinds)
                     {
                         arguments.Add(new MemberAccessExpression(
@@ -1573,10 +1576,16 @@ public sealed partial class CSharpToGSharpTranslator
                 // and the round-trip binder already backstops a renamed kind
                 // that does not exist. Flagging those would trade a silent wrong
                 // answer for a loud wrong one.
-                if (BindsToOperationKindsParameter(argument, this.context)
-                    && !IsDirectOperationKindAccess(argument.Expression, this.context))
+                if (BindsToOperationKindsParameter(argument, this.context))
                 {
-                    unexpandable = true;
+                    if (!IsDirectOperationKindAccess(argument.Expression, this.context))
+                    {
+                        unexpandable = true;
+                    }
+                }
+                else
+                {
+                    handlerIndex = arguments.Count;
                 }
 
                 arguments.Add(this.TranslateExpression(argument.Expression));
@@ -1616,6 +1625,23 @@ public sealed partial class CSharpToGSharpTranslator
                 DiagnosticId = "CS2GS-ANALYZER-SHAPE",
             });
 
+            if (guardsIsType && handlerIndex >= 0)
+            {
+                arguments[handlerIndex] = GuardIsTypeHandler(arguments[handlerIndex]);
+                const string IsTypeNote =
+                    "'OperationKind.IsType' registered as a wrapper lambda that forwards to the handler unless the node is an "
+                    + "is-expression with a pattern ('x is T v', 'x is T { ... }'): G# binds those to the same "
+                    + "BoundIsExpression kind as a plain type test, where Roslyn sends them to IsPattern instead.";
+                this.context.Report(new TranslationDiagnostic(
+                    "analyzer-api",
+                    IsTypeNote,
+                    invocation.GetLocation(),
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+                });
+            }
+
             result = new InvocationExpression(
                 new MemberAccessExpression(
                     this.TranslateExpression(receiver.Expression),
@@ -1623,6 +1649,43 @@ public sealed partial class CSharpToGSharpTranslator
                     isArrow: false),
                 arguments);
             return true;
+        }
+
+        /// <summary>
+        /// Issue #4436: wraps a handler registered for <c>OperationKind.IsType</c>
+        /// so it never sees an is-expression carrying a declaration or
+        /// recursive pattern. Roslyn models those as <c>IIsPatternOperation</c>,
+        /// but G# binds every <c>is</c> to one <c>BoundIsExpression</c> kind, and
+        /// for the pattern forms <c>TypeOperand</c> is nil — a handler written
+        /// against Roslyn's non-null <c>IIsTypeOperation.TypeOperand</c> would
+        /// dereference it. The guard rejects only those nodes, so it composes
+        /// with any other kinds named in the same registration.
+        /// </summary>
+        /// <param name="handler">The translated handler.</param>
+        /// <returns>The guarded wrapper lambda.</returns>
+        private static GExpression GuardIsTypeHandler(GExpression handler)
+        {
+            GExpression ctxNode = new MemberAccessExpression(new IdentifierExpression("ctx"), "BoundNode", isArrow: false);
+            GExpression isPatternForm = new PatternTestExpression(
+                ctxNode,
+                new TypePattern(
+                    "_",
+                    new NamedTypeReference("BoundIsExpression"),
+                    new PropertyPattern(new List<PropertyPatternField>
+                    {
+                        new PropertyPatternField("TypeOperand", new ConstantPattern(LiteralExpression.Null())),
+                    }),
+                    designationAfterType: true));
+            GExpression handlerCall = new InvocationExpression(handler, new List<GExpression> { new IdentifierExpression("ctx") });
+            var body = new BlockStatement(new List<GStatement>
+            {
+                new IfStatement(
+                    new UnaryExpression("!", new ParenthesizedExpression(isPatternForm)),
+                    new BlockStatement(new List<GStatement> { new ExpressionStatement(handlerCall) })),
+            });
+            return new LambdaExpression(
+                new List<Parameter> { new Parameter("ctx", new NamedTypeReference("BoundNodeAnalysisContext")) },
+                blockBody: body);
         }
 
         /// <summary>

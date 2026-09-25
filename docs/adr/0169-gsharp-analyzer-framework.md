@@ -113,8 +113,13 @@ corpus cannot reach a row, by a snippet translation test.
   `Compilation`, `ReportDiagnostic`). The driver dispatches it once per bound
   function body; lambdas and local functions are nested in their enclosing
   body, as Roslyn nests them in the operation block.
-- `IOperation.ChildOperations` → `BoundNode.ChildNodes` (one level of
-  `BoundTreeWalker`), and `Descendants()` / `DescendantsAndSelf()`.
+- `IOperation.ChildOperations` → `BoundNode.ChildNodes`, and
+  `Descendants()` / `DescendantsAndSelf()`. They follow Roslyn's operation
+  tree where the compiler walker does not: a function literal's body is
+  inside it (the walker leaves the literal opaque), an assignment's
+  children are its target and then its value (G# stores the target as a
+  symbol), and a plain `x is T` has only its operand under it. Node-action
+  dispatch does not yet enter lambda bodies or assignment targets (#4457).
 - `IMethodReferenceOperation` / `IPropertyReferenceOperation` map onto two new
   analyzer-facing bases in the style of #3920,
   `BoundMethodReferenceOperationExpression` (`Method`, `Instance`) and
@@ -131,7 +136,9 @@ corpus cannot reach a row, by a snippet translation test.
 - The type-test surface: `IIsTypeOperation.{TypeOperand,ValueOperand}` →
   `BoundIsExpression.{TypeOperand,Expression}` (`TypeOperand` is set only for
   a plain type test, so the pattern of `x is T` is not also dispatched as a
-  type pattern); the type, declaration and recursive patterns →
+  type pattern). G# binds a pattern `is` (`x is T v`) to the same node, which
+  Roslyn sends to `IsPattern` instead, so cs2gs wraps an `IsType` handler in
+  a guard that drops those nodes; the type, declaration and recursive patterns →
   `BoundTypePattern.TargetType`; `ITypeOfOperation.TypeOperand` →
   `BoundTypeOfExpression.OperandType`. Three Roslyn pattern kinds reach one
   G# kind, so the registry de-duplicates kinds and a rule naming all three

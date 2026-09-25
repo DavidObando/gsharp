@@ -412,6 +412,11 @@ internal static class RoslynAnalyzerApiMap
         ["MethodReference"] = new[] { "MethodGroupExpression", "ClrMethodGroupExpression" },
         ["PropertyReference"] = new[] { "PropertyAccessExpression", "ClrPropertyAccessExpression" },
 
+        // One kind, but it must go through the registration expansion: G#
+        // binds a pattern `is` to the same node, so the translator wraps the
+        // handler in a guard that drops those (GuardIsTypeHandler).
+        ["IsType"] = new[] { "IsExpression" },
+
         // Every node a Roslyn Invocation reaches. `receiver.Method()` — the most
         // ordinary call there is — is a UserInstanceCallExpression, and leaving
         // it out meant a migrated invocation rule never fired on it at all
@@ -573,6 +578,13 @@ internal static class RoslynAnalyzerApiMap
         // IOperation.Syntax maps to BoundNode.Syntax, which is `SyntaxNode?`: a
         // synthesized bound node may have no syntax of its own.
         ("Microsoft.CodeAnalysis.IOperation", "Syntax"),
+
+        // Issue #4436. BoundIsExpression.TypeOperand is nil for a pattern
+        // `is`; the reference bases report no symbol for an empty method
+        // group or for an imported field read.
+        ("Microsoft.CodeAnalysis.Operations.IIsTypeOperation", "TypeOperand"),
+        ("Microsoft.CodeAnalysis.Operations.IMethodReferenceOperation", "Method"),
+        ("Microsoft.CodeAnalysis.Operations.IPropertyReferenceOperation", "Property"),
     };
 
     /// <summary>

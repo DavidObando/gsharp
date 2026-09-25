@@ -40,8 +40,14 @@ public sealed class TypeTestSurfaceAnalyzer : DiagnosticAnalyzer
 
     private static void AnalyzeIsType(OperationAnalysisContext context)
     {
+        // Roslyn's TypeOperand is never null here, so the rule reads it
+        // directly. The translated rule must therefore never be handed a
+        // declaration-pattern is-expression, whose TypeOperand is nil in G#.
         var operation = (IIsTypeOperation)context.Operation;
-        Check(context, operation.TypeOperand, "is");
+        if (operation.TypeOperand.Name == WrapperTypeName)
+        {
+            Check(context, operation.TypeOperand, "is");
+        }
     }
 
     private static void AnalyzePattern(OperationAnalysisContext context)

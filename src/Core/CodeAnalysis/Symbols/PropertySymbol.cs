@@ -176,10 +176,7 @@ public sealed class PropertySymbol : Symbol
         {
             ReleaseAccessor(getterSymbol, value);
             getterSymbol = value;
-            if (value != null)
-            {
-                value.AssociatedSymbol = this;
-            }
+            AssociateAccessor(value);
         }
     }
 
@@ -194,10 +191,7 @@ public sealed class PropertySymbol : Symbol
         {
             ReleaseAccessor(setterSymbol, value);
             setterSymbol = value;
-            if (value != null)
-            {
-                value.AssociatedSymbol = this;
-            }
+            AssociateAccessor(value);
         }
     }
 
@@ -314,6 +308,18 @@ public sealed class PropertySymbol : Symbol
     internal void RepointDeclaration(PropertyDeclarationSyntax declaration)
     {
         Declaration = declaration;
+    }
+
+    // An accessor keeps the property that first claimed it. A constructed
+    // generic property reuses its definition's accessors, and repointing them
+    // at the substitution would lose the definition's attributes, which is
+    // what an analyzer reads through AssociatedSymbol.
+    private void AssociateAccessor(FunctionSymbol? accessor)
+    {
+        if (accessor != null && accessor.AssociatedSymbol == null)
+        {
+            accessor.AssociatedSymbol = this;
+        }
     }
 
     // An accessor that is replaced or removed stops naming this property as

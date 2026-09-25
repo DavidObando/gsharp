@@ -49,10 +49,10 @@ public sealed class Adr0169FunnelSurfaceParityTests : IDisposable
     [Fact]
     public void TranslatedFunnelRule_MatchesRoslyn_OverTranslatedCorpus()
     {
-        // Door, wrapper factory, the five signature-accessor shapes (direct,
-        // declared local, assignment, foreach, out var), method group and
-        // unattributed property getter.
-        AssertParity("FunnelSurfaceAnalyzer", "Corpus.cs", expected: 9);
+        // Door, door in a lambda, wrapper factory, the five signature-accessor
+        // shapes (direct, declared local, assignment, foreach, out var),
+        // method group and unattributed property getter.
+        AssertParity("FunnelSurfaceAnalyzer", "Corpus.cs", expected: 10);
     }
 
     [Fact]
@@ -67,12 +67,24 @@ public sealed class Adr0169FunnelSurfaceParityTests : IDisposable
         AssertParity("TypeTestSurfaceAnalyzer", "TypeTestCorpus.cs", expected: 4);
     }
 
+    [Fact]
+    public void TranslatedDescendantsWalk_MatchesRoslyn_OverTranslatedCorpus()
+    {
+        // Assign: three local references (one of them the assignment target)
+        // and one call. Lambda: the call inside the lambda body. PlainIs: one
+        // local reference and no pattern.
+        AssertParity("DescendantsSurfaceAnalyzer", "DescendantsCorpus.cs", expected: 6);
+    }
+
     private void AssertParity(string analyzerName, string corpusName, int expected)
     {
         string corpus = Fixture(corpusName);
 
         // Asserted on the C# side too, so a wrong expectation cannot silently
-        // weaken the G# side.
+        // weaken the G# side. Each corpus case is its own member, and every
+        // diagnostic is keyed by the member that contains it, so a case that
+        // stops reporting cannot be masked by another case reporting twice
+        // with the same message (ADR-0154).
         IReadOnlyList<string> roslyn = RunRoslyn(analyzerName, corpusName, corpus);
         Assert.Equal(expected, roslyn.Count);
 
@@ -114,9 +126,51 @@ public sealed class Adr0169FunnelSurfaceParityTests : IDisposable
             .WithAnalyzers(ImmutableArray.Create(analyzer))
             .GetAnalyzerDiagnosticsAsync().GetAwaiter().GetResult()
             .Where(d => d.Id == "GSA0007")
-            .Select(d => d.GetMessage(System.Globalization.CultureInfo.InvariantCulture))
+            .Select(d => RoslynMember(d.Location) + ": " + d.GetMessage(System.Globalization.CultureInfo.InvariantCulture))
             .OrderBy(m => m, StringComparer.Ordinal)
             .ToList();
+    }
+
+    private static string RoslynMember(Location location)
+    {
+        SyntaxNode node = location.SourceTree!.GetRoot().FindNode(location.SourceSpan);
+        foreach (SyntaxNode ancestor in node.AncestorsAndSelf())
+        {
+            switch (ancestor)
+            {
+                case Microsoft.CodeAnalysis.CSharp.Syntax.MethodDeclarationSyntax method:
+                    return method.Identifier.ValueText;
+                case Microsoft.CodeAnalysis.CSharp.Syntax.PropertyDeclarationSyntax property:
+                    return property.Identifier.ValueText;
+            }
+        }
+
+        return "?";
+    }
+
+    private static string GSharpMember(GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree, GSharp.Core.CodeAnalysis.Text.TextSpan span)
+    {
+        // The innermost function or property declaration whose span covers
+        // the diagnostic.
+        string name = "?";
+        var current = (GSharp.Core.CodeAnalysis.Syntax.SyntaxNode)tree.Root;
+        while (current != null)
+        {
+            switch (current)
+            {
+                case GSharp.Core.CodeAnalysis.Syntax.FunctionDeclarationSyntax function:
+                    name = function.Identifier.Text;
+                    break;
+                case GSharp.Core.CodeAnalysis.Syntax.PropertyDeclarationSyntax property:
+                    name = property.Identifier.Text;
+                    break;
+            }
+
+            current = current.GetChildren().FirstOrDefault(child =>
+                child.Span.Start <= span.Start && span.Start + span.Length <= child.Span.Start + child.Span.Length);
+        }
+
+        return name;
     }
 
     private IReadOnlyList<string> RunTranslated(string analyzerName, string gsCorpus)
@@ -139,7 +193,7 @@ public sealed class Adr0169FunnelSurfaceParityTests : IDisposable
         Assert.DoesNotContain(produced, d => d.Id is "GS9300" or "GS9301" or "GS9304");
         return produced
             .Where(d => d.Id == "GSA0007")
-            .Select(d => d.Message)
+            .Select(d => GSharpMember(tree, d.Location.Span) + ": " + d.Message)
             .OrderBy(m => m, StringComparer.Ordinal)
             .ToList();
     }

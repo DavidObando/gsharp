@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -57,7 +58,21 @@ public sealed class BoundAssignmentExpression : BoundExpression
     /// <see cref="BoundVariableExpression"/> over it, built on first use for
     /// the analyzer surface; the binder and emitter never read it.
     /// </summary>
-    public BoundExpression Target => target ??= new BoundVariableExpression(Syntax, Variable);
+    public BoundExpression Target
+    {
+        get
+        {
+            var cached = Volatile.Read(ref target);
+            if (cached != null)
+            {
+                return cached;
+            }
+
+            // Analyzers may run concurrently: publish the first node built.
+            BoundExpression built = new BoundVariableExpression(Syntax, Variable);
+            return Interlocked.CompareExchange(ref target, built, null) ?? built;
+        }
+    }
 
     /// <summary>
     /// Gets the assigned value — the Roslyn <c>IAssignmentOperation.Value</c>
