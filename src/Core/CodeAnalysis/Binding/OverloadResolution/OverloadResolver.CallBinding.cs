@@ -2233,7 +2233,13 @@ internal sealed partial class OverloadResolver
                     && deferredTarget != null)
                 {
                     var targeted = bindLambdaWithTarget(deferredLambda, deferredTarget);
-                    boundArguments[i] = conversions.BindConversion(lambdaLoc, targeted, expectedType);
+
+                    // Issue #4400: at an `in` delegate parameter the target-
+                    // bound lambda is a value; pass it by readonly reference.
+                    boundArguments[i] = parameter.RefKind == RefKind.In
+                        ? conversions.BindImplicitInArgument(lambdaLoc, targeted, expectedType, parameter)
+                        : conversions.BindConversion(lambdaLoc, targeted, expectedType);
+                    hasErrors |= parameter.RefKind == RefKind.In && boundArguments[i] is BoundErrorExpression;
                     continue;
                 }
 
@@ -2246,7 +2252,7 @@ internal sealed partial class OverloadResolver
             var lambdaSyntax = i < parameterSyntax.Length && parameterSyntax[i] is { } sourceArgument
                 ? GetLambdaArgumentSyntax(sourceArgument)
                 : null;
-            if (parameter.RefKind == RefKind.None
+            if (parameter.RefKind is RefKind.None or RefKind.In
                 && TryConvertLambdaArgumentWithTarget(
                     argument,
                     expectedType,
@@ -2255,9 +2261,15 @@ internal sealed partial class OverloadResolver
                     lambdaSyntax,
                     parameter))
             {
-                boundArguments[i] = Invariant.Required(
+                var typedLambda = Invariant.Required(
                     targetTypedLambda,
                     "a successfully target-typed lambda produces a bound expression");
+
+                // Issue #4400: at an `in` delegate parameter the target-typed
+                // lambda is a value; pass it by readonly reference.
+                boundArguments[i] = parameter.RefKind == RefKind.In && typedLambda is not BoundErrorExpression
+                    ? conversions.CreateImplicitInReference(typedLambda, Invariant.Required(expectedType, "a bound parameter has a target type"))
+                    : typedLambda;
                 continue;
             }
 
@@ -2311,13 +2323,28 @@ internal sealed partial class OverloadResolver
                 {
                     if (parameter.RefKind == RefKind.In && argRefKind == RefKind.None)
                     {
-                        // GS0242 (error): `in` without the explicit modifier. ADR-0060
-                        // says we do NOT silently spill a value to a temp, and no
-                        // downstream type error is guaranteed to fire, so the diagnostic
-                        // itself carries error severity (issue #3501: it was a warning,
-                        // and the mis-bound argument reached the emitter as GS9998).
-                        Diagnostics.ReportInArgumentMissingInModifier(argSyntax?.Location ?? syntax.Location, i + 1, parameter.Name);
-                        hasErrors = true;
+                        // Issue #4400 (ADR-0060 amendment): `in` without the
+                        // call-site modifier passes a readonly reference, as in
+                        // C# — the lvalue's own address, or a spilled temp's.
+                        // An interpolated string at an `in IFormattable` /
+                        // `in FormattableString` parameter is re-lowered to
+                        // the formattable first, exactly as a by-value one is.
+                        var inValue = argument;
+                        if (argSyntax != null
+                            && UnwrapNamedArgumentValue(argSyntax) is InterpolatedStringExpressionSyntax interpolatedInArg
+                            && expectedType != null
+                            && isFormattableStringTargetType(expectedType))
+                        {
+                            inValue = bindInterpolatedStringAsFormattable(interpolatedInArg, expectedType);
+                        }
+
+                        var implicitIn = conversions.BindImplicitInArgument(
+                            argSyntax?.Location ?? syntax.Location,
+                            inValue,
+                            Invariant.Required(expectedType, "a bound parameter has a target type"),
+                            parameter);
+                        boundArguments[i] = implicitIn;
+                        hasErrors |= implicitIn is BoundErrorExpression;
                         continue;
                     }
 

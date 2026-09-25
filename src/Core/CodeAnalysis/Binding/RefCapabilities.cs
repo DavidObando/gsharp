@@ -271,6 +271,34 @@ internal static class RefCapabilities
                     ? RefKind.RefReadOnly
                     : RefKind.Ref;
 
+    /// <summary>
+    /// Issue #4400: whether an argument written without a modifier at an
+    /// <c>in</c> parameter passes its own storage's address (as C# does) —
+    /// a variable (not a smart-cast narrowed read, whose storage has another
+    /// type; not a compile-time constant; not a reference-type <c>this</c>),
+    /// an addressable field, an array element, a dereference, or a native
+    /// ref-returning call. Every other shape is an rvalue and is spilled to a
+    /// readonly temp.
+    /// </summary>
+    /// <param name="value">The converted argument.</param>
+    /// <returns><see langword="true"/> when its address is taken directly.</returns>
+    internal static bool IsDirectlyAddressableForImplicitIn(BoundExpression value)
+        => value switch
+        {
+            BoundVariableExpression { Variable: ParameterSymbol { IsReceiverParameter: true } } receiver =>
+                !Binder.IsReferenceTypeForConstraint(receiver.Type) && receiver.NarrowedType == null,
+            BoundVariableExpression variable =>
+                (variable.NarrowedType == null || variable.NarrowedType == variable.Variable.Type)
+                && variable.Variable is not GlobalVariableSymbol { IsConst: true }
+                && variable.Variable is not LocalVariableSymbol { IsConst: true },
+
+            // A `const` field has no storage: lowering folds it to a literal.
+            BoundFieldAccessExpression { Field.IsConst: true } => false,
+            BoundClrPropertyAccessExpression { Member: FieldInfo { IsLiteral: true } } => false,
+            BoundBlockExpression or BoundConditionalExpression => false,
+            _ => ExpressionBinder.IsLvalue(value),
+        };
+
     internal static bool IsReadOnlyStorage(BoundExpression expression)
         => expression switch
         {

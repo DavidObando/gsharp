@@ -719,17 +719,6 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.OutDeclarationOutsideOutArgument);
 
     /// <summary>
-    /// ADR-0060 §8: warns that a call passes a value at an <c>in</c> parameter position
-    /// without the matching <c>in</c> modifier. The compiler does NOT silently spill the
-    /// value; the user should write <c>in lvalue</c> or remove the <c>in</c> from the signature.
-    /// </summary>
-    /// <param name="location">The argument location.</param>
-    /// <param name="argumentIndex">The 1-based argument index.</param>
-    /// <param name="parameterName">The parameter name on the callee.</param>
-    public void ReportInArgumentMissingInModifier(TextLocation location, int argumentIndex, string parameterName)
-    => Report(location, DiagnosticDescriptors.InArgumentMissingInModifier, argumentIndex, parameterName);
-
-    /// <summary>
     /// Issue #343: reports a positional call argument written after a named call
     /// argument. Named arguments must come last; positional → named ordering is
     /// fixed by the parser to support unambiguous matching against the parameter

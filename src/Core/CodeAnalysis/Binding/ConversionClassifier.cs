@@ -57,6 +57,10 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </remarks>
 internal sealed class ConversionClassifier
 {
+    // Issue #4400: name prefix of the readonly temp an implicit-`in` rvalue is
+    // spilled into (see CreateImplicitInReference / IsImplicitInTemp).
+    private const string ImplicitInTempPrefix = "<inArgument";
+
     // Issue #1482: the numeric-primitive set and widening lattice live in the
     // single authoritative `NumericWideningLattice` helper; this facade queries
     // it (via `NumericWideningLattice.IsNumericPrimitive`) instead of carrying a
@@ -1180,6 +1184,21 @@ internal sealed class ConversionClassifier
                         rebound = new BoundDefaultExpression(argument.Syntax, defTargetType);
                     }
                 }
+                else if (IsImplicitInClrArgument(argument, parameters[paramIndex]))
+                {
+                    // Issue #4400: a plain argument at an imported `in`
+                    // parameter is converted to the pointee type and passed
+                    // by readonly reference, as in C#.
+                    var sourceIndex = i - receiverArgCount;
+                    var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
+                        ? call.Arguments[sourceIndex].Location
+                        : call?.Location ?? default;
+                    TypeSymbol? inPointeeOverride = null;
+                    parameterTypeOverrides?.TryGetValue(paramIndex, out inPointeeOverride);
+                    var inPointee = inPointeeOverride
+                        ?? GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs);
+                    rebound = BindImplicitInArgument(location, argument, inPointee, parameter: null);
+                }
                 else if (!parameterType.IsByRef
                     && (argument.Type != TypeSymbol.Error || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
                 {
@@ -1959,12 +1978,16 @@ internal sealed class ConversionClassifier
     /// <param name="symbolicTypeArgs">The construction's symbolic type arguments.</param>
     /// <param name="closedConstructor">The resolved (closed, erased) CLR constructor.</param>
     /// <param name="paramIndex">Zero-based index into the constructor's parameter list.</param>
+    /// <param name="peelByRef">Issue #4400: map a by-ref slot's POINTEE instead
+    /// of skipping it, for an implicit <c>in</c> argument that must be spilled
+    /// or addressed at the symbolic type (<c>Holder&lt;T&gt;(in !0)</c>).</param>
     /// <returns>The recovered symbolic parameter type, or <see langword="null"/>.</returns>
     public static TypeSymbol? TrySubstituteCtorParameterTypeFromConstructedType(
         Type? openGenericDefinition,
         ImmutableArray<TypeSymbol> symbolicTypeArgs,
         ConstructorInfo? closedConstructor,
-        int paramIndex)
+        int paramIndex,
+        bool peelByRef = false)
     {
         if (openGenericDefinition == null
             || closedConstructor == null
@@ -2005,12 +2028,17 @@ internal sealed class ConversionClassifier
         }
 
         var openParamType = openParams[paramIndex].ParameterType;
-        if (openParamType.IsByRef)
+        if (openParamType.IsByRef != peelByRef)
         {
             // A by-ref ctor slot is emitted as an address, never boxed, so it
             // is already correct and rewriting it here would change RefKind
-            // handling downstream.
+            // handling downstream. Only the implicit-`in` caller asks for it.
             return null;
+        }
+
+        if (peelByRef)
+        {
+            openParamType = Invariant.Required(openParamType.GetElementType(), "a by-ref parameter has an element type");
         }
 
         // Only a parameter that actually MENTIONS the declaring generic's own
@@ -2123,6 +2151,14 @@ internal sealed class ConversionClassifier
         }
 
         var openParamType = openParams[paramIndex].ParameterType;
+
+        // Issue #4400: an `in` slot (`T&`) recovers its pointee's slot. The
+        // by-value callers never pass a by-ref parameter here.
+        if (openParamType.IsByRef)
+        {
+            openParamType = Invariant.Required(openParamType.GetElementType(), "a by-ref parameter has an element type");
+        }
+
         if (openParamType.IsGenericParameter
             && openParamType.DeclaringMethod == null
             && openParamType.GenericParameterPosition < imported.TypeArguments.Length
@@ -2804,12 +2840,14 @@ internal sealed class ConversionClassifier
     /// <param name="expectedType">The (substituted) parameter type.</param>
     /// <param name="parameter">The target parameter (carrying
     /// <see cref="RefKind"/>).</param>
+    /// <param name="argumentIndex">The 1-based argument position, for diagnostics.</param>
     /// <returns>The argument, possibly with a normal conversion applied.</returns>
     public BoundExpression BindCallArgumentWithRefKind(
         TextLocation location,
         BoundExpression argument,
         TypeSymbol expectedType,
-        ParameterSymbol parameter)
+        ParameterSymbol parameter,
+        int argumentIndex)
     {
         if (parameter != null && parameter.RefKind != RefKind.None)
         {
@@ -2839,9 +2877,260 @@ internal sealed class ConversionClassifier
                     return argument;
                 }
             }
+            else if (argument is BoundInterpolatedStringExpression { Handler: not null })
+            {
+                // Issue #377: a by-ref interpolated-string handler argument is
+                // lowered to the handler local's address later.
+                return BindConversion(location, argument, expectedType, callParameter: parameter);
+            }
+            else if (parameter.RefKind == RefKind.In)
+            {
+                // Issue #4400: an `in` parameter given a plain argument (no
+                // call-site modifier) is passed by readonly reference.
+                return BindImplicitInArgument(location, argument, expectedType, parameter);
+            }
+            else if (IsPlainValueArgument(argument))
+            {
+                // Issue #4400: a `ref`/`out` parameter given a plain value
+                // (no modifier) has no address to pass. Report the same
+                // GS0235 the free-function path reports instead of letting the
+                // value reach the emitter as unverifiable IL.
+                Diagnostics.ReportRefKindMismatch(
+                    location,
+                    argumentIndex,
+                    parameter.Name,
+                    parameter.RefKind == RefKind.Out ? "out" : "ref",
+                    "none");
+                return new BoundErrorExpression(argument.Syntax);
+            }
         }
 
         return BindConversion(location, argument, expectedType, callParameter: parameter);
+    }
+
+    /// <summary>
+    /// Issue #4400 (ADR-0060 amendment): binds an argument written WITHOUT a
+    /// call-site modifier against an <c>in</c> parameter, matching C#. The
+    /// argument is first converted to the parameter type exactly as a by-value
+    /// argument would be (so an argument with no implicit conversion reports
+    /// the usual GS0154/GS0155), then passed by readonly reference: the
+    /// address of the converted value when it is still an addressable lvalue
+    /// of the parameter type, otherwise the address of a synthesized readonly
+    /// temp holding the value.
+    /// </summary>
+    /// <param name="location">The diagnostic location for a conversion error.</param>
+    /// <param name="argument">The bound argument (not an address-of).</param>
+    /// <param name="expectedType">The (substituted) parameter pointee type.</param>
+    /// <param name="parameter">The target parameter, when it is a G# symbol.</param>
+    /// <returns>A <see cref="BoundAddressOfExpression"/> of type <c>T&amp;</c>,
+    /// or the conversion's error expression.</returns>
+    public BoundExpression BindImplicitInArgument(
+        TextLocation location,
+        BoundExpression argument,
+        TypeSymbol expectedType,
+        ParameterSymbol? parameter)
+    {
+        if (argument is BoundErrorExpression || expectedType == TypeSymbol.Error)
+        {
+            return argument;
+        }
+
+        // An untyped `default` (ADR-0100 placeholder) takes the pointee type,
+        // exactly as it takes a by-value parameter's type.
+        if (argument is BoundDefaultExpression { Type: var defaultType } && defaultType == TypeSymbol.Error)
+        {
+            argument = new BoundDefaultExpression(argument.Syntax, expectedType);
+        }
+
+        var converted = BindConversion(location, argument, expectedType, callParameter: parameter);
+        if (converted is BoundErrorExpression || converted.Type == TypeSymbol.Error)
+        {
+            return converted;
+        }
+
+        return CreateImplicitInReference(converted, expectedType);
+    }
+
+    /// <summary>
+    /// Issue #4400: wraps an already-converted <paramref name="value"/> as a
+    /// readonly reference for an <c>in</c> parameter — its own address when it
+    /// is addressable storage of exactly <paramref name="parameterType"/>
+    /// (C# passes the variable itself, so the callee aliases it), else the
+    /// address of a fresh readonly temp initialized with the value (an rvalue,
+    /// or an lvalue that needed a conversion).
+    /// </summary>
+    /// <param name="value">The converted argument value.</param>
+    /// <param name="parameterType">The parameter pointee type.</param>
+    /// <returns>The readonly address-of expression.</returns>
+    public BoundExpression CreateImplicitInReference(BoundExpression value, TypeSymbol parameterType)
+    {
+        if (RefCapabilities.IsDirectlyAddressableForImplicitIn(value)
+            && DeclarationBinder.TypeSignaturesEquivalent(value.Type, parameterType))
+        {
+            return new BoundAddressOfExpression(value.Syntax, value, unmanaged: false, isReadOnly: true);
+        }
+
+        // The temp is typed as the SLOT, not the value: an implicit reference
+        // conversion (`FormattableString` at `in IFormattable`) leaves the
+        // value's own type on the node, but the callee takes `IFormattable&`.
+        var tempType = parameterType != TypeSymbol.Error ? parameterType : value.Type;
+        var temp = new LocalVariableSymbol(
+            $"{ImplicitInTempPrefix}{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+            isReadOnly: true,
+            type: tempType);
+        var spill = new BoundBlockExpression(
+            value.Syntax,
+            ImmutableArray.Create<BoundStatement>(new BoundVariableDeclaration(value.Syntax, temp, value)),
+            new BoundVariableExpression(value.Syntax, temp));
+        return new BoundAddressOfExpression(value.Syntax, spill, unmanaged: false, isReadOnly: true);
+    }
+
+    /// <summary>
+    /// Issue #4400: whether <paramref name="variable"/> is the readonly temp
+    /// <see cref="CreateImplicitInReference"/> spills an rvalue into.
+    /// </summary>
+    /// <param name="variable">The variable to test.</param>
+    /// <returns><see langword="true"/> for an implicit-<c>in</c> spill temp.</returns>
+    public static bool IsImplicitInTemp(VariableSymbol variable)
+        => variable is LocalVariableSymbol && variable.Name.StartsWith(ImplicitInTempPrefix, StringComparison.Ordinal);
+
+    /// <summary>
+    /// Issue #4400: the final by-ref check for an argument that a call path's
+    /// early branch (an open type-parameter pass-through, a function-literal
+    /// adapter, a target-typed lambda) produced without going through
+    /// <see cref="BindCallArgumentWithRefKind"/>. A plain value at an
+    /// <c>in</c> slot is passed by readonly reference; one at a <c>ref</c> or
+    /// <c>out</c> slot reports GS0235 and becomes an error expression, since it
+    /// has no storage to pass. Anything else is returned unchanged.
+    /// </summary>
+    /// <param name="argument">The bound argument as the early branch left it.</param>
+    /// <param name="parameter">The target parameter.</param>
+    /// <param name="expectedType">The (substituted) parameter type.</param>
+    /// <param name="location">The argument's location, for GS0235.</param>
+    /// <param name="argumentIndex">The 1-based argument position, for GS0235.</param>
+    /// <returns>The argument ready for a by-ref slot, or an error expression.</returns>
+    public BoundExpression FinishByRefArgument(
+        BoundExpression argument,
+        ParameterSymbol parameter,
+        TypeSymbol expectedType,
+        TextLocation location,
+        int argumentIndex)
+    {
+        if (parameter.RefKind == RefKind.None || !IsPlainValueArgument(argument))
+        {
+            return argument;
+        }
+
+        if (parameter.RefKind == RefKind.In)
+        {
+            var value = argument is BoundDefaultExpression { Type: var defaultType } && defaultType == TypeSymbol.Error
+                ? new BoundDefaultExpression(argument.Syntax, expectedType)
+                : argument;
+            return CreateImplicitInReference(value, expectedType);
+        }
+
+        Diagnostics.ReportRefKindMismatch(
+            location,
+            argumentIndex,
+            parameter.Name,
+            parameter.RefKind == RefKind.Out ? "out" : "ref",
+            "none");
+        return new BoundErrorExpression(argument.Syntax);
+    }
+
+    /// <summary>
+    /// Issue #4400: whether <paramref name="argument"/> is a plain value at an
+    /// imported <c>in</c> (or <c>ref readonly</c>) parameter — one that still
+    /// needs the readonly reference a call-site <c>in</c> would have produced.
+    /// </summary>
+    /// <param name="argument">The bound argument.</param>
+    /// <param name="parameter">The imported CLR parameter.</param>
+    /// <returns><see langword="true"/> when the argument must be passed by implicit readonly reference.</returns>
+    public static bool IsImplicitInClrArgument(BoundExpression argument, ParameterInfo parameter)
+        => parameter.ParameterType.IsByRef
+            && parameter.IsIn
+            && !parameter.IsOut
+            && (IsPlainValueArgument(argument) || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument));
+
+    /// <summary>
+    /// Issue #4400: whether a bound argument is a plain VALUE — not already an
+    /// address (<c>in x</c>, <c>&amp;x</c>, a conditional address, a <c>*T</c>),
+    /// not a by-ref interpolated-string handler (lowered to an address later),
+    /// and not an error. An untyped <c>default</c> placeholder counts: it is
+    /// materialized at the pointee type.
+    /// </summary>
+    /// <param name="argument">The bound argument.</param>
+    /// <returns><see langword="true"/> when an <c>in</c> slot needs it passed by implicit reference.</returns>
+    public static bool IsPlainValueArgument(BoundExpression argument)
+        => argument is not (BoundAddressOfExpression or BoundConditionalAddressExpression or BoundErrorExpression)
+            && argument is not BoundInterpolatedStringExpression { Handler: not null }
+            && argument.Type is not (ByRefTypeSymbol or PointerTypeSymbol)
+            && (argument.Type != TypeSymbol.Error || argument is BoundDefaultExpression);
+
+    /// <summary>
+    /// Issue #4400: the pointee type an implicit <c>in</c> argument converts to
+    /// at an imported by-reference parameter, recovering a symbolic
+    /// (same-compilation) type argument the closed CLR signature erased.
+    /// </summary>
+    /// <param name="parameter">The imported CLR parameter.</param>
+    /// <param name="paramIndex">The parameter's index.</param>
+    /// <param name="method">The resolved CLR method, when known.</param>
+    /// <param name="receiverType">The receiver type carrying symbolic type arguments.</param>
+    /// <param name="symbolicMethodTypeArgs">The symbolic method type arguments.</param>
+    /// <returns>The pointee type.</returns>
+    public static TypeSymbol GetImplicitInClrPointeeType(
+        ParameterInfo parameter,
+        int paramIndex,
+        MethodInfo? method,
+        TypeSymbol? receiverType,
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs)
+    {
+        // Each of these readers already peels the by-ref slot and returns the
+        // (nullability-annotated) pointee — `in string?` stays `string?`, and
+        // an `in int*` pointee stays a pointer — so none is re-peeled here.
+        return TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType, symbolicMethodTypeArgs)
+            ?? TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs)
+            ?? TryRecoverReceiverTypeParameterSlot(method, paramIndex, receiverType)
+            ?? ClrNullability.GetParameterTypeSymbol(parameter);
+    }
+
+    /// <summary>
+    /// Issue #4400: applies only the implicit-<c>in</c> rewrite to a CLR call's
+    /// arguments, for call paths that otherwise pass their arguments through
+    /// unconverted (a non-generic interface-constrained instance call).
+    /// </summary>
+    /// <param name="arguments">The source-order bound arguments.</param>
+    /// <param name="parameters">The resolved CLR method's parameters.</param>
+    /// <param name="call">The originating call, for argument locations.</param>
+    /// <param name="parameterMapping">Optional source-argument to parameter map.</param>
+    /// <param name="method">The resolved CLR method, for symbolic slot recovery.</param>
+    /// <param name="receiverType">The receiver/constraint type carrying symbolic type arguments.</param>
+    /// <returns>The arguments, with each plain <c>in</c> argument passed by readonly reference.</returns>
+    public ImmutableArray<BoundExpression> BindImplicitInClrArguments(
+        ImmutableArray<BoundExpression> arguments,
+        ParameterInfo[] parameters,
+        CallExpressionSyntax call,
+        ImmutableArray<int> parameterMapping,
+        MethodInfo? method,
+        TypeSymbol? receiverType)
+    {
+        ImmutableArray<BoundExpression>.Builder? builder = null;
+        for (var i = 0; i < arguments.Length; i++)
+        {
+            var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            if (paramIndex < parameters.Length && IsImplicitInClrArgument(arguments[i], parameters[paramIndex]))
+            {
+                var location = i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+                builder ??= arguments.ToBuilder();
+                builder[i] = BindImplicitInArgument(
+                    location,
+                    arguments[i],
+                    GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs: default),
+                    parameter: null);
+            }
+        }
+
+        return builder?.ToImmutable() ?? arguments;
     }
 
     /// <summary>Reports a rejected call argument through the shared GS0154 contract.</summary>

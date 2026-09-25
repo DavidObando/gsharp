@@ -10,6 +10,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Documentation;
@@ -1086,6 +1087,132 @@ internal sealed partial class OverloadResolver
             parameterOffset);
     }
 
+    // Issue #4400: recognises the spill ConversionClassifier.CreateImplicitInReference
+    // builds for an rvalue at an `in` slot — `&{ let <inArgumentN> = value; <inArgumentN> }`
+    // — and returns the spilled value.
+    private static bool TryGetImplicitInSpilledValue(BoundExpression argument, [NotNullWhen(true)] out BoundExpression? value)
+    {
+        if (argument is BoundAddressOfExpression { Operand: BoundBlockExpression block }
+            && block.Statements is [BoundVariableDeclaration { Variable: var temp, Initializer: { } initializer }]
+            && block.Expression is BoundVariableExpression { Variable: var read }
+            && ReferenceEquals(temp, read)
+            && ConversionClassifier.IsImplicitInTemp(temp))
+        {
+            value = initializer;
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
+    // Issue #4400: the value a reordered named `in` argument is captured as,
+    // in source order, when its storage can neither stay put (see
+    // IsFixedStorageAddress) nor be re-addressed from captured inputs (see
+    // TryGetAddressInputs). An implicit-`in` spill captures its spilled value;
+    // any other readonly (`in`) address — a ref-returning call's, a
+    // dereference's — captures the value it addresses, so it still runs in
+    // source order. The cost is that the callee sees a copy of that storage,
+    // which a readonly reference only reveals if the storage changes during
+    // the call. A by-ref local cannot hold the address instead, because a
+    // named-argument temp may have to survive an `await` in a later argument.
+    private static bool TryGetInArgumentCaptureValue(BoundExpression argument, [NotNullWhen(true)] out BoundExpression? value)
+    {
+        if (TryGetImplicitInSpilledValue(argument, out value))
+        {
+            return true;
+        }
+
+        if (argument is BoundAddressOfExpression { IsReadOnly: true, IsUnmanaged: false } readOnlyAddress
+            && !IsFixedStorageAddress(readOnlyAddress)
+            && !TryGetAddressInputs(readOnlyAddress, out _, out _))
+        {
+            value = readOnlyAddress.Operand;
+            return true;
+        }
+
+        value = null;
+        return false;
+    }
+
+    // Issue #4400: an address whose storage no later argument can redirect —
+    // a variable (reassigning it changes the value at that same storage,
+    // which the callee then sees exactly as in C#), a static field, or a
+    // value-type field chain rooted in such storage — may stay in its
+    // parameter slot when the arguments are reordered.
+    private static bool IsFixedStorageAddress(BoundExpression argument)
+        => argument is BoundAddressOfExpression { IsUnmanaged: false } address && IsFixedStorage(address.Operand);
+
+    private static bool IsFixedStorage(BoundExpression operand)
+        => operand switch
+        {
+            BoundVariableExpression => true,
+            BoundFieldAccessExpression { Receiver: null } => true,
+            BoundFieldAccessExpression { Receiver: { } receiver }
+                when !Binder.IsReferenceTypeForConstraint(receiver.Type) => IsFixedStorage(receiver),
+            _ => false,
+        };
+
+    // Issue #4400: the inputs that select an address's storage — a reference
+    // receiver (`h` in `h.F`) or an array and its index (`xs[i]`). Capturing
+    // them in source order and re-taking the address from the captured values
+    // passes exactly the storage C# passes, even when a later argument
+    // reassigns `h`, `xs` or `i`, and keeps the aliasing.
+    private static bool TryGetAddressInputs(
+        BoundExpression argument,
+        [NotNullWhen(true)] out BoundAddressOfExpression? address,
+        out ImmutableArray<BoundExpression> inputs)
+    {
+        if (argument is BoundAddressOfExpression { IsUnmanaged: false } candidate
+            && TryGetStorageRootInputs(candidate.Operand, out inputs))
+        {
+            address = candidate;
+            return true;
+        }
+
+        address = null;
+        inputs = default;
+        return false;
+    }
+
+    // Walks an lvalue through value-type field links (`holder.Cell.Value`,
+    // `grid[i, j].Value`) down to what actually selects its storage: a
+    // reference receiver, or an array and all of its indices.
+    private static bool TryGetStorageRootInputs(BoundExpression lvalue, out ImmutableArray<BoundExpression> inputs)
+    {
+        switch (lvalue)
+        {
+            case BoundFieldAccessExpression { Receiver: { } receiver }
+                when Binder.IsReferenceTypeForConstraint(receiver.Type):
+                inputs = ImmutableArray.Create(receiver);
+                return true;
+            case BoundFieldAccessExpression { Receiver: { } valueReceiver }:
+                return TryGetStorageRootInputs(valueReceiver, out inputs);
+            case BoundIndexExpression { IsArrayBackedElementAccess: true } element:
+                inputs = ImmutableArray.Create(element.Target).AddRange(element.Indices);
+                return true;
+            default:
+                inputs = default;
+                return false;
+        }
+    }
+
+    // Issue #4400: re-roots an address on captured inputs.
+    private sealed class CapturedInputRewriter : BoundTreeRewriter
+    {
+        private readonly Dictionary<BoundExpression, BoundExpression> replacements;
+
+        public CapturedInputRewriter(Dictionary<BoundExpression, BoundExpression> replacements)
+        {
+            this.replacements = replacements;
+        }
+
+        public BoundExpression Rewrite(BoundExpression expression) => RewriteExpression(expression);
+
+        protected override BoundExpression RewriteExpression(BoundExpression node)
+            => replacements.TryGetValue(node, out var replacement) ? replacement : base.RewriteExpression(node);
+    }
+
     private static ImmutableArray<BoundExpression> PreserveMappedArgumentEvaluationOrder(
         ImmutableArray<BoundExpression> parameterOrderedArguments,
         ImmutableArray<int> sourceToParameterMapping,
@@ -1114,9 +1241,18 @@ internal sealed partial class OverloadResolver
             }
 
             reordered |= parameterIndex != sourceIndex;
+
+            // Issue #4400: an address stays in its slot when its storage is
+            // fixed, is re-taken from inputs captured in source order when a
+            // receiver/index selects it, and an `in` one is otherwise captured
+            // by value. Only a remaining `ref`/`out` address still forgoes
+            // reordering, as before.
             if (!hasHandlerSourceForwarding &&
                 parameterOrderedArguments[slot] is
-                    BoundAddressOfExpression or BoundConditionalAddressExpression)
+                    BoundAddressOfExpression or BoundConditionalAddressExpression &&
+                !TryGetInArgumentCaptureValue(parameterOrderedArguments[slot], out _) &&
+                !IsFixedStorageAddress(parameterOrderedArguments[slot]) &&
+                !TryGetAddressInputs(parameterOrderedArguments[slot], out _, out _))
             {
                 return parameterOrderedArguments;
             }
@@ -1135,10 +1271,53 @@ internal sealed partial class OverloadResolver
         {
             var slot = parameterOffset + sourceToParameterMapping[sourceIndex];
             BoundExpression argument = parameterOrderedArguments[slot];
+
+            // Issue #4400: an `in` argument evaluates its VALUE here, in source
+            // order, into the named-argument temp whose address is passed; a
+            // plain variable's address needs no capture at all.
+            var implicitInSpill = false;
+            TypeSymbol? captureType = null;
+            if (TryGetInArgumentCaptureValue(argument, out var spilledValue))
+            {
+                // The capture temp takes the SLOT's pointee type, not the
+                // value's: an implicit-`in` spill may hold a narrower value
+                // (`FormattableString` at `in IFormattable`) whose own type
+                // would make the passed address `FormattableString&`.
+                captureType = TypeSymbol.TryGetPointeeType(argument.Type, out var slotPointee) ? slotPointee : null;
+                argument = spilledValue;
+                implicitInSpill = true;
+            }
+            else if (IsFixedStorageAddress(argument))
+            {
+                replacements[slot] = argument;
+                continue;
+            }
+            else if (TryGetAddressInputs(argument, out var inputAddress, out var inputs))
+            {
+                var inputTemps = new Dictionary<BoundExpression, BoundExpression>(ReferenceEqualityComparer.Instance);
+                for (var inputIndex = 0; inputIndex < inputs.Length; inputIndex++)
+                {
+                    var input = inputs[inputIndex];
+                    var inputTemp = new LocalVariableSymbol(
+                        $"<>namedArg{sourceIndex}_{inputIndex}",
+                        isReadOnly: true,
+                        input.Type);
+                    evaluations.Add(new BoundVariableDeclaration(input.Syntax, inputTemp, input));
+                    inputTemps[input] = new BoundVariableExpression(input.Syntax, inputTemp);
+                }
+
+                replacements[slot] = new BoundAddressOfExpression(
+                    inputAddress.Syntax,
+                    new CapturedInputRewriter(inputTemps).Rewrite(inputAddress.Operand),
+                    unmanaged: false,
+                    inputAddress.IsReadOnly);
+                continue;
+            }
+
             argument = RewriteHandlerForwardedArguments(
                 argument,
                 sourceCaptures);
-            var addressCapturedValue = false;
+            var addressCapturedValue = implicitInSpill;
             if (argument is BoundInterpolatedStringExpression handlerArgument &&
                 handlerArgument.Handler is { HandlerRefKind: not RefKind.None } handler)
             {
@@ -1153,14 +1332,16 @@ internal sealed partial class OverloadResolver
                 // A nil literal has no evaluation to preserve. Capturing it
                 // would create a local whose type is `nil`, which has no CLR
                 // signature representation; leave it in its parameter slot.
-                replacements[slot] = argument;
+                // Issue #4400: an `in` nil keeps its original typed spill,
+                // since the slot needs an address, not the bare value.
+                replacements[slot] = implicitInSpill ? parameterOrderedArguments[slot] : argument;
                 continue;
             }
 
             var temp = new LocalVariableSymbol(
                 $"<>namedArg{sourceIndex}",
                 isReadOnly: true,
-                argument.Type);
+                captureType ?? argument.Type);
             evaluations.Add(new BoundVariableDeclaration(argument.Syntax, temp, argument));
             BoundExpression tempLoad = new BoundVariableExpression(argument.Syntax, temp);
             sourceCaptures[sourceIndex] = tempLoad;
@@ -1622,8 +1803,10 @@ internal sealed partial class OverloadResolver
                 }
             }
 
-            // For imported `in`: accept either &expr or plain value — the
-            // ADR-0039 emit path spills a value to a temp for CLR interop.
+            // For imported `in`: accept either &expr or a plain value. Issue
+            // #4400: the CLR argument conversions have already rewritten a
+            // plain value into a readonly reference (the lvalue's own address,
+            // or a spilled temp's); the emitter has no value fallback.
         }
     }
 

@@ -686,18 +686,29 @@ internal sealed partial class OverloadResolver
                 {
                     if (parameter.RefKind == RefKind.In && argumentRefKind == RefKind.None)
                     {
-                        Diagnostics.ReportInArgumentMissingInModifier(argumentLocation, i + 1, parameter.Name);
-                    }
-                    else
-                    {
-                        Diagnostics.ReportRefKindMismatch(
-                            argumentLocation,
-                            i + 1,
-                            parameter.Name,
-                            refKindToString(parameter.RefKind),
-                            refKindToString(argumentRefKind));
+                        // Issue #4400: pass a readonly reference, as in C#. An
+                        // untyped lambda is target-bound first, exactly as at
+                        // a by-value delegate parameter.
+                        if (GetLambdaArgumentSyntax(argumentSyntax) is { } inLambdaSyntax
+                            && bindLambdaWithTarget != null
+                            && IsUntypedArrowLambda(inLambdaSyntax)
+                            && parameter.Type is FunctionTypeSymbol inLambdaTarget)
+                        {
+                            argument = bindLambdaWithTarget(inLambdaSyntax, inLambdaTarget);
+                        }
+
+                        var implicitIn = conversions.BindImplicitInArgument(argumentLocation, argument, parameter.Type, parameter);
+                        hasErrors |= implicitIn is BoundErrorExpression;
+                        converted.Add(implicitIn);
+                        continue;
                     }
 
+                    Diagnostics.ReportRefKindMismatch(
+                        argumentLocation,
+                        i + 1,
+                        parameter.Name,
+                        refKindToString(parameter.RefKind),
+                        refKindToString(argumentRefKind));
                     hasErrors = true;
                     converted.Add(argument);
                     continue;
@@ -760,6 +771,40 @@ internal sealed partial class OverloadResolver
             parameterNameAt);
         argumentRefKinds = hasRefKinds ? refKinds.MoveToImmutable() : default;
         return true;
+    }
+
+    // Issue #4400: the per-argument loops of the user-method and extension
+    // paths leave through several early `continue`s (an open type-parameter
+    // pass-through, function-literal adapters, formattable strings, a
+    // target-typed lambda) that never reach BindCallArgumentWithRefKind. Any
+    // plain value such a branch leaves at a by-ref slot is finished here — an
+    // `in` one is passed by readonly reference, a `ref`/`out` one reports
+    // GS0235 — so no path can hand the emitter a value where the callee
+    // expects an address.
+    private void FinishByRefArguments(
+        ImmutableArray<BoundExpression>.Builder convertedArgs,
+        ImmutableArray<ParameterSymbol> parameters,
+        int parameterOffset,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution,
+        Func<int, TextLocation> locationAt,
+        int argumentNumberOffset)
+    {
+        for (var i = 0; i < convertedArgs.Count && i + parameterOffset < parameters.Length; i++)
+        {
+            var parameter = parameters[i + parameterOffset];
+            if (parameter.RefKind == RefKind.None)
+            {
+                continue;
+            }
+
+            var expectedType = substitution != null ? substituteType(parameter.Type, substitution) : parameter.Type;
+            convertedArgs[i] = conversions.FinishByRefArgument(
+                convertedArgs[i],
+                parameter,
+                expectedType,
+                locationAt(i),
+                i + argumentNumberOffset);
+        }
     }
 
     private bool TryBuildImplicitMemberLoad(
@@ -1410,7 +1455,7 @@ internal sealed partial class OverloadResolver
             var lambdaSyntax = i < permutedSyntax.Length && permutedSyntax[i] is { } sourceArgument
                 ? GetLambdaArgumentSyntax(sourceArgument)
                 : null;
-            if (extension.Parameters[i + 1].RefKind == RefKind.None
+            if (extension.Parameters[i + 1].RefKind is RefKind.None or RefKind.In
                 && TryConvertLambdaArgumentWithTarget(
                     permutedArguments[i],
                     expectedType,
@@ -1425,8 +1470,18 @@ internal sealed partial class OverloadResolver
                 continue;
             }
 
-            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1]));
+            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1], i + 1));
         }
+
+        // convertedArgs[0] is the receiver, so it aligns with extension.Parameters
+        // and argument i is source argument i - 1.
+        FinishByRefArguments(
+            convertedArgs,
+            extension.Parameters,
+            parameterOffset: 0,
+            substitution,
+            i => i >= 1 && i - 1 < permutedSyntax.Length ? permutedSyntax[i - 1]?.Location ?? ce.Location : ce.Location,
+            argumentNumberOffset: 0);
 
         // Issue #1931: stash the extension function's own (explicit or
         // inferred) type arguments on the bound node so the emitter's
@@ -1898,7 +1953,7 @@ internal sealed partial class OverloadResolver
             var lambdaSyntax = argSyntaxForLocation is { } sourceArgument
                 ? GetLambdaArgumentSyntax(sourceArgument)
                 : null;
-            if (parameter.RefKind == RefKind.None
+            if (parameter.RefKind is RefKind.None or RefKind.In
                 && TryConvertLambdaArgumentWithTarget(
                     permutedArguments[i],
                     expectedType,
@@ -1924,7 +1979,7 @@ internal sealed partial class OverloadResolver
         continue;
             }
 
-            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset]));
+            convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, method.Parameters[i + parameterOffset], i + 1));
         }
 
         // Issue #1931: stash the method's own (explicit or inferred) type
@@ -1944,6 +1999,14 @@ internal sealed partial class OverloadResolver
 
             methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
         }
+
+        FinishByRefArguments(
+            convertedArgs,
+            method.Parameters,
+            parameterOffset,
+            substitution,
+            i => i < permutedSyntax.Length ? permutedSyntax[i]?.Location ?? ce.Location : ce.Location,
+            argumentNumberOffset: 1);
 
         var finalArguments = PreserveNamedArgumentEvaluationOrder(
             ce.Arguments,

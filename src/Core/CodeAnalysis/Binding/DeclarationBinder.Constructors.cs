@@ -473,6 +473,20 @@ internal sealed partial class DeclarationBinder
                     : RefKind.Ref;
                 refKindsBuilder.Add(refKind);
 
+                // Issue #4400: a plain argument at an imported `in` base
+                // constructor parameter is passed by readonly reference.
+                // For a generic base (`Base<T>(in T)`) the pointee is projected
+                // through the base's own type arguments exactly as the by-value
+                // branch below projects its target (#3984); the erased closed
+                // `object&` is not what the emitted `.ctor(!0&)` takes.
+                if (ConversionClassifier.IsImplicitInClrArgument(orderedArgs[i], ctorParams[i]))
+                {
+                    var inPointee = TryProjectSymbolicBaseInPointeeType(openBaseCtorParams, openBaseDefinition, baseTypeArguments, i)
+                        ?? ConversionClassifier.GetImplicitInClrPointeeType(ctorParams[i], i, method: null, receiverType: null, symbolicMethodTypeArgs: default);
+                    convertedArgs.Add(conversions.BindImplicitInArgument(argLocation(i), orderedArgs[i], inPointee, parameter: null));
+                    continue;
+                }
+
                 // A by-ref argument is forwarded as-is (it is already a managed
                 // pointer, e.g. the result of `&x`); no value conversion applies.
                 convertedArgs.Add(orderedArgs[i]);
@@ -674,6 +688,38 @@ internal sealed partial class DeclarationBinder
             && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
             ? mapped
             : null;
+    }
+
+    // Issue #4400: the symbolic pointee of a generic base constructor's `in`
+    // parameter (`Base<T>(in T)` → `T`), or null when nothing was erased.
+    private static TypeSymbol? TryProjectSymbolicBaseInPointeeType(
+        ParameterInfo[]? openBaseCtorParams,
+        System.Type? openBaseDefinition,
+        ImmutableArray<TypeSymbol> baseTypeArguments,
+        int index)
+    {
+        if (openBaseCtorParams == null
+            || openBaseDefinition == null
+            || baseTypeArguments.IsDefaultOrEmpty
+            || index < 0
+            || index >= openBaseCtorParams.Length
+            || openBaseCtorParams[index].ParameterType.GetElementType() is not { } openPointee)
+        {
+            return null;
+        }
+
+        // Keep every symbolic shape the receiver projection keeps
+        // (ConversionClassifier.TrySubstituteParameterTypeFromReceiver): a
+        // type parameter or same-compilation type in the pointee, or a base
+        // type argument whose nullability, fixed length or tuple names the
+        // erased closed signature cannot carry (`Base[string?]`, `Base[[3]int32]`).
+        var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(openPointee, openBaseDefinition, baseTypeArguments);
+        var keepsSymbolicShape = TypeSymbol.ContainsTypeParameter(mapped)
+            || TypeSymbol.ContainsSameCompilationUserType(mapped)
+            || baseTypeArguments.Any(static argument => TypeSymbol.RequiresSymbolicProjection(argument)
+                || TypeSymbol.ContainsFixedLengthArray(argument)
+                || argument is TupleTypeSymbol);
+        return mapped != TypeSymbol.Error && keepsSymbolicShape ? mapped : null;
     }
 
     private BoundExpression BindConstructorInitializerArgument(ExpressionSyntax syntax)
@@ -911,7 +957,7 @@ internal sealed partial class DeclarationBinder
                 boundArguments[i] = argument;
             }
 
-            if (parameter.RefKind != RefKind.None)
+            if (parameter.RefKind != RefKind.None && !IsImplicitInArgument(parameter, argument))
             {
                 if (!TryGetAddressedArgumentType(argument, out var addressedType)
                     || addressedType != parameter.Type)
@@ -928,7 +974,9 @@ internal sealed partial class DeclarationBinder
             // that it accepts a nil-carrying input.
             if (ConversionClassifier.AcceptsNilAnnotatedArgument(parameter, argument.Type, parameter.Type))
             {
-                convertedArgs.Add(argument);
+                convertedArgs.Add(parameter.RefKind == RefKind.In
+                    ? conversions.CreateImplicitInReference(argument, parameter.Type)
+                    : argument);
                 continue;
             }
 
@@ -944,7 +992,9 @@ internal sealed partial class DeclarationBinder
                 return null;
             }
 
-            convertedArgs.Add(conversions.BindConversion(argLocation(i), argument, parameter.Type));
+            convertedArgs.Add(parameter.RefKind == RefKind.In
+                ? conversions.BindImplicitInArgument(argLocation(i), argument, parameter.Type, parameter)
+                : conversions.BindConversion(argLocation(i), argument, parameter.Type));
         }
 
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol);
@@ -1005,7 +1055,12 @@ internal sealed partial class DeclarationBinder
                 var argType = boundArguments[i].Type;
                 var paramType = paramTypes[i];
                 var parameter = candidate.Parameters[i];
-                if (parameter.RefKind != RefKind.None)
+
+                // Issue #4400: a plain argument at an `in` parameter is
+                // applicable like a by-value one (it is passed by implicit
+                // readonly reference after the ordinary conversion).
+                if (parameter.RefKind != RefKind.None
+                    && !IsImplicitInArgument(parameter, boundArguments[i]))
                 {
                     if (!TryGetAddressedArgumentType(boundArguments[i], out var addressedType)
                         || addressedType != paramType)
@@ -1106,13 +1161,19 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            convertedArgs.Add(best.Parameters[i].RefKind != RefKind.None
-                ? boundArguments[i]
-                : conversions.BindConversion(argLocation(i), boundArguments[i], bestParamTypes[i]));
+            convertedArgs.Add(IsImplicitInArgument(best.Parameters[i], boundArguments[i])
+                ? conversions.BindImplicitInArgument(argLocation(i), boundArguments[i], bestParamTypes[i], best.Parameters[i])
+                : best.Parameters[i].RefKind != RefKind.None
+                    ? boundArguments[i]
+                    : conversions.BindConversion(argLocation(i), boundArguments[i], bestParamTypes[i]));
         }
 
         return new BaseConstructorInitializer(convertedArgs.ToImmutable(), baseClassSymbol, best);
     }
+
+    // Issue #4400: a plain (non-address) argument at an `in` parameter.
+    private static bool IsImplicitInArgument(ParameterSymbol parameter, BoundExpression argument)
+        => parameter.RefKind == RefKind.In && !TryGetAddressedArgumentType(argument, out _);
 
     private static BoundExpression CreateProjectedOptionalUserDefaultArgument(
         ParameterSymbol parameter,

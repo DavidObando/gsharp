@@ -2339,7 +2339,7 @@ public sealed partial class CSharpToGSharpTranslator
                             new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { dependency }));
 
                 // Issue #3501: gsc `let`-bound function literals now declare
-                // and call through ref/out/in parameters (A2 + the GS0242
+                // and call through ref/out/in parameters (A2 + the ref-kind
                 // call-site modifier), so a ref-kind signature alone no longer
                 // forces a lift — only a recursion cycle through ANOTHER local
                 // function does (the partner would be forward-referenced

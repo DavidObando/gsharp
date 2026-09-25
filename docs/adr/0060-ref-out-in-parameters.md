@@ -4,7 +4,7 @@
 - **Date**: 2026-06-05
 - **Implemented**: 2026-06-05 (PR [#489](https://github.com/DavidObando/gsharp/pull/489))
 - **Phase**: Phase 8 — language ergonomics / CLR-interop surface
-- **Related**: issue #341 (`out` parameters at call sites), issue #342 (`ref` / `in` parameters at call sites); ADR-0039 (managed by-ref pointers `&`/`*` / `ByRefTypeSymbol`), ADR-0034 (imported CLR interop), ADR-0038 (generic method inference), ADR-0058 (ref-safe-to-escape), ADR-0017 (method virtuality), ADR-0018 (interface defaults), ADR-0021 (generic variance — established `in`/`out` as contextual keywords); ADR-0051 (property declarations), ADR-0118 (indexer members), ADR-0131 (expression-bodied members) — amended by §14 below (issue #3879)
+- **Related**: issue #341 (`out` parameters at call sites), issue #342 (`ref` / `in` parameters at call sites); ADR-0039 (managed by-ref pointers `&`/`*` / `ByRefTypeSymbol`), ADR-0034 (imported CLR interop), ADR-0038 (generic method inference), ADR-0058 (ref-safe-to-escape), ADR-0017 (method virtuality), ADR-0018 (interface defaults), ADR-0021 (generic variance — established `in`/`out` as contextual keywords); ADR-0051 (property declarations), ADR-0118 (indexer members), ADR-0131 (expression-bodied members) — amended by §14 below (issue #3879); the call-site `in` rule is amended by §15 below (issue #4400)
 
 ## Context
 
@@ -68,7 +68,7 @@ The four legal **`out` argument shapes** are:
 
 Optionally-typed forms (`out var name T`, `out let name T`, `out name T` with declaration) are accepted and follow G#'s usual binding grammar — the type clause must be assignable from the parameter's pointee type; an exact match is recommended for clarity but a widening reference conversion is allowed.
 
-`ref` and `in` accept only the lvalue form: `ref name`, `in name`. Neither admits inline binding, because both require the value to be observable *before* the call (`ref` requires definite assignment; `in` is read-only and therefore meaningless on a freshly-introduced local). For `in`, when the user wants to pass a value expression rather than an lvalue, they may bind it first (`let big = SomeLargeStruct{}` then `Consume(in big)`); the binder does **not** silently spill values at `in` argument positions, in deliberate contrast to C#. This makes the cost (a copy to a temp lvalue) visible.
+`ref` and `in` accept only the lvalue form: `ref name`, `in name`. Neither admits inline binding, because both require the value to be observable *before* the call (`ref` requires definite assignment; `in` is read-only and therefore meaningless on a freshly-introduced local). For `in`, when the user wants to pass a value expression rather than an lvalue, they may bind it first (`let big = SomeLargeStruct{}` then `Consume(in big)`); the binder does **not** silently spill values at `in` argument positions, in deliberate contrast to C#. This makes the cost (a copy to a temp lvalue) visible. *(Superseded by §15, issue #4400: omitting `in` now follows C#, passing an lvalue's address or spilling a value to a readonly temp.)*
 
 ### 2. Method-definition syntax
 
@@ -220,14 +220,14 @@ The next available GS-series diagnostic ID is GS0230 (verified against `Diagnost
 | GS0234 | Error | Variable `{name}` is not definitely assigned before being passed by `ref`. (User-facing twin of the internal GS9003 that today fires only for synthesized `&x`.) |
 | GS0235 | Error | Override or interface implementation's parameter ref-kind does not match the base/interface member. (E.g. overriding `Try(out int32)` with `Try(ref int32)` is illegal.) |
 | GS0236 | Error | `out`/`ref`/`in` is not a legal modifier on a variadic parameter (`name ...T`). The two features compose poorly at the CLR level (params arrays cannot be `T&[]`) and are rejected at parse / bind time. |
-| GS0237 | Warning | A call passes a value at an `in` parameter position without the `in` modifier. The compiler does **not** silently spill; the warning fires to invite the user to either pass `in lvalue` or remove the `in` from the signature. (Promotable to error in a future ADR if the warning proves consistently followed.) |
+| GS0237 | Warning | A call passes a value at an `in` parameter position without the `in` modifier. The compiler does **not** silently spill; the warning fires to invite the user to either pass `in lvalue` or remove the `in` from the signature. (Promotable to error in a future ADR if the warning proves consistently followed.) *(Superseded by §15, issue #4400: implemented as GS0242, now retired; an omitted `in` passes a readonly reference as in C#.)* |
 | GS0238 | Error | A function declares a parameter of managed-pointer type `*T`. Message: "managed-pointer type `*T` is not a legal parameter type; use `ref name T`, `out name T`, or `in name T` instead." Replaces today's silent emit corruption (Context §3) with a compile-time diagnostic and a concrete rewrite. Same rule applies to delegate parameter slots, named-delegate-type parameters, and `func(...)` structural-type parameters. |
 
 GS9001–GS9006 from ADR-0039 continue to fire for low-level `&x` misuse and remain the canonical diagnostics for direct address-of operations. The new GS023x family is keyword-form-specific and produces more targeted messages because it can name the modifier the user typed.
 
 ### 9. Overload resolution
 
-Overload resolution (ADR-0034 / ADR-0038) is extended in one place: when ranking candidates whose parameter `i` has a non-`None` ref-kind, the candidate is *eligible* only if argument `i`'s observed ref-kind matches exactly. There is no implicit `None → In` promotion (per §1 — the `in` modifier is mandatory on the caller's side). The match is symmetric, so `ref` cannot satisfy an `in` parameter and vice versa, matching CLR rules.
+Overload resolution (ADR-0034 / ADR-0038) is extended in one place: when ranking candidates whose parameter `i` has a non-`None` ref-kind, the candidate is *eligible* only if argument `i`'s observed ref-kind matches exactly. There is no implicit `None → In` promotion (per §1 — the `in` modifier is mandatory on the caller's side). *(Superseded by §15: a plain argument at an `in` parameter is applicable like a by-value one.)* The match is symmetric, so `ref` cannot satisfy an `in` parameter and vice versa, matching CLR rules.
 
 Type inference (`InferTypeArguments` per ADR-0038) is unchanged because it already peels `IsByRef` from parameter types before unification ("ByRef — peel the byref and recurse"). The inference engine sees the pointee type on both sides and the ref-kind matching is a separate gate.
 
@@ -384,6 +384,55 @@ for shallow permissions, independent lifetime rules, CLR metadata, and cs2gs
 translation. Source call/getter-result alias retention remains #4219; readonly
 support does not silently turn an alias into a snapshot.
 
+### 15. Amendment (issue #4400): an omitted `in` modifier passes a readonly reference
+
+§1, §8 and §9 made the call-site `in` mandatory and promised never to spill a
+value silently. The implementation did not hold to that. The free-function,
+delegate and constructor paths reported GS0242. The member-call path
+(`this.M(x)`, `base.M(x)`, a call in a lambda), every imported CLR method,
+constructor and extension, and the `: base(...)` initializer instead bound the
+argument as a VALUE, and the emitter pushed it where the callee expected an
+address: ilverify `StackUnexpected`, then `InvalidProgramException`. The
+"ADR-0039 emit path spills a value to a temp" that the imported-call comments
+relied on did not exist. The imported `in` indexer rejected the call with
+GS0155. C# callers omit `in` as a matter of course, so cs2gs output hit all of
+this constantly.
+
+The rule is now C#'s, on every call form (free function, instance, `shared`,
+`base.`, constructor, convenience-init chaining, `: base(...)` to a G# or CLR
+base, delegate invoke, imported indexers, extensions, imported methods).
+A user indexer is not on this list, because its declaration still drops a
+ref-kind modifier on its parameters, so it never has an `in` parameter to
+pass to (#4421). An argument without a modifier at an `in` parameter is:
+
+1. converted to the parameter type exactly as a by-value argument would be.
+   An argument with no implicit conversion therefore reports the ordinary
+   GS0154/GS0155, as C# rejects it too;
+2. passed by the address of that value when the converted argument is still
+   addressable storage of the parameter type: a local or parameter (not a
+   smart-cast narrowed read, and not a reference-type `this`), a field with an
+   addressable receiver, an array element, a dereference, or a native
+   ref-returning call. As in C#, the callee aliases the caller's variable;
+3. otherwise spilled to a compiler-introduced readonly temp whose address is
+   passed. This covers a literal, a call or operator result, a property read,
+   and an lvalue that needed a conversion first (`int32` local at an
+   `in int64` parameter).
+
+The binder lowers the argument to `BoundAddressOfExpression(operand)` for
+case 2 and to `BoundAddressOfExpression(BoundBlockExpression([temp = value],
+temp))` for case 3 (`ConversionClassifier.BindImplicitInArgument` /
+`CreateImplicitInReference`). Every downstream consumer already handles that
+shape, including the emitter's #3355 block-address path and the slot planner. The
+emitter no longer has a value fallback for a by-ref argument slot. A plain
+value there is an internal error, not unverifiable IL. GS0242 is retired. An
+explicit `in x` keeps its meaning (it requires an lvalue, GS9001), and `ref`/`out`
+still require their modifier. The member-call path now reports GS0235 for a
+plain value there instead of emitting it. Overload ranking among G# functions and methods
+already ignored the ref-kind of a plain argument. The one candidate filter that
+did not ignore it, the explicit `: base(...)` constructor filter, now treats a
+plain argument at an `in` parameter like a by-value one. The package-level strict-mode pragma that §Consequences anticipated
+for this relaxation is not provided.
+
 ## Consequences
 
 **Unlocked:**
@@ -399,7 +448,7 @@ support does not silently turn an alias into a snapshot.
 
 - Call sites that previously worked with `&x` against a `ref`/`out`/`in` parameter still work; new call sites that mix the modifier with a non-lvalue payload produce GS0230. The "must be lvalue" diagnostic remains GS9001 for the underlying `&x` and is reused (via the same lvalue classifier) for the keyword form.
 - Users writing G# functions with `out` parameters must satisfy the new definite-assignment rule on every return path (GS0233). This is strictly correct behavior; the diagnostic mirrors the existing C# rule.
-- The deliberate refusal to silently spill values at `in` argument positions (GS0237 warning) is a divergence from C#. The rationale is that G# values the explicitness of cost; users who want the spill can write `let temp = expr` then `in temp`.
+- The deliberate refusal to silently spill values at `in` argument positions (GS0237 warning) is a divergence from C#. The rationale is that G# values the explicitness of cost; users who want the spill can write `let temp = expr` then `in temp`. *(Reversed by §15, issue #4400: the divergence is gone, and GS0242 is retired.)*
 
 **Foreclosed:**
 
@@ -411,7 +460,7 @@ support does not silently turn an alias into a snapshot.
 **Other ADRs constrained:**
 
 - ~~A future ADR introducing `ref` returns must compose with §5's body lowering: the `BoundIndirectAssignmentExpression` shape extends naturally to `BoundRefReturnStatement`.~~ **Implemented in issue #490** — `BoundReturnStatement` gained an `IsRef` flag and wraps the operand in `BoundAddressOfExpression`; the emitter emits `EmitAddressOf` before `ret`, mirroring the `BoundIndirectAssignmentExpression` lowering shape.
-- A future relaxation of GS0237 (auto-spill at `in` argument positions) would convert the warning into a silent compiler-inserted temp; it should preserve the *option* to opt back in to strict mode via a package-level pragma.
+- A future relaxation of GS0237 (auto-spill at `in` argument positions) would convert the warning into a silent compiler-inserted temp; it should preserve the *option* to opt back in to strict mode via a package-level pragma. *(Superseded by §15, issue #4400: the relaxation happened without the strict-mode pragma; an omitted `in` now passes a readonly reference as in C#.)*
 - The `customize` partial-class support (multi-package emit, ADR-0028) must propagate `ParameterSymbol.RefKind` across partial declarations and surface a mismatch diagnostic if two partial declarations disagree on the modifier.
 
 ## Alternatives considered
@@ -432,7 +481,7 @@ Match C#'s rules: `out`/`ref` mandatory, `in` optional (compiler-inserted temp w
 **Pros.** Familiar to every .NET developer. Maximizes muscle-memory portability between C# and G# codebases.
 **Cons.** The `in`-elision rule is a footgun in a Go-style language. It silently inserts a copy at the call site — exactly the kind of hidden cost Go's design (and G#'s heritage) was built to avoid. A user reading `Consume(big)` cannot tell whether `big` is being copied (call-by-value), passed by readonly reference (call-by-`in` with elision), or being moved (no semantics; Go doesn't have moves either, but the visual ambiguity is what concerns us).
 
-**Rejected in its strongest form**; the chosen design takes C#'s call-site keyword shape *but* makes `in` mandatory at the call site (GS0237 warning today, promotable to error). This keeps the cost visible.
+**Rejected in its strongest form**; the chosen design takes C#'s call-site keyword shape *but* makes `in` mandatory at the call site (GS0237 warning today, promotable to error). This keeps the cost visible. *(Reversed by §15, issue #4400: G# now adopts C#'s `in` elision.)*
 
 ### C. Use `&x` for call sites, introduce a separate modifier syntax for definition sites only
 
@@ -479,7 +528,7 @@ The opposite extreme of Option E: deprecate ADR-0039's `*T` type and `&x` operat
 
 - **`ref` returns.** A G# function returning `ref T` (managed-pointer return) requires escape-analysis integration per ADR-0058. Tracked separately.
 - **`ref` locals beyond `*T`.** ✅ Implemented in issue #491: `let ref x = expr` / `var ref x = expr` binds `x` as an alias to an lvalue. The local's IL slot is `T&`; reads emit `ldloc; ldind.*`, writes `ldloc; value; stind.*`. Aliasing is rejected at top level, inside `async`/iterator functions, and as `const ref` (diagnostics GS0256–GS0258). Cross-function escape (ref returns / RSTE) is still tracked under "ref returns" above.
-- **`in`-elision opt-in.** If GS0237 proves uniformly silenced by users mechanically adding `in`, a future ADR may revisit and either tighten (to error) or relax (with a compiler-inserted temp under an opt-in pragma). Today the design errs toward visible cost.
+- **`in`-elision opt-in.** If GS0237 proves uniformly silenced by users mechanically adding `in`, a future ADR may revisit and either tighten (to error) or relax (with a compiler-inserted temp under an opt-in pragma). Today the design errs toward visible cost. *(Superseded by §15, issue #4400: the relaxation happened without the strict-mode pragma; an omitted `in` now passes a readonly reference as in C#.)*
 - **Conditional ref-passing.** `f(cond ? ref x : ref y)` and similar lvalue-ternary forms; a focused mini-ADR after ref-safe-to-escape's data-flow tracker is mature.
 - **`scoped ref` / `scoped out` / `scoped in` parameters.** §2 admits `scoped ref` syntactically; ADR-0058 specifies the enforcement for `scoped` on `*T`. The full propagation matrix for the keyword-form ref-kind parameters needs a follow-up test-pass once §11's diagnostics are wired up.
 - **Coverage matrix.** New `BoundNodeKind` entries (e.g. `BoundOutDeclarationStatement`, `BoundIndirectAssignmentExpression` if not already present) and any new `SyntaxKind` entries must be added to both `test/Core.Tests/CoverageMatrix/coverage-matrix.golden.txt` and `docs/coverage-matrix.md` in the same change that introduces them.

@@ -1214,10 +1214,13 @@ internal static class DefiniteAssignmentAnalyzer
         SyntaxNode? callSyntax,
         ExpressionFlowContext? flowContext)
     {
+        // An explicit receiver parameter is part of the signature but not of
+        // the bound argument list (OverloadResolver's parameterOffset).
+        var offset = parameters.Length == arguments.Length + 1 && parameters[0].IsReceiverParameter ? 1 : 0;
         for (var i = 0; i < arguments.Length; i++)
         {
-            var refKind = i < parameters.Length ? parameters[i].RefKind : RefKind.None;
-            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax, flowContext);
+            var refKind = i + offset < parameters.Length ? parameters[i + offset].RefKind : RefKind.None;
+            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax, flowContext, i + 1);
         }
     }
 
@@ -1234,7 +1237,7 @@ internal static class DefiniteAssignmentAnalyzer
         for (var i = 0; i < arguments.Length; i++)
         {
             var refKind = !refKinds.IsDefault && i < refKinds.Length ? refKinds[i] : RefKind.None;
-            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax, flowContext);
+            ProcessCallArgument(arguments[i], refKind, assigned, diagnostics, pointerAliases, tracked, callSyntax, flowContext, i + 1);
         }
     }
 
@@ -1246,8 +1249,35 @@ internal static class DefiniteAssignmentAnalyzer
         Dictionary<VariableSymbol, VariableSymbol> pointerAliases,
         HashSet<VariableSymbol> tracked,
         SyntaxNode? callSyntax,
-        ExpressionFlowContext? flowContext)
+        ExpressionFlowContext? flowContext,
+        int argumentNumber)
     {
+        // Issue #4400 fail-safe: every call path should have turned the
+        // argument of a by-ref slot into an address (an implicit `in`
+        // reference, or GS0235 for `ref`/`out`). Should some binding path
+        // still hand over a plain value, report it here — every call shape
+        // with by-ref parameters funnels through this analysis — rather than
+        // let the emitter push a value where the callee expects an address.
+        if (refKind != RefKind.None
+            && (ConversionClassifier.IsPlainValueArgument(argument)
+                || OverloadResolution.ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
+        {
+            diagnostics?.ReportArgumentMustBePassedByRef(
+                argument.Syntax?.Location ?? callSyntax?.Location ?? default(TextLocation),
+                argumentNumber,
+                callSyntax is CallExpressionSyntax { Identifier.Text: { Length: > 0 } calleeName } ? calleeName : "the callee");
+            return;
+        }
+
+        // Issue #4400: an `in` argument — written `in x` or passed implicitly —
+        // only lets the callee READ the storage, so it is analyzed exactly as a
+        // value read of the operand (the same checks `f(x)` gets).
+        if (refKind == RefKind.In && argument is BoundAddressOfExpression inAddress)
+        {
+            ProcessExpression(inAddress.Operand, assigned, diagnostics, pointerAliases, tracked, flowContext);
+            return;
+        }
+
         if (refKind != RefKind.None
             && argument is BoundAddressOfExpression address
             && TryGetSingleAddressedVariable(address.Operand, out var variable))

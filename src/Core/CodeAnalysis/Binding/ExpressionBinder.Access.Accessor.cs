@@ -4556,7 +4556,10 @@ internal sealed partial class ExpressionBinder
                 var lambdaSyntax = slotSyntax is { } sourceArgument
                     ? OverloadResolver.GetLambdaArgumentSyntax(sourceArgument)
                     : null;
-                if (method.Parameters[i].RefKind == RefKind.None
+
+                // Issue #4400: an `in` delegate parameter target-types a lambda
+                // like a by-value one; the post-pass below passes it by reference.
+                if (method.Parameters[i].RefKind is RefKind.None or RefKind.In
                     && overloads.TryConvertLambdaArgumentWithTarget(
                         permutedArgs[i],
                         expectedType,
@@ -4571,7 +4574,28 @@ internal sealed partial class ExpressionBinder
                     continue;
                 }
 
-                convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArgs[i], expectedType, method.Parameters[i]));
+                convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArgs[i], expectedType, method.Parameters[i], i + 1));
+            }
+
+            // Issue #4400: the early `continue`s above (type-parameter
+            // pass-through, function-literal adapter, target-typed lambda) never
+            // reach BindCallArgumentWithRefKind. Finish any plain value they
+            // left at a by-ref slot: an `in` one is passed by readonly
+            // reference, a `ref`/`out` one reports GS0235.
+            for (var i = 0; i < convertedArgs.Count && i < method.Parameters.Length; i++)
+            {
+                if (method.Parameters[i].RefKind == RefKind.None)
+                {
+                    continue;
+                }
+
+                var byRefType = substitution != null
+                    ? Binder.SubstituteType(method.Parameters[i].Type, substitution, scope.References.MapClrTypeToReferences)
+                    : method.Parameters[i].Type;
+                var byRefLocation = i < parameterSyntax.Length
+                    ? parameterSyntax[i]?.Location ?? ce.Location
+                    : ce.Location;
+                convertedArgs[i] = conversions.FinishByRefArgument(convertedArgs[i], method.Parameters[i], byRefType, byRefLocation, i + 1);
             }
 
             // Issue #1209: when the static call dispatches on a constructed

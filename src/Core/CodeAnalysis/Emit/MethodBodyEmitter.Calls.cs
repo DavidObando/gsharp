@@ -552,11 +552,23 @@ internal sealed partial class MethodBodyEmitter
                 {
                     this.EmitConditionalAddress(condAddr);
                 }
+                else if (arg.Type is ByRefTypeSymbol or PointerTypeSymbol)
+                {
+                    // An expression that already yields an address — e.g. the
+                    // #377 by-ref interpolated-handler block whose tail is the
+                    // handler local's address, or a `*T` value.
+                    this.EmitExpression(arg);
+                }
                 else
                 {
-                    // Fallback for in: emit value, but this shouldn't happen
-                    // since binder requires & for all ref-kind arguments in V1.
-                    this.EmitExpression(arg);
+                    // Issue #4400: a by-value operand here would be pushed where
+                    // the callee expects an address (StackUnexpected /
+                    // InvalidProgramException). The binder lowers every plain
+                    // `in` argument to an address; fail loudly rather than
+                    // emit unverifiable IL if some path ever misses it.
+                    throw new EmitDiagnosticException(
+                        $"Argument {i + 1} is passed to a '{rk.ToString().ToLowerInvariant()}' parameter but was bound as a value, not an address.",
+                        arg.Syntax);
                 }
             }
             else
