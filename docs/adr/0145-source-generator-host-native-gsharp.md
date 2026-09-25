@@ -219,7 +219,9 @@ degrades in the stub (§B) and may reduce what attribute-driven generators match
   `GS9200` non-structured exit, `GS9201` parse-fatal input, `GS9202` stub
   re-parse failure (host bug), `GS9203` generator threw, `GS9204` unspellable
   signature type, `GS9205` analyzer load failure, `GS9206` generator matched
-  nothing, `GS9207` back-translation gap.
+  nothing, `GS9207` back-translation gap, `GS9208` a generated implementing
+  part that cannot take its declaring part's header (see the 2026-09-24
+  amendment).
 
 ### I. Determinism contract
 
@@ -427,6 +429,63 @@ Follow-ups (not in the initial delivery):
   #2214's translation mechanism is verified against a synthetic stand-in file
   (`samples/ForeignCompile/ThisAssembly.cs`) with NBGV's exact shape; making
   NBGV itself fire for `Language=Gsharp` needs its own follow-up.
+
+### Amendment (2026-09-24): generated partial-method implementing parts
+
+ADR-0192 follow-on 2 makes gsgen supply the implementing part of a G#
+partial method whose declaring part the user wrote, such as
+`@GeneratedRegex(...) private partial func Digits() Regex;` in a `shared`
+block. Three rules extend §B–§D:
+
+- **Implementing parts.** The stub renders a lone G# declaring part as a C#
+  partial method definition. A generated implementation of it translates to a
+  G# implementing part (`partial func` with its body, cs2gs's
+  `emitGeneratedImplementingParts`), which gsc pairs with the declaring part
+  (ADR-0192).
+- **One unit per namespace.** A generated document that declares several
+  namespaces is split into one `.g.gs` per namespace, the way `cs2gs migrate`'s
+  repository layout splits a source file (`TranslateStage`, `packageFilter`).
+  The first unit, with the fewest dots in its namespace, keeps the hint-name
+  file. Each other unit is written to `{hint}.{Package_With_Underscores}.g.gs`.
+  Translated as one unit, the Regex generator's file put its helper types
+  (`Digits_0`, `Utilities`, `RunnerFactory`, the `IndexOfAny*` extension
+  funcs) in the user's package, where a user type named `Utilities` collided
+  with them (GS0102). Split, they stay in
+  `System.Text.RegularExpressions.Generated`, and the user-package unit reaches
+  them through an ordinary import. The generator declares them `file` types.
+  G# has no file scope, so they become `internal` types of that separate
+  package: invisible outside the assembly and out of the user's namespace.
+  Several user packages that use the generator share one helper package,
+  because the generator emits one `Generated` namespace. The split also
+  applies to foreign C# `Compile` items (issue #2214).
+- **Header copying.** gsc pairs the parts by comparing header text (GS0611,
+  and the parameter-type grouping key), but the implementing part is spelled
+  from the generated C#: `Regex` where the user wrote
+  `System.Text.RegularExpressions.Regex`, `int32` where the user wrote `int`.
+  So gsgen re-spells each implementing part's header with its declaring
+  part's own text, from the first modifier through the return type. The
+  renderer records each lone declaring part it offered, and
+  `ImplementingPartHeaders` finds both headers with gsc's own parser. The two
+  parts are matched by package, top-level type, name and parameter count.
+  Method annotations and the body are kept, because gsc unions annotations
+  and each part keeps its own. The user file's namespace imports, and any
+  alias import the header names, are added to the `.g.gs` so the copied
+  header binds.
+
+  The header is left as generated, and `GS9208` is reported at the declaring
+  part, when:
+  - a parameter name differs, because the body refers to the generated
+    names and copying the header would rebind it to other parameters; or
+  - an alias the header needs is already bound to a different target in the
+    `.g.gs`.
+
+  gsc then reports the mismatch as GS0611, so nothing pairs silently.
+
+  Limits:
+  - Overloads with the same name and parameter count in one type are not told
+    apart, so their headers stay as generated.
+  - A copied namespace import can make a name in the generated body
+    ambiguous. gsc reports that as an error; it is never silently bound.
 
 ## Consequences
 

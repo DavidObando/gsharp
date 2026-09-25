@@ -555,6 +555,48 @@ and it is covered by its own test.
 2. **gsgen wiring**: have ADR-0145's generator host translate real
    `[GeneratedRegex]` output into a G# implementing part against a user-written
    declaring part.
+   **Done** (2026-09-24), in four steps:
+   - *Step 1* (#4368): the gsgen stub renders a lone G# declaring part as a C#
+     partial method definition, so the generator sees something to implement.
+   - *Step 2* (#4380): gsc binds the base-member shapes the generated runner
+     code uses.
+   - *Step 3* (#4416): gsgen back-translates a generated implementation whose
+     definition is in the stub as a G# implementing part (`partial func` with
+     its body), which gsc pairs with the user's declaring part.
+   - *Step 4*: the generated document is split into one G# unit per C#
+     namespace (the split `cs2gs migrate` already does), so the generator's
+     `file` helper types (`Digits_0`, `Utilities`, `RunnerFactory`, ...) keep
+     their own package, `System.Text.RegularExpressions.Generated`, as
+     `internal` types (G# has no file scope). They no longer land in, and
+     collide with, the user's package. gsgen also spells the implementing part
+     with the declaring part's own header, because GS0611 compares header text
+     and the generated C# spells types its own way (`Regex`, `int32`). The
+     details are in ADR-0145's 2026-09-24 amendment.
+
+   The working spelling is a declaring part in a `shared` block;
+   `private shared partial func` is not valid G#:
+
+   ```gsharp
+   partial class Patterns {
+       shared {
+           @GeneratedRegex("\\d+", RegexOptions.IgnoreCase)
+           private partial func Digits() Regex;
+       }
+   }
+   ```
+
+   `samples/GeneratedRegex` builds this through the packed SDK and runs it
+   (`e2etests/generated-regex-e2e.sh`).
+
+   **Known gap** (2026-09-24): a pattern that backtracks inside a loop, such as
+   `(foo|ba+r)+\w*?baz`, does not build through the SDK. The generator passes
+   `ref base.runstack!`, a field the reference pack annotates `int[]?`, to a
+   `ref int[]` helper. G# has no spelling for that `!` on a by-ref argument, so
+   cs2gs emits `&base.runstack`, and gsc rejects it (GS0154). The same code
+   compiles in-process against the runtime implementation assemblies, which
+   is why the GeneratorHost tests pass. Closing the gap needs a gsc decision on
+   by-ref arguments from nullable storage. The e2e script pins the current
+   error so it fails once the gap closes.
 3. **Retire `TryTranslateGeneratedRegex`'s `__generatedRegex_` family** once (1)
    and (2) land — the actual close of issue #4301.
 4. **Partial properties** (§F), if a native scenario asks for them.
