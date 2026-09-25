@@ -29,7 +29,7 @@ namespace Cs2Gs.Tests;
 /// usage evidence is in another compilation. Until gsc deleted its
 /// stated-nullable carve-out (#4390) the bare chain compiled anyway. After
 /// that it failed with GS0158. <c>src/Compiler</c> failed on
-/// <c>compilation.DebugInformation.Format</c> and took six dependants with it,
+/// <c>compilation.DebugInformation.Format</c> and took five dependants with it,
 /// and <c>test/Core.Tests</c> failed on <c>constructed.Definition.TypeParameters</c>.
 /// </para>
 /// </summary>
@@ -146,6 +146,32 @@ namespace App
 
         Assert.Contains("host.Name.Length", printed);
         Assert.DoesNotContain("!!", printed);
+    }
+
+    /// <summary>
+    /// Precision: the declaring compilation is matched by full assembly
+    /// identity. A consumer bound to a same-named assembly of ANOTHER version
+    /// (a package, not this run's project) keeps that metadata's contract, so
+    /// its chains stay bare even though the run's own project would widen the
+    /// members.
+    /// </summary>
+    [Fact]
+    public void SameNamedAssemblyOfAnotherVersion_IsNotTreatedAsTheDeclaringProject()
+    {
+        (CSharpCompilation library, _) = Compile(Library, "Lib", Array.Empty<MetadataReference>());
+        (_, MetadataReference otherVersion) = Compile(
+            Library.Replace(
+                "using System.Diagnostics.CodeAnalysis;",
+                "using System.Diagnostics.CodeAnalysis;\n[assembly: System.Reflection.AssemblyVersion(\"2.0.0.0\")]",
+                StringComparison.Ordinal),
+            "Lib",
+            Array.Empty<MetadataReference>());
+        (CSharpCompilation consumer, _) = Compile(Consumer, "App", new[] { otherVersion });
+
+        string printed = Translate(consumer, new[] { library, consumer });
+
+        Assert.Contains("host.Settings.Format", printed);
+        Assert.Contains("host.Definition.Name", printed);
     }
 
     private static (CSharpCompilation Compilation, MetadataReference Image) Compile(

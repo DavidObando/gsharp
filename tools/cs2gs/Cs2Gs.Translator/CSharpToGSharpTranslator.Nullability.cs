@@ -174,7 +174,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (candidate == null
                     || ReferenceEquals(candidate, this.context.Compilation)
-                    || candidate.AssemblyName != assembly.Name)
+                    || !candidate.Assembly.Identity.Equals(assembly.Identity))
                 {
                     continue;
                 }
