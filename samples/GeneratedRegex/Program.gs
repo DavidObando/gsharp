@@ -1,7 +1,7 @@
 package GeneratedRegex
 
-import System
 import GeneratedRegex.Text
+import System
 
 Console.WriteLine("month: " + Patterns.Month("2024-05"))
 Console.WriteLine("no month: " + Patterns.Month("May 2024"))
