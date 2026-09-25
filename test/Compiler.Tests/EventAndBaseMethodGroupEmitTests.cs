@@ -790,10 +790,22 @@ d2.Fire()
 
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("could not start dotnet");
+
+        // Read both streams concurrently (a full stderr buffer cannot block
+        // the child while stdout is drained) and bound the run, so a hung
+        // program fails the test instead of stalling the suite.
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(TimeSpan.FromMinutes(2)))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            Assert.Fail($"'{assemblyPath}' did not exit within 2 minutes.\nstdout:\n{stdout.Result}\nstderr:\n{stderr.Result}");
+        }
+
         var output = new StringBuilder();
-        output.Append(process.StandardOutput.ReadToEnd());
-        output.Append(process.StandardError.ReadToEnd());
-        process.WaitForExit();
+        output.Append(stdout.Result);
+        output.Append(stderr.Result);
         return (process.ExitCode, output.ToString());
     }
 
