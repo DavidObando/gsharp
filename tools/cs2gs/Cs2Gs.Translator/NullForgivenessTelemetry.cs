@@ -138,7 +138,12 @@ internal static class NullForgivenessTelemetry
                 System.IO.Directory.CreateDirectory(directory);
             }
 
-            System.IO.File.WriteAllLines(DumpPath, lines);
+            // Written beside the destination and moved over it, so a reader
+            // never sees a half-written file and concurrent runs targeting
+            // one path leave one run's complete snapshot, not an interleaving.
+            string staging = DumpPath + "." + System.Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".tmp";
+            System.IO.File.WriteAllLines(staging, lines);
+            System.IO.File.Move(staging, DumpPath, overwrite: true);
         }
         catch (System.Exception exception) when (exception is System.IO.IOException
             or System.UnauthorizedAccessException
