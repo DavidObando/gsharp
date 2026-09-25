@@ -387,12 +387,6 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
     }
 
     /// <summary>
-    /// A lambda passed where its delegate type is inferred keeps its result's
-    /// <c>!!</c>: <c>Select(x =&gt; x.Name)</c> would otherwise infer
-    /// <c>IEnumerable[string!]</c>, and <c>ToList()</c> a <c>List[string!]</c>
-    /// that the declared <c>List[string]</c> does not accept (GS0155).
-    /// </summary>
-    /// <summary>
     /// A frozen read inside a conditional that <c>??</c> then absorbs is not
     /// asserted either: a nil name reaches the fallback, as in C#.
     /// </summary>
@@ -414,6 +408,7 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
             """,
             MetadataReference.CreateFromFile(libraryPath),
             NullableContextOptions.Disable);
+
         Assert.DoesNotContain("n.Name!!", printed, StringComparison.Ordinal);
 
         EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -423,6 +418,12 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
         Assert.Equal("fallback", result.Value);
     }
 
+    /// <summary>
+    /// A lambda passed where its delegate type is inferred keeps its result's
+    /// <c>!!</c>: <c>Select(x =&gt; x.Name)</c> would otherwise infer
+    /// <c>IEnumerable[string!]</c>, and <c>ToList()</c> a <c>List[string!]</c>
+    /// that the declared <c>List[string]</c> does not accept (GS0155).
+    /// </summary>
     [Fact]
     public void A_Lambda_Whose_Type_Is_Inferred_Keeps_Its_Result_Assertion()
     {

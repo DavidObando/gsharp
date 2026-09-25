@@ -61,7 +61,7 @@ internal static class NullForgivenessTelemetry
     /// </summary>
     static NullForgivenessTelemetry()
     {
-        if (!string.IsNullOrEmpty(DumpPath))
+        if (!string.IsNullOrWhiteSpace(DumpPath))
         {
             System.AppDomain.CurrentDomain.ProcessExit += WriteSnapshotOnExit;
         }
@@ -118,6 +118,10 @@ internal static class NullForgivenessTelemetry
     {
     }
 
+    // Best effort: a measurement dump must never fail a run that otherwise
+    // succeeded, so an unwritable path is reported on stderr and dropped.
+    // Snapshot() is ordered (count, then reason), so dumps compare line for
+    // line across runs.
     private static void WriteSnapshotOnExit(object sender, System.EventArgs e)
     {
         var lines = new List<string>();
@@ -126,6 +130,23 @@ internal static class NullForgivenessTelemetry
             lines.Add(count.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\t" + reason);
         }
 
-        System.IO.File.WriteAllLines(DumpPath, lines);
+        try
+        {
+            string directory = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(DumpPath));
+            if (!string.IsNullOrEmpty(directory))
+            {
+                System.IO.Directory.CreateDirectory(directory);
+            }
+
+            System.IO.File.WriteAllLines(DumpPath, lines);
+        }
+        catch (System.Exception exception) when (exception is System.IO.IOException
+            or System.UnauthorizedAccessException
+            or System.ArgumentException
+            or System.NotSupportedException)
+        {
+            System.Console.Error.WriteLine(
+                "cs2gs: could not write " + DumpPathVariable + " to '" + DumpPath + "': " + exception.Message);
+        }
     }
 }
