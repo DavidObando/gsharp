@@ -101,7 +101,7 @@ test('search failures provide a usable fallback', async ({page}) => {
 
 for (const colorScheme of ['light', 'dark'] as const) {
   test(`${colorScheme} theme: responsive layout and accessible surfaces`, async ({page}) => {
-    test.setTimeout(90000);
+    test.setTimeout(120000);
     await page.emulateMedia({colorScheme, reducedMotion: 'reduce'});
     for (const width of [320, 390, 768, 1024, 1440]) {
       await page.setViewportSize({width, height: 960});
@@ -131,6 +131,64 @@ for (const colorScheme of ['light', 'dark'] as const) {
         'color',
         colorScheme === 'dark' ? 'rgb(242, 237, 232)' : 'rgb(36, 33, 38)',
       );
+      // Linux WebKit can leave the article subtree styled with the other
+      // theme's tokens for a couple of seconds after load, even though
+      // data-theme and <body> are already correct (the CI trace shows the
+      // article text painted #242126 on #19181c, then correcting itself).
+      // axe must not sample that window, so wait until no text-bearing element
+      // rendered on the page reads (as axe does) the other theme's text
+      // colour, and the article element itself -- where the stale state was
+      // observed -- resolves the root's theme tokens. Only the article element
+      // is token-checked, not its descendants, so a component that deliberately
+      // overrides a token (a callout, say) cannot wedge this wait; hidden
+      // content is skipped because axe ignores it too.
+      // If the stale state never clears, this fails: users would see it too.
+      await expect
+        .poll(
+          () =>
+            page.evaluate((otherText) => {
+              const rootStyle = getComputedStyle(document.documentElement);
+              const tokens = ['--gs-text', '--ifm-color-primary'].map((name) => [
+                name,
+                rootStyle.getPropertyValue(name).trim(),
+              ]);
+              const stale: string[] = [];
+              const article = document.querySelector('article');
+              if (article) {
+                const articleStyle = getComputedStyle(article);
+                const staleToken = tokens.find(
+                  ([name, value]) => articleStyle.getPropertyValue(name).trim() !== value,
+                );
+                if (staleToken) {
+                  stale.push(`article: ${staleToken[0]}`);
+                }
+              }
+              const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
+              let previous: Element | null = null;
+              for (let node = walker.nextNode(); node && stale.length < 5; node = walker.nextNode()) {
+                const element = node.parentElement;
+                if (!element || element === previous || !node.textContent?.trim()) {
+                  continue;
+                }
+                previous = element;
+                if (!element.checkVisibility({visibilityProperty: true}) || element.closest('[aria-hidden="true"]')) {
+                  continue;
+                }
+                const style = getComputedStyle(element);
+                const colors = [style.color, style.getPropertyValue('-webkit-text-fill-color')];
+                if (colors.includes(otherText)) {
+                  stale.push(`${element.tagName.toLowerCase()}: ${colors[0]}`);
+                }
+              }
+              return stale;
+            }, colorScheme === 'dark' ? 'rgb(36, 33, 38)' : 'rgb(242, 237, 232)'),
+          {
+            message: `${colorScheme} theme fully applied before the accessibility scan: ${route}`,
+            timeout: 10000,
+            intervals: [250, 500, 1000],
+          },
+        )
+        .toEqual([]);
       if (route === 'docs/ref/diagnostics') {
         const emphasizedCode = page.locator('article td > strong > code').filter({
           hasText: /^unsafe$/,
