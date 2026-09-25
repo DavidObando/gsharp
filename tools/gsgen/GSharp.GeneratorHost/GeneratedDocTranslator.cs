@@ -75,6 +75,12 @@ public static class GeneratedDocTranslator
                 .WithNullableContextOptions(NullableContextOptions.Enable)
                 .WithAllowUnsafe(true));
 
+        // Every generated tree is translated; the stub never is. A generated
+        // partial method implementation whose definition is in the stub (a
+        // user G# declaring part, e.g. `@GeneratedRegex ... partial func`)
+        // therefore becomes a G# implementing part (ADR-0192 follow-on 2).
+        var translatedFilePaths = generatedTrees.Select(t => t.Tree.FilePath).ToList();
+
         foreach ((GeneratedCsDocument doc, SyntaxTree tree) in generatedTrees)
         {
             SemanticModel model = compilation.GetSemanticModel(tree);
@@ -82,7 +88,9 @@ public static class GeneratedDocTranslator
 
             CompilationUnit unit = new CSharpToGSharpTranslator(
                 preservePartialParts: true,
-                widenObliviousReferenceFields: true)
+                widenObliviousReferenceFields: true,
+                translatedFilePaths: translatedFilePaths,
+                emitGeneratedImplementingParts: true)
                 .TranslateDocument(loaded);
 
             // Skip a generated document that carried no translatable content.

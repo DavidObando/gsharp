@@ -134,6 +134,13 @@ public sealed partial class CSharpToGSharpTranslator
     // (default) keeps the single-implementation shape.
     private readonly bool emitPartialMethodPairs;
 
+    // ADR-0192 follow-on 2 (gsgen): when true, a C# partial method
+    // IMPLEMENTATION whose definition lives in a tree this run does not emit
+    // (the gsgen stub rendered from the user's G# declaring part) is emitted
+    // as a G# implementing part (`partial func` with its body). Only the
+    // source-generator host enables it; see GeneratedImplementingPartDefinition.
+    private readonly bool emitGeneratedImplementingParts;
+
     // The translated project's directory, when known, so the translator applies
     // the loader's full generated-source rule (the obj/bin path half of
     // GeneratedSourceDetection) to a partial method's other part.
@@ -228,6 +235,16 @@ public sealed partial class CSharpToGSharpTranslator
     /// translated alongside its definition; without it the
     /// <c>&lt;auto-generated&gt;</c>/obj heuristic is used.
     /// </param>
+    /// <param name="emitGeneratedImplementingParts">
+    /// ADR-0192 follow-on 2: when <see langword="true"/>, a partial method
+    /// implementation whose definition is in a tree this run does not
+    /// translate is emitted as a G# implementing part (<c>partial func</c>
+    /// with its body), to pair with the user's hand-written G# declaring part.
+    /// Used only by the source-generator host (gsgen), whose definitions live
+    /// in the stub rendered from the user's G#; pass
+    /// <paramref name="translatedFilePaths"/> with it. Default
+    /// <see langword="false"/>: such an implementation is an ordinary method.
+    /// </param>
     /// <param name="projectDirectory">
     /// The translated project's directory, or <see langword="null"/> when
     /// unknown (in-memory sources). Used only to recognize a partial method
@@ -244,8 +261,10 @@ public sealed partial class CSharpToGSharpTranslator
         bool preserveEntryType = false,
         string projectDirectory = null,
         bool emitPartialMethodPairs = false,
-        IReadOnlyCollection<string> translatedFilePaths = null)
+        IReadOnlyCollection<string> translatedFilePaths = null,
+        bool emitGeneratedImplementingParts = false)
     {
+        this.emitGeneratedImplementingParts = emitGeneratedImplementingParts;
         this.translatedFilePaths = translatedFilePaths is null
             ? null
             : new HashSet<string>(translatedFilePaths, StringComparer.Ordinal);
@@ -425,7 +444,8 @@ public sealed partial class CSharpToGSharpTranslator
             this.projectDirectory,
             this.emitPartialMethodPairs,
             suppressedPartialPairKeys,
-            this.translatedFilePaths);
+            this.translatedFilePaths,
+            this.emitGeneratedImplementingParts);
 
         IReadOnlyList<AttributeUse> fileAttributes = this.includeFileAttributes
             ? visitor.MapFileAttributes(
@@ -1609,6 +1629,9 @@ public sealed partial class CSharpToGSharpTranslator
         // See `CSharpToGSharpTranslator.emitPartialMethodPairs`.
         private readonly bool emitPartialMethodPairs;
 
+        // See `CSharpToGSharpTranslator.emitGeneratedImplementingParts`.
+        private readonly bool emitGeneratedImplementingParts;
+
         // Pair keys the reconciliation loop demoted: those partial methods
         // translate as if emitPartialMethodPairs were off.
         private readonly IReadOnlyCollection<string> suppressedPartialPairKeys;
@@ -1686,8 +1709,10 @@ public sealed partial class CSharpToGSharpTranslator
             string projectDirectory = null,
             bool emitPartialMethodPairs = false,
             IReadOnlyCollection<string> suppressedPartialPairKeys = null,
-            HashSet<string> translatedFilePaths = null)
+            HashSet<string> translatedFilePaths = null,
+            bool emitGeneratedImplementingParts = false)
         {
+            this.emitGeneratedImplementingParts = emitGeneratedImplementingParts;
             this.suppressedPartialPairKeys = suppressedPartialPairKeys;
             this.translatedFilePaths = translatedFilePaths;
             this.retainedFilePaths = retainedFilePaths;
