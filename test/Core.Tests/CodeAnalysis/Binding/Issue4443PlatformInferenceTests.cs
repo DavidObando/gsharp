@@ -56,6 +56,13 @@ public class Issue4443PlatformInferenceTests
 
                 public static List<T> WrapList<T>(T value) { return new List<T> { value }; }
             }
+
+        #nullable enable
+            public static class En
+            {
+                public static List<string?> NullableStrings() { return new List<string?> { null, "b" }; }
+            }
+        #nullable restore
         }
         """;
 
@@ -143,6 +150,22 @@ public class Issue4443PlatformInferenceTests
 
         Assert.Equal("System.Collections.Generic.List[string!]!", ProbeType(library, "let probe = Ob.Strings()"));
         Assert.Equal("string!", ProbeType(library, "let probe = First(Ob.Strings())"));
+    }
+
+    /// <summary>
+    /// The projection that reads the nested case reads any flags-annotated
+    /// argument of the parameter's own generic definition, so an enabled
+    /// <c>List&lt;string?&gt;</c> now infers <c>T = string?</c> for
+    /// <c>First</c>, as C# does. It used to read the CLR shape and infer
+    /// <c>string</c>: a non-null result from a list that holds nils, with no
+    /// diagnostic.
+    /// </summary>
+    [Fact]
+    public void An_Annotated_Nullable_Element_Infers_The_Nullable_Type()
+    {
+        using var library = new CSharpFixture(LibrarySource);
+
+        Assert.Equal("string?", ProbeType(library, "let probe = First(En.NullableStrings())"));
     }
 
     /// <summary>
