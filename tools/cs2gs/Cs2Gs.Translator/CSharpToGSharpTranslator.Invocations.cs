@@ -2061,7 +2061,9 @@ public sealed partial class CSharpToGSharpTranslator
             && !parameter.ContainingSymbol.DeclaringSyntaxReferences.IsDefaultOrEmpty;
 
         // Issue #4400: C# passes an implicit `in` argument by reference only
-        // when it is variable storage that already has the parameter's type.
+        // when it is variable storage that already has the parameter's type
+        // (nullability included: `string` at `in string?` is not an exact
+        // pointee for an explicit G# `in`).
         // A converted argument (`int` local at an `in long` parameter) is
         // converted and spilled, and a property or constant is an rvalue, so
         // each must stay a plain value: an explicit G# `in` demands an lvalue
@@ -2071,7 +2073,7 @@ public sealed partial class CSharpToGSharpTranslator
             && value is ILocalReferenceOperation { Local.IsConst: false }
                 or IParameterReferenceOperation
                 or IFieldReferenceOperation { Field.IsConst: false }
-            && SymbolEqualityComparer.Default.Equals(value.Type, parameter.Type);
+            && SymbolEqualityComparer.IncludeNullability.Equals(value.Type, parameter.Type);
 
         // Issue #3414: Roslyn has already fixed the converted delegate signature
         // at a direct argument. Preserve it when the callable's natural signature

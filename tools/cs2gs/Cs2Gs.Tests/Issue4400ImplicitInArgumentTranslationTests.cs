@@ -31,6 +31,7 @@ namespace Cs2Gs.Tests;
 public class Issue4400ImplicitInArgumentTranslationTests
 {
     private const string Source = """
+        #nullable enable
         using System;
 
         namespace Repro;
@@ -74,6 +75,8 @@ public class Issue4400ImplicitInArgumentTranslationTests
 
             public static int Sum(in Pair p) => p.A + p.B;
 
+            public static int Len(in string? s) => s?.Length ?? -1;
+
             public static void Main()
             {
                 int x = 3;
@@ -89,6 +92,8 @@ public class Issue4400ImplicitInArgumentTranslationTests
                 Console.WriteLine(box.ViaMembers());
                 const int c = 4;
                 Console.WriteLine(Scale(c));
+                string t = "abc";
+                Console.WriteLine(Len(t));
             }
         }
         """;
@@ -114,7 +119,7 @@ public class Issue4400ImplicitInArgumentTranslationTests
             (string dllPath, string stdout, int exit) = CompileAndRun(workDir, printed);
             Assert.True(exit == 0, "Translated program must run. Output:\n" + stdout + "\n\nTranslated G#:\n" + printed);
             Assert.Equal(
-                new[] { "6", "8", "4", "7", "14", "8", "12", "22", "8" },
+                new[] { "6", "8", "4", "7", "14", "8", "12", "22", "8", "3" },
                 stdout.Split('\n', StringSplitOptions.RemoveEmptyEntries).Select(l => l.Trim()).ToArray());
 
             IlVerifyResult result = new IlVerifyRunner().Verify(dllPath);
