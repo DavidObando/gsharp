@@ -105,8 +105,9 @@ namespace App
     /// Every branching form whose whole-expression target accepts nil leaves
     /// the arm bare when the member is declared in another project of the run:
     /// a conditional or switch into a widened local, a return from a widened
-    /// method, an expression-bodied member, an assignment, and the left
-    /// operand of <c>??</c>.
+    /// method, an expression-bodied member, an assignment, the left operand of
+    /// <c>??</c>, a <c>?.</c> receiver, a <c>== null</c> / <c>is null</c> test,
+    /// and an inferred generic parameter, which G# re-infers from the argument.
     /// </summary>
     [Fact]
     public void NullableEffectiveTarget_ArmsStayBare()
@@ -146,6 +147,18 @@ namespace App
         public static string Coalesced(Model.Arg argument, int i) => (i >= 0 ? null : argument.Name) ?? ""fallback"";
 
         public static string SwitchCoalesced(Model.Arg argument, int i) => (i switch { 0 => null, _ => argument.Name }) ?? ""fallback"";
+
+        public static int? Accessed(Model.Arg argument, int i) => (i >= 0 ? null : argument.Name)?.Length;
+
+        public static int? SwitchAccessed(Model.Arg argument, int i) => (i switch { 0 => argument.Value, _ => argument.Name })?.Length;
+
+        public static bool Compared(Model.Arg argument, int i) => (i >= 0 ? argument.Value : argument.Name) == null;
+
+        public static bool Tested(Model.Arg argument, int i) => (i switch { 0 => argument.Value, _ => argument.Name }) is null;
+
+        public static T Id<T>(T value) => value;
+
+        public static string Inferred(Model.Arg argument, int i) => Id(i > 0 ? argument.Value : argument.Name);
     }
 }";
         string printed = TranslateCrossProject(app);
@@ -155,7 +168,8 @@ namespace App
 
     /// <summary>
     /// Precision: an arm whose whole-expression target is a non-null
-    /// parameter still asserts, for a conditional and for a switch.
+    /// parameter still asserts, for a conditional and for a switch, and so
+    /// does an arm into a generic parameter whose type argument is explicit.
     /// </summary>
     [Fact]
     public void NonNullEffectiveTarget_ArmsKeepAssertion()
@@ -170,12 +184,18 @@ namespace App
         public static int Conditional(Model.Arg argument, int i) => Index(i > 0 ? argument.Name : ""x"");
 
         public static int Switch(Model.Arg argument, int i) => Index(i switch { 0 => argument.Name, _ => ""y"" });
+
+        public static T Id<T>(T value) => value;
+
+        public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
     }
 }";
         string printed = TranslateCrossProject(app);
 
         Assert.Contains("if i > 0 { argument.Name!! } else { \"x\" }", printed);
         Assert.Contains("case 0: argument.Name!!", printed);
+        Assert.Contains("Id[string](if i > 0 {", printed);
+        Assert.Contains("else { argument.Name!! })", printed);
     }
 
     private static string TranslateCrossProject(string app) => TranslateBothProjects(app).Consumer;

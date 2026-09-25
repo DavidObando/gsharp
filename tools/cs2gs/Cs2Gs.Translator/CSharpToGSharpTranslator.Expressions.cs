@@ -1535,14 +1535,25 @@ public sealed partial class CSharpToGSharpTranslator
             // promotion; every other value position keeps its existing bytes.
             //
             // A conditional or switch-expression arm flows into the whole
-            // expression's target (FindContextualValueTarget). When that target
-            // accepts nil — `string? x = c ? null : a.Name`, a return of a
-            // method cs2gs widened to `T?`, or the left operand of `??`, which
-            // exists to receive a nil — asserting the arm would turn the nil C#
-            // happily passes on into a throw.
+            // expression. Asserting one arm cannot make the whole non-null when
+            // the whole already accepts or observes nil, and it would turn the
+            // nil C# happily passes on into a throw. That is the case when:
+            //   - another arm is itself nil, so the whole is `T?` in G#
+            //     whatever consumes it (BranchResultAcceptsNil);
+            //   - the whole is the operand of a nil-observing construct: the
+            //     left of `??`, a `?.` receiver, or a `== null` / `is null` test
+            //     (also BranchResultAcceptsNil);
+            //   - the whole's effective target (FindContextualValueTarget)
+            //     accepts nil: a local, field, property or parameter cs2gs
+            //     widened to `T?`, or a return of such a method;
+            //   - that target is an INFERRED generic parameter, which G#
+            //     re-infers from the emitted argument
+            //     (IsInferredGenericParameterTarget).
             if (IsBranchArm(value)
-                && (BranchFeedsCoalesceOperand(value)
-                    || this.NullForgivingTargetAcceptsNil(targetType, targetSymbol)))
+                && (BranchResultAcceptsNil(value, out ExpressionSyntax branch)
+                    || this.NullForgivingTargetAcceptsNil(targetType, targetSymbol)
+                    || (targetSymbol is IParameterSymbol parameterTarget
+                        && IsInferredGenericParameterTarget(parameterTarget, branch))))
             {
                 return translated;
             }
@@ -2841,12 +2852,17 @@ public sealed partial class CSharpToGSharpTranslator
             };
         }
 
-        // Whether the branching expression `value` is an arm of is (through
-        // parentheses and nested arms) the LEFT operand of `??`: a nil there
-        // selects the fallback, so the arm's target accepts nil whatever the
-        // C# type says.
-        private static bool BranchFeedsCoalesceOperand(ExpressionSyntax value)
+        // Whether the branching expression `value` is an arm of — climbed
+        // through parentheses and nested arms to the outermost one, returned in
+        // `branch` — is nil-valued or nil-observing as a whole, so no arm's `!!`
+        // can serve any purpose:
+        //   - some arm at any level is a `null`/`default` literal, so the whole
+        //     is `T?` in G#, and anything it flows into must accept nil;
+        //   - or the whole is the left operand of `??`, a `?.` receiver, an
+        //     operand of `== null` / `!= null`, or tested with `is null`.
+        private static bool BranchResultAcceptsNil(ExpressionSyntax value, out ExpressionSyntax branch)
         {
+            bool hasNilArm = false;
             SyntaxNode current = value;
             while (true)
             {
@@ -2857,11 +2873,13 @@ public sealed partial class CSharpToGSharpTranslator
                 else if (current.Parent is ConditionalExpressionSyntax conditional
                     && (conditional.WhenTrue == current || conditional.WhenFalse == current))
                 {
+                    hasNilArm |= IsNilArm(conditional.WhenTrue) || IsNilArm(conditional.WhenFalse);
                     current = conditional;
                 }
                 else if (current.Parent is SwitchExpressionArmSyntax { Parent: SwitchExpressionSyntax switchExpression } arm
                     && arm.Expression == current)
                 {
+                    hasNilArm |= switchExpression.Arms.Any(candidate => IsNilArm(candidate.Expression));
                     current = switchExpression;
                 }
                 else
@@ -2870,9 +2888,34 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            return current.Parent is BinaryExpressionSyntax coalesce
-                && coalesce.IsKind(SyntaxKind.CoalesceExpression)
-                && coalesce.Left == current;
+            branch = (ExpressionSyntax)current;
+            if (hasNilArm)
+            {
+                return true;
+            }
+
+            return current.Parent switch
+            {
+                BinaryExpressionSyntax coalesce when coalesce.IsKind(SyntaxKind.CoalesceExpression) =>
+                    coalesce.Left == current,
+                ConditionalAccessExpressionSyntax conditionalAccess => conditionalAccess.Expression == current,
+                BinaryExpressionSyntax equality
+                    when equality.IsKind(SyntaxKind.EqualsExpression) || equality.IsKind(SyntaxKind.NotEqualsExpression) =>
+                        IsNullLiteral(equality.Left == current ? equality.Right : equality.Left),
+                IsPatternExpressionSyntax isPattern => isPattern.Expression == current && IsNullConstantPattern(isPattern.Pattern),
+                _ => false,
+            };
+
+            static bool IsNilArm(ExpressionSyntax arm)
+            {
+                while (arm is ParenthesizedExpressionSyntax parenthesized)
+                {
+                    arm = parenthesized.Expression;
+                }
+
+                return IsNullOrSuppressedNull(arm)
+                    || arm.IsKind(SyntaxKind.DefaultLiteralExpression);
+            }
         }
 
         private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)
