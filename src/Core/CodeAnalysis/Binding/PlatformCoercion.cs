@@ -102,6 +102,26 @@ internal static class PlatformCoercion
     }
 
     /// <summary>
+    /// ADR-0186 §4 for a <b>delegate invocation target</b>: the delegate value
+    /// that <c>f(args)</c>, <c>(expr)(args)</c> or <c>x.F(args)</c> invokes.
+    /// <para>
+    /// Every binder path that invokes a delegate value routes through here,
+    /// so the invocation shapes can't drift apart. Issue #4325 fixed the
+    /// local and parenthesised-callee shapes; the member-value shapes
+    /// (<c>x.F()</c> on a G#-declared, imported-instance or imported-static
+    /// field or property) still invoked a nil <c>Func[string]!</c> with an
+    /// unattributed NRE until they were routed here too. A null-conditional
+    /// <c>f?(…)</c> never calls this: its guard already tests for nil, so no
+    /// coercion to non-null occurs.
+    /// </para>
+    /// </summary>
+    /// <param name="target">The delegate value being invoked.</param>
+    /// <param name="location">The invocation site, for the message.</param>
+    /// <returns>The checked target, or the original when it is not platform-typed.</returns>
+    internal static BoundExpression CheckDelegateInvocationTarget(BoundExpression target, TextLocation? location)
+        => InsertCheck(target, location, "a delegate invocation target");
+
+    /// <summary>
     /// ADR-0186 §4's message shape: <c>"&lt;expr&gt; was nil
     /// (nullability-oblivious value from &lt;origin&gt;) at
     /// &lt;file&gt;:&lt;line&gt;"</c>.

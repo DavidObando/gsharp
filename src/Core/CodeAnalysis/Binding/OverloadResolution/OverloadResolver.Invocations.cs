@@ -113,7 +113,7 @@ internal sealed partial class OverloadResolver
         // ADR-0186 §4, issue #4325: invoking a platform function value
         // (`f(x)` where `f` is declared in an ADR-0186 §9 oblivious scope) is
         // a coercion to non-null like every other delegate invocation target.
-        receiverLoad = PlatformCoercion.InsertCheck(receiverLoad, syntax.Identifier.Location, "a delegate invocation target");
+        receiverLoad = PlatformCoercion.CheckDelegateInvocationTarget(receiverLoad, syntax.Identifier.Location);
         return new BoundIndirectCallExpression(null, receiverLoad, fnType, args, argumentRefKinds);
     }
 
@@ -1130,10 +1130,7 @@ internal sealed partial class OverloadResolver
         // a guarded access, because no coercion to non-null occurs there.
         if (nullConditionalCallee == null)
         {
-            callee = PlatformCoercion.InsertCheck(
-                callee,
-                calleeLocation,
-                "a delegate invocation target");
+            callee = PlatformCoercion.CheckDelegateInvocationTarget(callee, calleeLocation);
         }
 
         if (TryReportNullableDelegateReceiver(
