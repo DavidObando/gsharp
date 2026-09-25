@@ -131,6 +131,29 @@ namespace Demo
     }
 
     [Fact]
+    public void NilableReferenceOperand_InAnExpressionTree_UsesStringConcat()
+    {
+        // Issue #4287 (review): `?.` is not representable in an expression
+        // tree (GS0473), so there the nilable operand converts through the
+        // static `string.Concat(object?)`, which is null-as-empty like C# and
+        // evaluates the operand once. `TranslateUnit` binds the output.
+        string printed = TranslateUnit(@"
+#nullable enable
+using System;
+using System.Linq.Expressions;
+namespace Demo
+{
+    public class C
+    {
+        public Expression<Func<object?, string>> F() => o => ""p:"" + o;
+    }
+}");
+
+        Assert.Contains("Concat(o)", printed);
+        Assert.DoesNotContain("o?.ToString()", printed);
+    }
+
+    [Fact]
     public void PureStringConcatenation_IsUnchanged()
     {
         string printed = TranslateUnit(@"

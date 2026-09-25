@@ -724,6 +724,21 @@ public sealed partial class CSharpToGSharpTranslator
             // legal and costs one branch.
             if (this.ConcatOperandMayBeNilInEmittedGSharp(operandSyntax, operandType))
             {
+                // Inside an expression-tree lambda `?.` is not available (gsc
+                // rejects a null-conditional access there, GS0473), so use the
+                // static `string.Concat(object?)`: null-as-empty like C#,
+                // evaluates its operand once, and a plain static call is
+                // representable in a tree (Copilot review).
+                if (this.IsWithinExpressionTreeLambda(operandSyntax))
+                {
+                    ITypeSymbol stringType = this.context.Compilation.GetSpecialType(SpecialType.System_String);
+                    return new InvocationExpression(
+                        new MemberAccessExpression(
+                            new TypeExpression(this.typeMapper.Map(stringType, this.context, operandSyntax.GetLocation())),
+                            "Concat"),
+                        new List<GExpression> { translated });
+                }
+
                 return new ConditionalAccessExpression(
                     receiver,
                     new InvocationExpression(new MemberAccessExpression(new ConditionalReceiverExpression(), "ToString")));
