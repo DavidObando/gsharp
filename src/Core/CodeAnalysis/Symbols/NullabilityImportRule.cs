@@ -161,6 +161,27 @@ internal static class NullabilityImportRule
         => Apply(argument, DecideOpenSlot(declaredState, ClassifyArgument(argument)));
 
     /// <summary>
+    /// The inverse of <see cref="ApplyOpenSlot"/>, for method type-argument
+    /// inference: given the argument a call passes to an open slot, the type
+    /// argument that slot must be closed over. Where <see cref="DecideOpenSlot"/>
+    /// widens a <c>Reference</c> argument to <c>T?</c>, a <c>X?</c> argument
+    /// passed to that slot supplies <c>T := X</c>. This is C#'s rule:
+    /// <c>Required&lt;T&gt;(T? value) where T : class</c> called with a
+    /// <c>Type?</c> infers <c>T</c> as <c>Type</c>, so the call returns
+    /// <c>Type</c>. Every other cell hands the argument back unchanged. A value
+    /// type <c>int?</c> is its own argument (<c>T := int?</c> for an
+    /// unconstrained <c>T?</c>), and so is a <c>T!</c> platform value.
+    /// </summary>
+    /// <param name="argument">The argument's type at the slot.</param>
+    /// <param name="declaredState">What the open declaration says about the slot.</param>
+    /// <returns>The type the slot's type parameter is inferred as.</returns>
+    internal static TypeSymbol InferOpenSlotArgument(TypeSymbol argument, ClrNullabilityState declaredState)
+        => argument is NullableTypeSymbol nullable
+            && DecideOpenSlot(declaredState, ClassifyArgument(nullable)) == ImportedReferenceNullability.Nullable
+                ? nullable.UnderlyingType
+                : argument;
+
+    /// <summary>
     /// The byte-domain applier for an open slot, for the projection reader
     /// (<c>ClrNullability.ProjectNullableFlags</c>), which rewrites a flag
     /// array rather than building a <see cref="TypeSymbol"/>. The argument is

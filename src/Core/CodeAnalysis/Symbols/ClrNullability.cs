@@ -215,6 +215,18 @@ public static class ClrNullability
     }
 
     /// <summary>
+    /// Issue #4425: what a parameter's declaration says about its top-level
+    /// position, as written. Unlike <see cref="GetParameterTypeSymbol"/>, this
+    /// does not also widen a reference parameter whose default is
+    /// <c>null</c>: <c>T value = default</c> declares an unannotated
+    /// <c>T</c>, and method type-argument inference must read it as one.
+    /// </summary>
+    /// <param name="parameter">The parameter to inspect.</param>
+    /// <returns>The declared state of the parameter's top-level position.</returns>
+    internal static ClrNullabilityState GetParameterDeclaredState(ParameterInfo parameter)
+        => ClassifyPosition(ReadNullableFlags(parameter, parameter.Member), 0);
+
+    /// <summary>
     /// Issue #3802: collects the parameter names named by every
     /// <c>[return: NotNullIfNotNull(name)]</c> on <paramref name="method"/>.
     /// The attribute states a CONDITIONAL post-condition — the (declared
