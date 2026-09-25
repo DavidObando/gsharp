@@ -1563,14 +1563,17 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // Whether a value of <paramref name="type"/> carries a reference
-        // position below its top level: an array (its element), or a
-        // constructed type with a reference or type-parameter argument,
-        // including one nested inside a value-type argument (a tuple).
+        // position below its top level: an array whose element is (or holds)
+        // a reference, or a constructed type with a reference or
+        // type-parameter argument, including one nested inside a value-type
+        // argument (a tuple). An `int[]` has none: gsc reads it as
+        // `[]int32!`, which converts to `[]int32` and `[]int32?` as a scalar
+        // read does.
         private static bool HasNestedReferencePosition(ITypeSymbol type)
         {
-            if (type is IArrayTypeSymbol)
+            if (type is IArrayTypeSymbol array)
             {
-                return true;
+                return IsOrHoldsReference(array.ElementType);
             }
 
             if (type is not INamedTypeSymbol named)
@@ -1582,9 +1585,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 foreach (ITypeSymbol argument in current.TypeArguments)
                 {
-                    if (argument.IsReferenceType
-                        || argument is ITypeParameterSymbol
-                        || HasNestedReferencePosition(argument))
+                    if (IsOrHoldsReference(argument))
                     {
                         return true;
                     }
@@ -1593,6 +1594,11 @@ public sealed partial class CSharpToGSharpTranslator
 
             return false;
         }
+
+        private static bool IsOrHoldsReference(ITypeSymbol type) =>
+            type.IsReferenceType
+            || type is ITypeParameterSymbol
+            || HasNestedReferencePosition(type);
 
         private bool IsFrozenObliviousImportMember(ISymbol symbol) =>
             this.IsImportedObliviousNullableMember(symbol)
@@ -1649,6 +1655,15 @@ public sealed partial class CSharpToGSharpTranslator
                 // (`Keep<string?>(x)`) leave nothing to infer. An argument
                 // nothing binds (a dynamic call) is treated as inferring.
                 case ArgumentSyntax argument:
+                    // A tuple literal's element (`Accept((n.Name, 0))`) is an
+                    // argument syntactically but binds no parameter: its
+                    // platform-ness reaches inference exactly when the tuple
+                    // itself does.
+                    if (argument.Parent is TupleExpressionSyntax tuple)
+                    {
+                        return this.ValueFeedsTypeInference(tuple);
+                    }
+
                     if (argument.Parent?.Parent is InvocationExpressionSyntax { Expression: { } callee }
                         && HasExplicitTypeArguments(callee))
                     {
@@ -1724,13 +1739,15 @@ public sealed partial class CSharpToGSharpTranslator
 
         // The local declaration whose initializer is <paramref name="clause"/>,
         // or null when it initializes something else (a field, a property, a
-        // parameter default). Written as plain type tests: cs2gs translates
-        // itself, and a nested property pattern here would spill.
+        // parameter default). A `for` or `using` statement's declaration is a
+        // local declaration too: both are translated through
+        // TranslateLocalDeclaration. Written as plain type tests: cs2gs
+        // translates itself, and a nested property pattern here would spill.
         private static VariableDeclarationSyntax LocalDeclarationOf(EqualsValueClauseSyntax clause)
         {
             if (clause.Parent is not VariableDeclaratorSyntax declarator
                 || declarator.Parent is not VariableDeclarationSyntax declaration
-                || declaration.Parent is not LocalDeclarationStatementSyntax)
+                || declaration.Parent is not (LocalDeclarationStatementSyntax or ForStatementSyntax or UsingStatementSyntax))
             {
                 return null;
             }

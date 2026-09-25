@@ -50,6 +50,7 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
             }
             public string Describe() { return "node"; }
             public static string[] Lines(string p) { return new[] { p, p }; }
+            public static int[] Ints(bool nil) { return nil ? null : new[] { 1, 2 }; }
         }
 
         public static class Wrapping
@@ -312,6 +313,122 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
         Assert.Contains("let name = n.Name!!", printed, StringComparison.Ordinal);
         Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
         Assert.Equal(1, result.Value);
+    }
+
+    /// <summary>
+    /// A <c>for</c> statement's local takes its type from its initializer just
+    /// like a statement-level <c>var</c> local, so it keeps the <c>!!</c>.
+    /// Without it, <c>name</c> is <c>string!</c> and <c>Wrap(name)</c> infers
+    /// <c>List[string!]</c> (GS0155).
+    /// </summary>
+    [Fact]
+    public void A_For_Statement_Local_Keeps_The_Assertion()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousForLocalLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static int Count(Node n)
+                {
+                    System.Collections.Generic.List<string> names = new System.Collections.Generic.List<string>();
+                    int passes = 0;
+                    for (var name = n.Name; passes < 1; passes++)
+                    {
+                        names = Wrapping.Wrap(name);
+                    }
+
+                    return names.Count;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.Count(Node.Make(\"a\", nil))" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.Contains("n.Name!!", printed, StringComparison.Ordinal);
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(1, result.Value);
+    }
+
+    /// <summary>
+    /// An array of a value type has no nested reference position, so an
+    /// oblivious <c>int[]</c> read is left bare like a scalar one. Returned
+    /// from a method declared <c>int[]?</c>, a nil flows through instead of
+    /// throwing. The oracle passes a nil and expects <c>true</c>.
+    /// </summary>
+    [Fact]
+    public void A_Value_Element_Array_Read_Is_Left_Bare()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousIntArrayLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static int[]? Get(bool nil)
+                {
+                    return Node.Ints(nil);
+                }
+
+                public static bool IsMissing(bool nil)
+                {
+                    return Get(nil) == null;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Enable);
+
+        Assert.DoesNotContain("Node.Ints(nil)!!", printed, StringComparison.Ordinal);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.IsMissing(true)" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(true, result.Value);
+    }
+
+    /// <summary>
+    /// A tuple literal's element binds no parameter, so it is classified from
+    /// its tuple. Passed to a fixed <c>(string?, int)</c> parameter nothing is
+    /// inferred, the read stays bare, and a nil reaches the nullable element
+    /// instead of throwing. The oracle passes a nil and expects <c>true</c>.
+    /// </summary>
+    [Fact]
+    public void A_Tuple_Element_With_A_Fixed_Target_Is_Left_Bare()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousTupleLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static bool Accept((string?, int) pair)
+                {
+                    return pair.Item1 == null;
+                }
+
+                public static bool Probe(Node n)
+                {
+                    return Accept((n.Name, 0));
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Enable);
+
+        Assert.DoesNotContain("n.Name!!", printed, StringComparison.Ordinal);
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.Probe(Node.Make(nil, nil))" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(true, result.Value);
     }
 
     /// <summary>
