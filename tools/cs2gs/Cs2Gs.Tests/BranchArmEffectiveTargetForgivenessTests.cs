@@ -189,6 +189,8 @@ namespace App
             string chosen = (flag ? argument.Name : argument.Value)!;
             return chosen == null ? 0 : chosen.Length;
         }
+
+        public static string[] DefaultArm(Model.Arg argument, int i) => new[] { i > 0 ? default(string) : argument.Name };
     }
 }";
         string printed = TranslateCrossProject(app);
@@ -219,6 +221,18 @@ namespace App
         public static T Id<T>(T value) => value;
 
         public static string Explicit(Model.Arg argument, int i) => Id<string>(i > 0 ? argument.Value : argument.Name);
+
+        public sealed class Dest
+        {
+            public static explicit operator Dest(string s) => new Dest();
+        }
+
+        public static Dest Converted(Model.Arg argument, bool flag)
+        {
+            Dest d = (Dest)(flag ? argument.Name : ""x"");
+            if (d == null) { return null; }
+            return d;
+        }
     }
 }";
         string printed = TranslateCrossProject(app);
@@ -227,6 +241,10 @@ namespace App
         Assert.Contains("case 0: argument.Name!!", printed);
         Assert.Contains("Id[string](if i > 0 {", printed);
         Assert.Contains("else { argument.Name!! })", printed);
+
+        // A user-defined conversion is an invocation boundary: the arm feeds
+        // the operator's non-null parameter, not the widened local `d`.
+        Assert.Contains("if flag { argument.Name!! } else { \"x\" }", printed);
     }
 
     /// <summary>
