@@ -1744,6 +1744,17 @@ internal sealed class MemberLookup
         return TypeSymbol.RequiresSymbolicProjection(mapped) ? mapped : null;
     }
 
+    // The one suppression ADR-0193 Phase 2 allows. It covers exactly this
+    // member, whose body is the one door call the phase cannot close; a
+    // whole-member region is also the only shape cs2gs carries into the
+    // self-migrated tree as @SuppressDiagnostic (ADR-0175), so a pragma around
+    // the call alone would be dropped there. Merging here is blocked on Phase
+    // 3: the symbolic-projection consumers do not peel `PlatformTypeSymbol`,
+    // which is why PR #4362 round 3 (`b0c76053d`) backed the merge out. Phase
+    // 4 (issue #4363) adds the merge, attributes this member
+    // `[NullabilityFunnel]` and deletes the pragma. Every reference to it is
+    // pinned by Adr0193SymbolicProjectionGapCallersTests.
+#pragma warning disable GSA0007
     /// <summary>
     /// ADR-0193 Phase 2: the known symbolic-projection gap, in one place.
     /// <see cref="ResolveCallReturnTypeFromSymbolicTypeArgs"/> and
@@ -1777,18 +1788,8 @@ internal sealed class MemberLookup
         ImmutableArray<TypeSymbol> typeArguments,
         MethodInfo? openMethodDefinition = null,
         ImmutableArray<TypeSymbol?> methodTypeArguments = default)
-    {
-        // The one suppression ADR-0193 Phase 2 allows, around the one door
-        // call the phase cannot close. Merging here is blocked on Phase 3: the
-        // symbolic-projection consumers do not peel `PlatformTypeSymbol`, which
-        // is why PR #4362 round 3 (`b0c76053d`) backed the merge out. Phase 4
-        // (issue #4363) adds the merge, attributes this member
-        // `[NullabilityFunnel]` and deletes the pragma. Every caller is pinned
-        // by Adr0193SymbolicProjectionGapCallersTests.
-#pragma warning disable GSA0007
-        return MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
+        => MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
 #pragma warning restore GSA0007
-    }
 
     /// <summary>
     /// Issue #833: build the per-MVar symbolic type-argument vector for an
