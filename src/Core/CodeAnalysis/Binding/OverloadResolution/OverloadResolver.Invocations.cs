@@ -765,29 +765,35 @@ internal sealed partial class OverloadResolver
 
     // Issue #4400: the per-argument loops of the user-method and extension
     // paths leave through several early `continue`s (an open type-parameter
-    // pass-through, function-literal adapters, formattable strings) that never
-    // reach BindCallArgumentWithRefKind. Any plain value such a branch leaves
-    // at an `in` slot is passed by readonly reference here, so no path can
-    // hand the emitter a value where the callee expects an address.
-    private void PassPlainInArgumentsByReference(
+    // pass-through, function-literal adapters, formattable strings, a
+    // target-typed lambda) that never reach BindCallArgumentWithRefKind. Any
+    // plain value such a branch leaves at a by-ref slot is finished here — an
+    // `in` one is passed by readonly reference, a `ref`/`out` one reports
+    // GS0235 — so no path can hand the emitter a value where the callee
+    // expects an address.
+    private void FinishByRefArguments(
         ImmutableArray<BoundExpression>.Builder convertedArgs,
         ImmutableArray<ParameterSymbol> parameters,
         int parameterOffset,
-        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution,
+        Func<int, TextLocation> locationAt,
+        int argumentNumberOffset)
     {
         for (var i = 0; i < convertedArgs.Count && i + parameterOffset < parameters.Length; i++)
         {
             var parameter = parameters[i + parameterOffset];
-            if (parameter.RefKind != RefKind.In || !ConversionClassifier.IsPlainValueArgument(convertedArgs[i]))
+            if (parameter.RefKind == RefKind.None)
             {
                 continue;
             }
 
             var expectedType = substitution != null ? substituteType(parameter.Type, substitution) : parameter.Type;
-            var value = convertedArgs[i] is BoundDefaultExpression { Type: var defaultType } untypedDefault && defaultType == TypeSymbol.Error
-                ? new BoundDefaultExpression(untypedDefault.Syntax, expectedType)
-                : convertedArgs[i];
-            convertedArgs[i] = conversions.CreateImplicitInReference(value, expectedType);
+            convertedArgs[i] = conversions.FinishByRefArgument(
+                convertedArgs[i],
+                parameter,
+                expectedType,
+                locationAt(i),
+                i + argumentNumberOffset);
         }
     }
 
@@ -1457,8 +1463,15 @@ internal sealed partial class OverloadResolver
             convertedArgs.Add(conversions.BindCallArgumentWithRefKind(argLoc, permutedArguments[i], expectedType, extension.Parameters[i + 1], i + 1));
         }
 
-        // convertedArgs[0] is the receiver, so it aligns with extension.Parameters.
-        PassPlainInArgumentsByReference(convertedArgs, extension.Parameters, parameterOffset: 0, substitution);
+        // convertedArgs[0] is the receiver, so it aligns with extension.Parameters
+        // and argument i is source argument i - 1.
+        FinishByRefArguments(
+            convertedArgs,
+            extension.Parameters,
+            parameterOffset: 0,
+            substitution,
+            i => i >= 1 && i - 1 < permutedSyntax.Length ? permutedSyntax[i - 1]?.Location ?? ce.Location : ce.Location,
+            argumentNumberOffset: 0);
 
         // Issue #1931: stash the extension function's own (explicit or
         // inferred) type arguments on the bound node so the emitter's
@@ -1977,7 +1990,13 @@ internal sealed partial class OverloadResolver
             methodTypeArguments = methodTypeArgsBuilder.MoveToImmutable();
         }
 
-        PassPlainInArgumentsByReference(convertedArgs, method.Parameters, parameterOffset, substitution);
+        FinishByRefArguments(
+            convertedArgs,
+            method.Parameters,
+            parameterOffset,
+            substitution,
+            i => i < permutedSyntax.Length ? permutedSyntax[i]?.Location ?? ce.Location : ce.Location,
+            argumentNumberOffset: 1);
 
         var finalArguments = PreserveNamedArgumentEvaluationOrder(
             ce.Arguments,

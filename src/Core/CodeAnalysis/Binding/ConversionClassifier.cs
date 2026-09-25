@@ -2885,9 +2885,7 @@ internal sealed class ConversionClassifier
                 // call-site modifier) is passed by readonly reference.
                 return BindImplicitInArgument(location, argument, expectedType, parameter);
             }
-            else if (argument is not BoundErrorExpression
-                && argument.Type != TypeSymbol.Error
-                && argument.Type is not (ByRefTypeSymbol or PointerTypeSymbol))
+            else if (IsPlainValueArgument(argument))
             {
                 // Issue #4400: a `ref`/`out` parameter given a plain value
                 // (no modifier) has no address to pass. Report the same
@@ -2978,6 +2976,50 @@ internal sealed class ConversionClassifier
             ImmutableArray.Create<BoundStatement>(new BoundVariableDeclaration(value.Syntax, temp, value)),
             new BoundVariableExpression(value.Syntax, temp));
         return new BoundAddressOfExpression(value.Syntax, spill, unmanaged: false, isReadOnly: true);
+    }
+
+    /// <summary>
+    /// Issue #4400: the final by-ref check for an argument that a call path's
+    /// early branch (an open type-parameter pass-through, a function-literal
+    /// adapter, a target-typed lambda) produced without going through
+    /// <see cref="BindCallArgumentWithRefKind"/>. A plain value at an
+    /// <c>in</c> slot is passed by readonly reference; one at a <c>ref</c> or
+    /// <c>out</c> slot reports GS0235 and becomes an error expression, since it
+    /// has no storage to pass. Anything else is returned unchanged.
+    /// </summary>
+    /// <param name="argument">The bound argument as the early branch left it.</param>
+    /// <param name="parameter">The target parameter.</param>
+    /// <param name="expectedType">The (substituted) parameter type.</param>
+    /// <param name="location">The argument's location, for GS0235.</param>
+    /// <param name="argumentIndex">The 1-based argument position, for GS0235.</param>
+    /// <returns>The argument ready for a by-ref slot, or an error expression.</returns>
+    public BoundExpression FinishByRefArgument(
+        BoundExpression argument,
+        ParameterSymbol parameter,
+        TypeSymbol expectedType,
+        TextLocation location,
+        int argumentIndex)
+    {
+        if (parameter.RefKind == RefKind.None || !IsPlainValueArgument(argument))
+        {
+            return argument;
+        }
+
+        if (parameter.RefKind == RefKind.In)
+        {
+            var value = argument is BoundDefaultExpression { Type: var defaultType } && defaultType == TypeSymbol.Error
+                ? new BoundDefaultExpression(argument.Syntax, expectedType)
+                : argument;
+            return CreateImplicitInReference(value, expectedType);
+        }
+
+        Diagnostics.ReportRefKindMismatch(
+            location,
+            argumentIndex,
+            parameter.Name,
+            parameter.RefKind == RefKind.Out ? "out" : "ref",
+            "none");
+        return new BoundErrorExpression(argument.Syntax);
     }
 
     /// <summary>

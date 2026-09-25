@@ -835,6 +835,64 @@ public class Issue4400ImplicitInArgumentTests
             """,
             "GS0235",
         };
+
+        // The same through the early-bound branches that skip the ref-kind
+        // check: an open type parameter passed through a generic instance,
+        // `shared` or extension method, and a function literal adapted for a
+        // generic `ref` delegate parameter.
+        yield return new object[]
+        {
+            "generic-instance-ref-without-modifier",
+            """
+            class C {
+                func R[T](ref x T) { }
+            }
+            func G[U](c C, u U) {
+                c.R(u)
+            }
+            """,
+            "GS0235",
+        };
+        yield return new object[]
+        {
+            "generic-shared-ref-without-modifier",
+            """
+            class C {
+                shared {
+                    func R[T](ref x T) { }
+                }
+            }
+            func G[U](u U) {
+                C.R(u)
+            }
+            """,
+            "GS0235",
+        };
+        yield return new object[]
+        {
+            "generic-extension-out-without-modifier",
+            """
+            struct Q {
+                var X int32
+            }
+            func (q Q) R[T](out x T) { x = default }
+            func G[U](q Q, u U) {
+                q.R(u)
+            }
+            """,
+            "GS0235",
+        };
+        yield return new object[]
+        {
+            "generic-function-literal-ref-without-modifier",
+            """
+            class C {
+                func F[T](ref f (T) -> T, v T) T -> f(v)
+            }
+            let r = C().F((x int32) -> x + 1, 2)
+            """,
+            "GS0235",
+        };
     }
 
     /// <summary>
