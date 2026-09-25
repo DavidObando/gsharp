@@ -1538,7 +1538,7 @@ public sealed partial class CSharpToGSharpTranslator
             var arguments = new List<GExpression>();
             var expanded = false;
             var unexpandable = false;
-            var guardsIsType = false;
+            var guardedKinds = new List<string>();
             var handlerIndex = -1;
             foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
             {
@@ -1548,7 +1548,11 @@ public sealed partial class CSharpToGSharpTranslator
                     && RoslynAnalyzerApiMap.TryMapOperationKindDispatch(kindField.Name, out string[] boundNodeKinds))
                 {
                     expanded = true;
-                    guardsIsType |= kindField.Name == "IsType";
+                    if (kindField.Name is "IsType" or "PropertyReference" or "MethodReference")
+                    {
+                        guardedKinds.Add(kindField.Name);
+                    }
+
                     foreach (string boundNodeKind in boundNodeKinds)
                     {
                         arguments.Add(new MemberAccessExpression(
@@ -1625,16 +1629,16 @@ public sealed partial class CSharpToGSharpTranslator
                 DiagnosticId = "CS2GS-ANALYZER-SHAPE",
             });
 
-            if (guardsIsType && handlerIndex >= 0)
+            if (guardedKinds.Count > 0 && handlerIndex >= 0)
             {
-                arguments[handlerIndex] = GuardIsTypeHandler(arguments[handlerIndex]);
-                const string IsTypeNote =
-                    "'OperationKind.IsType' registered as a wrapper lambda that forwards to the handler unless the node is an "
-                    + "is-expression with a pattern ('x is T v', 'x is T { ... }'): G# binds those to the same "
-                    + "BoundIsExpression kind as a plain type test, where Roslyn sends them to IsPattern instead.";
+                arguments[handlerIndex] = GuardOperationHandler(arguments[handlerIndex], guardedKinds);
+                const string GuardNote =
+                    "'RegisterOperationAction' registered as a wrapper lambda that drops the nodes G# shares with another Roslyn "
+                    + "operation: a pattern 'is' (Roslyn's IsPattern) for IsType, an imported field read (Roslyn's "
+                    + "FieldReference) for PropertyReference, and an empty method group for MethodReference.";
                 this.context.Report(new TranslationDiagnostic(
                     "analyzer-api",
-                    IsTypeNote,
+                    GuardNote,
                     invocation.GetLocation(),
                     TranslationSeverity.Warning)
                 {
@@ -1652,35 +1656,56 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Issue #4436: wraps a handler registered for <c>OperationKind.IsType</c>
-        /// so it never sees an is-expression carrying a declaration or
-        /// recursive pattern. Roslyn models those as <c>IIsPatternOperation</c>,
-        /// but G# binds every <c>is</c> to one <c>BoundIsExpression</c> kind, and
-        /// for the pattern forms <c>TypeOperand</c> is nil — a handler written
-        /// against Roslyn's non-null <c>IIsTypeOperation.TypeOperand</c> would
-        /// dereference it. The guard rejects only those nodes, so it composes
-        /// with any other kinds named in the same registration.
+        /// Issue #4436: wraps a handler registered for an operation kind whose
+        /// G# node also carries a form Roslyn sends elsewhere, so the handler
+        /// never sees that form. Each form shows as a nil member Roslyn
+        /// declares non-null, which a handler written against Roslyn would
+        /// dereference:
+        /// <list type="bullet">
+        /// <item><c>IsType</c>: a declaration or recursive pattern <c>is</c>
+        /// (Roslyn's <c>IIsPatternOperation</c>) has a nil
+        /// <c>BoundIsExpression.TypeOperand</c>;</item>
+        /// <item><c>PropertyReference</c>: an imported field read (Roslyn's
+        /// <c>IFieldReferenceOperation</c>) has a nil <c>Property</c>;</item>
+        /// <item><c>MethodReference</c>: an empty method group has a nil
+        /// <c>Method</c>.</item>
+        /// </list>
+        /// The guard rejects only those nodes, so it composes with any other
+        /// kinds named in the same registration.
         /// </summary>
         /// <param name="handler">The translated handler.</param>
+        /// <param name="guardedKinds">The guarded Roslyn kinds the registration names.</param>
         /// <returns>The guarded wrapper lambda.</returns>
-        private static GExpression GuardIsTypeHandler(GExpression handler)
+        private static GExpression GuardOperationHandler(GExpression handler, List<string> guardedKinds)
         {
             GExpression ctxNode = new MemberAccessExpression(new IdentifierExpression("ctx"), "BoundNode", isArrow: false);
-            GExpression isPatternForm = new PatternTestExpression(
-                ctxNode,
-                new TypePattern(
-                    "_",
-                    new NamedTypeReference("BoundIsExpression"),
-                    new PropertyPattern(new List<PropertyPatternField>
-                    {
-                        new PropertyPatternField("TypeOperand", new ConstantPattern(LiteralExpression.Null())),
-                    }),
-                    designationAfterType: true));
+            GExpression rejected = null;
+            foreach (string kind in guardedKinds)
+            {
+                (string type, string member) = kind switch
+                {
+                    "IsType" => ("BoundIsExpression", "TypeOperand"),
+                    "PropertyReference" => ("BoundPropertyReferenceOperationExpression", "Property"),
+                    _ => ("BoundMethodReferenceOperationExpression", "Method"),
+                };
+                GExpression test = new PatternTestExpression(
+                    ctxNode,
+                    new TypePattern(
+                        "_",
+                        new NamedTypeReference(type),
+                        new PropertyPattern(new List<PropertyPatternField>
+                        {
+                            new PropertyPatternField(member, new ConstantPattern(LiteralExpression.Null())),
+                        }),
+                        designationAfterType: true));
+                rejected = rejected == null ? test : new BinaryExpression(rejected, "||", test);
+            }
+
             GExpression handlerCall = new InvocationExpression(handler, new List<GExpression> { new IdentifierExpression("ctx") });
             var body = new BlockStatement(new List<GStatement>
             {
                 new IfStatement(
-                    new UnaryExpression("!", new ParenthesizedExpression(isPatternForm)),
+                    new UnaryExpression("!", new ParenthesizedExpression(rejected)),
                     new BlockStatement(new List<GStatement> { new ExpressionStatement(handlerCall) })),
             });
             return new LambdaExpression(

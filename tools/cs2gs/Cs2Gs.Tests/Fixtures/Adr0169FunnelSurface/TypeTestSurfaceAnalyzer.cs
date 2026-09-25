@@ -36,6 +36,23 @@ public sealed class TypeTestSurfaceAnalyzer : DiagnosticAnalyzer
             OperationKind.DeclarationPattern,
             OperationKind.RecursivePattern);
         context.RegisterOperationAction(AnalyzeTypeOf, OperationKind.TypeOf);
+        context.RegisterOperationAction(AnalyzeProperty, OperationKind.PropertyReference);
+    }
+
+    // Roslyn never sends a field read here, so the rule reads Property
+    // directly. G# binds an imported field read to the same node as an
+    // imported property read, with a nil Property; the translated rule must
+    // never be handed one.
+    private static void AnalyzeProperty(OperationAnalysisContext context)
+    {
+        var operation = (IPropertyReferenceOperation)context.Operation;
+        if (operation.Property.Name == "Length")
+        {
+            context.ReportDiagnostic(Diagnostic.Create(
+                DiagnosticDescriptors.NullabilityFunnelBypass,
+                context.Operation.Syntax.GetLocation(),
+                "property " + operation.Property.Name));
+        }
     }
 
     private static void AnalyzeIsType(OperationAnalysisContext context)

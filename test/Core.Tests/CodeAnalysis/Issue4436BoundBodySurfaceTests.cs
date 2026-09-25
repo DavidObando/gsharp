@@ -58,6 +58,33 @@ func Outer() int32 {
     }
 
     [Fact]
+    public void ChildNodes_OfAFunctionLiteral_IsItsBody_AndNotItsParents()
+    {
+        // The literal lists its body; the declaration holding the literal
+        // lists only the literal, never the body as a sibling.
+        var probe = Run(Source, GeneratedCodeAnalysisFlags.None);
+        var literal = probe.Bodies["Outer"].SelectMany(b => b.Descendants()).OfType<BoundFunctionLiteralExpression>().Single();
+        var holder = probe.Bodies["Outer"].SelectMany(b => b.Descendants())
+            .Single(n => n.ChildNodes.Contains(literal));
+
+        Assert.Equal(new BoundNode[] { literal.Body }, literal.ChildNodes);
+        Assert.DoesNotContain(literal.Body, holder.ChildNodes);
+    }
+
+    [Fact]
+    public void Descendants_IsLazy_AndMatchesARecursiveChildWalk()
+    {
+        var probe = Run(Source, GeneratedCodeAnalysisFlags.None);
+        var body = probe.Bodies["Outer"].Single();
+
+        Assert.Equal(Recursive(body), body.Descendants());
+        Assert.Same(body.ChildNodes[0], body.Descendants().First());
+
+        static IEnumerable<BoundNode> Recursive(BoundNode node)
+            => node.ChildNodes.SelectMany(child => new[] { child }.Concat(Recursive(child)));
+    }
+
+    [Fact]
     public void ChildNodes_OfAnAssignment_AreTargetThenValue()
     {
         var probe = Run(Source, GeneratedCodeAnalysisFlags.None);

@@ -14,7 +14,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public abstract class BoundNode
 {
-    private ImmutableArray<BoundNode> descendants;
+    private ImmutableArray<BoundNode> childNodes;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundNode"/> class.
@@ -67,9 +67,17 @@ public abstract class BoundNode
     {
         get
         {
-            var collector = new NodeCollector(this, recurse: false);
-            collector.Visit(this);
-            return collector.Nodes.ToImmutable();
+            // A bound tree does not change once built, so each node's one-level
+            // list is built once. Across a tree that is one entry per node, the
+            // size of the tree itself.
+            if (childNodes.IsDefault)
+            {
+                var collector = new NodeCollector(this);
+                collector.Visit(this);
+                ImmutableInterlocked.InterlockedInitialize(ref childNodes, collector.Nodes.ToImmutable());
+            }
+
+            return childNodes;
         }
     }
 
@@ -80,20 +88,17 @@ public abstract class BoundNode
     /// <returns>The descendants, excluding this node.</returns>
     public IEnumerable<BoundNode> Descendants()
     {
-        // One walk over the whole subtree, in pre-order: the same order as
-        // recursing through ChildNodes, without building a child list per node.
-        // A bound tree does not change once built, so the list is built once
-        // per node and reused by every later query over it.
-        var cached = descendants;
-        if (cached.IsDefault)
+        // Lazy and pre-order, like Roslyn's: it walks the cached ChildNodes
+        // lists, so a partial enumeration stops early and nothing retains a
+        // copy of the subtree.
+        var pending = new Stack<BoundNode>();
+        PushChildren(pending, this);
+        while (pending.Count > 0)
         {
-            var collector = new NodeCollector(this, recurse: true);
-            collector.Visit(this);
-            ImmutableInterlocked.InterlockedInitialize(ref descendants, collector.Nodes.ToImmutable());
-            cached = descendants;
+            var current = pending.Pop();
+            yield return current;
+            PushChildren(pending, current);
         }
-
-        return cached;
     }
 
     /// <summary>
@@ -151,6 +156,15 @@ public abstract class BoundNode
         }
     }
 
+    private static void PushChildren(Stack<BoundNode> pending, BoundNode node)
+    {
+        var children = node.ChildNodes;
+        for (var i = children.Length - 1; i >= 0; i--)
+        {
+            pending.Push(children[i]);
+        }
+    }
+
     private sealed class FirstSyntaxFinder : BoundTreeWalker
     {
         public SyntaxNode? Found { get; private set; }
@@ -193,20 +207,17 @@ public abstract class BoundNode
     }
 
     /// <summary>
-    /// Records the statements, expressions and patterns below a root, in the
-    /// order the default walker visits them: one level below it
-    /// (<c>recurse: false</c>), or the whole subtree in pre-order
-    /// (<c>recurse: true</c>).
+    /// Records the statements, expressions and patterns one level below a
+    /// root, in the order the default walker visits them, with the
+    /// operation-tree overrides described on <see cref="ChildNodes"/>.
     /// </summary>
     private sealed class NodeCollector : BoundTreeWalker
     {
         private readonly BoundNode root;
-        private readonly bool recurse;
 
-        public NodeCollector(BoundNode root, bool recurse)
+        public NodeCollector(BoundNode root)
         {
             this.root = root;
-            this.recurse = recurse;
         }
 
         public ImmutableArray<BoundNode>.Builder Nodes { get; } = ImmutableArray.CreateBuilder<BoundNode>();
@@ -227,7 +238,9 @@ public abstract class BoundNode
             }
 
             // The walker leaves a function literal opaque; the operation tree
-            // does not.
+            // does not. Only the literal itself (the root) lists its body: a
+            // literal met as a child was recorded by Take and not entered, so
+            // its body never becomes a sibling in its parent's list.
             if (node is BoundFunctionLiteralExpression literal)
             {
                 VisitStatement(literal.Body);
@@ -262,9 +275,8 @@ public abstract class BoundNode
             base.VisitIsExpression(node);
         }
 
-        // Whether the base walker descends into the node. The root is never
-        // recorded; any other node is recorded, and descended into only when
-        // collecting the whole subtree.
+        // Whether the base walker descends into the node: only the root. Any
+        // other node is recorded as a child and not entered.
         private bool Take(BoundNode? node)
         {
             if (node == null)
@@ -278,7 +290,7 @@ public abstract class BoundNode
             }
 
             Nodes.Add(node);
-            return recurse;
+            return false;
         }
     }
 }

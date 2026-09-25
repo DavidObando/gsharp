@@ -68,8 +68,15 @@ public sealed class BoundAssignmentExpression : BoundExpression
                 return cached;
             }
 
-            // Analyzers may run concurrently: publish the first node built.
+            // Analyzers may run concurrently: publish the first node built. A
+            // node built before the assignment is anchored is not cached, so
+            // the target never keeps a missing location.
             BoundExpression built = new BoundVariableExpression(Syntax, Variable);
+            if (Syntax == null)
+            {
+                return built;
+            }
+
             return Interlocked.CompareExchange(ref target, built, null) ?? built;
         }
     }

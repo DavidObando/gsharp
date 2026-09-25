@@ -116,8 +116,9 @@ corpus cannot reach a row, by a snippet translation test.
   in their enclosing body, as Roslyn nests them in the operation block. A
   property accessor, which has no declaration of its own, takes its
   property's source tree for generated-code skipping.
-- `IOperation.ChildOperations` → `BoundNode.ChildNodes`, and
-  `Descendants()` / `DescendantsAndSelf()`. They follow Roslyn's operation
+- `IOperation.ChildOperations` → `BoundNode.ChildNodes` (built once per
+  node), and `Descendants()` / `DescendantsAndSelf()` (lazy, pre-order, over
+  the cached child lists). They follow Roslyn's operation
   tree where the compiler walker does not: a function literal's body is
   inside it (the walker leaves the literal opaque), an assignment's
   children are its target and then its value (G# stores the target as a
@@ -128,7 +129,11 @@ corpus cannot reach a row, by a snippet translation test.
   `BoundMethodReferenceOperationExpression` (`Method`, `Instance`) and
   `BoundPropertyReferenceOperationExpression` (`Property`, `Instance`), each
   spanning the user and CLR provenance of the method group or property access;
-  the operation kinds dispatch to both nodes.
+  the operation kinds dispatch to both nodes. An imported field read shares
+  the CLR property node (Roslyn's `FieldReference`), with a nil `Property`,
+  so cs2gs wraps a `PropertyReference` handler in a guard that drops it (as
+  it drops a pattern `is` from `IsType`, and an empty group from
+  `MethodReference`).
 - `ILocalReferenceOperation.Local` → `BoundVariableExpression.Variable`;
   `ISimpleAssignmentOperation.{Target,Value}` → `BoundAssignmentExpression`;
   `IVariableDeclaratorOperation` → `BoundVariableDeclaration` (the initializer

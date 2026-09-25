@@ -65,7 +65,9 @@ public sealed class Adr0169FunnelSurfaceParityTests : IDisposable
         // cs2gs lowers it to `x is T && x.P == v` in ordinary mode, so it never
         // reaches G# as a pattern; the RecursivePattern row serves hand-written
         // G# `T{...}` patterns.
-        AssertParity("TypeTestSurfaceAnalyzer", "TypeTestCorpus.cs", expected: 4);
+        // Also an imported property read, and an imported field read that
+        // must not reach the property rule.
+        AssertParity("TypeTestSurfaceAnalyzer", "TypeTestCorpus.cs", expected: 5);
     }
 
     [Fact]

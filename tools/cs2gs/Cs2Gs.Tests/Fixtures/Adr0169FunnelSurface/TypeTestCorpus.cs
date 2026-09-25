@@ -52,5 +52,12 @@ namespace GSharp.Core.CodeAnalysis.Binding
 
         // Not reported: another type.
         public bool Other(TypeSymbol type) => type is PlatformTypeSymbol;
+
+        // Reported: an imported property read.
+        public int Measured(string text) => text.Length;
+
+        // Not reported, and never handed to the property rule: an imported
+        // field read.
+        public string Blank() => string.Empty;
     }
 }
