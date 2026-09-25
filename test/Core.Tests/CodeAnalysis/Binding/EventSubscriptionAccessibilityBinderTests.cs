@@ -311,8 +311,9 @@ public sealed class EventSubscriptionAccessibilityBinderTests
             {
                 Directory.Delete(directory, recursive: true);
             }
-            catch (IOException)
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
             {
+                // Best-effort cleanup: a handle released late must not fail the test.
             }
         }
     }

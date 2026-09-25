@@ -196,6 +196,80 @@ gi.Fire(Item())
     }
 
     /// <summary>
+    /// Issue #4391, through a class-constrained type parameter: the receiver
+    /// is a <c>T</c> constrained to a construction of the generic class
+    /// (directly or through a class deriving it), so the handler type is the
+    /// event's type as that construction names it.
+    /// </summary>
+    [Fact]
+    public void GenericSourceEvent_ThroughClassConstrainedTypeParameter_RunsLikeCSharp()
+    {
+        const string source = @"
+package P
+import System
+
+open class GB[T] {
+    event Got EventHandler[T]?
+    func Fire(v T) { Got?.Invoke(this, v) }
+}
+
+open class GD : GB[string] {}
+
+class Hooker {
+    func Hook[X GB[string]](x X, h EventHandler[string]) { x.Got += h }
+    func HookD[Y GD](y Y, h EventHandler[string]) {
+        y.Got += h
+        y.Got += func (s object?, e string) { Console.WriteLine(""lambda $e"") }
+        y.Got -= h
+    }
+}
+
+let g = GD()
+let h EventHandler[string] = func (s object?, e string) { Console.WriteLine(""h $e"") }
+Hooker().Hook(g, h)
+Hooker().HookD(g, h)
+g.Fire(""a"")
+";
+
+        const string csSource = """
+            using System;
+
+            class GB<T>
+            {
+                public event EventHandler<T>? Got;
+                public void Fire(T v) { Got?.Invoke(this, v); }
+            }
+
+            class GD : GB<string> { }
+
+            class Hooker
+            {
+                public void Hook<X>(X x, EventHandler<string> h) where X : GB<string> { x.Got += h; }
+                public void HookD<Y>(Y y, EventHandler<string> h) where Y : GD
+                {
+                    y.Got += h;
+                    y.Got += (s, e) => Console.WriteLine($"lambda {e}");
+                    y.Got -= h;
+                }
+            }
+
+            static class Program
+            {
+                static void Main()
+                {
+                    var g = new GD();
+                    EventHandler<string> h = (s, e) => Console.WriteLine($"h {e}");
+                    new Hooker().Hook(g, h);
+                    new Hooker().HookD(g, h);
+                    g.Fire("a");
+                }
+            }
+            """;
+
+        AssertMatchesCSharp("constrained-generic-event", source, csSource, new[] { "h a", "lambda a" });
+    }
+
+    /// <summary>
     /// Issue #4393: a base method group converted to a delegate directly in a
     /// member body observes the base implementation, in a generic class, a
     /// non-generic class, a class closing a generic base, across an

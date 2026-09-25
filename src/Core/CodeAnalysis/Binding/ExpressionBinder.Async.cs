@@ -720,14 +720,19 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(null);
                 }
 
-                var constrainedHandler = BindEventSubscriptionHandler(syntax.Value, constrainedUserEvent.Type);
+                // As on the `obj.E` path: the declaring construction supplies
+                // the handler type (`EventHandler[string]` for a `GB[string]`
+                // constraint, issue #4391) and parents the accessor call.
+                var constrainedEventType = constrainedEventOwner.SubstituteMemberType(constrainedUserEvent.Type) ?? constrainedUserEvent.Type;
+                var constrainedHandler = BindEventSubscriptionHandler(syntax.Value, constrainedEventType);
                 return new BoundEventSubscriptionExpression(
                     null,
                     boundReceiver,
-                    classConstraint,
+                    constrainedEventOwner,
                     constrainedUserEvent,
                     constrainedHandler,
-                    isAdd);
+                    isAdd,
+                    constrainedEventType);
             }
 
             // ADR-0149 follow-up (issue #2370): event subscription through an
