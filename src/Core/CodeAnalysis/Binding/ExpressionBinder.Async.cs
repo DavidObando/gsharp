@@ -204,10 +204,11 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        // Metadata may omit an accessor: an event with no add (or remove) is
-        // never subscribable here, and is reported below as inaccessible.
+        // The accessor this subscription calls decides, not the one the
+        // visible-member probe filtered on (metadata may give add and remove
+        // different accessibilities).
         var accessor = isAdd ? hidden.AddMethod : hidden.RemoveMethod;
-        if (accessor != null && IsFamilyAccessibleClrEvent(accessor, hidden.DeclaringType, receiver))
+        if (IsCallableClrEventAccessor(accessor, hidden.DeclaringType, receiver))
         {
             return hidden;
         }
@@ -221,6 +222,24 @@ internal sealed partial class ExpressionBinder
         reported = true;
         return null;
     }
+
+    /// <summary>
+    /// Issue #4394: the one decision whether an imported event's add or
+    /// remove accessor may be called here through <paramref name="receiver"/>:
+    /// it exists, and it is visible to this compilation (public, or a friend
+    /// assembly's internal) or reachable as a <c>protected</c> member of a
+    /// base class (<see cref="IsFamilyAccessibleClrEvent"/>). Metadata may
+    /// omit an accessor or give add and remove different accessibilities, so
+    /// each subscription asks about the accessor it calls.
+    /// </summary>
+    /// <param name="accessor">The add or remove accessor, if any.</param>
+    /// <param name="declaringType">The event's declaring type.</param>
+    /// <param name="receiver">The bound instance receiver, or <see langword="null"/> for a static event.</param>
+    /// <returns><see langword="true"/> when the accessor may be called.</returns>
+    private bool IsCallableClrEventAccessor(MethodInfo? accessor, Type? declaringType, BoundExpression? receiver)
+        => accessor != null
+            && (ClrMemberVisibility.IsVisible(accessor, CanAccessInternalsOf(declaringType))
+                || IsFamilyAccessibleClrEvent(accessor, declaringType, receiver));
 
     /// <summary>
     /// Whether the current class may call <paramref name="accessor"/>, a
@@ -858,7 +877,6 @@ internal sealed partial class ExpressionBinder
         }
 
         EventInfo? eventInfo = null;
-        var familyAccessEvent = false;
         if (isEventCapableOperator && receiverClrType != null)
         {
             // Issue #3705: friend-visible `internal` events are candidates
@@ -916,8 +934,6 @@ internal sealed partial class ExpressionBinder
                 {
                     return new BoundErrorExpression(null);
                 }
-
-                familyAccessEvent = eventInfo != null;
             }
 
             if (eventInfo == null)
@@ -929,12 +945,10 @@ internal sealed partial class ExpressionBinder
 
         // Issue #4394: the visibility probe above admits an event by its add
         // accessor; `-=` calls the remove accessor, which metadata can declare
-        // with a narrower accessibility. A missing accessor (possible in
-        // metadata) cannot be called either and takes the same report.
+        // with a different accessibility. The same predicate as the
+        // non-public path decides, for the accessor this subscription calls.
         var subscriptionAccessor = isAdd ? eventInfo.AddMethod : eventInfo.RemoveMethod;
-        if (subscriptionAccessor == null
-            || (!familyAccessEvent
-                && !ClrMemberVisibility.IsVisible(subscriptionAccessor, CanAccessInternalsOf(eventInfo.DeclaringType))))
+        if (!IsCallableClrEventAccessor(subscriptionAccessor, eventInfo.DeclaringType, boundReceiver))
         {
             Diagnostics.ReportMemberInaccessible(
                 eventNameSyntax.Location,

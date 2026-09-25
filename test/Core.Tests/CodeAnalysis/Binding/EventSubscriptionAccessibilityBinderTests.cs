@@ -249,6 +249,65 @@ public sealed class EventSubscriptionAccessibilityBinderTests
         Assert.True(result.Success, Describe(result));
     }
 
+    [Theory]
+    [InlineData("this.AddPublic += h")]
+    [InlineData("this.AddPublic -= h")]
+    [InlineData("this.RemovePublic += h")]
+    [InlineData("this.RemovePublic -= h")]
+    public void SplitAccessorImportedEvent_FromDerivedClass_EachAccessorBinds(string statement)
+    {
+        // Each accessor is public or protected, and the derived class may
+        // call a protected one through its own instance: all four bind,
+        // whichever accessor the visible-member probe found the event by.
+        var result = CompileAgainstLibrary(
+            $$"""
+            import System
+            import EventAccess.Split
+
+            class Der : Source {
+                func Hook(h EventHandler) {
+                    {{statement}}
+                }
+            }
+            """,
+            EmitSplitAccessorLibrary);
+
+        Assert.True(result.Success, Describe(result));
+    }
+
+    [Theory]
+    [InlineData("s.AddPublic += h", true)]
+    [InlineData("s.AddPublic -= h", false)]
+    [InlineData("s.RemovePublic += h", false)]
+    [InlineData("s.RemovePublic -= h", true)]
+    public void SplitAccessorImportedEvent_FromUnrelatedClass_ChecksTheCalledAccessor(string statement, bool binds)
+    {
+        // An unrelated class can call only the public accessor, so
+        // `+=` and `-=` on one event can differ.
+        var result = CompileAgainstLibrary(
+            $$"""
+            import System
+            import EventAccess.Split
+
+            class Other {
+                func Hook(s Source, h EventHandler) {
+                    {{statement}}
+                }
+            }
+            """,
+            EmitSplitAccessorLibrary);
+
+        if (binds)
+        {
+            Assert.True(result.Success, Describe(result));
+        }
+        else
+        {
+            var error = Assert.Single(result.Diagnostics);
+            Assert.Equal("GS0379", error.Id);
+        }
+    }
+
     [Fact]
     public void MissingImportedEvent_StillReportsCannotFindMember()
     {
@@ -279,7 +338,7 @@ public sealed class EventSubscriptionAccessibilityBinderTests
     private static string Describe(CompileResult result)
         => string.Join(Environment.NewLine, result.Diagnostics.Select(d => d.Id + ": " + d.Message));
 
-    private static CompileResult CompileAgainstLibrary(string body)
+    private static CompileResult CompileAgainstLibrary(string body, Func<string, string> emitLibrary = null)
     {
         var directory = Path.Combine(
             AppContext.BaseDirectory,
@@ -288,7 +347,9 @@ public sealed class EventSubscriptionAccessibilityBinderTests
         Directory.CreateDirectory(directory);
         try
         {
-            var libraryPath = EmitCSharpLibrary(directory, "EventAccess.Library", CSharpLibrarySource);
+            var libraryPath = emitLibrary != null
+                ? emitLibrary(directory)
+                : EmitCSharpLibrary(directory, "EventAccess.Library", CSharpLibrarySource);
             using var resolver = ReferenceResolver.WithReferences(new[] { libraryPath });
             resolver.CurrentAssemblyName = AssemblyName;
             var compilation = new GsCompilation(
@@ -316,6 +377,51 @@ public sealed class EventSubscriptionAccessibilityBinderTests
                 // Best-effort cleanup: a handle released late must not fail the test.
             }
         }
+    }
+
+    /// <summary>
+    /// Emits <c>EventAccess.Split.Source</c>, whose events give their two
+    /// accessors different accessibilities, which C# cannot declare but
+    /// metadata can: <c>AddPublic</c> has a public add and a protected
+    /// remove, <c>RemovePublic</c> a protected add and a public remove.
+    /// </summary>
+    private static string EmitSplitAccessorLibrary(string directory)
+    {
+        const string name = "EventAccess.Split";
+        var assembly = new System.Reflection.Emit.PersistedAssemblyBuilder(
+            new System.Reflection.AssemblyName(name),
+            typeof(object).Assembly);
+        var module = assembly.DefineDynamicModule(name);
+        var type = module.DefineType(
+            "EventAccess.Split.Source",
+            System.Reflection.TypeAttributes.Public | System.Reflection.TypeAttributes.Class);
+        type.DefineDefaultConstructor(System.Reflection.MethodAttributes.Public);
+
+        void DefineEvent(string eventName, System.Reflection.MethodAttributes addAccess, System.Reflection.MethodAttributes removeAccess)
+        {
+            var ev = type.DefineEvent(eventName, System.Reflection.EventAttributes.None, typeof(EventHandler));
+            System.Reflection.Emit.MethodBuilder Accessor(string accessorName, System.Reflection.MethodAttributes access)
+            {
+                var method = type.DefineMethod(
+                    accessorName,
+                    access | System.Reflection.MethodAttributes.SpecialName | System.Reflection.MethodAttributes.HideBySig,
+                    typeof(void),
+                    new[] { typeof(EventHandler) });
+                method.GetILGenerator().Emit(System.Reflection.Emit.OpCodes.Ret);
+                return method;
+            }
+
+            ev.SetAddOnMethod(Accessor("add_" + eventName, addAccess));
+            ev.SetRemoveOnMethod(Accessor("remove_" + eventName, removeAccess));
+        }
+
+        DefineEvent("AddPublic", System.Reflection.MethodAttributes.Public, System.Reflection.MethodAttributes.Family);
+        DefineEvent("RemovePublic", System.Reflection.MethodAttributes.Family, System.Reflection.MethodAttributes.Public);
+        type.CreateType();
+
+        var path = Path.Combine(directory, name + ".dll");
+        assembly.Save(path);
+        return path;
     }
 
     private static string EmitCSharpLibrary(string directory, string assemblyName, string source)
