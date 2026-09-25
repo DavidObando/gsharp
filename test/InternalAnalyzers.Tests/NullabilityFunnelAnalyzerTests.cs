@@ -41,8 +41,6 @@ namespace GSharp.Core.CodeAnalysis.Symbols
         [NullabilityFunnel]
         public static ImportedTypeSymbol Get(Type t) => new ImportedTypeSymbol();
 
-        public static ImportedTypeSymbol Get(string name) => new ImportedTypeSymbol();
-
         [NullabilityFunnel]
         internal static ImportedTypeSymbol GetWithoutNullability(Type t, NullabilityFreeReason reason) => Get(t);
     }
@@ -118,7 +116,6 @@ namespace GSharp.Core.CodeAnalysis.Binding
             var flags = [|ClrNullability.ReadNullableFlags(m.ReturnParameter, m)|];
             _ = [|ClrNullability.ClassifyPosition(flags, 0)|];
             _ = [|ClrNullability.ClassifyFlag(1)|];
-            _ = ImportedTypeSymbol.Get("not a CLR Type overload");
             _ = ClrNullability.GetReturnTypeSymbol(m);
         }
     }

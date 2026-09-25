@@ -1048,16 +1048,21 @@ something the plan left open:
 - **Analyzer scope.** Only `Core.csproj` and `Cs2Gs.Tests` reference
   `InternalAnalyzers`. The rule reports only code in a `GSharp.Core.*`
   namespace, so the reader-agreement harness and cs2gs's tests, which call the
-  doors on purpose, are not affected. A lambda or local function belongs to the
-  member that contains it. A property accessor is exempt when its property
-  carries the attribute. A method-group reference to a door is reported like
-  a call. The signature-accessor clause follows a local back through its
-  initializer, its assignments, a `foreach` collection or an `out var`
-  producer, within the same method. It treats any `ReturnType`,
-  `ReturnParameter`, `ParameterType`, `PropertyType`, `FieldType` or
-  `EventHandlerType` read on a `System.Reflection` type anywhere in the
-  argument as a signature position, including one reached through
-  `GetGenericArguments()` or `GetElementType()`.
+  doors on purpose, are not affected. The rule runs once per operation
+  block, so a lambda or local function belongs to the member whose body
+  contains it, and a property accessor is exempt when its property carries
+  the attribute. A method-group reference to a door is reported like a call.
+  The signature-accessor clause checks every `System.Type` argument of an
+  escape hatch, so a named argument written out of order is still checked.
+  It follows a local back through its declarator's initializer, its
+  assignments, a `foreach` collection or an `out var` producer, all within
+  the same body. It treats any `ReturnType`, `ReturnParameter`,
+  `ParameterType`, `PropertyType`, `FieldType` or `EventHandlerType` read on a
+  `System.Reflection` type anywhere in the argument as a signature position,
+  including one reached through `GetGenericArguments()` or `GetElementType()`.
+  The rule is written against the analyzer surface that ADR-0169
+  self-migrates: an operation-block action, `DescendantsAndSelf()`, and
+  symbol reads by `Name` and `ContainingType`.
 - **`ResolveInstanceReturnTypeFromReceiver` moved** into the family as
   `MemberLookup.GetClrReceiverProjectedReturnTypeSymbol`, with its by-ref
   sibling `GetClrReceiverProjectedParameterPointeeTypeSymbol`. Both now share

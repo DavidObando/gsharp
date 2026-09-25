@@ -24,35 +24,32 @@ namespace GSharp.InternalAnalyzers;
 /// and its twins <c>ImportedTypeSymbol.GetWithoutNullability</c> and
 /// <c>MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability</c>, each taking
 /// a required <c>NullabilityFreeReason</c> — are allowed anywhere,
-/// except when its argument is, within the same method, a signature accessor
-/// (<c>ReturnType</c>, <c>ReturnParameter</c>, <c>ParameterType</c>,
-/// <c>PropertyType</c>, <c>FieldType</c>, <c>EventHandlerType</c>, or
-/// anything derived from one, such as <c>GetGenericArguments()</c> or
-/// <c>GetElementType()</c>).</item>
+/// except when a <c>System.Type</c> argument is, within the same method, a
+/// signature accessor (<c>ReturnType</c>, <c>ReturnParameter</c>,
+/// <c>ParameterType</c>, <c>PropertyType</c>, <c>FieldType</c>,
+/// <c>EventHandlerType</c>, or anything derived from one, such as
+/// <c>GetGenericArguments()</c> or <c>GetElementType()</c>).</item>
 /// <item>Inside a funnel member that is not <c>NullabilityImportRule</c>'s,
 /// a direct <c>NullableTypeSymbol.Get</c> / <c>PlatformTypeSymbol.Get</c>
 /// call is reported: the walkers resolve classified positions through the
 /// rule.</item>
 /// </list>
-/// Exemption is per member, never per type. Lambdas and local functions are
-/// part of the member that contains them.
+/// Exemption is per member, never per type. The rule runs once per operation
+/// block, so a lambda or local function is part of the member whose body
+/// contains it, and every local's sources are collected from that same body.
+/// <para>
+/// The rule is self-migrated to G# (ADR-0169), so it sticks to the analyzer
+/// surface cs2gs maps: an operation-block action, <c>DescendantsAndSelf()</c>,
+/// and symbol reads by <c>Name</c> / <c>ContainingType</c>.
+/// </para>
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
 public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
 {
     private const string FunnelAttributeName = "NullabilityFunnelAttribute";
-    private const string EscapeHatchSuffix = "WithoutNullability";
-    private const string ReasonTypeName = "NullabilityFreeReason";
     private const string ImportRuleTypeName = "NullabilityImportRule";
     private const string CoreNamespacePrefix = "GSharp.Core";
-
-    private static readonly ImmutableHashSet<string> SignatureAccessors = ImmutableHashSet.Create(
-        "ReturnType",
-        "ReturnParameter",
-        "ParameterType",
-        "PropertyType",
-        "FieldType",
-        "EventHandlerType");
+    private const string SystemTypeName = "global::System.Type";
 
     /// <inheritdoc />
     public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics { get; }
@@ -63,72 +60,163 @@ public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
     {
         context.ConfigureGeneratedCodeAnalysis(GeneratedCodeAnalysisFlags.None);
         context.EnableConcurrentExecution();
-        context.RegisterOperationAction(AnalyzeInvocation, OperationKind.Invocation);
-        context.RegisterOperationAction(AnalyzeMethodReference, OperationKind.MethodReference);
+        context.RegisterOperationBlockAction(AnalyzeBlock);
     }
 
-    private static void AnalyzeInvocation(OperationAnalysisContext context)
+    private static void AnalyzeBlock(OperationBlockAnalysisContext context)
     {
-        var invocation = (IInvocationOperation)context.Operation;
+        var owner = context.OwningSymbol;
+        if (!IsInCore(owner))
+        {
+            return;
+        }
 
-        // By formal ordinal, not source order: a named argument can be written
-        // out of declaration order (`reason: …, clrType: x.ReturnType`).
-        var typeArgument = invocation.Arguments.FirstOrDefault(a => a.Parameter?.Ordinal == 0)?.Value;
-        Analyze(context, invocation.TargetMethod, invocation, typeArgument);
+        var isFunnel = IsFunnelMember(owner);
+        var isImportRule = owner.ContainingType?.Name == ImportRuleTypeName;
+
+        // Pass 1: where every local in the body gets its value from.
+        var sources = new Dictionary<ISymbol, List<IOperation>>(SymbolEqualityComparer.Default);
+        foreach (var block in context.OperationBlocks)
+        {
+            foreach (var node in block.DescendantsAndSelf())
+            {
+                if (node is IVariableDeclaratorOperation declarator)
+                {
+                    if (declarator.Initializer != null)
+                    {
+                        AddSource(sources, declarator.Symbol, declarator.Initializer.Value);
+                    }
+                }
+                else if (node is IAssignmentOperation assignment)
+                {
+                    if (assignment.Target is ILocalReferenceOperation assigned)
+                    {
+                        AddSource(sources, assigned.Local, assignment.Value);
+                    }
+                }
+                else if (node is IForEachLoopOperation loop)
+                {
+                    foreach (var loopLocal in loop.Locals)
+                    {
+                        AddSource(sources, loopLocal, loop.Collection);
+                    }
+                }
+                else if (node is IInvocationOperation producer)
+                {
+                    // `out var t`: the call that fills the local is its source.
+                    foreach (var argument in producer.Arguments)
+                    {
+                        if (argument.Value is IDeclarationExpressionOperation declaration
+                            && declaration.Expression is ILocalReferenceOperation declared)
+                        {
+                            AddSource(sources, declared.Local, producer);
+                        }
+                    }
+                }
+            }
+        }
+
+        // Pass 2: every door, escape hatch and wrapper factory in the body.
+        foreach (var block in context.OperationBlocks)
+        {
+            foreach (var node in block.DescendantsAndSelf())
+            {
+                if (node is IInvocationOperation invocation)
+                {
+                    AnalyzeCall(context, invocation.TargetMethod, invocation, isFunnel, isImportRule, sources);
+                }
+                else if (node is IMethodReferenceOperation reference)
+                {
+                    AnalyzeMethodGroup(context, reference.Method, reference, isFunnel, isImportRule);
+                }
+            }
+        }
     }
 
-    private static void AnalyzeMethodReference(OperationAnalysisContext context)
+    private static void AddSource(Dictionary<ISymbol, List<IOperation>> sources, ISymbol local, IOperation value)
     {
-        var reference = (IMethodReferenceOperation)context.Operation;
+        if (!sources.TryGetValue(local, out var list))
+        {
+            list = new List<IOperation>();
+            sources[local] = list;
+        }
 
+        list.Add(value);
+    }
+
+    private static void AnalyzeCall(
+        OperationBlockAnalysisContext context,
+        ISymbol target,
+        IInvocationOperation invocation,
+        bool isFunnel,
+        bool isImportRule,
+        Dictionary<ISymbol, List<IOperation>> sources)
+    {
+        if (IsEscapeHatch(target))
+        {
+            // Every System.Type argument is checked, whatever its position or
+            // name: an escape hatch's type argument is one of them.
+            foreach (var argument in invocation.Arguments)
+            {
+                var value = argument.Value;
+                if (IsSystemType(value.Type)
+                    && DerivesFromSignatureAccessor(value, sources, new HashSet<ISymbol>(SymbolEqualityComparer.Default)))
+                {
+                    Report(context, invocation, $"'{target.Name}' is given a member signature position; read it through a funnel reader (ClrNullability.Get*TypeSymbol or MemberLookup.GetClr*TypeSymbol) so its declaration nullability is merged");
+                    return;
+                }
+            }
+
+            return;
+        }
+
+        AnalyzeDoorOrFactory(context, target, invocation, isFunnel, isImportRule);
+    }
+
+    private static void AnalyzeMethodGroup(
+        OperationBlockAnalysisContext context,
+        ISymbol target,
+        IOperation reference,
+        bool isFunnel,
+        bool isImportRule)
+    {
         // A method group (`.Select(TypeSymbol.FromClrType)`) calls the door on
         // arguments the analyzer cannot see, so it is reported as a call. The
         // escape hatch passed as a group is reported too: its argument is
         // unknowable here, so the signature-accessor check cannot pass.
-        Analyze(context, reference.Method, reference, argument: null);
-    }
-
-    private static void Analyze(OperationAnalysisContext context, IMethodSymbol target, IOperation operation, IOperation? argument)
-    {
-        if (!IsInCore(context.ContainingSymbol))
-        {
-            return;
-        }
-
-        var member = GetEnclosingMember(context.ContainingSymbol);
         if (IsEscapeHatch(target))
         {
-            if (argument == null)
-            {
-                Report(context, operation, $"'{target.Name}' is used as a method group, so its argument cannot be checked; call it directly with the Type in hand");
-                return;
-            }
-
-            if (DerivesFromSignatureAccessor(argument, operation, new HashSet<ISymbol>(SymbolEqualityComparer.Default)))
-            {
-                Report(context, operation, $"'{target.Name}' is given a member signature position; read it through a funnel reader (ClrNullability.Get*TypeSymbol or MemberLookup.GetClr*TypeSymbol) so its declaration nullability is merged");
-            }
-
+            Report(context, reference, $"'{target.Name}' is used as a method group, so its argument cannot be checked; call it directly with the Type in hand");
             return;
         }
 
+        AnalyzeDoorOrFactory(context, target, reference, isFunnel, isImportRule);
+    }
+
+    private static void AnalyzeDoorOrFactory(
+        OperationBlockAnalysisContext context,
+        ISymbol target,
+        IOperation operation,
+        bool isFunnel,
+        bool isImportRule)
+    {
         if (IsDoor(target))
         {
-            if (!IsFunnelMember(member))
+            if (!isFunnel)
             {
-                Report(context, operation, $"'{target.ContainingType.Name}.{target.Name}' is a nullability conversion door and may only be called from a [NullabilityFunnel] member; read signature positions through a funnel reader, or use TypeSymbol.FromClrTypeWithoutNullability with a NullabilityFreeReason");
+                Report(context, operation, $"'{target.ContainingType?.Name}.{target.Name}' is a nullability conversion door and may only be called from a [NullabilityFunnel] member; read signature positions through a funnel reader, or use TypeSymbol.FromClrTypeWithoutNullability with a NullabilityFreeReason");
             }
 
             return;
         }
 
-        if (IsWrapperFactory(target) && IsFunnelMember(member) && !IsImportRuleMember(member))
+        if (isFunnel && !isImportRule && IsWrapperFactory(target))
         {
-            Report(context, operation, $"'{target.ContainingType.Name}.{target.Name}' is called directly inside a [NullabilityFunnel] member; resolve a classified position through NullabilityImportRule instead");
+            Report(context, operation, $"'{target.ContainingType?.Name}.{target.Name}' is called directly inside a [NullabilityFunnel] member; resolve a classified position through NullabilityImportRule instead");
         }
     }
 
-    private static void Report(OperationAnalysisContext context, IOperation operation, string message)
+    private static void Report(OperationBlockAnalysisContext context, IOperation operation, string message)
         => context.ReportDiagnostic(Diagnostic.Create(DiagnosticDescriptors.NullabilityFunnelBypass, operation.Syntax.GetLocation(), message));
 
     private static bool IsInCore(ISymbol? symbol)
@@ -137,160 +225,119 @@ public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
         return ns != null && (ns == CoreNamespacePrefix || ns.StartsWith(CoreNamespacePrefix + ".", System.StringComparison.Ordinal));
     }
 
-    private static bool IsDoor(IMethodSymbol method)
+    private static bool IsDoor(ISymbol method)
     {
-        var type = method.ContainingType?.Name;
-        var isDoor = (type, method.Name) switch
-        {
-            ("TypeSymbol", "FromClrType") => true,
-            ("MemberLookup", "MapOpenClrTypeToSymbolic") => true,
-            ("ImportedTypeSymbol", "Get") => IsTypeParameterList(method),
-            ("ClrNullability", "ReadNullableFlags") => true,
-            ("ClrNullability", "ClassifyFlag") => true,
-            ("ClrNullability", "ClassifyPosition") => true,
-            _ => false,
-        };
-
-        return isDoor && IsInCore(method.ContainingType);
-    }
-
-    private static bool IsTypeParameterList(IMethodSymbol method)
-        => method.Parameters.Length == 1
-            && method.Parameters[0].Type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == "global::System.Type";
-
-    private static bool IsEscapeHatch(IMethodSymbol method)
-        => method.Name.EndsWith(EscapeHatchSuffix, System.StringComparison.Ordinal)
-            && method.Parameters.Any(p => p.Type.Name == ReasonTypeName)
-            && IsInCore(method.ContainingType);
-
-    private static bool IsWrapperFactory(IMethodSymbol method)
-        => method.Name == "Get"
-            && method.ContainingType?.Name is "NullableTypeSymbol" or "PlatformTypeSymbol"
-            && IsInCore(method.ContainingType);
-
-    private static ISymbol? GetEnclosingMember(ISymbol? symbol)
-    {
-        while (symbol is IMethodSymbol { MethodKind: MethodKind.AnonymousFunction or MethodKind.LocalFunction })
-        {
-            symbol = symbol.ContainingSymbol;
-        }
-
-        return symbol;
-    }
-
-    private static bool IsFunnelMember(ISymbol? member)
-    {
-        if (member == null)
+        if (!IsInCore(method.ContainingType))
         {
             return false;
         }
 
+        var type = method.ContainingType?.Name;
+        var name = method.Name;
+        return (type == "TypeSymbol" && name == "FromClrType")
+            || (type == "MemberLookup" && name == "MapOpenClrTypeToSymbolic")
+            || (type == "ImportedTypeSymbol" && name == "Get")
+            || (type == "ClrNullability" && (name == "ReadNullableFlags" || name == "ClassifyFlag" || name == "ClassifyPosition"));
+    }
+
+    private static bool IsEscapeHatch(ISymbol method)
+    {
+        if (!IsInCore(method.ContainingType))
+        {
+            return false;
+        }
+
+        var type = method.ContainingType?.Name;
+        var name = method.Name;
+        return (type == "TypeSymbol" && name == "FromClrTypeWithoutNullability")
+            || (type == "ImportedTypeSymbol" && name == "GetWithoutNullability")
+            || (type == "MemberLookup" && name == "MapOpenClrTypeToSymbolicWithoutNullability");
+    }
+
+    private static bool IsWrapperFactory(ISymbol method)
+    {
+        var type = method.ContainingType?.Name;
+        return method.Name == "Get"
+            && (type == "NullableTypeSymbol" || type == "PlatformTypeSymbol")
+            && IsInCore(method.ContainingType);
+    }
+
+    private static bool IsFunnelMember(ISymbol member)
+    {
         if (HasFunnelAttribute(member))
         {
             return true;
         }
 
-        return member is IMethodSymbol { AssociatedSymbol: { } associated } && HasFunnelAttribute(associated);
+        // A property accessor is covered by its property's attribute.
+        return member is IMethodSymbol accessor
+            && accessor.AssociatedSymbol != null
+            && HasFunnelAttribute(accessor.AssociatedSymbol);
     }
 
     private static bool HasFunnelAttribute(ISymbol symbol)
-        => symbol.GetAttributes().Any(a => a.AttributeClass?.Name == FunnelAttributeName);
-
-    private static bool IsImportRuleMember(ISymbol? member)
-        => member?.ContainingType?.Name == ImportRuleTypeName;
-
-    /// <summary>
-    /// Whether <paramref name="operation"/> is, or is computed from, a
-    /// signature accessor within the same method: directly, or through
-    /// locals whose initializers, assignments or <c>foreach</c> collections
-    /// are.
-    /// </summary>
-    private static bool DerivesFromSignatureAccessor(IOperation operation, IOperation site, HashSet<ISymbol> visited)
     {
-        foreach (var node in DescendantsAndSelf(operation))
+        foreach (var attribute in symbol.GetAttributes())
         {
-            switch (node)
+            if (attribute.AttributeClass?.Name == FunnelAttributeName)
             {
-                case IPropertyReferenceOperation property when IsSignatureAccessor(property.Property):
-                    return true;
-                case ILocalReferenceOperation local when visited.Add(local.Local):
-                    foreach (var source in SourcesOf(local.Local, site))
-                    {
-                        if (DerivesFromSignatureAccessor(source, site, visited))
-                        {
-                            return true;
-                        }
-                    }
-
-                    break;
+                return true;
             }
         }
 
         return false;
     }
 
-    private static bool IsSignatureAccessor(IPropertySymbol property)
-        => SignatureAccessors.Contains(property.Name)
-            && property.ContainingType?.ContainingNamespace?.ToDisplayString() == "System.Reflection";
+    private static bool IsSystemType(ITypeSymbol? type)
+        => type != null && type.ToDisplayString(SymbolDisplayFormat.FullyQualifiedFormat) == SystemTypeName;
 
-    private static IEnumerable<IOperation> SourcesOf(ILocalSymbol local, IOperation site)
+    /// <summary>
+    /// Whether <paramref name="operation"/> is, or is computed from, a
+    /// signature accessor within the same method: directly, or through
+    /// locals whose initializers, assignments, <c>foreach</c> collections or
+    /// <c>out var</c> producers are.
+    /// </summary>
+    private static bool DerivesFromSignatureAccessor(
+        IOperation operation,
+        Dictionary<ISymbol, List<IOperation>> sources,
+        HashSet<ISymbol> visited)
     {
-        var root = site;
-        while (root.Parent != null)
+        foreach (var node in operation.DescendantsAndSelf())
         {
-            root = root.Parent;
-        }
-
-        foreach (var node in DescendantsAndSelf(root))
-        {
-            switch (node)
+            if (node is IPropertyReferenceOperation property)
             {
-                case IVariableDeclaratorOperation declarator
-                    when SymbolEqualityComparer.Default.Equals(declarator.Symbol, local) && declarator.GetVariableInitializer() is { } initializer:
-                    yield return initializer.Value;
-                    break;
-                case IAssignmentOperation assignment
-                    when assignment.Target is ILocalReferenceOperation target && SymbolEqualityComparer.Default.Equals(target.Local, local):
-                    yield return assignment.Value;
-                    break;
-                case IForEachLoopOperation loop when loop.Locals.Contains(local, SymbolEqualityComparer.Default):
-                    yield return loop.Collection;
-                    break;
-                case IDeclarationExpressionOperation declaration when ContainsLocal(declaration, local):
-                    // `out var t` / deconstruction: the producer is the
-                    // enclosing call or assignment.
-                    var producer = declaration.Parent;
-                    while (producer != null && producer is not (IInvocationOperation or IAssignmentOperation))
+                if (IsSignatureAccessor(property.Property))
+                {
+                    return true;
+                }
+            }
+            else if (node is ILocalReferenceOperation reference)
+            {
+                if (visited.Add(reference.Local) && sources.TryGetValue(reference.Local, out var localSources))
+                {
+                    foreach (var source in localSources)
                     {
-                        producer = producer.Parent;
+                        if (DerivesFromSignatureAccessor(source, sources, visited))
+                        {
+                            return true;
+                        }
                     }
-
-                    if (producer != null)
-                    {
-                        yield return producer;
-                    }
-
-                    break;
+                }
             }
         }
+
+        return false;
     }
 
-    private static bool ContainsLocal(IOperation operation, ILocalSymbol local)
-        => DescendantsAndSelf(operation).OfType<ILocalReferenceOperation>()
-            .Any(r => SymbolEqualityComparer.Default.Equals(r.Local, local));
-
-    private static IEnumerable<IOperation> DescendantsAndSelf(IOperation operation)
+    private static bool IsSignatureAccessor(ISymbol property)
     {
-        var stack = new Stack<IOperation>();
-        stack.Push(operation);
-        while (stack.Count > 0)
-        {
-            var current = stack.Pop();
-            yield return current;
-            foreach (var child in current.ChildOperations)
-            {
-                stack.Push(child);
-            }
-        }
+        var name = property.Name;
+        return (name == "ReturnType"
+                || name == "ReturnParameter"
+                || name == "ParameterType"
+                || name == "PropertyType"
+                || name == "FieldType"
+                || name == "EventHandlerType")
+            && property.ContainingType?.ContainingNamespace?.ToDisplayString() == "System.Reflection";
     }
 }
