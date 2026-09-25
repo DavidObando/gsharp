@@ -3,10 +3,12 @@
 // </copyright>
 
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Globalization;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator.Loading;
@@ -21,6 +23,18 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
+        // Issue #4356 follow-up: DeclaringCompilationPromotes' usage-scan
+        // results, per declaring compilation (see there).
+        private static readonly ConditionalWeakTable<CSharpCompilation, ConcurrentDictionary<ISymbol, bool>>
+            DeclaringUsageScans = new ConditionalWeakTable<CSharpCompilation, ConcurrentDictionary<ISymbol, bool>>();
+
+        // Issue #4356 follow-up: TryGetDeclaringRepositoryMember's owner index
+        // and DeclaringRepositoryMemberPromotes' answers (see there).
+        private readonly Dictionary<ISymbol, bool> declaringRepositoryMemberPromotions =
+            new Dictionary<ISymbol, bool>(SymbolEqualityComparer.Default);
+
+        private Dictionary<AssemblyIdentity, CSharpCompilation> repositoryCompilationsByIdentity;
+
         private HashSet<string> repositorySharedDocumentPaths;
 
         // Issue #4146 (Copilot review of #4128's fix): lazily-built cache
@@ -74,6 +88,21 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.ComputeIsUsedAsNullable(symbol, scope);
             }
 
+            return ScopeUsesAsNullable(this.context.SemanticModel, symbol, scope);
+        }
+
+        // The #1072 usage scan proper: whether `scope` compares `symbol` with
+        // `null`, assigns it `null`, `??=`-assigns it, tests it `is null`, or
+        // initializes it to `null`. `model` binds `scope`'s tree — this
+        // compilation's own model, or (for a member another project of the run
+        // declares, see DeclaringCompilationPromotes) the declaring
+        // compilation's, so the consumer asks exactly what the producer asked.
+        private static bool ScopeUsesAsNullable(SemanticModel model, ISymbol symbol, SyntaxNode scope)
+        {
+            bool BindsTo(ExpressionSyntax expression) =>
+                model.GetSymbolInfo(expression).Symbol is { } bound
+                    && SymbolEqualityComparer.Default.Equals(bound, symbol);
+
             foreach (SyntaxNode node in scope.DescendantNodes())
             {
                 switch (node)
@@ -81,8 +110,8 @@ public sealed partial class CSharpToGSharpTranslator
                     case BinaryExpressionSyntax binary
                         when binary.IsKind(SyntaxKind.EqualsExpression)
                             || binary.IsKind(SyntaxKind.NotEqualsExpression):
-                        if ((IsNullLiteral(binary.Right) && this.BindsTo(binary.Left, symbol))
-                            || (IsNullLiteral(binary.Left) && this.BindsTo(binary.Right, symbol)))
+                        if ((IsNullLiteral(binary.Right) && BindsTo(binary.Left))
+                            || (IsNullLiteral(binary.Left) && BindsTo(binary.Right)))
                         {
                             return true;
                         }
@@ -91,7 +120,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                     case AssignmentExpressionSyntax assignment
                         when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
-                            && this.BindsTo(assignment.Left, symbol)
+                            && BindsTo(assignment.Left)
                             && IsNullOrSuppressedNull(assignment.Right):
                         return true;
 
@@ -101,11 +130,11 @@ public sealed partial class CSharpToGSharpTranslator
                     // where only a literal `null`/`null!` RHS proves it).
                     case AssignmentExpressionSyntax coalesceAssignment
                         when coalesceAssignment.IsKind(SyntaxKind.CoalesceAssignmentExpression)
-                            && this.BindsTo(coalesceAssignment.Left, symbol):
+                            && BindsTo(coalesceAssignment.Left):
                         return true;
 
                     case IsPatternExpressionSyntax isPattern
-                        when this.BindsTo(isPattern.Expression, symbol)
+                        when BindsTo(isPattern.Expression)
                             && IsNullConstantPattern(isPattern.Pattern):
                         return true;
 
@@ -113,12 +142,153 @@ public sealed partial class CSharpToGSharpTranslator
                         when declarator.Initializer != null
                             && IsNullOrSuppressedNull(declarator.Initializer.Value)
                             && SymbolEqualityComparer.Default.Equals(
-                                this.context.GetDeclaredSymbol(declarator), symbol):
+                                model.GetDeclaredSymbol(declarator), symbol):
                         return true;
                 }
             }
 
             return false;
+        }
+
+        /// <summary>
+        /// Issue #4356 follow-up: resolves a field or property that another
+        /// project of this migration run declares — seen here through that
+        /// project's reference assembly, or through a compilation reference —
+        /// to its SOURCE declaration in that project's own compilation.
+        /// </summary>
+        /// <param name="symbol">The field or property as this compilation binds it.</param>
+        /// <param name="owner">The declaring project's compilation.</param>
+        /// <param name="source">The declaration in <paramref name="owner"/>.</param>
+        /// <returns>True when both were found.</returns>
+        private bool TryGetDeclaringRepositoryMember(
+            ISymbol symbol,
+            out CSharpCompilation owner,
+            out ISymbol source)
+        {
+            owner = null;
+            source = null;
+            if (symbol is not (IPropertySymbol or IFieldSymbol)
+                || symbol.ContainingAssembly is not { } assembly
+                || SymbolEqualityComparer.Default.Equals(assembly, this.context.Compilation.Assembly)
+                || (this.context.RepositoryCompilations ?? this.context.SiblingCompilations)
+                    is not { } compilations
+                || symbol.OriginalDefinition.GetDocumentationCommentId() is not { } id)
+            {
+                return false;
+            }
+
+            if (this.repositoryCompilationsByIdentity == null)
+            {
+                this.repositoryCompilationsByIdentity = new Dictionary<AssemblyIdentity, CSharpCompilation>();
+                foreach (CSharpCompilation compilation in compilations)
+                {
+                    if (compilation != null && !ReferenceEquals(compilation, this.context.Compilation))
+                    {
+                        this.repositoryCompilationsByIdentity.TryAdd(compilation.Assembly.Identity, compilation);
+                    }
+                }
+            }
+
+            if (!this.repositoryCompilationsByIdentity.TryGetValue(assembly.Identity, out CSharpCompilation candidate))
+            {
+                return false;
+            }
+
+            ISymbol declared = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, candidate);
+            if (declared == null
+                || !SymbolEqualityComparer.Default.Equals(declared.ContainingAssembly, candidate.Assembly)
+                || declared.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            owner = candidate;
+            source = declared;
+            return true;
+        }
+
+        /// <summary>
+        /// Issue #4356 follow-up: whether a field or property that another
+        /// project of this run declares is emitted <c>T?</c> there, per
+        /// <see cref="TryGetDeclaringRepositoryMember"/> and
+        /// <see cref="DeclaringCompilationPromotes"/>. The answer is a property
+        /// of the declaration, so it is cached per original definition: the
+        /// forgiveness predicates ask it from many sites.
+        /// </summary>
+        /// <param name="symbol">The field or property as this compilation binds it.</param>
+        /// <returns>True when the declaring project widens the member.</returns>
+        private bool DeclaringRepositoryMemberPromotes(ISymbol symbol)
+        {
+            if (symbol is not (IPropertySymbol or IFieldSymbol))
+            {
+                return false;
+            }
+
+            ISymbol key = symbol.OriginalDefinition;
+            if (!this.declaringRepositoryMemberPromotions.TryGetValue(key, out bool promotes))
+            {
+                promotes = this.TryGetDeclaringRepositoryMember(symbol, out CSharpCompilation owner, out ISymbol source)
+                    && this.DeclaringCompilationPromotes(owner, source);
+                this.declaringRepositoryMemberPromotions[key] = promotes;
+            }
+
+            return promotes;
+        }
+
+        /// <summary>
+        /// Issue #4356 follow-up: the declaration-side promotions of
+        /// <see cref="ShouldPromoteToNullableReference"/> that only the
+        /// DECLARING project can decide — <c>[AllowNull]</c> (#3694), which a
+        /// reference assembly's consumer cannot see through
+        /// <see cref="ObliviousNullabilityAnalyzer.HasAllowNullWriteContract"/>'s
+        /// source-only gate, and the #1072 usage scan, whose evidence lives in
+        /// the declaring project's syntax. Asked of that project's own
+        /// compilation, the answer is the one its translation emitted. The
+        /// other promotions (taint, generated-null, pure forwarding) already
+        /// consult every compilation of the run.
+        /// </summary>
+        /// <param name="owner">The declaring project's compilation.</param>
+        /// <param name="source">The member's declaration in <paramref name="owner"/>.</param>
+        /// <returns>True when the declaring project emits the member <c>T?</c>.</returns>
+        private bool DeclaringCompilationPromotes(CSharpCompilation owner, ISymbol source)
+        {
+            // The producer's own eligibility gate, applied to the DECLARED type:
+            // `source` is the original definition, so a consumer's substituted
+            // `Box<string>.Value` is judged as `T Value`, which the producer never
+            // widens unless `T` is known to be a reference type.
+            ITypeSymbol declared = source switch
+            {
+                IPropertySymbol property => property.Type,
+                IFieldSymbol field => field.Type,
+                _ => null,
+            };
+            if (declared is not { IsReferenceType: true }
+                || declared.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return false;
+            }
+
+            if (ObliviousNullabilityAnalyzer.HasAllowNullWriteContract(source))
+            {
+                return true;
+            }
+
+            if (this.IsDeclaredInRepositorySharedDocument(source)
+                || this.GetNullabilityScope(source) is not { } scope
+                || !owner.ContainsSyntaxTree(scope.SyntaxTree))
+            {
+                return false;
+            }
+
+            // The answer depends only on the declaring compilation and the
+            // member, so it is cached per compilation for the whole run rather
+            // than per consuming document: a test project reads the same few
+            // members from thousands of sites.
+            return DeclaringUsageScans
+                .GetValue(owner, _ => new ConcurrentDictionary<ISymbol, bool>(SymbolEqualityComparer.Default))
+                .GetOrAdd(
+                    source,
+                    member => ScopeUsesAsNullable(owner.GetSemanticModel(scope.SyntaxTree), member, scope));
         }
 
         // Promotes <paramref name="type"/> to its nullable (`T?`) form when the
@@ -1195,6 +1365,19 @@ public sealed partial class CSharpToGSharpTranslator
                 || declared.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return false;
+            }
+
+            // Issue #4356 follow-up: a field or property declared in ANOTHER
+            // project of this migration is seen here through that project's
+            // reference assembly (repository mode loads siblings as metadata),
+            // so its declaration-side promotions — `[AllowNull]` below, the
+            // #1072 usage scan — cannot be decided from this compilation. The
+            // referenced project's own translation DID decide them and emitted
+            // `T?`; ask the same questions of the declaring compilation so this
+            // consumer's member chains get the `!!` gsc requires (GS0158).
+            if (this.DeclaringRepositoryMemberPromotes(symbol))
+            {
+                return true;
             }
 
             // Issue #3694: C# gives a declaration two nullability contracts, an
