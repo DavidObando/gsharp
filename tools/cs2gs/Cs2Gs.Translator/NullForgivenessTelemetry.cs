@@ -143,7 +143,8 @@ internal static class NullForgivenessTelemetry
         catch (System.Exception exception) when (exception is System.IO.IOException
             or System.UnauthorizedAccessException
             or System.ArgumentException
-            or System.NotSupportedException)
+            or System.NotSupportedException
+            or System.Security.SecurityException)
         {
             System.Console.Error.WriteLine(
                 "cs2gs: could not write " + DumpPathVariable + " to '" + DumpPath + "': " + exception.Message);
