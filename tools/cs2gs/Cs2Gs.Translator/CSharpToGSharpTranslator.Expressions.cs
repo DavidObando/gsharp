@@ -2833,6 +2833,15 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        // Whether `local` is declared `var` (its G# type is inferred from its
+        // initializer rather than spelled).
+        private static bool IsImplicitlyTypedLocal(ILocalSymbol local) =>
+            local.DeclaringSyntaxReferences.Any(reference =>
+                reference.GetSyntax() is VariableDeclaratorSyntax
+                {
+                    Parent: VariableDeclarationSyntax { Type.IsVar: true },
+                });
+
         // Whether `value` is (through parentheses) an arm of a conditional or a
         // switch expression, the walk FindContextualValueTarget climbs.
         private static bool IsBranchArm(ExpressionSyntax value)
@@ -2923,6 +2932,26 @@ public sealed partial class CSharpToGSharpTranslator
 
         private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(ExpressionSyntax value)
         {
+            // A C# `!` has no runtime meaning, so an arm under one still flows
+            // into the suppressed expression's sink, and that sink is the
+            // target when it accepts nil (`string chosen = (c ? a : b)!;` with
+            // `chosen` widened to `T?`). Otherwise the `!` is where the value
+            // is asserted, so the arm keeps the target it has below it and the
+            // `!` itself becomes the one `!!`.
+            (ITypeSymbol Type, ISymbol Symbol) climbed =
+                this.FindContextualValueTarget(value, climbSuppression: true, out bool crossedSuppression);
+            return !crossedSuppression || this.NullForgivingTargetAcceptsNil(climbed.Type, climbed.Symbol)
+                ? climbed
+                : this.FindContextualValueTarget(value, climbSuppression: false, out _);
+        }
+
+        private (ITypeSymbol Type, ISymbol Symbol) FindContextualValueTarget(
+            ExpressionSyntax value,
+            bool climbSuppression,
+            out bool crossedSuppression)
+        {
+            crossedSuppression = false;
+
             // A conditional or switch-expression ARM has no target of its own:
             // it flows into whatever the whole `?:` / `switch` flows into, so the
             // walk climbs to the outermost branching expression. `isBranchArm`
@@ -2931,12 +2960,15 @@ public sealed partial class CSharpToGSharpTranslator
             bool isBranchArm = false;
             while (true)
             {
-                if (current.Parent is ParenthesizedExpressionSyntax
-                    or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
+                if (current.Parent is ParenthesizedExpressionSyntax)
                 {
-                    // `!` has no runtime meaning: the arm still flows wherever
-                    // the suppressed expression flows.
                     current = current.Parent;
+                }
+                else if (climbSuppression
+                    && current.Parent is PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
+                {
+                    current = current.Parent;
+                    crossedSuppression = true;
                 }
                 else if (current.Parent is ConditionalExpressionSyntax conditional
                     && (conditional.WhenTrue == current || conditional.WhenFalse == current))
@@ -2971,7 +3003,19 @@ public sealed partial class CSharpToGSharpTranslator
             // widened to `T?` (TargetWillRemainNonNullableReference reads it
             // off the symbol). The arm's own converted type is only the C#
             // conditional's type, which in oblivious code never says `?`.
-            if (target == null && isBranchArm && this.ResolveValueSink((ExpressionSyntax)current) is { } sink)
+            //
+            // A `var` local is not a target: in nullable-enabled C# its type is
+            // always annotated, but in G# it is inferred from the emitted value,
+            // so leaving the arm bare would make the local `T?` and move the
+            // failure to its next use. It is a target only when cs2gs itself
+            // widens it (it then emits the `T?` clause).
+            if (target == null
+                && isBranchArm
+                && this.ResolveValueSink((ExpressionSyntax)current) is { } sink
+                && !(sink is ILocalSymbol inferredLocal
+                    && IsImplicitlyTypedLocal(inferredLocal)
+                    && !this.ShouldPromoteToNullableReference(inferredLocal)
+                    && !this.IsUsedAsNullable(inferredLocal, this.GetNullabilityScope(inferredLocal))))
             {
                 ITypeSymbol sinkType = sink switch
                 {

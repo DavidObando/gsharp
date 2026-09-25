@@ -208,6 +208,43 @@ namespace App
         Assert.Contains("else { argument.Name!! })", printed);
     }
 
+    /// <summary>
+    /// A <c>var</c> local is not a nil-accepting target, even though
+    /// nullable-enabled C# annotates it: G# infers it from the emitted value.
+    /// This is the Oahu <c>CoreAuthService.ToSession</c> shape. The flow-narrowed
+    /// <c>a</c> arm keeps its <c>!!</c>, so <c>alias</c> stays <c>string</c>
+    /// and can initialize a non-null member.
+    /// </summary>
+    [Fact]
+    public void ImplicitlyTypedLocal_IsNotANilAcceptingTarget()
+    {
+        const string source = @"
+#nullable enable
+using System.Collections.Generic;
+
+public sealed class Session { public string Alias { get; set; } = """"; }
+
+public static class C
+{
+    public static Session Make(IReadOnlyDictionary<string, string> aliases, string id, string? name)
+    {
+        var alias = aliases.TryGetValue(id, out var a) && !string.IsNullOrWhiteSpace(a)
+            ? a
+            : name ?? id;
+        return new Session { Alias = alias };
+    }
+}";
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Contains("{ a!! } else { name ?? id }", printed);
+        RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
+        Assert.True(result.Success, string.Join("\n", result.Errors) + "\n\n" + printed);
+    }
+
     private static string TranslateCrossProject(string app) => TranslateBothProjects(app).Consumer;
 
     private static (string Library, string Consumer) TranslateBothProjects(string app)
