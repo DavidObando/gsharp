@@ -720,12 +720,25 @@ public sealed partial class CSharpToGSharpTranslator
             // null-conditional `x?.ToString()`, whose `string?` result G#
             // concatenates the same way. `x.ToString()` was a call on a `T?`
             // receiver: gsc now reports it (GS0159), and it threw on nil
-            // where C# did not. Nilable here means `T?` in the EMITTED G#: a C#
-            // `T?` reference declaration, or a Roslyn member that is `T?` only
-            // on the G# analyzer API (whatever its C# shape: Roslyn's
-            // `SyntaxToken` is a struct, G#'s is a nilable class).
-            if ((operandType is { IsReferenceType: true, NullableAnnotation: NullableAnnotation.Annotated })
-                || this.IsGSharpNullableAnalyzerExpression(operandSyntax))
+            // where C# did not. Nilable here means "may be `T?` in the EMITTED
+            // G#": a C# `T?` reference declaration; a Roslyn member that is `T?`
+            // only on the G# analyzer API (whatever its C# shape: Roslyn's
+            // `SyntaxToken` is a struct, G#'s is a nilable class); or anything
+            // the shared value and receiver predicates say gsc imports as
+            // nilable, such as `Array.GetValue` (annotated `object?`) called from
+            // an oblivious C# file, where Roslyn erases the annotation at the
+            // call site. `?.` on a value that turns out non-null is legal and
+            // costs one branch.
+            // Plain equality rather than a property pattern over the Roslyn
+            // enum: cs2gs translates its own source, and a pattern test against
+            // a Roslyn enum constant does not survive that (issue #4167).
+            if ((operandType != null
+                    && operandType.IsReferenceType
+                    && operandType.NullableAnnotation == NullableAnnotation.Annotated)
+                || this.IsGSharpNullableAnalyzerExpression(operandSyntax)
+                || this.NullableReferenceValueMayBeNull(operandSyntax)
+                || this.ReceiverValueIsObliviouslyReadAnnotatedResult(operandSyntax)
+                || this.ReceiverValueIsPromotedNullable(operandSyntax))
             {
                 return new ConditionalAccessExpression(
                     receiver,
