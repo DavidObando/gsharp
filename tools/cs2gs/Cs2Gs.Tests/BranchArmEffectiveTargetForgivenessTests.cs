@@ -106,8 +106,10 @@ namespace App
     /// the arm bare when the member is declared in another project of the run:
     /// a conditional or switch into a widened local, a return from a widened
     /// method, an expression-bodied member, an assignment, the left operand of
-    /// <c>??</c>, a <c>?.</c> receiver, a <c>== null</c> / <c>is null</c> test,
-    /// and an inferred generic parameter, which G# re-infers from the argument.
+    /// <c>??</c>, a <c>?.</c> receiver, a <c>== null</c> / <c>is null</c> test
+    /// (including a wrapped <c>(null!)</c>), a widened local reached through a
+    /// null-forgiving <c>!</c>, and an inferred generic parameter, which G#
+    /// re-infers from the argument.
     /// </summary>
     [Fact]
     public void NullableEffectiveTarget_ArmsStayBare()
@@ -159,6 +161,14 @@ namespace App
         public static T Id<T>(T value) => value;
 
         public static string Inferred(Model.Arg argument, int i) => Id(i > 0 ? argument.Value : argument.Name);
+
+        public static bool ComparedWrapped(Model.Arg argument, int i) => (i >= 0 ? argument.Value : argument.Name) == (null!);
+
+        public static int Suppressed(Model.Arg argument, bool flag)
+        {
+            string chosen = (flag ? argument.Name : argument.Value)!;
+            return chosen == null ? 0 : chosen.Length;
+        }
     }
 }";
         string printed = TranslateCrossProject(app);

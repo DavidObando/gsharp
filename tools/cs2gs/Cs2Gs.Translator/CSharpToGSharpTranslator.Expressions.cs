@@ -2866,8 +2866,11 @@ public sealed partial class CSharpToGSharpTranslator
             SyntaxNode current = value;
             while (true)
             {
-                if (current.Parent is ParenthesizedExpressionSyntax)
+                if (current.Parent is ParenthesizedExpressionSyntax
+                    or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
                 {
+                    // `!` has no runtime meaning: the arm still flows wherever
+                    // the suppressed expression flows.
                     current = current.Parent;
                 }
                 else if (current.Parent is ConditionalExpressionSyntax conditional
@@ -2901,7 +2904,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ConditionalAccessExpressionSyntax conditionalAccess => conditionalAccess.Expression == current,
                 BinaryExpressionSyntax equality
                     when equality.IsKind(SyntaxKind.EqualsExpression) || equality.IsKind(SyntaxKind.NotEqualsExpression) =>
-                        IsNullLiteral(equality.Left == current ? equality.Right : equality.Left),
+                        IsNullOrSuppressedNull(equality.Left == current ? equality.Right : equality.Left),
                 IsPatternExpressionSyntax isPattern => isPattern.Expression == current && IsNullConstantPattern(isPattern.Pattern),
                 _ => false,
             };
@@ -2928,8 +2931,11 @@ public sealed partial class CSharpToGSharpTranslator
             bool isBranchArm = false;
             while (true)
             {
-                if (current.Parent is ParenthesizedExpressionSyntax)
+                if (current.Parent is ParenthesizedExpressionSyntax
+                    or PostfixUnaryExpressionSyntax { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression })
                 {
+                    // `!` has no runtime meaning: the arm still flows wherever
+                    // the suppressed expression flows.
                     current = current.Parent;
                 }
                 else if (current.Parent is ConditionalExpressionSyntax conditional
@@ -2965,7 +2971,7 @@ public sealed partial class CSharpToGSharpTranslator
             // widened to `T?` (TargetWillRemainNonNullableReference reads it
             // off the symbol). The arm's own converted type is only the C#
             // conditional's type, which in oblivious code never says `?`.
-            if (target == null && isBranchArm && this.ResolveValueSink(value) is { } sink)
+            if (target == null && isBranchArm && this.ResolveValueSink((ExpressionSyntax)current) is { } sink)
             {
                 ITypeSymbol sinkType = sink switch
                 {
