@@ -642,11 +642,9 @@ public class Adr0186ObliviousScopeTests
             }
             """,
             NullabilityMode.PlatformTypes);
-        using var pe = new MemoryStream();
-        var emit = compilation.Emit(pe, pdbStream: null, refStream: null, assemblyName: "Adr0186NestedPosition");
 
-        Assert.False(emit.Success);
-        Assert.Contains(emit.Diagnostics, d => d.Id == "GS0155");
+        // A binding diagnostic, so the bound program is enough; no emit.
+        Assert.Contains(compilation.BoundProgram.Diagnostics, d => d.Id == "GS0155");
     }
 
     /// <summary>

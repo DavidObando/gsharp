@@ -42,7 +42,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// members are enabled (csc picks each type's context byte by majority, so its
 /// exact rows vary with the member mix); what both compilers' metadata
 /// <em>says</em> is compared against Roslyn's actual output by
-/// <see cref="Csc_And_Gsc_Agree_On_Every_Oblivious_Position"/>.
+/// <see cref="Csc_And_Gsc_Agree_On_Every_Top_Level_Oblivious_Position"/>.
 /// </para>
 /// </summary>
 public class Adr0186ObliviousRoundTripEmitTests
@@ -293,7 +293,7 @@ public class Adr0186ObliviousRoundTripEmitTests
     /// </para>
     /// </summary>
     [Fact]
-    public void Csc_And_Gsc_Agree_On_Every_Oblivious_Position()
+    public void Csc_And_Gsc_Agree_On_Every_Top_Level_Oblivious_Position()
     {
         const string csharp = """
             #nullable enable
