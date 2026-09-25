@@ -400,8 +400,10 @@ this constantly.
 
 The rule is now C#'s, on every call form (free function, instance, `shared`,
 `base.`, constructor, convenience-init chaining, `: base(...)` to a G# or CLR
-base, delegate invoke, user and imported indexers, extensions, imported
-methods). An argument without a modifier at an `in` parameter is:
+base, delegate invoke, imported indexers, extensions, imported methods).
+A user indexer is not on this list, because its declaration still drops a
+ref-kind modifier on its parameters, so it never has an `in` parameter to
+pass to (#4421). An argument without a modifier at an `in` parameter is:
 
 1. converted to the parameter type exactly as a by-value argument would be.
    An argument with no implicit conversion therefore reports the ordinary

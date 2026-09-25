@@ -1258,7 +1258,9 @@ internal static class DefiniteAssignmentAnalyzer
         // still hand over a plain value, report it here — every call shape
         // with by-ref parameters funnels through this analysis — rather than
         // let the emitter push a value where the callee expects an address.
-        if (refKind != RefKind.None && ConversionClassifier.IsPlainValueArgument(argument))
+        if (refKind != RefKind.None
+            && (ConversionClassifier.IsPlainValueArgument(argument)
+                || OverloadResolution.ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
         {
             diagnostics?.ReportArgumentMustBePassedByRef(
                 argument.Syntax?.Location ?? callSyntax?.Location ?? default(TextLocation),

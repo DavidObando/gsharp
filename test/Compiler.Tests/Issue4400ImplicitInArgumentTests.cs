@@ -479,9 +479,10 @@ public class Issue4400ImplicitInArgumentTests
             new[] { "4", "4", "3", "s", "9", "12" },
         };
 
-        // Constructors: direct, convenience-init chaining, `: base(...)`; a
-        // user indexer; an extension; a struct passing `this` and its own
-        // readonly field; and a call inside an async function.
+        // Constructors: direct, convenience-init chaining, `: base(...)`; an
+        // extension; a struct passing `this` and its own readonly field; and a
+        // call inside an async function. (A user indexer's `in` parameter is
+        // dropped at declaration, #4421, so it has no row here.)
         yield return new object[]
         {
             "constructor-extension-struct-async",
@@ -833,6 +834,7 @@ public class Issue4400ImplicitInArgumentTests
             }
 
             func Fwd64(in x int64) int64 -> Api.S(x)
+            func Twice(x int32) int32 -> x * 2
 
             var v int64 = 5
             Console.WriteLine(Api.S(v))
@@ -862,6 +864,7 @@ public class Issue4400ImplicitInArgumentTests
             Console.WriteLine("${named} ${log.Text}")
             Console.WriteLine(Api.Len(nil))
             Console.WriteLine(Api.Len("abc"))
+            Console.WriteLine(Api.F(Twice))
             """;
 
         var tempDir = Directory.CreateTempSubdirectory("gs_4400_imp_").FullName;
@@ -877,7 +880,7 @@ public class Issue4400ImplicitInArgumentTests
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, $"the app must run. Exit {exit}:\n{output}");
             Assert.Equal(
-                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41", "1", "10", "value", "12 BA", "-1", "3" },
+                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41", "1", "10", "value", "12 BA", "-1", "3", "4" },
                 SplitLines(output));
         }
         finally

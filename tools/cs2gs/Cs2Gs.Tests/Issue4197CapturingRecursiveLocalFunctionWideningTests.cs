@@ -696,23 +696,13 @@ namespace Demo
         // `__local_Project_Add(cell: &slots[Idx()], a: Val(), 100)` and the
         // binding is right: cell aliases slots[1], a = 5, b = 100 => 105.
         //
-        // `order` prints 21, not C#'s 12, and that is a SEPARATE gsc-side gap
-        // with nothing to do with cs2gs: gsc evaluates an out-of-declared-order
-        // NAMED argument list in source order for by-value operands but
-        // evaluates a `&` operand at its PARAMETER position. Reduced to three
-        // SEPARATE hand-written G# programs, no translator involved, each with
-        // its own callee — `Idx`/`Val` fold a digit into `order`:
-        //   func Add(a int32, ref cell int32, b int32 = 100)
-        //     Add(cell: &slots[Idx()], a: Val(), 100)  => order 21  (WRONG)
-        //   func Add(a int32, c int32)
-        //     Add(c: Idx(), a: Val())                  => order 12  (by-value
-        //                                                            named, ok)
-        //   func RefFirst(ref cell int32, a int32)
-        //     RefFirst(&slots[Idx()], Val())           => order 12  (positional
-        //                                                            ref, ok)
-        // Pinned here as the tripwire for that follow-up: when gsc starts
-        // ordering `&` operands by source position this assertion flips to
-        // "105:12" and this comment comes out.
+        // `order` is 12, as in C#. It used to print 21, a separate gsc-side
+        // gap: gsc evaluated a by-value operand of an out-of-declared-order
+        // NAMED argument list in source order, but a `&` operand at its
+        // PARAMETER position. Issue #4400 (PR #4411) fixed that: a reordered
+        // `&slots[Idx()]` now captures the array and index that select its
+        // storage in source order and re-takes the address from them. This
+        // assertion was the tripwire for that follow-up.
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
 namespace Demo
 {
@@ -768,10 +758,8 @@ namespace Demo
         Assert.Contains("ref cell int32", printed, StringComparison.Ordinal);
 
         // a = 5, b = 100 (default), cell = slots[1] = 105 — the binding this
-        // carve-out exists to get right. `order` is the gsc-side tripwire
-        // documented above; before the carve-out this snippet did not compile
-        // at all, so there was no order to get wrong.
-        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(0)", "105:21");
+        // carve-out exists to get right — and source-order evaluation (12).
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(0)", "105:12");
     }
 
     [Fact]

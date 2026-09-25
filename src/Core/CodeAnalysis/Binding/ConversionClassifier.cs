@@ -3050,7 +3050,7 @@ internal sealed class ConversionClassifier
         => parameter.ParameterType.IsByRef
             && parameter.IsIn
             && !parameter.IsOut
-            && IsPlainValueArgument(argument);
+            && (IsPlainValueArgument(argument) || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument));
 
     /// <summary>
     /// Issue #4400: whether a bound argument is a plain VALUE — not already an
