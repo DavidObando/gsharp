@@ -1587,17 +1587,6 @@ internal sealed class MemberLookup
             isExpanded,
             out _);
 
-    // ADR-0193 Phase 2 (GSA0007): the one suppression the phase allows, for
-    // the one known gap it cannot close. Both members below project a
-    // signature position through SYMBOLIC method type arguments and return it
-    // with no declaration-nullability merge, so a concrete oblivious
-    // container returned (or `out`-bound) through a symbolically inferred
-    // generic call loses its `!`. Merging here is blocked on Phase 3: the
-    // symbolic-projection consumers do not peel `PlatformTypeSymbol`, which
-    // is why PR #4362 round 3 (`b0c76053d`) backed the merge out. Phase 4 of
-    // ADR-0193 (issue #4363) adds the merge, attributes both members
-    // `[NullabilityFunnel]` and deletes this pragma.
-#pragma warning disable GSA0007
     /// <summary>
     /// Issue #833 (sibling to #794 on the call-site argument side): when the
     /// imported generic method's open return type <em>contains</em> a method
@@ -1609,6 +1598,15 @@ internal sealed class MemberLookup
     /// or inferred via <see cref="InferSymbolicMethodTypeArguments"/>).
     /// Returns <see langword="null"/> when no symbolic substitution applies, so
     /// callers keep their existing return-type derivation.
+    /// <para>
+    /// ADR-0193 Phase 2 (GSA0007): this member and
+    /// <see cref="ResolveByRefParameterPointeeFromSymbolicTypeArgs"/> return a
+    /// projected signature position with no declaration-nullability merge, so
+    /// a concrete oblivious container returned (or <c>out</c>-bound) through a
+    /// symbolically inferred generic call loses its <c>!</c>. Both reach the
+    /// door only through <see cref="MapOpenSignatureWithoutDeclarationMerge"/>,
+    /// the one suppressed member, so the gap stays one call wide.
+    /// </para>
     /// </summary>
     /// <param name="closed">The closed generic method selected by overload resolution.</param>
     /// <param name="symbolicMethodTypeArgs">Per-MVar symbolic type arguments; entries may be <see langword="null"/>.</param>
@@ -1649,7 +1647,7 @@ internal sealed class MemberLookup
                 var projectedArguments = ImmutableArray.CreateBuilder<TypeSymbol>(openArguments.Length);
                 foreach (var argument in openArguments)
                 {
-                    projectedArguments.Add(MapOpenClrTypeToSymbolic(
+                    projectedArguments.Add(MapOpenSignatureWithoutDeclarationMerge(
                         argument,
                         receiverOpenDef,
                         receiverTypeArgs,
@@ -1668,7 +1666,7 @@ internal sealed class MemberLookup
             }
         }
 
-        var mapped = MapOpenClrTypeToSymbolic(openReturn, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
+        var mapped = MapOpenSignatureWithoutDeclarationMerge(openReturn, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
 
         // ADR-0172: a named-tuple-bearing return shares its CLR backing with
         // the unnamed shape, so the CLR fallback would erase the names — keep
@@ -1742,13 +1740,15 @@ internal sealed class MemberLookup
             return null;
         }
 
-        var mapped = MapOpenClrTypeToSymbolic(openType, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
+        var mapped = MapOpenSignatureWithoutDeclarationMerge(openType, receiverOpenDef, receiverTypeArgs, openMethod, symbolicMethodTypeArgs);
         return TypeSymbol.RequiresSymbolicProjection(mapped) ? mapped : null;
     }
 
     /// <summary>
-    /// ADR-0193 Phase 2: the rest of the same known gap, in one place. The
-    /// symbolic lambda- and delegate-target projections (the binder's
+    /// ADR-0193 Phase 2: the known symbolic-projection gap, in one place.
+    /// <see cref="ResolveCallReturnTypeFromSymbolicTypeArgs"/> and
+    /// <see cref="ResolveByRefParameterPointeeFromSymbolicTypeArgs"/> project
+    /// through here, and so do the symbolic lambda- and delegate-target projections (the binder's
     /// <c>TryBuildSymbolicDelegateTarget*</c> and deferred-lambda paths)
     /// project a delegate-typed signature position through symbolic type
     /// arguments and read the literal's target shape off the result. They
@@ -1777,8 +1777,18 @@ internal sealed class MemberLookup
         ImmutableArray<TypeSymbol> typeArguments,
         MethodInfo? openMethodDefinition = null,
         ImmutableArray<TypeSymbol?> methodTypeArguments = default)
-        => MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
+    {
+        // The one suppression ADR-0193 Phase 2 allows, around the one door
+        // call the phase cannot close. Merging here is blocked on Phase 3: the
+        // symbolic-projection consumers do not peel `PlatformTypeSymbol`, which
+        // is why PR #4362 round 3 (`b0c76053d`) backed the merge out. Phase 4
+        // (issue #4363) adds the merge, attributes this member
+        // `[NullabilityFunnel]` and deletes the pragma. Every caller is pinned
+        // by Adr0193SymbolicProjectionGapCallersTests.
+#pragma warning disable GSA0007
+        return MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
 #pragma warning restore GSA0007
+    }
 
     /// <summary>
     /// Issue #833: build the per-MVar symbolic type-argument vector for an

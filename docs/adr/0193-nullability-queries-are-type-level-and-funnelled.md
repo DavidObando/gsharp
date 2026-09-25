@@ -476,8 +476,9 @@ in the IDE.
      `MemberLookup.MapOpenClrTypeToSymbolic` overloads,
      and `ClrNullability.ReadNullableFlags` / `ClassifyFlag` /
      `ClassifyPosition`. (*Phase 2 correction:* `ImportedTypeSymbol.Get(Type)`
-     and `MemberLookup.MapOpenClrParameterTypeToSymbolic` are doors too;
-     see the Phase 2 implementation note.) A call to any of them is reported unless one of the
+     is a door too. Phase 2 also found a door path this list missed,
+     `MemberLookup.MapOpenClrParameterTypeToSymbolic`, and deleted it rather
+     than listing it; see the Phase 2 implementation note.) A call to any of them is reported unless one of the
      next two points applies. The wrapper factories `NullableTypeSymbol.Get` and
      `PlatformTypeSymbol.Get` are *not* doors in general, because the language
      legitimately wraps types it already has (the `?.` result, a nil arm, a
