@@ -6,6 +6,7 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.ExceptionServices;
 using System.Runtime.Loader;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Symbols.Display;
@@ -308,7 +309,9 @@ public class Issue4443PlatformInferenceTests
             }
             catch (TargetInvocationException invocation) when (invocation.InnerException != null)
             {
-                throw invocation.InnerException;
+                // Keep the program's own stack trace for a failing assertion.
+                ExceptionDispatchInfo.Capture(invocation.InnerException).Throw();
+                throw;
             }
             finally
             {
