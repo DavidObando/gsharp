@@ -56,9 +56,10 @@ partial class P {
     [Fact]
     public void BacktrackingLoopRunner_BuildsAgainstTheReferencePack_WithNoGS0612()
     {
-        string generated = this.Generate();
-        Assert.Contains("StackPush(&base.runstack", generated, StringComparison.Ordinal);
-        Assert.Contains("@SuppressDiagnostic(\"GS0612\")", generated, StringComparison.Ordinal);
+        List<(string HintName, string Source)> generated = this.Generate();
+        string helpers = string.Concat(generated.Select(file => file.Source));
+        Assert.Contains("StackPush(&base.runstack", helpers, StringComparison.Ordinal);
+        Assert.Contains("@SuppressDiagnostic(\"GS0612\")", helpers, StringComparison.Ordinal);
 
         // Nothing is left for a warnings-as-errors build to promote.
         IReadOnlyList<Diagnostic> diagnostics = CompileAgainstReferencePack(generated);
@@ -70,20 +71,23 @@ partial class P {
     {
         // Anti-vacuity: the reference pack really does annotate runstack, so
         // the suppression above is what removes the warning.
-        string generated = this.Generate().Replace("@SuppressDiagnostic(\"GS0612\") ", string.Empty, StringComparison.Ordinal);
-        Assert.DoesNotContain("@SuppressDiagnostic(\"GS0612\")", generated, StringComparison.Ordinal);
+        List<(string HintName, string Source)> generated = this.Generate()
+            .Select(file => (file.HintName, file.Source.Replace("@SuppressDiagnostic(\"GS0612\") ", string.Empty, StringComparison.Ordinal)))
+            .ToList();
+        Assert.DoesNotContain(generated, file => file.Source.Contains("@SuppressDiagnostic(\"GS0612\")", StringComparison.Ordinal));
 
         IReadOnlyList<Diagnostic> diagnostics = CompileAgainstReferencePack(generated);
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.IsError);
         Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0612");
     }
 
-    private static IReadOnlyList<Diagnostic> CompileAgainstReferencePack(string generated)
+    private static IReadOnlyList<Diagnostic> CompileAgainstReferencePack(List<(string HintName, string Source)> generated)
     {
+        var trees = new List<GsSyntaxTree> { GsSyntaxTree.Parse(SourceText.From(UserSource, "User.gs")) };
+        trees.AddRange(generated.Select(file => GsSyntaxTree.Parse(SourceText.From(file.Source, file.HintName + ".gs"))));
         var combined = new Compilation(
             ReferenceResolver.WithReferences(RefPackAssemblies()),
-            GsSyntaxTree.Parse(SourceText.From(UserSource, "User.gs")),
-            GsSyntaxTree.Parse(SourceText.From(generated, "Generated.g.gs")))
+            trees.ToArray())
         {
             IsLibrary = true,
         };
@@ -112,7 +116,7 @@ partial class P {
         return Directory.EnumerateFiles(refDir, "*.dll");
     }
 
-    private string Generate()
+    private List<(string HintName, string Source)> Generate()
     {
         var user = new Compilation(GsSyntaxTree.Parse(SourceText.From(UserSource, "User.gs")));
         GeneratorHostResult result = GeneratorHostRunner.RunFromAnalyzerPaths(
@@ -122,9 +126,15 @@ partial class P {
 
         Assert.Empty(result.Failures);
         Assert.Empty(result.GeneratorDiagnostics);
-        (string hintName, string generated) = Assert.Single(result.GeneratedGsFiles);
-        this.output.WriteLine("// " + hintName);
-        this.output.WriteLine(generated);
-        return generated;
+        Assert.NotEmpty(result.GeneratedGsFiles);
+        var files = new List<(string HintName, string Source)>();
+        foreach ((string hintName, string source) in result.GeneratedGsFiles)
+        {
+            this.output.WriteLine("// " + hintName);
+            this.output.WriteLine(source);
+            files.Add((hintName, source));
+        }
+
+        return files;
     }
 }
