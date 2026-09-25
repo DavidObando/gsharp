@@ -1545,7 +1545,8 @@ public sealed partial class CSharpToGSharpTranslator
             // `[]string`, while `File.ReadAllLines(path)!!` does (the
             // netstandard2.0 Gsharp.NET.Sdk, #4449). Only a value whose type
             // has no nested reference position is left bare.
-            if (HasNestedReferencePosition(this.context.GetTypeInfo(expression).Type))
+            ITypeSymbol type = this.context.GetTypeInfo(expression).Type;
+            if (HasNestedReferencePosition(type))
             {
                 return false;
             }
@@ -1553,7 +1554,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (expression is ElementAccessExpressionSyntax elementAccess
                 && elementAccess.Expression is not ConditionalAccessExpressionSyntax
                 && this.IsFrozenObliviousImportMember(this.context.GetSymbolInfo(elementAccess.Expression).Symbol)
-                && this.context.GetTypeInfo(expression).Type is { IsReferenceType: true } elementType
+                && type is { IsReferenceType: true } elementType
                 && elementType.NullableAnnotation == NullableAnnotation.None)
             {
                 return true;

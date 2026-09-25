@@ -152,7 +152,8 @@ internal static class NullForgivenessTelemetry
             or System.Security.SecurityException)
         {
             System.Console.Error.WriteLine(
-                "cs2gs: could not write " + DumpPathVariable + " to '" + DumpPath + "': " + exception.Message);
+                "cs2gs: could not write the null-forgiveness telemetry snapshot to '" + DumpPath
+                + "' (from " + DumpPathVariable + "): " + exception.Message);
         }
     }
 }
