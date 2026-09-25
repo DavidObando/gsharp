@@ -116,6 +116,8 @@ namespace Demo
     [Fact]
     public void RefConstructorInitializerArgument_DropsTheAssertion()
     {
+        // Constructor-initializer arguments take the null-seam path
+        // (TranslateNullSeamArgument), not TranslateArgumentValue.
         string printed = TranslateUnit(@"
 #nullable enable
 namespace Demo
@@ -138,6 +140,51 @@ namespace Demo
 
         Assert.DoesNotContain("!!", printed, StringComparison.Ordinal);
         Assert.Contains(": base(&", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void OnlyTheOutermostAssertionIsDropped()
+    {
+        // `Next!` guards a real dereference on the way to the variable, so it
+        // stays `Next!!`; only the assertion on the variable itself goes.
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Node
+    {
+        public Node? Next;
+        public int[]? Items;
+    }
+
+    public static class C
+    {
+        private static void Fill(ref int[] items) => items = new int[1];
+
+        public static void Run(Node holder)
+        {
+            Fill(ref holder.Next!.Items!);
+            Fill(ref (holder.Next!.Items!));
+        }
+    }
+}");
+
+        Assert.Equal(2, CountOccurrences(printed, "holder.Next!!.Items"));
+        Assert.DoesNotContain("Items!!", printed, StringComparison.Ordinal);
+        Assert.Contains("Fill(&holder.Next!!.Items)", printed, StringComparison.Ordinal);
+    }
+
+    private static int CountOccurrences(string haystack, string needle)
+    {
+        int count = 0;
+        for (int index = haystack.IndexOf(needle, StringComparison.Ordinal);
+            index >= 0;
+            index = haystack.IndexOf(needle, index + needle.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
     }
 
     private static string TranslateUnit(string source)
