@@ -41,6 +41,8 @@ public sealed class Issue4425ImportedNullableTypeParameterInferenceTests
 
             public static T Identity<T>(T value) => value;
 
+            public static T IdentityDefault<T>(T value = default) => value;
+
             public static T Val<T>(T? value) where T : struct => value ?? default;
         }
         """;
@@ -124,6 +126,28 @@ public sealed class Issue4425ImportedNullableTypeParameterInferenceTests
         var narrowed = Compile(
             """
             func Run(maybe string?) string -> Inv.Identity(maybe)
+            """);
+        Assert.False(narrowed.Success, "T := string? must not be narrowed to string");
+    }
+
+    /// <summary>
+    /// The same control with an optional parameter: <c>T value = default</c>
+    /// declares an unannotated slot, even though the imported parameter reads
+    /// as nullable because of its <c>null</c> default. Inference reads the
+    /// declaration, so a <c>string?</c> argument still infers
+    /// <c>T := string?</c>.
+    /// </summary>
+    [Fact]
+    public void Imported_UnannotatedOptionalSlot_NullableReferenceArgument_StaysNullable()
+    {
+        AssertCompiles(
+            """
+            func Run(maybe string?) string? -> Inv.IdentityDefault(maybe)
+            """);
+
+        var narrowed = Compile(
+            """
+            func Run(maybe string?) string -> Inv.IdentityDefault(maybe)
             """);
         Assert.False(narrowed.Success, "T := string? must not be narrowed to string");
     }

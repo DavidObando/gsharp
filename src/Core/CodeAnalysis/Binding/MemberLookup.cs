@@ -7269,10 +7269,11 @@ internal sealed class MemberLookup
             return argument;
         }
 
-        var declaredState = ClrNullability.GetParameterTypeSymbol(openParameter) is NullableTypeSymbol
-            ? ClrNullabilityState.Annotated
-            : ClrNullabilityState.NotAnnotated;
-        return NullabilityImportRule.InferOpenSlotArgument(argument, declaredState);
+        // The slot as DECLARED: GetParameterTypeSymbol also widens a parameter
+        // with a null default, and `T value = default` must not strip `?`.
+        return NullabilityImportRule.InferOpenSlotArgument(
+            argument,
+            ClrNullability.GetParameterDeclaredState(openParameter));
     }
 
     private static TypeSymbol?[] FixSymbolicMethodTypeArguments(
