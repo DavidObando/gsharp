@@ -95,8 +95,8 @@ public class Issue710NullConditionalIndexingEmitTests
 
             func main() {
                 var d Dictionary[string, int32]? = Dictionary[string, int32]()
-                d.Add("a", 100)
-                d.Add("b", 200)
+                d!!.Add("a", 100)
+                d!!.Add("b", 200)
                 var v = d?["a"]
                 Console.WriteLine(v)
             }
@@ -120,7 +120,7 @@ public class Issue710NullConditionalIndexingEmitTests
 
             func main() {
                 var d Dictionary[string, string]? = Dictionary[string, string]()
-                d.Add("hi", "world")
+                d!!.Add("hi", "world")
                 Console.WriteLine(d?["hi"])
 
                 var d2 Dictionary[string, string]? = nil

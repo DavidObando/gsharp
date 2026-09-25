@@ -287,18 +287,22 @@ public class Issue3034NullableNarrowingDiagnosticTests
     }
 
     [Fact]
-    public void ArrayNullableReceiver_KeepsExistingSuccessfulBinding()
+    public void ArrayNullableReceiver_Reports_LikeASourceDeclaredOne()
     {
-        // A nilable SLICE (`[]?T`, ADR-0132) reaches a different receiver
-        // path and still binds. That is the same gap for another receiver
-        // shape, tracked as #4458; this pins today's behaviour, not a
-        // guarantee.
-        Assert.Empty(GetDiagnostics("""
+        // Issue #4287, the other half this test used to pin as "existing
+        // successful binding": a nilable SLICE (`[]?T`, ADR-0132) is a
+        // `NullableTypeSymbol` over the array too, so an imported instance
+        // method on it now reports the same GS0159.
+        var diagnostic = GetGs0159("""
             func Run() {
                 var values []?int32 = nil
                 values.ToString()
             }
-            """));
+            """);
+
+        Assert.Equal(
+            "Cannot call function ToString because receiver 'values' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
+            diagnostic.Message);
     }
 
     [Fact]
