@@ -3121,7 +3121,7 @@ internal sealed partial class ExpressionBinder
                 {
                     Diagnostics.ReportTypeNotCollectionInitializable(
                         initSyntax.FieldIdentifier.Location,
-                        MemberLookup.GetClrMemberValueTypeSymbol(member).StripTopLevelReferenceNullability());
+                        MemberLookup.GetClrMemberValueTypeSymbol(member).StripToBareShape());
                     BindCollectionElementsForDiagnostics(bracedInit);
                 }
 

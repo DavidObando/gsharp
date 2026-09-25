@@ -975,10 +975,12 @@ something the plan left open:
     new members of that family listed below. Where a caller deliberately wants
     the bare shape (an `object` member called on an erased type parameter, a
     boxing target, a method group's inference signature, a lowered local), it
-    reads through the funnel and then drops the top-level reference nullability
-    with the new `TypeSymbol.StripTopLevelReferenceNullability()`, which is
-    ADR-0193 §2's `StripReferenceNullability(deep: false)`. Phase 3 adds the
-    deep form and folds the existing strip helpers onto it.
+    reads through the funnel and then calls the new
+    `TypeSymbol.StripToBareShape()`. That removes a top-level `?`/`!` and the
+    `NullabilityAnnotatedTypeSymbol` carrier, reproducing the shape the erased
+    read gave. Dropping the carrier also drops the inner flags it holds, which
+    is deliberate for these callers and is why the helper is not named as a
+    top-level strip. Phase 3's `StripReferenceNullability(deep)` replaces it.
   - **The rest now sit inside `[NullabilityFunnel]` members.** There are 46 such
     members, pinned by `Adr0193NullabilityFunnelMembersTests` (Core.Tests):
     - the door bodies, including the escape hatches' own bodies;

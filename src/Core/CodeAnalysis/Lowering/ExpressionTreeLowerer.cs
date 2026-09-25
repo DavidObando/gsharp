@@ -1176,7 +1176,7 @@ internal sealed class ExpressionTreeLowerer : NestedFunctionBodyRewriter
         for (var i = 0; i < arguments.Length; i++)
         {
             var expectedType = i < parameters.Length
-                ? ClrNullability.GetParameterTypeSymbol(parameters[i]).StripTopLevelReferenceNullability()
+                ? ClrNullability.GetParameterTypeSymbol(parameters[i]).StripToBareShape()
                 : null;
             builder.Add(this.TranslateArgument(arguments[i], expectedType, parameterMap));
         }

@@ -780,7 +780,7 @@ public sealed class Lowerer : BoundTreeRewriter
         // CLR type, so no special-casing is needed here beyond using the
         // real return type instead of a hardcoded `ValueTask`.
         var valueTaskBoolClr = moveNextAsync.ReturnType;
-        var valueTaskBoolType = ClrNullability.GetReturnTypeSymbol(moveNextAsync).StripTopLevelReferenceNullability();
+        var valueTaskBoolType = ClrNullability.GetReturnTypeSymbol(moveNextAsync).StripToBareShape();
 
         // GetAsyncEnumerator's arity: either the interface's single optional
         // `CancellationToken` parameter, or the fully duck-typed parameterless
@@ -793,7 +793,7 @@ public sealed class Lowerer : BoundTreeRewriter
         }
         else
         {
-            var paramType = ClrNullability.GetParameterTypeSymbol(getAsyncEnumeratorParams[0]).StripTopLevelReferenceNullability();
+            var paramType = ClrNullability.GetParameterTypeSymbol(getAsyncEnumeratorParams[0]).StripToBareShape();
             getEnumeratorArgs = ImmutableArray.Create<BoundExpression>(new BoundDefaultExpression(null, paramType));
         }
 
@@ -852,14 +852,14 @@ public sealed class Lowerer : BoundTreeRewriter
             enumeratorType = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
                 openGetAsyncEnumerator,
                 patternImp.OpenDefinition,
-                patternImp.TypeArguments).StripTopLevelReferenceNullability();
+                patternImp.TypeArguments).StripToBareShape();
             currentType = openCurrentMember is System.Reflection.PropertyInfo or System.Reflection.FieldInfo
                 ? MemberLookup.GetClrMemberValueTypeSymbol(openCurrentMember, patternImp.OpenDefinition, patternImp.TypeArguments)
                 : valueVariable.Type;
         }
         else
         {
-            enumeratorType = ClrNullability.GetReturnTypeSymbol(getAsyncEnumerator).StripTopLevelReferenceNullability();
+            enumeratorType = ClrNullability.GetReturnTypeSymbol(getAsyncEnumerator).StripToBareShape();
             currentType = GetClrMemberType(currentMember);
         }
 
@@ -914,7 +914,7 @@ public sealed class Lowerer : BoundTreeRewriter
         }
 
         var valueTaskClr = disposeAsync.ReturnType;
-        var valueTaskType = ClrNullability.GetReturnTypeSymbol(disposeAsync).StripTopLevelReferenceNullability();
+        var valueTaskType = ClrNullability.GetReturnTypeSymbol(disposeAsync).StripToBareShape();
         var disposeCall = new BoundImportedInstanceCallExpression(
             null,
             enumeratorExpr,
@@ -1345,7 +1345,7 @@ public sealed class Lowerer : BoundTreeRewriter
                 modifiers: null);
             if (getEnumerator != null)
             {
-                enumeratorType = ClrNullability.GetReturnTypeSymbol(getEnumerator).StripTopLevelReferenceNullability();
+                enumeratorType = ClrNullability.GetReturnTypeSymbol(getEnumerator).StripToBareShape();
                 getEnumeratorCall = new BoundImportedInstanceCallExpression(
                     null,
                     collection,
@@ -1362,7 +1362,7 @@ public sealed class Lowerer : BoundTreeRewriter
             var getEnumerator = MemberLookup.ResolveGetEnumerator(clrType, out _);
             if (getEnumerator != null)
             {
-                enumeratorType = ClrNullability.GetReturnTypeSymbol(getEnumerator).StripTopLevelReferenceNullability();
+                enumeratorType = ClrNullability.GetReturnTypeSymbol(getEnumerator).StripToBareShape();
                 getEnumeratorCall = new BoundImportedInstanceCallExpression(
                     null,
                     collection,
@@ -1644,7 +1644,7 @@ public sealed class Lowerer : BoundTreeRewriter
     /// managed pointer and inserts the load-indirect.
     /// </summary>
     private static TypeSymbol GetClrMemberType(System.Reflection.MemberInfo member)
-        => MemberLookup.GetClrMemberValueTypeSymbol(member).StripTopLevelReferenceNullability();
+        => MemberLookup.GetClrMemberValueTypeSymbol(member).StripToBareShape();
 
     private BoundBlockStatement RewriteProtectedRegionEntries(BoundStatement statement)
     {

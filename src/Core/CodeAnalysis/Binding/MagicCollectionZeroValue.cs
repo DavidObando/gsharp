@@ -292,7 +292,7 @@ internal static class MagicCollectionZeroValue
 
             fieldBuilder.Add(new FieldSymbol(
                 field.Name,
-                ClrNullability.GetFieldTypeSymbol(field).StripTopLevelReferenceNullability(),
+                ClrNullability.GetFieldTypeSymbol(field).StripToBareShape(),
                 field.IsPublic ? Accessibility.Public : Accessibility.Private,
                 isReadOnly: field.IsInitOnly));
             reflectedFields[field.Name] = field;
@@ -499,7 +499,7 @@ internal static class MagicCollectionZeroValue
     {
         var positions = ClrNullability.GetFieldTypeSymbol(field).GetElementPositions();
         return (uint)index < (uint)positions.Length
-            ? positions[index].StripTopLevelReferenceNullability()
+            ? positions[index].StripToBareShape()
             : TypeSymbol.Error;
     }
 }

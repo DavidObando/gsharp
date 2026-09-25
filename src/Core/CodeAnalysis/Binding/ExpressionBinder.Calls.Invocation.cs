@@ -1359,7 +1359,7 @@ internal sealed partial class ExpressionBinder
 
                 // The delegate slot's bare shape: a function literal is never
                 // nil, so the slot's own top-level nullability does not apply.
-                targets[idx] = (fn, ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripTopLevelReferenceNullability());
+                targets[idx] = (fn, ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape());
             }
 
             if (!allMapped)

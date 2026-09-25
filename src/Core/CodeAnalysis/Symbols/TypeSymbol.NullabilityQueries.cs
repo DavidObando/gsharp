@@ -167,18 +167,25 @@ public partial class TypeSymbol
     }
 
     /// <summary>
-    /// ADR-0193 Phase 2: this type with its top-level <em>reference</em>
-    /// nullability removed — a reference <c>?</c>, a platform <c>!</c>, and a
-    /// <see cref="NullabilityAnnotatedTypeSymbol"/> wrapper, repeatedly — and a
-    /// value-type <c>Nullable&lt;V&gt;</c> left alone. For the few callers
-    /// that read a signature position through the funnel but deliberately
-    /// want its bare shape (an object member called on an erased type
-    /// parameter, a boxing target). This is ADR-0193 §2's
-    /// <c>StripReferenceNullability(deep: false)</c>; Phase 3 adds the deep
-    /// form and folds the existing strip helpers onto it.
+    /// ADR-0193 Phase 2: the shape a caller that deliberately ignores
+    /// reference nullability used to get from <see cref="FromClrType"/>. It
+    /// removes a top-level reference <c>?</c> and platform <c>!</c>, and the
+    /// <see cref="NullabilityAnnotatedTypeSymbol"/> carrier, repeatedly, and
+    /// leaves a value-type <c>Nullable&lt;V&gt;</c> alone.
+    /// <para>
+    /// Dropping the carrier also drops the inner-position flags it holds
+    /// (<c>List[string?]?</c> becomes <c>List[string]</c>), while
+    /// inner positions held as nested wrappers survive. That is deliberate
+    /// for the few Phase 2 callers: each read a signature position erased
+    /// before, and wants that exact shape (an <c>object</c> member called on an
+    /// erased type parameter, a boxing target, a method group's inference
+    /// signature, a lowered local). Nothing that wants nullability should
+    /// call this. Phase 3's <c>StripReferenceNullability(deep)</c> replaces it
+    /// with a representation-independent answer.
+    /// </para>
     /// </summary>
     /// <returns>The bare type.</returns>
-    internal TypeSymbol StripTopLevelReferenceNullability()
+    internal TypeSymbol StripToBareShape()
     {
         var type = this;
         while (true)

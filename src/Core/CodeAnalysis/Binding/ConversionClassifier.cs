@@ -3933,7 +3933,7 @@ internal sealed class ConversionClassifier
             // bare reference type, so the value is boxed rather than lifted.
             // Read the position through the funnel and drop its top-level
             // reference nullability, rather than reading it erased.
-            return ClrNullability.GetParameterTypeSymbol(parameter).StripTopLevelReferenceNullability();
+            return ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
         }
 
         return ClrNullability.GetParameterTypeSymbol(parameter);
@@ -5004,11 +5004,11 @@ internal sealed class ConversionClassifier
             var mappedParameter = MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
                 parameters[0],
                 openDefinition,
-                ownerTypeArguments).StripTopLevelReferenceNullability();
+                ownerTypeArguments).StripToBareShape();
             var mappedReturn = MemberLookup.GetClrOpenMethodReturnTypeSymbol(
                 candidate,
                 openDefinition,
-                ownerTypeArguments).StripTopLevelReferenceNullability();
+                ownerTypeArguments).StripToBareShape();
 
             // Both sides must match exactly. A mapped projection is a fresh
             // ImportedTypeSymbol that never reference-equals the declared

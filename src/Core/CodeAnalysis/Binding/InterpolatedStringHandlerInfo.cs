@@ -656,13 +656,13 @@ public sealed class InterpolatedStringHandlerInfo
     /// </summary>
     private static TypeSymbol ReadHandlerType(ParameterInfo parameter, System.Type handler)
     {
-        var read = ClrNullability.GetParameterTypeSymbol(parameter).StripTopLevelReferenceNullability();
+        var read = ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
         if (ClrTypeUtilities.AreSame(read.ClrType, handler))
         {
             return read;
         }
 
         var elements = read.GetElementPositions();
-        return elements.Length == 1 ? elements[0].StripTopLevelReferenceNullability() : read;
+        return elements.Length == 1 ? elements[0].StripToBareShape() : read;
     }
 }

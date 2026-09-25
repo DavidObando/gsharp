@@ -1663,7 +1663,7 @@ internal sealed partial class DeclarationBinder
     {
         var positions = ClrNullability.GetParameterTypeSymbol(paramsParameter).GetElementPositions();
         return positions.Length == 1
-            ? positions[0].StripTopLevelReferenceNullability()
+            ? positions[0].StripToBareShape()
             : TypeSymbol.Object;
     }
 }

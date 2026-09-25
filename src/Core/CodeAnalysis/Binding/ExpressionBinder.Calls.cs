@@ -2431,7 +2431,7 @@ internal sealed partial class ExpressionBinder
 
             // The parameter's bare shape: this only diagnoses a failed
             // overload resolution, which compared erased shapes.
-            var expectedType = ClrNullability.GetParameterTypeSymbol(parameter).StripTopLevelReferenceNullability();
+            var expectedType = ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
             var actualType = boundArguments[index] is BoundAddressOfExpression address
                 ? address.Operand.Type
                 : boundArguments[index].Type;
@@ -2905,7 +2905,7 @@ internal sealed partial class ExpressionBinder
             }
 
             // The delegate slot's bare shape: a function literal is never nil.
-            var nominalCandidate = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripTopLevelReferenceNullability();
+            var nominalCandidate = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape();
             if (nominalTargetsAgree)
             {
                 if (nominalTarget == null)

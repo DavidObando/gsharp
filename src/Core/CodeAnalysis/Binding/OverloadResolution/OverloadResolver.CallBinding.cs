@@ -152,12 +152,12 @@ internal sealed partial class OverloadResolver
             for (var i = 0; i < parameters.Length; i++)
             {
                 parameters[i] = ClrNullability.GetParameterTypeSymbol(methodParameters[i + parameterOffset])
-                    .StripTopLevelReferenceNullability();
+                    .StripToBareShape();
             }
 
             returnType = method.ReturnType.IsSameAs(typeof(void))
                 ? TypeSymbol.Void
-                : ClrNullability.GetReturnTypeSymbol(method).StripTopLevelReferenceNullability();
+                : ClrNullability.GetReturnTypeSymbol(method).StripToBareShape();
             return true;
         }
 
@@ -357,7 +357,7 @@ internal sealed partial class OverloadResolver
 
         // ADR-0193 Phase 2: read through the funnel and taken bare, as the
         // method-group signature above is.
-        return ClrNullability.GetReturnTypeSymbol(best).StripTopLevelReferenceNullability();
+        return ClrNullability.GetReturnTypeSymbol(best).StripToBareShape();
     }
 
     private bool TryResolveImplicitInheritedTypeArguments(

@@ -2517,7 +2517,7 @@ internal sealed partial class StatementBinder
                 arguments.Add(conversions.BindConversion(
                     location,
                     receiver,
-                    ClrNullability.GetParameterTypeSymbol(parameters[0]).StripTopLevelReferenceNullability()));
+                    ClrNullability.GetParameterTypeSymbol(parameters[0]).StripToBareShape()));
                 refKinds.Add(RefKind.None);
             }
 

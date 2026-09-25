@@ -4450,7 +4450,7 @@ internal sealed partial class ExpressionBinder
         // annotation on `object.ToString()` must not leak a spurious nullable
         // return into the generic context (which would reject the common
         // `func Show[T struct]() string -> v.ToString()` shape with GS0156).
-        var returnType = ClrNullability.GetReturnTypeSymbol(method).StripTopLevelReferenceNullability();
+        var returnType = ClrNullability.GetReturnTypeSymbol(method).StripToBareShape();
 
         // Unlike the CLR-interface path, the parameter of a matched object
         // member (e.g. Equals(object)) is a real System.Object, so a `T`-typed
@@ -4560,7 +4560,7 @@ internal sealed partial class ExpressionBinder
 
         // Read nullable-obliviously, as the object-member path above does: the
         // receiver is an erased type parameter.
-        var returnType = ClrNullability.GetReturnTypeSymbol(method).StripTopLevelReferenceNullability();
+        var returnType = ClrNullability.GetReturnTypeSymbol(method).StripToBareShape();
 
         var mapping = resolution.ParameterMapping;
         var convertedArgs = conversions.BindClrParameterConversions(arguments, parameters, ce, mapping, method: method, receiverType: receiver.Type);
