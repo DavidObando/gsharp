@@ -264,22 +264,11 @@ internal sealed partial class ExpressionBinder
             return true;
         }
 
+        // Issue #4453: the receiver half is the same C# CS1540 rule source
+        // members follow, asked through the one shared helper.
         var enclosing = (function?.ReceiverType ?? GetEffectiveThisParameter()?.Type) as StructSymbol;
-        if (enclosing == null || receiver.Type is not StructSymbol receiverClass)
-        {
-            return false;
-        }
-
-        var enclosingDefinition = enclosing.Definition ?? enclosing;
-        foreach (var level in receiverClass.GetHierarchy())
-        {
-            if (ReferenceEquals(level.Definition ?? level, enclosingDefinition))
-            {
-                return true;
-            }
-        }
-
-        return false;
+        return enclosing != null
+            && AccessibilityChecker.IsReceiverWithinClass(receiver.Type, enclosing);
     }
 
     private static bool IsSameOrDerivedClrType(Type type, Type ancestor)

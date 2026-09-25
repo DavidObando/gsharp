@@ -634,7 +634,13 @@ d2.Fire()
         }
     }
 
-    private static void AssertMatchesCSharp(string name, string source, string csSource, string[] expected)
+    /// <summary>
+    /// Compiles <paramref name="source"/> with gsc, verifies it with ILVerify
+    /// and runs it, runs <paramref name="csSource"/> compiled by Roslyn, and
+    /// asserts both print <paramref name="expected"/>. Shared with
+    /// <see cref="ProtectedReceiverAccessEmitTests"/>.
+    /// </summary>
+    internal static void AssertMatchesCSharp(string name, string source, string csSource, string[] expected)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_event_mg_").FullName;
         try

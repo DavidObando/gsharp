@@ -1357,7 +1357,7 @@ nesting depth.
 | GS0372 | Error | An init-only property is assigned outside a constructor, object initializer, or `init` accessor for the same instance.  | |
 | GS0373 | Error | A property declares both `set` and `init` accessors.  | |
 | GS0374 | Error | A static property declares an `init` accessor.  | |
-| GS0379 | Error | `'{Type}.{member}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{Type}' and types derived from it.` |
+| GS0379 | Error | `'{Type}.{member}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{Type}' and types derived from it, and an instance member only through a receiver of the accessing type or a type derived from it.` |
 | GS0380 | Error | `'protected' is only allowed on members of an 'open class' (a type that can be inherited). Mark the enclosing class 'open', or use a different accessibility.` |
 | GS0381 | Error | A class participates in a direct or transitive inheritance cycle.  | |
 | GS0383 | Error | `'base' is not valid here: '<T>' must be an instance member of a class that has a base class to use 'base.Member(...)'.` |

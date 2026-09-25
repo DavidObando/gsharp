@@ -2445,7 +2445,7 @@ public sealed class Binder
                             }
 
                             var lowered = Lowerer.Lower(ctorBody, structSym);
-                            AnalyzeFunctionBody(lowered, ctor.Function, ctorBinder.Diagnostics);
+                            AnalyzeFunctionBody(ctorBody, lowered, ctor.Function, ctorBinder.Diagnostics);
                             return new BodyBindResult(lowered, ctorBinder.Diagnostics.ToImmutableArray());
                         });
                     });
@@ -2972,7 +2972,7 @@ public sealed class Binder
                         binder.Diagnostics.ReportAllPathsMustReturn(declaration.Identifier.Location);
                     }
 
-                    AnalyzeFunctionBody(lowered, function, binder.Diagnostics);
+                    AnalyzeFunctionBody(body, lowered, function, binder.Diagnostics);
 
                     return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
                 });
@@ -3026,7 +3026,7 @@ public sealed class Binder
                         binder.Diagnostics.ReportAllPathsMustReturn(bodySyntax.OpenBraceToken.Location);
                     }
 
-                    AnalyzeFunctionBody(lowered, accessor, binder.Diagnostics);
+                    AnalyzeFunctionBody(body, lowered, accessor, binder.Diagnostics);
 
                     return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
                 });
@@ -3086,7 +3086,7 @@ public sealed class Binder
                         binder.Diagnostics.ReportAllPathsMustReturn(allPathsReturnLocation.Value);
                     }
 
-                    AnalyzeFunctionBody(lowered, member, binder.Diagnostics);
+                    AnalyzeFunctionBody(body, lowered, member, binder.Diagnostics);
 
                     return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
                 });
@@ -3138,7 +3138,7 @@ public sealed class Binder
                         binder.Diagnostics.ReportAllPathsMustReturn(structMethodDeclaration.Identifier.Location);
                     }
 
-                    AnalyzeFunctionBody(lowered, method, binder.Diagnostics);
+                    AnalyzeFunctionBody(body, lowered, method, binder.Diagnostics);
 
                     return new BodyBindResult(lowered, binder.Diagnostics.ToImmutableArray());
                 });
@@ -3148,10 +3148,14 @@ public sealed class Binder
     }
 
     private static void AnalyzeFunctionBody(
+        BoundStatement bound,
         BoundBlockStatement lowered,
         FunctionSymbol function,
         DiagnosticBag diagnostics)
     {
+        // Issue #4453: the protected-receiver rule reads the bound body, where
+        // every receiver still has the static type the source gave it.
+        ProtectedReceiverDiagnostics.Report(bound, function, diagnostics);
         var body = lowered.PreEmitAnalysisBody ?? lowered;
         MethodGroupDiagnostics.ReportUnresolved(body, diagnostics);
         DefiniteAssignmentAnalyzer.Analyze(body, function, diagnostics);
@@ -3225,6 +3229,7 @@ public sealed class Binder
 
             binder.statements.FinalizeUserLabels();
             var combined = new BoundBlockStatement(null, boundBlocks.ToImmutable());
+            ProtectedReceiverDiagnostics.Report(combined, context, binder.Diagnostics);
             var lowered = Lowerer.Lower(combined, structSym);
             MethodGroupDiagnostics.ReportUnresolved(lowered, binder.Diagnostics);
             diagnostics.AddRange(binder.Diagnostics.ToImmutableArray());
@@ -3478,7 +3483,7 @@ public sealed class Binder
                 child.Diagnostics.ReportAllPathsMustReturn(method.Declaration.Identifier.Location);
             }
 
-            AnalyzeFunctionBody(lowered, method, child.Diagnostics);
+            AnalyzeFunctionBody(body, lowered, method, child.Diagnostics);
             Diagnostics.AddRange(child.Diagnostics.ToImmutableArray());
             methodBodies[method] = lowered;
         }

@@ -848,6 +848,13 @@ inaccessible from unrelated external code. It mirrors C# `protected`:
   derives — directly or transitively — from it, when accessed from the derived
   class's own body. Access from outside that inheritance chain reports
   **GS0379** (`'<member>' is inaccessible due to its protection level`).
+- As in C# (CS1540), a derived class reaches a `protected` **instance** member
+  only through a receiver whose static type is that derived class or a class
+  derived from it: `this`, `base`, a bare name, or a variable of the derived
+  type. A receiver typed as the base class or as a sibling subclass may be an
+  instance of some other subclass, so `s.f` with `s Source` inside
+  `class Derived : Source` reports **GS0379**. Static `protected` members have
+  no receiver and are exempt; the declaring class itself may use any receiver.
 - Because protection is only meaningful where a derived type can exist,
   `protected` is permitted **only on members of an `open class`** (the only
   inheritable G# types). Applying it to a member of a non-`open`/sealed class, a
