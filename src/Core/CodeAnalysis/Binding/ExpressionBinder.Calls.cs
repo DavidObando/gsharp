@@ -2498,7 +2498,7 @@ internal sealed partial class ExpressionBinder
                     parameterIndex,
                     openGenericDefinition,
                     symbolicTypeArguments)
-                    ?? ClrNullability.GetParameterTypeSymbol(parameters[parameterIndex]);
+                    ?? ClrNullability.GetParameterTypeSymbol(parameters[parameterIndex]).StripToBareShape();
                 if (expectedType != null
                     && !DeclarationBinder.TypeSignaturesEquivalent(expectedType, candidateType))
                 {
@@ -2599,7 +2599,7 @@ internal sealed partial class ExpressionBinder
                 matchingParameterIndex,
                 openGenericDefinition,
                 symbolicTypeArguments)
-                ?? ClrNullability.GetParameterTypeSymbol(parameter);
+                ?? ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
             var resolvedParameter = new ParameterSymbol(
                 parameter.Name ?? "value",
                 pointeeType,
@@ -2689,7 +2689,7 @@ internal sealed partial class ExpressionBinder
                 parameterIndex,
                 openGenericDefinition,
                 symbolicTypeArguments)
-                ?? ClrNullability.GetParameterTypeSymbol(parameter);
+                ?? ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
             var syntheticParameter = new ParameterSymbol(
                 parameter.Name ?? "value",
                 pointeeType,

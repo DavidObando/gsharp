@@ -1114,8 +1114,14 @@ something the plan left open:
   - a static call on a symbolic class receiver;
   - an indexer whose element only mentions the receiver's parameter;
   - the structural-projection plan's CLR slots;
-  - a CLR operator's parameter and return types;
-  - an inline `out var` over a closed method.
+  - a CLR operator's parameter and return types.
+
+  An inline `out var`'s fallback read goes through the funnel too, but keeps
+  its bare shape. Giving the local the parameter's declared `?`
+  (`[NotNullWhen(true)] out Uri? result`) would need `out var` flow
+  narrowing first. The cs2gs Oahu gate showed this: a migrated
+  `if !Uri.TryCreate(s, k, out var u) { continue }; return u` stopped
+  compiling. That work is recorded on #4363.
 
   The full `Core.Tests` and `Compiler.Tests` runs surfaced three consequences:
   - The structural-projection diagnostics now name the slot's declared type.

@@ -78,6 +78,37 @@ public sealed class Adr0193FunnelMergeTests
             """);
     }
 
+    [Fact]
+    public void InlineOutVarKeepsItsBareShape()
+    {
+        // The cs2gs Oahu gate's shape: the out parameter is declared
+        // `[NotNullWhen(true)] out Uri? result`, and the result is used after
+        // a `bool` guard that does not narrow. The inline local keeps the bare
+        // shape it had before Phase 2 (#4363 tracks reading the declared `?`
+        // once `out var` narrowing exists).
+        var result = EmittedOracle.Evaluate(
+            new[]
+            {
+                """
+                import System
+
+                func Parse(text string) Uri {
+                    while true {
+                        let ok = Uri.TryCreate(text, UriKind.Absolute, out var parsed)
+                        if !ok {
+                            continue
+                        }
+
+                        return parsed
+                    }
+                }
+                """,
+            },
+            new EmittedOracleOptions { IsLibrary = true });
+
+        Assert.Empty(result.Diagnostics);
+    }
+
     private static void AssertNullableStringRejected(string source)
     {
         using var fixture = new CSharpFixture(Contract);

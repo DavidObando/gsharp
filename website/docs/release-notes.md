@@ -165,7 +165,6 @@ Before moving an application to a different compiler version, pin the intended S
   - a static member reached through a generic receiver;
   - a static call on a generic class;
   - the operands and result of an imported CLR operator;
-  - an inline `out var` bound against an imported method;
   - structural projection into an imported CLR type.
 
   **Remedy** for code that now reports a diagnostic here: the value really can be nil, so narrow it, assert it with `!!`, or give the destination a `?` type. An oblivious position (from an assembly that states no nullability) now reads as the platform type `T!` on these paths, as it already did elsewhere. A new internal analyzer, `GSA0007`, keeps compiler code from converting a member's type without reading its nullability.

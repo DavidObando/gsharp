@@ -2513,10 +2513,17 @@ internal sealed partial class ExpressionBinder
             // `object` and member access on it (`found.V`) would fail (GS0158).
             // Recover the symbolic pointee type from the receiver's symbolic
             // type arguments (mirroring `MemberLookup.GetClrReceiverProjectedReturnTypeSymbol`).
+            //
+            // ADR-0193 Phase 2: the fallback reads through the funnel but keeps
+            // the bare shape the local always had. Giving it the parameter's
+            // declared `?` (`[NotNullWhen(true)] out Uri? result`) is right in
+            // principle but needs `out var` flow narrowing first; migrated code
+            // such as `if !Uri.TryCreate(s, k, out var u) { continue }; return u`
+            // stops compiling without it. Tracked on #4363.
             var pointeeType = MemberLookup.GetClrReceiverProjectedParameterPointeeTypeSymbol(receiverType, resolvedMethod, paramIndex)
                 ?? ResolveMethodGenericParameterPointeeType(resolvedMethod, paramIndex, typeArgSymbols)
                 ?? MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs(resolvedMethod, paramIndex, symbolicMethodTypeArgs, receiverType)
-                ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]);
+                ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape();
             var syntheticParameter = new ParameterSymbol(
                 parameters[paramIndex].Name ?? "value",
                 pointeeType,
