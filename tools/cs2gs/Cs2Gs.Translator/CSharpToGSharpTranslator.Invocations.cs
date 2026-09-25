@@ -1852,8 +1852,8 @@ public sealed partial class CSharpToGSharpTranslator
             // Imported CLR targets keep the plain value too.
             if (refKind == SyntaxKind.InKeyword || this.TargetsSourceDeclaredInParameter(argument))
             {
-                GExpression translated = this.TranslateExpression(argument.Expression);
-                GExpression translatedIn = WithoutNonNullAssertion(translated);
+                GExpression translatedValue = this.TranslateExpression(argument.Expression);
+                GExpression translatedIn = WithoutNonNullAssertion(translatedValue);
                 if (translatedIn is IdentifierExpression inIdentifier
                     && (refKind == SyntaxKind.InKeyword || this.PassesInArgumentWithoutConversion(argument)))
                 {
@@ -1865,7 +1865,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // needs the address form.
                 return refKind == SyntaxKind.InKeyword
                     ? AddressOf(translatedIn)
-                    : translated;
+                    : translatedValue;
             }
 
             // A declared-nullable reference argument that C# flow analysis has

@@ -3085,21 +3085,13 @@ internal sealed class ConversionClassifier
         TypeSymbol? receiverType,
         ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs)
     {
-        var substituted = TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType, symbolicMethodTypeArgs)
+        // Each of these readers already peels the by-ref slot and returns the
+        // (nullability-annotated) pointee — `in string?` stays `string?`, and
+        // an `in int*` pointee stays a pointer — so none is re-peeled here.
+        return TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType, symbolicMethodTypeArgs)
             ?? TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs)
-            ?? TryRecoverReceiverTypeParameterSlot(method, paramIndex, receiverType);
-        if (substituted != null)
-        {
-            return TypeSymbol.TryGetPointeeType(substituted, out var substitutedPointee) ? substitutedPointee : substituted;
-        }
-
-        var declared = ClrNullability.GetParameterTypeSymbol(parameter);
-        if (TypeSymbol.TryGetPointeeType(declared, out var pointee))
-        {
-            return pointee;
-        }
-
-        return TypeSymbol.FromClrType(Invariant.Required(parameter.ParameterType.GetElementType(), "a by-ref parameter has an element type"));
+            ?? TryRecoverReceiverTypeParameterSlot(method, paramIndex, receiverType)
+            ?? ClrNullability.GetParameterTypeSymbol(parameter);
     }
 
     /// <summary>

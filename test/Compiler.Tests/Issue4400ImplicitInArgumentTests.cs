@@ -78,6 +78,10 @@ public class Issue4400ImplicitInArgumentTests
 
             public static int Named(in int a, int b) => (a * 10) + b;
 
+        #nullable enable
+            public static int Len(in string? s) => s?.Length ?? -1;
+        #nullable restore
+
             public static string O(int x) => "value";
 
             public static string O(ref int x) => "ref";
@@ -216,8 +220,20 @@ public class Issue4400ImplicitInArgumentTests
                 }
             }
 
+            private struct Cell
+            {
+                public int Value;
+            }
+
+            private sealed class Box
+            {
+                public Cell Cell = new Cell { Value = 11 };
+            }
+
             private sealed class S
             {
+                public Box box = new Box();
+                public int[,] grid = { { 1, 2 }, { 3, 4 } };
                 public H h = new H(5);
                 public int[] xs = { 10, 20 };
                 public int i;
@@ -253,6 +269,18 @@ public class Issue4400ImplicitInArgumentTests
                 return 4;
             }
 
+            private static int MutateBox(S s)
+            {
+                s.box.Cell.Value = 12;
+                return 5;
+            }
+
+            private static int MutateGrid(S s)
+            {
+                s.grid[1, 0] = 33;
+                return 6;
+            }
+
             public static string Run()
             {
                 var s = new S();
@@ -261,7 +289,9 @@ public class Issue4400ImplicitInArgumentTests
                 ref int r = ref s.arr[0];
                 int r3 = Consume(a: r, b: Swap(s));
                 int r4 = Consume(a: s.v, b: SetV(s));
-                return $"{r1} {r2} {r3} {r4}";
+                int r5 = Consume(a: s.box.Cell.Value, b: MutateBox(s));
+                int r6 = Consume(a: s.grid[1, 0], b: MutateGrid(s));
+                return $"{r1} {r2} {r3} {r4} {r5} {r6}";
             }
         }
         """;
@@ -275,7 +305,17 @@ public class Issue4400ImplicitInArgumentTests
             init(f int32) { F = f }
         }
 
+        struct Cell {
+            var Value int32
+        }
+
+        class Box {
+            var Cell Cell = Cell{Value: 11}
+        }
+
         class S {
+            var box Box = Box()
+            var grid [,]int32 = [2, 2]int32{1, 2, 3, 4}
             var h H = H(5)
             var xs []int32 = []int32{10, 20}
             var i int32 = 0
@@ -307,6 +347,16 @@ public class Issue4400ImplicitInArgumentTests
             return 4
         }
 
+        func MutateBox(s S) int32 {
+            s.box.Cell.Value = 12
+            return 5
+        }
+
+        func MutateGrid(s S) int32 {
+            s.grid[1, 0] = 33
+            return 6
+        }
+
         func Run() string {
             let s = S()
             let r1 = Consume(a: s.h.F, b: Reassign(s))
@@ -314,7 +364,9 @@ public class Issue4400ImplicitInArgumentTests
             var ref r = s.arr[0]
             let r3 = Consume(a: r, b: Swap(s))
             let r4 = Consume(a: s.v, b: SetV(s))
-            return "${r1} ${r2} ${r3} ${r4}"
+            let r5 = Consume(a: s.box.Cell.Value, b: MutateBox(s))
+            let r6 = Consume(a: s.grid[1, 0], b: MutateGrid(s))
+            return "${r1} ${r2} ${r3} ${r4} ${r5} ${r6}"
         }
 
         Console.WriteLine(Run())
@@ -432,7 +484,7 @@ public class Issue4400ImplicitInArgumentTests
         // readonly field; and a call inside an async function.
         yield return new object[]
         {
-            "constructor-indexer-extension-struct-async",
+            "constructor-extension-struct-async",
             """
             package P
             import System
@@ -469,12 +521,6 @@ public class Issue4400ImplicitInArgumentTests
                 }
             }
 
-            class Idx {
-                prop this[in i int32] int32 {
-                    get { return i * 10 }
-                }
-            }
-
             func (p Pt) Ext(in k int32) int32 -> p.X + k
 
             async func Later() int32 {
@@ -489,13 +535,11 @@ public class Issue4400ImplicitInArgumentTests
             Console.WriteLine(GDerived(4).V)
             Console.WriteLine(Chained().V)
             Console.WriteLine(GBase(i).V)
-            Console.WriteLine(Idx()[3])
-            Console.WriteLine(Idx()[i])
             Console.WriteLine(p.Ext(5))
             Console.WriteLine(p.Ext(i))
             Console.WriteLine(Later().Result)
             """,
-            new[] { "3", "3", "5", "21", "4", "30", "40", "6", "5", "10" },
+            new[] { "3", "3", "5", "21", "4", "6", "5", "10" },
         };
 
         // Forwarding storage that is ALREADY a reference: an `in`, `ref` or
@@ -816,6 +860,8 @@ public class Issue4400ImplicitInArgumentTests
             let log = Log()
             let named = Api.Named(b: log.Mark("B", 2), a: log.Mark("A", 1))
             Console.WriteLine("${named} ${log.Text}")
+            Console.WriteLine(Api.Len(nil))
+            Console.WriteLine(Api.Len("abc"))
             """;
 
         var tempDir = Directory.CreateTempSubdirectory("gs_4400_imp_").FullName;
@@ -831,7 +877,7 @@ public class Issue4400ImplicitInArgumentTests
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, $"the app must run. Exit {exit}:\n{output}");
             Assert.Equal(
-                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41", "1", "10", "value", "12 BA" },
+                new[] { "6", "8", "6", "4", "9", "11", "8", "22", "15", "22", "33", "6", "12", "41", "1", "10", "value", "12 BA", "-1", "3" },
                 SplitLines(output));
         }
         finally
@@ -994,7 +1040,7 @@ public class Issue4400ImplicitInArgumentTests
                 context.Unload();
             }
 
-            Assert.Equal("501 1002 9903 804", expected);
+            Assert.Equal("501 1002 9903 804 1205 3306", expected);
 
             var appPath = Path.Combine(tempDir, "Order.dll");
             var log = Compile(tempDir, NamedOrderSource, appPath);

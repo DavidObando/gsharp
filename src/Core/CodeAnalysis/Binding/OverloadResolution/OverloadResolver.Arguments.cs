@@ -1163,25 +1163,38 @@ internal sealed partial class OverloadResolver
         [NotNullWhen(true)] out BoundAddressOfExpression? address,
         out ImmutableArray<BoundExpression> inputs)
     {
-        if (argument is BoundAddressOfExpression { IsUnmanaged: false } candidate)
+        if (argument is BoundAddressOfExpression { IsUnmanaged: false } candidate
+            && TryGetStorageRootInputs(candidate.Operand, out inputs))
         {
-            switch (candidate.Operand)
-            {
-                case BoundFieldAccessExpression { Receiver: { } receiver }
-                    when Binder.IsReferenceTypeForConstraint(receiver.Type):
-                    address = candidate;
-                    inputs = ImmutableArray.Create(receiver);
-                    return true;
-                case BoundIndexExpression { IsArrayBackedElementAccess: true, Indices.Length: 1 } element:
-                    address = candidate;
-                    inputs = ImmutableArray.Create(element.Target, element.Indices[0]);
-                    return true;
-            }
+            address = candidate;
+            return true;
         }
 
         address = null;
         inputs = default;
         return false;
+    }
+
+    // Walks an lvalue through value-type field links (`holder.Cell.Value`,
+    // `grid[i, j].Value`) down to what actually selects its storage: a
+    // reference receiver, or an array and all of its indices.
+    private static bool TryGetStorageRootInputs(BoundExpression lvalue, out ImmutableArray<BoundExpression> inputs)
+    {
+        switch (lvalue)
+        {
+            case BoundFieldAccessExpression { Receiver: { } receiver }
+                when Binder.IsReferenceTypeForConstraint(receiver.Type):
+                inputs = ImmutableArray.Create(receiver);
+                return true;
+            case BoundFieldAccessExpression { Receiver: { } valueReceiver }:
+                return TryGetStorageRootInputs(valueReceiver, out inputs);
+            case BoundIndexExpression { IsArrayBackedElementAccess: true } element:
+                inputs = ImmutableArray.Create(element.Target).AddRange(element.Indices);
+                return true;
+            default:
+                inputs = default;
+                return false;
+        }
     }
 
     // Issue #4400: re-roots an address on captured inputs.
