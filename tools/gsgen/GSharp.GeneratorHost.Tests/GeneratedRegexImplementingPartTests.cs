@@ -251,6 +251,114 @@ partial class Calc {
         Assert.Contains(Errors(combined), error => error.StartsWith("GS0611", StringComparison.Ordinal));
     }
 
+    // A partial class split across two files that alias `R` differently: each
+    // header binds in its own file, but both are copied into one .g.gs with
+    // one import scope. The second header is left as generated, and GS9208
+    // names both user files rather than blaming the generated code.
+    [Fact]
+    public void AliasClashBetweenTwoUserFiles_IsReportedAgainstBothFiles()
+    {
+        const string First = @"package App
+
+import System.Text.RegularExpressions
+import R = System.Text.RegularExpressions
+
+partial class P {
+    shared {
+        @GeneratedRegex(""\\d+"")
+        private partial func Digits() R.Regex;
+    }
+}
+";
+        const string Second = @"package App
+
+import System.Text.RegularExpressions
+import R = System.Text
+
+partial class P {
+    shared {
+        @GeneratedRegex(""[a-z]+"")
+        private partial func Word() R.RegularExpressions.Regex;
+    }
+}
+";
+        var user = new Compilation(ParseUser(new[] { First, Second }).ToArray());
+        GeneratorHostResult result = GeneratorHostRunner.RunFromAnalyzerPaths(
+            user,
+            CSharpProjectLoader.RuntimeReferences(),
+            new[] { RegexGenerator() });
+
+        Assert.Empty(result.GeneratorDiagnostics);
+        GeneratorHostDiagnostic diagnostic = Assert.Single(result.HostDiagnostics);
+        this.output.WriteLine(diagnostic.Message);
+        Assert.Equal("GS9208", diagnostic.Id);
+        Assert.Equal("User1.gs", diagnostic.Location.FileName);
+        Assert.Contains("'import R = System.Text' from 'User1.gs'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("from 'User0.gs', needs it as 'System.Text.RegularExpressions'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("the generated code", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    // ADR-0192 follow-on 2 review: a generated document with two or more
+    // named namespaces is split into one unit per namespace, and its
+    // global-namespace declarations must land in one of them (the first, as
+    // the unsplit translation hoisted them into a package) instead of matching
+    // no unit's filter and vanishing. User code still reaches them.
+    [Fact]
+    public void GlobalDeclarations_OfASplitDocument_StayReachable()
+    {
+        const string UserSource = @"package App
+
+import System
+
+class Probe {
+    shared {
+        public func Value() int32 {
+            return GlobalHelper.G + Gen.Utilities.U
+        }
+    }
+}
+";
+        const string Generated = @"namespace Gen.Helpers.Deep { internal static class DeepHelper { public static int D => 3; } }
+namespace Gen { internal static class Utilities { public static int U => 2; } }
+internal static class GlobalHelper { public static int G => 7; }
+";
+        Run run = this.GenerateAndCompile(
+            new[] { UserSource },
+            new FixedSourceGenerator(("Impl.g.cs", Generated)));
+
+        Assert.Equal(2, run.Files.Count);
+        string primary = run.File("Impl.g.cs");
+        Assert.StartsWith("package Gen\n", primary.Replace("\r\n", "\n", StringComparison.Ordinal), StringComparison.Ordinal);
+        Assert.Contains("class GlobalHelper", primary, StringComparison.Ordinal);
+        Assert.Equal(1, run.Files.Sum(file => CountOccurrences(file.Source, "class GlobalHelper")));
+        Assert.Equal(9, Invoke(run.Type("Probe"), "Value"));
+    }
+
+    // A split unit's file name never takes one a generator hint name owns:
+    // `Mixed.cs`'s `Lib.B` unit would be `Mixed.Lib_B`, which the real
+    // `Mixed.Lib_B.cs` owns, so the split unit gets a `.split` marker and the
+    // result does not depend on write order.
+    [Fact]
+    public void SplitUnitName_NeverTakesAGeneratorHintName()
+    {
+        const string Mixed = @"namespace Lib.A { internal static class First { public static int V => 1; } }
+namespace Lib.B { internal static class Second { public static int V => 2; } }
+";
+        const string Real = @"namespace Other { internal static class Third { public static int V => 3; } }
+";
+        var user = new Compilation(GsSyntaxTree.Parse(SourceText.From("package App\n", "User0.gs")));
+        GeneratorHostResult result = GeneratorHostRunner.Run(
+            user,
+            CSharpProjectLoader.RuntimeReferences(),
+            new IIncrementalGenerator[] { new FixedSourceGenerator(("Mixed.cs", Mixed), ("Mixed.Lib_B.cs", Real)) });
+
+        Assert.Equal(
+            new[] { "Mixed.Lib_B.cs", "Mixed.Lib_B.split.g.cs", "Mixed.cs" },
+            result.GeneratedGsFiles.Select(file => file.HintName).OrderBy(name => name, StringComparer.Ordinal).ToArray());
+        Assert.Contains("package Other", result.GeneratedGsFiles.Single(file => file.HintName == "Mixed.Lib_B.cs").GSharpSource, StringComparison.Ordinal);
+        Assert.Contains("package Lib.B", result.GeneratedGsFiles.Single(file => file.HintName == "Mixed.Lib_B.split.g.cs").GSharpSource, StringComparison.Ordinal);
+    }
+
     private static string RegexGenerator() => RegexGeneratorPath();
 
     private static object Invoke(Type type, string method, params object[] arguments) =>
@@ -371,6 +479,28 @@ partial class Calc {
         public string File(string hintName) => Files.Single(file => file.HintName == hintName).Source;
 
         public Type Type(string name) => Assembly.GetTypes().Single(type => type.Name == name);
+    }
+
+    /// <summary>A generator that adds the same fixed documents to every compilation.</summary>
+    private sealed class FixedSourceGenerator : IIncrementalGenerator
+    {
+        private readonly (string HintName, string Source)[] documents;
+
+        public FixedSourceGenerator(params (string HintName, string Source)[] documents)
+        {
+            this.documents = documents;
+        }
+
+        public void Initialize(IncrementalGeneratorInitializationContext context)
+        {
+            context.RegisterPostInitializationOutput(production =>
+            {
+                foreach ((string hintName, string source) in this.documents)
+                {
+                    production.AddSource(hintName, source);
+                }
+            });
+        }
     }
 
     /// <summary>

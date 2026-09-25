@@ -71,7 +71,11 @@ internal static class ImplementingPartHeaders
         // every splice offset is exact.
         var firstPassDiagnostics = new List<GeneratorHostDiagnostic>();
         var missingImports = new List<ImportDirective>();
-        Plan(unit, printed, definitions, firstPassDiagnostics, missingImports);
+
+        // The user file each added alias import came from, so a clash between
+        // two user files merged into this one .g.gs names both of them.
+        var aliasOrigins = new Dictionary<string, string>(StringComparer.Ordinal);
+        Plan(unit, printed, definitions, firstPassDiagnostics, missingImports, aliasOrigins);
         if (missingImports.Count > 0)
         {
             var imports = new List<ImportDirective>(unit.Imports);
@@ -80,7 +84,7 @@ internal static class ImplementingPartHeaders
             printed = GSharpPrinter.Print(unit);
         }
 
-        List<Splice> splices = Plan(unit, printed, definitions, diagnostics, new List<ImportDirective>());
+        List<Splice> splices = Plan(unit, printed, definitions, diagnostics, new List<ImportDirective>(), aliasOrigins);
         var builder = new StringBuilder(printed);
         foreach (Splice splice in splices.OrderByDescending(s => s.Start))
         {
@@ -96,7 +100,8 @@ internal static class ImplementingPartHeaders
         string printed,
         IReadOnlyList<StubPartialDefinition> definitions,
         List<GeneratorHostDiagnostic> diagnostics,
-        List<ImportDirective> missingImports)
+        List<ImportDirective> missingImports,
+        Dictionary<string, string> aliasOrigins)
     {
         var splices = new List<Splice>();
         GsSyntaxTree tree = GsSyntaxTree.Parse(SourceText.From(printed));
@@ -123,12 +128,12 @@ internal static class ImplementingPartHeaders
             if (parameterMismatch != null)
             {
                 string message = $"the generated implementation of partial method '{declaring.Identifier.ValueText}' "
-                    + $"names {parameterMismatch}; its header is left as generated, so gsc reports the disagreement (GS0611)";
+                    + $"names {parameterMismatch}; its header is left as generated, so gsc will report the two parts as mismatched";
                 diagnostics.Add(new GeneratorHostDiagnostic(DiagnosticId, message, declaring.Identifier.Location));
                 continue;
             }
 
-            string aliasClash = AddMissingImports(unit, declaring, missingImports);
+            string aliasClash = AddMissingImports(unit, declaring, missingImports, aliasOrigins);
             if (aliasClash != null)
             {
                 string message = $"the header of partial method '{declaring.Identifier.ValueText}' "
@@ -232,12 +237,17 @@ internal static class ImplementingPartHeaders
 
     // Queues the imports of the declaring part's file that the copied header
     // may need and the unit lacks. Returns a description of an alias clash,
-    // or null.
+    // or null. One .g.gs has one import scope, so an alias clashes with the
+    // generated code's own imports, or with another user file whose declaring
+    // part's header was copied into the same .g.gs (a partial class split
+    // across files that alias the same name differently).
     private static string AddMissingImports(
         CompilationUnit unit,
         FunctionDeclarationSyntax declaring,
-        List<ImportDirective> missingImports)
+        List<ImportDirective> missingImports,
+        Dictionary<string, string> aliasOrigins)
     {
+        string file = declaring.SyntaxTree.Text.FileName;
         HashSet<string> headerIdentifiers = HeaderIdentifiers(declaring);
         foreach (MemberSyntax member in declaring.SyntaxTree.Root.Members)
         {
@@ -269,10 +279,15 @@ internal static class ImplementingPartHeaders
             if (existing == null)
             {
                 missingImports.Add(new ImportDirective(target, alias));
+                aliasOrigins[alias] = file;
             }
             else if (!string.Equals(existing, target, StringComparison.Ordinal))
             {
-                return $"its alias '{alias}' names '{target}', but the generated code imports '{alias}' as '{existing}'";
+                string origin = aliasOrigins.TryGetValue(alias, out string otherFile)
+                    ? $"the header of another partial method, from '{otherFile}', needs it as '{existing}'"
+                    : $"the generated code imports it as '{existing}'";
+                return $"it needs 'import {alias} = {target}' from '{file}', but {origin}, "
+                    + "and the generated file has one import scope";
             }
         }
 

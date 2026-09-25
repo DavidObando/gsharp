@@ -441,6 +441,7 @@ public sealed class TranslateStage : IMigrationStage
                             retainedFilePaths: retainedFilePaths,
                             packageFilter: package,
                             includeFileAttributes: unitIndex == 0,
+                            includeGlobalNamespace: unitIndex == 0,
                             analyzerApiMode: analyzerApiMode,
                             preserveEntryType: preserveEntryType,
                             projectDirectory: currentProject.ProjectDirectory,

@@ -98,6 +98,13 @@ public static class GeneratedDocTranslator
         // therefore becomes a G# implementing part (ADR-0192 follow-on 2).
         var translatedFilePaths = generatedTrees.Select(t => t.Tree.FilePath).ToList();
 
+        // The output-file stems the generator's own hint names occupy: a split
+        // unit's name never takes one, so which file keeps a plain name does
+        // not depend on write order.
+        var usedStems = new HashSet<string>(
+            generated.Select(doc => OutputStem(doc.HintName)),
+            StringComparer.OrdinalIgnoreCase);
+
         foreach ((GeneratedCsDocument doc, SyntaxTree tree) in generatedTrees)
         {
             SemanticModel model = compilation.GetSemanticModel(tree);
@@ -132,6 +139,7 @@ public static class GeneratedDocTranslator
                     preservePartialParts: true,
                     packageFilter: package,
                     includeFileAttributes: unitIndex == 0,
+                    includeGlobalNamespace: unitIndex == 0,
                     widenObliviousReferenceFields: true,
                     translatedFilePaths: translatedFilePaths,
                     emitGeneratedImplementingParts: true)
@@ -151,7 +159,7 @@ public static class GeneratedDocTranslator
                     hostDiagnostics);
 
                 RoundTripResult roundTrip = GSharpRoundTrip.Validate(gs);
-                string hintName = unitIndex == 0 ? doc.HintName : SplitHintName(doc.HintName, package);
+                string hintName = unitIndex == 0 ? doc.HintName : SplitHintName(doc.HintName, package, usedStems);
                 results.Add(new TranslatedGsDocument(hintName, gs, roundTrip.Errors, hostDiagnostics));
             }
         }
@@ -166,19 +174,38 @@ public static class GeneratedDocTranslator
     /// <c>System.Text.RegularExpressions.Generated</c> becomes
     /// <c>RegexGenerator.System_Text_RegularExpressions_Generated.g.cs</c>),
     /// so every unit is written to its own deterministic <c>.g.gs</c> file.
+    /// A name whose output file a generator hint name (or an earlier split
+    /// unit) already takes gets a <c>.split</c>, <c>.split2</c>, ... marker.
     /// </summary>
-    private static string SplitHintName(string hintName, string package)
+    private static string SplitHintName(string hintName, string package, HashSet<string> usedStems)
     {
-        string suffix = package.Replace('.', '_');
-        foreach (string extension in new[] { ".g.cs", ".cs" })
+        string stem = StripExtension(hintName) + "." + package.Replace('.', '_');
+        string candidate = stem;
+        for (int attempt = 1; !usedStems.Add(OutputStem(candidate)); attempt++)
+        {
+            candidate = stem + ".split" + (attempt == 1 ? string.Empty : attempt.ToString(System.Globalization.CultureInfo.InvariantCulture));
+        }
+
+        return candidate + ".g.cs";
+    }
+
+    // The part of a hint name gsgen's writer keeps before appending `.g.gs`
+    // (GsgenProgram.ToOutputFileName): separators flattened, the generator
+    // extension dropped.
+    private static string OutputStem(string hintName) =>
+        StripExtension(hintName.Replace('\\', '_').Replace('/', '_'));
+
+    private static string StripExtension(string hintName)
+    {
+        foreach (string extension in new[] { ".g.gs", ".g.cs", ".gs", ".cs" })
         {
             if (hintName.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
             {
-                return hintName.Substring(0, hintName.Length - extension.Length) + "." + suffix + extension;
+                return hintName.Substring(0, hintName.Length - extension.Length);
             }
         }
 
-        return hintName + "." + suffix;
+        return hintName;
     }
 }
 

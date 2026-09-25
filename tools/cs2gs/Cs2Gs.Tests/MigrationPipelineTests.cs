@@ -356,6 +356,84 @@ public class MigrationPipelineTests
     }
 
     /// <summary>
+    /// The repository layout splits a file that declares several namespaces
+    /// into one G# unit per namespace. A global-namespace declaration in that
+    /// file belongs to no namespace, so it must land in exactly one unit (the
+    /// first) instead of matching no unit's package filter and vanishing.
+    /// </summary>
+    [Fact]
+    public async Task RepositoryTranslate_MultiNamespaceFile_KeepsItsGlobalDeclarations()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        string corpus = ResolveCorpusDir();
+        string sourceRoot = NewOutputRoot("split-global-source");
+        CorpusApp app = CreateFriendAssemblyFixture(corpus, sourceRoot);
+        string sourceDir = Path.GetDirectoryName(app.ProjectPath);
+        File.Delete(Path.Combine(sourceDir, "FriendAssembly.cs"));
+        File.WriteAllText(Path.Combine(sourceDir, "Mixed.cs"), """
+            namespace Split.Deep.Inner
+            {
+                public sealed class DeepThing
+                {
+                }
+            }
+
+            namespace Split
+            {
+                public sealed class ShallowThing
+                {
+                }
+            }
+
+            public sealed class GlobalThing
+            {
+                public static int Value => 7;
+            }
+
+            public delegate void GlobalCallback();
+            """);
+        string destinationRoot = NewOutputRoot("split-global");
+        string projectDir = Path.Combine(destinationRoot, "L2-Library");
+        Directory.CreateDirectory(projectDir);
+        var options = new PipelineOptions
+        {
+            GscPath = compiler,
+            SourceRoot = sourceRoot,
+            OutputRoot = destinationRoot,
+            OutputLayout = MigrationOutputLayout.Repository,
+
+            // Set up by MigrationPipeline for a repository run: the split's
+            // secondary units are recorded here.
+            RepositoryAdditionalFiles = new HashSet<string>(StringComparer.OrdinalIgnoreCase),
+        };
+        var context = new StageExecutionContext(
+            app,
+            options,
+            new GscInvoker(compiler),
+            projectDir,
+            new TriageBuilder("run", "2026-09-24T00:00:00Z", "test", app.Id));
+        StageOutcome translation = await new TranslateStage().ExecuteAsync(context);
+
+        Assert.Equal(StageStatus.Passed, translation.Status);
+        string[] units = Directory.GetFiles(projectDir, "Mixed*.gs")
+            .OrderBy(path => path, StringComparer.Ordinal)
+            .ToArray();
+        Assert.Equal(2, units.Length);
+        string primary = File.ReadAllText(Path.Combine(projectDir, "Mixed.gs"));
+        Assert.StartsWith("package Split", primary, StringComparison.Ordinal);
+        Assert.DoesNotContain("package Split.Deep", primary, StringComparison.Ordinal);
+        Assert.Contains("class GlobalThing", primary, StringComparison.Ordinal);
+        Assert.Contains("GlobalCallback", primary, StringComparison.Ordinal);
+        Assert.Equal(1, units.Count(path => File.ReadAllText(path).Contains("class GlobalThing", StringComparison.Ordinal)));
+        Assert.Equal(1, units.Count(path => File.ReadAllText(path).Contains("GlobalCallback", StringComparison.Ordinal)));
+    }
+
+    /// <summary>
     /// Pointing the pipeline at <c>corpus/CompileGap-Library</c> translates
     /// cleanly but reaches the compile stage and captures a
     /// <c>compile-error</c> triage artifact. That fixture exists solely to

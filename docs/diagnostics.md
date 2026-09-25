@@ -369,6 +369,25 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 |----|----------|-------------|-----------------|
 | GS9100 | **Warning** | One or more assemblies supplied via `/r:` depend (transitively) on assemblies that were not also supplied, so the reference set is not a complete transitive closure. The compiler degrades gracefully — members whose signatures live in the missing assemblies are skipped rather than aborting the build — but the affected members become invisible. The message names the missing assemblies. Add the missing package/project reference (the SDK passes `@(ReferencePathWithRefAssemblies)`, MSBuild's full transitive closure, so this normally only appears with a hand-rolled `/r:` set). Suppress with `/nowarn:GS9100`. | `gsc /r:LibAsmA.dll app.gs` where `LibAsmA.dll` references `DepAsmB.dll` and `DepAsmB.dll` is not also passed. |
 
+### Source-generator host diagnostics (GS9200–GS9219)
+
+The GS9200–GS9219 block belongs to `gsgen`, the Roslyn source-generator host
+([ADR-0145](adr/0145-source-generator-host-native-gsharp.md)). `gsgen` runs before `gsc`, and the SDK relays its diagnostics
+into the build; an error fails the build. A generator's own diagnostics keep
+the generator's IDs (for example `SYSLIB1043`).
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| GS9200 | Error | `gsgen` failed outright: an invalid response file, a missing input file, or an unexpected exception. The message carries the reason. |
+| GS9201 | Reserved | Reserved: parse-fatal G# input. |
+| GS9202 | Reserved | Reserved: the C# stub rendered from the G# declarations did not re-parse (a host bug). |
+| GS9203 | Warning | A generator threw, or its assembly could not be loaded. That generator's output is skipped and the others still run. |
+| GS9204 | Info | A G# type in a declaration signature has no C# spelling in the stub, so generators see it as `object`. |
+| GS9205 | Reserved | Reserved: analyzer assembly load failure (reported as GS9203 today). |
+| GS9206 | Reserved | Reserved: a generator matched nothing although its trigger attribute appears in user code. |
+| GS9207 | Info | A note about the `gsgen` invocation, such as an unrecognized or malformed argument that was ignored. |
+| GS9208 | Error | A generated implementing part of a partial method could not take its declaring part's header (ADR-0192). It is reported at the declaring part in two cases. First, the generated implementation names a parameter differently: its body uses the generated names, so the header is left as generated and `gsc` reports the two parts as mismatched. Second, an alias the header needs is already bound to a different target in the generated file: either by the generated code, or by another file's declaring part whose header went into the same file. Give the alias one meaning across the partial class's files, or spell the type without it. |
+
 ### Analyzer host diagnostics (GS9300–GS9319, reserved)
 
 The GS9300–GS9319 block is reserved for the G# analyzer framework host
