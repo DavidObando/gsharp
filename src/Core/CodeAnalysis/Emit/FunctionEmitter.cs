@@ -991,7 +991,7 @@ internal sealed class FunctionEmitter
         var flags = ImmutableArray.CreateBuilder<byte>();
         if (!taskProperty.PropertyType.IsValueType)
         {
-            flags.Add(1);
+            flags.Add(NullableFlagsBuilder.NotAnnotated);
         }
 
         if (taskProperty.PropertyType.IsGenericType)

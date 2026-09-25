@@ -3733,7 +3733,7 @@ internal sealed partial class ExpressionBinder
                     typeArgSymbols)
                 && effectiveReceiverSyntax != null)
             {
-                Diagnostics.ReportUnableToFindFunction(
+                Diagnostics.ReportNilableReceiverCall(
                     ce.Location,
                     methodName,
                     DescribeCallReceiver(receiver, effectiveReceiverSyntax, receiverStart));
@@ -4620,7 +4620,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        Diagnostics.ReportUnableToFindFunction(
+        Diagnostics.ReportNilableReceiverCall(
             ce.Location,
             ce.Identifier.ValueText,
             DescribeCallReceiver(receiver, receiverSyntax, receiverStart));

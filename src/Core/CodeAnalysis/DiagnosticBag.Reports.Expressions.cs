@@ -571,6 +571,22 @@ public sealed partial class DiagnosticBag
         $"Cannot call function {functionName} because receiver '{receiverName}' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.");
 
     /// <summary>
+    /// Reports GS0159 for a call on a receiver the author stated is
+    /// <c>T?</c> (issue #4287). The name says what the report means; the
+    /// report itself is the receiver-name form of
+    /// <see cref="ReportUnableToFindFunction(TextLocation, string, string)"/>,
+    /// which already carried this message.
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="functionName">The called function.</param>
+    /// <param name="receiverName">The nullable receiver spelling.</param>
+    public void ReportNilableReceiverCall(
+        TextLocation location,
+        string functionName,
+        string receiverName)
+        => ReportUnableToFindFunction(location, functionName, receiverName);
+
+    /// <summary>
     /// Reports that an overloaded call (constructor, static method, or
     /// instance method) is ambiguous between two or more applicable
     /// candidates under the binder's "better function member" rules.
