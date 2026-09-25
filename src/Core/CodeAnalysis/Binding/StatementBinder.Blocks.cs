@@ -1008,7 +1008,8 @@ internal sealed partial class StatementBinder
             not BoundIndirectCallExpression and
             not BoundUserInstanceCallExpression and
             not BoundImportedCallExpression and
-            not BoundImportedInstanceCallExpression)
+            not BoundImportedInstanceCallExpression and
+            not BoundBaseClassCallExpression)
         {
             Diagnostics.ReportGoOperandIsNotACall(syntax.Expression.Location);
             return new BoundExpressionStatement(syntax, new BoundErrorExpression(null));

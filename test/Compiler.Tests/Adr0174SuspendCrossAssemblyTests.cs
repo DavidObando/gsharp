@@ -8,6 +8,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Text;
+using System.Threading;
 using GSharp.Compiler;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
@@ -236,6 +237,146 @@ public class Adr0174SuspendCrossAssemblyTests
         }
     }
 
+    [Fact]
+    public void SuspendMethod_OfAnImportedBase_CalledThroughBase_IsAwaitedAndVerifies()
+    {
+        // Issue #4392: `base.M()` on a suspending method of a base class in
+        // another assembly. The imported base call was never completed, so it
+        // stayed typed ValueTask[string] and `"(" + base.M(x)` did not bind.
+        // It is awaited now, from the suspending member, from a function
+        // literal in it (through a forwarder) and from a plain member (the
+        // blocking bridge), and the result verifies.
+        const string BaseLibrary = """
+            package Lib
+
+            public open class Greeter {
+                public open suspend func Greet(x int32) string {
+                    return "Greeter$x"
+                }
+            }
+            """;
+
+        const string AppSource = """
+            package App
+            import System
+            import Lib
+
+            class Loud : Greeter {
+                suspend func Twice(x int32) string {
+                    let f = () -> base.Greet(x + 1)
+                    return "(" + base.Greet(x) + "," + f() + "," + Greet(x + 2) + ")"
+                }
+
+                func Plain() string {
+                    return base.Greet(9)
+                }
+            }
+
+            suspend func run() string {
+                let g = Loud()
+                return g.Twice(1) + " " + g.Plain()
+            }
+
+            Console.WriteLine(run())
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4392_xasm_").FullName;
+        try
+        {
+            var libPath = Path.Combine(tempDir, "Lib.dll");
+            var libLog = Compile(tempDir, "Lib.gs", BaseLibrary, libPath, "/target:library");
+            Assert.True(File.Exists(libPath), "library compile failed:\n" + libLog);
+
+            var appPath = Path.Combine(tempDir, "App.dll");
+            var appLog = Compile(tempDir, "App.gs", AppSource, appPath, "/target:exe", "/reference:" + libPath);
+            Assert.True(File.Exists(appPath), "app compile failed:\n" + appLog);
+
+            IlVerifier.Verify(appPath, new[] { libPath, Path.Combine(tempDir, "Gsharp.Runtime.Channels.dll") });
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, output);
+            Assert.Equal("(Greeter1,Greeter2,Greeter3) Greeter9", output.Trim());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SuspendMethod_OfAnImportedBase_CalledThroughBase_ObservesTheCallersContext()
+    {
+        // Issue #4392 (review): `base.M()` on an imported suspending method
+        // passes the caller's context, so cancelling the caller's scope
+        // reaches the base method's `select`. Without it the base method ran
+        // under `Context.None`, never saw the cancellation and waited forever
+        // on a channel nobody sends to.
+        const string BaseLibrary = """
+            package Lib
+
+            public open class Waiter {
+                public open suspend func Wait(ch chan[int32]) string {
+                    var outcome = "none"
+                    select {
+                    case cancelled {
+                        outcome = "cancelled"
+                    }
+                    case <-ch {
+                        outcome = "received"
+                    }
+                    }
+                    return outcome
+                }
+            }
+            """;
+
+        const string AppSource = """
+            package App
+            import System
+            import Lib
+
+            class Relay : Waiter {
+                suspend func Forward(ch chan[int32]) string {
+                    return base.Wait(ch)
+                }
+            }
+
+            suspend func run() string {
+                var outcome = "none"
+                scope {
+                    let never = chan[int32](1)
+                    ctx.TryCancel()
+                    outcome = Relay().Forward(never)
+                }
+                return outcome
+            }
+
+            Console.WriteLine(run())
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4392_ctx_").FullName;
+        try
+        {
+            var libPath = Path.Combine(tempDir, "Lib.dll");
+            var libLog = Compile(tempDir, "Lib.gs", BaseLibrary, libPath, "/target:library");
+            Assert.True(File.Exists(libPath), "library compile failed:\n" + libLog);
+
+            var appPath = Path.Combine(tempDir, "App.dll");
+            var appLog = Compile(tempDir, "App.gs", AppSource, appPath, "/target:exe", "/reference:" + libPath);
+            Assert.True(File.Exists(appPath), "app compile failed:\n" + appLog);
+
+            IlVerifier.Verify(appPath, new[] { libPath, Path.Combine(tempDir, "Gsharp.Runtime.Channels.dll") });
+
+            var (exit, output) = RunDotnet(appPath, TimeSpan.FromSeconds(60));
+            Assert.True(exit == 0, output);
+            Assert.Equal("cancelled", output.Trim());
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static (int Exit, string Output, string CompileLog) CompileAndRun(string appSource)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_0174_xasm_").FullName;
@@ -294,6 +435,9 @@ public class Adr0174SuspendCrossAssemblyTests
     }
 
     private static (int Exit, string Output) RunDotnet(string assemblyPath)
+        => RunDotnet(assemblyPath, Timeout.InfiniteTimeSpan);
+
+    private static (int Exit, string Output) RunDotnet(string assemblyPath, TimeSpan timeout)
     {
         var psi = new ProcessStartInfo("dotnet", $"\"{assemblyPath}\"")
         {
@@ -306,9 +450,18 @@ public class Adr0174SuspendCrossAssemblyTests
         using var process = Process.Start(psi)
             ?? throw new InvalidOperationException("could not start dotnet");
         var output = new StringBuilder();
-        output.Append(process.StandardOutput.ReadToEnd());
-        output.Append(process.StandardError.ReadToEnd());
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(timeout))
+        {
+            process.Kill(entireProcessTree: true);
+            process.WaitForExit();
+            return (-1, "timed out after " + timeout + ":\n" + stdout.Result + stderr.Result);
+        }
+
         process.WaitForExit();
+        output.Append(stdout.Result);
+        output.Append(stderr.Result);
         return (process.ExitCode, output.ToString());
     }
 

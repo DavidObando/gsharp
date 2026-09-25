@@ -165,6 +165,20 @@ internal sealed class SuspensionPointCollector : BoundTreeWalker
         base.VisitUserInstanceCallExpression(node);
     }
 
+    /// <inheritdoc/>
+    protected override void VisitBaseClassCallExpression(BoundBaseClassCallExpression node)
+    {
+        // Issue #4392: `base.M()` calls the base method as surely as an
+        // ordinary instance call does, so a base method inference marks
+        // suspending colours its caller too.
+        if (goDepth == 0 && node.Method is { } method)
+        {
+            facts.Callees.Add(method);
+        }
+
+        base.VisitBaseClassCallExpression(node);
+    }
+
     /// <summary>One body's suspension facts.</summary>
     internal sealed class Facts
     {
