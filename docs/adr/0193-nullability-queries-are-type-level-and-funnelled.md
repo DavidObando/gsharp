@@ -982,8 +982,10 @@ something the plan left open:
     read gave. Dropping the carrier also drops the inner flags it holds, which
     is deliberate for these callers and is why the helper is not named as a
     top-level strip. Phase 3's `StripReferenceNullability(deep)` replaces it.
-  - **The rest now sit inside `[NullabilityFunnel]` members.** There are 46 such
-    members, pinned by `Adr0193NullabilityFunnelMembersTests` (Core.Tests):
+  - **The rest now sit inside `[NullabilityFunnel]` members.** There are 47 such
+    members, pinned by `Adr0193NullabilityFunnelMembersTests` (Core.Tests). The
+    47th, `ClrNullability.GetParameterDeclaredState`, is a reader #4426 added
+    after the census; it was attributed on rebase. The list covers:
     - the door bodies, including the escape hatches' own bodies;
     - the Layer 0 classifier (`ClassifyFlag`, `ClassifyPosition` and the
       two `IsFlagNonNull` / `IsPositionNonNull` projections of it);

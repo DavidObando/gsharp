@@ -25,6 +25,7 @@ public sealed class Adr0193NullabilityFunnelMembersTests
         "ClrNullability.ClassifyFlag(Byte)",
         "ClrNullability.ClassifyPosition(ImmutableArray`1, Int32)",
         "ClrNullability.GetFieldTypeSymbol(FieldInfo)",
+        "ClrNullability.GetParameterDeclaredState(ParameterInfo)",
         "ClrNullability.GetParameterTypeSymbol(ParameterInfo)",
         "ClrNullability.GetPropertyElementTypeSymbol(PropertyInfo, Type)",
         "ClrNullability.GetPropertyTypeSymbol(PropertyInfo)",

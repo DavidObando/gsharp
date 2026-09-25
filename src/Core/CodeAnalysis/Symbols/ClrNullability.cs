@@ -228,6 +228,7 @@ public static class ClrNullability
     /// </summary>
     /// <param name="parameter">The parameter to inspect.</param>
     /// <returns>The declared state of the parameter's top-level position.</returns>
+    [NullabilityFunnel]
     internal static ClrNullabilityState GetParameterDeclaredState(ParameterInfo parameter)
         => ClassifyPosition(ReadNullableFlags(parameter, parameter.Member), 0);
 
