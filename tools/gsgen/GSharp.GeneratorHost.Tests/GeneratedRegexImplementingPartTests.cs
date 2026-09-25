@@ -8,8 +8,11 @@ using System.IO;
 using System.Linq;
 using System.Reflection;
 using System.Runtime.Loader;
+using System.Text;
 using Cs2Gs.Translator.Loading;
 using GSharp.Core.CodeAnalysis.Text;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 using Xunit.Abstractions;
 using static GSharp.GeneratorHost.Tests.StubTestSupport;
@@ -19,12 +22,13 @@ using GsSyntaxTree = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree;
 namespace GSharp.GeneratorHost.Tests;
 
 /// <summary>
-/// ADR-0192 follow-on 2, step 3: a G# <c>@GeneratedRegex</c> declaring part
-/// drives the REAL Regex generator through the stub, and the back-translated
-/// <c>.g.gs</c> carries the generated implementation as a G# IMPLEMENTING part
-/// (<c>partial func</c> with its body) rather than an ordinary method that
-/// would leave the declaring part unimplemented (GS0609) and collide with it
-/// (GS0264).
+/// ADR-0192 follow-on 2, steps 3 and 4: a G# <c>@GeneratedRegex</c> declaring
+/// part drives the REAL Regex generator through the stub, and the
+/// back-translated <c>.g.gs</c> carries the generated implementation as a G#
+/// IMPLEMENTING part (<c>partial func</c> with its body) that pairs with it.
+/// Step 4: the generator's helper types keep their own package (no collision
+/// with user types), and the implementing part is spelled with the user's own
+/// header so a differently spelled declaring part still pairs.
 /// </summary>
 public class GeneratedRegexImplementingPartTests
 {
@@ -40,9 +44,15 @@ partial class P {
         public func Test(s string) bool {
             return Digits().IsMatch(s)
         }
+
+        public func Kind() string {
+            return Digits().GetType().FullName!!
+        }
     }
 }
 ";
+
+    private const string GeneratedPackage = "System.Text.RegularExpressions.Generated";
 
     private readonly ITestOutputHelper output;
 
@@ -61,48 +71,264 @@ partial class P {
     public void RealRegexGenerator_BackTranslatesToAnImplementingPart_ThatCompilesAndRuns(string arguments, string match)
     {
         string userSource = UserSourceTemplate.Replace("ARGUMENTS", arguments, StringComparison.Ordinal);
-        var user = new Compilation(GsSyntaxTree.Parse(SourceText.From(userSource, "User.gs")));
+        Run run = this.GenerateAndCompile(new[] { userSource }, RegexGenerator());
 
-        GeneratorHostResult result = GeneratorHostRunner.RunFromAnalyzerPaths(
+        string userPart = run.File("RegexGenerator.g.cs");
+        Assert.Contains("package App", userPart, StringComparison.Ordinal);
+        Assert.Contains("private partial func Digits() Regex -> Digits_0.Instance", userPart, StringComparison.Ordinal);
+        Assert.Contains("import " + GeneratedPackage, userPart, StringComparison.Ordinal);
+
+        Type p = run.Type("P");
+        Assert.Equal(true, Invoke(p, "Test", match));
+        Assert.Equal(false, Invoke(p, "Test", "zzz"));
+        Assert.StartsWith(GeneratedPackage + ".", (string)Invoke(p, "Kind"), StringComparison.Ordinal);
+    }
+
+    // Step 4: the generator's `file` helper types (`Digits_0`, `Utilities`,
+    // `RunnerFactory`, the `IndexOfAny*` extension funcs) come out in their
+    // own package, so a user type named `Utilities` no longer collides with
+    // them (it was GS0102, with the helpers' members then unresolvable).
+    [Fact]
+    public void GeneratedHelpers_KeepTheirOwnPackage_SoAUserUtilitiesTypeDoesNotCollide()
+    {
+        string userSource = UserSourceTemplate.Replace("ARGUMENTS", @"""\\d+""", StringComparison.Ordinal)
+            + @"
+class Utilities {
+    public func Name() string {
+        return ""user utilities""
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { userSource }, RegexGenerator());
+
+        string userPart = run.File("RegexGenerator.g.cs");
+        string helpers = run.File("RegexGenerator.System_Text_RegularExpressions_Generated.g.cs");
+        Assert.DoesNotContain("class Utilities", userPart, StringComparison.Ordinal);
+        Assert.StartsWith("package " + GeneratedPackage, helpers, StringComparison.Ordinal);
+        Assert.Contains("internal class Digits_0", helpers, StringComparison.Ordinal);
+        Assert.Contains("class Utilities", helpers, StringComparison.Ordinal);
+        Assert.DoesNotContain("import " + GeneratedPackage, helpers, StringComparison.Ordinal);
+
+        Type p = run.Type("P");
+        Assert.Equal(true, Invoke(p, "Test", "a1"));
+        Assert.Equal(GeneratedPackage + ".Digits_0", Invoke(p, "Kind"));
+    }
+
+    // Two user packages that each use the generator: the generator emits ONE
+    // file with one `Generated` namespace, so there is exactly one set of
+    // helper types, shared by both packages' implementing parts.
+    [Fact]
+    public void TwoUserPackages_ShareOneHelperPackage()
+    {
+        string app = UserSourceTemplate.Replace("ARGUMENTS", @"""\\d+""", StringComparison.Ordinal);
+        const string Lib = @"package Lib
+
+import System.Text.RegularExpressions
+
+partial class Q {
+    shared {
+        @GeneratedRegex(""^[a-z]+$"", RegexOptions.IgnoreCase)
+        internal partial func Word() Regex;
+
+        public func Test(s string) bool {
+            return Word().IsMatch(s)
+        }
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { app, Lib }, RegexGenerator());
+
+        Assert.Equal(3, run.Files.Count);
+        Assert.Contains("package Lib", run.File("RegexGenerator.Lib.g.cs"), StringComparison.Ordinal);
+        int utilities = run.Files.Sum(file => CountOccurrences(file.Source, "class Utilities"));
+        Assert.Equal(1, utilities);
+
+        Assert.Equal(true, Invoke(run.Type("P"), "Test", "a1"));
+        Assert.Equal(true, Invoke(run.Type("Q"), "Test", "HeLLo"));
+        Assert.Equal(false, Invoke(run.Type("Q"), "Test", "he llo"));
+    }
+
+    // Step 4: pairing is textual (GS0611), so the implementing part is spelled
+    // with the declaring part's own header — here a fully qualified return
+    // type the back-translation would have shortened to `Regex`.
+    [Fact]
+    public void DifferentlySpelledHeader_IsCopiedIntoTheImplementingPart()
+    {
+        string userSource = UserSourceTemplate
+            .Replace("ARGUMENTS", @"""\\d+""", StringComparison.Ordinal)
+            .Replace("private partial func Digits() Regex;", "private partial func Digits() System.Text.RegularExpressions.Regex;", StringComparison.Ordinal);
+        Run run = this.GenerateAndCompile(new[] { userSource }, RegexGenerator());
+
+        Assert.Contains(
+            "private partial func Digits() System.Text.RegularExpressions.Regex -> Digits_0.Instance",
+            run.File("RegexGenerator.g.cs"),
+            StringComparison.Ordinal);
+        Assert.Equal(true, Invoke(run.Type("P"), "Test", "a1"));
+    }
+
+    // A declaring part spelled with an alias the user's file imports: the
+    // alias import is brought into the .g.gs so the copied header binds.
+    [Fact]
+    public void AliasSpelledHeader_BringsTheAliasImport()
+    {
+        const string UserSource = @"package App
+
+import System.Text.RegularExpressions
+import Rx = System.Text.RegularExpressions.Regex
+
+partial class P {
+    shared {
+        @GeneratedRegex(""\\d+"")
+        private partial func Digits() Rx;
+
+        public func Test(s string) bool {
+            return Digits().IsMatch(s)
+        }
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { UserSource }, RegexGenerator());
+
+        string userPart = run.File("RegexGenerator.g.cs");
+        Assert.Contains("import Rx = System.Text.RegularExpressions.Regex", userPart, StringComparison.Ordinal);
+        Assert.Contains("private partial func Digits() Rx -> Digits_0.Instance", userPart, StringComparison.Ordinal);
+        Assert.Equal(true, Invoke(run.Type("P"), "Test", "a1"));
+    }
+
+    // A parameter type spelled `int` where the back-translated C# `int` would
+    // be `int32` (the `@LoggerMessage` shape): GS0264/GS0610/GS0609 before.
+    [Fact]
+    public void ParameterTypeAliasSpelling_IsCopiedIntoTheImplementingPart()
+    {
+        const string UserSource = @"package App
+
+partial class Calc {
+    shared {
+        public partial func Twice(count int) int;
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { UserSource }, new PartialImplementationGenerator(renameParameters: false));
+
+        Assert.Contains("public partial func Twice(count int) int", run.Files.Single().Source, StringComparison.Ordinal);
+        Assert.Equal(42, Invoke(run.Type("Calc"), "Twice", 21));
+    }
+
+    // A generated implementation whose parameter names differ from the
+    // declaring part's must not pair silently: copying the header would rebind
+    // the body to the wrong names, so the header is left as generated, gsgen
+    // reports GS9208 at the declaring part, and gsc reports GS0611.
+    [Fact]
+    public void ParameterNameMismatch_IsReported_NotCopied()
+    {
+        const string UserSource = @"package App
+
+partial class Calc {
+    shared {
+        public partial func Sub(a int32, b int32) int32;
+    }
+}
+";
+        var user = new Compilation(GsSyntaxTree.Parse(SourceText.From(UserSource, "User.gs")));
+        GeneratorHostResult result = GeneratorHostRunner.Run(
             user,
             CSharpProjectLoader.RuntimeReferences(),
-            new[] { RegexGeneratorPath() });
+            new IIncrementalGenerator[] { new PartialImplementationGenerator(renameParameters: true) });
 
-        Assert.Empty(result.Failures);
-        Assert.Empty(result.GeneratorDiagnostics);
+        GeneratorHostDiagnostic diagnostic = Assert.Single(result.HostDiagnostics);
+        this.output.WriteLine(diagnostic.Message);
+        Assert.Equal("GS9208", diagnostic.Id);
+        Assert.Equal("User.gs", diagnostic.Location.FileName);
+        Assert.Contains("'aRenamed'", diagnostic.Message, StringComparison.Ordinal);
+
         (string hintName, string generated) = Assert.Single(result.GeneratedGsFiles);
-        this.output.WriteLine("// " + hintName);
-        this.output.WriteLine(generated);
-
-        Assert.Contains("private partial func Digits() Regex -> Digits_0.Instance", generated, StringComparison.Ordinal);
-
-        // Compile the user file with the .g.gs. The pairing itself must hold:
-        // no lone declaring part (GS0609), no part-count mismatch (GS0610), no
-        // duplicate overload (GS0264). Other diagnostics are the remaining
-        // ADR-0192 follow-on 2 step-4 work (the header and namespace of the
-        // generated part) and are only reported here.
         var combined = new Compilation(
-            GsSyntaxTree.Parse(SourceText.From(userSource, "User.gs")),
+            GsSyntaxTree.Parse(SourceText.From(UserSource, "User.gs")),
             GsSyntaxTree.Parse(SourceText.From(generated, hintName + ".gs")))
         {
             IsLibrary = true,
         };
-        List<string> errors = combined.GlobalScope.Diagnostics
-            .Concat(combined.BoundProgram.Diagnostics)
+        Assert.Contains(Errors(combined), error => error.StartsWith("GS0611", StringComparison.Ordinal));
+    }
+
+    private static string RegexGenerator() => RegexGeneratorPath();
+
+    private static object Invoke(Type type, string method, params object[] arguments) =>
+        type.GetMethod(method, BindingFlags.Public | BindingFlags.Static).Invoke(null, arguments);
+
+    private static int CountOccurrences(string text, string value)
+    {
+        int count = 0;
+        for (int index = text.IndexOf(value, StringComparison.Ordinal); index >= 0; index = text.IndexOf(value, index + value.Length, StringComparison.Ordinal))
+        {
+            count++;
+        }
+
+        return count;
+    }
+
+    private static List<string> Errors(Compilation compilation) =>
+        compilation.GlobalScope.Diagnostics
+            .Concat(compilation.BoundProgram.Diagnostics)
             .Where(diagnostic => diagnostic.IsError)
             .Select(diagnostic =>
                 $"{diagnostic.Id} {diagnostic.Location.Text?.FileName}:{diagnostic.Location.StartLine + 1}: " +
                 diagnostic.Message)
             .Distinct(StringComparer.Ordinal)
             .ToList();
+
+    private Run GenerateAndCompile(IReadOnlyList<string> userSources, string analyzerPath)
+    {
+        GeneratorHostResult result = GeneratorHostRunner.RunFromAnalyzerPaths(
+            new Compilation(ParseUser(userSources).ToArray()),
+            CSharpProjectLoader.RuntimeReferences(),
+            new[] { analyzerPath });
+        return this.Compile(userSources, result);
+    }
+
+    private Run GenerateAndCompile(IReadOnlyList<string> userSources, IIncrementalGenerator generator)
+    {
+        GeneratorHostResult result = GeneratorHostRunner.Run(
+            new Compilation(ParseUser(userSources).ToArray()),
+            CSharpProjectLoader.RuntimeReferences(),
+            new[] { generator });
+        return this.Compile(userSources, result);
+    }
+
+    private static List<GsSyntaxTree> ParseUser(IReadOnlyList<string> userSources) =>
+        userSources
+            .Select((source, index) => GsSyntaxTree.Parse(SourceText.From(source, "User" + index + ".gs")))
+            .ToList();
+
+    private Run Compile(IReadOnlyList<string> userSources, GeneratorHostResult result)
+    {
+        Assert.Empty(result.Failures);
+        Assert.Empty(result.GeneratorDiagnostics);
+        Assert.Empty(result.HostDiagnostics);
+
+        var files = new List<GeneratedFile>();
+        foreach ((string hintName, string source) in result.GeneratedGsFiles)
+        {
+            this.output.WriteLine("// " + hintName);
+            this.output.WriteLine(source);
+            files.Add(new GeneratedFile(hintName, source));
+        }
+
+        // Compile the user files with every .g.gs: the pairing must hold and
+        // nothing else may fail.
+        List<GsSyntaxTree> trees = ParseUser(userSources);
+        trees.AddRange(files.Select(file => GsSyntaxTree.Parse(SourceText.From(file.Source, file.HintName + ".gs"))));
+        var combined = new Compilation(trees.ToArray())
+        {
+            IsLibrary = true,
+        };
+        List<string> errors = Errors(combined);
         foreach (string error in errors)
         {
             this.output.WriteLine(error);
         }
 
-        Assert.DoesNotContain(errors, error => error.Contains("GS0609", StringComparison.Ordinal));
-        Assert.DoesNotContain(errors, error => error.Contains("GS0610", StringComparison.Ordinal));
-        Assert.DoesNotContain(errors, error => error.Contains("GS0264", StringComparison.Ordinal));
+        Assert.Empty(errors);
 
         using var peStream = new MemoryStream();
         var emit = combined.Emit(peStream);
@@ -113,10 +339,89 @@ partial class P {
 
         Assert.True(emit.Success);
         peStream.Position = 0;
-        var loadContext = new AssemblyLoadContext("GeneratedRegex-" + Guid.NewGuid().ToString("N"), isCollectible: true);
-        Type p = loadContext.LoadFromStream(peStream).GetTypes().Single(type => type.Name == "P");
-        MethodInfo test = p.GetMethod("Test", BindingFlags.Public | BindingFlags.Static);
-        Assert.Equal(true, test.Invoke(null, new object[] { match }));
-        Assert.Equal(false, test.Invoke(null, new object[] { "zzz" }));
+        var loadContext = new AssemblyLoadContext("GeneratedPart-" + Guid.NewGuid().ToString("N"), isCollectible: true);
+        return new Run(files, loadContext.LoadFromStream(peStream));
+    }
+
+    private sealed class GeneratedFile
+    {
+        public GeneratedFile(string hintName, string source)
+        {
+            HintName = hintName;
+            Source = source;
+        }
+
+        public string HintName { get; }
+
+        public string Source { get; }
+    }
+
+    private sealed class Run
+    {
+        public Run(List<GeneratedFile> files, Assembly assembly)
+        {
+            Files = files;
+            Assembly = assembly;
+        }
+
+        public List<GeneratedFile> Files { get; }
+
+        public Assembly Assembly { get; }
+
+        public string File(string hintName) => Files.Single(file => file.HintName == hintName).Source;
+
+        public Type Type(string name) => Assembly.GetTypes().Single(type => type.Name == name);
+    }
+
+    /// <summary>
+    /// A generator that implements every lone partial method definition
+    /// returning <c>int</c> in the style of <c>@LoggerMessage</c>: spelling the
+    /// signature from the symbol (so C# <c>int</c>, back-translated as
+    /// <c>int32</c>), with a body that doubles the first parameter or
+    /// subtracts the second from the first.
+    /// </summary>
+    private sealed class PartialImplementationGenerator : IIncrementalGenerator
+    {
+        private readonly bool renameParameters;
+
+        public PartialImplementationGenerator(bool renameParameters)
+        {
+            this.renameParameters = renameParameters;
+        }
+
+        public void Initialize(IncrementalGeneratorInitializationContext context)
+        {
+            var methods = context.SyntaxProvider.CreateSyntaxProvider(
+                static (node, _) => node is MethodDeclarationSyntax method
+                    && method.Body == null
+                    && method.ExpressionBody == null
+                    && method.Modifiers.Any(modifier => modifier.ValueText == "partial"),
+                static (syntaxContext, _) => (IMethodSymbol)syntaxContext.SemanticModel.GetDeclaredSymbol(syntaxContext.Node));
+            context.RegisterSourceOutput(methods.Collect(), (production, symbols) =>
+            {
+                var builder = new StringBuilder();
+                foreach (IMethodSymbol method in symbols)
+                {
+                    if (method.ReturnType.SpecialType != SpecialType.System_Int32)
+                    {
+                        continue;
+                    }
+
+                    List<string> names = method.Parameters
+                        .Select(parameter => this.renameParameters ? parameter.Name + "Renamed" : parameter.Name)
+                        .ToList();
+                    string parameters = string.Join(", ", method.Parameters.Select((parameter, i) => "int " + names[i]));
+                    string body = names.Count == 1 ? names[0] + " * 2" : names[0] + " - " + names[1];
+                    builder.Append("namespace ").Append(method.ContainingNamespace.ToDisplayString()).AppendLine(" {")
+                        .Append("partial class ").Append(method.ContainingType.Name).AppendLine(" {")
+                        .Append("    public static partial int ").Append(method.Name)
+                        .Append('(').Append(parameters).Append(") => ").Append(body).AppendLine(";")
+                        .AppendLine("}")
+                        .AppendLine("}");
+                }
+
+                production.AddSource("Implementations.g.cs", builder.ToString());
+            });
+        }
     }
 }

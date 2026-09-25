@@ -31,6 +31,7 @@ public sealed class GsStubRenderer
 {
     private readonly GsToCSharpTypeSpeller speller;
     private readonly List<string> notes = new();
+    private readonly List<StubPartialDefinition> partialDefinitions = new();
 
     // Identifier locations gsc reported GS0610 (wrong partial part count) at.
     // PartialMethodMerger's error recovery keeps one bodiless declaring part
@@ -96,6 +97,12 @@ public sealed class GsStubRenderer
     public IReadOnlyList<string> Notes => notes;
 
     /// <summary>
+    /// Gets the lone G# declaring parts the last render offered to generators
+    /// as C# partial method definitions (ADR-0192 follow-on 2).
+    /// </summary>
+    public IReadOnlyList<StubPartialDefinition> PartialDefinitions => partialDefinitions;
+
+    /// <summary>
     /// Renders the C# stub for every user-declared type in <paramref name="scope"/>.
     /// </summary>
     /// <param name="scope">The bound global scope to project.</param>
@@ -111,6 +118,7 @@ public sealed class GsStubRenderer
             .Where(diagnostic => diagnostic.Id == "GS0610")
             .Select(diagnostic => diagnostic.Location)
             .ToHashSet();
+        this.partialDefinitions.Clear();
 
         var builder = new StringBuilder();
         builder.AppendLine("#nullable enable");
@@ -253,8 +261,34 @@ public sealed class GsStubRenderer
         var isPartialType = structSymbol.Declaration?.IsPartial ?? false;
         RenderMethods(sb, memberIndent, structSymbol.Methods, isStatic: false, isPartialType);
         RenderMethods(sb, memberIndent, structSymbol.StaticMethods, isStatic: true, isPartialType);
+        RecordPartialDefinitions(structSymbol, structSymbol.Methods, isPartialType);
+        RecordPartialDefinitions(structSymbol, structSymbol.StaticMethods, isPartialType);
 
         sb.Append(indent).AppendLine("}");
+    }
+
+    /// <summary>
+    /// ADR-0192 follow-on 2, step 4: records each lone G# declaring part the
+    /// stub offered to generators as a C# partial method definition, so the
+    /// back-translation can spell a generated implementing part with the
+    /// user's own header (<see cref="ImplementingPartHeaders"/>).
+    /// </summary>
+    private void RecordPartialDefinitions(StructSymbol owner, ImmutableArray<FunctionSymbol> methods, bool isPartialType)
+    {
+        if (methods.IsDefaultOrEmpty)
+        {
+            return;
+        }
+
+        foreach (var method in methods)
+        {
+            if (!SkipType(method.Name)
+                && method.Declaration is { } declaration
+                && ClassifyPartialShape(method, isPartialType) == PartialShape.Definition)
+            {
+                partialDefinitions.Add(new StubPartialDefinition(owner.PackageName, owner.Name, declaration));
+            }
+        }
     }
 
     private List<string> CollectBaseTypes(StructSymbol structSymbol)
