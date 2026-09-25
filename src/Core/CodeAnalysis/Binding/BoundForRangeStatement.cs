@@ -72,6 +72,17 @@ public sealed class BoundForRangeStatement : BoundLoopStatement
     /// <summary>Gets the value variable.</summary>
     public VariableSymbol ValueVariable { get; }
 
+    /// <summary>
+    /// Gets the loop's iteration variables — the Roslyn
+    /// <c>IForEachLoopOperation.Locals</c> analogue (ADR-0169, issue #4436):
+    /// <see cref="KeyVariable"/> when the loop declares one, then
+    /// <see cref="ValueVariable"/>.
+    /// </summary>
+    public System.Collections.Immutable.ImmutableArray<VariableSymbol> Locals
+        => KeyVariable is { } key
+            ? System.Collections.Immutable.ImmutableArray.Create(key, ValueVariable)
+            : System.Collections.Immutable.ImmutableArray.Create(ValueVariable);
+
     /// <summary>Gets the collection expression.</summary>
     public BoundExpression Collection { get; }
 

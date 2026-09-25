@@ -998,6 +998,12 @@ public abstract class BoundTreeWalker
         VisitPattern(node.Pattern);
     }
 
+    protected virtual void VisitIsExpression(BoundIsExpression node)
+    {
+        VisitExpression(node.Expression);
+        VisitPattern(node.Pattern);
+    }
+
     // ----- Helpers -------------------------------------------------------
 
     private void VisitList(ImmutableArray<BoundExpression> items)
@@ -1011,12 +1017,6 @@ public abstract class BoundTreeWalker
         {
             VisitExpression(item);
         }
-    }
-
-    private void VisitIsExpression(BoundIsExpression node)
-    {
-        VisitExpression(node.Expression);
-        VisitPattern(node.Pattern);
     }
 
     private void VisitAsExpression(BoundAsExpression node)

@@ -18,7 +18,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// inference to <c>BindConversion</c>, where the target delegate signature is
 /// available.
 /// </summary>
-public sealed class BoundMethodGroupExpression : BoundExpression
+public sealed class BoundMethodGroupExpression : BoundMethodReferenceOperationExpression
 {
     public BoundMethodGroupExpression(SyntaxNode? syntax, FunctionSymbol function, FunctionTypeSymbol type)
         : this(syntax, receiver: null, function, type)
@@ -110,6 +110,12 @@ public sealed class BoundMethodGroupExpression : BoundExpression
     public bool ForceNonVirtualDispatch { get; init; }
 
     public override TypeSymbol Type => FunctionType ?? (TypeSymbol)TypeSymbol.Error;
+
+    /// <inheritdoc/>
+    public override Symbol? Method => Function ?? (Candidates.IsDefaultOrEmpty ? null : Candidates[0]);
+
+    /// <inheritdoc/>
+    public override BoundExpression? Instance => Receiver;
 
     public override BoundNodeKind Kind => BoundNodeKind.MethodGroupExpression;
 }

@@ -98,6 +98,51 @@ silently sees a fraction of the program; it is how the migrated GSA0002
 observed none of the reflection-`Type` code it exists to police, since imported
 operands are exactly the ones it cares about.
 
+### Operation-block surface (issue #4436)
+
+The ADR-0193 funnel rules (GSA0007 now, GSA0008 in its Phase 3) look at a
+whole body at once and read signature-level facts off symbols, so the covered
+API grew by one registration and the members those rules reach. Everything
+below is mapped in `RoslynAnalyzerApiMap` and pinned by the funnel-surface
+parity tests (`Adr0169FunnelSurfaceParityTests`: Roslyn over a C# corpus
+against the translated analyzer over the translated corpus) or, where a parity
+corpus cannot reach a row, by a snippet translation test.
+
+- `RegisterOperationBlockAction` → `RegisterBoundBodyAction`, receiving a
+  `BoundBodyAnalysisContext` (`OwningSymbol`, `OwningFunction`, `Bodies`,
+  `Compilation`, `ReportDiagnostic`). The driver dispatches it once per bound
+  function body; lambdas and local functions are nested in their enclosing
+  body, as Roslyn nests them in the operation block.
+- `IOperation.ChildOperations` → `BoundNode.ChildNodes` (one level of
+  `BoundTreeWalker`), and `Descendants()` / `DescendantsAndSelf()`.
+- `IMethodReferenceOperation` / `IPropertyReferenceOperation` map onto two new
+  analyzer-facing bases in the style of #3920,
+  `BoundMethodReferenceOperationExpression` (`Method`, `Instance`) and
+  `BoundPropertyReferenceOperationExpression` (`Property`, `Instance`), each
+  spanning the user and CLR provenance of the method group or property access;
+  the operation kinds dispatch to both nodes.
+- `ILocalReferenceOperation.Local` → `BoundVariableExpression.Variable`;
+  `ISimpleAssignmentOperation.{Target,Value}` → `BoundAssignmentExpression`;
+  `IVariableDeclaratorOperation` → `BoundVariableDeclaration` (the initializer
+  wrapper collapses — G# has no `IVariableInitializerOperation`);
+  `IForEachLoopOperation.{Locals,Collection}` → `BoundForRangeStatement`;
+  an inline `out var` (`IDeclarationExpressionOperation`) is
+  `BoundAddressOfExpression` over the declared local.
+- The type-test surface: `IIsTypeOperation.{TypeOperand,ValueOperand}` →
+  `BoundIsExpression.{TypeOperand,Expression}` (`TypeOperand` is set only for
+  a plain type test, so the pattern of `x is T` is not also dispatched as a
+  type pattern); the type, declaration and recursive patterns →
+  `BoundTypePattern.TargetType`; `ITypeOfOperation.TypeOperand` →
+  `BoundTypeOfExpression.OperandType`. Three Roslyn pattern kinds reach one
+  G# kind, so the registry de-duplicates kinds and a rule naming all three
+  still runs once per pattern.
+- Symbols: `ISymbol.GetAttributes()` → `Symbol.GetAttributes()` (with
+  `AttributeData.AttributeClass` → `BoundAttribute.AttributeClass`),
+  `IMethodSymbol.AssociatedSymbol` and `MethodKind` (`Ordinary`,
+  `AnonymousFunction`, `LocalFunction`, `PropertyGet`, `PropertySet`,
+  `StaticConstructor`) on `FunctionSymbol`, and `ILocalSymbol` →
+  `VariableSymbol`.
+
 ### Supporting infrastructure promoted into Core
 
 - `DiagnosticDescriptor` becomes public and Roslyn-shaped

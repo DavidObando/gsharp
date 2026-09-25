@@ -163,6 +163,12 @@ initial implementation.
 | 20 | `ISymbol.DeclaringSyntaxReferences` → `GetSyntax()` | `Symbol.DeclaringSyntaxNodes` (REQ-13) | Exact — GSA0005 |
 | 21 | String literals naming analyzed-code identifiers (`"StructFieldDefs"`, namespace strings) | kept verbatim; literals flowing into name-comparison positions get an info-level shape note ("verify identifier survives migration unchanged") | Adapted |
 | 22 | `CSharpCompilation.Create` / `WithAnalyzers` / `GetAnalyzerDiagnosticsAsync` (tests) | G# `Compilation` + `GSharpAnalyzerDriver` / verifier surface (REQ-14) | Exact |
+| 23 | `RegisterOperationBlockAction`, `OperationBlockAnalysisContext.{OwningSymbol,OperationBlocks}` | `RegisterBoundBodyAction`, `BoundBodyAnalysisContext.{OwningSymbol,Bodies}` | Exact — GSA0007 (#4436) |
+| 24 | `IOperation.ChildOperations`, `Descendants()`, `DescendantsAndSelf()` | `BoundNode.ChildNodes`, `Descendants()`, `DescendantsAndSelf()` | Exact — GSA0007 (#4436) |
+| 25 | `IMethodReferenceOperation`, `IPropertyReferenceOperation` (`Method`/`Property`, `Instance`) | `BoundMethodReferenceOperationExpression`, `BoundPropertyReferenceOperationExpression`; each kind dispatches to the user and CLR node | Exact — GSA0007 (#4436) |
+| 26 | `ILocalReferenceOperation`, `ISimpleAssignmentOperation`, `IVariableDeclaratorOperation`, `IForEachLoopOperation`, `IDeclarationExpressionOperation` | `BoundVariableExpression`, `BoundAssignmentExpression`, `BoundVariableDeclaration`, `BoundForRangeStatement`, `BoundAddressOfExpression` | **Adapted** — the initializer wrapper collapses and an inline `out var` is an address-of — GSA0007 (#4436) |
+| 27 | `IIsTypeOperation`, `ITypePatternOperation` / `IDeclarationPatternOperation` / `IRecursivePatternOperation`, `ITypeOfOperation.TypeOperand` | `BoundIsExpression.{TypeOperand,Expression}`, `BoundTypePattern.TargetType`, `BoundTypeOfExpression.OperandType` | **Adapted** — three pattern kinds reach one G# kind; cs2gs lowers a C# recursive pattern before it reaches G# — GSA0008 (#4436) |
+| 28 | `ISymbol.GetAttributes()`, `AttributeData.AttributeClass`, `IMethodSymbol.{AssociatedSymbol,MethodKind}`, `ILocalSymbol` | `Symbol.GetAttributes()`, `BoundAttribute.AttributeClass`, `FunctionSymbol.{AssociatedSymbol,MethodKind}`, `VariableSymbol` | Exact — GSA0007 (#4436) |
 
 REQ-16: the analyzer host TFM is net10 (in-proc in gsc), so translated analyzer
 projects retarget `netstandard2.0` → `net10.0`. REQ-17: the SDK defines the

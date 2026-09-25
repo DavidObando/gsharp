@@ -94,6 +94,7 @@ public sealed class GSharpAnalyzerDriver
         DispatchSyntax();
         DispatchSymbols(program);
         DispatchBoundNodes(program);
+        DispatchBoundBodies(program);
         DispatchSemanticModels();
 
         foreach (var entry in registry.CompilationEndActions.Concat(registry.CompilationActions))
@@ -170,6 +171,30 @@ public sealed class GSharpAnalyzerDriver
         }
 
         new DispatchingBoundTreeWalker(this, containingFunction: null, isGenerated: false).Visit(program.Statement);
+    }
+
+    private void DispatchBoundBodies(BoundProgram program)
+    {
+        if (registry.BoundBodyActions.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var (function, body) in program.Functions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            var isGenerated = function.Declaration is { } declaration && IsGeneratedTree(declaration.SyntaxTree);
+            foreach (var entry in registry.BoundBodyActions)
+            {
+                if (SkipsGenerated(entry.Owner, isGenerated))
+                {
+                    continue;
+                }
+
+                var context = new BoundBodyAnalysisContext(function, body, compilation, Sink(entry.Owner), cancellationToken);
+                Guarded(entry.Owner, () => entry.Action(context));
+            }
+        }
     }
 
     private void DispatchSemanticModels()
@@ -436,6 +461,23 @@ public sealed class GSharpAnalyzerDriver
         {
             Dispatch(node);
             base.VisitPattern(node);
+        }
+
+        // Issue #4436: a plain `x is T` is ONE Roslyn is-type operation, with
+        // no pattern operation under it. G# binds it as an is-expression over
+        // a type pattern, so dispatching that pattern would report the same
+        // test twice to a rule registered for both kinds. The pattern of a
+        // declaration or recursive test is a real pattern in Roslyn too, and
+        // is dispatched.
+        protected override void VisitIsExpression(BoundIsExpression node)
+        {
+            if (node.IsSimpleTypeTest)
+            {
+                VisitExpression(node.Expression);
+                return;
+            }
+
+            base.VisitIsExpression(node);
         }
 
         private void Dispatch(BoundNode? node)

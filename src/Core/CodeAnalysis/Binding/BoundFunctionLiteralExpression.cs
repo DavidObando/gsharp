@@ -29,6 +29,7 @@ public sealed class BoundFunctionLiteralExpression : BoundExpression
         : base(syntax)
     {
         Function = function;
+        function.IsFunctionLiteral = true;
         FunctionType = type;
         Body = body;
         CapturedVariables = capturedVariables;

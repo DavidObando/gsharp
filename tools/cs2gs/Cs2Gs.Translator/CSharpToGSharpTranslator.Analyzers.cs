@@ -442,6 +442,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            if (member.Name.Identifier.Text == "Value"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "Value" } initializerValue
+                && RoslynTypeMetadataName(initializerValue.ContainingType) is "Microsoft.CodeAnalysis.Operations.IVariableInitializerOperation"
+                    or "Microsoft.CodeAnalysis.Operations.ISymbolInitializerOperation")
+            {
+                // Issue #4436: IVariableInitializerOperation.Value drops — a G#
+                // declaration's Initializer is the bound expression directly.
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
             if (member.Name.Identifier.Text == "ArgumentList"
                 && member.Parent is MemberAccessExpressionSyntax { Name.Identifier.Text: "Arguments" }
                 && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "ArgumentList" } argumentListProperty

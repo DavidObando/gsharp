@@ -57,6 +57,15 @@ public class AnalysisContext
         => registry.AddKeyed(registry.BoundNodeActions, owner, action, boundNodeKinds);
 
     /// <summary>
+    /// Registers a callback invoked once per declared function body with the
+    /// whole bound body — the counterpart of Roslyn's
+    /// <c>RegisterOperationBlockAction</c> (ADR-0169, issue #4436).
+    /// </summary>
+    /// <param name="action">The callback.</param>
+    public void RegisterBoundBodyAction(Action<BoundBodyAnalysisContext> action)
+        => registry.BoundBodyActions.Add(new AnalyzerActionEntry<BoundBodyAnalysisContext>(owner, action));
+
+    /// <summary>
     /// Registers a callback invoked once per syntax tree, before binding-time
     /// actions.
     /// </summary>

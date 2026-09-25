@@ -112,6 +112,14 @@ public abstract class Symbol
     public virtual string? ContainingNamespace => ContainingType?.ContainingNamespace;
 
     /// <summary>
+    /// Gets the attributes attached to this symbol — the Roslyn
+    /// <c>ISymbol.GetAttributes()</c> analogue (ADR-0169, issue #4436); the
+    /// same list as <see cref="Attributes"/>.
+    /// </summary>
+    /// <returns>The attributes.</returns>
+    public ImmutableArray<BoundAttribute> GetAttributes() => Attributes;
+
+    /// <summary>
     /// Renders this symbol in the requested format — the Roslyn
     /// <c>ToDisplayString(SymbolDisplayFormat)</c> analogue (ADR-0169).
     /// <see cref="DisplayFormat.FullyQualified"/> mirrors Roslyn's

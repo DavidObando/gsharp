@@ -27,7 +27,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <c>[dup] ldftn/ldvirtftn</c> over the captured receiver (instance), followed
 /// by a <c>newobj</c> of the target delegate.
 /// </summary>
-public sealed class BoundClrMethodGroupExpression : BoundExpression
+public sealed class BoundClrMethodGroupExpression : BoundMethodReferenceOperationExpression
 {
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundClrMethodGroupExpression"/>
@@ -87,6 +87,13 @@ public sealed class BoundClrMethodGroupExpression : BoundExpression
     public TypeSymbol? DelegateType { get; }
 
     public override TypeSymbol Type => DelegateType ?? TypeSymbol.Error;
+
+    /// <inheritdoc/>
+    public override Symbol? Method
+        => ImportedMethod(ResolvedMethod ?? (Candidates.IsDefaultOrEmpty ? null : Candidates[0]));
+
+    /// <inheritdoc/>
+    public override BoundExpression? Instance => Receiver;
 
     public override BoundNodeKind Kind => BoundNodeKind.ClrMethodGroupExpression;
 }

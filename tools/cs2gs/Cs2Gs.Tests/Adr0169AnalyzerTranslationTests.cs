@@ -277,6 +277,113 @@ public sealed class BinaryComparisonAnalyzer : DiagnosticAnalyzer
     }
 
     [Fact]
+    public void OperationBlockSurface_TranslatesToBoundBodyApi()
+    {
+        // Issue #4436: the rows the ADR-0193 funnel analyzers use that the
+        // funnel-surface parity tests do not reach — child/descendant walks,
+        // the operation-kind reads, IIsTypeOperation.ValueOperand,
+        // IMethodSymbol.MethodKind and the reference operations' Instance.
+        var (printed, diagnostics) = TranslateAnalyzer(@"
+using System.Collections.Immutable;
+using System.Linq;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.Diagnostics;
+using Microsoft.CodeAnalysis.Operations;
+
+namespace Sample;
+
+[DiagnosticAnalyzer(LanguageNames.CSharp)]
+public sealed class BlockSurfaceAnalyzer : DiagnosticAnalyzer
+{
+    private static readonly DiagnosticDescriptor Rule = new(
+        ""TEST4436"", ""Title"", ""Message"", ""Testing"", DiagnosticSeverity.Warning, isEnabledByDefault: true);
+
+    public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(Rule);
+
+    public override void Initialize(AnalysisContext context)
+    {
+        context.RegisterOperationBlockAction(AnalyzeBlock);
+        context.RegisterOperationAction(
+            AnalyzeReference,
+            OperationKind.MethodReference,
+            OperationKind.PropertyReference,
+            OperationKind.LocalReference,
+            OperationKind.SimpleAssignment,
+            OperationKind.VariableDeclarator);
+        context.RegisterOperationAction(AnalyzeIsType, OperationKind.IsType);
+    }
+
+    private static void AnalyzeBlock(OperationBlockAnalysisContext context)
+    {
+        if (context.OwningSymbol is IMethodSymbol method && method.MethodKind == MethodKind.AnonymousFunction)
+        {
+            return;
+        }
+
+        foreach (IOperation block in context.OperationBlocks)
+        {
+            int children = block.ChildOperations.Count();
+            int all = block.Descendants().Count();
+            if (children > all)
+            {
+                context.ReportDiagnostic(Diagnostic.Create(Rule, block.Syntax.GetLocation()));
+            }
+        }
+    }
+
+    private static void AnalyzeReference(OperationAnalysisContext context)
+    {
+        if (context.Operation is IMethodReferenceOperation methodReference && methodReference.Instance == null)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Operation.Syntax.GetLocation()));
+        }
+        else if (context.Operation is IPropertyReferenceOperation propertyReference && propertyReference.Instance == null)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, context.Operation.Syntax.GetLocation()));
+        }
+        else if (context.Operation.Kind == OperationKind.LocalReference)
+        {
+            return;
+        }
+    }
+
+    private static void AnalyzeIsType(OperationAnalysisContext context)
+    {
+        var operation = (IIsTypeOperation)context.Operation;
+        if (operation.ValueOperand.Kind == OperationKind.TypeOf)
+        {
+            context.ReportDiagnostic(Diagnostic.Create(Rule, operation.Syntax.GetLocation()));
+        }
+    }
+}
+");
+
+        Assert.Contains("RegisterBoundBodyAction", printed, StringComparison.Ordinal);
+        Assert.Contains("BoundBodyAnalysisContext", printed, StringComparison.Ordinal);
+        Assert.Contains(".Bodies", printed, StringComparison.Ordinal);
+        Assert.Contains(".ChildNodes", printed, StringComparison.Ordinal);
+        Assert.Contains(".Descendants()", printed, StringComparison.Ordinal);
+        Assert.Contains("MethodKind.AnonymousFunction", printed, StringComparison.Ordinal);
+
+        // One Roslyn reference kind fans out to both provenances.
+        Assert.Contains("BoundNodeKind.MethodGroupExpression", printed, StringComparison.Ordinal);
+        Assert.Contains("BoundNodeKind.ClrMethodGroupExpression", printed, StringComparison.Ordinal);
+        Assert.Contains("BoundNodeKind.PropertyAccessExpression", printed, StringComparison.Ordinal);
+        Assert.Contains("BoundNodeKind.ClrPropertyAccessExpression", printed, StringComparison.Ordinal);
+        Assert.Contains("BoundMethodReferenceOperationExpression", printed, StringComparison.Ordinal);
+        Assert.Contains("BoundPropertyReferenceOperationExpression", printed, StringComparison.Ordinal);
+        Assert.Contains(".Instance", printed, StringComparison.Ordinal);
+        Assert.Contains("BoundNodeKind.IsExpression", printed, StringComparison.Ordinal);
+
+        // IIsTypeOperation.ValueOperand is BoundIsExpression.Expression.
+        Assert.DoesNotContain("ValueOperand", printed, StringComparison.Ordinal);
+        Assert.Contains("BoundIsExpression", printed, StringComparison.Ordinal);
+
+        Assert.DoesNotContain(diagnostics, d => d.Severity == TranslationSeverity.Unsupported);
+        AssertBindsAgainstGsCore(printed);
+    }
+
+    [Fact]
     public void NamespaceSymbolParameter_MapsToNullableStringWithoutAssert()
     {
         // Roslyn annotates INamespaceSymbol non-nullable even though
