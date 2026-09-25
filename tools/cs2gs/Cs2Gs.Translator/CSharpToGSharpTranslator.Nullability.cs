@@ -28,6 +28,13 @@ public sealed partial class CSharpToGSharpTranslator
         private static readonly ConditionalWeakTable<CSharpCompilation, ConcurrentDictionary<ISymbol, bool>>
             DeclaringUsageScans = new ConditionalWeakTable<CSharpCompilation, ConcurrentDictionary<ISymbol, bool>>();
 
+        // Issue #4356 follow-up: TryGetDeclaringRepositoryMember's owner index
+        // and DeclaringRepositoryMemberPromotes' answers (see there).
+        private readonly Dictionary<ISymbol, bool> declaringRepositoryMemberPromotions =
+            new Dictionary<ISymbol, bool>(SymbolEqualityComparer.Default);
+
+        private Dictionary<AssemblyIdentity, CSharpCompilation> repositoryCompilationsByIdentity;
+
         private HashSet<string> repositorySharedDocumentPaths;
 
         // Issue #4146 (Copilot review of #4128's fix): lazily-built cache
@@ -170,27 +177,62 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            foreach (CSharpCompilation candidate in compilations)
+            if (this.repositoryCompilationsByIdentity == null)
             {
-                if (candidate == null
-                    || ReferenceEquals(candidate, this.context.Compilation)
-                    || !candidate.Assembly.Identity.Equals(assembly.Identity))
+                this.repositoryCompilationsByIdentity = new Dictionary<AssemblyIdentity, CSharpCompilation>();
+                foreach (CSharpCompilation compilation in compilations)
                 {
-                    continue;
-                }
-
-                ISymbol declared = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, candidate);
-                if (declared != null
-                    && SymbolEqualityComparer.Default.Equals(declared.ContainingAssembly, candidate.Assembly)
-                    && !declared.DeclaringSyntaxReferences.IsDefaultOrEmpty)
-                {
-                    owner = candidate;
-                    source = declared;
-                    return true;
+                    if (compilation != null && !ReferenceEquals(compilation, this.context.Compilation))
+                    {
+                        this.repositoryCompilationsByIdentity.TryAdd(compilation.Assembly.Identity, compilation);
+                    }
                 }
             }
 
-            return false;
+            if (!this.repositoryCompilationsByIdentity.TryGetValue(assembly.Identity, out CSharpCompilation candidate))
+            {
+                return false;
+            }
+
+            ISymbol declared = DocumentationCommentId.GetFirstSymbolForDeclarationId(id, candidate);
+            if (declared == null
+                || !SymbolEqualityComparer.Default.Equals(declared.ContainingAssembly, candidate.Assembly)
+                || declared.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            owner = candidate;
+            source = declared;
+            return true;
+        }
+
+        /// <summary>
+        /// Issue #4356 follow-up: whether a field or property that another
+        /// project of this run declares is emitted <c>T?</c> there, per
+        /// <see cref="TryGetDeclaringRepositoryMember"/> and
+        /// <see cref="DeclaringCompilationPromotes"/>. The answer is a property
+        /// of the declaration, so it is cached per original definition: the
+        /// forgiveness predicates ask it from many sites.
+        /// </summary>
+        /// <param name="symbol">The field or property as this compilation binds it.</param>
+        /// <returns>True when the declaring project widens the member.</returns>
+        private bool DeclaringRepositoryMemberPromotes(ISymbol symbol)
+        {
+            if (symbol is not (IPropertySymbol or IFieldSymbol))
+            {
+                return false;
+            }
+
+            ISymbol key = symbol.OriginalDefinition;
+            if (!this.declaringRepositoryMemberPromotions.TryGetValue(key, out bool promotes))
+            {
+                promotes = this.TryGetDeclaringRepositoryMember(symbol, out CSharpCompilation owner, out ISymbol source)
+                    && this.DeclaringCompilationPromotes(owner, source);
+                this.declaringRepositoryMemberPromotions[key] = promotes;
+            }
+
+            return promotes;
         }
 
         /// <summary>
@@ -1333,8 +1375,7 @@ public sealed partial class CSharpToGSharpTranslator
             // referenced project's own translation DID decide them and emitted
             // `T?`; ask the same questions of the declaring compilation so this
             // consumer's member chains get the `!!` gsc requires (GS0158).
-            if (this.TryGetDeclaringRepositoryMember(symbol, out CSharpCompilation owner, out ISymbol source)
-                && this.DeclaringCompilationPromotes(owner, source))
+            if (this.DeclaringRepositoryMemberPromotes(symbol))
             {
                 return true;
             }
