@@ -34,7 +34,7 @@ public sealed class Issue4287StatedNullableReceiverCallTests
     /// <param name="body">The body of <c>Main</c>.</param>
     [Theory]
 
-    // Case 0, the filed repro: a `let` field.
+    // Case 0, the repro as the issue reports it: a `let` field.
     [InlineData("class Holder {\n    let name string? = nil\n    func Use() string { return this.name.ToUpper() }\n}", "")]
 
     // Case 1: a `var` field; case 14: a property.
