@@ -215,6 +215,11 @@ public class Adr0186ObliviousRoundTripEmitTests
                     await Task.Yield()
                     return List[string?]()
                 }
+
+                async func NestedTask(options Opts?, name string?, tag string?) Task[Task[string?]] {
+                    await Task.Yield()
+                    return Task.FromResult[string?](nil)
+                }
             }
             """;
 
@@ -244,6 +249,16 @@ public class Adr0186ObliviousRoundTripEmitTests
             var list = FirstTypeArgument(nested);
             Assert.IsNotType<NullableTypeSymbol>(list);
             AssertNullableString(FirstTypeArgument(list));
+
+            // A declared `Task[Task[string?]]` awaits a real `Task[string?]`:
+            // `function.Type` is already that awaited result, so it must not be
+            // unwrapped a second time, or the inner task reads back nilable and
+            // its `string?` flag shifts off the end.
+            var nestedTask = ClrNullability.GetReturnTypeSymbol(service.GetMethod("NestedTask")!);
+            Assert.IsNotType<NullableTypeSymbol>(nestedTask);
+            var innerTask = FirstTypeArgument(nestedTask);
+            Assert.IsNotType<NullableTypeSymbol>(innerTask);
+            AssertNullableString(FirstTypeArgument(innerTask));
         });
     }
 

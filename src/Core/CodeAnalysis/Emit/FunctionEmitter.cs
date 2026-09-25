@@ -1011,13 +1011,12 @@ internal sealed class FunctionEmitter
 
         if (taskType.IsGenericType)
         {
-            // `function.Type` is the awaited result, whether the author wrote
-            // `async func F() T` or `async func F() Task[T]`; unwrap the latter
-            // exactly once, as the declaration binder does.
-            var awaited = AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(function.Type, out var unwrapped)
-                ? unwrapped
-                : function.Type;
-            flags.AddRange(NullableFlagsBuilder.Build(awaited));
+            // `function.Type` IS the awaited result: the declaration binder
+            // (NormalizeAsyncDeclaredReturnType) already removed one declared
+            // `Task[T]` / `ValueTask[T]`. Unwrapping again here would drop a
+            // real nested task: `async func F() Task[Task[string?]]` awaits a
+            // `Task[string?]`, and its flags are `[1, 1, 2]`, not `[1, 2]`.
+            flags.AddRange(NullableFlagsBuilder.Build(function.Type));
         }
 
         return flags.ToImmutable();
