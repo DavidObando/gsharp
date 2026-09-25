@@ -4638,7 +4638,9 @@ internal sealed partial class ExpressionBinder
         var syntax = receiverSyntax ?? receiver.Syntax;
         if (syntax == null)
         {
-            return "a " + (receiver.Type?.ToDisplayString(DisplayFormat.Minimal) ?? "nilable") + " value";
+            return receiver.Type is { } receiverType
+                ? "a " + GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplay.ToTypeDisplayString(receiverType) + " value"
+                : "a nilable value";
         }
 
         var text = syntax.SyntaxTree.Text.ToString(TextSpan.FromBounds(
