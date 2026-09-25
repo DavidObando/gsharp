@@ -1608,12 +1608,17 @@ public sealed partial class CSharpToGSharpTranslator
                             && MentionsMethodTypeParameter(parameter.OriginalDefinition.Type));
 
                 // A lambda result: the lambda's return type may be inferred
-                // from it (`xs.Select(x => ext.Name)`).
-                case AnonymousFunctionExpressionSyntax:
+                // from it (`xs.Select(x => ext.Name)`). A lambda whose target
+                // delegate already returns `T?` (`Func<string?> f = () =>
+                // n.Name`) is the exception: its result type is fixed and
+                // nullable, so a bare `T!` converts to it with no check, and a
+                // `!!` there would throw on a nil the C# returns.
+                case AnonymousFunctionExpressionSyntax lambda:
+                    return !this.LambdaTargetReturnsNullableReference(lambda);
                 case ReturnStatementSyntax when node.Parent.FirstAncestorOrSelf<SyntaxNode>(
                         n => n is AnonymousFunctionExpressionSyntax or BaseMethodDeclarationSyntax
-                            or LocalFunctionStatementSyntax or AccessorDeclarationSyntax) is AnonymousFunctionExpressionSyntax:
-                    return true;
+                            or LocalFunctionStatementSyntax or AccessorDeclarationSyntax) is AnonymousFunctionExpressionSyntax enclosingLambda:
+                    return !this.LambdaTargetReturnsNullableReference(enclosingLambda);
 
                 // The receiver of a generic extension whose `this` parameter is
                 // the method type parameter itself (`x.Also(...)` with
@@ -1647,6 +1652,23 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return false;
             }
+        }
+
+        // ADR-0186 step 6 (PR 0): whether the delegate a lambda converts to
+        // returns an annotated-nullable reference type (`Func<string?>`). The
+        // effective return of an async lambda is the awaited type.
+        private bool LambdaTargetReturnsNullableReference(AnonymousFunctionExpressionSyntax lambda)
+        {
+            if (this.context.GetTypeInfo(lambda).ConvertedType is not INamedTypeSymbol { DelegateInvokeMethod: { } invoke })
+            {
+                return false;
+            }
+
+            ITypeSymbol returnType = GetEffectiveReturnType(
+                invoke.ReturnType,
+                lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword));
+            return returnType is { IsReferenceType: true }
+                && returnType.NullableAnnotation == NullableAnnotation.Annotated;
         }
 
         // True when <paramref name="member"/> binds to an extension method whose

@@ -273,6 +273,42 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
     }
 
     /// <summary>
+    /// A lambda whose target delegate already returns <c>T?</c> has a fixed,
+    /// nullable result type, so its result is not an inference position and
+    /// stays bare. With a <c>!!</c> there, a nil name would throw where the
+    /// C# returns <c>null</c>. The oracle passes a nil and expects
+    /// <c>true</c>.
+    /// </summary>
+    [Fact]
+    public void A_Lambda_With_A_Nullable_Target_Return_Leaves_Its_Result_Bare()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousLambdaLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static bool NameIsNil(Node n)
+                {
+                    System.Func<string?> read = () => { return n.Name; };
+                    return read() == null;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+
+        Assert.DoesNotContain("n.Name!!", printed, StringComparison.Ordinal);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.NameIsNil(Node.Make(nil, nil))" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(true, result.Value);
+    }
+
+    /// <summary>
     /// Explicit type arguments leave nothing to infer, so the inference
     /// carve-out does not apply: <c>IsNil&lt;string&gt;(n.Name)</c> stays bare.
     /// With the old <c>!!</c>, a nil name threw instead of reaching the

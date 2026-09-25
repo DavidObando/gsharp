@@ -103,6 +103,16 @@ internal static class NullForgivenessTelemetry
     /// </summary>
     public static void Reset() => Counts.Clear();
 
+    /// <summary>
+    /// Runs the static constructor, so that the exit dump is armed even for a
+    /// run in which <see cref="Record"/> is never called; such a run then
+    /// writes an empty file rather than none. Called when a translator is
+    /// constructed.
+    /// </summary>
+    internal static void EnsureInitialized()
+    {
+    }
+
     private static void WriteSnapshotOnExit(object sender, System.EventArgs e)
     {
         var lines = new List<string>();
