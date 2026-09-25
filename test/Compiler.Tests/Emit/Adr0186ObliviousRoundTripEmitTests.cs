@@ -161,6 +161,79 @@ public class Adr0186ObliviousRoundTripEmitTests
     }
 
     /// <summary>
+    /// Issue #4287: an async function's emitted return is <c>Task&lt;T&gt;</c>,
+    /// not its declared <c>T</c>, and it must re-import as a non-null task even
+    /// when its METHOD context byte is 2.
+    /// <para>
+    /// gsc used to write no <c>[Nullable]</c> for an async return at all, on
+    /// the reasoning that a non-null task matches the assembly default. The
+    /// method-level <c>[NullableContext]</c> is chosen by majority across the
+    /// return and parameters, though, so nilable parameters in the majority made it 2, and
+    /// the task then read back as <c>Task[T]?</c>. That was invisible until gsc
+    /// started rejecting calls on a stated <c>T?</c> receiver: Oahu's
+    /// <c>await service.RunAsync(opts, ct).ConfigureAwait(false)</c> across a
+    /// G# assembly boundary reported GS0159.
+    /// </para>
+    /// <para>
+    /// The <c>Maybe</c> row pins the awaited result's own position too: a
+    /// <c>Rep?</c> result stays nullable INSIDE a non-null task.
+    /// </para>
+    /// </summary>
+    [Fact]
+    public void Async_Returns_Round_Trip_As_NonNull_Tasks_Under_A_Nilable_Method_Context()
+    {
+        const string source = """
+            package Probe
+            import System.Threading.Tasks
+
+            class Rep {
+                var N int32
+            }
+
+            class Opts {
+                var Skip bool
+            }
+
+            class Service {
+                async func RunAsync(options Opts? = nil, name string? = nil, tag string? = nil) Rep {
+                    await Task.Yield()
+                    return Rep()
+                }
+
+                async func Maybe(options Opts?, name string?, tag string?) Rep? {
+                    await Task.Yield()
+                    return nil
+                }
+
+                async func Values(options Opts?, name string?, tag string?) ValueTask[Rep] {
+                    await Task.Yield()
+                    return Rep()
+                }
+            }
+            """;
+
+        WithCompiledType(source, "Probe.Service", Array.Empty<string>(), service =>
+        {
+            foreach (var name in new[] { "RunAsync", "Values" })
+            {
+                var method = service.GetMethod(name)!;
+
+                // The discriminating precondition: the parameters really do
+                // force a nilable method context, or this pins nothing.
+                Assert.Equal((byte)2, ContextByte(method.GetCustomAttributesData()));
+
+                var task = ClrNullability.GetReturnTypeSymbol(method);
+                Assert.IsNotType<NullableTypeSymbol>(task);
+                Assert.IsNotType<NullableTypeSymbol>(FirstTypeArgument(task));
+            }
+
+            var maybe = ClrNullability.GetReturnTypeSymbol(service.GetMethod("Maybe")!);
+            Assert.IsNotType<NullableTypeSymbol>(maybe);
+            Assert.IsType<NullableTypeSymbol>(FirstTypeArgument(maybe));
+        });
+    }
+
+    /// <summary>
     /// Parameters and returns: a wholly oblivious method, and a method mixing
     /// all three values across its parameters (a parameter-level
     /// <c>@Oblivious</c>).

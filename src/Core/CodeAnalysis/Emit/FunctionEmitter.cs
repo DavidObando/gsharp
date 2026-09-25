@@ -241,7 +241,7 @@ internal sealed class FunctionEmitter
         var signature = this.EncodeFunctionSignature(function, bodySelection.AsyncPlan, isEntryPoint);
         var methodName = GetMethodMetadataName(function, isEntryPoint, isSynthesizedEntryPointStub);
         var methodAttributes = GetMethodAttributes(function, isEntryPoint, isSynthesizedEntryPointStub);
-        var parameterMetadata = this.EmitParameterMetadata(function, bodySelection.AsyncPlan);
+        var parameterMetadata = this.EmitParameterMetadata(function, bodySelection.AsyncPlan, isEntryPoint);
         var handle = this.EmitMethodDefinition(
             function,
             methodAttributes,
@@ -647,7 +647,8 @@ internal sealed class FunctionEmitter
 
     private FunctionParameterMetadata EmitParameterMetadata(
         FunctionSymbol function,
-        AsyncStateMachinePlan? asyncPlan)
+        AsyncStateMachinePlan? asyncPlan,
+        bool isEntryPoint)
     {
         // Issue #170 / ADR-0047 §3: emit a Parameter row per source parameter
         // so we can attach a CustomAttribute to each one. The first emitted
@@ -670,15 +671,24 @@ internal sealed class FunctionEmitter
         var hasReturnAttributes = !function.Attributes.IsDefaultOrEmpty
             && function.Attributes.Any(a => a.Target == AttributeTargetKind.Return);
 
-        // Compute nullable flags for return + each non-`this` parameter. Async
-        // kickoff methods get an empty return-slot here because the actual
-        // emitted return type is `Task` / `Task<T>`, not `function.Type`; its
-        // reference-non-nullable shape (byte 1) matches the assembly-level
-        // NullableContextAttribute(1) default, so omitting the per-return
-        // attribute is equivalent to emitting `[NullableAttribute(1)]`.
-        var returnFlags = asyncPlan != null
-            ? ImmutableArray<byte>.Empty
-            : NullableFlagsBuilder.Build(function.Type);
+        // Compute nullable flags for return + each non-`this` parameter. An
+        // async kickoff's emitted return is the builder's task type, not
+        // `function.Type`, so its flags describe that shape (see
+        // AsyncKickoffReturnFlags). They used to be left EMPTY, on the
+        // reasoning that a non-null `Task<T>` matches the assembly-level
+        // NullableContextAttribute(1) default. That holds only while the
+        // METHOD context stays 1: ChooseMethodNullableContext picks the
+        // majority byte across return and parameters, so a method with more
+        // nilable parameters than non-null ones got [NullableContext(2)], and
+        // the omitted return then re-imported as `Task[T]?` (issue #4287, found
+        // when gsc started rejecting calls on a `T?` receiver:
+        // `await service.RunAsync(opts, ct).ConfigureAwait(false)` across a
+        // G# assembly boundary).
+        var returnFlags = asyncPlan == null
+            ? NullableFlagsBuilder.Build(function.Type)
+            : isEntryPoint && asyncPlan.StateMachine.BuilderInfo.TaskProperty != null
+                ? ImmutableArray<byte>.Empty
+                : AsyncKickoffReturnFlags(function, asyncPlan);
         var paramFlagsList = new List<ImmutableArray<byte>>();
         foreach (var p in function.EmittedParameters)
         {
@@ -951,6 +961,47 @@ internal sealed class FunctionEmitter
         {
             this.outer.EmitSuspendingAttribute(handle);
         }
+    }
+
+    /// <summary>
+    /// Issue #4287: the <c>[Nullable]</c> flags of an async kickoff's emitted
+    /// return, which is the builder's task type (<c>Task</c>, <c>Task&lt;T&gt;</c>,
+    /// <c>ValueTask&lt;T&gt;</c>, …), not <c>function.Type</c>. Laid out the way
+    /// csc lays out the same signature: the task's own byte when it is a
+    /// reference type (always non-null: the builder never returns nil), then
+    /// the awaited result's flags when the task is generic. A value-type task
+    /// contributes no byte of its own, and an <c>async void</c> kickoff has
+    /// nothing to describe.
+    /// </summary>
+    /// <param name="function">The async function.</param>
+    /// <param name="asyncPlan">Its state-machine plan.</param>
+    /// <returns>The return position's flags.</returns>
+    private static ImmutableArray<byte> AsyncKickoffReturnFlags(FunctionSymbol function, AsyncStateMachinePlan asyncPlan)
+    {
+        var builderInfo = asyncPlan.StateMachine.BuilderInfo;
+        if (builderInfo.Kind == AsyncMethodBuilderKind.Void || builderInfo.TaskProperty is not { } taskProperty)
+        {
+            return ImmutableArray<byte>.Empty;
+        }
+
+        var flags = ImmutableArray.CreateBuilder<byte>();
+        if (!taskProperty.PropertyType.IsValueType)
+        {
+            flags.Add(1);
+        }
+
+        if (taskProperty.PropertyType.IsGenericType)
+        {
+            // `function.Type` is the awaited result, whether the author wrote
+            // `async func F() T` or `async func F() Task[T]`; unwrap the latter
+            // exactly once, as the declaration binder does.
+            var awaited = AsyncReturnTypeNormalizer.TryUnwrapTaskReturnType(function.Type, out var unwrapped)
+                ? unwrapped
+                : function.Type;
+            flags.AddRange(NullableFlagsBuilder.Build(awaited));
+        }
+
+        return flags.ToImmutable();
     }
 
     /// <summary>
