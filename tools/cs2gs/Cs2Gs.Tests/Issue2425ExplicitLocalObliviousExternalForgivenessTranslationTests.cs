@@ -21,28 +21,23 @@ namespace Cs2Gs.Tests;
 /// Translator-fidelity tests for issue #2425: an explicit-typed local declared
 /// `T x = external.ObliviousReturn();` — where the declared type equals the
 /// initializer's natural type (the common case that omits the type clause
-/// entirely, ADR-0115 §B.3) — used to drop null forgiveness for an oblivious
-/// EXTERNAL (metadata, no nullable context) member result. Issue #2202's
-/// value-read logic asserted `!!` on a DIRECT return of such a member
+/// entirely, ADR-0115 §B.3) — drops null forgiveness for an oblivious EXTERNAL
+/// (metadata, no nullable context) member result. Issue #2202's value-read logic
+/// already asserts `!!` on a DIRECT return of such a member
 /// (`return external.ObliviousReturn();`), but issue #1737's explicit-local
 /// type-retention decision only consults the whole-program SAME/SIBLING-source
 /// taint fixpoint (issue #2412), which an EXTERNAL symbol can never seed an edge
-/// in. So the explicit type was dropped, gsc inferred the local as `T?` (its
-/// then unannotated-external-import rule, issue #1354, ADR-0136), and a later
-/// `return codeVerifier;` had no external symbol left at the read site to
-/// trigger forgiveness (GS0156) — exactly the real-world `Oahu.Core`
+/// in. So the explicit type is dropped, gsc infers the local as `T?` (per its own
+/// unannotated-external-import rule, issue #1354), and a later `return
+/// codeVerifier;` has no external symbol left at the read site to trigger
+/// forgiveness (GS0156) — exactly the real-world `Oahu.Core`
 /// `Login.CreateCodeVerifier` shape (`string codeVerifier =
-/// tokenBytes.ToUrlBase64String(); return codeVerifier;`). The #2425 fix
-/// asserted `!!` at the INITIALIZER so the local inferred a non-null type.
+/// tokenBytes.ToUrlBase64String(); return codeVerifier;`).
 ///
-/// <para>
-/// Since ADR-0186 step 3 gsc imports the oblivious result as the platform type
-/// `T!`, so the local infers `T!` and gsc checks it wherever it is used as
-/// non-null. These tests now pin that cs2gs emits no `!!` at the initializer or
-/// at later uses (ADR-0186 step 6, PR 0). The test names (`…Forgiven…`)
-/// predate ADR-0186 step 6 and are kept for issue traceability; the assertions
-/// state the current contract.
-/// </para>
+/// The fix asserts `!!` at the INITIALIZER (mirroring the direct-return fix)
+/// instead of retaining an explicit `T?` type, so the local infers the intended
+/// non-null type from the start and every later use (return/argument/
+/// assignment) needs no further special-casing.
 /// </summary>
 public class Issue2425ExplicitLocalObliviousExternalForgivenessTranslationTests
 {
@@ -67,15 +62,12 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let codeVerifier = tokenBytes.ToUrlBase64String()", printed);
-        Assert.DoesNotContain("let codeVerifier = tokenBytes.ToUrlBase64String()!!", printed);
+        Assert.Contains("let codeVerifier = tokenBytes.ToUrlBase64String()!!", printed);
         Assert.Contains("return codeVerifier", printed);
 
-        // Parity with a direct return: the later `return codeVerifier` gets no
-        // `!!` either; gsc checks the `T!` local at that return itself.
+        // Parity: the local's declaration absorbs the SAME single forgiveness a
+        // direct return would need — the later `return codeVerifier` must not
+        // need (or get) a second one.
         Assert.DoesNotContain("return codeVerifier!!", printed);
     }
 
@@ -95,11 +87,7 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
-        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
     }
 
     [Fact]
@@ -118,11 +106,7 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let result = ExtLib.StaticCombine(\"hello\")", printed);
-        Assert.DoesNotContain("let result = ExtLib.StaticCombine(\"hello\")!!", printed);
+        Assert.Contains("let result = ExtLib.StaticCombine(\"hello\")!!", printed);
     }
 
     [Fact]
@@ -141,11 +125,7 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let result = ext.Field", printed);
-        Assert.DoesNotContain("let result = ext.Field!!", printed);
+        Assert.Contains("let result = ext.Field!!", printed);
     }
 
     [Fact]
@@ -164,11 +144,7 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let result = ext.Prop", printed);
-        Assert.DoesNotContain("let result = ext.Prop!!", printed);
+        Assert.Contains("let result = ext.Prop!!", printed);
     }
 
     /// <summary>
@@ -200,10 +176,10 @@ namespace Demo
     }
 
     /// <summary>
-    /// A parenthesized initializer resolves the same underlying symbol (Roslyn's
-    /// <c>GetSymbolInfo</c> sees through parentheses), so it is treated like the
-    /// bare call: emitted with no <c>!!</c>, matching the direct-return path's
-    /// behavior for the identical shape.
+    /// Positive test: a parenthesized initializer resolves the same underlying
+    /// symbol (Roslyn's <c>GetSymbolInfo</c> sees through parentheses), so the
+    /// forgiveness still applies — matching the direct-return path's behavior
+    /// for the identical shape.
     /// </summary>
     [Fact]
     public void ParenthesizedInitializer_ForgivenAtInitialization()
@@ -221,11 +197,7 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let result = (ext.Combine(\"hello\"))", printed);
-        Assert.DoesNotContain("let result = (ext.Combine(\"hello\"))!!", printed);
+        Assert.Contains("let result = (ext.Combine(\"hello\"))!!", printed);
     }
 
     [Fact]
@@ -244,13 +216,8 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let a = ext.Combine(\"x\")", printed);
-        Assert.DoesNotContain("let a = ext.Combine(\"x\")!!", printed);
-        Assert.Contains("let b = ext.Combine(\"y\")", printed);
-        Assert.DoesNotContain("let b = ext.Combine(\"y\")!!", printed);
+        Assert.Contains("let a = ext.Combine(\"x\")!!", printed);
+        Assert.Contains("let b = ext.Combine(\"y\")!!", printed);
     }
 
     [Fact]
@@ -271,11 +238,7 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
-        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
         Assert.Contains("this.Sink(result)", printed);
         Assert.DoesNotContain("this.Sink(result!!)", printed);
     }
@@ -298,18 +261,14 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
-        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
         Assert.Contains("other = result", printed);
         Assert.DoesNotContain("other = result!!", printed);
     }
 
     /// <summary>
-    /// A `var` local initialized from an oblivious external member is also
-    /// emitted with no `!!`; G# infers the platform type `T!` for it.
+    /// A `var` local also needs forgiveness at its oblivious external initializer
+    /// so G# infers the same non-null type that C# does.
     /// </summary>
     [Fact]
     public void VarLocal_IsForgivenAtInitializer()
@@ -327,11 +286,7 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
-        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
     }
 
     /// <summary>
@@ -394,9 +349,8 @@ namespace Demo
     }
 
     /// <summary>
-    /// A nullable-enabled consumer of a nullable-oblivious producer gets the same
-    /// result: gsc used to import the unannotated return as `T?` regardless of the
-    /// consumer's context, and now imports it as `T!`, so no `!!` is emitted.
+    /// A nullable-enabled consumer still sees a nullable-oblivious producer's
+    /// unannotated reference return as T? in G#, so it needs the same bridge.
     /// </summary>
     [Fact]
     public void NullableEnabledCompilation_IsForgiven()
@@ -414,17 +368,17 @@ namespace Demo
     }
 }");
 
-        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
-        // type `T!` and checks it itself at this coercion, so cs2gs no longer
-        // emits `!!` here (a `!!` on `T!` only duplicated that check).
-        Assert.Contains("let result = ext.Combine(\"hello\")", printed);
-        Assert.DoesNotContain("let result = ext.Combine(\"hello\")!!", printed);
+        Assert.Contains("let result = ext.Combine(\"hello\")!!", printed);
     }
 
     /// <summary>
-    /// Direct-return parity: an explicit local later returned and a direct
-    /// return of the identical call agree, and neither needs a <c>!!</c> for
-    /// the oblivious external member (both used to carry exactly one).
+    /// Direct-return parity, as it stands after ADR-0186 step 6 (PR 0). The
+    /// local keeps exactly one <c>!!</c>, at its initializer: cs2gs may drop the
+    /// type clause, and the local then takes its type from the initializer, so
+    /// the <c>!!</c> keeps it a non-null <c>T</c> rather than the platform type
+    /// <c>T!</c>. The direct return needs none, because gsc reads the oblivious
+    /// result as <c>T!</c> and checks it at the return itself. Neither shape
+    /// asserts twice.
     /// </summary>
     [Fact]
     public void ExplicitLocalThenReturn_MatchesDirectReturnForgivenessCount()
@@ -456,10 +410,7 @@ namespace Demo
 
         int CountForgiveness(string printed) => printed.Split("!!").Length - 1;
 
-        // ADR-0186 step 6 (PR 0): both shapes still agree. Neither needs a
-        // `!!` now: gsc reads the oblivious metadata result as `T!` and
-        // checks it at the non-null coercion itself.
-        Assert.Equal(0, CountForgiveness(viaLocal));
+        Assert.Equal(1, CountForgiveness(viaLocal));
         Assert.Equal(0, CountForgiveness(direct));
     }
 

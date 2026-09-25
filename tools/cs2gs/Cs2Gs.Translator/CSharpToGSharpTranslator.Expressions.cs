@@ -1625,6 +1625,20 @@ public sealed partial class CSharpToGSharpTranslator
                         && unreduced.Parameters[0].Type is ITypeParameterSymbol receiverParameter
                         && receiverParameter.TypeParameterKind == TypeParameterKind.Method;
 
+                // The initializer of a local. A `var` local takes its type from
+                // it, and so does an explicitly typed one whenever cs2gs drops
+                // the redundant type clause (issue #1737, `let name = n.Name`).
+                // Without the `!!` the local is `T!`, and every later use of
+                // it (`Wrap(name)`) would infer from `T!` in turn.
+                case EqualsValueClauseSyntax
+                {
+                    Parent: VariableDeclaratorSyntax
+                    {
+                        Parent: VariableDeclarationSyntax { Parent: LocalDeclarationStatementSyntax },
+                    },
+                }:
+                    return true;
+
                 // An element whose array or collection type is inferred from it.
                 case InitializerExpressionSyntax { Parent: ImplicitArrayCreationExpressionSyntax }:
                 case CollectionElementSyntax:

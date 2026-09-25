@@ -1668,9 +1668,11 @@ Suggested sequencing, each step independently landable and green:
    > it itself at each coercion to a non-null reference, so the `!!` only
    > duplicated that check. GS0536 never fires on a `T!` operand, so the
    > polish pass never stripped it. PR 0 leaves those reads bare, except for
-   > a value whose platform-ness would reach type inference (a `T!` argument
+   > a value whose platform-ness would reach type inference. A `T!` argument
    > infers `List[string!]`, which §3 rule 3 does not convert to an enabled
-   > `List[string]`). Reads of a *repo-sibling* member are unchanged, because
+   > `List[string]`. A local's initializer counts too, because cs2gs may drop
+   > the local's type clause, and the local then carries `T!` into its own
+   > later uses. Reads of a *repo-sibling* member are unchanged, because
    > cs2gs decides that member's emitted type (`T` or a promoted `T?`).
    >
    > **Measured before any code, as open questions 9 and 14 ask.** A

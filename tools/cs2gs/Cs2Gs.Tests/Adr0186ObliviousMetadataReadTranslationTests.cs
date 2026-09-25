@@ -87,7 +87,8 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
 
             public static string Keep(Node n)
             {
-                string kept = n.Next.Name;
+                string kept = "";
+                kept = n.Next.Name;
                 return kept;
             }
 
@@ -127,7 +128,7 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
     }
 
     /// <summary>
-    /// Receivers, an explicitly typed local and a return that read oblivious
+    /// Receivers, an assignment and a return that read oblivious
     /// metadata carry no <c>!!</c>, and the output binds against that metadata.
     /// Restoring the pre-step-3 <c>T?</c> mirror rule puts the <c>!!</c> back
     /// and fails the first assertion.
@@ -232,6 +233,42 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
             new[] { printed + Environment.NewLine + "Use.Count(Node.Make(\"a\", nil))" },
             new EmittedOracleOptions { References = new[] { libraryPath } });
         Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    /// <summary>
+    /// An implicitly typed local takes its type from its initializer, so its
+    /// initializer is an inference position too. Without the <c>!!</c>,
+    /// <c>var name = n.Name</c> makes <c>name</c> a <c>string!</c>, and
+    /// <c>Wrap(name)</c> then infers <c>List[string!]</c> (GS0155).
+    /// </summary>
+    [Fact]
+    public void An_Implicitly_Typed_Local_Keeps_The_Assertion()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousLocalInferenceLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static int Count(Node n)
+                {
+                    System.Collections.Generic.List<string> names = new System.Collections.Generic.List<string>();
+                    var name = n.Name;
+                    names = Wrapping.Wrap(name);
+                    return names.Count;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.Count(Node.Make(\"a\", nil))" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.Contains("let name = n.Name!!", printed, StringComparison.Ordinal);
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
         Assert.Equal(1, result.Value);
     }
 
