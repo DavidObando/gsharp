@@ -82,7 +82,7 @@ public class Adr0192PartialMethodEmitTests
 
         Console.WriteLine("Loud methods: ${loudCount}")
         let loud = t.GetMethod("Loud")
-        Console.WriteLine("Obsolete: ${loud.GetCustomAttributes(typeof(ObsoleteAttribute), false).Length}")
+        Console.WriteLine("Obsolete: ${loud!!.GetCustomAttributes(typeof(ObsoleteAttribute), false).Length}")
         """;
 
     /// <summary>

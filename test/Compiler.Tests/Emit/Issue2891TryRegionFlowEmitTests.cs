@@ -216,7 +216,7 @@ public class Issue2891TryRegionFlowEmitTests
             try {
                 F(false)
             } catch (ex Exception) {
-                result += ex.StackTrace.Contains("<Program>.Origin") ? 5 : -100
+                result += ex.StackTrace!!.Contains("<Program>.Origin") ? 5 : -100
             }
             """);
         yield return Case("ExceptionSuppressedByFinallyBreak", 4, """
