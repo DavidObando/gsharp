@@ -31,6 +31,16 @@ namespace GSharp.GeneratorHost;
 public static class GeneratedDocTranslator
 {
     /// <summary>
+    /// The path of the stub tree in the back-translation compilation. The
+    /// translator tells the stub from generator output by path (a generated
+    /// implementation whose definition is NOT in a translated file becomes a
+    /// G# implementing part), so this path must be one no generator can emit:
+    /// Roslyn rejects a hint name containing <c>&lt;</c> or <c>&gt;</c>
+    /// (<c>AddSource</c> throws), so no generated tree can share it.
+    /// </summary>
+    public const string StubPath = "<gsgen-stub>.cs";
+
+    /// <summary>
     /// Back-translates the generated C# documents into G# partial parts.
     /// </summary>
     /// <param name="stubCSharp">The declaration-only C# stub the generators ran against.</param>
@@ -53,7 +63,7 @@ public static class GeneratedDocTranslator
         }
 
         var parseOptions = new CSharpParseOptions(LanguageVersion.Latest);
-        SyntaxTree stubTree = CSharpSyntaxTree.ParseText(stubCSharp, parseOptions, path: "GsgenStubs.cs");
+        SyntaxTree stubTree = CSharpSyntaxTree.ParseText(stubCSharp, parseOptions, path: StubPath);
 
         // Bind stub + every generated tree together so generated members resolve
         // against user declarations and package runtime types.
