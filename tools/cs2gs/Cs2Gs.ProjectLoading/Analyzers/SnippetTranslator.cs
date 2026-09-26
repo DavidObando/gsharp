@@ -226,7 +226,7 @@ public static class SnippetTranslator
                 length = toleratedLength;
             }
 
-            if (index < 0)
+            if (index < 0 && declarationOrdinal is null)
             {
                 MarkedText renamed = renaming.Rename(marked);
                 string candidate = renamed.Text;
@@ -466,18 +466,44 @@ public static class SnippetTranslator
     private static int ExpressionOrdinal(
         LoadedDocument document, MarkedText marked, string package)
     {
-        string markedTokens = ExpressionTokenKey(SyntaxFactory.ParseExpression(marked.Text));
+        ExpressionSyntax markedExpression = document.GetRoot().DescendantNodes()
+            .OfType<ExpressionSyntax>()
+            .First(expression => expression.SpanStart == marked.Start
+                && expression.Span.Length == marked.Text.Length);
+        string markedTokens = ExpressionTokenKey(document, markedExpression);
         return document.GetRoot().DescendantNodes()
             .OfType<ExpressionSyntax>()
             .Where(expression => expression.SpanStart < marked.Start)
             .Where(expression => package is null
                 || string.Equals(DeclaredPackageAt(document, expression.SpanStart), package, StringComparison.Ordinal))
             .Count(expression => string.Equals(
-                ExpressionTokenKey(expression), markedTokens, StringComparison.Ordinal));
+                ExpressionTokenKey(document, expression), markedTokens, StringComparison.Ordinal));
     }
 
-    private static string ExpressionTokenKey(SyntaxNode expression)
-        => string.Join("\u001f", expression.DescendantTokens().Select(token => token.Text));
+    private static string ExpressionTokenKey(LoadedDocument document, SyntaxNode expression)
+        => string.Join(
+            "\u001f",
+            expression.DescendantTokens().Select(token =>
+            {
+                if (token.IsKind(SyntaxKind.NullKeyword))
+                {
+                    return "nil";
+                }
+
+                if (token.IsKind(SyntaxKind.DefaultKeyword))
+                {
+                    return "default";
+                }
+
+                if (token.Parent is TypeSyntax type
+                    && document.SemanticModel.GetTypeInfo(type).Type is { } symbol
+                    && CSharpTypeMapper.GetPredefinedName(symbol.SpecialType) is { } predefined)
+                {
+                    return predefined;
+                }
+
+                return token.Text;
+            }));
 
     private static int PackageUnitIndex(IReadOnlyList<string> packages, string package)
     {

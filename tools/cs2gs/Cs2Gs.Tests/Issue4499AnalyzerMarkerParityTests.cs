@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Linq;
 using Cs2Gs.Translator.Analyzers;
 using Xunit;
 
@@ -19,6 +20,8 @@ namespace Outer
 {
     namespace Symbols
     {
+        using int32 = System.Int32;
+
         static class Door
         {
             public static Type Convert(Type type) => type;
@@ -45,6 +48,8 @@ namespace Outer
 {
     namespace Symbols
     {
+        using int32 = System.Int32;
+
         class Consumer
         {
             // typeof(int32) is already the translated spelling.
@@ -55,6 +60,8 @@ namespace Outer
                 _ = [|Door.Convert(type)|];
                 // Door.Map(evt.EventHandlerType, null, default) must not affect expression ordinals.
                 _ = [|Door.Map(evt.EventHandlerType, null, default)|];
+                _ = Door.Map(typeof(int32), null, default);
+                _ = [|Door.Map(typeof(int), null, default)|];
                 _ = [|Door.Tuple(default)|];
             }
         }
@@ -67,9 +74,11 @@ namespace Outer
     {
         SnippetTranslationResult result = SnippetTranslator.Translate(Source);
 
-        Assert.NotNull(result.GsWithMarkers);
+        Assert.True(
+            result.GsWithMarkers is not null,
+            string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.Message)));
         Assert.Empty(result.UnplacedMarkers);
-        Assert.Equal(4, result.GsWithMarkers.Split("[|", StringSplitOptions.None).Length - 1);
+        Assert.Equal(5, result.GsWithMarkers.Split("[|", StringSplitOptions.None).Length - 1);
 
         string[] units = result.GsWithMarkers.Split(
             SnippetTranslator.UnitSeparator,
@@ -78,12 +87,17 @@ namespace Outer
         string symbols = Assert.Single(units, unit => unit.Contains("package Outer.Symbols", StringComparison.Ordinal));
         string binding = Assert.Single(units, unit => unit.Contains("package Binding", StringComparison.Ordinal));
 
-        Assert.Equal(4, symbols.Split("[|", StringSplitOptions.None).Length - 1);
+        Assert.Equal(5, symbols.Split("[|", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("[|", binding, StringComparison.Ordinal);
         Assert.Contains("-> [|typeof(int32)|]", symbols, StringComparison.Ordinal);
         Assert.DoesNotContain("// [|typeof(int32)|]", symbols, StringComparison.Ordinal);
         Assert.Contains("[|Door.Convert(type)|]", symbols, StringComparison.Ordinal);
         Assert.Contains("[|Door.Map(", symbols, StringComparison.Ordinal);
+        int earlierTranslatedSpelling = symbols.IndexOf(
+            "Door.Map(typeof(int32), nil,", StringComparison.Ordinal);
+        int markedRenamedCall = symbols.IndexOf(
+            "[|Door.Map(typeof(int32), nil,", StringComparison.Ordinal);
+        Assert.True(earlierTranslatedSpelling >= 0 && markedRenamedCall > earlierTranslatedSpelling);
         Assert.Contains("nil", symbols, StringComparison.Ordinal);
         Assert.Contains("default(ImmutableArray[Type])", symbols, StringComparison.Ordinal);
         Assert.Contains("))|]", symbols, StringComparison.Ordinal);
