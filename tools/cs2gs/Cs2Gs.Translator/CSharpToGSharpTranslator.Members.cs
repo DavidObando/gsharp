@@ -1803,9 +1803,13 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns><see langword="true"/> to emit the method as an implementing part.</returns>
         private bool IsGeneratedImplementingPart(IMethodSymbol implementation, TypeDeclarationKind ownerKind)
         {
+            // A record owner is a G# `data class` / `data struct`, which may
+            // hold partial funcs like any class or struct (ADR-0192 amendment,
+            // partial data types): gsgen renders a G# data type as a record.
             if (!this.emitGeneratedImplementingParts
                 || !this.preservePartialParts
-                || ownerKind is not (TypeDeclarationKind.Class or TypeDeclarationKind.Struct)
+                || ownerKind is not (TypeDeclarationKind.Class or TypeDeclarationKind.Struct
+                    or TypeDeclarationKind.DataClass or TypeDeclarationKind.DataStruct)
                 || implementation?.PartialDefinitionPart is not IMethodSymbol definition)
             {
                 return false;
