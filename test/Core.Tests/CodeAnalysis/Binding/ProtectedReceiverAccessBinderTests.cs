@@ -172,6 +172,61 @@ public sealed class ProtectedReceiverAccessBinderTests
     }
 
     /// <summary>
+    /// A <c>: base(...)</c> argument is bound outside the constructor body,
+    /// for explicit and primary constructors alike, and is still class code.
+    /// </summary>
+    /// <param name="declaration">The derived class, reading <c>s.f</c> in its base-constructor arguments.</param>
+    [Theory]
+    [InlineData("class Accessor : Seeded {\n    init(s Source) : base(s.f) {}\n}")]
+    [InlineData("class Accessor(s Source) : Seeded(s.f) {\n}")]
+    public void InBaseConstructorArguments_ThroughBaseReceiver_IsGS0379(string declaration)
+    {
+        var source = Declarations + """
+            open class Seeded : Source {
+                init(v int32) {}
+            }
+
+            """ + declaration;
+
+        AssertSingleGS0379At(source, "s.f", "f");
+    }
+
+    /// <summary>
+    /// Property patterns resolve members without the class-level check the
+    /// other access paths make; they now report it too.
+    /// </summary>
+    /// <param name="statement">The pattern read.</param>
+    /// <param name="id">The expected diagnostic.</param>
+    /// <param name="member">The member named in the diagnostic.</param>
+    [Theory]
+    [InlineData("let x = s is { f: 1 }", "GS0379", "f")]
+    [InlineData("let x = s is { P: 2 }", "GS0379", "P")]
+    [InlineData("let x = s is { hidden: 3 }", "GS0472", "hidden")]
+    public void PropertyPattern_FromUnrelatedClass_IsReportedInaccessible(string statement, string id, string member)
+    {
+        var source = """
+            open class Source {
+                protected var f int32
+                protected prop P int32 { get -> 2 }
+                private var hidden int32
+            }
+
+            """ + $$"""
+            class Other {
+                func Hook(s Source) {
+                    {{statement}}
+                }
+            }
+            """;
+
+        var errors = EmittedOracle.Evaluate(source).Diagnostics.Where(d => d.IsError).ToArray();
+        var error = Assert.Single(errors);
+        Assert.Equal(id, error.Id);
+        var text = Assert.IsType<GSharp.Core.CodeAnalysis.Text.SourceText>(error.Location.Text);
+        Assert.Equal(member, text.ToString(error.Location.Span));
+    }
+
+    /// <summary>
     /// An unrelated class already fails the class-level check; the receiver
     /// rule must not report the same access a second time.
     /// </summary>

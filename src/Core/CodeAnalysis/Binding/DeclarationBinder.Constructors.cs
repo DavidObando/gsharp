@@ -727,6 +727,17 @@ internal sealed partial class DeclarationBinder
 
     private BoundExpression BindConstructorInitializerArgument(ExpressionSyntax syntax)
     {
+        var bound = BindConstructorInitializerArgumentCore(syntax);
+
+        // Issue #4453: a `: base(...)` argument is code of the constructor's
+        // class but is bound outside its body, so the protected-receiver
+        // rule runs here too (primary and explicit constructors alike).
+        ProtectedReceiverDiagnostics.Report(bound, getCurrentFunction(), Diagnostics);
+        return bound;
+    }
+
+    private BoundExpression BindConstructorInitializerArgumentCore(ExpressionSyntax syntax)
+    {
         if (ExpressionBinder.IsTargetDependentBlockArgumentSyntax(syntax))
         {
             return new BoundErrorExpression(syntax);

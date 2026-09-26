@@ -231,8 +231,14 @@ internal static class ProtectedReceiverDiagnostics
 
                 var declaring = member.DeclaringType as StructSymbol
                     ?? (node.Type as StructSymbol is { } owner ? FindDeclaringClass(owner, declares) : null);
+
+                // The pattern binder resolves members without the class-level
+                // check every other access path makes, so this is the one
+                // place a pattern's private or protected member read is
+                // checked at all (GS0472 / GS0379), before the receiver rule.
                 if (declaring == null
-                    || !AccessibilityChecker.ViolatesProtectedReceiverRule(accessibility, declaring, node.Type, function))
+                    || (AccessibilityChecker.IsAccessible(accessibility, declaring, function)
+                        && !AccessibilityChecker.ViolatesProtectedReceiverRule(accessibility, declaring, node.Type, function)))
                 {
                     continue;
                 }
