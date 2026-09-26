@@ -1550,7 +1550,7 @@ public sealed partial class CSharpToGSharpTranslator
             //     re-infers from the emitted argument
             //     (IsInferredGenericParameterTarget).
             if (IsBranchArm(value)
-                && (BranchResultAcceptsNil(value, out ExpressionSyntax branch)
+                && (this.BranchResultAcceptsNil(value, out ExpressionSyntax branch)
                     || this.NullForgivingTargetAcceptsNil(targetType, targetSymbol)
                     || (targetSymbol is IParameterSymbol parameterTarget
                         && IsInferredGenericParameterTarget(parameterTarget, branch))))
@@ -2833,6 +2833,27 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        // Whether `node` reaches its sink through a cast that calls a
+        // user-defined conversion operator. Such a cast is an invocation
+        // boundary: the value feeds the operator's (non-null) parameter, not
+        // the sink that receives the converted result, so that sink is not the
+        // value's target. ResolveValueSink walks casts, so this is asked first.
+        private bool FlowsThroughUserDefinedConversion(SyntaxNode node)
+        {
+            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                if (node.Parent is CastExpressionSyntax cast
+                    && this.context.SemanticModel.GetOperation(cast) is IConversionOperation { OperatorMethod: not null })
+                {
+                    return true;
+                }
+
+                node = node.Parent;
+            }
+
+            return false;
+        }
+
         // Whether `local` is declared `var` (its G# type is inferred from its
         // initializer rather than spelled).
         private static bool IsImplicitlyTypedLocal(ILocalSymbol local) =>
@@ -2869,7 +2890,7 @@ public sealed partial class CSharpToGSharpTranslator
         //     is `T?` in G#, and anything it flows into must accept nil;
         //   - or the whole is the left operand of `??`, a `?.` receiver, an
         //     operand of `== null` / `!= null`, or tested with `is null`.
-        private static bool BranchResultAcceptsNil(ExpressionSyntax value, out ExpressionSyntax branch)
+        private bool BranchResultAcceptsNil(ExpressionSyntax value, out ExpressionSyntax branch)
         {
             bool hasNilArm = false;
             SyntaxNode current = value;
@@ -2918,15 +2939,21 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => false,
             };
 
-            static bool IsNilArm(ExpressionSyntax arm)
+            bool IsNilArm(ExpressionSyntax arm)
             {
                 while (arm is ParenthesizedExpressionSyntax parenthesized)
                 {
                     arm = parenthesized.Expression;
                 }
 
+                // `default(T)` is nil for a reference type or Nullable<T>,
+                // never for `default(int)`.
                 return IsNullOrSuppressedNull(arm)
-                    || arm.IsKind(SyntaxKind.DefaultLiteralExpression);
+                    || arm.IsKind(SyntaxKind.DefaultLiteralExpression)
+                    || (arm is DefaultExpressionSyntax
+                        && this.context.GetTypeInfo(arm).Type is { } defaultType
+                        && (defaultType.IsReferenceType
+                            || defaultType.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T));
             }
         }
 
@@ -3011,6 +3038,7 @@ public sealed partial class CSharpToGSharpTranslator
             // widens it (it then emits the `T?` clause).
             if (target == null
                 && isBranchArm
+                && !this.FlowsThroughUserDefinedConversion(current)
                 && this.ResolveValueSink((ExpressionSyntax)current) is { } sink
                 && !(sink is ILocalSymbol inferredLocal
                     && IsImplicitlyTypedLocal(inferredLocal)
