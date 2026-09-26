@@ -135,12 +135,14 @@ public class Issue4444PlatformUserTypeResolutionTests
     }
 
     /// <summary>
-    /// An extension call over a platform user-type value binds the same
-    /// extension it binds over the plain type: a <c>Node!</c> passed to a
-    /// generic extension, and <c>Where</c> on a list built in the scope.
+    /// A <c>Node!</c> passed to an imported generic static method binds as a
+    /// <c>Node</c> would: <c>Enumerable.Repeat(first, 2)</c>. The erased
+    /// projection that gates the static call is what this pins
+    /// (<c>MemberLookup.TryProjectErasedClrType</c>); <c>Where</c> on a list
+    /// built in the scope is kept as a control that binds either way.
     /// </summary>
     [Fact]
-    public void An_Extension_Over_A_Platform_User_Type_Binds()
+    public void A_Platform_User_Type_Argument_Binds_An_Imported_Generic_Static_Call()
     {
         const string source = """
             @Oblivious
