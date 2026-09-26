@@ -2231,9 +2231,9 @@ internal sealed partial class ExpressionBinder
     {
         // Issue #4444, ADR-0186 §1 and §5a: `T!` has `T`'s signature, so a
         // platform argument rides through exactly as its underlying type does.
-        // A platform type over a G#-declared class, interface, struct,
-        // delegate or enum has a null ClrType, and no arm below matched the
-        // wrapper, so overload resolution never ran for it.
+        // A platform type over a G#-declared class, interface or delegate
+        // (value types are never wrapped) has a null ClrType, and no arm
+        // below matched the wrapper, so overload resolution never ran for it.
         if (typeSymbol is PlatformTypeSymbol platform)
         {
             return GetEffectiveArgumentClrTypeForOverloadResolution(platform.UnderlyingType);
