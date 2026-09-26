@@ -204,14 +204,7 @@ public sealed class ProtectedReceiverAccessBinderTests
     [InlineData("let x = s is { hidden: 3 }", "GS0472", "hidden")]
     public void PropertyPattern_FromUnrelatedClass_IsReportedInaccessible(string statement, string id, string member)
     {
-        var source = """
-            open class Source {
-                protected var f int32
-                protected prop P int32 { get -> 2 }
-                private var hidden int32
-            }
-
-            """ + $$"""
+        var source = PatternDeclarations + $$"""
             class Other {
                 func Hook(s Source) {
                     {{statement}}
@@ -219,6 +212,35 @@ public sealed class ProtectedReceiverAccessBinderTests
             }
             """;
 
+        AssertSingleErrorOnMember(source, id, member);
+    }
+
+    /// <summary>
+    /// Top-level statements are bound outside any function body; a property
+    /// pattern there is checked the same way.
+    /// </summary>
+    /// <param name="statement">The pattern read.</param>
+    /// <param name="id">The expected diagnostic.</param>
+    /// <param name="member">The member named in the diagnostic.</param>
+    [Theory]
+    [InlineData("let x = Source() is { f: 1 }", "GS0379", "f")]
+    [InlineData("let x = Source() is { hidden: 3 }", "GS0472", "hidden")]
+    public void PropertyPattern_InTopLevelStatement_IsReportedInaccessible(string statement, string id, string member)
+    {
+        AssertSingleErrorOnMember(PatternDeclarations + statement + "\n", id, member);
+    }
+
+    private const string PatternDeclarations = """
+        open class Source {
+            protected var f int32
+            protected prop P int32 { get -> 2 }
+            private var hidden int32
+        }
+
+        """;
+
+    private static void AssertSingleErrorOnMember(string source, string id, string member)
+    {
         var errors = EmittedOracle.Evaluate(source).Diagnostics.Where(d => d.IsError).ToArray();
         var error = Assert.Single(errors);
         Assert.Equal(id, error.Id);

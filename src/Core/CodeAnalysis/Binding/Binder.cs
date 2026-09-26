@@ -1765,9 +1765,12 @@ public sealed class Binder
         // AnalyzeFunctionBody, so reject any unresolved method group retained
         // by inference/conditional binding before the global diagnostic
         // snapshot is taken.
-        MethodGroupDiagnostics.ReportUnresolved(
-            new BoundBlockStatement(null, statements.ToImmutable()),
-            binder.Diagnostics);
+        var topLevelBlock = new BoundBlockStatement(null, statements.ToImmutable());
+        MethodGroupDiagnostics.ReportUnresolved(topLevelBlock, binder.Diagnostics);
+
+        // Issue #4453: top-level statements do not pass through
+        // AnalyzeFunctionBody either; check their member accesses too.
+        ProtectedReceiverDiagnostics.Report(topLevelBlock, synthesizedEntryPoint, binder.Diagnostics);
         var diagnostics = binder.Diagnostics.ToImmutableArray();
 
         if (previous != null)

@@ -32,11 +32,11 @@ internal static class ProtectedReceiverDiagnostics
 {
     /// <summary>Reports every protected-receiver violation in <paramref name="root"/>.</summary>
     /// <param name="root">The bound (pre-lowering) body or expression.</param>
-    /// <param name="function">The function whose body <paramref name="root"/> is, or the accessibility context an initializer is bound in.</param>
+    /// <param name="function">The function whose body <paramref name="root"/> is, the accessibility context an initializer is bound in, or <see langword="null"/> for code outside any function.</param>
     /// <param name="diagnostics">The bag to report into.</param>
     public static void Report(BoundNode? root, FunctionSymbol? function, DiagnosticBag diagnostics)
     {
-        if (root != null && function != null)
+        if (root != null)
         {
             new Walker(function, diagnostics).Visit(root);
         }
@@ -101,7 +101,7 @@ internal static class ProtectedReceiverDiagnostics
     {
         private readonly DiagnosticBag diagnostics;
         private readonly HashSet<(TextLocation Location, string Member)> reported = new();
-        private FunctionSymbol function;
+        private FunctionSymbol? function;
 
         // The nearest enclosing node that carries syntax. A compound
         // assignment's implicit read (`s.f += 1`) and a null-conditional
@@ -109,7 +109,7 @@ internal static class ProtectedReceiverDiagnostics
         // source expression they belong to, once.
         private SyntaxNode? anchor;
 
-        public Walker(FunctionSymbol function, DiagnosticBag diagnostics)
+        public Walker(FunctionSymbol? function, DiagnosticBag diagnostics)
         {
             this.function = function;
             this.diagnostics = diagnostics;
