@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Linq;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -48,11 +49,7 @@ internal static class AccessibilityChecker
         // A direct generic local cannot borrow a lexical access domain that
         // its emitted host cannot preserve. Keep source lookup lexical, but
         // apply the ordinary Program-host checks to every member reference.
-        if (currentFunction?.LocalDeclaration != null
-            && !currentFunction.HasNonGenericLexicalOwner)
-        {
-            currentFunction = null;
-        }
+        currentFunction = NormalizeAccessContext(currentFunction);
 
         if (declaringType is InterfaceSymbol declaringInterface)
         {
@@ -73,10 +70,85 @@ internal static class AccessibilityChecker
                 == true;
         }
 
-        var enclosingType = (currentFunction?.ReceiverType as StructSymbol)
-            ?? (currentFunction?.StaticOwnerType as StructSymbol)
-            ?? (currentFunction?.LexicalEnclosingType as StructSymbol);
-        return IsAccessibleFromType(accessibility, declaringType as StructSymbol, enclosingType);
+        return IsAccessibleFromType(accessibility, declaringType as StructSymbol, GetEnclosingClass(currentFunction));
+    }
+
+    /// <summary>
+    /// Issue #4453: the C# CS1540 receiver rule for <c>protected</c> instance
+    /// members. Outside its declaring class, a derived class may reach a
+    /// <c>protected</c> instance member only through a receiver whose static
+    /// type is that derived class or a class derived from it, because a
+    /// receiver typed as the base (or a sibling) may be an instance of some
+    /// other subclass. The CLR enforces the same rule (ILVerify reports
+    /// <c>MethodAccess</c>/<c>FieldAccess</c>).
+    /// <para>
+    /// This reports only the receiver half: it returns <see langword="false"/>
+    /// when <see cref="IsAccessible"/> already rejects the access, so the
+    /// caller never reports the same access twice. Static members, which
+    /// have no receiver, are exempt, as in C#.
+    /// </para>
+    /// </summary>
+    /// <param name="accessibility">The accessed member's accessibility.</param>
+    /// <param name="declaringType">The type that declares the member.</param>
+    /// <param name="receiverType">The static type of the instance receiver, or <see langword="null"/> for a static member.</param>
+    /// <param name="currentFunction">The function whose body contains the access.</param>
+    /// <returns><see langword="true"/> when the access is reachable from the accessing class but not through this receiver.</returns>
+    public static bool ViolatesProtectedReceiverRule(
+        Accessibility accessibility,
+        TypeSymbol? declaringType,
+        TypeSymbol? receiverType,
+        FunctionSymbol? currentFunction)
+    {
+        if (accessibility != Accessibility.Protected
+            || receiverType == null
+            || ReferenceEquals(receiverType, TypeSymbol.Error)
+            || declaringType is not StructSymbol declaringClass
+            || !IsAccessible(accessibility, declaringType, currentFunction))
+        {
+            return false;
+        }
+
+        var enclosingClass = GetEnclosingClass(NormalizeAccessContext(currentFunction));
+
+        // Inside the declaring class itself, any receiver is fine: C# applies
+        // the receiver rule only to access from a derived class.
+        if (enclosingClass == null || SameClassDefinition(enclosingClass, declaringClass))
+        {
+            return false;
+        }
+
+        return !IsReceiverWithinClass(receiverType, enclosingClass);
+    }
+
+    /// <summary>
+    /// Issue #4453: whether <paramref name="receiverType"/> is
+    /// <paramref name="enclosingClass"/> or a class derived from it, any
+    /// construction of a generic class counting as that class (C# allows
+    /// <c>Derived&lt;int&gt;</c> inside <c>Derived&lt;T&gt;</c>). A
+    /// nullability wrapper is read through, and a type parameter stands for
+    /// its class constraint. The protected-receiver rule for both source
+    /// members (<see cref="ViolatesProtectedReceiverRule"/>) and imported
+    /// events (#4394) asks this one question.
+    /// </summary>
+    /// <param name="receiverType">The receiver's static type.</param>
+    /// <param name="enclosingClass">The class containing the access.</param>
+    /// <returns><see langword="true"/> when the receiver is of the enclosing class or a subclass.</returns>
+    public static bool IsReceiverWithinClass(TypeSymbol receiverType, StructSymbol enclosingClass)
+    {
+        if (GetReceiverClass(receiverType) is not { } receiverClass)
+        {
+            return false;
+        }
+
+        foreach (var level in receiverClass.GetHierarchy())
+        {
+            if (SameClassDefinition(level, enclosingClass))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
@@ -190,6 +262,78 @@ internal static class AccessibilityChecker
 
         return !IsAccessible(accessibility, declaringType, currentFunction);
     }
+
+    /// <summary>
+    /// Issue #4453: whether two classes are the same generic definition. Any
+    /// construction counts as its definition, but, unlike
+    /// <see cref="SameDeclaringType"/>, there is no fallback on the simple
+    /// name and package: two nested classes <c>A.D</c> and <c>B.D</c> share
+    /// both and are still different classes, and the receiver rule must not
+    /// confuse them.
+    /// </summary>
+    private static bool SameClassDefinition(StructSymbol left, StructSymbol right)
+    {
+        var leftDefinition = left.Definition;
+        var rightDefinition = right.Definition;
+        return ReferenceEquals(leftDefinition, rightDefinition)
+            || (leftDefinition.Declaration != null
+                && ReferenceEquals(leftDefinition.Declaration, rightDefinition.Declaration));
+    }
+
+    /// <summary>
+    /// The class a receiver of <paramref name="type"/> is statically known to
+    /// be an instance of: the type itself, the type under a <c>?</c> or
+    /// <c>!</c> wrapper (this asks which class, not whether it may be nil),
+    /// or a type parameter's class constraint.
+    /// </summary>
+    private static StructSymbol? GetReceiverClass(TypeSymbol type)
+    {
+        // A malformed constraint cycle (`T U`, `U T`) must not hang the
+        // binder; each type parameter is followed at most once.
+        HashSet<TypeParameterSymbol>? visited = null;
+        TypeSymbol? current = type;
+        while (current != null)
+        {
+            switch (current)
+            {
+                case StructSymbol structType:
+                    return structType;
+                case NullableTypeSymbol nullable:
+                    current = nullable.UnderlyingType;
+                    break;
+                case PlatformTypeSymbol platform:
+                    current = platform.UnderlyingType;
+                    break;
+                case TypeParameterSymbol typeParameter:
+                    visited ??= new HashSet<TypeParameterSymbol>(ReferenceEqualityComparer.Instance);
+                    if (!visited.Add(typeParameter))
+                    {
+                        return null;
+                    }
+
+                    current = typeParameter.ClassConstraint ?? typeParameter.TypeParameterBound;
+                    break;
+                default:
+                    return null;
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
+    /// A direct generic local cannot borrow a lexical access domain that its
+    /// emitted host cannot preserve, so it is checked as Program-host code.
+    /// </summary>
+    private static FunctionSymbol? NormalizeAccessContext(FunctionSymbol? currentFunction)
+        => currentFunction?.LocalDeclaration != null && !currentFunction.HasNonGenericLexicalOwner
+            ? null
+            : currentFunction;
+
+    private static StructSymbol? GetEnclosingClass(FunctionSymbol? currentFunction)
+        => (currentFunction?.ReceiverType as StructSymbol)
+            ?? (currentFunction?.StaticOwnerType as StructSymbol)
+            ?? (currentFunction?.LexicalEnclosingType as StructSymbol);
 
     /// <summary>
     /// Issue #2044: walks <see cref="Symbol.ContainingType"/> to the

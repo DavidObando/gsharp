@@ -4267,6 +4267,10 @@ internal sealed partial class DeclarationBinder
                     var convertedInit = initSyntax is BlockExpressionSyntax
                         ? boundInit
                         : conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+
+                    // Issue #4453: an initializer is class code too, so the
+                    // protected-receiver rule applies to it.
+                    ProtectedReceiverDiagnostics.Report(convertedInit, staticInitializerContext, Diagnostics);
                     staticInitBuilder[fieldSym] = convertedInit;
                 }
 
@@ -4340,6 +4344,9 @@ internal sealed partial class DeclarationBinder
                     var convertedInit = initSyntax is BlockExpressionSyntax
                         ? boundInit
                         : conversions.BindConversion(initSyntax.Location, boundInit, fieldType);
+
+                    // Issue #4453: see the static initializers above.
+                    ProtectedReceiverDiagnostics.Report(convertedInit, getCurrentFunction(), Diagnostics);
                     instanceInitBuilder[fieldSym] = convertedInit;
                 }
 

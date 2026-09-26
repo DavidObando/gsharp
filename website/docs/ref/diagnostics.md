@@ -656,7 +656,7 @@ Because protection is only meaningful where a derived type can exist,
 
 | Code | Severity | Message |
 |------|----------|---------|
-| GS0379 | Error | `'{Type}.{member}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{Type}' and types derived from it.` |
+| GS0379 | Error | `'{Type}.{member}' is inaccessible due to its protection level: a 'protected' member is only accessible within '{Type}' and types derived from it, and an instance member only through a receiver of the accessing type or a type derived from it.` |
 | GS0380 | Error | `'protected' is only allowed on members of an 'open class' (a type that can be inherited). Mark the enclosing class 'open', or use a different accessibility.` |
 
 

@@ -775,7 +775,9 @@ public class Issue3523FunctionPointerMemberInvocationTests
             }
 
             class Derived : Owner {
-                func AllowedDerived(owner Owner) {
+                // Issue #4453: a protected instance member is reachable from a
+                // derived class only through a receiver of that class (C# CS1540).
+                func AllowedDerived(owner Derived) {
                     owner.ProtectedField(1)
                     owner.InternalField(2)
                 }

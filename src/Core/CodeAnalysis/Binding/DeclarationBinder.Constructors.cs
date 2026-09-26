@@ -228,6 +228,7 @@ internal sealed partial class DeclarationBinder
                         location);
                 }
 
+                ReportProtectedReceiverAccess(clrInit ?? gsharpInit);
                 scope = staticScope;
             }
         }
@@ -746,6 +747,28 @@ internal sealed partial class DeclarationBinder
         finally
         {
             binderCtx.DeferTargetlessConditional = previous;
+        }
+    }
+
+    /// <summary>
+    /// Issue #4453: a <c>: base(...)</c> argument is code of the
+    /// constructor's class but is bound outside its body, so the
+    /// protected-receiver pass runs over the resolved initializer's final
+    /// arguments, after constructor resolution has rebound any deferred
+    /// (target-dependent) argument. Primary and explicit constructors both
+    /// call this.
+    /// </summary>
+    /// <param name="initializer">The resolved base-constructor initializer, if resolution succeeded.</param>
+    private void ReportProtectedReceiverAccess(BaseConstructorInitializer? initializer)
+    {
+        if (initializer == null)
+        {
+            return;
+        }
+
+        foreach (var argument in initializer.Arguments)
+        {
+            ProtectedReceiverDiagnostics.Report(argument, getCurrentFunction(), Diagnostics);
         }
     }
 
@@ -1641,6 +1664,7 @@ internal sealed partial class DeclarationBinder
                         location);
                 }
 
+                ReportProtectedReceiverAccess(init);
                 scope = staticScope;
             }
         }
