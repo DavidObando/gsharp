@@ -379,7 +379,7 @@ public class Issue3099TypeArgumentReificationTests
                 for field in t.GetFields() {
                     shape = shape + "|" + field.Name + ":" + field.FieldType.FullName + ":" + field.IsInitOnly.ToString() + ":" + field.IsStatic.ToString() + ":" + field.IsLiteral.ToString()
                     if field.IsLiteral {
-                        shape = shape + ":" + field.GetRawConstantValue().ToString()
+                        shape = shape + ":" + field.GetRawConstantValue()!!.ToString()
                     }
                 }
                 return shape
