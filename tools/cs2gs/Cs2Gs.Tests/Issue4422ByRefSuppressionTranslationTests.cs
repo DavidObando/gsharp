@@ -237,6 +237,11 @@ public class Cache
 ");
 
         Assert.DoesNotContain("@SuppressDiagnostic", printed, StringComparison.Ordinal);
+
+        // Issue #4287: `&cache` cannot carry the C# `!`, so gsc infers T from
+        // the declared `Dictionary?` and the call result is nilable; the
+        // receiver re-states the author's suppression.
+        Assert.Contains("Volatile.Read(&cache)!!.TryGetValue", printed, StringComparison.Ordinal);
         AssertCompilesWithoutGS0612(printed);
     }
 
