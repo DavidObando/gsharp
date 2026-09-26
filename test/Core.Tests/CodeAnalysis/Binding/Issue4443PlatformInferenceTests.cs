@@ -80,6 +80,10 @@ public class Issue4443PlatformInferenceTests
 
         func First[T](xs List[T]) T { return xs[0] }
 
+        func Get[T](ref x T) T { return x }
+
+        struct Cell[T] { var Value T }
+
         """;
 
     /// <summary>
@@ -191,6 +195,35 @@ public class Issue4443PlatformInferenceTests
         var thrown = Assert.Throws<NullReferenceException>(() => Run(library, program));
         Assert.Contains("nullability-oblivious", thrown.Message, StringComparison.Ordinal);
         Assert.Contains("coerced at", thrown.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// A by-reference argument infers from its exact type in the call that is
+    /// actually bound, not only while candidates are ranked: <c>Get(ref a)</c>
+    /// over a <c>string!</c> local infers <c>T = string!</c>, so the result
+    /// read from a location that may hold nil stays platform-typed. Stripping
+    /// it would type that result <c>string</c> with no check anywhere.
+    /// </summary>
+    [Fact]
+    public void A_By_Reference_Argument_Infers_Its_Exact_Type()
+    {
+        using var library = new CSharpFixture(LibrarySource);
+
+        Assert.Equal("string!", ProbeType(library, "var a = Ob.Name()\nlet probe = Get(ref a)"));
+    }
+
+    /// <summary>
+    /// The amendment covers method type arguments only. A generic struct
+    /// literal still infers its type argument from a <c>T!</c> field value
+    /// exactly, as before: <c>Cell{Value: Ob.Name()}</c> is a
+    /// <c>Cell[string!]</c>.
+    /// </summary>
+    [Fact]
+    public void A_Generic_Struct_Literal_Keeps_The_Platform_Type_Argument()
+    {
+        using var library = new CSharpFixture(LibrarySource);
+
+        Assert.Equal("Cell[string!]", ProbeType(library, "let probe = Cell{Value: Ob.Name()}"));
     }
 
     /// <summary>

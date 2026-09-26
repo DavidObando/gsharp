@@ -1339,14 +1339,14 @@ internal sealed partial class OverloadResolver
                 // a generic receiver type (e.g. `func (s []T) ...`) bind T.
                 if (receiver?.Type != null)
                 {
-                    inferTypeArguments(extension.Parameters[0].Type, receiver.Type, substitution);
+                    inferTypeArguments(extension.Parameters[0].Type, RefCapabilities.GetInferenceType(extension.Parameters[0], receiver.Type), substitution);
                 }
 
                 for (var i = 0; i < permutedArguments.Length; i++)
                 {
                     if (permutedArguments[i].Type != null)
                     {
-                        inferTypeArguments(extension.Parameters[i + 1].Type, permutedArguments[i].Type, substitution);
+                        inferTypeArguments(extension.Parameters[i + 1].Type, RefCapabilities.GetInferenceType(extension.Parameters[i + 1], permutedArguments[i].Type), substitution);
                     }
                 }
 
@@ -1744,13 +1744,13 @@ internal sealed partial class OverloadResolver
                         {
                             // Carrier pass-through (`f(existingList)`): let the
                             // general structural walk unify the carrier shapes.
-                            inferTypeArguments(paramType, argType, substitution);
+                            inferTypeArguments(paramType, RefCapabilities.GetValueArgumentInferenceType(argType), substitution);
                         }
                         else
                         {
                             for (var j = i; j < permutedArguments.Length; j++)
                             {
-                                inferTypeArguments(variadicInferElement, permutedArguments[j].Type, substitution);
+                                inferTypeArguments(variadicInferElement, RefCapabilities.GetValueArgumentInferenceType(permutedArguments[j].Type), substitution);
                             }
                         }
 

@@ -11841,37 +11841,18 @@ public sealed class Binder
     }
 
     /// <summary>
-    /// Infers method type arguments from one argument against its parameter.
-    /// <para>
-    /// ADR-0186 §3 (as amended by #4443): inference never yields <c>T!</c>
-    /// from an argument's top level. A platform-typed argument contributes its
-    /// underlying <c>T</c>; the call then coerces the argument <c>T! → T</c>,
-    /// which §4 checks. Without this, <c>Wrap(x)</c> over a <c>string!</c>
-    /// inferred <c>List[string!]</c>, which rule 3 does not convert to the
-    /// <c>List[string]</c> the code declares. Only the top level is stripped:
-    /// a platform position nested in the argument's type (the element of an
-    /// oblivious <c>List&lt;string&gt;</c>) belongs to an invariant
-    /// container's identity, so it still infers <c>T!</c>.
-    /// </para>
+    /// Infers type arguments from one argument type against its parameter
+    /// type, exactly as given. A method call's argument sites first pass the
+    /// argument through <see cref="RefCapabilities.GetInferenceType"/>, which
+    /// is where ADR-0186 §3's #4443 amendment (a by-value <c>T!</c> argument
+    /// contributes <c>T</c>) is decided; the other consumers (generic struct
+    /// literals, generic type construction, delegate-target inference) keep
+    /// the argument's exact type, as the amendment's method-only scope says.
     /// </summary>
     /// <param name="parameterType">The parameter type, which may mention type parameters.</param>
     /// <param name="argumentType">The argument's type.</param>
     /// <param name="substitution">The inferred bindings, updated in place.</param>
     internal static void InferTypeArguments(TypeSymbol parameterType, TypeSymbol argumentType, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
-        => InferTypeArgumentsCore(
-            parameterType,
-            argumentType is PlatformTypeSymbol platform ? platform.UnderlyingType : argumentType,
-            substitution);
-
-    /// <summary>
-    /// Infers method type arguments from an argument whose exact type must be
-    /// kept, a by-reference argument: unlike <see cref="InferTypeArguments"/>
-    /// it does not strip a top-level <c>T!</c>.
-    /// </summary>
-    /// <param name="parameterType">The parameter type, which may mention type parameters.</param>
-    /// <param name="argumentType">The argument's type.</param>
-    /// <param name="substitution">The inferred bindings, updated in place.</param>
-    internal static void InferTypeArgumentsExact(TypeSymbol parameterType, TypeSymbol argumentType, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
         => InferTypeArgumentsCore(parameterType, argumentType, substitution);
 
     private static void InferTypeArgumentsCore(TypeSymbol parameterType, TypeSymbol argumentType, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)

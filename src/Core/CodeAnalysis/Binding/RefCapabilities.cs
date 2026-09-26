@@ -242,10 +242,43 @@ internal static class RefCapabilities
         => HasUnscopedRefAttribute(indexer.GetCustomAttributesData())
             || HasUnscopedRefAttribute(indexer.GetGetMethod(nonPublic: true)?.GetCustomAttributesData());
 
+    /// <summary>
+    /// The type a method-call argument contributes to type-argument inference
+    /// for <paramref name="parameter"/>.
+    /// <para>
+    /// ADR-0186 §3, as amended by #4443: a by-value argument whose top level
+    /// is <c>T!</c> contributes <c>T</c>, and the call then coerces it
+    /// <c>T! → T</c>, which §4 checks. Only the top level is stripped; a
+    /// platform position nested in the argument's type is part of an
+    /// invariant container's identity and still infers <c>T!</c>. A
+    /// by-reference argument keeps its exact type, because a <c>ref</c> has no
+    /// coercion to carry the check. This is the one place that decision is
+    /// made for G# callees; every method-call argument site routes through it
+    /// or through <see cref="GetValueArgumentInferenceType"/>.
+    /// </para>
+    /// </summary>
+    /// <param name="parameter">The parameter the argument binds to.</param>
+    /// <param name="argumentType">The argument's type.</param>
+    /// <returns>The type to unify against the parameter's type.</returns>
     internal static TypeSymbol GetInferenceType(ParameterSymbol parameter, TypeSymbol argumentType)
-        => parameter.RefKind != RefKind.None && argumentType is ByRefTypeSymbol byRef
-            ? byRef.PointeeType
-            : argumentType;
+    {
+        if (parameter.RefKind != RefKind.None)
+        {
+            return argumentType is ByRefTypeSymbol byRef ? byRef.PointeeType : argumentType;
+        }
+
+        return GetValueArgumentInferenceType(argumentType);
+    }
+
+    /// <summary>
+    /// <see cref="GetInferenceType"/> for a by-value argument with no single
+    /// parameter of its own (a variadic element, or a carrier passed through
+    /// to a variadic slot): a top-level <c>T!</c> contributes <c>T</c>.
+    /// </summary>
+    /// <param name="argumentType">The argument's type.</param>
+    /// <returns>The type to unify against the parameter's type.</returns>
+    internal static TypeSymbol GetValueArgumentInferenceType(TypeSymbol argumentType)
+        => argumentType is PlatformTypeSymbol platform ? platform.UnderlyingType : argumentType;
 
     internal static RefKind GetReturnRefKind(MethodInfo? method)
     {
