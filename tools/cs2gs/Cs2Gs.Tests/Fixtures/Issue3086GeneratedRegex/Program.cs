@@ -2,11 +2,8 @@ using System.Text.RegularExpressions;
 
 namespace Issue3086;
 
-public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
+public sealed record GitHubUrl(string Owner, string Name, int? PrNumber)
 {
-    private const string PatternText =
-        @"^https://(www\.)?github\.com/(?<owner>[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/(?<name>[A-Za-z0-9._-]+?)(\.git)?(/(pull/(?<pr>\d+))?)?/?$";
-
     public static bool TryParse(string? url, out GitHubUrl parsed)
     {
         parsed = new GitHubUrl(string.Empty, string.Empty, null);
@@ -15,7 +12,7 @@ public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
             return false;
         }
 
-        var match = Pattern().Match(url.Trim());
+        var match = GitHubUrlPatterns.Pattern().Match(url.Trim());
         if (!match.Success)
         {
             return false;
@@ -25,6 +22,15 @@ public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
         parsed = new GitHubUrl(match.Groups["owner"].Value, match.Groups["name"].Value, prNumber);
         return true;
     }
+}
+
+// Issue #4301: a G# record cannot hold a partial func (GS0607), so the
+// [GeneratedRegex] methods live in a partial class, which migrates to G#
+// declaring parts that gsgen implements with the real Regex generator.
+internal static partial class GitHubUrlPatterns
+{
+    private const string PatternText =
+        @"^https://(www\.)?github\.com/(?<owner>[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/(?<name>[A-Za-z0-9._-]+?)(\.git)?(/(pull/(?<pr>\d+))?)?/?$";
 
     public static bool HasExpectedRegexSemantics()
     {
@@ -59,7 +65,7 @@ public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
         PatternText,
         RegexOptions.ExplicitCapture,
         matchTimeoutMilliseconds: 1000)]
-    private static partial Regex Pattern();
+    internal static partial Regex Pattern();
 
     [GeneratedRegex("^default$")]
     private static partial Regex DefaultPattern();
@@ -69,6 +75,17 @@ public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
 
     [GeneratedRegex("(?i)^invariant$", RegexOptions.CultureInvariant)]
     private static partial Regex InvariantPattern();
+
+    // Culture-sensitive IgnoreCase, which the pre-#4301 cached-Regex rewrite
+    // could not migrate: under tr-TR, `i` matches dotted `\u0130` but not `I`.
+    public static bool HasCultureSemantics() =>
+        TurkishI().IsMatch("\u0130") && !TurkishI().IsMatch("I") && InlineIgnoreCase().IsMatch("ABC");
+
+    [GeneratedRegex("^i$", RegexOptions.IgnoreCase, "tr-TR")]
+    private static partial Regex TurkishI();
+
+    [GeneratedRegex("(?i)^abc$")]
+    private static partial Regex InlineIgnoreCase();
 }
 
 public sealed partial class InstanceRegexOwner
@@ -86,13 +103,14 @@ public static class Program
         AssertUrl("https://github.com/DavidObando/gsharp", null);
         AssertUrl("https://github.com/DavidObando/gsharp/pull/3086", 3086);
 
-        if (!GitHubUrl.HasExpectedRegexSemantics())
+        if (!GitHubUrlPatterns.HasExpectedRegexSemantics())
         {
             throw new InvalidOperationException("GeneratedRegex semantics changed.");
         }
 
-        if (!GitHubUrl.HasDefaultRegexSemantics() ||
-            !GitHubUrl.HasInvariantInlineIgnoreCaseSemantics())
+        if (!GitHubUrlPatterns.HasDefaultRegexSemantics() ||
+            !GitHubUrlPatterns.HasInvariantInlineIgnoreCaseSemantics() ||
+            !GitHubUrlPatterns.HasCultureSemantics())
         {
             throw new InvalidOperationException("GeneratedRegex default semantics changed.");
         }

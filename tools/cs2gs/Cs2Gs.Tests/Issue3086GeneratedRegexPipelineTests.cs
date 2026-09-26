@@ -14,7 +14,10 @@ using Xunit;
 
 namespace Cs2Gs.Tests;
 
-/// <summary>Issue #3086: GeneratedRegex partial declarations survive migration as equivalent cached regexes.</summary>
+/// <summary>
+/// Issue #3086 / #4301: GeneratedRegex partial methods migrate to G# declaring
+/// parts, which the SDK build implements with the real Regex generator (gsgen).
+/// </summary>
 [Collection(IlVerifyPipelineCollection.Name)]
 public sealed class Issue3086GeneratedRegexPipelineTests
 {
@@ -69,44 +72,23 @@ public sealed class Issue3086GeneratedRegexPipelineTests
             Environment.NewLine,
             Directory.GetFiles(appDirectory, "*.gs", SearchOption.AllDirectories)
                 .Select(File.ReadAllText));
-        // ADR-0179 phase 7b: the gsfmt post-pass wraps an over-wide backing
-        // field across several lines, so "the initializer of THIS field" is no
-        // longer "the line that declares it". Slice from the declaration to the
-        // next `__generatedRegex_` instead, which is the following member.
-        string defaultPatternField = GeneratedRegexInitializer(translated, "__generatedRegex_DefaultPattern");
-        string infinitePatternField = GeneratedRegexInitializer(translated, "__generatedRegex_InfinitePattern");
-
-        Assert.Contains("let __generatedRegex_Pattern Regex = Regex(", translated, StringComparison.Ordinal);
-        Assert.Contains("RegexOptions.ExplicitCapture", translated, StringComparison.Ordinal);
-        Assert.Contains("TimeSpan.FromMilliseconds(1000.0)", translated, StringComparison.Ordinal);
-        Assert.Contains("func Pattern() Regex -> __generatedRegex_Pattern", translated, StringComparison.Ordinal);
-        Assert.Contains("let __generatedRegex_DefaultPattern Regex = Regex(", translated, StringComparison.Ordinal);
-        Assert.Contains("RegexOptions.None", translated, StringComparison.Ordinal);
-        Assert.DoesNotContain("Regex.InfiniteMatchTimeout", defaultPatternField, StringComparison.Ordinal);
-        Assert.Contains(
-            "func DefaultPattern() Regex -> __generatedRegex_DefaultPattern",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains(
-            "let __generatedRegex_InfinitePattern Regex = Regex(",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains("Regex.InfiniteMatchTimeout", infinitePatternField, StringComparison.Ordinal);
-        Assert.Contains(
-            "func InfinitePattern() Regex -> __generatedRegex_InfinitePattern",
-            translated,
-            StringComparison.Ordinal);
-        Assert.Contains("RegexOptions.CultureInvariant", translated, StringComparison.Ordinal);
-        Assert.Contains(
-            "let __generatedRegex_LowercaseWords Regex = Regex(",
-            translated,
-            StringComparison.Ordinal);
+        // Issue #4301: each [GeneratedRegex] method is a G# declaring part;
+        // gsgen implements it with the real Regex generator during the SDK
+        // compile. The const pattern and the named timeout are re-spelled
+        // positionally from their values.
+        Assert.DoesNotContain("__generatedRegex_", translated, StringComparison.Ordinal);
+        Assert.Contains("@GeneratedRegex(\"^https://", translated, StringComparison.Ordinal);
+        Assert.Contains("RegexOptions.ExplicitCapture, 1000)", translated, StringComparison.Ordinal);
+        Assert.Contains("internal partial func Pattern() Regex;", translated, StringComparison.Ordinal);
+        Assert.Contains("@GeneratedRegex(\"^infinite$$\", RegexOptions.None, -1)", translated, StringComparison.Ordinal);
+        Assert.Contains("@GeneratedRegex(\"^i$$\", RegexOptions.IgnoreCase, \"tr-TR\")", translated, StringComparison.Ordinal);
+        Assert.Contains("private partial func TurkishI() Regex;", translated, StringComparison.Ordinal);
         Assert.Contains(
             "partial class InstanceRegexOwner {" + Environment.NewLine +
-            "    func LowercaseWords() Regex -> __generatedRegex_LowercaseWords",
+            "    @GeneratedRegex(\"^[a-z]+$$\")" + Environment.NewLine +
+            "    partial func LowercaseWords() Regex;",
             translated,
             StringComparison.Ordinal);
-        Assert.DoesNotContain("@GeneratedRegex", translated, StringComparison.Ordinal);
         Assert.True(
             appResult.Succeeded,
             string.Join("; ", appResult.Stages.Select(stage => stage.Stage + "=" + stage.Status)));
@@ -116,7 +98,7 @@ public sealed class Issue3086GeneratedRegexPipelineTests
     }
 
     [Fact]
-    public async Task InlineIgnoreCaseWithoutInvariant_ReportsUnsupported()
+    public async Task InlineIgnoreCaseWithoutInvariant_TranslatesToDeclaringParts()
     {
         string sourceRoot = NewDirectory("scratch-projects");
         File.WriteAllText(Path.Combine(sourceRoot, "Directory.Build.props"), "<Project></Project>");
@@ -173,38 +155,16 @@ public sealed class Issue3086GeneratedRegexPipelineTests
             document.FilePath);
         string translated = GSharpPrinter.Print(
             new CSharpToGSharpTranslator().TranslateDocument(document, context));
-        TranslationDiagnostic[] diagnostics = context.Diagnostics
-            .Where(diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported)
-            .ToArray();
-
-        Assert.Equal(3, diagnostics.Length);
-        Assert.All(
-            diagnostics,
-            diagnostic => Assert.Contains(
-                "including inline option groups",
-                diagnostic.Message,
-                StringComparison.Ordinal));
-        Assert.Contains("func DisabledIgnoreCase()", translated, StringComparison.Ordinal);
-        Assert.Contains("func EscapedLiteral()", translated, StringComparison.Ordinal);
-        Assert.Contains("func CharacterClassLiteral()", translated, StringComparison.Ordinal);
-        Assert.Contains("func InvariantIgnoreCase()", translated, StringComparison.Ordinal);
-    }
-
-    /// <summary>
-    /// Returns the initializer text of one <c>[GeneratedRegex]</c> backing
-    /// field: everything between its declaration and the next
-    /// <c>__generatedRegex_</c>, which is the accessor that reads it. Slicing
-    /// by member rather than by line keeps the assertion honest once the
-    /// ADR-0179 post-pass is free to wrap the initializer.
-    /// </summary>
-    private static string GeneratedRegexInitializer(string translated, string field)
-    {
-        string marker = field + " Regex =";
-        int start = translated.IndexOf(marker, StringComparison.Ordinal);
-        Assert.True(start >= 0, $"expected '{marker}' in the migrated source.");
-        start += marker.Length;
-        int end = translated.IndexOf("__generatedRegex_", start, StringComparison.Ordinal);
-        return end < 0 ? translated[start..] : translated[start..end];
+        // The pre-#4301 rewrite constructed the Regex itself and reported
+        // culture-sensitive IgnoreCase; the real generator handles it.
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("private partial func GlobalIgnoreCase() Regex;", translated, StringComparison.Ordinal);
+        Assert.Contains("private partial func ScopedIgnoreCase() Regex;", translated, StringComparison.Ordinal);
+        Assert.Contains("private partial func ToggledIgnoreCase() Regex;", translated, StringComparison.Ordinal);
+        Assert.Contains("private partial func DisabledIgnoreCase() Regex;", translated, StringComparison.Ordinal);
+        Assert.Contains("private partial func InvariantIgnoreCase() Regex;", translated, StringComparison.Ordinal);
     }
 
     private static void CopyFixture(string destination)
