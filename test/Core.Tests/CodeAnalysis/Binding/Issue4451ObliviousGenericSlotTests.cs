@@ -22,11 +22,18 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// checked at the call. Both sides of such a pair erase to one CLR type
 /// (<c>string!</c> at <c>string</c>), and the imported-call argument binder
 /// only converted an argument whose CLR shape differed, so the check was never
-/// inserted for any imported callee. The reported shape is the worst of them:
-/// an oblivious <c>List&lt;T&gt; WrapList&lt;T&gt;(T value)</c> closed as
-/// <c>WrapList[string]</c> reads its parameter as <c>string</c> and its return
-/// as <c>List[string]</c>, so a nil entered a non-null list and surfaced later
-/// as an unattributed <see cref="NullReferenceException"/>.
+/// inserted for any imported callee.
+/// <para>
+/// The reported shape, an oblivious <c>List&lt;T&gt; WrapList&lt;T&gt;(T value)</c>
+/// closed as <c>WrapList[string]</c>, used to read its parameter as
+/// <c>string</c> and its return as <c>List[string]</c>, so a nil entered a
+/// non-null list and surfaced later as an unattributed
+/// <see cref="NullReferenceException"/>. Under the ADR-0193 amendment
+/// (owner decision, 2026-09-26) that call now binds <c>T = string!</c>: it
+/// takes the nil unchecked, returns <c>List[string!]</c>, and the nil is
+/// checked where an element is read
+/// (<see cref="An_Explicit_Argument_At_An_Oblivious_Slot_Reads_As_Platform"/>).
+/// </para>
 /// <para>
 /// A parameter the callee leaves oblivious (<c>T!</c>) or declares nullable
 /// (<c>T?</c>) accepts the nil unchecked, as before.
@@ -50,7 +57,20 @@ public class Issue4451ObliviousGenericSlotTests
                 public static T Echo<T>(T value) { return value; }
 
                 public static bool IsNil<T>(T value) where T : class { return value == null; }
+            }
 
+            public static class Mixed
+            {
+                // `T` fills an oblivious slot and a non-null one.
+        #nullable disable
+                public static int Pair<T>(T oblivious,
+        #nullable enable
+                    T stated) where T : class { return 1; }
+        #nullable restore
+            }
+
+            public static class ObMore
+            {
                 public static int TakeOblivious(string value) { return value == null ? -1 : value.Length; }
             }
 
@@ -100,6 +120,7 @@ public class Issue4451ObliviousGenericSlotTests
     /// <param name="program">The G# statements.</param>
     [Theory]
     [InlineData("Console.WriteLine(En.EchoEnabled[string](Ob.Nil()))")]
+    [InlineData("Console.WriteLine(Mixed.Pair[string](Ob.Name(), Ob.Nil()))")]
     [InlineData("Console.WriteLine(En.TakeEnabled(Ob.Nil()))")]
     [InlineData("let b = Box(Ob.Name())\nConsole.WriteLine(b.Measure(Ob.Nil()))")]
     [InlineData("let b = Box(Ob.Nil())\nConsole.WriteLine(b.Value.Length)")]
@@ -129,7 +150,7 @@ public class Issue4451ObliviousGenericSlotTests
 
         const string program = """
             let s = Ob.Nil()
-            Console.WriteLine(Ob.TakeOblivious(s))
+            Console.WriteLine(ObMore.TakeOblivious(s))
             Console.WriteLine(En.TakeNilable(s))
             if !String.IsNullOrEmpty(s) {
                 Console.WriteLine(s.Length)

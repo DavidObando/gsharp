@@ -1813,19 +1813,31 @@ internal sealed class MemberLookup
         var openMethod = closedOrOpenMethod.IsGenericMethodDefinition || !closedOrOpenMethod.IsGenericMethod
             ? closedOrOpenMethod
             : closedOrOpenMethod.GetGenericMethodDefinition();
+
+        // Every slot the type parameter fills directly must agree. If one is
+        // oblivious and another is annotated or enabled, a `T!` binding
+        // would take the check away from the stated slot, so the argument
+        // stays as written and each slot is converted on its own terms.
+        ClrNullabilityState? agreed = null;
         foreach (var parameter in openMethod.GetParameters())
         {
             var parameterType = parameter.ParameterType.IsByRef ? parameter.ParameterType.GetElementType() : parameter.ParameterType;
             if (parameterType is { IsGenericParameter: true, DeclaringMethod: not null }
                 && parameterType.GenericParameterPosition == ordinal)
             {
-                return NullabilityImportRule.ApplyExplicitOpenSlotArgument(
-                    argument,
-                    ClrNullability.GetParameterDeclaredState(parameter));
+                var state = ClrNullability.GetParameterDeclaredState(parameter);
+                if (agreed is { } previous && previous != state)
+                {
+                    return argument;
+                }
+
+                agreed = state;
             }
         }
 
-        return argument;
+        return agreed is { } declared
+            ? NullabilityImportRule.ApplyExplicitOpenSlotArgument(argument, declared)
+            : argument;
     }
 
     /// <summary>
