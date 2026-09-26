@@ -2421,7 +2421,8 @@ public sealed partial class CSharpToGSharpTranslator
                         return valueElement.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T;
                     }
 
-                    return arrayType.ElementNullableAnnotation == NullableAnnotation.NotAnnotated;
+                    return arrayType.ElementNullableAnnotation == NullableAnnotation.NotAnnotated
+                        && !this.IsWidenedArrayElementRead(arrayElement);
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
@@ -3146,6 +3147,21 @@ public sealed partial class CSharpToGSharpTranslator
                     || declaredType?.NullableAnnotation == NullableAnnotation.Annotated);
         }
 
+        // Issue #4500: whether `value` reads an element of a local whose
+        // `new T[n]` allocation cs2gs widened to `T?` (IsWidenedArrayElementLocal).
+        private bool IsWidenedArrayElementRead(ExpressionSyntax value)
+        {
+            while (value is ParenthesizedExpressionSyntax parenthesized)
+            {
+                value = parenthesized.Expression;
+            }
+
+            return value is ElementAccessExpressionSyntax elementAccess
+                && this.context.GetSymbolInfo(elementAccess).Symbol is null
+                && this.context.GetSymbolInfo(elementAccess.Expression).Symbol is ILocalSymbol arrayLocal
+                && this.IsWidenedArrayElementLocal(arrayLocal);
+        }
+
         private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
         {
             if (this.GSharpExpressionIsStaticallyNonNull(value)
@@ -3155,6 +3171,12 @@ public sealed partial class CSharpToGSharpTranslator
                 || this.IsCallableValueExpression(value))
             {
                 return false;
+            }
+
+            // Issue #4500: an element read of an array cs2gs widened to `[n]T?`.
+            if (this.IsWidenedArrayElementRead(value))
+            {
+                return true;
             }
 
             TypeInfo typeInfo = this.context.GetTypeInfo(value);

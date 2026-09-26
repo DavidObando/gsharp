@@ -57,14 +57,18 @@ public class Holder
             members[i] = member;
         }
 
-        return (names[0] ?? ""-"") + (names[1] ?? ""-"") + (members[0] == null ? ""N"" : ""Y"");
+        return (names[0] ?? ""-"") + (names[1] ?? ""-"") + (members[0] == null ? ""N"" : ""Y"") + members[1].Name;
     }
 }", NullableContextOptions.Disable);
 
         Assert.Contains("let names = [2]string?", printed);
         Assert.Contains("let members = [2]Holder?", printed);
-        Assert.DoesNotContain("!!", printed);
-        Assert.Equal("-h1N", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
+        // The writes stay bare; a later dereference of a widened element is
+        // asserted, as C# throws on a null there.
+        Assert.DoesNotContain("member?.Name!!", printed);
+        Assert.DoesNotContain("= member!!", printed);
+        Assert.Contains("members[1]!!.Name", printed);
+        Assert.Equal("-h1Nh1", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
     }
 
     [Fact]
