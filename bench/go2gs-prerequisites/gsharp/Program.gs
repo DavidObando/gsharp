@@ -45,6 +45,25 @@ class ManualRichCounter(Box IntBox) : Counter {
     func Read() int32 -> Box.Value
 }
 
+class ReferenceFactory(Calls int32) {
+    func Create(value int32) ReferenceCounter {
+        Calls += 1
+        return ReferenceCounter(value)
+    }
+}
+
+class IndexSelector(Calls int32) {
+    func Next() int32 {
+        Calls += 1
+        return 0
+    }
+}
+
+func makeLocation(value int32) managed[int32] {
+    var copy = value
+    return managed(copy)
+}
+
 func semanticWitnesses() {
     var shared = slice[int32].Create(2, 4)
     shared[0] = 1
@@ -100,15 +119,71 @@ func semanticWitnesses() {
     Console.WriteLine(
         "semantic adapt-reference " + reference.Read().ToString() + " " + referenceSource.Value.ToString()
     )
+
+    var independentSource = ValueCounter{Value: 40}
+    let firstCopy = adapt[Counter](independentSource)
+    let secondCopy = adapt[Counter](independentSource)
+    firstCopy.Increment()
+    Console.WriteLine(
+        "semantic adapt-independent " + firstCopy.Read().ToString() + " " + secondCopy.Read().ToString() +
+            " " +
+            independentSource
+            .Value
+            .ToString()
+    )
+
+    var firstPointee = ValueCounter{Value: 50}
+    var secondPointee = ValueCounter{Value: 60}
+    var selected = managed(firstPointee)
+    let capturedPointer = adapt[Counter](ref selected)
+    selected = managed(secondPointee)
+    capturedPointer.Increment()
+    Console.WriteLine(
+        "semantic pointer-capture " + capturedPointer.Read().ToString() + " " + firstPointee.Value.ToString() +
+            " " +
+            secondPointee
+            .Value
+            .ToString()
+    )
+
+    let firstFactoryLocation = makeLocation(70)
+    let secondFactoryLocation = makeLocation(70)
+    *firstFactoryLocation += 1
+    Console.WriteLine(
+        "semantic factory-locations " + (*firstFactoryLocation).ToString() + " " + (*secondFactoryLocation).ToString()
+    )
+
+    var values = slice[int32]{80, 81}
+    let selector = IndexSelector(0)
+    let selectedElement = managed(values[selector.Next()])
+    values = values[1 .. 2]
+    *selectedElement = 82
+    Console.WriteLine(
+        "semantic slice-selection " + selector.Calls.ToString() + " " + (*selectedElement).ToString() +
+            " " +
+            values[0].ToString()
+    )
+
+    let factory = ReferenceFactory(0)
+    for i in 0 ... 0 {
+        let skipped = adapt[Counter](factory.Create(90))
+        skipped.Increment()
+    }
+    for i in 0 ... 1 {
+        let once = adapt[Counter](factory.Create(90))
+        once.Increment()
+    }
+    Console.WriteLine("semantic zero-trip-effects " + factory.Calls.ToString())
 }
 
-func report(name string, elapsed TimeSpan, count int32, allocated int64, checksum int64) {
-    let ns = elapsed.TotalNanoseconds / float64(count)
-    let bytes = float64(allocated) / float64(count)
+func report(name string, elapsedTicks int64, count int32, allocated int64, checksum int64) {
     Console.WriteLine(
         "perf " + name + " "
-        + ns.ToString("F2", CultureInfo.InvariantCulture) + " "
-        + bytes.ToString("F2", CultureInfo.InvariantCulture) + " "
+        + elapsedTicks.ToString(CultureInfo.InvariantCulture) + " "
+        + Stopwatch.Frequency.ToString(CultureInfo.InvariantCulture) + " "
+        + count.ToString(CultureInfo.InvariantCulture) + " "
+        + allocated.ToString(CultureInfo.InvariantCulture) + " "
+        + "-1 "
         + checksum.ToString()
     )
 }
@@ -123,26 +198,32 @@ func benchSlice(count int32) {
         checksum += view[0]
     }
     checksum = 0
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         let view = values[1 .. 3]
         view[0] += 1
         checksum += view[0]
     }
     sw.Stop()
-    report("slice-view", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("slice-view", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchSliceAppend(count int32) {
     var values = slice[int32].Create(0, 1)
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         values = values.Append(i)
     }
     sw.Stop()
-    report("slice-append", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, int64(values.Length))
+    report(
+        "slice-append",
+        sw.ElapsedTicks,
+        count,
+        GC.GetAllocatedBytesForCurrentThread() - before,
+        int64(values.Length)
+    )
 }
 
 func benchManaged(count int32) {
@@ -152,14 +233,14 @@ func benchManaged(count int32) {
         *location += 1
     }
     var checksum int64
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         *location += 1
         checksum += *location
     }
     sw.Stop()
-    report("managed-location", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("managed-location", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchManagedConstruction(count int32) {
@@ -170,14 +251,14 @@ func benchManagedConstruction(count int32) {
         checksum += *location
     }
     checksum = 0
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         let location = managed(values[0])
         checksum += *location
     }
     sw.Stop()
-    report("managed-create", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("managed-create", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchAdaptReference(count int32) {
@@ -187,14 +268,14 @@ func benchAdaptReference(count int32) {
         counter.Increment()
     }
     var checksum int64
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         counter.Increment()
         checksum += counter.Read()
     }
     sw.Stop()
-    report("adapt-reference", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("adapt-reference", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchNominalReference(count int32) {
@@ -204,14 +285,14 @@ func benchNominalReference(count int32) {
         counter.Increment()
     }
     var checksum int64
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         counter.Increment()
         checksum += counter.Read()
     }
     sw.Stop()
-    report("nominal-reference", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("nominal-reference", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchAdaptLocation(count int32) {
@@ -222,14 +303,14 @@ func benchAdaptLocation(count int32) {
         counter.Increment()
     }
     var checksum int64
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         counter.Increment()
         checksum += counter.Read()
     }
     sw.Stop()
-    report("adapt-location", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("adapt-location", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchRichCapture(count int32) {
@@ -245,14 +326,14 @@ func benchRichCapture(count int32) {
         counter.Increment()
     }
     var checksum int64
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         counter.Increment()
         checksum += counter.Read()
     }
     sw.Stop()
-    report("rich-capture", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("rich-capture", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchManualRichCapture(count int32) {
@@ -262,14 +343,14 @@ func benchManualRichCapture(count int32) {
         counter.Increment()
     }
     var checksum int64
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         counter.Increment()
         checksum += counter.Read()
     }
     sw.Stop()
-    report("manual-rich-capture", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("manual-rich-capture", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchAdaptConstruction(count int32) {
@@ -280,14 +361,14 @@ func benchAdaptConstruction(count int32) {
         checksum += counter.Read()
     }
     checksum = 0
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         let counter = adapt[Counter](source)
         checksum += counter.Read()
     }
     sw.Stop()
-    report("adapt-create", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("adapt-create", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchNominalConstruction(count int32) {
@@ -298,14 +379,14 @@ func benchNominalConstruction(count int32) {
         checksum += counter.Read()
     }
     checksum = 0
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         let counter Counter = ForwardingCounter(source)
         checksum += counter.Read()
     }
     sw.Stop()
-    report("nominal-create", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("nominal-create", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchRichConstruction(count int32) {
@@ -322,8 +403,8 @@ func benchRichConstruction(count int32) {
         checksum += counter.Read()
     }
     checksum = 0
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         let counter = object: Counter{
             func Increment() {
@@ -335,7 +416,7 @@ func benchRichConstruction(count int32) {
         checksum += counter.Read()
     }
     sw.Stop()
-    report("rich-create", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("rich-create", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func benchManualRichConstruction(count int32) {
@@ -346,17 +427,18 @@ func benchManualRichConstruction(count int32) {
         checksum += counter.Read()
     }
     checksum = 0
-    let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
+    let before = GC.GetAllocatedBytesForCurrentThread()
     for i in 0 ... count {
         let counter Counter = ManualRichCounter(box)
         checksum += counter.Read()
     }
     sw.Stop()
-    report("manual-rich-create", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+    report("manual-rich-create", sw.ElapsedTicks, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
 func Main() {
+    Console.WriteLine("runtime " + Environment.Version.ToString())
     semanticWitnesses()
     if Environment.GetEnvironmentVariable("GO2GS_SPIKE_BENCH") == "1" {
         let count = 2000000
