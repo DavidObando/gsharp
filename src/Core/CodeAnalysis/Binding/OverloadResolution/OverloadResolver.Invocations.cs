@@ -1339,14 +1339,14 @@ internal sealed partial class OverloadResolver
                 // a generic receiver type (e.g. `func (s []T) ...`) bind T.
                 if (receiver?.Type != null)
                 {
-                    inferTypeArguments(extension.Parameters[0].Type, receiver.Type, substitution);
+                    inferTypeArguments(extension.Parameters[0].Type, RefCapabilities.GetInferenceType(extension.Parameters[0], receiver.Type), substitution);
                 }
 
                 for (var i = 0; i < permutedArguments.Length; i++)
                 {
                     if (permutedArguments[i].Type != null)
                     {
-                        inferTypeArguments(extension.Parameters[i + 1].Type, permutedArguments[i].Type, substitution);
+                        inferTypeArguments(extension.Parameters[i + 1].Type, RefCapabilities.GetInferenceType(extension.Parameters[i + 1], permutedArguments[i].Type), substitution);
                     }
                 }
 
@@ -1734,7 +1734,9 @@ internal sealed partial class OverloadResolver
                         && VariadicCarriers.GetElementType(paramType) is { } variadicInferElement
                         && variadicInferElement != TypeSymbol.Error)
                     {
-                        var argType = permutedArguments[i].Type;
+                        // Normalized first, so a top-level `T!` over a slice is still a
+                        // pass-through carrier.
+                        var argType = RefCapabilities.GetValueArgumentInferenceType(permutedArguments[i].Type);
                         if (permutedArguments.Length - i == 1 && argType is SliceTypeSymbol passThroughSlice)
                         {
                             inferTypeArguments(variadicInferElement, passThroughSlice.ElementType, substitution);
@@ -1750,7 +1752,7 @@ internal sealed partial class OverloadResolver
                         {
                             for (var j = i; j < permutedArguments.Length; j++)
                             {
-                                inferTypeArguments(variadicInferElement, permutedArguments[j].Type, substitution);
+                                inferTypeArguments(variadicInferElement, RefCapabilities.GetValueArgumentInferenceType(permutedArguments[j].Type), substitution);
                             }
                         }
 

@@ -2413,7 +2413,12 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                var source = argType is SliceTypeSymbol argSlice ? argSlice.ElementType : argType;
+                // Normalize first, so a top-level `T!` over a slice is still
+                // recognised as a pass-through carrier.
+                var normalized = RefCapabilities.GetValueArgumentInferenceType(argType);
+                var source = normalized is SliceTypeSymbol argSlice
+                    ? argSlice.ElementType
+                    : normalized;
                 inferTypeArguments(inferenceElement, source, substitution);
             }
         }

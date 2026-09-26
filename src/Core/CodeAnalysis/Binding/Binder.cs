@@ -11848,7 +11848,22 @@ public sealed class Binder
         };
     }
 
+    /// <summary>
+    /// Infers type arguments from one argument type against its parameter
+    /// type, exactly as given. A method call's argument sites first pass the
+    /// argument through <see cref="RefCapabilities.GetInferenceType"/>, which
+    /// is where ADR-0186 §3's #4443 amendment (a by-value <c>T!</c> argument
+    /// contributes <c>T</c>) is decided; the other consumers (generic struct
+    /// literals, generic type construction, delegate-target inference) keep
+    /// the argument's exact type, as the amendment's method-only scope says.
+    /// </summary>
+    /// <param name="parameterType">The parameter type, which may mention type parameters.</param>
+    /// <param name="argumentType">The argument's type.</param>
+    /// <param name="substitution">The inferred bindings, updated in place.</param>
     internal static void InferTypeArguments(TypeSymbol parameterType, TypeSymbol argumentType, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
+        => InferTypeArgumentsCore(parameterType, argumentType, substitution);
+
+    private static void InferTypeArgumentsCore(TypeSymbol parameterType, TypeSymbol argumentType, Dictionary<TypeParameterSymbol, TypeSymbol> substitution)
     {
         if (parameterType is TypeParameterSymbol tp)
         {
@@ -11897,11 +11912,11 @@ public sealed class Binder
             // generic method's only `T?` parameter never contributes to `T`
             // inference and every call site needs an explicit `[T]` (GS0151),
             // even though the equivalent non-nullable `T` parameter infers fine.
-            InferTypeArguments(pn.UnderlyingType, argumentType is NullableTypeSymbol an ? an.UnderlyingType : argumentType, substitution);
+            InferTypeArgumentsCore(pn.UnderlyingType, argumentType is NullableTypeSymbol an ? an.UnderlyingType : argumentType, substitution);
         }
         else if (parameterType is SliceTypeSymbol ps && argumentType is SliceTypeSymbol asym)
         {
-            InferTypeArguments(ps.ElementType, asym.ElementType, substitution);
+            InferTypeArgumentsCore(ps.ElementType, asym.ElementType, substitution);
         }
         else if (parameterType is ChannelTypeSymbol pc
             && ChannelTypeSymbol.TryGetChannelShape(argumentType, out var argumentElement, out _, out _))
@@ -11912,11 +11927,11 @@ public sealed class Binder
             // inferred either way. Without this, `merge(a, b)` cannot infer its
             // element and every generic channel function has to be called with
             // an explicit type argument.
-            InferTypeArguments(pc.ElementType, argumentElement, substitution);
+            InferTypeArgumentsCore(pc.ElementType, argumentElement, substitution);
         }
         else if (parameterType is ArrayTypeSymbol pa && argumentType is ArrayTypeSymbol aa)
         {
-            InferTypeArguments(pa.ElementType, aa.ElementType, substitution);
+            InferTypeArgumentsCore(pa.ElementType, aa.ElementType, substitution);
 
             // #611 intentional asymmetry: a fixed-array `[N]T` does NOT unify
             // against a slice parameter `[]T` (or vice versa). In Go, explicit
@@ -11929,7 +11944,7 @@ public sealed class Binder
             && argumentType is RectangularArrayTypeSymbol ar
             && pr.Rank == ar.Rank)
         {
-            InferTypeArguments(pr.ElementType, ar.ElementType, substitution);
+            InferTypeArgumentsCore(pr.ElementType, ar.ElementType, substitution);
         }
         else if (parameterType is TupleTypeSymbol parameterTuple
             && argumentType is TupleTypeSymbol argumentTuple
@@ -11937,7 +11952,7 @@ public sealed class Binder
         {
             for (var i = 0; i < parameterTuple.Arity; i++)
             {
-                InferTypeArguments(
+                InferTypeArgumentsCore(
                     parameterTuple.ElementTypes[i],
                     argumentTuple.ElementTypes[i],
                     substitution);
@@ -11953,13 +11968,13 @@ public sealed class Binder
             switch (argumentType)
             {
                 case SequenceTypeSymbol aseq:
-                    InferTypeArguments(pseq.ElementType, aseq.ElementType, substitution);
+                    InferTypeArgumentsCore(pseq.ElementType, aseq.ElementType, substitution);
                     break;
                 case SliceTypeSymbol asl:
-                    InferTypeArguments(pseq.ElementType, asl.ElementType, substitution);
+                    InferTypeArgumentsCore(pseq.ElementType, asl.ElementType, substitution);
                     break;
                 case ArrayTypeSymbol aarr:
-                    InferTypeArguments(pseq.ElementType, aarr.ElementType, substitution);
+                    InferTypeArgumentsCore(pseq.ElementType, aarr.ElementType, substitution);
                     break;
                 default:
                     var openIEnumerable = typeof(System.Collections.Generic.IEnumerable<>);
@@ -11970,7 +11985,7 @@ public sealed class Binder
                         out _)
                         && sequenceArguments.Length == 1)
                     {
-                        InferTypeArguments(
+                        InferTypeArgumentsCore(
                             pseq.ElementType,
                             sequenceArguments[0],
                             substitution);
@@ -11985,7 +12000,7 @@ public sealed class Binder
             switch (argumentType)
             {
                 case AsyncSequenceTypeSymbol aaseq:
-                    InferTypeArguments(paseq.ElementType, aaseq.ElementType, substitution);
+                    InferTypeArgumentsCore(paseq.ElementType, aaseq.ElementType, substitution);
                     break;
                 default:
                     var openIAsyncEnumerable = typeof(System.Collections.Generic.IAsyncEnumerable<>);
@@ -11996,7 +12011,7 @@ public sealed class Binder
                         out _)
                         && asyncSequenceArguments.Length == 1)
                     {
-                        InferTypeArguments(
+                        InferTypeArgumentsCore(
                             paseq.ElementType,
                             asyncSequenceArguments[0],
                             substitution);
@@ -12013,10 +12028,10 @@ public sealed class Binder
             // T -> int32, U -> bool.
             for (var i = 0; i < pf.ParameterTypes.Length; i++)
             {
-                InferTypeArguments(pf.ParameterTypes[i], af.ParameterTypes[i], substitution);
+                InferTypeArgumentsCore(pf.ParameterTypes[i], af.ParameterTypes[i], substitution);
             }
 
-            InferTypeArguments(pf.ReturnType, af.ReturnType, substitution);
+            InferTypeArgumentsCore(pf.ReturnType, af.ReturnType, substitution);
         }
         else if (TryGetUserGenericArguments(parameterType, out var userParamDef, out var userParamArgs)
             && userParamArgs.Any(TypeSymbol.ContainsTypeParameter))
@@ -12034,7 +12049,7 @@ public sealed class Binder
             {
                 for (var i = 0; i < userParamArgs.Length; i++)
                 {
-                    InferTypeArguments(userParamArgs[i], userArgArgs[i], substitution);
+                    InferTypeArgumentsCore(userParamArgs[i], userArgArgs[i], substitution);
                 }
             }
         }
@@ -12057,7 +12072,7 @@ public sealed class Binder
             {
                 for (var i = 0; i < parameterType.TypeArguments.Length; i++)
                 {
-                    InferTypeArguments(
+                    InferTypeArgumentsCore(
                         parameterType.TypeArguments[i],
                         mappedArguments[i],
                         substitution);
@@ -12075,7 +12090,7 @@ public sealed class Binder
             var elementType = argumentType is SliceTypeSymbol slice
                 ? slice.ElementType
                 : ((ArrayTypeSymbol)argumentType).ElementType;
-            InferTypeArguments(parameterType.TypeArguments[0], elementType, substitution);
+            InferTypeArgumentsCore(parameterType.TypeArguments[0], elementType, substitution);
         }
     }
 
@@ -12181,6 +12196,21 @@ public sealed class Binder
                         openDefinition,
                         out currentProjection,
                         out currentFound);
+            }
+            else if (current is NullabilityAnnotatedTypeSymbol annotated
+                && annotated.ClrType is { IsGenericType: true, IsGenericTypeDefinition: false } annotatedClr
+                && ClrTypeUtilities.AreSame(annotatedClr.GetGenericTypeDefinition(), openDefinition))
+            {
+                // #4443: the argument IS the parameter's generic definition,
+                // so its type arguments are the projection. Read them through
+                // the annotated positions, not the CLR shape: the CLR shape
+                // erases each argument's nullability, so an oblivious
+                // `List<string>` (`List[string!]!`) against `List[T]` inferred
+                // `string`, and the argument then failed rule 3's conversion
+                // to `List[string]`. A projection through a base or an
+                // interface still reads the CLR shape below.
+                currentProjection = annotated.GetElementPositions();
+                currentFound = true;
             }
             else if (current.ClrType is { } clrType)
             {

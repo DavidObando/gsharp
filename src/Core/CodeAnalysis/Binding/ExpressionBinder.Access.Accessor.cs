@@ -4402,7 +4402,7 @@ internal sealed partial class ExpressionBinder
                     var inferenceLimit = isVariadic ? fixedParamCount : arguments.Length;
                     for (var i = 0; i < inferenceLimit; i++)
                     {
-                        Binder.InferTypeArguments(method.Parameters[i].Type, arguments[i].Type, substitution);
+                        Binder.InferTypeArguments(method.Parameters[i].Type, RefCapabilities.GetInferenceType(method.Parameters[i], arguments[i].Type), substitution);
                     }
 
                     if (isVariadic)
@@ -4410,7 +4410,7 @@ internal sealed partial class ExpressionBinder
                         var variadicParam = method.Parameters[method.Parameters.Length - 1];
                         var variadicElementType = VariadicCarriers.GetElementType(variadicParam.Type);
                         var trailingCount = arguments.Length - fixedParamCount;
-                        if (trailingCount == 1 && arguments[fixedParamCount].Type is SliceTypeSymbol singleSlice)
+                        if (trailingCount == 1 && RefCapabilities.GetValueArgumentInferenceType(arguments[fixedParamCount].Type) is SliceTypeSymbol singleSlice)
                         {
                             Binder.InferTypeArguments(variadicElementType, singleSlice.ElementType, substitution);
                         }
@@ -4418,7 +4418,7 @@ internal sealed partial class ExpressionBinder
                         {
                             for (var i = fixedParamCount; i < arguments.Length; i++)
                             {
-                                Binder.InferTypeArguments(variadicElementType, arguments[i].Type, substitution);
+                                Binder.InferTypeArguments(variadicElementType, RefCapabilities.GetValueArgumentInferenceType(arguments[i].Type), substitution);
                             }
                         }
                     }

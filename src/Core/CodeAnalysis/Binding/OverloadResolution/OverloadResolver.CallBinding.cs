@@ -2120,15 +2120,15 @@ internal sealed partial class OverloadResolver
                         && paramType is SliceTypeSymbol variadicSlice)
                     {
                         var trailingCount = boundArguments.Count - i;
-                        if (trailingCount == 1 && boundArguments[i].Type is SliceTypeSymbol)
+                        if (trailingCount == 1 && RefCapabilities.GetValueArgumentInferenceType(boundArguments[i].Type) is SliceTypeSymbol)
                         {
-                            inferTypeArguments(paramType, boundArguments[i].Type, substitution);
+                            inferTypeArguments(paramType, RefCapabilities.GetValueArgumentInferenceType(boundArguments[i].Type), substitution);
                         }
                         else
                         {
                             for (var j = i; j < boundArguments.Count; j++)
                             {
-                                inferTypeArguments(variadicSlice.ElementType, boundArguments[j].Type, substitution);
+                                inferTypeArguments(variadicSlice.ElementType, RefCapabilities.GetValueArgumentInferenceType(boundArguments[j].Type), substitution);
                             }
                         }
 

@@ -364,6 +364,44 @@ asserted only for *that* branch, and says nothing about the platform branch)
 must stay `T!` rather than silently promoting an unknown to a guarantee. Note
 this is deliberately *not* symmetric absorption: `T?` wins, `T` does not.
 
+> **Amendment (2026-09-25, #4443): generic method type inference never infers
+> `T!` from an argument's top level.** The owner's decision, which overrides the
+> paragraph above for method type arguments only:
+>
+> - An argument whose top-level type is `T!` contributes `T`.
+> - A `T!` argument and a `T` argument binding the same type parameter infer
+>   `T`, not `T!`. A `T?` argument still gives `T?`.
+> - Each `T!` argument is then coerced `T! → T` at the call, which §4 checks.
+>   A nil fails there with §4's attributed message instead of entering the
+>   callee.
+>
+> The reason is rule 3 below. `Wrap(x)` over a `string!` used to infer
+> `List[string!]`, and nothing converts that to the `List[string]` the code
+> declares, so every oblivious value passed to a generic helper
+> (`Enumerable.Repeat(x, n)`, a user `Wrap`) needed a `!!`. Inferring `T` puts
+> the check on the argument, the boundary a bare `T!` value already crosses
+> when passed to a declared `T` parameter, and it keeps the inferred types
+> identical to what enabled code infers.
+>
+> **Scope: the argument's top level only.** A platform position nested inside
+> the argument's type is part of an invariant container's identity (rule 3),
+> so it still infers `T!`: `First(xs)` over an oblivious `List<string>`
+> (`List[string!]!`) against `First[T](xs List[T]) T` infers `T = string!`. The
+> argument's own top level is stripped, its type argument is not. Two
+> slots keep the argument's exact type:
+>
+> - a by-reference parameter, because a `ref` has no coercion to carry the
+>   check;
+> - a parameter an imported method leaves oblivious, such as `T value` in an
+>   oblivious `List<T> WrapList<T>(T value)`. That slot reads as `T!` after
+>   substitution, so a stripped argument would cross it unchecked while the
+>   method's `List<T>` return read as `List[string]`. Keeping `string!` keeps
+>   the result `List[string!]`. The same pair of readings already lets a nil
+>   through with an explicit type argument
+>   ([#4451](https://github.com/DavidObando/gsharp/issues/4451)). Least-upper-bound unification (ternary
+> branches, `??`, inferred array elements) is unchanged: it still follows the
+> paragraph above.
+
 **Type inference for an unannotated binding**: `let s = obliviousCall()` gives
 `s` type `string!`. Platform-ness propagates through inference exactly as
 nullability does. This is what makes chains work with no special case (§5) and
