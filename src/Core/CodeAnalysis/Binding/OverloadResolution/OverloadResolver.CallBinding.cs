@@ -2377,13 +2377,15 @@ internal sealed partial class OverloadResolver
                         continue;
                     }
 
-                    if (!DeclarationBinder.TypeSignaturesEquivalent(operandType, expectedType)
-                        && operandType != TypeSymbol.Error)
+                    var refArgumentLocation = Invariant.Required(parameterSyntax[i], "a ref argument has source syntax").Location;
+                    var refParameterType = Invariant.Required(expectedType, "a bound parameter has a target type");
+                    if (operandType != TypeSymbol.Error
+                        && !conversions.CheckByRefArgumentStorage(refArgumentLocation, parameter, operandType, refParameterType))
                     {
-                        Diagnostics.ReportWrongArgumentType(
-                            Invariant.Required(parameterSyntax[i], "a ref argument has source syntax").Location,
+                        conversions.ReportByRefStorageMismatch(
+                            refArgumentLocation,
                             parameter.Name,
-                            Invariant.Required(expectedType, "a bound parameter has a target type"),
+                            refParameterType,
                             operandType);
                         hasErrors = true;
                     }
@@ -2391,9 +2393,14 @@ internal sealed partial class OverloadResolver
                 else if (argument is BoundConditionalAddressExpression condAddrArg)
                 {
                     var pointeeType = condAddrArg.PointeeType;
-                    if (pointeeType != expectedType && pointeeType != TypeSymbol.Error)
+                    if (pointeeType != TypeSymbol.Error
+                        && !conversions.CheckByRefArgumentStorage(
+                            Invariant.Required(parameterSyntax[i], "a conditional ref argument has source syntax").Location,
+                            parameter,
+                            pointeeType,
+                            Invariant.Required(expectedType, "a bound parameter has a target type")))
                     {
-                        Diagnostics.ReportWrongArgumentType(
+                        conversions.ReportByRefStorageMismatch(
                             Invariant.Required(parameterSyntax[i], "a conditional ref argument has source syntax").Location,
                             parameter.Name,
                             Invariant.Required(expectedType, "a bound parameter has a target type"),

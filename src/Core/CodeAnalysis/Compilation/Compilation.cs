@@ -29,6 +29,7 @@ public class Compilation
     private readonly System.Runtime.CompilerServices.ConditionalWeakTable<SyntaxTree, SemanticModel> semanticModels = new();
     private BoundGlobalScope? globalScope;
     private BoundProgram? boundProgram;
+    private Analyzers.DiagnosticSuppressionMap? diagnosticSuppressions;
     private ImmutableHashSet<string> preprocessorSymbols = ImmutableHashSet<string>.Empty;
     private string? assemblyName;
     private DebugInformationOptions debugInformation = new();
@@ -264,6 +265,25 @@ public class Compilation
     public SubmissionBindingOptions? Submission { get; set; }
 
     /// <summary>
+    /// Gets the ADR-0175 <c>@SuppressDiagnostic</c> scopes declared in this
+    /// compilation's syntax trees, built once. The analyzer driver filters
+    /// analyzer diagnostics through it, and
+    /// <see cref="ApplySourceSuppressions"/> filters the compiler's own.
+    /// </summary>
+    public Analyzers.DiagnosticSuppressionMap DiagnosticSuppressions
+    {
+        get
+        {
+            if (diagnosticSuppressions == null)
+            {
+                Interlocked.CompareExchange(ref diagnosticSuppressions, Analyzers.DiagnosticSuppressionMap.Build(SyntaxTrees), null);
+            }
+
+            return diagnosticSuppressions;
+        }
+    }
+
+    /// <summary>
     /// Gets the global scope.
     /// </summary>
     public BoundGlobalScope GlobalScope
@@ -324,6 +344,19 @@ public class Compilation
             return boundProgram;
         }
     }
+
+    /// <summary>
+    /// ADR-0175 amendment (issue #4422): removes the compiler warnings that a
+    /// source <c>@SuppressDiagnostic("GS####")</c> scope covers. Every
+    /// <see cref="EmitResult"/> this compilation produces is already filtered;
+    /// a host that assembles diagnostics from <see cref="GlobalScope"/> and
+    /// <see cref="BoundProgram"/> itself (the language server) calls this so it
+    /// reports exactly what gsc does. Errors are never suppressed.
+    /// </summary>
+    /// <param name="diagnostics">Diagnostics produced for this compilation.</param>
+    /// <returns>The diagnostics that remain visible.</returns>
+    public ImmutableArray<Diagnostic> ApplySourceSuppressions(ImmutableArray<Diagnostic> diagnostics)
+        => DiagnosticSuppressions.FilterCompilerDiagnostics(diagnostics);
 
     /// <summary>
     /// Returns a <see cref="SemanticModel"/> answering semantic queries for
@@ -388,7 +421,7 @@ public class Compilation
         var allDiagnostics = syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray();
         if (allDiagnostics.Any(d => d.IsError))
         {
-            return new EmitResult(success: false, allDiagnostics);
+            return CreateEmitResult(success: false, allDiagnostics);
         }
 
         var documentationDiagnostics = new DiagnosticBag();
@@ -415,7 +448,7 @@ public class Compilation
         // and tested, and widening this to "any error" would change it.
         if (program.Diagnostics.Any(d => d.Id == DiagnosticDescriptors.InterpolatedStringHandlerUnavailable.Id))
         {
-            return new EmitResult(
+            return CreateEmitResult(
                 success: false,
                 syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray());
         }
@@ -449,7 +482,7 @@ public class Compilation
         var (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
         {
-            return new EmitResult(success: false, lowerDiagnostics);
+            return CreateEmitResult(success: false, lowerDiagnostics);
         }
 
         program = loweredProgram;
@@ -475,10 +508,10 @@ public class Compilation
 
             var diagnostic = CreateInternalErrorDiagnostic(ex);
             var combined = allWarnings.Add(diagnostic);
-            return new EmitResult(success: false, combined);
+            return CreateEmitResult(success: false, combined);
         }
 
-        return new EmitResult(success: true, diagnostics: allWarnings);
+        return CreateEmitResult(success: true, diagnostics: allWarnings);
     }
 
     /// <summary>
@@ -544,7 +577,7 @@ public class Compilation
         var allDiagnostics = syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray();
         if (allDiagnostics.Any(d => d.IsError))
         {
-            return new EmitResult(success: false, allDiagnostics);
+            return CreateEmitResult(success: false, allDiagnostics);
         }
 
         var documentationDiagnostics = new DiagnosticBag();
@@ -571,7 +604,7 @@ public class Compilation
         // and tested, and widening this to "any error" would change it.
         if (program.Diagnostics.Any(d => d.Id == DiagnosticDescriptors.InterpolatedStringHandlerUnavailable.Id))
         {
-            return new EmitResult(
+            return CreateEmitResult(
                 success: false,
                 syntaxDiagnostics.Concat(program.Diagnostics).ToImmutableArray());
         }
@@ -605,7 +638,7 @@ public class Compilation
         var (lowered, loweredProgram, lowerDiagnostics) = LowerForEmit(program, References ?? Symbols.ReferenceResolver.Default());
         if (lowerDiagnostics.Any(d => d.IsError))
         {
-            return new EmitResult(success: false, lowerDiagnostics);
+            return CreateEmitResult(success: false, lowerDiagnostics);
         }
 
         program = loweredProgram;
@@ -651,10 +684,10 @@ public class Compilation
 
             var diagnostic = CreateInternalErrorDiagnostic(ex);
             var combined = allWarnings.Add(diagnostic);
-            return new EmitResult(success: false, combined);
+            return CreateEmitResult(success: false, combined);
         }
 
-        return new EmitResult(success: true, diagnostics: allWarnings);
+        return CreateEmitResult(success: true, diagnostics: allWarnings);
     }
 
     /// <summary>
@@ -789,6 +822,9 @@ public class Compilation
     {
         ReflectionMetadataEmitter.Emit(program, peStream, references, assemblyName, metadataOnly, asyncRewriteResult, iteratorRewriteResult, asyncIteratorRewriteResult, debugInformation, pdbStream, assemblyVersion, targetFrameworkMoniker, embeddedResources, Optimize);
     }
+
+    private EmitResult CreateEmitResult(bool success, ImmutableArray<Diagnostic> diagnostics)
+        => new EmitResult(success, ApplySourceSuppressions(diagnostics));
 
     private void PrepareReferencesForBinding(string? assemblyName)
     {

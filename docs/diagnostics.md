@@ -47,9 +47,9 @@ IDs may be given as `GS0001`, `0001`, or the bare integer `1`; all three forms a
 
 ### Source-level, scoped suppression (ADR-0175)
 
-The flags above are whole-compilation. To turn an **analyzer** diagnostic off
-for one declaration or one range of statements, annotate the source with
-`@SuppressDiagnostic`:
+The flags above are whole-compilation. To turn an analyzer diagnostic, or a
+compiler **warning**, off for one declaration or one range of statements,
+annotate the source with `@SuppressDiagnostic`:
 
 ```
 @SuppressDiagnostic("GSA0005")
@@ -71,6 +71,16 @@ reference, and is never written to metadata. Its scope is the span of the
 declaration or block it precedes; nesting adds identifiers and never removes
 them. An argument that is not a constant string shaped like a diagnostic ID is
 reported as [GS9305](#analyzer-host-diagnostics-gs9300gs9319-reserved).
+
+Since issue #4422 the same scopes also filter the compiler's own `GS####`
+diagnostics, in gsc, the language server and every `EmitResult`, but only
+warnings: as with C#'s `#pragma warning disable`, a compiler error cannot be
+suppressed. The check uses the diagnostic's own severity before `/warnaserror`
+promotion, so a suppressed warning stays suppressed under
+`<TreatWarningsAsErrors>`. cs2gs emits `@SuppressDiagnostic("GS0612")` where it
+drops a C# `!` from a by-reference argument (`ref x!`), and for a
+`#pragma warning disable CS8600`/`CS8601`/`CS8604`/`CS8620` region that covers a whole
+declaration.
 
 **Example `.gsproj` snippet:**
 ```xml
@@ -351,6 +361,7 @@ Issue #1655: the IDs below used to collide with earlier, unrelated diagnostics (
 | GS0609 | Error | A partial method has no implementing part; every partial method declared in G# must be implemented by exactly one part with a body (ADR-0192 §B). G# deliberately diverges from C#, which silently elides an unimplemented `void` partial method and its call sites. | `partial class A { partial func F() int32; }` with no second part — add the implementing part, or drop `partial` and give the declaration a body. |
 | GS0610 | Error | A partial method must have exactly one signature-only declaring part and one implementing part with a body (ADR-0192). | Two parts that both have bodies, two parts that are both signature-only, or an implementing part with no declaring part (the C# CS0759 analogue). |
 | GS0611 | Error | The declaring and implementing parts of a partial method disagree on some aspect of the signature — return type, parameter names/modifiers, accessibility, `open`/`override`, `async`/`suspend`, `ref` return, or type parameters (ADR-0192 §D); also a return or parameter type whose IDENTICAL spelling resolves to two different types across the two files' imports. A textually *different* parameter type never reaches GS0611: the grouping key treats it as a distinct, unmatched overload and reports GS0609/GS0610 instead. | `partial func F(x int32) int32;` paired with `partial func F(y int32) int32 { … }` — the parameter names differ. |
+| GS0612 | Warning | A by-reference argument's storage type differs from the parameter type only in reference nullability (issue #4422; the C# CS8620/CS8601 analogue). The storage is shared, so a nil can flow through it: the warning fires for any difference at a `ref` parameter, for nullable storage at a non-null `in` parameter, for a nullable `out` parameter over non-null storage, and for any nested difference (`List[string?]` against `List[string]`). A platform (`T!`, ADR-0186) position never warns. GS0612 reads declared types, not C#'s flow state, so it can fire where csc is silent (a `string?` local that holds a non-nil value). A value-type `int32?` is a different runtime type and is GS0154, not GS0612. Suppressible with `@SuppressDiagnostic("GS0612")` (ADR-0175). | `var s string? = nil` then `f(&s)` where `f(ref s string)` — give the storage the parameter's type, or narrow into a non-null local first. |
 | GS9001 | Error | Cannot take the address of a non-lvalue. | `&(1 + 2)` — the operand is a temporary expression. |
 | GS9002 | Error | Argument must be passed by `ref`. | A `ref` parameter called without the `ref` modifier. |
 | GS9003 | Error | Variable not definitely assigned before `ref` use. | `ref x` where `x` has not been assigned. |

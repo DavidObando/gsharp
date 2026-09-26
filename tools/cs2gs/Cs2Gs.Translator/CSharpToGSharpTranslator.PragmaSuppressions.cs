@@ -23,12 +23,23 @@ namespace Cs2Gs.Translator;
 /// the corpus names an analyzer that does not run on G# at all — StyleCop
 /// (<c>SA####</c>), the C# compiler (<c>CS####</c>), and the Roslyn ecosystem
 /// (<c>CA####</c>, <c>IDE####</c>, <c>VSTHRD###</c>, <c>RS####</c>) — so
-/// carrying them would emit annotations that suppress nothing.
+/// carrying them would emit annotations that suppress nothing. The one exception
+/// (issue #4422): CS8600, CS8601, CS8604 and CS8620, the csc nullability warnings that
+/// gsc reports at a by-reference argument as GS0612, translate to
+/// <c>@SuppressDiagnostic("GS0612")</c>.
 /// </summary>
 public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
+        // Issue #4422: CS8600 (possible null converted to a non-null type),
+        // CS8601 (possible null reference assignment), CS8604 (possible null
+        // argument, the `in` direction) and CS8620 (nullability
+        // differs in a nested type argument) — the csc warnings that match
+        // gsc's GS0612 at a by-reference argument.
+        private static readonly HashSet<string> CSharpNullabilityIdsForGs0612 =
+            new HashSet<string>(StringComparer.Ordinal) { "CS8600", "CS8601", "CS8604", "CS8620" };
+
         /// <summary>
         /// Appends a <c>@SuppressDiagnostic</c> annotation to
         /// <paramref name="translated"/> for every <c>GSA</c> identifier whose
@@ -64,6 +75,51 @@ public sealed partial class CSharpToGSharpTranslator
             attributes.Add(new AttributeUse(
                 "SuppressDiagnostic",
                 ids.Select(id => new AttributeArgument(LiteralExpression.String(id))).ToList()));
+        }
+
+        /// <summary>
+        /// Issue #4422: puts the GS0612 suppressions that a member's
+        /// statement-free code collected (<paramref name="suppressions"/>) on
+        /// the translated member. Only a member with no statement block at all
+        /// — an expression-bodied method, property or operator, or an
+        /// initializer — qualifies: its body IS the one expression the C#
+        /// <c>!</c> covered, so the member scope is no wider. A member with a
+        /// block got its suppressions from its statements; anything left over
+        /// (a constructor initializer beside a body) is dropped rather than
+        /// widened over the body. The set is cleared either way.
+        /// </summary>
+        /// <param name="translated">The translated G# member, or null.</param>
+        /// <param name="source">The C# member declaration it came from.</param>
+        /// <param name="suppressions">The collected identifiers.</param>
+        internal static void AttachExpressionBodySuppressions(GMember translated, MemberDeclarationSyntax source, HashSet<string> suppressions)
+        {
+            if (suppressions.Count == 0)
+            {
+                return;
+            }
+
+            IReadOnlyList<AttributeUse> declared = translated switch
+            {
+                MethodDeclaration m => m.Attributes,
+                PropertyDeclaration p => p.Attributes,
+                FieldDeclaration f => f.Attributes,
+                ConstructorDeclaration c => c.Attributes,
+                _ => null,
+            };
+
+            if (declared is List<AttributeUse> attributes
+                && source is not null
+                && !source.DescendantNodes().OfType<BlockSyntax>().Any())
+            {
+                attributes.Add(new AttributeUse(
+                    "SuppressDiagnostic",
+                    suppressions
+                        .OrderBy(id => id, StringComparer.Ordinal)
+                        .Select(id => new AttributeArgument(LiteralExpression.String(id)))
+                        .ToList()));
+            }
+
+            suppressions.Clear();
         }
 
         /// <summary>
@@ -158,6 +214,17 @@ public sealed partial class CSharpToGSharpTranslator
                 if (text != null && text.StartsWith("GSA", StringComparison.Ordinal))
                 {
                     yield return text;
+                }
+                else if (text != null && CSharpNullabilityIdsForGs0612.Contains(text))
+                {
+                    // Issue #4422: the csc nullability warnings a by-reference
+                    // argument can raise (a nested-type mismatch, a possible
+                    // null assigned through the reference, a possible null
+                    // converted to a non-null out/ref target) are the ones
+                    // gsc reports as GS0612. It is the only G# diagnostic they
+                    // map to: gsc's by-value nullability checks are errors,
+                    // which a suppression cannot hide.
+                    yield return "GS0612";
                 }
             }
         }

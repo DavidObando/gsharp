@@ -38,6 +38,17 @@ public static class NullableLifting
             }
         }
 
+        // Issue #4422: the address of value-type `int32?` storage is a
+        // `Nullable<int32>&`. The by-ref symbol's own ClrType is built from its
+        // pointee's relayed `int32`, which made `&x` applicable to an imported
+        // `ref int` parameter (`Interlocked.Increment`) and emitted unverifiable
+        // IL that wrote an int over the Nullable.
+        if (typeSymbol is ByRefTypeSymbol { PointeeType: NullableTypeSymbol } byRef
+            && GetEffectiveClrType(byRef.PointeeType) is { IsGenericType: true } nullablePointee)
+        {
+            return nullablePointee.MakeByRefType();
+        }
+
         return typeSymbol?.ClrType;
     }
 

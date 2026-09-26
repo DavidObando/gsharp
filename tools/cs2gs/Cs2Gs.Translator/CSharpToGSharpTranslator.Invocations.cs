@@ -1806,9 +1806,104 @@ public sealed partial class CSharpToGSharpTranslator
             return operand;
         }
 
+        /// <summary>
+        /// Issue #4422: whether <paramref name="argument"/> is a by-reference
+        /// argument whose C# <c>!</c> (<c>ref base.runstack!</c>) silenced a
+        /// nullability warning that the translation loses. G# has no spelling
+        /// for <c>!</c> on a variable (<c>&amp;x!!</c> is an rvalue), so
+        /// <see cref="WithoutNonNullAssertion"/> drops it, and gsc then reports
+        /// GS0612 where csc was told not to warn. The storage type is compared
+        /// with the parameter's, including nullability; only a difference
+        /// needs the suppression, and an operand whose type cannot be read is
+        /// assumed to.
+        /// </summary>
+        /// <param name="argument">The C# argument.</param>
+        /// <returns><see langword="true"/> when the statement must suppress GS0612.</returns>
+        private bool DropsByRefNullabilitySuppression(ArgumentSyntax argument)
+        {
+            ExpressionSyntax expression = argument.Expression;
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            if (expression is not PostfixUnaryExpressionSyntax suppression
+                || !suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+            {
+                return false;
+            }
+
+            ExpressionSyntax operand = suppression.Operand;
+            while (operand is ParenthesizedExpressionSyntax inner)
+            {
+                operand = inner.Expression;
+            }
+
+            // gsc reports GS0612 only at a G# callee; an imported (metadata)
+            // method's by-ref parameters keep their CLR matching rules, so a
+            // suppression there would be dead, and its block could hide a
+            // variable the statement declares.
+            IParameterSymbol boundParameter = this.GetArgumentParameter(argument);
+            if (boundParameter?.ContainingSymbol is { } callee && callee.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            ITypeSymbol parameterType = boundParameter?.Type;
+            ITypeSymbol storageType = this.context.GetSymbolInfo(operand).Symbol switch
+            {
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IPropertySymbol property => property.Type,
+                _ => (this.context.SemanticModel.GetOperation(operand) as IArrayElementReferenceOperation)?.Type,
+            };
+
+            return parameterType == null
+                || storageType == null
+                || !SymbolEqualityComparer.IncludeNullability.Equals(storageType, parameterType);
+        }
+
+        /// <summary>
+        /// The parameter a call argument binds to, read from the called
+        /// method's symbol (the argument's own operation is not always
+        /// available for a <c>ref x!</c> operand).
+        /// </summary>
+        /// <param name="argument">The C# argument.</param>
+        /// <returns>The parameter, or <see langword="null"/>.</returns>
+        private IParameterSymbol GetArgumentParameter(ArgumentSyntax argument)
+        {
+            if (this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } direct })
+            {
+                return direct;
+            }
+
+            if (argument.Parent is not BaseArgumentListSyntax list
+                || list.Parent is null
+                || this.context.GetSymbolInfo(list.Parent).Symbol is not IMethodSymbol method)
+            {
+                return null;
+            }
+
+            if (argument.NameColon is { } nameColon)
+            {
+                return method.Parameters.FirstOrDefault(p => p.Name == nameColon.Name.Identifier.ValueText);
+            }
+
+            int index = list.Arguments.IndexOf(argument);
+            return index >= 0 && index < method.Parameters.Length ? method.Parameters[index] : null;
+        }
+
         private GExpression TranslateArgumentValue(ArgumentSyntax argument)
         {
             SyntaxKind refKind = argument.RefKindKeyword.Kind();
+            if (refKind != SyntaxKind.None && this.DropsByRefNullabilitySuppression(argument))
+            {
+                // Issue #4422: carry the dropped `!` across as a statement-scoped
+                // suppression of the warning it silenced.
+                this.state.PendingStatementSuppressions?.Add("GS0612");
+            }
+
             if (refKind == SyntaxKind.OutKeyword)
             {
                 if (argument.Expression is DeclarationExpressionSyntax declaration)

@@ -433,6 +433,7 @@ internal static class ClrOverloadResolution
         // ADR-0039: peel by-ref from target (ref/out/in parameter) for matching.
         // If the user passes &x (source is T&), peel both sides.
         // If the user passes x (source is T), peel only the target.
+        var byRefStorage = target.IsByRef && source.IsByRef;
         if (target.IsByRef)
         {
             target = target.GetElementType()!;
@@ -446,6 +447,16 @@ internal static class ClrOverloadResolution
         if (ClrTypeUtilities.AreSame(target, source))
         {
             return ImplicitConversionKind.Identity;
+        }
+
+        // Issue #4422: an address passes the storage itself, so a value-type
+        // `Nullable<V>` on either side must match exactly: `int?` storage is
+        // not an `int` location, nor the reverse, and wrapping it would emit
+        // unverifiable IL.
+        if (byRefStorage
+            && (NullableLifting.IsValueTypeNullableClr(target) || NullableLifting.IsValueTypeNullableClr(source)))
+        {
+            return ImplicitConversionKind.None;
         }
 
         if (target.IsPointer && source.IsPointer

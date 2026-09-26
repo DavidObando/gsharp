@@ -686,6 +686,22 @@ internal sealed partial class OverloadResolver
 
                 paramTypes[i] = paramType;
 
+                // Issue #4422: a by-reference slot ranks on its storage type:
+                // an exact match beats one that differs only in reference
+                // nullability, as in C#.
+                if (cand.Parameters[slot + parameterOffset].RefKind != RefKind.None
+                    && ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is { } byRefStorage
+                    && !TypeSymbol.ContainsTypeParameter(paramType))
+                {
+                    var exact = ByRefStorageMatching.IsExactStorageMatch(byRefStorage, paramType);
+                    kinds[i] = exact == true
+                        ? ClrOverloadResolution.ImplicitConversionKind.Identity
+                        : exact == false
+                            ? ClrOverloadResolution.ImplicitConversionKind.Reference
+                            : ClrOverloadResolution.ImplicitConversionKind.DelegateReturnCovariance;
+                    continue;
+                }
+
                 // Issue #1531 control: a value-returning delegate/method-group
                 // argument that maps onto a `(...)->void` delegate parameter
                 // discards its result. Classify it as C#'s worst-ranked
@@ -1331,9 +1347,24 @@ internal sealed partial class OverloadResolver
 
             var parameter = candidate.Parameters[parameterSlot + parameterOffset];
 
-            // By-ref/out/in parameters have their own exact-type rules.
+            // By-ref/out/in parameters have their own exact-type rules. Issue
+            // #4422: apply them here too, so a candidate whose storage type
+            // the by-ref gate would reject is not selected over one it
+            // accepts (`ref int32` versus `ref int32?` for `int32?` storage).
             if (parameter.RefKind != RefKind.None)
             {
+                if (ByRefStorageMatching.TryGetStorageType(boundArguments[i]) is { } storageType)
+                {
+                    var byRefParameterType = substitution != null
+                        ? Binder.SubstituteType(parameter.Type, substitution)
+                        : parameter.Type;
+                    if (!TypeSymbol.ContainsTypeParameter(byRefParameterType)
+                        && ByRefStorageMatching.IsExactStorageMatch(storageType, byRefParameterType) == null)
+                    {
+                        return false;
+                    }
+                }
+
                 continue;
             }
 

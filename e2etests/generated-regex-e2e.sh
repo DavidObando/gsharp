@@ -8,12 +8,12 @@
 #     implementing part that gsc pairs with the user's declaring part;
 #   - a pattern with options and a backtracking pattern run through the
 #     generated Regex subclass;
-#   - KNOWN GAP: a pattern whose backtracking runs inside a loop makes the
-#     generator pass `ref base.runstack!` (a nullable-annotated field of the
-#     reference pack) to a `ref int[]` helper. G# has no spelling for that
-#     `!`: cs2gs emits `&base.runstack`, which gsc rejects with GS0154. That
-#     case is built separately and must fail with exactly that error, so the
-#     script fails loudly once the gap closes;
+#   - a pattern whose backtracking runs inside a loop makes the generator
+#     pass `ref base.runstack!` (a nullable-annotated field of the reference
+#     pack) to a `ref int[]` helper. cs2gs emits `&base.runstack` under a
+#     statement-scoped `@SuppressDiagnostic("GS0612")`, and gsc accepts it
+#     (issue #4422). The sample builds with TreatWarningsAsErrors, and the
+#     build log must carry no G# diagnostic at all;
 #   - the generator's `file` helper types keep their own package, so a user
 #     type named `Utilities` does not collide with them, and a second user
 #     package shares the same helpers;
@@ -50,7 +50,17 @@ EOF
 
 echo "==> dotnet build samples/GeneratedRegex/GeneratedRegex.gsproj"
 rm -rf samples/GeneratedRegex/bin samples/GeneratedRegex/obj
-dotnet build samples/GeneratedRegex/GeneratedRegex.gsproj --nologo
+BUILD_LOG=$(dotnet build samples/GeneratedRegex/GeneratedRegex.gsproj --nologo 2>&1) || {
+    echo "$BUILD_LOG"
+    echo "FAIL: samples/GeneratedRegex did not build."
+    exit 1
+}
+echo "$BUILD_LOG"
+if echo "$BUILD_LOG" | grep -Eq "(warning|error) GS[0-9]+"; then
+    echo "FAIL: samples/GeneratedRegex must build with no G# diagnostics:"
+    echo "$BUILD_LOG" | grep -E "(warning|error) GS[0-9]+" | sort -u
+    exit 1
+fi
 
 GSGEN_DIR="samples/GeneratedRegex/obj/Debug/net10.0/gsgen"
 USER_PART="$GSGEN_DIR/RegexGenerator.g.gs"
@@ -77,6 +87,11 @@ if ! grep -q "partial func Digits() System.Text.RegularExpressions.Regex ->" "$U
     echo "FAIL: the implementing part was not spelled with the declaring part's header."
     exit 1
 fi
+if ! grep -q '@SuppressDiagnostic("GS0612") {' "$HELPERS" \
+    || ! grep -q "StackPush(&base.runstack," "$HELPERS"; then
+    echo "FAIL: the backtracking-loop helpers do not pass &base.runstack under a GS0612 suppression."
+    exit 1
+fi
 
 OUT="samples/GeneratedRegex/bin/Debug/net10.0/GeneratedRegex.dll"
 echo "==> Running $OUT"
@@ -85,6 +100,8 @@ EXPECTED='month: 05
 no month: none
 tail: abc12|345
 no tail: none
+loop: FOObaarQQbaz
+no loop: none
 first number: 42
 words: 3
 utilities: user Utilities
@@ -168,52 +185,3 @@ if [[ "$LOG_ACTUAL" != "logged" ]]; then
     exit 1
 fi
 echo "PASS: @LoggerMessage with a 'count int' declaring part paired and ran."
-
-echo "==> KNOWN GAP: backtracking inside a loop (ref base.runstack!)"
-GAP_DIR=$(scaffold runstack)
-cat > "$GAP_DIR/Gap.gsproj" <<'EOF'
-<Project Sdk="Gsharp.NET.Sdk">
-  <PropertyGroup>
-    <OutputType>Exe</OutputType>
-    <TargetFramework>net10.0</TargetFramework>
-    <RootNamespace>Gap</RootNamespace>
-  </PropertyGroup>
-</Project>
-EOF
-cat > "$GAP_DIR/Program.gs" <<'EOF'
-package Gap
-
-import System
-import System.Text.RegularExpressions
-
-partial class P {
-    shared {
-        @GeneratedRegex("(foo|ba+r)+\\w*?baz", RegexOptions.IgnoreCase)
-        private partial func Loop() Regex;
-
-        public func Test(s string) bool {
-            return Loop().IsMatch(s)
-        }
-    }
-}
-
-Console.WriteLine(P.Test("xxFOObaarQQbaz").ToString())
-EOF
-set +e
-GAP_LOG=$(cd "$GAP_DIR" && dotnet build Gap.gsproj --nologo 2>&1)
-GAP_RC=$?
-set -e
-if [[ "$GAP_RC" == "0" ]]; then
-    echo "FAIL: the known runstack gap no longer reproduces: the backtracking-loop pattern now builds."
-    echo "      Move this case into samples/GeneratedRegex and delete this block."
-    exit 1
-fi
-GAP_ERRORS=$(echo "$GAP_LOG" | grep "error GS" | sed -E 's/^.*(error GS[0-9]+: .*) \[[^]]*\]$/\1/' | sort -u)
-EXPECTED_GAP="error GS0154: Parameter 'stack' requires a value of type '[]int32' but was given a value of type '*[]?int32'."
-if [[ "$GAP_ERRORS" != "$EXPECTED_GAP" ]] \
-    || ! grep -q "StackPush(&base.runstack," "$GAP_DIR/obj/Debug/net10.0/gsgen/RegexGenerator.System_Text_RegularExpressions_Generated.g.gs"; then
-    echo "FAIL: the backtracking-loop pattern failed differently from the known runstack gap:"
-    echo "$GAP_ERRORS"
-    exit 1
-fi
-echo "KNOWN GAP (unchanged): GS0154 at StackPush(&base.runstack, ...) in the generated helpers."

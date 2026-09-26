@@ -374,6 +374,47 @@ public sealed partial class DiagnosticBag
     => Report(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualType);
 
     /// <summary>
+    /// Issue #4422: GS0154 for a by-reference argument whose storage is a
+    /// value-type <c>V?</c> at a <c>V</c> parameter (or the reverse). The text
+    /// says why: <c>V?</c> is <c>Nullable&lt;V&gt;</c>, a different runtime
+    /// type, not an annotation.
+    /// </summary>
+    /// <param name="location">The argument's location.</param>
+    /// <param name="name">The parameter name.</param>
+    /// <param name="parameterType">The parameter's pointee type.</param>
+    /// <param name="storageType">The argument's storage type.</param>
+    public void ReportWrongValueNullableByRefArgument(TextLocation location, string name, TypeSymbol parameterType, TypeSymbol storageType)
+    {
+        var nullableSide = storageType is NullableTypeSymbol storageNullable ? storageNullable : parameterType as NullableTypeSymbol;
+        var underlying = nullableSide?.UnderlyingType ?? storageType;
+        var reason = $"{storageType}' — '{underlying}?' is a Nullable<{underlying}>, a different runtime type from '{underlying}";
+        ReportWrongArgumentType(location, name, parameterType, reason);
+    }
+
+    /// <summary>
+    /// GS0154 with the given text in place of the argument type.
+    /// </summary>
+    /// <param name="location">The text location where the error was found.</param>
+    /// <param name="name">The parameter name.</param>
+    /// <param name="expectedType">The expected type.</param>
+    /// <param name="actualDescription">The argument type, with any explanation.</param>
+    public void ReportWrongArgumentType(TextLocation location, string name, TypeSymbol expectedType, string actualDescription)
+    => Report(location, DiagnosticDescriptors.WrongArgumentType, name, expectedType, actualDescription);
+
+    /// <summary>
+    /// Issue #4422: GS0612 — a by-reference argument's storage type differs
+    /// from the parameter type only in reference nullability.
+    /// </summary>
+    /// <param name="location">The argument's location.</param>
+    /// <param name="refKind">The parameter's ref kind, spelled as in source (<c>ref</c>, <c>out</c>, <c>in</c>).</param>
+    /// <param name="name">The parameter name.</param>
+    /// <param name="parameterType">The parameter type.</param>
+    /// <param name="storageType">The argument's storage type.</param>
+    /// <param name="reason">Which way a nil can flow through the shared storage.</param>
+    public void ReportByRefArgumentNullabilityMismatch(TextLocation location, string refKind, string name, TypeSymbol parameterType, TypeSymbol storageType, string reason)
+    => Report(location, DiagnosticDescriptors.ByRefArgumentNullabilityMismatch, refKind, name, storageType, parameterType, reason);
+
+    /// <summary>
     /// Rerpots that there's no conversion from one type to the other.
     /// </summary>
     /// <param name="location">The text location where the error was found.</param>

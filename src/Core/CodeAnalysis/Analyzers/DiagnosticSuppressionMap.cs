@@ -96,6 +96,48 @@ public sealed class DiagnosticSuppressionMap
     }
 
     /// <summary>
+    /// ADR-0175 amendment (issue #4422): drops the compiler's own (<c>GS####</c>)
+    /// diagnostics that a source <c>@SuppressDiagnostic</c> scope covers.
+    /// Only a diagnostic whose severity is below
+    /// <see cref="DiagnosticSeverity.Error"/> can be suppressed: like C#'s
+    /// <c>#pragma warning disable</c>, a scope cannot hide a compiler error.
+    /// The severity tested is the descriptor's, before any
+    /// <c>/gsdiag</c>/<c>/warnaserror</c> promotion, so a suppressed warning
+    /// stays suppressed under warnings-as-errors.
+    /// </summary>
+    /// <param name="diagnostics">The compiler diagnostics.</param>
+    /// <returns>The diagnostics no scope suppresses (the same array when none is).</returns>
+    public ImmutableArray<Diagnostic> FilterCompilerDiagnostics(ImmutableArray<Diagnostic> diagnostics)
+    {
+        if (this.scopes.IsDefaultOrEmpty || diagnostics.IsDefaultOrEmpty)
+        {
+            return diagnostics;
+        }
+
+        ImmutableArray<Diagnostic>.Builder? kept = null;
+        for (var i = 0; i < diagnostics.Length; i++)
+        {
+            var diagnostic = diagnostics[i];
+            var suppressed = !diagnostic.IsError && IsSuppressed(diagnostic);
+            if (suppressed && kept == null)
+            {
+                kept = ImmutableArray.CreateBuilder<Diagnostic>(diagnostics.Length);
+                for (var j = 0; j < i; j++)
+                {
+                    kept.Add(diagnostics[j]);
+                }
+            }
+
+            if (!suppressed)
+            {
+                kept?.Add(diagnostic);
+            }
+        }
+
+        return kept == null ? diagnostics : kept.ToImmutable();
+    }
+
+    /// <summary>
     /// Gets a value indicating whether <paramref name="annotation"/> is the
     /// compiler-intrinsic <c>@SuppressDiagnostic</c> annotation (ADR-0175).
     /// Recognition is by source spelling: the annotation has no CLR type, is

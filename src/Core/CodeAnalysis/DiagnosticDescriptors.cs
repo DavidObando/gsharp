@@ -603,6 +603,12 @@ internal static class DiagnosticDescriptors
 
     internal static readonly DiagnosticDescriptor PartialMethodPartsDisagree = new("GS0611", DiagnosticSeverity.Error, "Partial declarations of method '{0}' disagree on {1}.");
 
+    // Issue #4422: a by-reference argument whose storage type differs from the
+    // parameter type only in reference nullability (the C# CS8620/CS8601
+    // analogue). The storage location is shared, so the mismatch is reported
+    // in the direction a nil can flow through it.
+    internal static readonly DiagnosticDescriptor ByRefArgumentNullabilityMismatch = new("GS0612", DiagnosticSeverity.Warning, "The storage passed to {0} parameter '{1}' has type '{2}', which differs from the parameter type '{3}' in nullability: {4}.");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

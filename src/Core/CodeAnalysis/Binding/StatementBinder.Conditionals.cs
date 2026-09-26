@@ -802,7 +802,12 @@ internal sealed partial class StatementBinder
 
         if (inner is BoundUserInstanceCallExpression userInstanceCall && userInstanceCall.Type == TypeSymbol.Bool)
         {
-            var (thenFrame, elseFrame) = (default(Dictionary<AccessPath, TypeSymbol>), default(Dictionary<AccessPath, TypeSymbol>));
+            // Spelled with the declared `?` rather than `var (a, b) = (default(T),
+            // default(T))`: the translated G# gives that tuple form the
+            // non-null type `T`, which differs from these `ref T?` parameters
+            // (GS0612, issue #4422).
+            Dictionary<AccessPath, TypeSymbol>? thenFrame = null;
+            Dictionary<AccessPath, TypeSymbol>? elseFrame = null;
             MergeUserMemberNotNullWhenNarrowings(userInstanceCall.Method.Attributes, negate, ref thenFrame, ref elseFrame);
             return (thenFrame, elseFrame);
         }

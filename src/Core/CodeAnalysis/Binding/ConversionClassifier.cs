@@ -2854,15 +2854,20 @@ internal sealed class ConversionClassifier
             if (argument is BoundAddressOfExpression addr)
             {
                 var operandType = addr.Operand?.Type;
-                if (DeclarationBinder.TypeSignaturesEquivalent(operandType, expectedType)
-                    || operandType == TypeSymbol.Error
-                    || expectedType == TypeSymbol.Error)
+                if (operandType == TypeSymbol.Error
+                    || expectedType == TypeSymbol.Error
+                    || (operandType != null && CheckByRefArgumentStorage(location, parameter, operandType, expectedType)))
                 {
                     return argument;
                 }
 
-                // Fall through: type mismatch on the address-of operand. Surface
-                // the standard "cannot convert" diagnostic via BindConversion.
+                // Issue #4422: report the mismatch against the storage type
+                // rather than letting BindConversion report the `*T` address.
+                if (operandType != null)
+                {
+                    ReportByRefStorageMismatch(location, parameter.Name, expectedType, operandType);
+                    return new BoundErrorExpression(argument.Syntax);
+                }
             }
             else if (argument is BoundConditionalAddressExpression condAddr)
             {
@@ -2870,12 +2875,15 @@ internal sealed class ConversionClassifier
                 // parameter positions. The shared pointee type was validated
                 // by BindConditionalRefArgument.
                 var pointeeType = condAddr.PointeeType;
-                if (DeclarationBinder.TypeSignaturesEquivalent(pointeeType, expectedType)
-                    || pointeeType == TypeSymbol.Error
-                    || expectedType == TypeSymbol.Error)
+                if (pointeeType == TypeSymbol.Error
+                    || expectedType == TypeSymbol.Error
+                    || CheckByRefArgumentStorage(location, parameter, pointeeType, expectedType))
                 {
                     return argument;
                 }
+
+                ReportByRefStorageMismatch(location, parameter.Name, expectedType, pointeeType);
+                return new BoundErrorExpression(argument.Syntax);
             }
             else if (argument is BoundInterpolatedStringExpression { Handler: not null })
             {
@@ -2906,6 +2914,95 @@ internal sealed class ConversionClassifier
         }
 
         return BindConversion(location, argument, expectedType, callParameter: parameter);
+    }
+
+    /// <summary>
+    /// Issue #4422: the by-reference argument gate for a G# callee. The
+    /// storage behind <c>&amp;x</c> must have the parameter's type; it may
+    /// differ only in reference nullability, as in C#, and then GS0612 warns in
+    /// the direction a nil can flow through the shared storage:
+    /// <list type="bullet">
+    /// <item><c>ref</c>: any difference.</item>
+    /// <item><c>in</c>: nullable storage at a non-null parameter (the callee
+    /// reads a nil as non-null), or a nested difference.</item>
+    /// <item><c>out</c>: a nullable parameter over non-null storage (the callee
+    /// may write nil), or a nested difference.</item>
+    /// </list>
+    /// A platform (<c>T!</c>) position states nothing and never warns
+    /// (ADR-0186). The caller reports GS0154 when this returns
+    /// <see langword="false"/>.
+    /// </summary>
+    /// <param name="location">The argument's location.</param>
+    /// <param name="parameter">The target parameter (carrying its ref kind).</param>
+    /// <param name="storageType">The type of the storage the argument addresses.</param>
+    /// <param name="parameterType">The (substituted) parameter type.</param>
+    /// <returns><see langword="true"/> when the storage is accepted.</returns>
+    public bool CheckByRefArgumentStorage(
+        TextLocation location,
+        ParameterSymbol parameter,
+        TypeSymbol storageType,
+        TypeSymbol parameterType)
+    {
+        if (!ByRefStorageMatching.AreSameStorageType(
+            storageType,
+            parameterType,
+            out var storageNullable,
+            out var parameterNullable,
+            out var nestedMismatch))
+        {
+            return false;
+        }
+
+        string? reason = null;
+        var refKind = parameter.RefKind;
+        if (nestedMismatch)
+        {
+            reason = "a nested type argument or element differs in nullability, and both views share one object";
+        }
+        else if (storageNullable && refKind != RefKind.Out)
+        {
+            reason = "a nil in the storage reaches the callee as a non-null value";
+        }
+        else if (parameterNullable && refKind != RefKind.In)
+        {
+            reason = "the callee may store nil into storage declared non-null";
+        }
+
+        if (reason != null)
+        {
+            var refKindText = refKind == RefKind.Out ? "out" : refKind == RefKind.In ? "in" : "ref";
+            Diagnostics.ReportByRefArgumentNullabilityMismatch(location, refKindText, parameter.Name, parameterType, storageType, reason);
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Issue #4422: reports GS0154 for by-reference storage the gate rejected,
+    /// naming the storage type (not the <c>*T</c> address type). When the
+    /// only difference is value-type nullability (<c>int32?</c> storage at
+    /// <c>ref int32</c>, or the reverse) the text says the two are different
+    /// runtime types.
+    /// </summary>
+    /// <param name="location">The argument's location.</param>
+    /// <param name="parameterName">The parameter name.</param>
+    /// <param name="parameterType">The (substituted) parameter type.</param>
+    /// <param name="storageType">The storage type.</param>
+    public void ReportByRefStorageMismatch(TextLocation location, string parameterName, TypeSymbol parameterType, TypeSymbol storageType)
+    {
+        if (IsValueNullableOf(storageType, parameterType) || IsValueNullableOf(parameterType, storageType))
+        {
+            Diagnostics.ReportWrongValueNullableByRefArgument(location, parameterName, parameterType, storageType);
+            return;
+        }
+
+        Diagnostics.ReportWrongArgumentType(location, parameterName, parameterType, storageType);
+
+        static bool IsValueNullableOf(TypeSymbol nullable, TypeSymbol other)
+            => nullable is NullableTypeSymbol valueNullable
+                && NullableLifting.IsAnyValueTypeNullable(valueNullable)
+                && other is not NullableTypeSymbol
+                && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(valueNullable.UnderlyingType, other);
     }
 
     /// <summary>

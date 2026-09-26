@@ -358,7 +358,7 @@ public sealed class GSharpAnalyzerDriver
         // covering this diagnostic's primary location drops it. The check sits
         // here, in the driver, so gsc, the language server, and
         // GSharpAnalyzerVerifier all honour the same scoping rule.
-        suppressions ??= DiagnosticSuppressionMap.Build(compilation.SyntaxTrees);
+        suppressions ??= compilation.DiagnosticSuppressions;
         if (suppressions.IsSuppressed(diagnostic))
         {
             return;

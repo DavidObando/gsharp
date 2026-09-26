@@ -18,6 +18,13 @@ partial class Patterns {
         @GeneratedRegex("^(.*)(\\d{3})$")
         private partial func LastThree() Regex;
 
+        // Backtracking inside a loop: the generator pushes its state with
+        // `StackPush(ref base.runstack!, …)`, which cs2gs translates to
+        // `&base.runstack` under a statement-scoped
+        // `@SuppressDiagnostic("GS0612")` (issue #4422).
+        @GeneratedRegex("(foo|ba+r)+\\w*?baz", RegexOptions.IgnoreCase)
+        private partial func Loop() Regex;
+
         // The header may be spelled however the user likes: gsgen spells the
         // generated implementing part with this declaring part's own header.
         @GeneratedRegex("\\d+")
@@ -36,6 +43,15 @@ partial class Patterns {
             let m = LastThree().Match(s)
             if m.Success {
                 return m.Groups[1].Value + "|" + m.Groups[2].Value
+            }
+
+            return "none"
+        }
+
+        public func LoopMatch(s string) string {
+            let m = Loop().Match(s)
+            if m.Success {
+                return m.Value
             }
 
             return "none"

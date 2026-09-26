@@ -1560,7 +1560,7 @@ public static class GSharpPrinter
                 var typeClause = local.Type == null ? string.Empty : $" {RenderType(local.Type)}";
                 var usingPrefix = local.IsUsing ? (local.IsAwait ? "await using " : "using ") : string.Empty;
                 var refPrefix = local.IsReadOnlyRefAlias ? "ref readonly " : local.IsRefAlias ? "ref " : string.Empty;
-                var declHead = $"{pad}{usingPrefix}{RenderBinding(local.Binding)} {refPrefix}{local.Name}{typeClause}";
+                var declHead = $"{pad}{RenderSuppressionPrefix(local.SuppressedDiagnostics)}{usingPrefix}{RenderBinding(local.Binding)} {refPrefix}{local.Name}{typeClause}";
                 var initClause = local.Initializer == null
                     ? string.Empty
                     : $" = {RenderWrappable(local.Initializer, indent, declHead.Length + 3)}";
@@ -1645,7 +1645,7 @@ public static class GSharpPrinter
                 return RenderTry(tryStatement, indent);
 
             case BlockStatement block:
-                return $"{pad}{RenderBlock(block, indent)}";
+                return $"{pad}{RenderSuppressionPrefix(block.SuppressedDiagnostics)}{RenderBlock(block, indent)}";
 
             case RawStatement raw:
                 return $"{pad}{raw.Text}";
@@ -1851,6 +1851,22 @@ public static class GSharpPrinter
         }
 
         return sb.ToString();
+    }
+
+    /// <summary>
+    /// Issue #4422: the ADR-0175 <c>@SuppressDiagnostic("ID", …) </c> prefix of
+    /// an annotated statement-position block or local declaration, or empty.
+    /// </summary>
+    /// <param name="ids">The suppressed diagnostic identifiers.</param>
+    /// <returns>The prefix, ending in a space, or the empty string.</returns>
+    private static string RenderSuppressionPrefix(IReadOnlyList<string> ids)
+    {
+        if (ids == null || ids.Count == 0)
+        {
+            return string.Empty;
+        }
+
+        return "@SuppressDiagnostic(" + string.Join(", ", ids.Select(id => "\"" + id + "\"")) + ") ";
     }
 
     private static string RenderBlock(BlockStatement block, int indent)
@@ -2628,12 +2644,18 @@ public static class GSharpPrinter
         BlockStatement body = constructor.Body;
         if (constructor.DelegatingArguments != null)
         {
-            var statements = new List<GStatement>
+            GStatement delegation = new ExpressionStatement(new InvocationExpression(
+                new IdentifierExpression("init"),
+                constructor.DelegatingArguments));
+            if (constructor.DelegatingSuppressedDiagnostics.Count > 0)
             {
-                new ExpressionStatement(new InvocationExpression(
-                    new IdentifierExpression("init"),
-                    constructor.DelegatingArguments)),
-            };
+                delegation = new BlockStatement(new List<GStatement> { delegation })
+                {
+                    SuppressedDiagnostics = constructor.DelegatingSuppressedDiagnostics,
+                };
+            }
+
+            var statements = new List<GStatement> { delegation };
             statements.AddRange(body.Statements);
             body = new BlockStatement(statements, body.IsUnsafe, body.IsChecked, body.IsUnchecked);
         }

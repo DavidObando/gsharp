@@ -110,14 +110,18 @@ public static class DocumentSyncHandler
 
         var diagnostics = new List<Diagnostic>();
 
-        foreach (var d in syntaxTree.Diagnostics)
+        // ADR-0175 amendment (#4422): parser warnings honour @SuppressDiagnostic
+        // exactly as gsc's EmitResult does.
+        foreach (var d in compilation.ApplySourceSuppressions(syntaxTree.Diagnostics))
         {
             diagnostics.Add(BuildDiagnostic("Syntax", d.Message, d.Location.Span.Start, d.Location.Span.End, syntaxTree.Text));
         }
 
         if (!skipBinding)
         {
-            foreach (var d in compilation.GlobalScope.Diagnostics)
+            // ADR-0175 amendment (#4422): drop what a source
+            // @SuppressDiagnostic scope covers, exactly as gsc's EmitResult does.
+            foreach (var d in compilation.ApplySourceSuppressions(compilation.GlobalScope.Diagnostics))
             {
                 // Only report diagnostics that originate from this file's syntax tree.
                 if (useProject && d.Location.Text != syntaxTree.Text)
@@ -129,7 +133,7 @@ public static class DocumentSyncHandler
             }
 
             var program = compilation.BoundProgram;
-            foreach (var d in program.Diagnostics)
+            foreach (var d in compilation.ApplySourceSuppressions(program.Diagnostics))
             {
                 if (useProject && d.Location.Text != syntaxTree.Text)
                 {
@@ -148,7 +152,7 @@ public static class DocumentSyncHandler
                 docDiagnostics,
                 warnOnMissingDocs: false);
 
-            foreach (var d in docDiagnostics)
+            foreach (var d in compilation.ApplySourceSuppressions(docDiagnostics.ToImmutableArray()))
             {
                 if (useProject && d.Location.Text != syntaxTree.Text)
                 {
