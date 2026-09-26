@@ -2575,14 +2575,20 @@ public sealed partial class CSharpToGSharpTranslator
             var failures = new string[arity];
             for (int i = 0; i < arity; i++)
             {
+                // Issue #4476: receive the reason in an `out var` local (typed
+                // as the parameter, which self-migration widens to `string?`
+                // because it is assigned null) and store it like `names[i]`,
+                // rather than passing the non-null `string[]` element by
+                // reference, which is GS0612 in the migrated G#.
                 ISymbol member = this.FindDeconstructSlotMember(
                     operation.MatchedType,
                     deconstruct,
                     deconstruct.Parameters[i],
                     recursive,
-                    out failures[i]);
+                    out var failure);
                 names[i] = member?.Name;
                 members[i] = member;
+                failures[i] = failure;
             }
 
             return new PositionalSlots(false, names, members, failures);
