@@ -56,6 +56,8 @@ public class Issue4443PlatformInferenceTests
                 public static List<string> Strings() { return new List<string> { "a", "b" }; }
 
                 public static List<T> WrapList<T>(T value) { return new List<T> { value }; }
+
+                public static List<T> WrapMany<T>(params T[] values) { return new List<T>(values); }
             }
 
         #nullable enable
@@ -278,6 +280,12 @@ public class Issue4443PlatformInferenceTests
         Assert.StartsWith(
             "System.Collections.Generic.List[string!]",
             ProbeType(library, "let probe = Ob.WrapList(Ob.Name())"),
+            StringComparison.Ordinal);
+
+        // The same for an expanded oblivious `params T[]` element.
+        Assert.StartsWith(
+            "System.Collections.Generic.List[string!]",
+            ProbeType(library, "let probe = Ob.WrapMany(Ob.Name(), Ob.Name())"),
             StringComparison.Ordinal);
 
         const string program = """

@@ -7229,12 +7229,12 @@ internal sealed class MemberLookup
             var slot = ClrNullability.GetParameterTypeSymbol(parameter);
             if (paramsElement)
             {
-                slot = (slot is PlatformTypeSymbol outer ? outer.UnderlyingType : slot) switch
-                {
-                    ArrayTypeSymbol array => array.ElementType,
-                    SliceTypeSymbol slice => slice.ElementType,
-                    _ => slot,
-                };
+                // The carrier's element through the shared position reader:
+                // an oblivious `params T[]` reads as a platform wrapper over a
+                // flags-annotated array, whose element a symbolic
+                // array/slice test does not reach.
+                var elements = slot.GetElementPositions();
+                slot = elements.Length == 1 ? elements[0] : slot;
             }
 
             return slot is PlatformTypeSymbol ? platform : platform.UnderlyingType;
