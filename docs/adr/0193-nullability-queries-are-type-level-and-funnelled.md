@@ -1087,25 +1087,29 @@ something the plan left open:
   stamp a root `!` onto a projection with symbolic method type arguments, which
   is the Phase 4 blocker. The constructor path now gets the same top-level `?`
   its two siblings already had.
-- **The suppression covers one region, not one method.** The single
-  `#pragma warning disable GSA0007` wraps three adjacent `MemberLookup`
-  members that share the known gap:
-  - `ResolveCallReturnTypeFromSymbolicTypeArgs`, as planned;
+- **The suppression covers one member.** The single
+  `#pragma warning disable GSA0007` wraps only
+  `MemberLookup.MapOpenSignatureWithoutDeclarationMerge`, a one-line member
+  whose body is the door call the phase cannot close. It covers the whole
+  member rather than the call alone because cs2gs carries a GSA pragma into
+  the self-migrated tree only when it covers a whole member (ADR-0175;
+  a statement-level region is dropped, #4447). The known gap routes through
+  it:
+  - `ResolveCallReturnTypeFromSymbolicTypeArgs`, the planned exception;
   - `ResolveByRefParameterPointeeFromSymbolicTypeArgs`, its by-ref sibling
-    for an inline `out var` (#4350). It was added after this ADR was written
-    and has the same unmerged projection;
-  - `MapOpenSignatureWithoutDeclarationMerge`, a named member that concentrates
-    the other symbolic-method-type-argument projections that need the merge
-    but cannot take it yet. These are the lambda and delegate-target
-    projections in `ExpressionBinder.Calls.Invocation.cs` and
-    `ExpressionBinder.Literals.cs`, and the `params` element in
-    `OverloadResolver.Arguments.cs`. Every one of their consumers tests the
-    result for `ImportedTypeSymbol` without peeling it, which is exactly the
-    blocker `b0c76053d` recorded.
+    for an inline `out var` (#4350), added after this ADR was written with the
+    same unmerged projection;
+  - the symbolic lambda and delegate-target projections in
+    `ExpressionBinder.Calls.Invocation.cs` and `ExpressionBinder.Literals.cs`,
+    and the symbolic `params` element projection in
+    `OverloadResolver.ExpandParamsArguments`. Every one of their consumers
+    tests the result for `ImportedTypeSymbol` without peeling it, which is
+    exactly the blocker `b0c76053d` recorded.
 
-  Routing those nine calls to one member keeps the gap in one suppressed
-  place. Phase 4 then closes it by adding the merge in three members rather
-  than in four binder files.
+  The two `Resolve*` members are outside the pragma; GSA0007 cannot see a
+  reference to any of the three named members, so
+  `Adr0193SymbolicProjectionGapCallersTests` pins every reference, keyed by
+  its containing member.
 - **Real defects the triage found and fixed** (a declared `?` dropped by an
   erased read). Each has a regression test in `Adr0193FunnelMergeTests`
   (Core.Tests). Both tests were confirmed to fail with the old read restored.
@@ -1252,11 +1256,12 @@ something the plan left open:
   Phase 2 funnel, on **every** non-null return (including the
   `Task`/`ValueTask`/`IAsyncEnumerable` arm). The method becomes a
   `[NullabilityFunnel]` member, and the Phase 2 suppression is removed.
-  *Phase 2 addition:* the suppressed region also holds
-  `ResolveByRefParameterPointeeFromSymbolicTypeArgs` (its by-ref sibling for
-  an inline `out var`, #4350) and `MapOpenSignatureWithoutDeclarationMerge`,
-  through which the symbolic lambda/delegate-target projections and the
-  symbolic `params` element project. All three take the merge in this phase.
+  *Phase 2 addition:* the suppression is on
+  `MapOpenSignatureWithoutDeclarationMerge` alone. This method, its by-ref
+  sibling `ResolveByRefParameterPointeeFromSymbolicTypeArgs` (#4350), and the
+  symbolic lambda/delegate-target and `params` element projections all
+  project through it, so the merge lands there once, and that member becomes
+  the `[NullabilityFunnel]` member whose pragma is deleted.
 - It is gated on **both** earlier results, because `b0c76053d` failed for two
   independent reasons: decision 1's open-slot ruling (via Phase 1's
   `ApplyOpenSlot`) is what keeps `Min()`/`Max()` on an unconstrained `T` from
