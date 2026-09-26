@@ -74,6 +74,45 @@ public class Issue4420PlatformUpcastTests
 
         func TakeNilableObjects(xs IEnumerable[object?]) int32 { return xs.Count() }
 
+        // An `IEnumerable[string!]` itself: the same generic definition as the
+        // target, reaching `IEnumerable[object]` through covariance.
+        func AsEnumerable[T](xs List[T]) IEnumerable[T] { return xs }
+
+        interface IOut[out T] {
+            func Get() T;
+        }
+
+        class OutRepo[T] : IOut[T] {
+            private let value T
+
+            init(value T) {
+                this.value = value
+            }
+
+            func Get() T -> value
+        }
+
+        func TakeOut(x IOut[object]) int32 { return 1 }
+
+        interface IView[T] : IEnumerable[T] {
+        }
+
+        class ViewRepo[T] : IView[T] {
+            private let items List[T] = List[T]()
+
+            init(value T) {
+                items.Add(value)
+            }
+
+            func GetEnumerator() IEnumerator[T] -> items.GetEnumerator()
+            private func (IEnumerable) GetEnumerator() IEnumerator -> GetEnumerator()
+        }
+
+        // Inferred from the list's NESTED element, which keeps `string!` (a
+        // top-level `T!` argument would infer `string`, #4443), so this is an
+        // `IView[string!]`.
+        func ViewOfFirst[T](xs List[T]) IView[T] { return ViewRepo[T](xs[0]) }
+
         func Keep(s string) string { return s }
 
         class Repo[T] : IEnumerable[T] {
@@ -122,6 +161,9 @@ public class Issue4420PlatformUpcastTests
     [InlineData("TakeEnum(BaseRepo(Ob.Strings()[0]))")]
     [InlineData("TakeObjects(Ob.Strings())")]
     [InlineData("TakeObjects(Ob.Lines())")]
+    [InlineData("TakeObjects(AsEnumerable(Ob.Strings()))")]
+    [InlineData("TakeOut(OutRepo(Ob.Strings()[0]))")]
+    [InlineData("TakeEnum(ViewOfFirst(Ob.Strings()))")]
     public void An_Upcast_To_A_NonNull_Element_Supertype_Is_Rejected(string call)
     {
         using var library = new CSharpFixture(LibrarySource);
