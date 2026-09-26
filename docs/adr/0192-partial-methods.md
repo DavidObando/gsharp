@@ -161,6 +161,7 @@ single any-order run. Canonical style places `partial` immediately before
 | Position | Allowed? | Notes |
 |---|---|---|
 | `func` member of a `partial class` / `partial struct` | **yes** | The feature. |
+| `func` member of a `partial data class` / `partial data struct` | **yes** | The G# spelling of a C# `partial record` / `partial record struct`; see the 2026-09-26 amendment. |
 | `func` inside that type's `shared { }` block | **yes** | The motivating scenario is static. |
 | `func` member of a nested `partial` type | **yes** | Handled by the same recursion. |
 | `func` member of a **non-partial** type | no — `GS0608` | C# CS0751's analogue. |
@@ -310,8 +311,8 @@ MSBuild may vary — the same concern ADR-0144 §D addresses for type parts.
 
 | ID | Message |
 |---|---|
-| `GS0607` | `'partial' is not valid here; only a 'func' member of a 'partial class' or 'partial struct' may be partial.` |
-| `GS0608` | `Partial method '{0}' must be declared inside a 'partial class' or 'partial struct'.` |
+| `GS0607` | `'partial' is not valid here; only a 'func' member of a 'partial class' or 'partial struct' (including a 'data class' or 'data struct') may be partial.` |
+| `GS0608` | `Partial method '{0}' must be declared inside a 'partial class' or 'partial struct' (including a 'data class' or 'data struct').` |
 | `GS0609` | `Partial method '{0}' has no implementing part; every partial method declared in G# must be implemented by exactly one part with a body.` |
 | `GS0610` | `Partial method '{0}' must have exactly one signature-only declaring part and one implementing part with a body, but found {1} declaring part(s) and {2} implementing part(s).` |
 | `GS0611` | `Partial declarations of method '{0}' disagree on {1}.` |
@@ -543,6 +544,85 @@ part. A name-only key pairs them and then reports a signature conflict the user
 never wrote — manufacturing the mismatch it then complains about. This is the
 same defect class as issue #3907's `PartialTypeMerger.GroupByKey` arity bug,
 and it is covered by its own test.
+
+## Amendment (2026-09-26): partial data types
+
+A C# `[GeneratedRegex]` method is often declared in a `partial record`, as in
+code-exploder's `GitHubUrl`:
+
+```csharp
+public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
+{
+    [GeneratedRegex(@"^https://...$", RegexOptions.ExplicitCapture, matchTimeoutMilliseconds: 1000)]
+    private static partial Regex Pattern();
+}
+```
+
+Its G# spelling is a `partial data class` (a `partial record struct` is a
+`partial data struct`) holding the declaring part:
+
+```gsharp
+public sealed partial data class GitHubUrl(Owner string, Name string, PrNumber int32?) {
+    shared {
+        @GeneratedRegex("^https://...$", RegexOptions.ExplicitCapture, 1000)
+        private partial func Pattern() Regex;
+    }
+}
+```
+
+**The language already admits this, so gsc needs no new rule.** ADR-0144
+made `data class` / `data struct` partial types, with the restrictions below,
+and a data class is a class for §A: its partial funcs merge exactly as a
+partial class's do. This amendment records the combination and pins it with
+tests, and makes gsgen handle it. The rules, all ADR-0144's:
+
+- **Syntax.** `partial` composes with `data` (and `sealed`/`open`,
+  accessibility) in any order in the type head.
+- **`data` on every part** (`GS0479`). `data` changes how a part binds, so
+  a part without it is an error rather than a silently non-data part.
+- **At most one part carries the positional parameter list** (`GS0482`). It
+  is the primary constructor, and the synthesized properties come from it.
+  Any part may carry it; it need not be the first in part order.
+- **Members.** Every other part may hold any member a data type can hold:
+  funcs, partial funcs (declaring or implementing parts), properties, fields,
+  a `shared { }` block. `open`/`sealed` and accessibility follow ADR-0144 §C:
+  stated on any part, conflicts reported.
+- **Synthesized record members** (constructor, properties, `Equals`,
+  `GetHashCode`, `ToString`, `with` copy, deconstruction) are synthesized once,
+  from the merged declaration. `PartialTypeMerger` concatenates the parts
+  before the binder runs (ADR-0144 §E), so no synthesis step sees a single
+  part, and every part's fields and properties take part in equality exactly
+  as if they had been written in one declaration. Their order is the ADR-0144
+  §D part order.
+
+The diagnostics are unchanged. The `GS0607` / `GS0608` messages now say that
+a `data class` or `data struct` qualifies, because "`partial class` or
+`partial struct`" read as if it excluded them.
+
+**gsgen** (ADR-0145) needed two changes:
+
+- The stub renders a G# data type with no base class as a C# `record` /
+  `record struct` (`partial` when the G# type is), so a generator sees a
+  record (`IsRecord`) and C# supplies the record members. It renders no
+  positional parameter list: the properties and constructors it already
+  renders carry the shape, and a positional list makes C# reject an explicit
+  constructor that does not chain to it (CS8862) and a variadic parameter
+  whose property is a slice (CS8866). A data class with a base class stays a
+  C# `class` in the stub, because a record derives only from a record
+  (CS8864).
+- The back-translation spells every generated part of a user data type as a
+  `partial data class` / `partial data struct` part, whatever keyword the
+  generated C# re-declared the type with. The generated part carries no
+  `open`, no `sealed` and no positional list, which are the user's parts to
+  state. Without this, cs2gs spells a non-sealed record `open` (its
+  synthesized members are virtual), which conflicts with a user part that
+  says `sealed` (GS0478); and a data class the stub rendered as a class came
+  back as a plain `partial class` (GS0479). The translator also emits a
+  generated implementation in a record as a G# implementing part, as it does
+  in a class or struct.
+
+cs2gs's own migration of a C# partial record's partial methods is PR #4484's
+step, not this amendment's.
 
 ## Follow-on work (explicitly NOT part of this ADR)
 

@@ -32,6 +32,7 @@ public sealed class GsStubRenderer
     private readonly GsToCSharpTypeSpeller speller;
     private readonly List<string> notes = new();
     private readonly List<StubPartialDefinition> partialDefinitions = new();
+    private readonly List<StubDataType> dataTypes = new();
 
     // Identifier locations gsc reported GS0610 (wrong partial part count) at.
     // PartialMethodMerger's error recovery keeps one bodiless declaring part
@@ -103,6 +104,13 @@ public sealed class GsStubRenderer
     public IReadOnlyList<StubPartialDefinition> PartialDefinitions => partialDefinitions;
 
     /// <summary>
+    /// Gets the top-level G# data types the last render projected, whose
+    /// generated parts the back-translation spells as <c>data</c> parts
+    /// (ADR-0192 amendment, partial data types).
+    /// </summary>
+    public IReadOnlyList<StubDataType> DataTypes => dataTypes;
+
+    /// <summary>
     /// Renders the C# stub for every user-declared type in <paramref name="scope"/>.
     /// </summary>
     /// <param name="scope">The bound global scope to project.</param>
@@ -119,6 +127,7 @@ public sealed class GsStubRenderer
             .Select(diagnostic => diagnostic.Location)
             .ToHashSet();
         this.partialDefinitions.Clear();
+        this.dataTypes.Clear();
 
         var builder = new StringBuilder();
         builder.AppendLine("#nullable enable");
@@ -145,6 +154,11 @@ public sealed class GsStubRenderer
             if (SkipType(structSymbol.Name) || structSymbol.ContainingType != null)
             {
                 continue;
+            }
+
+            if (structSymbol.IsData)
+            {
+                dataTypes.Add(new StubDataType(structSymbol.PackageName, structSymbol.Name, structSymbol.TypeParameters.Length, structSymbol.IsClass));
             }
 
             AddType(structSymbol.PackageName, (sb, indent) => RenderStruct(sb, indent, structSymbol));
@@ -235,7 +249,27 @@ public sealed class GsStubRenderer
             sb.Append("partial ");
         }
 
-        sb.Append(structSymbol.IsClass ? "class " : "struct ");
+        // A G# `data class` / `data struct` is the spelling of a C# `record` /
+        // `record struct` (ADR-0192 amendment, partial data types), so a
+        // generator that checks `IsRecord` sees the real shape; C# supplies
+        // the record's synthesized members itself. The positional parameter
+        // list is NOT rendered: the properties and constructors below already
+        // carry the type's shape, and with a positional list C# rejects an
+        // explicit constructor that does not chain to it (CS8862) and a
+        // property whose type differs from its parameter's (CS8866, a variadic
+        // `...T` parameter is `T[]` but its property a slice). Fidelity only:
+        // the back-translation spells a generated part of a data type as a
+        // `data` part from DataTypes, whatever keyword the generator
+        // re-declared it with.
+        if (RendersAsRecord(structSymbol))
+        {
+            sb.Append(structSymbol.IsClass ? "record " : "record struct ");
+        }
+        else
+        {
+            sb.Append(structSymbol.IsClass ? "class " : "struct ");
+        }
+
         sb.Append(structSymbol.Name);
         sb.Append(RenderTypeParameters(structSymbol.TypeParameters));
 
@@ -290,6 +324,14 @@ public sealed class GsStubRenderer
             }
         }
     }
+
+    // A C# record may derive only from `object` or another record (CS8864),
+    // while a G# data class may derive from any open class. So only a data
+    // type with no base class renders as a record; any other stays a class.
+    private static bool RendersAsRecord(StructSymbol structSymbol) =>
+        structSymbol.IsData
+        && structSymbol.BaseClass == null
+        && structSymbol.ImportedBaseType == null;
 
     private List<string> CollectBaseTypes(StructSymbol structSymbol)
     {

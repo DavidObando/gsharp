@@ -593,9 +593,9 @@ internal static class DiagnosticDescriptors
     // after rebasing onto main, which had independently landed the native-
     // slice/managed-reference diagnostics (ADR-0189/0190) at GS0600-GS0604 in
     // the meantime — an additive collision git's rebase did not flag.
-    internal static readonly DiagnosticDescriptor PartialModifierNotValidHere = new("GS0607", DiagnosticSeverity.Error, "'partial' is not valid here; only a 'func' member of a 'partial class' or 'partial struct' may be partial.");
+    internal static readonly DiagnosticDescriptor PartialModifierNotValidHere = new("GS0607", DiagnosticSeverity.Error, "'partial' is not valid here; only a 'func' member of a 'partial class' or 'partial struct' (including a 'data class' or 'data struct') may be partial.");
 
-    internal static readonly DiagnosticDescriptor PartialMethodRequiresPartialType = new("GS0608", DiagnosticSeverity.Error, "Partial method '{0}' must be declared inside a 'partial class' or 'partial struct'.");
+    internal static readonly DiagnosticDescriptor PartialMethodRequiresPartialType = new("GS0608", DiagnosticSeverity.Error, "Partial method '{0}' must be declared inside a 'partial class' or 'partial struct' (including a 'data class' or 'data struct').");
 
     internal static readonly DiagnosticDescriptor PartialMethodHasNoImplementation = new("GS0609", DiagnosticSeverity.Error, "Partial method '{0}' has no implementing part; every partial method declared in G# must be implemented by exactly one part with a body.");
 

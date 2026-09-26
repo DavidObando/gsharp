@@ -180,6 +180,80 @@ class Plain {
         Assert.DoesNotContain(method.Modifiers, m => m.Text == "partial");
     }
 
+    // ADR-0192 amendment (partial data types): a `partial data class` /
+    // `partial data struct` is the G# spelling of a C# `partial record` /
+    // `partial record struct`, so the stub offers it to a generator as one —
+    // a generator that checks `IsRecord`, or re-declares the type with the
+    // keyword it saw (the Regex generator does), then sees the real shape. The
+    // record's synthesized members are the C# compiler's to supply, and the
+    // stub must bind without errors.
+    [Theory]
+    [InlineData("sealed partial data class", "record", false)]
+    [InlineData("partial data struct", "record struct", true)]
+    public void DeclaringPartInAPartialDataType_RendersAPartialRecord_ThatBindsClean(string gsHeader, string csKeyword, bool isValueType)
+    {
+        var stub = Project(@"
+package App
+import System.Text.RegularExpressions
+
+HEADER Url(Owner string, Name string, Pr int32?) {
+    func Describe() string {
+        return Owner + ""/"" + Name
+    }
+
+    shared {
+        @GeneratedRegex(""\\d+"")
+        private partial func Digits() Regex;
+    }
+}
+".Replace("HEADER", gsHeader, System.StringComparison.Ordinal));
+
+        AssertParses(stub);
+        var type = Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(stub).GetRoot()
+            .DescendantNodes()
+            .OfType<RecordDeclarationSyntax>()
+            .SingleOrDefault(t => t.Identifier.Text == "Url");
+        Assert.True(type != null, "expected a record declaration in:\n" + stub);
+        Assert.Contains("partial " + csKeyword + " Url", type.ToString(), System.StringComparison.Ordinal);
+
+        var compilation = BindStub(stub);
+        // CS8795 (a partial method with accessibility has no implementation)
+        // is the expected state of a lone declaring part: the generator
+        // supplies the implementation.
+        var errors = compilation.GetDiagnostics()
+            .Where(d => d.Severity == DiagnosticSeverity.Error && d.Id != "CS8795")
+            .ToList();
+        Assert.True(errors.Count == 0, stub + "\n\n" + string.Join("\n", errors));
+
+        var symbol = compilation.GetTypeByMetadataName("App.Url");
+        Assert.NotNull(symbol);
+        Assert.True(symbol.IsRecord);
+        Assert.Equal(isValueType, symbol.IsValueType);
+        Assert.Equal(new[] { "Name", "Owner", "Pr" }, symbol.GetMembers().OfType<IPropertySymbol>().Where(p => p.Name != "EqualityContract").Select(p => p.Name).OrderBy(n => n));
+        Assert.True(DeclaredMethod(stub, "Digits").IsPartialDefinition);
+    }
+
+    // Every data type with no base class now renders as a record, not only one
+    // with partial funcs, so the other data shapes must still bind: an extra
+    // constructor, a variadic or defaulted positional parameter, a generic
+    // data class, and a non-positional data struct with fields.
+    [Theory]
+    [InlineData("data class Q(A int32) {\n    init(s string) {\n        A = 1\n    }\n}")]
+    [InlineData("data class Names(prefix string, items ...string)")]
+    [InlineData("data class D(A int32, B string = \"x\")")]
+    [InlineData("data class Box[T](Value T)")]
+    [InlineData("data struct Point {\n    var X int32\n    var Y int32\n}")]
+    [InlineData("data class Lower(x int32)")]
+    public void DataTypeShapes_RenderAsRecordsThatBindClean(string declaration)
+    {
+        var stub = Project("package App\n\n" + declaration + "\n");
+
+        AssertParses(stub);
+        var errors = BindStub(stub).GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, stub + "\n\n" + string.Join("\n", errors));
+        Assert.Contains(" record ", stub.Replace("record struct", "record ", System.StringComparison.Ordinal), System.StringComparison.Ordinal);
+    }
+
     private static System.Collections.Generic.List<MethodDeclarationSyntax> Methods(string stub, string name) =>
         Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(stub).GetRoot()
             .DescendantNodes()
