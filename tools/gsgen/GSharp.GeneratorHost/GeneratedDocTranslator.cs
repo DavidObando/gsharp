@@ -52,12 +52,18 @@ public static class GeneratedDocTranslator
     /// with (<see cref="ImplementingPartHeaders"/>); <see langword="null"/> or
     /// empty to keep every header as back-translated.
     /// </param>
+    /// <param name="dataTypes">
+    /// The top-level G# data types the stub rendered, whose generated parts
+    /// are spelled as <c>data</c> parts (<see cref="SpellDataTypeParts"/>);
+    /// <see langword="null"/> or empty for none.
+    /// </param>
     /// <returns>The back-translated G# parts: one per namespace of each generated document with members or file-level attributes.</returns>
     public static IReadOnlyList<TranslatedGsDocument> Translate(
         string stubCSharp,
         IReadOnlyList<GeneratedCsDocument> generated,
         IReadOnlyList<MetadataReference> references,
-        IReadOnlyList<StubPartialDefinition> declaringParts = null)
+        IReadOnlyList<StubPartialDefinition> declaringParts = null,
+        IReadOnlyList<StubDataType> dataTypes = null)
     {
         ArgumentNullException.ThrowIfNull(stubCSharp);
         ArgumentNullException.ThrowIfNull(generated);
@@ -144,6 +150,7 @@ public static class GeneratedDocTranslator
                     translatedFilePaths: translatedFilePaths,
                     emitGeneratedImplementingParts: true)
                     .TranslateDocument(loaded);
+                unit = SpellDataTypeParts(unit, dataTypes ?? Array.Empty<StubDataType>());
 
                 // Skip a unit that carried no translatable content.
                 if (unit.Members.Count == 0 && unit.FileAttributes.Count == 0)
@@ -165,6 +172,70 @@ public static class GeneratedDocTranslator
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// ADR-0192 amendment (partial data types): spells each top-level part of
+    /// a user G# data type as a <c>partial data class</c> / <c>partial data
+    /// struct</c> part with no <c>open</c>. gsc requires <c>data</c> on every
+    /// part of a data type (GS0479), but the generated C# re-declares the type
+    /// with whatever keyword the stub gave it: a <c>class</c> for a data class
+    /// the stub cannot render as a record (one with a base class), and a
+    /// record's synthesized virtual members make the translator spell a
+    /// non-sealed record <c>open</c>, which contradicts a user part that says
+    /// <c>sealed</c> (GS0478). Openness and sealedness are the user's to state
+    /// (gsc unions them across parts, ADR-0144 §C), so a generated part states
+    /// neither; nor does it carry a positional parameter list, which only one
+    /// part may (GS0482), the user's.
+    /// </summary>
+    private static CompilationUnit SpellDataTypeParts(CompilationUnit unit, IReadOnlyList<StubDataType> dataTypes)
+    {
+        if (dataTypes.Count == 0)
+        {
+            return unit;
+        }
+
+        var members = new List<GNode>(unit.Members.Count);
+        bool changed = false;
+        foreach (GNode member in unit.Members)
+        {
+            StubDataType dataType = member is TypeDeclaration { IsPartial: true } type
+                ? dataTypes.FirstOrDefault(candidate =>
+                    string.Equals(candidate.PackageName ?? string.Empty, unit.Package ?? string.Empty, StringComparison.Ordinal)
+                    && string.Equals(candidate.TypeName, type.Name, StringComparison.Ordinal)
+                    && candidate.TypeArity == type.TypeParameters.Count)
+                : null;
+            if (dataType == null)
+            {
+                members.Add(member);
+                continue;
+            }
+
+            var part = (TypeDeclaration)member;
+            members.Add(new TypeDeclaration(
+                dataType.IsClass ? TypeDeclarationKind.DataClass : TypeDeclarationKind.DataStruct,
+                part.Name,
+                part.TypeParameters,
+                primaryConstructorParameters: null,
+                part.BaseType,
+                baseConstructorArguments: null,
+                part.Interfaces,
+                part.Members,
+                part.Visibility,
+                isOpen: false,
+                isSealed: false,
+                isAbstract: false,
+                isPartial: true,
+                part.HasBody,
+                part.Attributes,
+                part.IsUnsafe,
+                part.IsRefLike));
+            changed = true;
+        }
+
+        return changed
+            ? new CompilationUnit(unit.Package, unit.Imports, members, unit.LeadingComments, unit.FileAttributes)
+            : unit;
     }
 
     /// <summary>
