@@ -3615,7 +3615,7 @@ public sealed class Conversion
         // containers are excluded for the reasons given below.
         if (from is not FunctionTypeSymbol
             && to is not FunctionTypeSymbol
-            && UnwrapPlatformAndNullable(from) is not { ClrType.IsValueType: true }
+            && !IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from))
             && TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments))
         {
             for (var i = 0; i < projected.Length; i++)
@@ -4005,10 +4005,23 @@ public sealed class Conversion
         {
             foreach (var level in GetStructHierarchy(sourceStruct))
             {
-                foreach (var implemented in level.ImplementedClrInterfaces)
+                // The level's substituted imported supertypes: each directly
+                // implemented CLR interface, and the imported base class.
+                // Each either IS the target's definition or reaches it
+                // through its own CLR hierarchy (`IChild<T> : IEnumerable<T>`,
+                // `Base<T> : List<T>`), which the imported arm below walks;
+                // they are imported symbols, so this recursion is one level.
+                var importedSupertypes = level.ImportedBaseType is { } importedBase
+                    ? level.ImplementedClrInterfaces.Add(importedBase)
+                    : level.ImplementedClrInterfaces;
+                foreach (var implemented in importedSupertypes)
                 {
-                    if (implemented is not null
-                        && TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr)
+                    if (implemented is null)
+                    {
+                        continue;
+                    }
+
+                    if (TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr)
                         && implementedClr is { IsGenericType: true }
                         && ClrTypeUtilities.AreSame(
                             implementedClr.IsGenericTypeDefinition ? implementedClr : implementedClr.GetGenericTypeDefinition(),
@@ -4016,6 +4029,12 @@ public sealed class Conversion
                         && implementedArguments.Length == targetArguments.Length)
                     {
                         projected = implementedArguments;
+                        return true;
+                    }
+
+                    if (implemented is not StructSymbol
+                        && TryProjectPlatformArgumentsToSupertype(implemented, to, out projected, out targetArguments))
+                    {
                         return true;
                     }
                 }

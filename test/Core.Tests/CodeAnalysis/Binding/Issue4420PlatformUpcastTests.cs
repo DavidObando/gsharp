@@ -44,6 +44,14 @@ public class Issue4420PlatformUpcastTests
 
                 public static string[] Lines() { return new[] { "a", "b" }; }
             }
+
+            public interface IChild<T> : IEnumerable<T>
+            {
+            }
+
+            public class Base<T> : List<T>
+            {
+            }
         }
         """;
 
@@ -75,6 +83,23 @@ public class Issue4420PlatformUpcastTests
             private func GetEnumerator() IEnumerator -> GetEnumerator()
         }
 
+        class ChildRepo[T] : IChild[T] {
+            private let items List[T] = List[T]()
+
+            init(value T) {
+                items.Add(value)
+            }
+
+            func GetEnumerator() IEnumerator[T] -> items.GetEnumerator()
+            private func GetEnumerator() IEnumerator -> GetEnumerator()
+        }
+
+        class BaseRepo[T] : Base[T] {
+            init(value T) {
+                this.Add(value)
+            }
+        }
+
         """;
 
     /// <summary>
@@ -89,6 +114,8 @@ public class Issue4420PlatformUpcastTests
     [InlineData("TakeEnum(Ob.Lines())")]
     [InlineData("TakeRo(Ob.Lines())")]
     [InlineData("TakeEnum(Repo(Ob.Strings()[0]))")]
+    [InlineData("TakeEnum(ChildRepo(Ob.Strings()[0]))")]
+    [InlineData("TakeEnum(BaseRepo(Ob.Strings()[0]))")]
     public void An_Upcast_To_A_NonNull_Element_Supertype_Is_Rejected(string call)
     {
         using var library = new CSharpFixture(LibrarySource);
