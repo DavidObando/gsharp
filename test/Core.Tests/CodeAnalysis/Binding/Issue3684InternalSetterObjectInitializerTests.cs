@@ -49,6 +49,14 @@ public sealed class Issue3684InternalSetterObjectInitializerTests
             public int Secret { get; private set; }
 
             public int Guarded { get; protected set; }
+
+            internal int Hidden { get; set; }
+
+            internal int hiddenField;
+
+            protected internal int ProtectedOrFriend { get; set; }
+
+            private protected int ProtectedAndFriend { get; set; }
         }
         """;
 
@@ -193,6 +201,105 @@ public sealed class Issue3684InternalSetterObjectInitializerTests
                 Assert.False(result.Success, Describe(result));
                 Assert.Contains(result.Diagnostics, d => d.Id == "GS0127");
             });
+    }
+
+    /// <summary>
+    /// An object initializer must also find a friend assembly's wholly
+    /// <c>internal</c> property or field, not only an <c>internal</c> setter on
+    /// a public property. The member lookup was public-only, so the migrated
+    /// <c>Cs2Gs.Tests</c> failed on
+    /// <c>PipelineOptions{…, RepositoryAdditionalFiles: …}</c> (GS0158) even
+    /// though <c>options.RepositoryAdditionalFiles = …</c> bound.
+    /// </summary>
+    /// <param name="memberName">The internal property or field.</param>
+    [Theory]
+    [InlineData("Hidden")]
+    [InlineData("hiddenField")]
+    public void FriendAssembly_ObjectInitializer_Finds_Internal_Member(string memberName)
+    {
+        RunFriend(memberName, result => Assert.True(result.Success, Describe(result)));
+    }
+
+    /// <summary>
+    /// The same internal members stay invisible to an assembly the library
+    /// did not befriend.
+    /// </summary>
+    /// <param name="memberName">The internal property or field.</param>
+    [Theory]
+    [InlineData("Hidden")]
+    [InlineData("hiddenField")]
+    public void NonFriendAssembly_ObjectInitializer_Does_Not_Find_Internal_Member(string memberName)
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, "Issue3684.Library", CSharpLibrarySource);
+            var result = CompileGSharp(
+                Consumer("Issue3684.Stranger", memberName),
+                "Issue3684.Stranger",
+                libraryPath);
+
+            Assert.False(result.Success, Describe(result));
+            Assert.Contains(result.Diagnostics, d => d.Id == "GS0158");
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// <c>private protected</c> needs a derived type as well as the friend
+    /// assembly, so, as in C#, a non-derived friend's object initializer
+    /// cannot see it.
+    /// </summary>
+    [Fact]
+    public void FriendAssembly_ObjectInitializer_Does_Not_Find_PrivateProtected_Member()
+    {
+        RunFriend(
+            "ProtectedAndFriend",
+            result =>
+            {
+                Assert.False(result.Success, Describe(result));
+                Assert.Contains(result.Diagnostics, d => d.Id == "GS0158");
+            });
+    }
+
+    /// <summary>
+    /// <c>protected internal</c> is accessible to a friend assembly in C#. The
+    /// object initializer must agree with gsc's plain assignment
+    /// (<c>bag.X = 1</c>); the two paths must never disagree.
+    /// </summary>
+    [Fact]
+    public void FriendAssembly_ProtectedInternal_ObjectInitializer_Agrees_With_Assignment()
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, "Issue3684.Library", CSharpLibrarySource);
+            var initializer = CompileGSharp(Consumer("Issue3684.Friend", "ProtectedOrFriend"), "Issue3684.Friend", libraryPath);
+            var assignment = CompileGSharp(
+                """
+                package Issue3684.Friend
+                import Issue3684.Library
+
+                func Run() Bag {
+                    let bag = Bag()
+                    bag.ProtectedOrFriend = 1
+                    return bag
+                }
+                """,
+                "Issue3684.Friend",
+                libraryPath);
+
+            Assert.True(
+                assignment.Success == initializer.Success,
+                "assignment: " + Describe(assignment) + "\ninitializer: " + Describe(initializer));
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
     }
 
     [Fact]
