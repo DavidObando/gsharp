@@ -585,6 +585,14 @@ internal static class RoslynAnalyzerApiMap
         ("Microsoft.CodeAnalysis.Operations.IIsTypeOperation", "TypeOperand"),
         ("Microsoft.CodeAnalysis.Operations.IMethodReferenceOperation", "Method"),
         ("Microsoft.CodeAnalysis.Operations.IPropertyReferenceOperation", "Property"),
+
+        // Issue #4287: ISymbol.ContainingType maps to Symbol.ContainingType,
+        // declared `TypeSymbol?`. Its `!!` used to come from the frozen-
+        // oblivious-metadata rule, which #4428 retired; a call through it
+        // (`method.ContainingType.ToDisplayString(…)`, GSA0002's shape) now
+        // reports GS0159 without one. The read from an oblivious C# file says
+        // nothing, so the G# side has to be stated here.
+        ("Microsoft.CodeAnalysis.ISymbol", "ContainingType"),
     };
 
     /// <summary>

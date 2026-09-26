@@ -1044,7 +1044,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             // ADR-0186 step 6 (PR 0): a read of oblivious CLR metadata is `T!`
             // in G#, and gsc checks a `T!` receiver itself (§4).
-            if (this.PlatformTypedImportNeedsNoBridge(recv))
+            //
+            // Issue #4287: not when ADR-0169 analyzer mode RETARGETS the member
+            // onto the G# analyzer API. The emitted read is then that API's
+            // member, which is `T?` (`method.ContainingType`), not the imported
+            // Roslyn position, and a call on it reports GS0159 without `!!`.
+            if (!this.IsGSharpNullableAnalyzerExpression(recv)
+                && this.PlatformTypedImportNeedsNoBridge(recv))
             {
                 return translated;
             }
