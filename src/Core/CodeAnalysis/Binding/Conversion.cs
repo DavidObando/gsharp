@@ -3294,6 +3294,34 @@ public sealed class Conversion
     /// </summary>
     private static bool DerivesFromConstructed(StructSymbol fromClass, StructSymbol toClass)
     {
+        if (!TryProjectConstructedBaseArguments(fromClass, toClass, out var projected)
+            || projected.Length != toClass.TypeArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < projected.Length; i++)
+        {
+            if (!AreTypeArgumentsEquivalent(projected[i], toClass.TypeArguments[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Projects a constructed G# class onto a same-compilation generic base,
+    /// preserving symbolic type arguments through every inheritance hop.
+    /// </summary>
+    private static bool TryProjectConstructedBaseArguments(
+        StructSymbol fromClass,
+        StructSymbol toClass,
+        out ImmutableArray<TypeSymbol> projected)
+    {
+        projected = ImmutableArray<TypeSymbol>.Empty;
+
         // Maps each visited class's declaration type parameters onto concrete
         // type arguments resolved in fromClass's context, composed across hops.
         Dictionary<TypeParameterSymbol, TypeSymbol>? running = null;
@@ -3302,8 +3330,21 @@ public sealed class Conversion
         {
             // The most-derived class itself is the identity case (handled by the
             // caller); only its base chain is an upcast target.
-            if (!ReferenceEquals(c, fromClass) && MatchesConstructedTarget(c, toClass, running))
+            if (!ReferenceEquals(c, fromClass)
+                && ReferenceEquals(c.Definition, toClass.Definition))
             {
+                if (c.TypeArguments.IsDefaultOrEmpty)
+                {
+                    return toClass.TypeArguments.IsDefaultOrEmpty;
+                }
+
+                var builder = ImmutableArray.CreateBuilder<TypeSymbol>(c.TypeArguments.Length);
+                foreach (var argument in c.TypeArguments)
+                {
+                    builder.Add(running == null ? argument : Binder.SubstituteType(argument, running));
+                }
+
+                projected = builder.MoveToImmutable();
                 return true;
             }
 
@@ -3318,12 +3359,9 @@ public sealed class Conversion
                 var count = Math.Min(defParams.Length, c.TypeArguments.Length);
                 for (var i = 0; i < count; i++)
                 {
-                    var arg = c.TypeArguments[i];
-                    if (arg is TypeParameterSymbol tpArg && running != null
-                        && running.TryGetValue(tpArg, out var resolved))
-                    {
-                        arg = resolved;
-                    }
+                    var arg = running == null
+                        ? c.TypeArguments[i]
+                        : Binder.SubstituteType(c.TypeArguments[i], running);
 
                     running ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
                     running[defParams[i]] = arg;
@@ -3332,52 +3370,6 @@ public sealed class Conversion
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// Issue #1248: tests whether a base-chain class <paramref name="c"/>, after
-    /// substituting its type arguments through <paramref name="running"/>, denotes
-    /// the same constructed type as <paramref name="toClass"/>.
-    /// </summary>
-    private static bool MatchesConstructedTarget(
-        StructSymbol c,
-        StructSymbol toClass,
-        Dictionary<TypeParameterSymbol, TypeSymbol>? running)
-    {
-        if (!ReferenceEquals(c.Definition, toClass.Definition))
-        {
-            return false;
-        }
-
-        // Non-generic class along the chain: definition identity is sufficient.
-        if (c.TypeArguments.IsDefaultOrEmpty && toClass.TypeArguments.IsDefaultOrEmpty)
-        {
-            return true;
-        }
-
-        if (c.TypeArguments.IsDefaultOrEmpty
-            || toClass.TypeArguments.IsDefaultOrEmpty
-            || c.TypeArguments.Length != toClass.TypeArguments.Length)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < c.TypeArguments.Length; i++)
-        {
-            var arg = c.TypeArguments[i];
-            if (arg is TypeParameterSymbol tp && running != null
-                && running.TryGetValue(tp, out var resolved))
-            {
-                arg = resolved;
-            }
-
-            if (!AreTypeArgumentsEquivalent(arg, toClass.TypeArguments[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     /// <summary>
@@ -3632,7 +3624,7 @@ public sealed class Conversion
         {
             for (var i = 0; i < projected.Length; i++)
             {
-                if (RelatePlatformArguments(projected[i], supertypeArguments[i]) == PlatformArgumentRelation.Illegal
+                if (IsProjectedPlatformArgumentIllegal(projected[i], supertypeArguments[i])
                     || IsCovariantPlatformEscape(projected[i], supertypeArguments[i]))
                 {
                     return true;
@@ -4066,8 +4058,27 @@ public sealed class Conversion
         from = UnwrapPlatformAndNullable(from);
         to = UnwrapPlatformAndNullable(to);
         if (from is null
-            || to is null
-            || !TryGetConstructedGenericArguments(to, out targetArguments, out var targetClr)
+            || to is null)
+        {
+            return false;
+        }
+
+        // A same-compilation G# base class has no CLR type while binding.
+        // Reuse the same symbolic hierarchy projection as the ordinary class
+        // upcast so rule 3 sees `Parent[string!]`, not the erased match that
+        // DerivesFromConstructed intentionally uses for runtime identity.
+        if (from is StructSymbol sourceClass
+            && to is StructSymbol targetClass
+            && !targetClass.TypeArguments.IsDefaultOrEmpty
+            && TryProjectConstructedBaseArguments(sourceClass, targetClass, out projected)
+            && projected.Length == targetClass.TypeArguments.Length
+            && (AnyContainsPlatformType(projected) || AnyContainsPlatformType(targetClass.TypeArguments)))
+        {
+            targetArguments = targetClass.TypeArguments;
+            return true;
+        }
+
+        if (!TryGetConstructedGenericArguments(to, out targetArguments, out var targetClr)
             || targetArguments.IsDefaultOrEmpty
             || targetClr is not { IsGenericType: true })
         {
@@ -4212,23 +4223,19 @@ public sealed class Conversion
                 continue;
             }
 
-            // Each supertype argument that is one of the source definition's
-            // own type parameters maps straight to that position, keeping its
-            // nested `T!`. A composite argument (`KeyValuePair<TKey, TValue>`
-            // for a dictionary) is declined to the ordinary rules as before:
-            // rebuilding it would need a nullability conversion door
-            // (ADR-0193, GSA0007), and this arm only ever adds rejections.
+            // Project every supertype argument through the source's symbolic
+            // positions. The nullability-free funnel is appropriate here:
+            // these are hierarchy shapes, not signature positions with
+            // declaration nullability to merge. It also recursively preserves
+            // platform holes inside composite arguments such as `List<T>`.
             var builder = ImmutableArray.CreateBuilder<TypeSymbol>(candidateArguments.Length);
             foreach (var argument in candidateArguments)
             {
-                if (!argument.IsGenericParameter
-                    || argument.DeclaringMethod != null
-                    || (uint)argument.GenericParameterPosition >= (uint)positions.Length)
-                {
-                    return false;
-                }
-
-                builder.Add(positions[argument.GenericParameterPosition]);
+                builder.Add(MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                    argument,
+                    sourceDefinition,
+                    positions,
+                    NullabilityFreeReason.TypeStructure));
             }
 
             projected = builder.MoveToImmutable();
@@ -4236,6 +4243,27 @@ public sealed class Conversion
         }
 
         return false;
+    }
+
+    private static bool IsProjectedPlatformArgumentIllegal(TypeSymbol projected, TypeSymbol target)
+    {
+        if (RelatePlatformArguments(projected, target) != PlatformArgumentRelation.Illegal)
+        {
+            return false;
+        }
+
+        // Same-shape arguments are rule 3's direct aliasing case. Different
+        // shapes need their own supertype projection: `List<string!>` to
+        // `IReadOnlyList<string>` exposes the platform element and is unsafe,
+        // while `List<string!>` to `object` hides it and is an ordinary safe
+        // covariance step.
+        if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(projected, target))
+        {
+            return true;
+        }
+
+        return TryClassifyPlatformTypeArgumentMismatch(projected, target, out var nested)
+            && !nested.IsImplicit;
     }
 
     /// <summary>

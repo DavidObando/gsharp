@@ -48,6 +48,10 @@ public class Issue4420PlatformUpcastTests
                 public static IEnumerable<string> Seq() { return new List<string> { "a", null }; }
 
                 public static Func<string> Factory() { return () => null; }
+
+                public static ICompositeChild<string> Composite() { return new CompositeChild<string>(); }
+
+                public static ICompositeDelegateChild<string> CompositeDelegates() { return new CompositeDelegateChild<string>(); }
             }
 
             public interface IChild<T> : IEnumerable<T>
@@ -57,6 +61,23 @@ public class Issue4420PlatformUpcastTests
             public class Base<T> : List<T>
             {
             }
+
+            public interface ICompositeChild<T> : IEnumerable<List<T>>
+            {
+            }
+
+            public class CompositeChild<T> : List<List<T>>, ICompositeChild<T>
+            {
+            }
+
+            public interface ICompositeDelegateChild<T> : IEnumerable<Func<T>>
+            {
+            }
+
+            public class CompositeDelegateChild<T> : List<Func<T>>, ICompositeDelegateChild<T>
+            {
+            }
+
         }
         """;
 
@@ -76,6 +97,10 @@ public class Issue4420PlatformUpcastTests
         func TakeUntyped(xs IEnumerable) int32 { return 1 }
 
         func TakeObjects(xs IEnumerable[object]) int32 { return xs.Count() }
+
+        func TakeNested(xs IEnumerable[List[string]]) int32 { return xs.Count() }
+
+        func TakeFactories(xs IEnumerable[Func[string]]) int32 { return xs.Count() }
 
         func TakeNilableObjects(xs IEnumerable[object?]) int32 { return xs.Count() }
 
@@ -134,6 +159,16 @@ public class Issue4420PlatformUpcastTests
 
         func Keep(s string) string { return s }
 
+        open class Parent[T] {
+        }
+
+        class Child[T] : Parent[T] {
+        }
+
+        func ChildOfFirst[T](xs List[T]) Child[T] { return Child[T]() }
+
+        func TakeParent(x Parent[string]) int32 { return 1 }
+
         class Repo[T] : IEnumerable[T] {
             private let items List[T] = List[T]()
 
@@ -185,6 +220,8 @@ public class Issue4420PlatformUpcastTests
     [InlineData("TakeEnum(ViewOfFirst(Ob.Strings()))")]
     [InlineData("TakeObjects(Ob.Seq())")]
     [InlineData("TakeInPlatformOf(Ob.Strings(), ObjectSink())")]
+    [InlineData("TakeNested(Ob.Composite())")]
+    [InlineData("TakeParent(ChildOfFirst(Ob.Strings()))")]
     public void An_Upcast_To_A_NonNull_Element_Supertype_Is_Rejected(string call)
     {
         using var library = new CSharpFixture(LibrarySource);
@@ -205,8 +242,8 @@ public class Issue4420PlatformUpcastTests
         using var library = new CSharpFixture(LibrarySource);
 
         Assert.Equal(
-            "2\n1\n2\n",
-            Run(library, "Console.WriteLine(TakeNilable(Ob.Strings()))\nConsole.WriteLine(TakeUntyped(Ob.Strings()))\nConsole.WriteLine(TakeNilableObjects(Ob.Strings()))"));
+            "2\n1\n2\n0\n0\n",
+            Run(library, "Console.WriteLine(TakeNilable(Ob.Strings()))\nConsole.WriteLine(TakeUntyped(Ob.Strings()))\nConsole.WriteLine(TakeNilableObjects(Ob.Strings()))\nConsole.WriteLine(TakeObjects(Ob.Composite()))\nConsole.WriteLine(TakeFactories(Ob.CompositeDelegates()))"));
 
         const string bridge = """
             let checked = List[string]()
