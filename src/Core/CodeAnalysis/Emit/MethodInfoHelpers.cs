@@ -31,6 +31,10 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </summary>
 internal static class MethodInfoHelpers
 {
+    public static bool IsCovariantSourceOverride(FunctionSymbol function)
+        => function.OverriddenMethod is { } baseMethod
+            && !DeclarationBinder.TypeSignaturesEquivalent(function.Type, baseMethod.Type);
+
     /// <summary>
     /// Issue #409: determines whether a value-type instance method must keep
     /// virtual method attributes because it participates in CLR vtable dispatch.
