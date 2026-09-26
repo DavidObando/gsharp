@@ -3340,6 +3340,21 @@ public sealed partial class CSharpToGSharpTranslator
                     when equality.IsKind(SyntaxKind.EqualsExpression) || equality.IsKind(SyntaxKind.NotEqualsExpression) =>
                         IsNullOrSuppressedNull(equality.Left == current ? equality.Right : equality.Left),
                 IsPatternExpressionSyntax isPattern => isPattern.Expression == current && IsNullConstantPattern(isPattern.Pattern),
+
+                // Issue #4452: C# positions that take a null as a value rather
+                // than dereference it — an interpolation hole or a string
+                // concatenation operand (formatted as empty), the operand of
+                // `as` (null in, null out), and a switch scrutinee (null is a
+                // pattern like any other).
+                InterpolationSyntax interpolation => interpolation.Expression == current,
+                BinaryExpressionSyntax concatenation
+                    when concatenation.IsKind(SyntaxKind.AddExpression)
+                        && this.context.GetTypeInfo(concatenation).Type?.SpecialType == SpecialType.System_String =>
+                            true,
+                BinaryExpressionSyntax asExpression when asExpression.IsKind(SyntaxKind.AsExpression) =>
+                    asExpression.Left == current,
+                SwitchExpressionSyntax switchScrutinee => switchScrutinee.GoverningExpression == current,
+                SwitchStatementSyntax switchStatement => switchStatement.Expression == current,
                 _ => false,
             };
 
@@ -3575,6 +3590,14 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ILocalSymbol local when ExplicitLocalTypeIsNullable(local) =>
                     (local.Type, local),
+
+                // Issue #4452: an explicitly typed local that cs2gs itself
+                // widens to `T?` (its code tests it against null) accepts nil,
+                // so the translated `!` into it must not assert.
+                ILocalSymbol widenedLocal when !IsImplicitlyTypedLocal(widenedLocal)
+                    && widenedLocal.Type.IsReferenceType
+                    && !this.TargetWillRemainNonNullableReference(widenedLocal.Type, widenedLocal) =>
+                    (widenedLocal.Type, widenedLocal),
                 IFieldSymbol field when field.Type.NullableAnnotation == NullableAnnotation.Annotated =>
                     (field.Type, field),
                 IPropertySymbol property when property.Type.NullableAnnotation == NullableAnnotation.Annotated =>

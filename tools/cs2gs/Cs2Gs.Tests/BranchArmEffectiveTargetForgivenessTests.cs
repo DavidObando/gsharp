@@ -197,6 +197,48 @@ namespace App
 
         Assert.DoesNotContain("argument.Name!!", printed);
         Assert.DoesNotContain("argument.Value!!", printed);
+
+        // Issue #4452: the translated C# `!` into the widened `chosen` is erased
+        // rather than asserted, so no `!!` wraps the whole branch either.
+        Assert.Contains("let chosen string? = (if flag { argument.Name } else { argument.Value })\n", printed);
+    }
+
+    /// <summary>
+    /// Issue #4452: a branch whose whole value C# takes as a possibly-null value
+    /// (an interpolation hole, a string concatenation operand, the operand of
+    /// <c>as</c>, a switch scrutinee) leaves its arms bare. Compiled with gsc and
+    /// run with a null <c>Name</c>: each form reproduces C#'s result instead of
+    /// throwing.
+    /// </summary>
+    [Fact]
+    public void NilAcceptingParents_ArmsStayBare_CompileAndRun()
+    {
+        const string app = @"
+using Model;
+
+namespace App
+{
+    public static class Use
+    {
+        public static string Interpolated(Arg a, bool f) => $""[{(f ? a.Name : a.Value)}]"";
+
+        public static string Concatenated(Arg a, bool f) => ""<"" + (f ? a.Name : a.Value) + "">"";
+
+        public static string Cast(Arg a, bool f) => ((f ? a.Name : a.Value) as string) ?? ""none"";
+
+        public static string Switched(Arg a, bool f) => (f ? a.Name : a.Value) switch { null => ""null"", var s => s };
+
+        public static string Run()
+        {
+            var a = new Arg(""v"");
+            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true);
+        }
+    }
+}";
+        (string library, string consumer) = TranslateBothProjects(app);
+
+        Assert.DoesNotContain("a.Name!!", consumer);
+        Assert.Equal("[]<>nonenull", CompileAndRun(new[] { library, consumer }, "App.Use.Run()").Trim());
     }
 
     /// <summary>
