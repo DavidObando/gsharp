@@ -3056,13 +3056,16 @@ public sealed partial class CSharpToGSharpTranslator
                     && assignment.Left is ElementAccessExpressionSyntax elementAccess
                     && this.BindsTo(elementAccess.Expression, local)
 
-                    // A value C# flow proves non-null (`if (x == null) return;
-                    // values[0] = x;`) is not a nil write; it keeps the
-                    // established `!!` bridge instead.
-                    && this.context.GetTypeInfo(assignment.Right).Nullability.FlowState != NullableFlowState.NotNull
+                    // A literal or suppressed null always writes nil: Roslyn
+                    // reports `null!` as NotNull, but cs2gs erases it to `nil`.
                     && (IsNullOrSuppressedNull(assignment.Right)
-                        || this.IsNullableInitializer(assignment.Right)
-                        || this.ShouldPromoteToNullableReference(this.context.GetSymbolInfo(assignment.Right).Symbol)))
+
+                        // A value C# flow proves non-null (`if (x == null) return;
+                        // values[0] = x;`) is not a nil write; it keeps the
+                        // established `!!` bridge instead.
+                        || (this.context.GetTypeInfo(assignment.Right).Nullability.FlowState != NullableFlowState.NotNull
+                            && (this.IsNullableInitializer(assignment.Right)
+                                || this.ShouldPromoteToNullableReference(this.context.GetSymbolInfo(assignment.Right).Symbol)))))
                 {
                     return true;
                 }

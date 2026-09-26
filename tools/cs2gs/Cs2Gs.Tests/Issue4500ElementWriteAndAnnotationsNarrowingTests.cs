@@ -97,6 +97,29 @@ public class Holder
         Assert.Equal("-bN1", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
     }
 
+    // #4505 review: Roslyn reports `null!` as NotNull, but cs2gs erases it to
+    // `nil`, so a literal or suppressed null write must still widen the element.
+    [Theory]
+    [InlineData("null")]
+    [InlineData("null!")]
+    public void LiteralOrSuppressedNullElementWrite_WidensTheElement_CompilesAndRuns(string nullValue)
+    {
+        string printed = Translate(@"
+public class Holder
+{
+    public static string Run()
+    {
+        var names = new string[2];
+        names[0] = " + nullValue + @";
+        names[1] = ""b"";
+        return (names[0] == null ? ""N"" : ""Y"") + names[1];
+    }
+}", NullableContextOptions.Enable);
+
+        Assert.Contains("[2]string?", printed);
+        Assert.Equal("Nb", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
+    }
+
     [Fact]
     public void AnnotationsContextLocal_NarrowedOnlyInCSharp_IsAsserted_CompilesAndRuns()
     {
