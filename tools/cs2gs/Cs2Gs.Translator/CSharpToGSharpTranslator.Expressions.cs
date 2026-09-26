@@ -3351,6 +3351,11 @@ public sealed partial class CSharpToGSharpTranslator
                     when concatenation.IsKind(SyntaxKind.AddExpression)
                         && this.context.GetTypeInfo(concatenation).Type?.SpecialType == SpecialType.System_String =>
                             true,
+                AssignmentExpressionSyntax appendAssignment
+                    when appendAssignment.IsKind(SyntaxKind.AddAssignmentExpression)
+                        && appendAssignment.Right == current
+                        && this.context.GetTypeInfo(appendAssignment).Type?.SpecialType == SpecialType.System_String =>
+                            true,
                 BinaryExpressionSyntax asExpression when asExpression.IsKind(SyntaxKind.AsExpression) =>
                     asExpression.Left == current,
                 SwitchExpressionSyntax switchScrutinee => switchScrutinee.GoverningExpression == current,

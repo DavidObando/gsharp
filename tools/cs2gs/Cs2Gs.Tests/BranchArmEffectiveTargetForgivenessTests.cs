@@ -168,9 +168,10 @@ namespace App
 
     /// <summary>
     /// The arm stays bare for an inferred generic parameter and for a widened
-    /// local reached through a C# <c>!</c>. In both, a whole-value <c>!!</c> is
-    /// still emitted by a different bridge (the argument bridge, and the
-    /// translated <c>!</c>). That is #4452, so this test pins only the arm.
+    /// local reached through a C# <c>!</c>. The translated <c>!</c> into the
+    /// widened local is erased too. Only the inferred-generic argument bridge
+    /// still emits a whole-value <c>!!</c> (left open on #4452), so for that
+    /// call this test pins only the arm.
     /// </summary>
     [Fact]
     public void InferredGenericAndSuppressedLocal_ArmsStayBare()
@@ -200,7 +201,8 @@ namespace App
 
         // Issue #4452: the translated C# `!` into the widened `chosen` is erased
         // rather than asserted, so no `!!` wraps the whole branch either.
-        Assert.Contains("let chosen string? = (if flag { argument.Name } else { argument.Value })\n", printed);
+        Assert.Contains("let chosen string? = (if flag { argument.Name } else { argument.Value })", printed);
+        Assert.DoesNotContain("argument.Value })!!", printed);
     }
 
     /// <summary>
@@ -228,17 +230,33 @@ namespace App
 
         public static string Switched(Arg a, bool f) => (f ? a.Name : a.Value) switch { null => ""null"", var s => s };
 
+        public static string Appended(Arg a, bool f)
+        {
+            string s = ""{"";
+            s += f ? a.Name : a.Value;
+            return s + ""}"";
+        }
+
+        public static string SwitchStatement(Arg a, bool f)
+        {
+            switch (f ? a.Name : a.Value)
+            {
+                case null: return ""N"";
+                default: return ""V"";
+            }
+        }
+
         public static string Run()
         {
             var a = new Arg(""v"");
-            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true);
+            return Interpolated(a, true) + Concatenated(a, true) + Cast(a, true) + Switched(a, true) + Appended(a, true) + SwitchStatement(a, true);
         }
     }
 }";
         (string library, string consumer) = TranslateBothProjects(app);
 
         Assert.DoesNotContain("a.Name!!", consumer);
-        Assert.Equal("[]<>nonenull", CompileAndRun(new[] { library, consumer }, "App.Use.Run()").Trim());
+        Assert.Equal("[]<>nonenull{}N", CompileAndRun(new[] { library, consumer }, "App.Use.Run()").Trim());
     }
 
     /// <summary>
