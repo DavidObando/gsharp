@@ -22,8 +22,8 @@ namespace Cs2Gs.Tests;
 /// Translator-fidelity tests for issue #2429: an object/struct-initializer
 /// MEMBER VALUE (<c>Type{Member: expr}</c> / <c>Type(args){Member: expr}</c>)
 /// and a COLLECTION-INITIALIZER element/<c>Add</c>-argument (bare, keyed, or
-/// indexed) do not receive the oblivious EXTERNAL (metadata, no nullable
-/// context) null-forgiveness already implemented for a direct RETURN (#2202),
+/// indexed) did not receive the oblivious EXTERNAL (metadata, no nullable
+/// context) null-forgiveness then implemented for a direct RETURN (#2202),
 /// an explicit-typed LOCAL declaration's initializer (#2425), and a plain
 /// REASSIGNMENT statement (#2427). This is the exact real-world Oahu.Core
 /// shape surfaced by #2429:
@@ -54,6 +54,16 @@ namespace Cs2Gs.Tests;
 /// (which previously had NO forgiveness at all) routes all three collection-
 /// element shapes through it too.
 /// </para>
+/// <para>
+/// The oblivious EXTERNAL signal needed <c>!!</c> because gsc used to import
+/// such a member as <c>T?</c> (ADR-0136). Since ADR-0186 step 3 gsc imports it
+/// as the platform type <c>T!</c> and checks it itself, so the external-member
+/// tests now pin that cs2gs emits no <c>!!</c> (ADR-0186 step 6, PR 0). A
+/// taint-promoted SIBLING-PROJECT source member is still a real <c>T?</c> and
+/// keeps its <c>!!</c>. The test names (<c>…IsForgiven</c>) predate ADR-0186
+/// step 6 and are kept for issue traceability; the assertions state the
+/// current contract.
+/// </para>
 /// </summary>
 public class Issue2429InitializerObliviousExternalForgivenessTranslationTests
 {
@@ -76,7 +86,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target{Name: ext.Combine(\"hello\")!!}", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Target{Name: ext.Combine(\"hello\")}", Compact(printed));
+        Assert.DoesNotContain("Target{Name: ext.Combine(\"hello\")!!}", Compact(printed));
     }
 
     [Fact]
@@ -96,7 +110,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target{Name: ext.Field!!}", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Target{Name: ext.Field}", Compact(printed));
+        Assert.DoesNotContain("Target{Name: ext.Field!!}", Compact(printed));
     }
 
     [Fact]
@@ -116,7 +134,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target{Name: ext.Prop!!}", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Target{Name: ext.Prop}", Compact(printed));
+        Assert.DoesNotContain("Target{Name: ext.Prop!!}", Compact(printed));
     }
 
     [Fact]
@@ -136,7 +158,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target{Name: ExtLib.StaticCombine(\"hello\")!!}", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Target{Name: ExtLib.StaticCombine(\"hello\")}", Compact(printed));
+        Assert.DoesNotContain("Target{Name: ExtLib.StaticCombine(\"hello\")!!}", Compact(printed));
     }
 
     [Fact]
@@ -156,7 +182,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target{Name: seed.AsUncIfLong()!!}", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Target{Name: seed.AsUncIfLong()}", Compact(printed));
+        Assert.DoesNotContain("Target{Name: seed.AsUncIfLong()!!}", Compact(printed));
     }
 
     [Fact]
@@ -176,7 +206,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target{Name: ext.Combine(\"hello\")!!}", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Target{Name: ext.Combine(\"hello\")}", Compact(printed));
+        Assert.DoesNotContain("Target{Name: ext.Combine(\"hello\")!!}", Compact(printed));
     }
 
     [Fact]
@@ -196,7 +230,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target{Name: ext.Combine(\"hello\")!!}", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Target{Name: ext.Combine(\"hello\")}", Compact(printed));
+        Assert.DoesNotContain("Target{Name: ext.Combine(\"hello\")!!}", Compact(printed));
     }
 
     // ---- Construction-with-initializer-suffix: Type(args){ Member = expr } -
@@ -222,7 +260,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target(1){Name = ext.Combine(\"hello\")!!}", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Target(1){Name = ext.Combine(\"hello\")}", Compact(printed));
+        Assert.DoesNotContain("Target(1){Name = ext.Combine(\"hello\")!!}", Compact(printed));
     }
 
     /// <summary>
@@ -332,7 +374,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Name: ext.Combine(\"hello\")!!", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Name: ext.Combine(\"hello\")", Compact(printed));
+        Assert.DoesNotContain("Name: ext.Combine(\"hello\")!!", Compact(printed));
     }
 
     // ---- Collection-initializer elements -----------------------------------
@@ -351,7 +397,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("List[string]{ ext.Combine(\"hello\")!! }", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("List[string]{ ext.Combine(\"hello\") }", Compact(printed));
+        Assert.DoesNotContain("List[string]{ ext.Combine(\"hello\")!! }", Compact(printed));
     }
 
     [Fact]
@@ -369,7 +419,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("ext.Combine(\"hello\")!!", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("ext.Combine(\"hello\")", Compact(printed));
+        Assert.DoesNotContain("ext.Combine(\"hello\")!!", Compact(printed));
     }
 
     /// <summary>
@@ -392,7 +446,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("[\"source_token\"] = ext.Prop!!", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("[\"source_token\"] = ext.Prop", Compact(printed));
+        Assert.DoesNotContain("[\"source_token\"] = ext.Prop!!", Compact(printed));
     }
 
     // ---- Negative / scope controls ------------------------------------------
@@ -426,7 +484,7 @@ namespace Demo
 
     /// <summary>
     /// Negative/scope control: the TARGET member is already nullable-annotated
-    /// (<c>string?</c>) and so already accepts a <c>T?</c> value unchanged —
+    /// (<c>string?</c>) and so accepts the oblivious value unchanged —
     /// nothing to forgive.
     /// </summary>
     [Fact]
@@ -542,9 +600,10 @@ namespace Demo
     }
 
     /// <summary>
-    /// A nullable-enabled consumer still needs the bridge because gsc maps the
-    /// imported producer's oblivious contract to <c>T?</c> independently of the
-    /// consumer's nullable context.
+    /// A nullable-enabled consumer gets the same result: gsc maps the imported
+    /// producer's oblivious contract independently of the consumer's nullable
+    /// context (formerly to <c>T?</c>, now to <c>T!</c>), so no <c>!!</c> is
+    /// emitted.
     /// </summary>
     [Fact]
     public void ObjectInitializerLiteral_NullableEnabledConsumer_IsForgiven()
@@ -563,7 +622,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Target{Name: ext.Combine(\"hello\")!!}", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Target{Name: ext.Combine(\"hello\")}", Compact(printed));
+        Assert.DoesNotContain("Target{Name: ext.Combine(\"hello\")!!}", Compact(printed));
     }
 
     /// <summary>
@@ -584,13 +647,18 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("List[string]{ ext.Combine(\"hello\")!! }", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("List[string]{ ext.Combine(\"hello\") }", Compact(printed));
+        Assert.DoesNotContain("List[string]{ ext.Combine(\"hello\")!! }", Compact(printed));
     }
 
     /// <summary>
     /// Direct-return/object-initializer parity: assigning the identical
-    /// oblivious external call to an object-initializer member gets exactly
-    /// the same single <c>!!</c> a direct return of that call would.
+    /// oblivious external call to an object-initializer member and returning it
+    /// directly agree, and neither needs a <c>!!</c> (both used to carry exactly
+    /// one).
     /// </summary>
     [Fact]
     public void ObjectInitializerMember_MatchesDirectReturnForgivenessCount()
@@ -620,8 +688,11 @@ namespace Demo
 
         int CountForgiveness(string printed) => printed.Split("!!").Length - 1;
 
-        Assert.Equal(1, CountForgiveness(viaInitializer));
-        Assert.Equal(1, CountForgiveness(direct));
+        // ADR-0186 step 6 (PR 0): both shapes still agree. Neither needs a
+        // `!!` now: gsc reads the oblivious metadata result as `T!` and
+        // checks it at the non-null coercion itself.
+        Assert.Equal(0, CountForgiveness(viaInitializer));
+        Assert.Equal(0, CountForgiveness(direct));
     }
 
     // ---- Real-world Oahu.Core shapes ---------------------------------------
@@ -672,7 +743,11 @@ public class ExtAuthor
 ");
 
         string compact = Compact(printed);
-        Assert.Contains("Author{Asin: author.Asin!!, Name: author.Name!!}", compact);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Author{Asin: author.Asin, Name: author.Name}", compact);
+        Assert.DoesNotContain("Author{Asin: author.Asin!!, Name: author.Name!!}", compact);
     }
 
     /// <summary>
@@ -714,7 +789,11 @@ public class ExtProfile
 }
 ");
 
-        Assert.Contains("[\"source_token\"] = profile.Token!!.RefreshToken!!", Compact(printed));
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("[\"source_token\"] = profile.Token.RefreshToken", Compact(printed));
+        Assert.DoesNotContain("[\"source_token\"] = profile.Token!!.RefreshToken!!", Compact(printed));
     }
 
     // ---- Helpers ------------------------------------------------------------

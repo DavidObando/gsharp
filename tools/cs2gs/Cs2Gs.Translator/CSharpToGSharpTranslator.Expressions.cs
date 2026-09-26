@@ -984,6 +984,13 @@ public sealed partial class CSharpToGSharpTranslator
                 return translated;
             }
 
+            // ADR-0186 step 6 (PR 0): a read of oblivious CLR metadata is `T!`
+            // in G#, and gsc checks a `T!` receiver itself (§4).
+            if (this.PlatformTypedImportNeedsNoBridge(recv))
+            {
+                return translated;
+            }
+
             bool iteratorForeachReceiverRequiresAssertion =
                 this.IteratorForeachReceiverRequiresAssertion(recv);
             bool importedGenericTupleElementRequiresAssertion =
@@ -1423,7 +1430,9 @@ public sealed partial class CSharpToGSharpTranslator
         // from another project or metadata assembly and its concrete reference
         // return/type is oblivious. Same-compilation source symbols stay on the
         // whole-program taint path; imported source and metadata contracts are
-        // already fixed and gsc maps their oblivious references to <c>T?</c>.
+        // already fixed. The value may be nil. For CLR metadata no project in
+        // this run emits, gsc reads it as the platform type `T!` (ADR-0186
+        // step 3), which needs no `!!`; see ReadsPlatformTypedImport.
         private bool IsImportedObliviousNullableMember(ISymbol symbol)
         {
             if (symbol is not (IMethodSymbol or IPropertySymbol or IFieldSymbol))
@@ -1484,6 +1493,329 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        /// <summary>
+        /// ADR-0186 step 6 (PR 0): whether <paramref name="expression"/> reads a
+        /// value whose G# type is the platform type <c>T!</c> because it comes
+        /// from oblivious CLR METADATA that no project in this migration run
+        /// emits — a member for which <see cref="IsImportedObliviousNullableMember"/>
+        /// holds and whose contract is frozen
+        /// (<see cref="TargetContractIsFrozenInMetadata"/>), or an element read
+        /// through such a member (ADR-0186 §3 rule 5: member access through a
+        /// <c>C[T!]</c> yields <c>T!</c>).
+        /// <para>
+        /// Since ADR-0186 step 3 gsc reads such a position as <c>T!</c>, not
+        /// <c>T?</c>, and inserts the nil check itself wherever the value is
+        /// coerced to a non-null reference — receivers included (§4). A
+        /// <c>!!</c> on it is therefore legal but only duplicates that check,
+        /// and the polish pass never strips it (GS0536 does not fire on a
+        /// <c>T!</c> operand). The forgiveness sites ask this to leave such a
+        /// read bare. The question "may this value be nil" still answers yes:
+        /// <see cref="NullableReferenceValueMayBeNull"/> and
+        /// <see cref="IsImportedObliviousNullableMember"/> are unchanged, because
+        /// their other callers (a <c>??=</c> result, a conditional index) must
+        /// keep treating the value as nilable.
+        /// </para>
+        /// <para>
+        /// A member declared in a project this run migrates is excluded: cs2gs
+        /// decides that declaration's emitted type, which is <c>T</c> or a
+        /// promoted <c>T?</c>, never <c>T!</c>. So is a local initialized from
+        /// such a read: cs2gs can give the local a type clause, and a
+        /// promoted one is <c>T?</c>.
+        /// </para>
+        /// </summary>
+        /// <param name="expression">The C# expression.</param>
+        /// <returns>True when the translated read has a platform type in G#.</returns>
+        private bool ReadsPlatformTypedImport(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            if (expression == null)
+            {
+                return false;
+            }
+
+            // A container (an array, or a constructed type with a reference
+            // argument) keeps its `!!`. gsc reads an oblivious container's
+            // nested positions as `T!` too, and on such a value the top-level
+            // `!!` also decides whether it converts to an enabled container:
+            // `File.ReadAllLines(path)` is `[]!string!` and does not convert to
+            // `[]string`, while `File.ReadAllLines(path)!!` does (the
+            // netstandard2.0 Gsharp.NET.Sdk, #4449). Only a value whose type
+            // has no nested reference position is left bare.
+            ITypeSymbol type = this.context.GetTypeInfo(expression).Type;
+            if (HasNestedReferencePosition(type))
+            {
+                return false;
+            }
+
+            if (expression is ElementAccessExpressionSyntax elementAccess
+                && elementAccess.Expression is not ConditionalAccessExpressionSyntax
+                && this.IsFrozenObliviousImportMember(this.context.GetSymbolInfo(elementAccess.Expression).Symbol)
+                && type is { IsReferenceType: true } elementType
+                && elementType.NullableAnnotation == NullableAnnotation.None)
+            {
+                return true;
+            }
+
+            return this.IsFrozenObliviousImportMember(this.context.GetSymbolInfo(expression).Symbol);
+        }
+
+        // Whether a value of <paramref name="type"/> carries a reference
+        // position below its top level: an array whose element is (or holds)
+        // a reference, or a constructed type with a reference or
+        // type-parameter argument, including one nested inside a value-type
+        // argument (a tuple). An `int[]` has none: gsc reads it as
+        // `[]int32!`, which converts to `[]int32` and `[]int32?` as a scalar
+        // read does.
+        private static bool HasNestedReferencePosition(ITypeSymbol type)
+        {
+            // Roslyn leaves TypeInfo.Type null for an unbound expression. No
+            // type means no known nested position; the member checks after
+            // this call decide the read.
+            if (type == null)
+            {
+                return false;
+            }
+
+            if (type is IArrayTypeSymbol array)
+            {
+                return IsOrHoldsReference(array.ElementType);
+            }
+
+            if (type is not INamedTypeSymbol named)
+            {
+                return false;
+            }
+
+            for (INamedTypeSymbol current = named; current != null; current = current.ContainingType)
+            {
+                foreach (ITypeSymbol argument in current.TypeArguments)
+                {
+                    if (IsOrHoldsReference(argument))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        private static bool IsOrHoldsReference(ITypeSymbol type) =>
+            type.IsReferenceType
+            || type is ITypeParameterSymbol
+            || HasNestedReferencePosition(type);
+
+        private bool IsFrozenObliviousImportMember(ISymbol symbol) =>
+            this.IsImportedObliviousNullableMember(symbol)
+            && this.TargetContractIsFrozenInMetadata(symbol);
+
+        /// <summary>
+        /// ADR-0186 step 6 (PR 0): whether a forgiveness site may leave
+        /// <paramref name="value"/> (a receiver or a value) without the
+        /// <c>!!</c> it would otherwise emit: it reads a platform-typed import
+        /// (<see cref="ReadsPlatformTypedImport"/>) and its top-level
+        /// platform-ness cannot reach type inference.
+        /// <para>
+        /// Inference is the one place a bare <c>T!</c> and <c>T!!</c> differ at
+        /// compile time. A <c>T!</c> argument infers <c>T!</c> for a method type
+        /// parameter, a lambda result infers it for the lambda, an element
+        /// infers it for an implicitly-typed array, and a receiver infers it
+        /// for an extension declared <c>this T</c>. A container built from that
+        /// (<c>List[string!]</c>) then cannot be stored where an enabled
+        /// declaration says <c>List[string]</c> (§3 rule 3). Those positions keep
+        /// today's <c>!!</c>, which pins the inferred type to <c>T</c>. An
+        /// ordinary receiver never reaches inference: §5 types the member access
+        /// as it would for <c>T</c>.
+        /// </para>
+        /// </summary>
+        /// <param name="value">The C# receiver or value expression.</param>
+        /// <returns>True when the expression needs no <c>!!</c> bridge.</returns>
+        private bool PlatformTypedImportNeedsNoBridge(ExpressionSyntax value) =>
+            this.ReadsPlatformTypedImport(value) && !this.ValueFeedsTypeInference(value);
+
+        // The outermost expression whose value is `value` passed through
+        // unchanged: parentheses, a conditional or switch arm, and `??`.
+        private static SyntaxNode SkipValuePreservingParents(SyntaxNode value)
+        {
+            SyntaxNode node = value;
+            while (node.Parent is ParenthesizedExpressionSyntax
+                or ConditionalExpressionSyntax
+                or SwitchExpressionArmSyntax
+                or SwitchExpressionSyntax
+                || (node.Parent is BinaryExpressionSyntax coalesce && coalesce.IsKind(SyntaxKind.CoalesceExpression)))
+            {
+                node = node.Parent;
+            }
+
+            return node;
+        }
+
+        private bool ValueFeedsTypeInference(ExpressionSyntax value)
+        {
+            SyntaxNode node = SkipValuePreservingParents(value);
+            switch (node.Parent)
+            {
+                // An argument to a parameter whose type mentions a method type
+                // parameter the call infers. Explicit type arguments
+                // (`Keep<string?>(x)`) leave nothing to infer. An argument
+                // nothing binds (a dynamic call) is treated as inferring.
+                case ArgumentSyntax argument:
+                    // A tuple literal's element (`Accept((n.Name, 0))`) is an
+                    // argument syntactically but binds no parameter: its
+                    // platform-ness reaches inference exactly when the tuple
+                    // itself does.
+                    if (argument.Parent is TupleExpressionSyntax tuple)
+                    {
+                        return ElementDeclaresDeconstructedLocal(tuple, argument)
+                            || this.ValueFeedsTypeInference(tuple);
+                    }
+
+                    if (argument.Parent?.Parent is InvocationExpressionSyntax { Expression: { } callee }
+                        && HasExplicitTypeArguments(callee))
+                    {
+                        return false;
+                    }
+
+                    IParameterSymbol parameter = (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)?.Parameter;
+                    return parameter == null
+                        || (parameter.ContainingSymbol is IMethodSymbol { IsGenericMethod: true }
+                            && MentionsMethodTypeParameter(parameter.OriginalDefinition.Type));
+
+                // A lambda result, when the lambda's own type is inferred and
+                // so may be inferred from the result: the lambda is itself an
+                // inference position (`xs.Select(x => ext.Name)`, or `var f =
+                // () => ext.Name`). A lambda converted to a fixed delegate
+                // type (`Func<string?> f = …`, or an oblivious `Reader` whose
+                // Invoke returns `T!`) is not: its result converts to that
+                // declared return, checked by gsc where it is non-null, and a
+                // `!!` would throw on a nil the C# returns.
+                case AnonymousFunctionExpressionSyntax lambda:
+                    return this.LambdaTypeIsInferred(lambda);
+                case ReturnStatementSyntax when node.Parent.FirstAncestorOrSelf<SyntaxNode>(
+                        n => n is AnonymousFunctionExpressionSyntax or BaseMethodDeclarationSyntax
+                            or LocalFunctionStatementSyntax or AccessorDeclarationSyntax) is AnonymousFunctionExpressionSyntax enclosingLambda:
+                    return this.LambdaTypeIsInferred(enclosingLambda);
+
+                // The receiver of a generic extension whose `this` parameter is
+                // the method type parameter itself (`x.Also(...)` with
+                // `Also<T>(this T self)`), which infers `T!` from it.
+                case MemberAccessExpressionSyntax memberAccess when memberAccess.Expression == node:
+                    return !HasExplicitTypeArguments(memberAccess)
+                        && this.context.GetSymbolInfo(memberAccess).Symbol is IMethodSymbol { ReducedFrom: { } unreduced }
+                        && unreduced.Parameters.Length > 0
+                        && unreduced.Parameters[0].Type is ITypeParameterSymbol receiverParameter
+                        && receiverParameter.TypeParameterKind == TypeParameterKind.Method;
+
+                // The initializer of a local. A `var` local takes its type from
+                // it, and so does an explicitly typed one whenever cs2gs drops
+                // the redundant type clause (issue #1737, `let name = n.Name`).
+                // Without the `!!` the local is `T!`, and every later use of
+                // it (`Wrap(name)`) would infer from `T!` in turn. A local
+                // whose emitted type is nullable keeps its type clause, so its
+                // initializer converts to `T?` with no inference and no check.
+                case EqualsValueClauseSyntax clause when LocalDeclarationOf(clause) != null:
+                    return !this.LocalKeepsNullableTypeClause(clause);
+
+                // An element whose array or collection type is inferred from it.
+                case InitializerExpressionSyntax { Parent: ImplicitArrayCreationExpressionSyntax }:
+                case CollectionElementSyntax:
+                    return true;
+
+                default:
+                    return false;
+            }
+        }
+
+        // ADR-0186 step 6 (PR 0): whether <paramref name="element"/> of a tuple
+        // literal deconstructed into a declaration lands in a new local
+        // (`var (name, _) = (n.Name, 0)`, or `(var name, var n2) = ...`). Such
+        // a local takes its type from the element, like a `var` initializer,
+        // so a `T!` element would make it `T!`. An element assigned to an
+        // existing variable has a fixed target and is not an inference
+        // position. Written as plain type tests: cs2gs translates itself, and
+        // a nested property pattern here would spill.
+        private static bool ElementDeclaresDeconstructedLocal(TupleExpressionSyntax tuple, ArgumentSyntax element)
+        {
+            if (tuple.Parent is not AssignmentExpressionSyntax assignment || assignment.Right != tuple)
+            {
+                return false;
+            }
+
+            if (assignment.Left is DeclarationExpressionSyntax)
+            {
+                return true;
+            }
+
+            if (assignment.Left is not TupleExpressionSyntax targets
+                || targets.Arguments.Count != tuple.Arguments.Count)
+            {
+                return false;
+            }
+
+            int index = tuple.Arguments.IndexOf(element);
+            return index >= 0 && targets.Arguments[index].Expression is DeclarationExpressionSyntax;
+        }
+
+        // ADR-0186 step 6 (PR 0): whether the local <paramref name="clause"/>
+        // initializes is emitted with a nullable type (`T?`): declared `T?` in
+        // C#, or promoted by cs2gs. Such a local keeps its type clause.
+        private bool LocalKeepsNullableTypeClause(EqualsValueClauseSyntax clause)
+        {
+            if (clause.Parent is not VariableDeclaratorSyntax declarator
+                || LocalDeclarationOf(clause) is not { } declaration
+                || declaration.Type.IsVar
+                || this.context.GetDeclaredSymbol(declarator) is not ILocalSymbol local)
+            {
+                return false;
+            }
+
+            return IsAnnotatedNullableReference(local.Type)
+                || this.ShouldPromoteToNullableReference(local);
+        }
+
+        // The local declaration whose initializer is <paramref name="clause"/>,
+        // or null when it initializes something else (a field, a property, a
+        // parameter default). A `for` or `using` statement's declaration is a
+        // local declaration too: both are translated through
+        // TranslateLocalDeclaration. Written as plain type tests: cs2gs
+        // translates itself, and a nested property pattern here would spill.
+        private static VariableDeclarationSyntax LocalDeclarationOf(EqualsValueClauseSyntax clause)
+        {
+            if (clause.Parent is not VariableDeclaratorSyntax declarator
+                || declarator.Parent is not VariableDeclarationSyntax declaration
+                || declaration.Parent is not (LocalDeclarationStatementSyntax or ForStatementSyntax or UsingStatementSyntax))
+            {
+                return null;
+            }
+
+            return declaration;
+        }
+
+        // ADR-0186 step 6 (PR 0): whether a lambda's delegate type is inferred
+        // rather than fixed by its target. A lambda initializing a `var` local
+        // takes its natural type from its body; any other lambda is inferred
+        // exactly when it sits in an inference position itself.
+        private bool LambdaTypeIsInferred(AnonymousFunctionExpressionSyntax lambda)
+        {
+            // The same walk ValueFeedsTypeInference makes, so a lambda inside
+            // a conditional (`Reader read = flag ? (() => n.Name) : …`) reaches
+            // the local's declared type here and is not mistaken for an
+            // inferred local.
+            SyntaxNode node = SkipValuePreservingParents(lambda);
+
+            if (node.Parent is EqualsValueClauseSyntax clause
+                && LocalDeclarationOf(clause) is { } declaration)
+            {
+                return declaration.Type.IsVar;
+            }
+
+            return this.ValueFeedsTypeInference(lambda);
+        }
+
         // True when <paramref name="member"/> binds to an extension method whose
         // (reduced) `this` parameter is nullable-annotated (`this T? x`) or was
         // promoted nullable by oblivious analysis. Such a method is designed to
@@ -1519,7 +1851,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             GExpression translated = this.TranslateExpression(value);
 
-            if (this.GSharpExpressionIsStaticallyNonNull(value, translated))
+            if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
+                || this.PlatformTypedImportNeedsNoBridge(value))
             {
                 return translated;
             }
@@ -1588,7 +1921,10 @@ public sealed partial class CSharpToGSharpTranslator
             ISymbol targetSymbol,
             bool includePromotedValue = false)
         {
-            if (this.GSharpExpressionIsStaticallyNonNull(value, translated))
+            // ADR-0186 step 6 (PR 0): a `T!` value flowing into a non-null
+            // target is checked by gsc at that coercion (§4).
+            if (this.GSharpExpressionIsStaticallyNonNull(value, translated)
+                || this.PlatformTypedImportNeedsNoBridge(value))
             {
                 return translated;
             }
@@ -3349,10 +3685,12 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IndexArgumentValueNeedsNullForgiveness(ExpressionSyntax value)
         {
+            // ADR-0186 step 6 (PR 0): a `T!` index argument is checked by gsc.
             if (IsNullOrSuppressedNull(value)
                 || value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
-                || this.IsWithinExpressionTreeLambda(value))
+                || this.IsWithinExpressionTreeLambda(value)
+                || this.PlatformTypedImportNeedsNoBridge(value))
             {
                 return false;
             }
@@ -3637,7 +3975,14 @@ public sealed partial class CSharpToGSharpTranslator
             // (issue #2113) but for VALUE positions (return statements, expression
             // bodies). The declaring contract, not the consumer's nullable mode,
             // determines how gsc imports the value.
-            if (this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(recv).Symbol))
+            //
+            // ADR-0186 step 6 (PR 0): that `T?` reading is ADR-0136's, which
+            // step 3 replaced. gsc now reads oblivious CLR metadata as `T!` and
+            // checks it at the coercion itself, so the rule is kept only for a
+            // member this run also migrates (whose emitted type cs2gs decides)
+            // and for a value whose platform-ness would reach type inference.
+            if (this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(recv).Symbol)
+                && !this.PlatformTypedImportNeedsNoBridge(recv))
             {
                 return NullForgivenessTelemetry.Record("2202-imported-oblivious-nullable-member");
             }
@@ -4559,8 +4904,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // ADR-0186 step 6 (PR 0): an oblivious-metadata result is `T!`,
+            // which gsc checks at the lambda's non-null return itself, unless
+            // the lambda's own type is inferred from it.
             return this.IsNullablePromotedValue(use)
-                || this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(use).Symbol);
+                || (this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(use).Symbol)
+                    && !this.PlatformTypedImportNeedsNoBridge(use));
         }
 
         // Issue #4179: `Task.Run<TResult>(Func<TResult> function)` (and its

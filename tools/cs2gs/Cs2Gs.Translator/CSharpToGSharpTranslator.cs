@@ -274,6 +274,9 @@ public sealed partial class CSharpToGSharpTranslator
         bool emitGeneratedImplementingParts = false,
         bool includeGlobalNamespace = false)
     {
+        // Arms the telemetry's exit dump (when requested) for every run that
+        // translates, including one in which no forgiveness rule ever fires.
+        NullForgivenessTelemetry.EnsureInitialized();
         this.emitGeneratedImplementingParts = emitGeneratedImplementingParts;
         this.includeGlobalNamespace = includeGlobalNamespace;
         this.translatedFilePaths = translatedFilePaths is null

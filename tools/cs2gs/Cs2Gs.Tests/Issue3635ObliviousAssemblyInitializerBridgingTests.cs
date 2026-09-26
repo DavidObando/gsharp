@@ -19,18 +19,27 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Translator-fidelity tests for issue #3635: member reads from a
 /// nullability-<em>oblivious</em> assembly (e.g. any netstandard2.0 reference,
-/// which carries no NRT metadata) are imported by gsc as <c>T?</c> (#1354),
-/// so a read flowing into a non-nullable slot needs a <c>!!</c> bridge. The
-/// #2113 machinery covered return/receiver/foreach positions but missed
-/// FIELD/PROPERTY INITIALIZERS: the migrated netstandard2.0
-/// <c>Gsharp.NET.Sdk</c> failed GS0155 on
+/// which carries no NRT metadata) used to be imported by gsc as <c>T?</c>
+/// (#1354, ADR-0136), so cs2gs bridged a read flowing into a non-nullable slot
+/// with <c>!!</c>. The #2113 machinery covered return/receiver/foreach
+/// positions but missed FIELD/PROPERTY INITIALIZERS: the migrated
+/// netstandard2.0 <c>Gsharp.NET.Sdk</c> failed GS0155 on
 /// <c>public string Optimization { get; set; } = bool.TrueString;</c>
 /// (oblivious static FIELD read) and GS0156 on
 /// <c>public ITaskItem[] References { get; set; } = Array.Empty&lt;ITaskItem&gt;();</c>
 /// (oblivious method return in an initializer). Uses the
 /// #2113 in-memory oblivious-library pattern; the consumer is
 /// nullable-ENABLED, matching Gsharp.NET.Sdk (its own declarations stay
-/// non-null <c>T</c>, only the oblivious READ is <c>T?</c>).
+/// non-null <c>T</c>, only the oblivious READ is imported differently).
+/// <para>
+/// Since ADR-0186 step 3 gsc imports the oblivious read as the platform type
+/// <c>T!</c> and checks it itself at the store, so these tests now pin that
+/// cs2gs emits no <c>!!</c> on a scalar read (ADR-0186 step 6, PR 0). A
+/// container read (the <c>string[]</c> returns) keeps its <c>!!</c>, which is
+/// still load-bearing there (#4449). The test names
+/// (<c>…Bridged</c>) predate ADR-0186 step 6 and are kept for issue
+/// traceability; the assertions state the current contract.
+/// </para>
 /// </summary>
 public class Issue3635ObliviousAssemblyInitializerBridgingTests
 {
@@ -51,8 +60,7 @@ public class Ext
     public void Enabled_AutoPropertyInitializer_ObliviousStaticFieldRead_Bridged()
     {
         // The Gsharp.NET.Sdk GS0155 shape: `= bool.TrueString` on an instance
-        // auto-property. The lowered backing field stays non-null `string`, so
-        // the oblivious `string?` read needs `!!`.
+        // auto-property, whose lowered backing field stays non-null `string`.
         string printed = TranslateEnabledWithObliviousLibrary(@"
 namespace Demo
 {
@@ -62,7 +70,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Name!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Name", printed);
+        Assert.DoesNotContain("Ext.Name!!", printed);
     }
 
     [Fact]
@@ -79,14 +91,17 @@ namespace Demo
     }
 }");
 
+        // A container read keeps its `!!` (ADR-0186 step 6, PR 0): the oblivious
+        // `string[]` return reads as `[]!string!`, and only the `!!` lets it
+        // convert to the enabled `[]string` slot (#4449).
         Assert.Contains("Ext.Items()!!", printed);
     }
 
     [Fact]
     public void Enabled_AutoPropertyInitializer_ObliviousStaticPropertyRead_Bridged()
     {
-        // Nearby shape: an oblivious static PROPERTY read in an initializer
-        // takes the same bridge as the field read.
+        // Nearby shape: an oblivious static PROPERTY read in an initializer,
+        // handled like the field read.
         string printed = TranslateEnabledWithObliviousLibrary(@"
 namespace Demo
 {
@@ -96,14 +111,18 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Title!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Title", printed);
+        Assert.DoesNotContain("Ext.Title!!", printed);
     }
 
     [Fact]
     public void Enabled_FieldInitializer_ObliviousMethodReturn_Bridged()
     {
         // Plain C# field initializer (not an auto-property lowering) with an
-        // oblivious method return — the pre-existing field path must bridge too.
+        // oblivious method return, which takes the pre-existing field path.
         string printed = TranslateEnabledWithObliviousLibrary(@"
 namespace Demo
 {
@@ -115,6 +134,9 @@ namespace Demo
     }
 }");
 
+        // A container read keeps its `!!` (ADR-0186 step 6, PR 0): the oblivious
+        // `string[]` return reads as `[]!string!`, and only the `!!` lets it
+        // convert to the enabled `[]string` slot (#4449).
         Assert.Contains("Ext.Items()!!", printed);
     }
 
@@ -123,7 +145,7 @@ namespace Demo
     {
         // A get-only auto-property initializer is lifted into the explicit
         // constructor body (OD-T1); the lifted assignment targets the
-        // property's non-null `string`, so the oblivious read still needs `!!`.
+        // property's non-null `string`.
         string printed = TranslateEnabledWithObliviousLibrary(@"
 namespace Demo
 {
@@ -137,7 +159,11 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Name!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Name", printed);
+        Assert.DoesNotContain("Ext.Name!!", printed);
     }
 
     [Fact]
@@ -158,6 +184,9 @@ namespace Demo
     }
 }");
 
+        // A container read keeps its `!!` (ADR-0186 step 6, PR 0): the oblivious
+        // `string[]` return reads as `[]!string!`, and only the `!!` lets it
+        // convert to the enabled `[]string` slot (#4449).
         Assert.Contains("Ext.Items()!!", printed);
     }
 
@@ -166,7 +195,7 @@ namespace Demo
     {
         // Same GS0155 shape but with a nullable-OBLIVIOUS consumer (a project
         // with no <Nullable> setting at all): the untainted auto-property
-        // renders non-null `string`, so the imported oblivious read is bridged.
+        // renders non-null `string`.
         string printed = TranslateObliviousWithObliviousLibrary(@"
 namespace Demo
 {
@@ -176,15 +205,19 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("Ext.Name!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("Ext.Name", printed);
+        Assert.DoesNotContain("Ext.Name!!", printed);
     }
 
     [Fact]
     public void Enabled_AutoPropertyInitializer_AnnotatedNonNullRead_NotBridged()
     {
         // Precision guard: `bool.TrueString` resolved against the ANNOTATED
-        // modern runtime (non-null `string`) must NOT grow a `!!` — only a
-        // genuinely oblivious declaring assembly triggers the bridge. This
+        // modern runtime (non-null `string`) must NOT grow a `!!` (neither does
+        // an oblivious read now; this guard predates ADR-0186 step 6). This
         // consumer references no oblivious library, so its emitted G# binds.
         string printed = TranslateEnabled(@"
 namespace Demo
