@@ -356,6 +356,44 @@ public sealed class Adr0186ObliviousMetadataReadTranslationTests : IDisposable
     }
 
     /// <summary>
+    /// A tuple element deconstructed into a new local is an inference
+    /// position too: <c>var (name, _) = (n.Name, 0)</c> gives <c>name</c> the
+    /// element's type, so the element keeps its <c>!!</c>. Without it
+    /// <c>name</c> is <c>string!</c> and <c>Wrap(name)</c> infers
+    /// <c>List[string!]</c> (GS0155). An element deconstructed into an
+    /// existing variable has a fixed target and stays bare.
+    /// </summary>
+    [Fact]
+    public void A_Deconstructed_Local_Keeps_The_Assertion()
+    {
+        string libraryPath = this.EmitObliviousLibrary("Adr0186ObliviousDeconstructLib");
+        string printed = Translate(
+            """
+            using ObLib;
+
+            public static class Use
+            {
+                public static int Count(Node n)
+                {
+                    System.Collections.Generic.List<string> names = new System.Collections.Generic.List<string>();
+                    var (name, _) = (n.Name, 0);
+                    names = Wrapping.Wrap(name);
+                    return names.Count;
+                }
+            }
+            """,
+            MetadataReference.CreateFromFile(libraryPath),
+            NullableContextOptions.Disable);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            new[] { printed + Environment.NewLine + "Use.Count(Node.Make(\"a\", nil))" },
+            new EmittedOracleOptions { References = new[] { libraryPath } });
+        Assert.Contains("n.Name!!", printed, StringComparison.Ordinal);
+        Assert.True(result.Diagnostics.IsEmpty, printed + "\n" + string.Join("\n", result.Diagnostics));
+        Assert.Equal(1, result.Value);
+    }
+
+    /// <summary>
     /// An array of a value type has no nested reference position, so an
     /// oblivious <c>int[]</c> read is left bare like a scalar one. Returned
     /// from a method declared <c>int[]?</c>, a nil flows through instead of

@@ -1670,7 +1670,8 @@ public sealed partial class CSharpToGSharpTranslator
                     // itself does.
                     if (argument.Parent is TupleExpressionSyntax tuple)
                     {
-                        return this.ValueFeedsTypeInference(tuple);
+                        return ElementDeclaresDeconstructedLocal(tuple, argument)
+                            || this.ValueFeedsTypeInference(tuple);
                     }
 
                     if (argument.Parent?.Parent is InvocationExpressionSyntax { Expression: { } callee }
@@ -1727,6 +1728,36 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return false;
             }
+        }
+
+        // ADR-0186 step 6 (PR 0): whether <paramref name="element"/> of a tuple
+        // literal deconstructed into a declaration lands in a new local
+        // (`var (name, _) = (n.Name, 0)`, or `(var name, var n2) = ...`). Such
+        // a local takes its type from the element, like a `var` initializer,
+        // so a `T!` element would make it `T!`. An element assigned to an
+        // existing variable has a fixed target and is not an inference
+        // position. Written as plain type tests: cs2gs translates itself, and
+        // a nested property pattern here would spill.
+        private static bool ElementDeclaresDeconstructedLocal(TupleExpressionSyntax tuple, ArgumentSyntax element)
+        {
+            if (tuple.Parent is not AssignmentExpressionSyntax assignment || assignment.Right != tuple)
+            {
+                return false;
+            }
+
+            if (assignment.Left is DeclarationExpressionSyntax)
+            {
+                return true;
+            }
+
+            if (assignment.Left is not TupleExpressionSyntax targets
+                || targets.Arguments.Count != tuple.Arguments.Count)
+            {
+                return false;
+            }
+
+            int index = tuple.Arguments.IndexOf(element);
+            return index >= 0 && targets.Arguments[index].Expression is DeclarationExpressionSyntax;
         }
 
         // ADR-0186 step 6 (PR 0): whether the local <paramref name="clause"/>
