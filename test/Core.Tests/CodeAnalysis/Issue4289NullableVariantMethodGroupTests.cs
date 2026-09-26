@@ -41,6 +41,33 @@ public class Issue4289NullableVariantMethodGroupTests
     }
 
     [Fact]
+    public void PlatformBaseParameter_IntoDerivedPredicate_BindsAndRuns()
+    {
+        const string source = """
+            import System.Collections.Immutable
+            import System.Linq
+
+            open class Animal { }
+            class Dog : Animal { }
+
+            class Checker {
+                shared {
+                    @Oblivious
+                    func Check(a Animal) bool -> a is Dog
+                }
+            }
+
+            let values ImmutableArray[Dog] = ImmutableArray.Create(Dog())
+            values.Any(Checker.Check)
+            """;
+
+        var result = EmittedOracle.Evaluate(source);
+
+        Assert.Empty(result.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
     public void NullableDerivedTarget_DoesNotAcceptNonNullableBaseParameter()
     {
         const string source = """

@@ -2212,9 +2212,10 @@ public sealed class Conversion
     /// widening, and nullable lifts ride the general implicit lattice but
     /// require a real coercion at the boundary, which neither CLR delegate
     /// variance nor a target-typed <c>ldftn</c>+<c>newobj</c> binding can
-    /// perform. Reference nullability wrappers are ignored only when deciding
-    /// whether each slot is reference-like; the annotated types still drive
-    /// conversion classification so nullable-to-non-nullable stays rejected.
+    /// perform. Reference nullability and platform wrappers are ignored only
+    /// when deciding whether each slot is reference-like; the annotated types
+    /// still drive conversion classification so nullable-to-non-nullable stays
+    /// rejected.
     /// </summary>
     /// <param name="from">The value-producing side of the slot.</param>
     /// <param name="to">The value-consuming side of the slot.</param>
@@ -2226,8 +2227,8 @@ public sealed class Conversion
             return false;
         }
 
-        var referenceFrom = UnwrapReferenceNullable(from);
-        var referenceTo = UnwrapReferenceNullable(to);
+        var referenceFrom = UnwrapPlatformAndNullable(UnwrapReferenceNullable(from));
+        var referenceTo = UnwrapPlatformAndNullable(UnwrapReferenceNullable(to));
         if (from == TypeSymbol.Void || to == TypeSymbol.Void
             || referenceFrom == null || referenceTo == null
             || !IsReferenceLikeTarget(referenceFrom)
