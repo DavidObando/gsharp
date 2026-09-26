@@ -36,6 +36,7 @@ public class Issue4420PlatformUpcastTests
     private const string LibrarySource = """
         namespace Issue4420.Library
         {
+            using System;
             using System.Collections.Generic;
 
             public static class Ob
@@ -45,6 +46,8 @@ public class Issue4420PlatformUpcastTests
                 public static string[] Lines() { return new[] { "a", "b" }; }
 
                 public static IEnumerable<string> Seq() { return new List<string> { "a", null }; }
+
+                public static Func<string> Factory() { return () => null; }
             }
 
             public interface IChild<T> : IEnumerable<T>
@@ -75,6 +78,8 @@ public class Issue4420PlatformUpcastTests
         func TakeObjects(xs IEnumerable[object]) int32 { return xs.Count() }
 
         func TakeNilableObjects(xs IEnumerable[object?]) int32 { return xs.Count() }
+
+        func TakeFactory(f Func[object]) int32 { return 1 }
 
         // An `IEnumerable[string!]` itself: the same generic definition as the
         // target, reaching `IEnumerable[object]` through covariance.
@@ -212,6 +217,19 @@ public class Issue4420PlatformUpcastTests
             """;
         var thrown = Assert.Throws<NullReferenceException>(() => Run(library, bridge));
         Assert.Contains("nullability-oblivious", thrown.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
+    /// ADR-0186 open question 13 deliberately leaves delegate conversion as a
+    /// conformance boundary: CLR covariance converts the imported
+    /// <c>Func[string!]</c> to <c>Func[object]</c>, with no nested check point.
+    /// </summary>
+    [Fact]
+    public void Imported_Delegate_Variance_Remains_A_Conformance_Boundary()
+    {
+        using var library = new CSharpFixture(LibrarySource);
+
+        Assert.Equal("1\n", Run(library, "Console.WriteLine(TakeFactory(Ob.Factory()))"));
     }
 
     private static string[] CompileErrors(CSharpFixture library, string program)

@@ -2072,19 +2072,13 @@ public sealed class Conversion
                     // `Classify` at all — a value-type argument on either
                     // side means the two constructed interfaces are genuinely
                     // different CLR types, not variance-compatible ones.
-                    if (!IsReferenceTypeArgument(fromArg) || !IsReferenceTypeArgument(toArg))
-                    {
-                        return false;
-                    }
-
                     // Covariant: the source argument must implicitly
                     // convert to the target argument (string -> object).
                     // #4420: an element conversion that needs ADR-0186 §4's
                     // nil check (`string!` -> `object`) is not variance: a
                     // variance conversion reads every element through the
                     // target view with no per-element check point.
-                    var covariant = Classify(fromArg, toArg);
-                    if (!covariant.Exists || !covariant.IsImplicit || covariant.RequiresPlatformNilCheck)
+                    if (!IsVarianceArgumentCompatible(fromArg, toArg, allowPlatformNilCheck: false))
                     {
                         return false;
                     }
@@ -2094,19 +2088,13 @@ public sealed class Conversion
                 case TypeParameterVariance.In:
                     // Same reference-type-only restriction as the `Out` case
                     // above, applied symmetrically to the contravariant slot.
-                    if (!IsReferenceTypeArgument(fromArg) || !IsReferenceTypeArgument(toArg))
-                    {
-                        return false;
-                    }
-
                     // Contravariant: the TARGET argument must implicitly
                     // convert to the SOURCE argument (object -> string),
                     // so the narrower interface accepts the wider one.
                     // #4420: symmetric to the covariant arm. A view that
                     // writes `string!` (possibly nil) into a sink declared
                     // non-null `object` has no per-element check point.
-                    var contravariant = Classify(toArg, fromArg);
-                    if (!contravariant.Exists || !contravariant.IsImplicit || contravariant.RequiresPlatformNilCheck)
+                    if (!IsVarianceArgumentCompatible(toArg, fromArg, allowPlatformNilCheck: false))
                     {
                         return false;
                     }
@@ -3143,6 +3131,7 @@ public sealed class Conversion
             return false;
         }
 
+        var isDelegateConformanceBoundary = ClrTypeUtilities.IsDelegateType(targetOpen);
         for (var i = 0; i < sourceArguments.Length; i++)
         {
             var sourceArgument = sourceArguments[i];
@@ -3181,17 +3170,10 @@ public sealed class Conversion
                 & System.Reflection.GenericParameterAttributes.VarianceMask;
             var compatible = variance switch
             {
-                // #4420: an element conversion that needs ADR-0186 §4's nil
-                // check (`string!` -> `object`) is not variance: the target
-                // view reads every element with no per-element check point.
                 System.Reflection.GenericParameterAttributes.Covariant =>
-                    IsReferenceTypeArgument(sourceArgument)
-                    && IsReferenceTypeArgument(targetArgument)
-                    && Classify(sourceArgument, targetArgument) is { Exists: true, IsImplicit: true, RequiresPlatformNilCheck: false },
+                    IsVarianceArgumentCompatible(sourceArgument, targetArgument, isDelegateConformanceBoundary),
                 System.Reflection.GenericParameterAttributes.Contravariant =>
-                    IsReferenceTypeArgument(sourceArgument)
-                    && IsReferenceTypeArgument(targetArgument)
-                    && Classify(targetArgument, sourceArgument) is { Exists: true, IsImplicit: true, RequiresPlatformNilCheck: false },
+                    IsVarianceArgumentCompatible(targetArgument, sourceArgument, isDelegateConformanceBoundary),
                 _ => false,
             };
             if (!compatible)
@@ -3609,6 +3591,17 @@ public sealed class Conversion
             return false;
         }
 
+        // ADR-0186 open question 13: function and delegate conversions are
+        // conformance boundaries, not container value conversions. They have
+        // no expression-level point at which rule 3's nested nil check could
+        // be inserted, so this arm must consistently decline them whether the
+        // delegate is represented as a FunctionTypeSymbol, DelegateTypeSymbol,
+        // or imported CLR type.
+        if (IsDelegateConformanceBoundary(from) || IsDelegateConformanceBoundary(to))
+        {
+            return false;
+        }
+
         // #4420: an UPCAST (`List[string!]` to `IEnumerable[string]`,
         // `[]string!` to `IReadOnlyList[string]`) is the same aliasing hazard
         // through a supertype view: the callee reads non-null elements from a
@@ -3623,9 +3616,7 @@ public sealed class Conversion
         // illegal direction is decided here; a legal pair falls through to
         // the rules below, unchanged. Function shapes and value-type
         // containers are excluded for the reasons given below.
-        if (from is not FunctionTypeSymbol
-            && to is not FunctionTypeSymbol
-            && !IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from))
+        if (!IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from))
             && TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments))
         {
             for (var i = 0; i < projected.Length; i++)
@@ -3689,11 +3680,6 @@ public sealed class Conversion
         //
         // Declining hands the pair back to the rules that already answer it,
         // which is what this arm does for every pair it cannot speak to.
-        if (from is FunctionTypeSymbol || to is FunctionTypeSymbol)
-        {
-            return false;
-        }
-
         // A VALUE-TYPE container is copied, not aliased, so rule 3's argument
         // does not reach it either.
         //
@@ -4357,6 +4343,29 @@ public sealed class Conversion
         }
 
         return type;
+    }
+
+    private static bool IsDelegateConformanceBoundary(TypeSymbol? type)
+    {
+        type = UnwrapPlatformAndNullable(type);
+        return type is FunctionTypeSymbol or DelegateTypeSymbol
+            || ClrTypeUtilities.IsDelegateType(type?.ClrType);
+    }
+
+    private static bool IsVarianceArgumentCompatible(
+        TypeSymbol source,
+        TypeSymbol target,
+        bool allowPlatformNilCheck)
+    {
+        if (!IsReferenceTypeArgument(source) || !IsReferenceTypeArgument(target))
+        {
+            return false;
+        }
+
+        var conversion = Classify(source, target);
+        return conversion.Exists
+            && conversion.IsImplicit
+            && (allowPlatformNilCheck || !conversion.RequiresPlatformNilCheck);
     }
 
     /// <summary>
