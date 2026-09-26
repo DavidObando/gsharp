@@ -98,6 +98,13 @@ instruction, follow the maintainer.
   for everyone on the machine. Put their work roots
   (`SELFMIG_PR_GUARD_ROOT`, `--out`, `--artifacts`, `TMPDIR`) under
   `~/.cache/<tag>/`, and delete them when you're done.
+- **Keep durable state off tmpfs.** `/tmp` is RAM-backed and is wiped on
+  reboot, and the session scratchpad (`/tmp/claude-*`) goes with it. Anything
+  you'd need after a crash or reboot lives on disk, e.g. `~/.cache/<tag>/`:
+  coordinator state and continuity logs, hand-off notes, drafted PR replies.
+- **After a crash or reboot,** background processes, monitors and local guard
+  runs are gone. Check each worktree's `git status` and clean interrupted
+  work roots before resuming.
 - **Never kill test processes by pattern.** `pkill -f "dotnet test"` (or
   `testhost`) matches your own shell and kills it. Kill by PID.
 - **Long commands:** start them once in the background and wait for the
@@ -165,6 +172,8 @@ For sessions that delegate work to subagents:
 
 - **Isolation:** each agent that commits gets its own git worktree and its
   own branch or PR. Never let an agent work in the main checkout.
+- **Keep the coordinator's state log on disk,** not in `/tmp` or the
+  scratchpad (see "Keep durable state off tmpfs" above).
 - **Briefs are self-contained:** include the issue, the relevant ADR
   decisions, the landing criteria and the process rules above. Agents don't
   inherit them automatically.
