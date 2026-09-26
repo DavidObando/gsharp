@@ -12,17 +12,25 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>An explicit persistent address, distinct from borrowed address-of.</summary>
 public sealed class BoundManagedReferenceExpression : BoundExpression
 {
-    public BoundManagedReferenceExpression(SyntaxNode? syntax, BoundExpression location, TypeSymbol type, bool readOnly)
+    public BoundManagedReferenceExpression(
+        SyntaxNode? syntax,
+        BoundExpression location,
+        TypeSymbol type,
+        bool readOnly,
+        bool retainForCapture = false)
         : base(syntax)
     {
         Location = location;
         Type = type;
         IsReadOnly = readOnly;
+        RetainForCapture = retainForCapture;
     }
 
     public BoundExpression Location { get; }
 
     public bool IsReadOnly { get; }
+
+    public bool RetainForCapture { get; }
 
     public override TypeSymbol Type { get; }
 

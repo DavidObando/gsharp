@@ -3563,7 +3563,8 @@ public sealed class Binder
                     syntax,
                     ManagedReferenceOrigins.PrepareAliases(argument, scope.References),
                     argumentType,
-                    readOnly: false);
+                    readOnly: false,
+                    retainForCapture: true);
             }
 
             var field = new FieldSymbol(

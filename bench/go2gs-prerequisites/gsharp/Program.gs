@@ -45,6 +45,28 @@ class ManualRichCounter(Box IntBox) : Counter {
     func Read() int32 -> Box.Value
 }
 
+class ManualRichPair(Left IntBox, Right IntBox, First int32, Second int32) : Counter {
+    func Increment() {
+        Left.Value += 1
+        Right.Value += 1
+    }
+
+    func Read() int32 -> Left.Value + Right.Value + First + Second
+}
+
+func makeRichCounter(seed int32) Counter {
+    var captured = seed
+    return object: Counter{
+        func Increment() {
+            captured += 1
+        }
+
+        func Read() int32 -> captured
+    }
+}
+
+func makeManualRichCounter(seed int32) Counter -> ManualRichCounter(IntBox(seed))
+
 func semanticWitnesses() {
     var shared = slice[int32].Create(2, 4)
     shared[0] = 1
@@ -356,6 +378,150 @@ func benchManualRichConstruction(count int32) {
     report("manual-rich-create", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
+func benchRetainedRichConstruction(count int32) {
+    var captured = 1
+    let retained = slice[Counter].Create(count, count)
+    var checksum int64
+    for warmup in 0 ... 20000 {
+        let counter = object: Counter{
+            func Increment() {
+                captured += 1
+            }
+
+            func Read() int32 -> captured
+        }
+        checksum += counter.Read()
+    }
+    checksum = 0
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        let counter = object: Counter{
+            func Increment() {
+                captured += 1
+            }
+
+            func Read() int32 -> captured
+        }
+        retained[i] = counter
+        checksum += counter.Read()
+    }
+    sw.Stop()
+    report("rich-create-retained", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+}
+
+func benchRetainedManualRichConstruction(count int32) {
+    let box = IntBox(1)
+    let retained = slice[Counter].Create(count, count)
+    var checksum int64
+    for warmup in 0 ... 20000 {
+        let counter Counter = ManualRichCounter(box)
+        checksum += counter.Read()
+    }
+    checksum = 0
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        let counter Counter = ManualRichCounter(box)
+        retained[i] = counter
+        checksum += counter.Read()
+    }
+    sw.Stop()
+    report("manual-rich-create-retained", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+}
+
+func benchFreshRootRichConstruction(count int32) {
+    var checksum int64
+    for warmup in 0 ... 20000 {
+        checksum += makeRichCounter(1).Read()
+    }
+    checksum = 0
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        checksum += makeRichCounter(1).Read()
+    }
+    sw.Stop()
+    report("rich-create-fresh-root", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+}
+
+func benchFreshRootManualRichConstruction(count int32) {
+    var checksum int64
+    for warmup in 0 ... 20000 {
+        checksum += makeManualRichCounter(1).Read()
+    }
+    checksum = 0
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        checksum += makeManualRichCounter(1).Read()
+    }
+    sw.Stop()
+    report(
+        "manual-rich-create-fresh-root",
+        sw.Elapsed,
+        count,
+        GC.GetAllocatedBytesForCurrentThread() - before,
+        checksum
+    )
+}
+
+func benchMultipleRichConstruction(count int32) {
+    var left = 1
+    var right = 2
+    var checksum int64
+    for warmup in 0 ... 20000 {
+        let counter = object: Counter{
+            let First = left
+            let Second = right
+            func Increment() {
+                left += 1
+                right += 1
+            }
+
+            func Read() int32 -> left + right + First + Second
+        }
+        checksum += counter.Read()
+    }
+    checksum = 0
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        let counter = object: Counter{
+            let First = left
+            let Second = right
+            func Increment() {
+                left += 1
+                right += 1
+            }
+
+            func Read() int32 -> left + right + First + Second
+        }
+        checksum += counter.Read()
+    }
+    sw.Stop()
+    report("rich-create-multi", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+}
+
+func benchMultipleManualRichConstruction(count int32) {
+    let left = IntBox(1)
+    let right = IntBox(2)
+    var checksum int64
+    for warmup in 0 ... 20000 {
+        let counter Counter = ManualRichPair(left, right, left.Value, right.Value)
+        checksum += counter.Read()
+    }
+    checksum = 0
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        let counter Counter = ManualRichPair(left, right, left.Value, right.Value)
+        checksum += counter.Read()
+    }
+    sw.Stop()
+    report("manual-rich-create-multi", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+}
+
 func Main() {
     semanticWitnesses()
     if Environment.GetEnvironmentVariable("GO2GS_SPIKE_BENCH") == "1" {
@@ -373,5 +539,11 @@ func Main() {
         benchNominalConstruction(count)
         benchRichConstruction(count)
         benchManualRichConstruction(count)
+        benchRetainedRichConstruction(count)
+        benchRetainedManualRichConstruction(count)
+        benchFreshRootRichConstruction(count)
+        benchFreshRootManualRichConstruction(count)
+        benchMultipleRichConstruction(count)
+        benchMultipleManualRichConstruction(count)
     }
 }

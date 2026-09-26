@@ -52,6 +52,30 @@ type manualRichCounter struct {
 func (c *manualRichCounter) Increment()  { c.box.value++ }
 func (c *manualRichCounter) Read() int32 { return c.box.value }
 
+type manualRichPair struct {
+	left   *intBox
+	right  *intBox
+	first  int32
+	second int32
+}
+
+func (c *manualRichPair) Increment() {
+	c.left.value++
+	c.right.value++
+}
+func (c *manualRichPair) Read() int32 {
+	return c.left.value + c.right.value + c.first + c.second
+}
+
+func makeRichCounter(seed int32) Counter {
+	captured := seed
+	return &richCounter{captured: &captured}
+}
+
+func makeManualRichCounter(seed int32) Counter {
+	return &manualRichCounter{box: &intBox{value: seed}}
+}
+
 func semanticWitnesses() {
 	shared := make([]int32, 2, 4)
 	shared[0], shared[1] = 1, 2
@@ -358,6 +382,129 @@ func benchManualRichConstruction(count int32) {
 	report("manual-rich-create", elapsed, count, allocated, checksum)
 }
 
+func benchRetainedRichConstruction(count int32) {
+	captured := int32(1)
+	retained := make([]Counter, count)
+	var checksum int64
+	for range 20_000 {
+		counter := &richCounter{captured: &captured}
+		checksum += int64(counter.Read())
+	}
+	checksum = 0
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for i := range count {
+			counter := &richCounter{captured: &captured}
+			retained[i] = counter
+			checksum += int64(counter.Read())
+		}
+		elapsed = time.Since(start)
+	})
+	report("rich-create-retained", elapsed, count, allocated, checksum)
+}
+
+func benchRetainedManualRichConstruction(count int32) {
+	box := &intBox{value: 1}
+	retained := make([]Counter, count)
+	var checksum int64
+	for range 20_000 {
+		counter := &manualRichCounter{box: box}
+		checksum += int64(counter.Read())
+	}
+	checksum = 0
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for i := range count {
+			counter := &manualRichCounter{box: box}
+			retained[i] = counter
+			checksum += int64(counter.Read())
+		}
+		elapsed = time.Since(start)
+	})
+	report("manual-rich-create-retained", elapsed, count, allocated, checksum)
+}
+
+func benchFreshRootRichConstruction(count int32) {
+	var checksum int64
+	for range 20_000 {
+		checksum += int64(makeRichCounter(1).Read())
+	}
+	checksum = 0
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for range count {
+			checksum += int64(makeRichCounter(1).Read())
+		}
+		elapsed = time.Since(start)
+	})
+	report("rich-create-fresh-root", elapsed, count, allocated, checksum)
+}
+
+func benchFreshRootManualRichConstruction(count int32) {
+	var checksum int64
+	for range 20_000 {
+		checksum += int64(makeManualRichCounter(1).Read())
+	}
+	checksum = 0
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for range count {
+			checksum += int64(makeManualRichCounter(1).Read())
+		}
+		elapsed = time.Since(start)
+	})
+	report("manual-rich-create-fresh-root", elapsed, count, allocated, checksum)
+}
+
+func benchMultipleRichConstruction(count int32) {
+	left := &intBox{value: 1}
+	right := &intBox{value: 2}
+	var checksum int64
+	for range 20_000 {
+		counter := &manualRichPair{left: left, right: right, first: left.value, second: right.value}
+		checksum += int64(counter.Read())
+	}
+	checksum = 0
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for range count {
+			counter := &manualRichPair{
+				left: left, right: right,
+				first: left.value, second: right.value,
+			}
+			checksum += int64(counter.Read())
+		}
+		elapsed = time.Since(start)
+	})
+	report("rich-create-multi", elapsed, count, allocated, checksum)
+}
+
+func benchMultipleManualRichConstruction(count int32) {
+	left := &intBox{value: 1}
+	right := &intBox{value: 2}
+	var checksum int64
+	for range 20_000 {
+		counter := &manualRichPair{left: left, right: right, first: left.value, second: right.value}
+		checksum += int64(counter.Read())
+	}
+	checksum = 0
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for range count {
+			counter := &manualRichPair{left: left, right: right, first: left.value, second: right.value}
+			checksum += int64(counter.Read())
+		}
+		elapsed = time.Since(start)
+	})
+	report("manual-rich-create-multi", elapsed, count, allocated, checksum)
+}
+
 func main() {
 	semanticWitnesses()
 	if os.Getenv("GO2GS_SPIKE_BENCH") == "1" {
@@ -375,5 +522,11 @@ func main() {
 		benchNominalConstruction(count)
 		benchRichConstruction(count)
 		benchManualRichConstruction(count)
+		benchRetainedRichConstruction(count)
+		benchRetainedManualRichConstruction(count)
+		benchFreshRootRichConstruction(count)
+		benchFreshRootManualRichConstruction(count)
+		benchMultipleRichConstruction(count)
+		benchMultipleManualRichConstruction(count)
 	}
 }

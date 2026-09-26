@@ -232,10 +232,16 @@ internal static class CaptureBoxingRewriter
         var capturedSet = new HashSet<VariableSymbol>();
         var nestedParameters = new HashSet<ParameterSymbol>();
         var persistentRoots = new HashSet<VariableSymbol>();
-        CaptureWalker.Collect(body, capturedSet, nestedParameters, persistentRoots);
+        var retainedCaptureTypes = new Dictionary<VariableSymbol, TypeSymbol>();
+        CaptureWalker.Collect(body, capturedSet, nestedParameters, persistentRoots, retainedCaptureTypes);
         foreach (var argument in arguments)
         {
-            CaptureWalker.Collect(new BoundExpressionStatement(argument.Syntax, argument), capturedSet, nestedParameters, persistentRoots);
+            CaptureWalker.Collect(
+                new BoundExpressionStatement(argument.Syntax, argument),
+                capturedSet,
+                nestedParameters,
+                persistentRoots,
+                retainedCaptureTypes);
         }
 
         if (capturedSet.Count == 0)
@@ -304,7 +310,16 @@ internal static class CaptureBoxingRewriter
                 : variable.Name;
             var boxLocal = new LocalVariableSymbol(slotName, isReadOnly: false, type: boxReference);
 
-            boxInfo[variable] = new BoxedVariable(variable, boxLocal, boxReference, fieldSymbol);
+            retainedCaptureTypes.TryGetValue(variable, out var retainedCaptureType);
+            var retainedCapture = retainedCaptureType == null
+                ? null
+                : new LocalVariableSymbol("<>__capture_" + variable.Name, isReadOnly: true, type: retainedCaptureType);
+            boxInfo[variable] = new BoxedVariable(
+                variable,
+                boxLocal,
+                boxReference,
+                fieldSymbol,
+                retainedCapture);
             newStructs.Add(boxClass);
         }
 
@@ -337,21 +352,9 @@ internal static class CaptureBoxingRewriter
             var prologue = ImmutableArray.CreateBuilder<BoundStatement>((paramBoxes.Count * 2) + rewritten.Statements.Length);
             foreach (var bi in paramBoxes)
             {
-                prologue.Add(new BoundVariableDeclaration(
-                    null,
-                    bi.BoxLocal,
-                    new BoundConstructorCallExpression(
-                        null,
-                        bi.BoxClass,
-                        ImmutableArray<BoundExpression>.Empty)));
-                prologue.Add(new BoundExpressionStatement(
-                    null,
-                    new BoundFieldAssignmentExpression(
-                        null,
-                        bi.BoxLocal,
-                        bi.BoxClass,
-                        bi.BoxField,
-                        new BoundVariableExpression(null, bi.Original))));
+                prologue.AddRange(BuildBoxStatements(
+                    bi,
+                    new BoundVariableExpression(null, bi.Original)));
             }
 
             parameterPrologue = prologue.ToImmutable();
@@ -435,14 +438,63 @@ internal static class CaptureBoxingRewriter
             isClass: true);
     }
 
+    private static ImmutableArray<BoundStatement> BuildBoxStatements(
+        BoxedVariable box,
+        BoundExpression? initialValue)
+    {
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>(box.RetainedCapture == null ? 2 : 3);
+        statements.Add(new BoundVariableDeclaration(
+            null,
+            box.BoxLocal,
+            new BoundConstructorCallExpression(
+                null,
+                box.BoxClass,
+                ImmutableArray<BoundExpression>.Empty)));
+        if (initialValue != null)
+        {
+            statements.Add(new BoundExpressionStatement(
+                null,
+                new BoundFieldAssignmentExpression(
+                    null,
+                    box.BoxLocal,
+                    box.BoxClass,
+                    box.BoxField,
+                    initialValue)));
+        }
+
+        if (box.RetainedCapture != null)
+        {
+            statements.Add(new BoundVariableDeclaration(
+                null,
+                box.RetainedCapture,
+                new BoundManagedReferenceExpression(
+                    null,
+                    new BoundFieldAccessExpression(
+                        null,
+                        new BoundVariableExpression(null, box.BoxLocal),
+                        box.BoxClass,
+                        box.BoxField),
+                    box.RetainedCapture.Type,
+                    readOnly: false)));
+        }
+
+        return statements.MoveToImmutable();
+    }
+
     private sealed class BoxedVariable
     {
-        public BoxedVariable(VariableSymbol original, LocalVariableSymbol boxLocal, StructSymbol boxClass, FieldSymbol boxField)
+        public BoxedVariable(
+            VariableSymbol original,
+            LocalVariableSymbol boxLocal,
+            StructSymbol boxClass,
+            FieldSymbol boxField,
+            LocalVariableSymbol? retainedCapture)
         {
             Original = original;
             BoxLocal = boxLocal;
             BoxClass = boxClass;
             BoxField = boxField;
+            RetainedCapture = retainedCapture;
         }
 
         public VariableSymbol Original { get; }
@@ -452,6 +504,8 @@ internal static class CaptureBoxingRewriter
         public StructSymbol BoxClass { get; }
 
         public FieldSymbol BoxField { get; }
+
+        public LocalVariableSymbol? RetainedCapture { get; }
     }
 
     /// <summary>
@@ -517,17 +571,28 @@ internal static class CaptureBoxingRewriter
         private readonly HashSet<VariableSymbol> sink;
         private readonly HashSet<ParameterSymbol>? nestedParameters;
         private readonly HashSet<VariableSymbol>? persistentRoots;
+        private readonly Dictionary<VariableSymbol, TypeSymbol>? retainedCaptureTypes;
 
-        private CaptureWalker(HashSet<VariableSymbol> sink, HashSet<ParameterSymbol>? nestedParameters, HashSet<VariableSymbol>? persistentRoots)
+        private CaptureWalker(
+            HashSet<VariableSymbol> sink,
+            HashSet<ParameterSymbol>? nestedParameters,
+            HashSet<VariableSymbol>? persistentRoots,
+            Dictionary<VariableSymbol, TypeSymbol>? retainedCaptureTypes)
         {
             this.sink = sink;
             this.nestedParameters = nestedParameters;
             this.persistentRoots = persistentRoots;
+            this.retainedCaptureTypes = retainedCaptureTypes;
         }
 
-        public static void Collect(BoundStatement root, HashSet<VariableSymbol> sink, HashSet<ParameterSymbol>? nestedParameters = null, HashSet<VariableSymbol>? persistentRoots = null)
+        public static void Collect(
+            BoundStatement root,
+            HashSet<VariableSymbol> sink,
+            HashSet<ParameterSymbol>? nestedParameters = null,
+            HashSet<VariableSymbol>? persistentRoots = null,
+            Dictionary<VariableSymbol, TypeSymbol>? retainedCaptureTypes = null)
         {
-            new CaptureWalker(sink, nestedParameters, persistentRoots).RewriteStatement(root);
+            new CaptureWalker(sink, nestedParameters, persistentRoots, retainedCaptureTypes).RewriteStatement(root);
         }
 
         protected override BoundExpression RewriteManagedReferenceExpression(BoundManagedReferenceExpression node)
@@ -536,6 +601,16 @@ internal static class CaptureBoxingRewriter
             if (this.persistentRoots != null)
             {
                 ManagedReferenceOrigins.CollectRoots(node.Location, this.persistentRoots);
+            }
+
+            if (node.RetainForCapture && this.retainedCaptureTypes != null)
+            {
+                var roots = new HashSet<VariableSymbol>();
+                ManagedReferenceOrigins.CollectRoots(node.Location, roots);
+                foreach (var root in roots)
+                {
+                    this.retainedCaptureTypes.TryAdd(root, node.Type);
+                }
             }
 
             return base.RewriteManagedReferenceExpression(node);
@@ -658,13 +733,7 @@ internal static class CaptureBoxingRewriter
                 {
                     foreach (var bi in introduced)
                     {
-                        builder.Add(new BoundVariableDeclaration(
-                            null,
-                            bi.BoxLocal,
-                            new BoundConstructorCallExpression(
-                                null,
-                                bi.BoxClass,
-                                ImmutableArray<BoundExpression>.Empty)));
+                        builder.AddRange(BuildBoxStatements(bi, initialValue: null));
                     }
 
                     builder.Add(newStatement);
@@ -703,6 +772,24 @@ internal static class CaptureBoxingRewriter
             }
 
             return node;
+        }
+
+        protected override BoundExpression RewriteManagedReferenceExpression(BoundManagedReferenceExpression node)
+        {
+            if (!node.RetainForCapture)
+            {
+                return base.RewriteManagedReferenceExpression(node);
+            }
+
+            var roots = new HashSet<VariableSymbol>();
+            ManagedReferenceOrigins.CollectRoots(node.Location, roots);
+            var root = roots.Count == 1
+                ? roots.Single()
+                : throw new InvalidOperationException("A retained rich capture must have exactly one lexical root.");
+            var retained = Invariant.Required(
+                this.boxInfo[root].RetainedCapture,
+                "capture collection planned retained location storage");
+            return new BoundVariableExpression(node.Syntax, retained);
         }
 
         /// <inheritdoc/>
@@ -1048,22 +1135,7 @@ internal static class CaptureBoxingRewriter
                 this.allocated.Add(bi.Original);
                 var initializer = this.RewriteExpression(
                     Invariant.Required(node.Initializer, "a captured variable declaration has an initializer"));
-                var stmts = ImmutableArray.Create<BoundStatement>(
-                    new BoundVariableDeclaration(
-                        null,
-                        bi.BoxLocal,
-                        new BoundConstructorCallExpression(
-                            null,
-                            bi.BoxClass,
-                            ImmutableArray<BoundExpression>.Empty)),
-                    new BoundExpressionStatement(
-                        null,
-                        new BoundFieldAssignmentExpression(
-                            null,
-                            bi.BoxLocal,
-                            bi.BoxClass,
-                            bi.BoxField,
-                            initializer)));
+                var stmts = BuildBoxStatements(bi, initializer);
                 return new BoundBlockStatement(null, stmts);
             }
 
@@ -1078,6 +1150,11 @@ internal static class CaptureBoxingRewriter
             // variables become reads/writes through the box. The base
             // BoundTreeRewriter intentionally skips the body (separate
             // lexical scope), so we override and recurse explicitly.
+            var retainedInBody = new Dictionary<VariableSymbol, TypeSymbol>();
+            CaptureWalker.Collect(
+                node.Body,
+                new HashSet<VariableSymbol>(),
+                retainedCaptureTypes: retainedInBody);
             var newBody = (BoundBlockStatement)this.RewriteStatement(node.Body);
             var parameterSeeds = ImmutableArray.CreateBuilder<BoundStatement>();
             foreach (var parameter in node.Function.Parameters)
@@ -1109,6 +1186,11 @@ internal static class CaptureBoxingRewriter
                 if (this.boxInfo.TryGetValue(cv, out var bi))
                 {
                     newCaptured.Add(bi.BoxLocal);
+                    if (bi.RetainedCapture != null && retainedInBody.ContainsKey(cv))
+                    {
+                        newCaptured.Add(bi.RetainedCapture);
+                    }
+
                     anyCaptureChange = true;
                 }
                 else
@@ -1171,22 +1253,7 @@ internal static class CaptureBoxingRewriter
         private ImmutableArray<BoundStatement> BuildBoxSeedStatements(BoxedVariable bi)
         {
             this.allocated.Add(bi.Original);
-            return ImmutableArray.Create<BoundStatement>(
-                new BoundVariableDeclaration(
-                    null,
-                    bi.BoxLocal,
-                    new BoundConstructorCallExpression(
-                        null,
-                        bi.BoxClass,
-                        ImmutableArray<BoundExpression>.Empty)),
-                new BoundExpressionStatement(
-                    null,
-                    new BoundFieldAssignmentExpression(
-                        null,
-                        bi.BoxLocal,
-                        bi.BoxClass,
-                        bi.BoxField,
-                        new BoundVariableExpression(null, bi.Original))));
+            return BuildBoxStatements(bi, new BoundVariableExpression(null, bi.Original));
         }
 
         private ImmutableArray<BoundStatement> BuildPatternBoxSeedStatements(BoundPattern pattern)

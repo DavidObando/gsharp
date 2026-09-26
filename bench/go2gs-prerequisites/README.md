@@ -23,7 +23,10 @@ The benchmark rows additionally compare:
 - adapted reference and managed-location calls;
 - rich-capture calls and construction;
 - generated adapters against hand-written ordinary wrappers;
-- rich objects against hand-written named objects over one capture box.
+- rich objects against hand-written named objects over one capture box;
+- shared-root construction with deliberately retained objects;
+- fresh-root construction that includes capture-box/location setup; and
+- two-capture/two-snapshot construction against a shape-matched named object.
 
 ## Run
 
@@ -42,7 +45,7 @@ iteration.
 Numbers are machine observations, not portable budgets. Like the concurrency
 harness, the Go ratios are informational.
 
-## September 26, 2026 result
+## September 26, 2026 baseline
 
 Host: Apple Silicon, 10 logical CPUs, .NET SDK 10.0.400/runtime 10.0.11,
 Go 1.27.1. All rows used two million operations and five rotated process
@@ -87,3 +90,32 @@ translation**:
 
 These findings do not invalidate ADRs 0188-0190. They constrain how ADR-0191
 may claim application-scale readiness.
+
+## September 26, 2026 rich-capture correction
+
+Issue #4512 retains the compiler-generated managed location once per dynamic
+mutable binding instead of rebuilding it for every rich object. Five rotated
+launches on the same host measured:
+
+| Scenario | G# JIT ns/op | G# AOT ns/op | JIT B/op | AOT B/op | Named control JIT/AOT B/op |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Shared-root rich construction | 15.65 | 11.49 | 24 | 24 | 24 / 24 |
+| Shared-root, retained objects | 45.54 | 41.10 | 24 | 24 | 24 / 24 |
+| Fresh capture root per object | 88.98 | 78.95 | 232.08 | 200 | 48 / 48 |
+| Two captures plus two snapshots | 17.46 | 13.27 | 40 | 40 | 40 / 40 |
+
+The original `rich-create` emitted, inside each measured iteration, a fresh
+rich object plus a generated managed-location helper, a root
+`ManagedLocationKey`, an extended field key, and a one-element field-path
+array. Its IL called `ManagedLocationKey.Object` and `.Field` immediately
+before each rich constructor call. This accounted for 176 B/op under
+NativeAOT. The JIT-only additional 72 B/op was traced under
+`ManagedLocationKey.Field` through `RuntimeFieldInfoStub.FromPtr`; it is a
+CoreCLR runtime-field materialization cost, not an unobserved closure
+environment.
+
+After the correction, the helper/key/path graph is constructed once beside
+the capture box. The measured loop loads that retained handle and executes
+only the rich-object `newobj`, matching the 24 B named control in both JIT and
+NativeAOT. The fresh-root row intentionally still exposes the complete
+per-binding setup graph; it is not subject to the shared-root 24 B budget.
