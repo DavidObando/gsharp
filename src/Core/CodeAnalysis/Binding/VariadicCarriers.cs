@@ -119,7 +119,7 @@ internal static class VariadicCarriers
         NullabilityAnnotatedTypeSymbol { ClrType: { IsGenericType: true, IsGenericTypeDefinition: false } } annotatedGeneric
             => annotatedGeneric.GetTypeArgumentSymbol(0),
         _ when carrierType.ClrType is { IsGenericType: true, IsGenericTypeDefinition: false } clr
-            => TypeSymbol.FromClrType(clr.GetGenericArguments()[0]),
+            => TypeSymbol.FromClrTypeWithoutNullability(clr.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure),
         _ => TypeSymbol.Error,
     };
 

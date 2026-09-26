@@ -7244,7 +7244,7 @@ public sealed class Binder
             return ImportedTypeSymbol.GetConstructed(type, definition, arguments);
         }
 
-        return TypeSymbol.FromClrType(type);
+        return TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.TypeStructure);
     }
 
     private static TypeSymbol MapAdapterMethodTypeWithNullability(
@@ -7696,8 +7696,8 @@ public sealed class Binder
             && target.EventHandlerType != null
             && source.EventHandlerType != null
             && AdapterTypesMatch(
-                TypeSymbol.FromClrType(target.EventHandlerType),
-                TypeSymbol.FromClrType(source.EventHandlerType));
+                MemberLookup.GetClrEventHandlerTypeSymbol(target),
+                MemberLookup.GetClrEventHandlerTypeSymbol(source));
 
     private static bool ImportedEventSlotsEquivalent(EventInfo left, EventInfo right)
         => left.Name == right.Name
@@ -12105,7 +12105,7 @@ public sealed class Binder
                     && current.GetGenericTypeDefinition().IsSameAs(openDefinition))
                 {
                     var arguments = current.GetGenericArguments()
-                        .Select(TypeSymbol.FromClrType)
+                        .Select(argument => TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure))
                         .ToImmutableArray();
                     if (!foundProjection)
                     {
@@ -12365,7 +12365,7 @@ public sealed class Binder
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>(args.Length);
         foreach (var a in args)
         {
-            builder.Add(TypeSymbol.FromClrType(a));
+            builder.Add(TypeSymbol.FromClrTypeWithoutNullability(a, NullabilityFreeReason.TypeStructure));
         }
 
         return builder.MoveToImmutable();
@@ -12637,7 +12637,7 @@ public sealed class Binder
                 {
                     try
                     {
-                        return TypeSymbol.FromClrType(it.OpenDefinition.MakeGenericType(clrArgs));
+                        return TypeSymbol.FromClrTypeWithoutNullability(it.OpenDefinition.MakeGenericType(clrArgs), NullabilityFreeReason.CompilerProduced);
                     }
                     catch (System.ArgumentException)
                     {
@@ -14011,7 +14011,7 @@ public sealed class Binder
     {
         return ImportedTypeSymbol.TryCreateSemanticAggregate(type, this.scope.References, out var aggregate)
             ? aggregate
-            : TypeSymbol.FromClrType(type);
+            : TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.ResolvedTypeName);
     }
 
     // Issue #337: build an (unresolved) CLR member method-group expression for a
@@ -14184,7 +14184,7 @@ public sealed class Binder
                     return importedAggregate;
                 }
 
-                return TypeSymbol.FromClrType(importedType.ClassType);
+                return TypeSymbol.FromClrTypeWithoutNullability(importedType.ClassType, NullabilityFreeReason.ResolvedTypeName);
             }
 
             // Issue #3734: the source type won, so no imported candidate was
@@ -14217,7 +14217,7 @@ public sealed class Binder
                 return submissionAggregate;
             }
 
-            return TypeSymbol.FromClrType(submissionClrType);
+            return TypeSymbol.FromClrTypeWithoutNullability(submissionClrType, NullabilityFreeReason.ResolvedTypeName);
         }
 
         if (scope.TryLookupImportedClass(name, declaration: null, out var importedClass, out importedTypeAmbiguity))
@@ -14227,7 +14227,7 @@ public sealed class Binder
                 return aggregate;
             }
 
-            return TypeSymbol.FromClrType(importedClass.ClassType);
+            return TypeSymbol.FromClrTypeWithoutNullability(importedClass.ClassType, NullabilityFreeReason.ResolvedTypeName);
         }
 
         // Issue #2273: `import R = Namespace.Type` names a TYPE outright (not a
@@ -14252,7 +14252,7 @@ public sealed class Binder
                     return clrAggregate;
                 }
 
-                return TypeSymbol.FromClrType(clrAliasType);
+                return TypeSymbol.FromClrTypeWithoutNullability(clrAliasType, NullabilityFreeReason.ResolvedTypeName);
             }
 
             // Source types are visible by simple (possibly nested) name across
@@ -14320,7 +14320,7 @@ public sealed class Binder
             return false;
         }
 
-        importedInterface = TypeSymbol.FromClrType(candidate);
+        importedInterface = TypeSymbol.FromClrTypeWithoutNullability(candidate, NullabilityFreeReason.ResolvedTypeName);
         return importedInterface?.ClrType != null;
     }
 
@@ -14360,7 +14360,7 @@ public sealed class Binder
             return false;
         }
 
-        importedBaseType = TypeSymbol.FromClrType(candidate);
+        importedBaseType = TypeSymbol.FromClrTypeWithoutNullability(candidate, NullabilityFreeReason.ResolvedTypeName);
         return importedBaseType?.ClrType != null;
     }
 

@@ -1243,7 +1243,7 @@ internal sealed partial class MethodBodyEmitter
                 }
 
                 this.EmitErasedObjectReturnWidening(
-                    TypeSymbol.FromClrType(getter.ReturnType),
+                    getter.ReturnType,
                     access.Type);
                 break;
             case FieldInfo field:
@@ -1464,7 +1464,7 @@ internal sealed partial class MethodBodyEmitter
             return;
         }
 
-        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(getter.ReturnType), idx.Type);
+        this.EmitErasedObjectReturnWidening(getter.ReturnType, idx.Type);
     }
 
     private void EmitClrIndexAssignment(BoundClrIndexAssignmentExpression ixa)
@@ -2278,7 +2278,7 @@ internal sealed partial class MethodBodyEmitter
     private void EmitLoadElementAddress(TypeSymbol elementType)
     {
         var clrType = elementType?.ClrType ?? typeof(object);
-        var token = this.outer.memberRefs.GetElementTypeToken(elementType ?? TypeSymbol.FromClrType(typeof(object)));
+        var token = this.outer.memberRefs.GetElementTypeToken(elementType ?? TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral));
         this.il.OpCode(ILOpCode.Ldelema);
         this.il.Token(token);
     }

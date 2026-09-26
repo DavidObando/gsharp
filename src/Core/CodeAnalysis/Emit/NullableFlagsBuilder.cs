@@ -73,6 +73,7 @@ internal static class NullableFlagsBuilder
     /// <param name="layoutType">Open declaration type defining metadata positions.</param>
     /// <param name="declarationFlags">Declaration nullable flags.</param>
     /// <returns>Combined nullability-aware type.</returns>
+    [NullabilityFunnel]
     internal static TypeSymbol MergeDeclarationNullability(
         TypeSymbol projectedType,
         Type layoutType,
@@ -254,7 +255,7 @@ internal static class NullableFlagsBuilder
 
                 if (nullable != null)
                 {
-                    merged = NullableTypeSymbol.Get(merged);
+                    merged = NullabilityImportRule.RestorePeeledNullable(merged);
                 }
 
                 return layout.IsValueType

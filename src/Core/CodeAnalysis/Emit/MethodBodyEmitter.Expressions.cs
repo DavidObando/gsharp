@@ -173,7 +173,7 @@ internal sealed partial class MethodBodyEmitter
                 }
 
                 this.EmitErasedObjectReturnWidening(
-                    TypeSymbol.FromClrType(impCall.Function.Method.ReturnType),
+                    impCall.Function.Method.ReturnType,
                     impCall.Type);
                 break;
             case BoundClrStaticCallExpression staticCall:
@@ -187,7 +187,7 @@ internal sealed partial class MethodBodyEmitter
                 {
                     this.il.Call(this.outer.memberRefs.GetMethodEntityHandle(staticCall.Method));
                     this.EmitErasedObjectReturnWidening(
-                        TypeSymbol.FromClrType(staticCall.Method.ReturnType),
+                        staticCall.Method.ReturnType,
                         staticCall.Type);
                 }
 
@@ -296,7 +296,7 @@ internal sealed partial class MethodBodyEmitter
                     }
 
                     this.EmitErasedObjectReturnWidening(
-                        TypeSymbol.FromClrType(instCall.Method.ReturnType),
+                        instCall.Method.ReturnType,
                         instCall.Type);
                     break;
                 }
@@ -866,7 +866,7 @@ internal sealed partial class MethodBodyEmitter
 
         return type.ClrType is { IsArray: true } clrArray && clrArray.GetArrayRank() > 1
             ? RectangularArrayTypeSymbol.Get(
-                TypeSymbol.FromClrType(clrArray.GetElementType()),
+                TypeSymbol.FromClrTypeWithoutNullability(clrArray.GetElementType(), NullabilityFreeReason.TypeStructure),
                 clrArray.GetArrayRank())
             : null;
     }

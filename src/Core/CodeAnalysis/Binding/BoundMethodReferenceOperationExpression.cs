@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Reflection;
 using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -75,9 +76,16 @@ public abstract class BoundMethodReferenceOperationExpression : BoundExpression
         // every reader sees one fully constructed instance.
         var built = new ImportedFunctionSymbol(
             method.Name,
-            new ImportedClassSymbol(method.DeclaringType ?? typeof(object), declaration: null),
+            new ImportedClassSymbol(ContainingClrType(method), declaration: null),
             method,
             declaration: null);
         return Interlocked.CompareExchange(ref importedMethod, built, null) ?? built;
     }
+
+    // The type the method is declared on. A module-level (global) method has
+    // no declaring type; its reflected type is the next best answer, and
+    // object only when reflection reports neither, which ordinary metadata
+    // methods never do.
+    private static Type ContainingClrType(MethodInfo method)
+        => method.DeclaringType ?? method.ReflectedType ?? typeof(object);
 }

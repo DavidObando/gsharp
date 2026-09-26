@@ -120,14 +120,14 @@ public static class IteratorRewriter
             if (def.FullName == "System.Collections.Generic.IEnumerable`1" ||
                 def.FullName == "System.Collections.Generic.IEnumerator`1")
             {
-                return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+                return TypeSymbol.FromClrTypeWithoutNullability(clr.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
             }
         }
 
         if (clr.FullName == "System.Collections.IEnumerable" ||
             clr.FullName == "System.Collections.IEnumerator")
         {
-            return TypeSymbol.FromClrType(typeof(object));
+            return TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral);
         }
 
         return null;

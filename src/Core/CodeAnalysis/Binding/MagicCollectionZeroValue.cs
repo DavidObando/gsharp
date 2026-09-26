@@ -198,7 +198,7 @@ internal static class MagicCollectionZeroValue
                 return null;
             }
 
-            type = MapTypeSymbol.Get(TypeSymbol.FromClrType(args[0]), TypeSymbol.FromClrType(args[1]));
+            type = MapTypeSymbol.Get(ElementShape(fieldInfo, 0), ElementShape(fieldInfo, 1));
         }
         else if (string.Equals(markerKind, "slice", StringComparison.Ordinal))
         {
@@ -208,7 +208,7 @@ internal static class MagicCollectionZeroValue
                 return null;
             }
 
-            type = SliceTypeSymbol.Get(TypeSymbol.FromClrType(elementClr));
+            type = SliceTypeSymbol.Get(ElementShape(fieldInfo, 0));
         }
         else if (markerKind.StartsWith("arr", StringComparison.Ordinal))
         {
@@ -218,7 +218,7 @@ internal static class MagicCollectionZeroValue
                 return null;
             }
 
-            type = ArrayTypeSymbol.Get(TypeSymbol.FromClrType(elementClr), length);
+            type = ArrayTypeSymbol.Get(ElementShape(fieldInfo, 0), length);
         }
         else if (markerKind.StartsWith("rect", StringComparison.Ordinal))
         {
@@ -235,7 +235,7 @@ internal static class MagicCollectionZeroValue
                 return null;
             }
 
-            type = RectangularArrayTypeSymbol.Get(TypeSymbol.FromClrType(elementClr), rank);
+            type = RectangularArrayTypeSymbol.Get(ElementShape(fieldInfo, 0), rank);
         }
         else if (string.Equals(markerKind, "seq", StringComparison.Ordinal))
         {
@@ -245,7 +245,7 @@ internal static class MagicCollectionZeroValue
                 return null;
             }
 
-            type = SequenceTypeSymbol.Get(TypeSymbol.FromClrType(args[0]));
+            type = SequenceTypeSymbol.Get(ElementShape(fieldInfo, 0));
         }
         else
         {
@@ -292,7 +292,7 @@ internal static class MagicCollectionZeroValue
 
             fieldBuilder.Add(new FieldSymbol(
                 field.Name,
-                TypeSymbol.FromClrType(field.FieldType),
+                ClrNullability.GetFieldTypeSymbol(field).StripToBareShape(),
                 field.IsPublic ? Accessibility.Public : Accessibility.Private,
                 isReadOnly: field.IsInitOnly));
             reflectedFields[field.Name] = field;
@@ -487,5 +487,19 @@ internal static class MagicCollectionZeroValue
         {
             visiting.Remove(visitKey);
         }
+    }
+
+    /// <summary>
+    /// ADR-0193 Phase 2: one element position of a magic-collection field's
+    /// declared type, read through the funnel and taken bare. The synthesized
+    /// empty collection is the field's runtime zero value; it read these
+    /// positions erased before, and still wants that shape.
+    /// </summary>
+    private static TypeSymbol ElementShape(FieldInfo field, int index)
+    {
+        var positions = ClrNullability.GetFieldTypeSymbol(field).GetElementPositions();
+        return (uint)index < (uint)positions.Length
+            ? positions[index].StripToBareShape()
+            : TypeSymbol.Error;
     }
 }

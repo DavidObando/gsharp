@@ -147,7 +147,7 @@ internal sealed partial class ExpressionBinder
                     out var isAmbiguous);
                 if (qualifiedType != null)
                 {
-                    typeSymbol = TypeSymbol.FromClrType(qualifiedType);
+                    typeSymbol = TypeSymbol.FromClrTypeWithoutNullability(qualifiedType, NullabilityFreeReason.ResolvedTypeName);
                 }
                 else if (isAmbiguous)
                 {
@@ -176,7 +176,7 @@ internal sealed partial class ExpressionBinder
                     resolved = scope.References.TryResolveType(
                         typeClause.DottedName + "`" + arity,
                         out var qualifiedType);
-                    typeSymbol = resolved ? TypeSymbol.FromClrType(qualifiedType) : null;
+                    typeSymbol = resolved ? TypeSymbol.FromClrTypeWithoutNullability(qualifiedType, NullabilityFreeReason.ResolvedTypeName) : null;
                     isAmbiguous = false;
                 }
                 else
@@ -232,7 +232,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var systemType = ImportedTypeSymbol.Get(typeof(Type));
+        var systemType = ImportedTypeSymbol.GetWithoutNullability(typeof(Type), NullabilityFreeReason.TypeLiteral);
         return new BoundTypeOfExpression(null, typeSymbol, systemType);
     }
 
@@ -301,7 +301,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        type = TypeSymbol.FromClrType(match);
+        type = TypeSymbol.FromClrTypeWithoutNullability(match, NullabilityFreeReason.ResolvedTypeName);
         return true;
     }
 
@@ -753,7 +753,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        type = TypeSymbol.FromClrType(match);
+        type = TypeSymbol.FromClrTypeWithoutNullability(match, NullabilityFreeReason.ResolvedTypeName);
         return true;
     }
 
@@ -1346,7 +1346,7 @@ internal sealed partial class ExpressionBinder
                     openParameterType = openElementType;
                 }
 
-                var symbolicTarget = MemberLookup.MapOpenClrTypeToSymbolic(
+                var symbolicTarget = MemberLookup.MapOpenSignatureWithoutDeclarationMerge(
                     openParameterType,
                     openDefinition: null,
                     typeArguments: default,
@@ -2924,7 +2924,7 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        var resultType = resultTypeOverride ?? TypeSymbol.FromClrType(clrType);
+        var resultType = resultTypeOverride ?? TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure);
         BoundExpression construction = new BoundClrConstructorCallExpression(
             syntax,
             clrType,
@@ -2954,7 +2954,7 @@ internal sealed partial class ExpressionBinder
         Type clrType,
         TypeSymbol? resultTypeOverride = null)
     {
-        var resultType = resultTypeOverride ?? TypeSymbol.FromClrType(clrType);
+        var resultType = resultTypeOverride ?? TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure);
         var parameterlessCtor = FindPublicParameterlessConstructor(clrType);
         BoundExpression construction = parameterlessCtor != null
             ? new BoundClrConstructorCallExpression(
@@ -3127,8 +3127,9 @@ internal sealed partial class ExpressionBinder
                 var bracedReceiver = new BoundVariableExpression(initSyntax, tempVar);
                 if (!TryEmitMemberCollectionInitializer(bracedReceiver, memberName, initSyntax.FieldIdentifier, bracedInit, statements))
                 {
-                    var memberClrType = member is PropertyInfo bp ? bp.PropertyType : ((FieldInfo)member).FieldType;
-                    Diagnostics.ReportTypeNotCollectionInitializable(initSyntax.FieldIdentifier.Location, TypeSymbol.FromClrType(memberClrType));
+                    Diagnostics.ReportTypeNotCollectionInitializable(
+                        initSyntax.FieldIdentifier.Location,
+                        MemberLookup.GetClrMemberValueTypeSymbol(member).StripToBareShape());
                     BindCollectionElementsForDiagnostics(bracedInit);
                 }
 

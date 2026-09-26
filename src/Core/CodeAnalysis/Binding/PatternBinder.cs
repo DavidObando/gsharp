@@ -1015,7 +1015,7 @@ internal sealed class PatternBinder
 
             foreach (var importedBase in MemberLookup.GetTransitiveClrBaseInterfaces(interfaceType))
             {
-                var importedBaseType = ImportedTypeSymbol.Get(importedBase);
+                var importedBaseType = ImportedTypeSymbol.GetWithoutNullability(importedBase, NullabilityFreeReason.TypeStructure);
                 if (TryBindClrPropertyPatternMember(
                     importedBaseType,
                     importedBase,

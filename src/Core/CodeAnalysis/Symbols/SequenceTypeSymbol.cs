@@ -92,7 +92,7 @@ public sealed class SequenceTypeSymbol : TypeSymbol
             if (IsEnumerableInterfaceDefinition(definition))
             {
                 openDefinition = definition;
-                elementType = TypeSymbol.FromClrType(clrType.GetGenericArguments()[0]);
+                elementType = TypeSymbol.FromClrTypeWithoutNullability(clrType.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
                 return true;
             }
         }

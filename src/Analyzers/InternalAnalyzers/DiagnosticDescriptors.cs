@@ -91,4 +91,19 @@ public static class DiagnosticDescriptors
         // risk, and every walk added from here on gets caught immediately.
         isEnabledByDefault: true,
         description: "A genuine base-class cycle (`class B : C` / `class C : B`) is normally caught by the post-bind cycle detector (issue #973), but any loop that re-walks the symbol-level BaseClass chain by hand runs before that detector on every struct's declaration body, and will spin or OOM if it lacks its own cycle guard. This recurred at least six times (issues #4162 and #4164's five call sites) as independent, unguarded copies of the same loop shape. StructSymbol.GetHierarchy() is the single already-guarded walk; every caller should go through it instead of re-deriving its own guard.");
+
+    /// <summary>
+    /// ADR-0193 §3: reports a call to a CLR-type-to-symbol conversion door
+    /// outside a <c>[NullabilityFunnel]</c> member, a nullability-free
+    /// conversion of a signature position, or a direct wrapper-factory call
+    /// inside a funnel walker.
+    /// </summary>
+    public static readonly DiagnosticDescriptor NullabilityFunnelBypass = new(
+        "GSA0007",
+        "Route CLR type conversions through the nullability funnel",
+        "{0}",
+        "GSharp.InternalAnalyzers",
+        DiagnosticSeverity.Warning,
+        isEnabledByDefault: true,
+        description: "Every Core path from a CLR Type (or its nullability metadata) to a TypeSymbol is a conversion door. Outside the members declared [NullabilityFunnel], a signature position must be read through the funnel readers (ClrNullability.Get*TypeSymbol, MemberLookup.GetClr*TypeSymbol), which merge declaration nullability; a type with no declaration nullability to lose goes through TypeSymbol.FromClrTypeWithoutNullability with a stated NullabilityFreeReason. Two independent paths computing one position's nullability is the most recurring defect class of the ADR-0186 work (ADR-0193, issue #4363).");
 }

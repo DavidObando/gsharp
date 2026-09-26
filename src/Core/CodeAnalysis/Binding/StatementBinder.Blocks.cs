@@ -2138,20 +2138,15 @@ internal sealed partial class StatementBinder
                 openMethod = null;
             }
 
-            var openElement = openMethod?.ReturnType.IsByRef == true
-                ? openMethod.ReturnType.GetElementType()
-                : null;
-            if (openElement != null)
+            if (openMethod?.ReturnType.IsByRef == true
+                && MemberLookup.GetClrOpenMethodReturnTypeSymbol(openMethod, imported.OpenDefinition, imported.TypeArguments) is ByRefTypeSymbol pinned)
             {
-                var mapped = MemberLookup.MapOpenClrTypeToSymbolic(openElement, imported);
-                if (mapped != null)
-                {
-                    return mapped;
-                }
+                return pinned.PointeeType;
             }
         }
 
-        return TypeSymbol.FromClrType(pinnableElementClr);
+        // The pinned element only types the pinned pointer local.
+        return TypeSymbol.FromClrTypeWithoutNullability(pinnableElementClr, NullabilityFreeReason.EmitShape);
     }
 
     private BoundStatement BindAwaitForRangeStatement(AwaitForRangeStatementSyntax syntax)

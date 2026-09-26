@@ -515,7 +515,7 @@ public class Issue4014SameGenericStructuralProjectionTests
             Assert.False(File.Exists(appPath), $"a spread that drops the differing member must not compile. Log:\n{appLog}");
             Assert.Contains("GS0490", appLog, StringComparison.Ordinal);
             Assert.Contains(
-                "Source member 'Value' of type 'int32' is not implicitly convertible to 'string'",
+                "Source member 'Value' of type 'int32' is not implicitly convertible to 'string?'",
                 appLog,
                 StringComparison.Ordinal);
         }
@@ -554,7 +554,7 @@ public class Issue4014SameGenericStructuralProjectionTests
             Assert.False(File.Exists(appPath), $"the implicit spelling must not compile. Log:\n{appLog}");
             Assert.Contains("GS0490", appLog, StringComparison.Ordinal);
             Assert.Contains(
-                "Source member 'Value' of type 'int32' is not implicitly convertible to 'string'",
+                "Source member 'Value' of type 'int32' is not implicitly convertible to 'string?'",
                 appLog,
                 StringComparison.Ordinal);
         }

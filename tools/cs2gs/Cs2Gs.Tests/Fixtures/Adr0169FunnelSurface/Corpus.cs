@@ -68,6 +68,13 @@ namespace GSharp.Core.CodeAnalysis.Binding
             return TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.TypeStructure);
         }
 
+        // Reported: through a reassigned parameter.
+        public TypeSymbol ViaParameter(MethodInfo method, Type type)
+        {
+            type = method.ReturnType;
+            return TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.TypeStructure);
+        }
+
         // Reported: through an assignment.
         public TypeSymbol ViaAssignment(FieldInfo field)
         {

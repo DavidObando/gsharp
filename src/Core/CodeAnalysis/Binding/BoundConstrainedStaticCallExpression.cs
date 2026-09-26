@@ -94,7 +94,7 @@ public sealed class BoundConstrainedStaticCallExpression : BoundCallOperationExp
     // fallback chain is dead in practice; ClrMethod! is safe because the only way
     // to reach it is InterfaceMethod being null, which happens exclusively via the
     // ClrMethod-taking constructor overload, which requires a non-null clrMethod.
-    public override TypeSymbol Type => ReturnType ?? InterfaceMethod?.Type ?? TypeSymbol.FromClrType(ClrMethod!.ReturnType);
+    public override TypeSymbol Type => ReturnType ?? InterfaceMethod?.Type ?? ClrNullability.GetReturnTypeSymbol(ClrMethod!);
 
     /// <summary>Gets the type-parameter symbol that supplies the runtime receiver (the <c>T</c> in <c>T.M(...)</c>).</summary>
     public TypeParameterSymbol TypeParameter { get; }

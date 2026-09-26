@@ -197,7 +197,7 @@ public sealed class SynthesizedStateMachineType : TypeSymbol
         var builder = new StringBuilder();
         FunctionTypeSymbol.AppendIdentityKey(
             builder,
-            awaiterTypeSymbol ?? TypeSymbol.FromClrType(awaiterClrType));
+            awaiterTypeSymbol ?? TypeSymbol.FromClrTypeWithoutNullability(awaiterClrType, NullabilityFreeReason.EmitShape));
         return builder.ToString();
     }
 }

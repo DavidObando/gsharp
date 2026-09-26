@@ -167,6 +167,47 @@ public partial class TypeSymbol
     }
 
     /// <summary>
+    /// ADR-0193 Phase 2: the shape a caller that deliberately ignores
+    /// reference nullability used to get from <see cref="FromClrType"/>. It
+    /// removes a top-level reference <c>?</c> and platform <c>!</c>, and the
+    /// <see cref="NullabilityAnnotatedTypeSymbol"/> carrier, repeatedly, and
+    /// leaves a value-type <c>Nullable&lt;V&gt;</c> alone.
+    /// <para>
+    /// Dropping the carrier also drops the inner-position flags it holds
+    /// (<c>List[string?]?</c> becomes <c>List[string]</c>), while
+    /// inner positions held as nested wrappers survive. That is deliberate
+    /// for the few Phase 2 callers: each read a signature position erased
+    /// before, and wants that exact shape (an <c>object</c> member called on an
+    /// erased type parameter, a boxing target, a method group's inference
+    /// signature, a lowered local). Nothing that wants nullability should
+    /// call this. Phase 3's <c>StripReferenceNullability(deep)</c> replaces it
+    /// with a representation-independent answer.
+    /// </para>
+    /// </summary>
+    /// <returns>The bare type.</returns>
+    internal TypeSymbol StripToBareShape()
+    {
+        var type = this;
+        while (true)
+        {
+            switch (type)
+            {
+                case PlatformTypeSymbol platform:
+                    type = platform.UnderlyingType;
+                    continue;
+                case NullableTypeSymbol nullable when !NullableLifting.IsAnyValueTypeNullable(nullable):
+                    type = nullable.UnderlyingType;
+                    continue;
+                case NullabilityAnnotatedTypeSymbol annotated:
+                    type = annotated.BaseType;
+                    continue;
+                default:
+                    return type;
+            }
+        }
+    }
+
+    /// <summary>
     /// An eight-argument <c>ValueTuple</c>/<c>Tuple</c> nests elements eight
     /// onward in its <c>TRest</c> argument. <see cref="TupleTypeSymbol"/> — what
     /// <see cref="FromClrType"/> builds — is already flat (issue #2750), so the
@@ -221,7 +262,7 @@ public partial class TypeSymbol
         if (clrType.IsArray)
         {
             return clrType.GetElementType() is { } element
-                ? ImmutableArray.Create(FromClrType(element))
+                ? ImmutableArray.Create(FromClrTypeWithoutNullability(element, NullabilityFreeReason.TypeStructure))
                 : ImmutableArray<TypeSymbol>.Empty;
         }
 
@@ -234,7 +275,7 @@ public partial class TypeSymbol
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>(arguments.Length);
         foreach (var argument in arguments)
         {
-            builder.Add(FromClrType(argument));
+            builder.Add(FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure));
         }
 
         return builder.MoveToImmutable();

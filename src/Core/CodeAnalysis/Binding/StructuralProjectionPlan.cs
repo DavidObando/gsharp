@@ -496,7 +496,7 @@ internal static class StructuralProjectionPlanner
                 return false;
             }
 
-            var parameterType = TypeSymbol.FromClrType(parameter.ParameterType);
+            var parameterType = ClrNullability.GetParameterTypeSymbol(parameter);
             targetNames.Add(parameterName);
             if (explicitNames?.Contains(parameterName) != true
                 && !sourceMembers.ContainsKey(parameterName)
@@ -528,7 +528,7 @@ internal static class StructuralProjectionPlanner
                 continue;
             }
 
-            var propertyType = TypeSymbol.FromClrType(property.PropertyType);
+            var propertyType = ClrNullability.GetPropertyTypeSymbol(property);
             if (!TryCreateSlot(property.Name, propertyType, sourceMembers, explicitNames, strict, out var slot, out failure))
             {
                 return false;
@@ -551,7 +551,7 @@ internal static class StructuralProjectionPlanner
                 continue;
             }
 
-            var fieldType = TypeSymbol.FromClrType(field.FieldType);
+            var fieldType = ClrNullability.GetFieldTypeSymbol(field);
             if (!TryCreateSlot(field.Name, fieldType, sourceMembers, explicitNames, strict, out var slot, out failure))
             {
                 return false;
@@ -667,7 +667,7 @@ internal static class StructuralProjectionPlanner
                 continue;
             }
 
-            var targetType = TypeSymbol.FromClrType(parameter.ParameterType);
+            var targetType = ClrNullability.GetParameterTypeSymbol(parameter);
             if (!sourceMembers.TryGetValue(parameter.Name, out var source)
                 || !HasImplicitMemberConversion(source.Type, targetType))
             {
@@ -977,7 +977,7 @@ internal static class StructuralProjectionPlanner
             {
                 result.Add(property.Name, new StructuralProjectionSourceMember(
                     property.Name,
-                    TypeSymbol.FromClrType(property.PropertyType),
+                    ClrNullability.GetPropertyTypeSymbol(property),
                     clrMember: property));
             }
         }
@@ -988,7 +988,7 @@ internal static class StructuralProjectionPlanner
             {
                 result.Add(field.Name, new StructuralProjectionSourceMember(
                     field.Name,
-                    TypeSymbol.FromClrType(field.FieldType),
+                    ClrNullability.GetFieldTypeSymbol(field),
                     clrMember: field));
             }
         }

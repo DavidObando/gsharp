@@ -1774,13 +1774,13 @@ public sealed class Conversion
             && (to is SliceTypeSymbol or ArrayTypeSymbol
                 || (to?.ClrType is { IsArray: true } targetClrArray && targetClrArray.GetArrayRank() == 1)))
         {
-            var sourceElement = TypeSymbol.FromClrType(importedArray.GetElementType());
+            var sourceElement = TypeSymbol.FromClrTypeWithoutNullability(importedArray.GetElementType(), NullabilityFreeReason.TypeStructure);
             TypeSymbol importedTargetElement = to switch
             {
                 SliceTypeSymbol targetSlice => targetSlice.ElementType,
                 ArrayTypeSymbol targetArray => targetArray.ElementType,
-                _ => TypeSymbol.FromClrType(
-                    Invariant.Required(to.ClrType, "an imported array target has a CLR representation").GetElementType()),
+                _ => TypeSymbol.FromClrTypeWithoutNullability(
+                    Invariant.Required(to.ClrType, "an imported array target has a CLR representation").GetElementType(), NullabilityFreeReason.TypeStructure),
             };
 
             if (AreTypeArgumentsEquivalent(sourceElement, importedTargetElement))
@@ -1882,7 +1882,7 @@ public sealed class Conversion
         {
             if (ClrTypeUtilities.ImplementsInterfaceByName(importedArrayForIface, to.ClrType)
                 || ArrayElementConvertsToInterfaceSymbolically(
-                    TypeSymbol.FromClrType(importedArrayForIface.GetElementType()),
+                    TypeSymbol.FromClrTypeWithoutNullability(importedArrayForIface.GetElementType(), NullabilityFreeReason.TypeStructure),
                     to))
             {
                 return Conversion.Implicit;
@@ -2566,7 +2566,7 @@ public sealed class Conversion
         ArrayTypeSymbol array => array.ElementType,
         RectangularArrayTypeSymbol => null,
         { ClrType: { IsArray: true } clrArray } when clrArray.GetArrayRank() == 1
-            => TypeSymbol.FromClrType(clrArray.GetElementType()),
+            => TypeSymbol.FromClrTypeWithoutNullability(clrArray.GetElementType(), NullabilityFreeReason.TypeStructure),
         _ => null,
     };
 
@@ -3012,7 +3012,7 @@ public sealed class Conversion
             var builder = ImmutableArray.CreateBuilder<TypeSymbol>(clrArgs.Length);
             foreach (var arg in clrArgs)
             {
-                builder.Add(TypeSymbol.FromClrType(arg));
+                builder.Add(TypeSymbol.FromClrTypeWithoutNullability(arg, NullabilityFreeReason.TypeStructure));
             }
 
             openDefinition = clr.GetGenericTypeDefinition();
@@ -3230,7 +3230,7 @@ public sealed class Conversion
             var builder = ImmutableArray.CreateBuilder<TypeSymbol>(candidateArguments.Length);
             foreach (var argument in candidateArguments)
             {
-                builder.Add(TypeSymbol.FromClrType(argument));
+                builder.Add(TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure));
             }
 
             sourceArguments = builder.MoveToImmutable();
@@ -4028,7 +4028,7 @@ public sealed class Conversion
                 return CompositeContainerKind.Slice;
             case ImportedTypeSymbol imported
                 when IsSingleDimensionArray(imported.ClrType, out var importedElement):
-                elements = ImmutableArray.Create(TypeSymbol.FromClrType(importedElement));
+                elements = ImmutableArray.Create(TypeSymbol.FromClrTypeWithoutNullability(importedElement, NullabilityFreeReason.TypeStructure));
                 return CompositeContainerKind.Slice;
             default:
                 elements = ImmutableArray<TypeSymbol>.Empty;
@@ -4547,7 +4547,7 @@ public sealed class Conversion
             // CLR level regardless of G#'s own annotation).
             if (fnParamType != null
                 && IsImplicitReferenceVariantSlot(
-                    UnwrapNullableForVariance(symbolicParamTypes[i]) ?? TypeSymbol.FromClrType(invokeParamTypes[i]),
+                    UnwrapNullableForVariance(symbolicParamTypes[i]) ?? TypeSymbol.FromClrTypeWithoutNullability(invokeParamTypes[i], NullabilityFreeReason.IdentityComparison),
                     UnwrapNullableForVariance(fnParamType)!))
             {
                 continue;
@@ -4638,7 +4638,7 @@ public sealed class Conversion
         // recovered symbolic delegate-side return type over the erased CLR
         // one, same as the parameter loop above.
         var effectiveReturnType = symbolicReturnType
-            ?? TypeSymbol.FromClrType(Invariant.Required(invokeReturnType, "a resolved delegate Invoke method has a return type"));
+            ?? TypeSymbol.FromClrTypeWithoutNullability(Invariant.Required(invokeReturnType, "a resolved delegate Invoke method has a return type"), NullabilityFreeReason.IdentityComparison);
         if (fnReturnClr == null
             && IsImplicitReferenceVariantSlot(UnwrapNullableForVariance(fn.ReturnType)!, UnwrapNullableForVariance(effectiveReturnType)!))
         {
@@ -5213,7 +5213,7 @@ public sealed class Conversion
         var builder = ImmutableArray.CreateBuilder<TypeSymbol>();
         foreach (var argument in closedShape.GetGenericArguments())
         {
-            var mapped = TypeSymbol.FromClrType(argument);
+            var mapped = TypeSymbol.FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure);
             if (mapped == null)
             {
                 return false;
@@ -5956,7 +5956,7 @@ public sealed class Conversion
                 }
                 else
                 {
-                    substituted = TypeSymbol.FromClrType(ifaceArg);
+                    substituted = TypeSymbol.FromClrTypeWithoutNullability(ifaceArg, NullabilityFreeReason.TypeStructure);
                 }
 
                 if (!AreTypeArgumentsEquivalent(substituted, toInterface.TypeArguments[i]))

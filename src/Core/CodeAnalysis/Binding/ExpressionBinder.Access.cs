@@ -311,7 +311,7 @@ internal sealed partial class ExpressionBinder
                 noApplicableOverload,
                 boundArguments,
                 ref result,
-                TypeSymbol.FromClrType(clrType));
+                TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure));
 
         // Issue #3821: the shared failure helper only commits to the
         // no-applicable-overload diagnostic when the call carries an explicit

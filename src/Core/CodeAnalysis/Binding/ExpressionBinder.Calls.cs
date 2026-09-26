@@ -716,9 +716,10 @@ internal sealed partial class ExpressionBinder
                      MemberLookup.TryGetClrEnumerableElementType(
                          imported.OpenDefinition,
                          out var openElement):
-                elementType = MemberLookup.MapOpenClrTypeToSymbolic(
+                elementType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                     openElement,
-                    imported);
+                    imported,
+                    NullabilityFreeReason.TypeStructure);
                 return true;
             case NullabilityAnnotatedTypeSymbol annotated
                 when annotated.ClrType != null &&
@@ -733,7 +734,7 @@ internal sealed partial class ExpressionBinder
                      MemberLookup.TryGetClrEnumerableElementType(
                          imported.ClrType,
                          out var importedElement):
-                elementType = TypeSymbol.FromClrType(importedElement);
+                elementType = TypeSymbol.FromClrTypeWithoutNullability(importedElement, NullabilityFreeReason.TypeStructure);
                 return true;
             case StructSymbol user
                 when MemberLookup.TryGetUserPatternEnumerableElementType(
@@ -765,6 +766,7 @@ internal sealed partial class ExpressionBinder
         }
 
         Type? clrElement = null;
+        ParameterInfo? elementParameter = null;
 
         // Issue #4013: the collection-literal view again (see HasCollectionAdd).
         // Passing the narrowed ordinary-call view here would change which
@@ -791,14 +793,15 @@ internal sealed partial class ExpressionBinder
             }
 
             clrElement = parameters[0].ParameterType;
+            elementParameter = parameters[0];
         }
 
-        if (clrElement == null)
+        if (elementParameter == null)
         {
             return false;
         }
 
-        elementType = TypeSymbol.FromClrType(clrElement);
+        elementType = ClrNullability.GetParameterTypeSymbol(elementParameter);
         return true;
     }
 
@@ -1495,7 +1498,7 @@ internal sealed partial class ExpressionBinder
         // CLR type.
         if (syntax.NullableQuestionToken != null && syntax.Arguments.Count == 1)
         {
-            TypeSymbol checkedTarget = TypeSymbol.FromClrType(resolvedClrType);
+            TypeSymbol checkedTarget = TypeSymbol.FromClrTypeWithoutNullability(resolvedClrType, NullabilityFreeReason.TypeStructure);
             if (ImportedTypeSymbol.TryCreateSemanticAggregate(
                     resolvedClrType,
                     scope.References,
@@ -1648,7 +1651,7 @@ internal sealed partial class ExpressionBinder
             clrNoApplicableOverload,
             clrArguments,
             ref result,
-            TypeSymbol.FromClrType(resolvedClrType));
+            TypeSymbol.FromClrTypeWithoutNullability(resolvedClrType, NullabilityFreeReason.TypeStructure));
     }
 
     private bool FinishClrConstructorBindingFailure(
@@ -2219,7 +2222,7 @@ internal sealed partial class ExpressionBinder
                 && !clrType.IsPrimitive
                 && !clrType.ContainsGenericParameters)
             {
-                result = new BoundDefaultExpression(syntax, TypeSymbol.FromClrType(clrType));
+                result = new BoundDefaultExpression(syntax, TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure));
                 return true;
             }
 
@@ -2370,7 +2373,7 @@ internal sealed partial class ExpressionBinder
         }
         else
         {
-            resultType = TypeSymbol.FromClrType(clrType);
+            resultType = TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.TypeStructure);
         }
 
         BoundExpression ctorCall = new BoundClrConstructorCallExpression(
@@ -2425,10 +2428,10 @@ internal sealed partial class ExpressionBinder
             }
 
             var parameter = parameters[parameterIndex];
-            var expectedType = TypeSymbol.FromClrType(
-                parameter.ParameterType.IsByRef
-                    ? parameter.ParameterType.GetElementType()
-                    : parameter.ParameterType);
+
+            // The parameter's bare shape: this only diagnoses a failed
+            // overload resolution, which compared erased shapes.
+            var expectedType = ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
             var actualType = boundArguments[index] is BoundAddressOfExpression address
                 ? address.Operand.Type
                 : boundArguments[index].Type;
@@ -2495,7 +2498,7 @@ internal sealed partial class ExpressionBinder
                     parameterIndex,
                     openGenericDefinition,
                     symbolicTypeArguments)
-                    ?? TypeSymbol.FromClrType(parameters[parameterIndex].ParameterType.GetElementType());
+                    ?? ClrNullability.GetParameterTypeSymbol(parameters[parameterIndex]).StripToBareShape();
                 if (expectedType != null
                     && !DeclarationBinder.TypeSignaturesEquivalent(expectedType, candidateType))
                 {
@@ -2596,7 +2599,7 @@ internal sealed partial class ExpressionBinder
                 matchingParameterIndex,
                 openGenericDefinition,
                 symbolicTypeArguments)
-                ?? TypeSymbol.FromClrType(parameter.ParameterType.GetElementType());
+                ?? ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
             var resolvedParameter = new ParameterSymbol(
                 parameter.Name ?? "value",
                 pointeeType,
@@ -2686,7 +2689,7 @@ internal sealed partial class ExpressionBinder
                 parameterIndex,
                 openGenericDefinition,
                 symbolicTypeArguments)
-                ?? TypeSymbol.FromClrType(parameter.ParameterType.GetElementType());
+                ?? ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
             var syntheticParameter = new ParameterSymbol(
                 parameter.Name ?? "value",
                 pointeeType,
@@ -2726,13 +2729,13 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        var openPointee = openParameters[parameterIndex].ParameterType.GetElementType();
-        return openPointee == null
-            ? null
-            : MemberLookup.MapOpenClrTypeToSymbolic(
-                openPointee,
+        var openParameter = openParameters[parameterIndex];
+        return openParameter.ParameterType.IsByRef
+            ? MemberLookup.GetClrOpenParameterPointeeTypeSymbol(
+                openParameter,
                 openGenericDefinition,
-                symbolicTypeArguments);
+                symbolicTypeArguments)
+            : null;
     }
 
     /// <summary>
@@ -2901,7 +2904,8 @@ internal sealed partial class ExpressionBinder
                 return false;
             }
 
-            var nominalCandidate = TypeSymbol.FromClrType(parameterType);
+            // The delegate slot's bare shape: a function literal is never nil.
+            var nominalCandidate = ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape();
             if (nominalTargetsAgree)
             {
                 if (nominalTarget == null)
@@ -3117,7 +3121,7 @@ internal sealed partial class ExpressionBinder
             noApplicableOverload,
             boundArguments,
             ref result,
-            TypeSymbol.FromClrType(nestedType));
+            TypeSymbol.FromClrTypeWithoutNullability(nestedType, NullabilityFreeReason.TypeStructure));
     }
 
     private sealed class SymbolicDelegateTarget

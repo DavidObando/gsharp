@@ -86,7 +86,9 @@ public abstract class BoundPropertyReferenceOperationExpression : BoundExpressio
                 isOverride: false);
             if (property.DeclaringType is { } declaringType)
             {
-                symbol.AnchorContainingType(ImportedTypeSymbol.Get(declaringType));
+                // The containing type is identity only (a rule reads its Name),
+                // not a signature position, so it carries no nullability.
+                symbol.AnchorContainingType(ImportedTypeSymbol.GetWithoutNullability(declaringType, NullabilityFreeReason.TypeStructure));
             }
 
             // Analyzers may run concurrently: publish the first symbol built,

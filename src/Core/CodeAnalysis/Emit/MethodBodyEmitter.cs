@@ -604,7 +604,7 @@ internal sealed partial class MethodBodyEmitter
         {
             // Loaded via a MetadataLoadContext or normal load: map the CLR
             // underlying type back to a TypeSymbol for the numeric lattice.
-            return TypeSymbol.FromClrType(underlying);
+            return TypeSymbol.FromClrTypeWithoutNullability(underlying, NullabilityFreeReason.TypeStructure);
         }
 
         return null;

@@ -1910,7 +1910,7 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(op.Left);
         this.EmitExpression(op.Right);
         this.EmitCallResolvedClrOrFunctionOperator(op);
-        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(operatorMethod.ReturnType), op.Type);
+        this.EmitErasedObjectReturnWidening(operatorMethod.ReturnType, op.Type);
     }
 
     // Issue #2388: mirrors EmitLiftedNullableBinary's HasValue/get_Value
@@ -2222,6 +2222,6 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(op.Operand);
         this.il.OpCode(ILOpCode.Call);
         this.il.Token(this.outer.memberRefs.GetMethodReference(op.Method));
-        this.EmitErasedObjectReturnWidening(TypeSymbol.FromClrType(op.Method.ReturnType), op.Type);
+        this.EmitErasedObjectReturnWidening(op.Method.ReturnType, op.Type);
     }
 }

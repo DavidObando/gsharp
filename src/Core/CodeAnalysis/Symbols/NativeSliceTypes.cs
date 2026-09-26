@@ -59,7 +59,7 @@ internal static class NativeSliceTypes
         var arguments = type.ConstructedTypeArguments;
         element = arguments.Length == 1
             ? arguments[0]
-            : TypeSymbol.FromClrType(clrType.GetGenericArguments()[0]);
+            : TypeSymbol.FromClrTypeWithoutNullability(clrType.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
         return true;
     }
 

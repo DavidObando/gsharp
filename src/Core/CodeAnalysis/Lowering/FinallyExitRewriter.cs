@@ -161,7 +161,7 @@ internal static class FinallyExitRewriter
                 catches.Add(clause.WithBody(catchBody));
             }
 
-            var exceptionType = TypeSymbol.FromClrType(typeof(Exception));
+            var exceptionType = TypeSymbol.FromClrTypeWithoutNullability(typeof(Exception), NullabilityFreeReason.TypeLiteral);
             var pendingException = new LocalVariableSymbol(
                 $"<>finally_exception_{currentOrdinal}",
                 isReadOnly: false,

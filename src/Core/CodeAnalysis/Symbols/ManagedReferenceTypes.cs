@@ -50,7 +50,7 @@ internal static class ManagedReferenceTypes
             ? annotated.GetTypeArgumentSymbol(0)
             : type.ConstructedTypeArguments is { Length: 1 } arguments
                 ? arguments[0]
-                : TypeSymbol.FromClrType(type.ClrType.GetGenericArguments()[0]);
+                : TypeSymbol.FromClrTypeWithoutNullability(type.ClrType.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
         return true;
     }
 

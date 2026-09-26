@@ -28,7 +28,7 @@ public sealed class BoundStateMachineAwaitOnCompleted : BoundExpression
     {
         AwaiterLocal = awaiterLocal ?? throw new ArgumentNullException(nameof(awaiterLocal));
         AwaiterClrType = awaiterClrType ?? throw new ArgumentNullException(nameof(awaiterClrType));
-        AwaiterTypeSymbol = awaiterTypeSymbol ?? TypeSymbol.FromClrType(awaiterClrType);
+        AwaiterTypeSymbol = awaiterTypeSymbol ?? TypeSymbol.FromClrTypeWithoutNullability(awaiterClrType, NullabilityFreeReason.TypeStructure);
         UseCritical = useCritical;
     }
 

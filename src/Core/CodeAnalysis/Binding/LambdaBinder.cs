@@ -2027,7 +2027,7 @@ internal sealed class LambdaBinder
         {
             if (Scope.References.TryResolveType(wrapperName, out var taskType))
             {
-                return ImportedTypeSymbol.Get(taskType);
+                return ImportedTypeSymbol.GetWithoutNullability(taskType, NullabilityFreeReason.TypeLiteral);
             }
 
             return element;
@@ -2084,7 +2084,7 @@ internal sealed class LambdaBinder
             // lookup read in preference to the reflected one.
             return TypeSymbol.ContainsNamedTupleElement(element)
                 ? ImportedTypeSymbol.GetConstructed(closed, taskOpen, ImmutableArray.Create(element))
-                : ImportedTypeSymbol.Get(closed);
+                : ImportedTypeSymbol.GetWithoutNullability(closed, NullabilityFreeReason.CompilerProduced);
         }
 
         return element;

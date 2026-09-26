@@ -2401,8 +2401,8 @@ internal static class ClrOverloadResolution
         }
 
         return Conversion.ClassifyNonStructural(
-            TypeSymbol.FromClrType(sourceArgument),
-            TypeSymbol.FromClrType(targetArguments[0])) is
+            TypeSymbol.FromClrTypeWithoutNullability(sourceArgument, NullabilityFreeReason.IdentityComparison),
+            TypeSymbol.FromClrTypeWithoutNullability(targetArguments[0], NullabilityFreeReason.IdentityComparison)) is
         {
             Exists: true,
             IsImplicit: true,
@@ -2536,15 +2536,15 @@ internal static class ClrOverloadResolution
                     compatible = IsClrVarianceReferenceType(sourceArgument)
                         && IsClrVarianceReferenceType(targetArgument)
                         && Conversion.ClassifyNonStructural(
-                            TypeSymbol.FromClrType(sourceArgument),
-                            TypeSymbol.FromClrType(targetArgument)) is { Exists: true, IsImplicit: true };
+                            TypeSymbol.FromClrTypeWithoutNullability(sourceArgument, NullabilityFreeReason.IdentityComparison),
+                            TypeSymbol.FromClrTypeWithoutNullability(targetArgument, NullabilityFreeReason.IdentityComparison)) is { Exists: true, IsImplicit: true };
                     break;
                 case GenericParameterAttributes.Contravariant:
                     compatible = IsClrVarianceReferenceType(sourceArgument)
                         && IsClrVarianceReferenceType(targetArgument)
                         && Conversion.ClassifyNonStructural(
-                            TypeSymbol.FromClrType(targetArgument),
-                            TypeSymbol.FromClrType(sourceArgument)) is { Exists: true, IsImplicit: true };
+                            TypeSymbol.FromClrTypeWithoutNullability(targetArgument, NullabilityFreeReason.IdentityComparison),
+                            TypeSymbol.FromClrTypeWithoutNullability(sourceArgument, NullabilityFreeReason.IdentityComparison)) is { Exists: true, IsImplicit: true };
                     break;
                 default:
                     compatible = false;
@@ -7839,8 +7839,8 @@ internal static class ClrOverloadResolution
             return false;
         }
 
-        var argumentSymbol = TypeSymbol.FromClrType(argumentType);
-        var parameterSymbol = TypeSymbol.FromClrType(parameterType);
+        var argumentSymbol = TypeSymbol.FromClrTypeWithoutNullability(argumentType, NullabilityFreeReason.IdentityComparison);
+        var parameterSymbol = TypeSymbol.FromClrTypeWithoutNullability(parameterType, NullabilityFreeReason.IdentityComparison);
         return argumentSymbol != null
             && parameterSymbol != null
             && ChannelTypeSymbol.TryGetChannelShape(argumentSymbol, out _, out _, out _)

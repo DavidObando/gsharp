@@ -215,7 +215,7 @@ internal sealed class BlittableDetector
                 return true;
             }
 
-            var symbol = TypeSymbol.FromClrType(type);
+            var symbol = TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.IdentityComparison);
             if (IsBlittablePrimitive(symbol)
                 || (unmanaged && IsUnmanagedOnlyPrimitive(symbol)))
             {

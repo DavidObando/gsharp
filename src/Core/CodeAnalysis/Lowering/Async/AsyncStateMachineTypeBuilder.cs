@@ -125,7 +125,7 @@ public static class AsyncStateMachineTypeBuilder
         sm.AddField(stateField);
         sm.StateField = stateField;
 
-        var builderFieldType = TypeSymbol.FromClrType(builderInfo.BuilderType);
+        var builderFieldType = TypeSymbol.FromClrTypeWithoutNullability(builderInfo.BuilderType, NullabilityFreeReason.EmitShape);
 
         // Issues #2381/#2713: match WrapAsTask's symbolic projection guard so
         // the builder field retains every result shape the CLR type erases.
@@ -351,7 +351,7 @@ public static class AsyncStateMachineTypeBuilder
                 var shape = AwaitableShape.Resolve(awaitableClrType);
                 if (shape != null)
                 {
-                    AwaiterTypes.Add((shape.AwaiterType, node.AwaiterTypeSymbol ?? TypeSymbol.FromClrType(shape.AwaiterType)));
+                    AwaiterTypes.Add((shape.AwaiterType, node.AwaiterTypeSymbol ?? TypeSymbol.FromClrTypeWithoutNullability(shape.AwaiterType, NullabilityFreeReason.EmitShape)));
                 }
             }
 

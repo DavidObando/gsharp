@@ -102,7 +102,7 @@ internal static class SubmissionGlobalTypeProjection
             return false;
         }
 
-        var projected = ImportedTypeSymbol.NormalizeSemanticAggregate(TypeSymbol.FromClrType(clrType), clrType, references);
+        var projected = ImportedTypeSymbol.NormalizeSemanticAggregate(TypeSymbol.FromClrTypeWithoutNullability(clrType, NullabilityFreeReason.CompilerProduced), clrType, references);
         if (projected == null || projected == TypeSymbol.Error || projected == TypeSymbol.Void)
         {
             return false;

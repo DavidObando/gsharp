@@ -948,7 +948,7 @@ public static class SymbolDisplay
         element = type switch
         {
             NullabilityAnnotatedTypeSymbol annotated => annotated.GetTypeArgumentSymbolForClrType(elementClr),
-            ImportedTypeSymbol => TypeSymbol.FromClrType(elementClr),
+            ImportedTypeSymbol => TypeSymbol.FromClrTypeWithoutNullability(elementClr, NullabilityFreeReason.TypeStructure),
             _ => null,
         };
         return element != null;

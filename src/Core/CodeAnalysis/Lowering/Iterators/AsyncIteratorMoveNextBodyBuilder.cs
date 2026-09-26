@@ -137,10 +137,10 @@ public static class AsyncIteratorMoveNextBodyBuilder
             // }
             var tryBody = BuildTryBody();
 
-            var exLocal = new LocalVariableSymbol("<>ex", isReadOnly: false, TypeSymbol.FromClrType(typeof(Exception)));
+            var exLocal = new LocalVariableSymbol("<>ex", isReadOnly: false, TypeSymbol.FromClrTypeWithoutNullability(typeof(Exception), NullabilityFreeReason.TypeLiteral));
             var catchBody = BuildCatchBody(exLocal);
 
-            var catchClause = new BoundCatchClause(TypeSymbol.FromClrType(typeof(Exception)), exLocal, catchBody);
+            var catchClause = new BoundCatchClause(TypeSymbol.FromClrTypeWithoutNullability(typeof(Exception), NullabilityFreeReason.TypeLiteral), exLocal, catchBody);
             var tryStmt = new BoundTryStatement(null, tryBody, ImmutableArray.Create(catchClause), finallyBlock: null);
             stmts.Add(tryStmt);
 
@@ -232,7 +232,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
             // state = -2;
             stmts.Add(Stmt(WriteField(stateField, Literal(StateMachineStates.FinishedState))));
 
-            var exceptionType = TypeSymbol.FromClrType(typeof(Exception));
+            var exceptionType = TypeSymbol.FromClrTypeWithoutNullability(typeof(Exception), NullabilityFreeReason.TypeLiteral);
             var isDisposeException = new BoundBinaryExpression(
                 null,
                 new BoundVariableExpression(null, exLocal),
@@ -405,7 +405,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     typeof(Exception).GetConstructor(Type.EmptyTypes),
                     "System.Exception declares a public parameterless constructor"),
                     ImmutableArray<BoundExpression>.Empty,
-                    TypeSymbol.FromClrType(typeof(Exception)));
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(Exception), NullabilityFreeReason.TypeLiteral));
                 var throwDispose = new BoundBlockStatement(
                     null,
                     ImmutableArray.Create<BoundStatement>(
@@ -604,7 +604,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 }
 
                 var awaiterClrType = shape.AwaiterType;
-                var awaiterTypeSymbol = TypeSymbol.FromClrType(awaiterClrType);
+                var awaiterTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(awaiterClrType, NullabilityFreeReason.EmitShape);
 
                 // Get the pooled awaiter field.
                 var poolKey = awaiterClrType.IsValueType ? awaiterClrType : typeof(object);
@@ -625,7 +625,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                 var awaitableClrType = awaitExpr.Expression?.Type?.ClrType;
                 if (awaitableClrType != null && awaitableClrType.IsValueType)
                 {
-                    var awaitableTypeSymbol = TypeSymbol.FromClrType(awaitableClrType);
+                    var awaitableTypeSymbol = TypeSymbol.FromClrTypeWithoutNullability(awaitableClrType, NullabilityFreeReason.EmitShape);
                     var tempLocal = new LocalVariableSymbol(
                         "<>awaitable_" + awaitState, isReadOnly: false, awaitableTypeSymbol);
                     stmts.Add(new BoundVariableDeclaration(null, tempLocal, rewrittenOperand));
@@ -684,7 +684,7 @@ public static class AsyncIteratorMoveNextBodyBuilder
                     null,
                     awaiterLocal,
                     awaiterClrType,
-                    TypeSymbol.FromClrType(awaiterClrType),
+                    TypeSymbol.FromClrTypeWithoutNullability(awaiterClrType, NullabilityFreeReason.EmitShape),
                     shape.ImplementsCriticalNotifyCompletion);
                 stmts.Add(Stmt(awaitOnCompletedMarker));
 

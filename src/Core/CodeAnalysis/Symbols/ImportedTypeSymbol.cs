@@ -129,6 +129,14 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     /// </summary>
     /// <param name="type">The CLR type.</param>
     /// <returns>The cached <see cref="ImportedTypeSymbol"/>.</returns>
+    /// <remarks>
+    /// ADR-0193 §3: a conversion door, like <see cref="TypeSymbol.FromClrType"/>
+    /// (which ends here). GSA0007 reports a call outside a
+    /// <see cref="NullabilityFunnelAttribute"/> member; a type with no
+    /// declaration nullability to lose goes through
+    /// <see cref="GetWithoutNullability"/>.
+    /// </remarks>
+    [NullabilityFunnel]
     public static ImportedTypeSymbol Get(Type type)
     {
         if (type == null)
@@ -367,6 +375,24 @@ public sealed class ImportedTypeSymbol : TypeSymbol
             ? aggregate
             : new NullabilityAnnotatedTypeSymbol(aggregate, annotated.NullableFlags);
         return nullable ? NullableTypeSymbol.Get(normalized) : normalized;
+    }
+
+    /// <summary>
+    /// ADR-0193 §3: <see cref="Get"/> for an audited, nullability-free
+    /// conversion — the <see cref="ImportedTypeSymbol"/> twin of
+    /// <see cref="TypeSymbol.FromClrTypeWithoutNullability"/>, for callers that
+    /// need the imported symbol itself rather than <see cref="TypeSymbol.FromClrType"/>'s
+    /// primitive and tuple mapping. GSA0007 checks it exactly as it checks that
+    /// door: allowed anywhere, except on a signature accessor.
+    /// </summary>
+    /// <param name="type">The CLR type.</param>
+    /// <param name="reason">Why no declaration nullability applies.</param>
+    /// <returns>The cached <see cref="ImportedTypeSymbol"/>.</returns>
+    [NullabilityFunnel]
+    internal static ImportedTypeSymbol GetWithoutNullability(Type type, NullabilityFreeReason reason)
+    {
+        _ = reason;
+        return Get(type);
     }
 
     /// <summary>

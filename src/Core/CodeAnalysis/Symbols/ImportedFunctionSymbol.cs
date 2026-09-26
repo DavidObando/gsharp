@@ -114,7 +114,7 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// <returns>The declaring type, or null for a global method.</returns>
     private protected override TypeSymbol? DefaultContainingType()
         => Method.DeclaringType is { } declaringType
-            ? ImportedTypeSymbol.Get(declaringType)
+            ? ImportedTypeSymbol.GetWithoutNullability(declaringType, NullabilityFreeReason.TypeStructure)
             : null;
 
     private TypeSymbol GetMethodType(MethodInfo method)

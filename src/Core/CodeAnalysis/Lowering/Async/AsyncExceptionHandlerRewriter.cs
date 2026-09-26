@@ -211,7 +211,7 @@ public static class AsyncExceptionHandlerRewriter
             // We need to rewrite. Build the output statement list.
             var statements = ImmutableArray.CreateBuilder<BoundStatement>();
 
-            var exceptionType = TypeSymbol.FromClrType(typeof(Exception));
+            var exceptionType = TypeSymbol.FromClrTypeWithoutNullability(typeof(Exception), NullabilityFreeReason.TypeLiteral);
             var nullableExceptionType = NullableTypeSymbol.Get(exceptionType);
             var pendingExLocal = new LocalVariableSymbol(
                 $"<>pending_ex_{localOrdinal++}", isReadOnly: false, nullableExceptionType);

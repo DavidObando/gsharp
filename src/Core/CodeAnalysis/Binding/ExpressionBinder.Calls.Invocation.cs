@@ -311,7 +311,7 @@ internal sealed partial class ExpressionBinder
             case ArrayTypeSymbol or SliceTypeSymbol or RectangularArrayTypeSymbol:
                 if (MemberLookup.TryProjectErasedClrType(receiverType, out var erasedArray))
                 {
-                    normalized = ImportedTypeSymbol.Get(erasedArray);
+                    normalized = ImportedTypeSymbol.GetWithoutNullability(erasedArray, NullabilityFreeReason.TypeStructure);
                     return true;
                 }
 
@@ -432,201 +432,6 @@ internal sealed partial class ExpressionBinder
             openDefinition,
             ImmutableArray.Create(elementType));
         return true;
-    }
-
-    /// <summary>
-    /// Issue #794: when an instance call is dispatched against a receiver whose
-    /// <see cref="ImportedTypeSymbol"/> carries symbolic type arguments
-    /// (e.g. <c>List[T]</c>, <c>Dictionary[K, V]</c>) — including the
-    /// open in-scope type-parameter case from #313/#671 — substitute the
-    /// open declaring type's return type using the receiver's symbolic
-    /// arguments. Without this override the call's return type comes from the
-    /// type-erased closed shape (<c>List&lt;object&gt;.ToArray()</c> →
-    /// <c>object[]</c>), losing the symbolic projection (<c>T[]</c>).
-    /// Returns <see langword="null"/> when no override is needed so callers
-    /// keep their existing return-type derivation.
-    /// </summary>
-    /// <param name="receiverType">The receiver's static type symbol.</param>
-    /// <param name="closedMethod">The closed method selected by overload resolution.</param>
-    /// <returns>The override return type symbol, or <see langword="null"/>.</returns>
-    private static TypeSymbol? ResolveInstanceReturnTypeFromReceiver(TypeSymbol receiverType, System.Reflection.MethodInfo? closedMethod)
-    {
-        if (MemberLookup.GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp
-            || imp.OpenDefinition == null
-            || imp.TypeArguments.IsDefaultOrEmpty
-            || closedMethod == null)
-        {
-            return null;
-        }
-
-        var openMethod = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod);
-        if (openMethod == null)
-        {
-            return null;
-        }
-
-        var openReturn = openMethod.ReturnType;
-        if (openReturn == null || openReturn.IsSameAs(typeof(void)))
-        {
-            return null;
-        }
-
-        // Issue #3712 follow-up: the receiver only closes the DECLARING TYPE's
-        // parameters. When the selected method is itself generic its own
-        // (method-level) parameters must be substituted from the closed method,
-        // or the projection returns the open shape — `List<TOutput>` for
-        // `List[Token].ConvertAll(...)` — and, because this override is
-        // consulted BEFORE the plain CLR return type, that open shape became
-        // the call's bound type and every use of it reported GS0156.
-        var mapped = MemberLookup.MapOpenClrTypeToSymbolic(
-            openReturn,
-            imp.OpenDefinition,
-            imp.TypeArguments,
-            openMethod,
-            BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod));
-
-        return NullableFlagsBuilder.MergeDeclarationNullability(
-            mapped,
-            openReturn,
-            ClrNullability.ReadNullableFlags(openMethod.ReturnParameter, openMethod));
-    }
-
-    /// <summary>
-    /// Issue #3712 follow-up: projects a closed generic method's own CLR type
-    /// arguments onto symbols, for use as the method-level substitution vector
-    /// of <see cref="MemberLookup.MapOpenClrTypeToSymbolic(Type, Type, ImmutableArray{TypeSymbol}, System.Reflection.MethodInfo, ImmutableArray{TypeSymbol})"/>.
-    /// Returns <see langword="default"/> for a non-generic (or still open)
-    /// method, which leaves the method-level substitution disabled exactly as
-    /// before.
-    /// </summary>
-    /// <param name="closedMethod">The closed method selected by overload resolution.</param>
-    /// <returns>The per-MVar symbol vector, or default when there is nothing to substitute.</returns>
-    private static ImmutableArray<TypeSymbol?> BuildMethodTypeArgSymbolsFromClosedMethod(System.Reflection.MethodInfo? closedMethod)
-    {
-        if (closedMethod == null
-            || !closedMethod.IsGenericMethod
-            || closedMethod.IsGenericMethodDefinition)
-        {
-            return default;
-        }
-
-        var closedTypeArgs = closedMethod.GetGenericArguments();
-        var builder = ImmutableArray.CreateBuilder<TypeSymbol?>(closedTypeArgs.Length);
-        foreach (var closedTypeArg in closedTypeArgs)
-        {
-            builder.Add(MemberLookup.MapOpenClrTypeToSymbolic(closedTypeArg, openDefinition: null, typeArguments: default));
-        }
-
-        return builder.MoveToImmutable();
-    }
-
-    /// <summary>
-    /// Issue #1107: the by-ref-parameter counterpart of
-    /// <see cref="ResolveInstanceReturnTypeFromReceiver"/>. When a call is
-    /// dispatched against a receiver whose <see cref="ImportedTypeSymbol"/>
-    /// carries symbolic type arguments (e.g. <c>Dictionary[K, V]</c>),
-    /// substitute the open declaring type's parameter pointee type using the
-    /// receiver's symbolic arguments. Without this an inline <c>out var</c>
-    /// argument against a generic by-ref parameter (e.g. the <c>out TValue</c>
-    /// of <c>Dictionary&lt;K, V&gt;.TryGetValue</c>) would bind from the
-    /// type-erased closed shape (<c>out object</c>), losing the symbolic
-    /// projection (the same-compilation user element type) and reporting
-    /// <c>GS0158</c> on a subsequent member access of the out-var local.
-    /// Returns <see langword="null"/> when no override is needed so callers keep
-    /// their existing pointee derivation.
-    /// </summary>
-    /// <param name="receiverType">The receiver's static type symbol.</param>
-    /// <param name="closedMethod">The closed method selected by overload resolution.</param>
-    /// <param name="paramIndex">The zero-based parameter position to recover.</param>
-    /// <returns>The override pointee type symbol, or <see langword="null"/>.</returns>
-    private static TypeSymbol? ResolveInstanceParameterPointeeTypeFromReceiver(
-        TypeSymbol? receiverType,
-        System.Reflection.MethodInfo? closedMethod,
-        int paramIndex)
-    {
-        if (receiverType == null
-            || MemberLookup.GetProjectionReceiverImportedType(receiverType) is not ImportedTypeSymbol imp
-            || imp.OpenDefinition == null
-            || imp.TypeArguments.IsDefaultOrEmpty
-            || closedMethod == null
-            || paramIndex < 0)
-        {
-            return null;
-        }
-
-        var openMethod = TryGetOpenInstanceMethod(imp.OpenDefinition, closedMethod);
-        if (openMethod == null)
-        {
-            return null;
-        }
-
-        var openParameters = openMethod.GetParameters();
-        if (paramIndex >= openParameters.Length)
-        {
-            return null;
-        }
-
-        var openParamType = openParameters[paramIndex].ParameterType;
-        var openPointee = openParamType.IsByRef ? openParamType.GetElementType() : openParamType;
-        if (openPointee == null)
-        {
-            return null;
-        }
-
-        // Issue #3712 follow-up (sibling of
-        // `ResolveInstanceReturnTypeFromReceiver`, #3705): substitute the
-        // method's OWN generic parameters too, so an `out` parameter of a
-        // generic method on a symbolically-constructed receiver (e.g.
-        // `Dictionary[K, V].TryAdd`-shaped generic members) does not project to
-        // the open method type parameter.
-        var openParameter = openParameters[paramIndex];
-        return NullableFlagsBuilder.MergeDeclarationNullability(
-            MemberLookup.MapOpenClrTypeToSymbolic(
-                openPointee,
-                imp.OpenDefinition,
-                imp.TypeArguments,
-                openMethod,
-                BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod)),
-            openPointee,
-            ClrNullability.ReadNullableFlags(openParameter, openMethod));
-    }
-
-    /// <summary>
-    /// Locates the open-generic-definition counterpart of <paramref name="closedMethod"/>
-    /// on <paramref name="openDefinition"/>. Match is by metadata token + module,
-    /// which is stable for methods on a constructed generic type (the
-    /// reflection layer reports the open token regardless of the closing).
-    /// </summary>
-    /// <param name="openDefinition">The open generic type definition.</param>
-    /// <param name="closedMethod">The closed method to project.</param>
-    /// <returns>The open method, or <see langword="null"/> when no match.</returns>
-    private static System.Reflection.MethodInfo? TryGetOpenInstanceMethod(System.Type? openDefinition, System.Reflection.MethodInfo? closedMethod)
-    {
-        if (openDefinition == null || closedMethod == null)
-        {
-            return null;
-        }
-
-        if (ClrTypeUtilities.AreSame(closedMethod.DeclaringType, openDefinition))
-        {
-            return closedMethod;
-        }
-
-        var token = closedMethod.MetadataToken;
-        var module = closedMethod.Module;
-        var bindingFlags = System.Reflection.BindingFlags.Public
-            | System.Reflection.BindingFlags.NonPublic
-            | System.Reflection.BindingFlags.Instance
-            | System.Reflection.BindingFlags.Static;
-        foreach (var candidate in openDefinition.GetMethods(bindingFlags))
-        {
-            if (candidate.MetadataToken == token && ReferenceEquals(candidate.Module, module))
-            {
-                return candidate;
-            }
-        }
-
-        return null;
     }
 
     /// <summary>
@@ -771,7 +576,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var candidateTarget = TypeSymbol.FromClrType(parameterType);
+            var candidateTarget = ClrNullability.GetParameterTypeSymbol(parameters[parameterIndex]);
             if (!CanTargetDependentBlockArgument(syntax, candidateTarget))
             {
                 continue;
@@ -925,7 +730,7 @@ internal sealed partial class ExpressionBinder
         {
             var argument = arguments[i];
             var openParamType = openParameters[i].ParameterType;
-            var symbolicParamType = MemberLookup.MapOpenClrTypeToSymbolic(openParamType, openDef, symbolicArgs);
+            var symbolicParamType = MemberLookup.GetClrOpenParameterTypeSymbol(openParameters[i], openDef, symbolicArgs);
 
             // Nominal identity remains on the explicit symbolicDelegateParam
             // conversion below; only the mapped Invoke shape is needed here.
@@ -981,7 +786,7 @@ internal sealed partial class ExpressionBinder
                         : conversions.BindConversion(argLoc, argument, symbolicParamType));
         }
 
-        var symbolicReturn = MemberLookup.MapOpenClrTypeToSymbolic(openMethod.ReturnType, openDef, symbolicArgs);
+        var symbolicReturn = MemberLookup.GetClrOpenMethodReturnTypeSymbol(openMethod, openDef, symbolicArgs);
         var overriddenFn = new ImportedFunctionSymbol(
             staticFn.Name,
             classSymbol,
@@ -1082,7 +887,7 @@ internal sealed partial class ExpressionBinder
         // Issue #2918: substitute the complete parameter before asking whether
         // it is a lambda target. The open parameter may itself be `T`, while
         // the receiver or method closes `T` to `Action[Src]`.
-        mapped = MemberLookup.MapOpenClrTypeToSymbolic(
+        mapped = MemberLookup.MapOpenSignatureWithoutDeclarationMerge(
             openParameterType,
             openDefinition,
             symbolicArgs);
@@ -1094,6 +899,9 @@ internal sealed partial class ExpressionBinder
         target = candidate;
         return true;
     }
+
+    private static Type? PeelByRef(Type? type)
+        => type?.IsByRef == true ? type.GetElementType() : type;
 
     private static TypeSymbol UnwrapExpressionTreeDelegate(TypeSymbol type) =>
         MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(type, out var delegateType)
@@ -1320,13 +1128,13 @@ internal sealed partial class ExpressionBinder
         var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(invokeParameters.Length);
         foreach (var parameter in invokeParameters)
         {
-            parameterTypes.Add(MemberLookup.MapOpenClrParameterTypeToSymbolic(
-                parameter.ParameterType, receiverOpenDef, receiverTypeArgs, openMethod, AsNullableElements(nonNullSymbolicMethodTypeArgs)));
+            parameterTypes.Add(MemberLookup.MapOpenSignatureWithoutDeclarationMerge(
+                PeelByRef(parameter.ParameterType), receiverOpenDef, receiverTypeArgs, openMethod, AsNullableElements(nonNullSymbolicMethodTypeArgs)));
         }
 
         var returnType = invoke.ReturnType.IsSameAs(typeof(void))
             ? TypeSymbol.Void
-            : MemberLookup.MapOpenClrTypeToSymbolic(invoke.ReturnType, receiverOpenDef, receiverTypeArgs, openMethod, AsNullableElements(nonNullSymbolicMethodTypeArgs));
+            : MemberLookup.MapOpenSignatureWithoutDeclarationMerge(invoke.ReturnType, receiverOpenDef, receiverTypeArgs, openMethod, AsNullableElements(nonNullSymbolicMethodTypeArgs));
 
         var candidate = FunctionTypeSymbol.Get(parameterTypes.ToImmutable(), returnType);
 
@@ -1549,7 +1357,9 @@ internal sealed partial class ExpressionBinder
                     break;
                 }
 
-                targets[idx] = (fn, TypeSymbol.FromClrType(parameterType));
+                // The delegate slot's bare shape: a function literal is never
+                // nil, so the slot's own top-level nullability does not apply.
+                targets[idx] = (fn, ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape());
             }
 
             if (!allMapped)
@@ -1968,7 +1778,9 @@ internal sealed partial class ExpressionBinder
             var parameterTypes = ImmutableArray.CreateBuilder<TypeSymbol>(kv.Value.Length);
             foreach (var clr in kv.Value)
             {
-                var symbol = TypeSymbol.FromClrType(clr);
+                // These are the closed types CLR inference produced over the
+                // erased argument Types; no declaration was read for them.
+                var symbol = TypeSymbol.FromClrTypeWithoutNullability(clr, NullabilityFreeReason.CompilerProduced);
                 if (symbol == null || symbol == TypeSymbol.Error)
                 {
                     return false;
@@ -2310,8 +2122,8 @@ internal sealed partial class ExpressionBinder
                     var slotUsable = true;
                     foreach (var invokeParameter in invokeParameters)
                     {
-                        var mapped = MemberLookup.MapOpenClrParameterTypeToSymbolic(
-                            invokeParameter.ParameterType,
+                        var mapped = MemberLookup.MapOpenSignatureWithoutDeclarationMerge(
+                            PeelByRef(invokeParameter.ParameterType),
                             receiverOpenDefinition,
                             receiverTypeArguments,
                             openMethod,
@@ -2331,7 +2143,7 @@ internal sealed partial class ExpressionBinder
                         break;
                     }
 
-                    mappedDelegate = MemberLookup.MapOpenClrTypeToSymbolic(
+                    mappedDelegate = MemberLookup.MapOpenSignatureWithoutDeclarationMerge(
                         openParameterType,
                         receiverOpenDefinition,
                         receiverTypeArguments,
@@ -2380,7 +2192,7 @@ internal sealed partial class ExpressionBinder
                     var returnClrType = invoke.ReturnType;
                     var mappedReturnType = returnClrType != null && returnClrType.IsSameAs(typeof(void))
                         ? TypeSymbol.Void
-                        : MemberLookup.MapOpenClrTypeToSymbolic(
+                        : MemberLookup.MapOpenSignatureWithoutDeclarationMerge(
                             returnClrType,
                             receiverOpenDefinition,
                             receiverTypeArguments,
@@ -2694,20 +2506,24 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var clrParameterType = parameters[paramIndex].ParameterType;
-            var pointeeClr = clrParameterType.IsByRef ? clrParameterType.GetElementType() : clrParameterType;
-
             // Issue #1107: when the by-ref parameter's pointee is a type-level
             // generic parameter on the receiver (e.g. `Dictionary[string,
             // Entry].TryGetValue(string, out TValue)`), the resolved CLR method
             // erased `TValue` to `object`, so the out-var local would bind as
             // `object` and member access on it (`found.V`) would fail (GS0158).
             // Recover the symbolic pointee type from the receiver's symbolic
-            // type arguments (mirroring `ResolveInstanceReturnTypeFromReceiver`).
-            var pointeeType = ResolveInstanceParameterPointeeTypeFromReceiver(receiverType, resolvedMethod, paramIndex)
+            // type arguments (mirroring `MemberLookup.GetClrReceiverProjectedReturnTypeSymbol`).
+            //
+            // ADR-0193 Phase 2: the fallback reads through the funnel but keeps
+            // the bare shape the local always had. Giving it the parameter's
+            // declared `?` (`[NotNullWhen(true)] out Uri? result`) is right in
+            // principle but needs `out var` flow narrowing first; migrated code
+            // such as `if !Uri.TryCreate(s, k, out var u) { continue }; return u`
+            // stops compiling without it. Tracked on #4363.
+            var pointeeType = MemberLookup.GetClrReceiverProjectedParameterPointeeTypeSymbol(receiverType, resolvedMethod, paramIndex)
                 ?? ResolveMethodGenericParameterPointeeType(resolvedMethod, paramIndex, typeArgSymbols)
                 ?? MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs(resolvedMethod, paramIndex, symbolicMethodTypeArgs, receiverType)
-                ?? TypeSymbol.FromClrType(pointeeClr);
+                ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape();
             var syntheticParameter = new ParameterSymbol(
                 parameters[paramIndex].Name ?? "value",
                 pointeeType,
@@ -2897,7 +2713,7 @@ internal sealed partial class ExpressionBinder
             // this name — so a genuine unresolvable type argument on a generic
             // method still reports its own diagnostic.
             var indexableOwner = receiver?.Type ?? classSymbol?.SymbolicReceiver
-                ?? (classSymbol == null ? null : TypeSymbol.FromClrType(classSymbol.ClassType));
+                ?? (classSymbol == null ? null : TypeSymbol.FromClrTypeWithoutNullability(classSymbol.ClassType, NullabilityFreeReason.TypeStructure));
             if (!IsAmbiguousSingleIdentifierTypeArgument(ce.TypeArgumentList)
                 || indexableOwner is not { } receiverType
                 || !HasCallableIndexableValueMember(receiverType, methodName))
@@ -4211,7 +4027,7 @@ internal sealed partial class ExpressionBinder
                         var instTypeArgSymbolsForCall = !instSymbolicTypeArgs.IsDefault ? instSymbolicTypeArgs : AsNullableElements(typeArgSymbols);
                         var returnType = ResolveImportedGenericReturnType(method, typeArgSymbols)
                             ?? MemberLookup.ResolveCallReturnTypeFromSymbolicTypeArgs(method, instSymbolicTypeArgs, effectiveReceiverType)
-                            ?? ResolveInstanceReturnTypeFromReceiver(effectiveReceiverType, method)
+                            ?? MemberLookup.GetClrReceiverProjectedReturnTypeSymbol(effectiveReceiverType, method)
                             ?? MapClrMethodReturnType(method);
                         var instParameters = method.GetParameters();
                         var instMapping = resolution.ParameterMapping;
@@ -4383,7 +4199,7 @@ internal sealed partial class ExpressionBinder
                 ce.Location,
                 explicitIfaceRecvType.Name,
                 methodName,
-                TypeSymbol.FromClrType(declaringIface).ToDisplayString(DisplayFormat.Minimal));
+                TypeSymbol.FromClrTypeWithoutNullability(declaringIface, NullabilityFreeReason.TypeStructure).ToDisplayString(DisplayFormat.Minimal));
             return new BoundErrorExpression(null);
         }
 

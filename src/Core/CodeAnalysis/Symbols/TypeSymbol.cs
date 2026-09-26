@@ -160,7 +160,7 @@ public partial class TypeSymbol : Symbol
             var builder = System.Collections.Immutable.ImmutableArray.CreateBuilder<TypeSymbol>(generic.GenericTypeArguments.Length);
             foreach (var argument in generic.GenericTypeArguments)
             {
-                builder.Add(FromClrType(argument));
+                builder.Add(FromClrTypeWithoutNullability(argument, NullabilityFreeReason.TypeStructure));
             }
 
             return builder.MoveToImmutable();
@@ -174,7 +174,7 @@ public partial class TypeSymbol : Symbol
     /// </summary>
     public virtual TypeSymbol ConstructedFrom
         => ClrType is { IsGenericType: true, IsGenericTypeDefinition: false } generic
-            ? FromClrType(generic.GetGenericTypeDefinition())
+            ? FromClrTypeWithoutNullability(generic.GetGenericTypeDefinition(), NullabilityFreeReason.TypeStructure)
             : this;
 
     /// <summary>
@@ -197,7 +197,7 @@ public partial class TypeSymbol : Symbol
     public virtual ImmutableArray<FieldSymbol> TupleElements => ImmutableArray<FieldSymbol>.Empty;
 
     /// <summary>Gets the immediate base type, or <see langword="null"/> when none exists.</summary>
-    public virtual TypeSymbol? BaseType => ClrType?.BaseType is { } baseType ? FromClrType(baseType) : null;
+    public virtual TypeSymbol? BaseType => ClrType?.BaseType is { } baseType ? FromClrTypeWithoutNullability(baseType, NullabilityFreeReason.TypeStructure) : null;
 
     /// <summary>
     /// Gets the members declared on this type — the Roslyn
@@ -234,6 +234,16 @@ public partial class TypeSymbol : Symbol
     /// </summary>
     /// <param name="clrType">The CLR type to map.</param>
     /// <returns>The corresponding <see cref="TypeSymbol"/>.</returns>
+    /// <remarks>
+    /// ADR-0193 §3: this is a conversion <em>door</em>. It reads no declaration
+    /// nullability, so GSA0007 reports a call to it outside a
+    /// <see cref="NullabilityFunnelAttribute"/> member. Signature positions go
+    /// through the funnel readers (<see cref="ClrNullability"/>'s
+    /// <c>Get*TypeSymbol</c>, <c>MemberLookup.GetClr*TypeSymbol</c>); a type
+    /// with no declaration nullability to lose goes through
+    /// <see cref="FromClrTypeWithoutNullability"/>, which names why.
+    /// </remarks>
+    [NullabilityFunnel]
     public static TypeSymbol FromClrType(Type? clrType)
     {
         if (clrType == null)
@@ -247,7 +257,7 @@ public partial class TypeSymbol : Symbol
         // `[NullableAttribute]` byte arrays is a follow-up.
         if (NullableLifting.GetValueTypeNullableUnderlyingClr(clrType) is { } nullableUnderlying)
         {
-            return NullableTypeSymbol.Get(FromClrType(nullableUnderlying));
+            return NullableLifting.WrapValueTypeNullable(FromClrType(nullableUnderlying));
         }
 
         if (clrType.IsPointer)
@@ -1787,7 +1797,7 @@ public partial class TypeSymbol : Symbol
                 return false;
             }
 
-            elementTypes.Add(FromClrType(arguments[0]));
+            elementTypes.Add(FromClrTypeWithoutNullability(arguments[0], NullabilityFreeReason.TypeStructure));
             return true;
         }
 
@@ -1799,7 +1809,7 @@ public partial class TypeSymbol : Symbol
         var directCount = arguments.Length == 8 ? 7 : arguments.Length;
         for (var i = 0; i < directCount; i++)
         {
-            elementTypes.Add(FromClrType(arguments[i]));
+            elementTypes.Add(FromClrTypeWithoutNullability(arguments[i], NullabilityFreeReason.TypeStructure));
         }
 
         return arguments.Length != 8

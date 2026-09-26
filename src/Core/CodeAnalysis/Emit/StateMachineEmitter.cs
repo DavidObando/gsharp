@@ -760,7 +760,7 @@ internal sealed class StateMachineEmitter
 
             var moveNext = new FunctionSymbol("MoveNext", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Bool, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             var getCurrent = new FunctionSymbol("get_Current", ImmutableArray<ParameterSymbol>.Empty, plan.ElementType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
-            var getCurrentObject = new FunctionSymbol("get_Current", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.FromClrType(typeof(object)), null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            var getCurrentObject = new FunctionSymbol("get_Current", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral), null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
 
             // Issue #810: when the element type contains an outer-method
             // type parameter, the `IEnumerator<T>` return for GetEnumerator
@@ -784,9 +784,9 @@ internal sealed class StateMachineEmitter
                     typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(typeof(object)),
                     typeof(System.Collections.Generic.IEnumerator<>),
                     ImmutableArray.Create<TypeSymbol>(plan.ElementType))
-                : TypeSymbol.FromClrType(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(plan.ElementType.ClrType ?? typeof(object)));
+                : TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Collections.Generic.IEnumerator<>).MakeGenericType(plan.ElementType.ClrType ?? typeof(object)), NullabilityFreeReason.TypeLiteral);
             var getEnumerator = new FunctionSymbol("GetEnumerator", ImmutableArray<ParameterSymbol>.Empty, getEnumeratorType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
-            var getEnumeratorObject = new FunctionSymbol("GetEnumerator", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.FromClrType(typeof(System.Collections.IEnumerator)), null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
+            var getEnumeratorObject = new FunctionSymbol("GetEnumerator", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Collections.IEnumerator), NullabilityFreeReason.TypeLiteral), null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             var dispose = new FunctionSymbol("Dispose", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             var reset = new FunctionSymbol("Reset", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             smClass.SetMethods(ImmutableArray.Create(moveNext, getCurrent, getCurrentObject, getEnumerator, getEnumeratorObject, dispose, reset));
@@ -809,7 +809,7 @@ internal sealed class StateMachineEmitter
                 new BoundReturnStatement(null,
                     new BoundConversionExpression(
                     null,
-                    TypeSymbol.FromClrType(typeof(object)),
+                    TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral),
                     new BoundFieldAccessExpression(null, new BoundVariableExpression(
                         null,
                         Invariant.Required(getCurrentObject.ThisParameter, "a state-machine method has an instance receiver")), smClass, currentField))))));
@@ -1035,14 +1035,14 @@ internal sealed class StateMachineEmitter
             // Fields
             var stateField = new FieldSymbol("<>1__state", TypeSymbol.Int32, Accessibility.Public);
             var currentField = new FieldSymbol("<>2__current", elementType, Accessibility.Public);
-            var promiseFieldType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>));
+            var promiseFieldType = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.Sources.ManualResetValueTaskSourceCore<bool>), NullabilityFreeReason.TypeLiteral);
             var promiseField = new FieldSymbol("<>v__promiseOfValueOrEnd", promiseFieldType, Accessibility.Public);
             var disposeModeField = new FieldSymbol("<>w__disposeMode", TypeSymbol.Bool, Accessibility.Public);
             var disposeExceptionField = new FieldSymbol(
                 "<>w__disposeException",
-                TypeSymbol.FromClrType(typeof(Exception)),
+                TypeSymbol.FromClrTypeWithoutNullability(typeof(Exception), NullabilityFreeReason.TypeLiteral),
                 Accessibility.Public);
-            var builderFieldType = TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder));
+            var builderFieldType = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder), NullabilityFreeReason.TypeLiteral);
             var builderField = new FieldSymbol("<>t__builder", builderFieldType, Accessibility.Public);
 
             var fields = ImmutableArray.CreateBuilder<FieldSymbol>();
@@ -1132,10 +1132,10 @@ internal sealed class StateMachineEmitter
             var moveNext = new FunctionSymbol("MoveNext", ImmutableArray<ParameterSymbol>.Empty, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             var getCurrent = new FunctionSymbol("get_Current", ImmutableArray<ParameterSymbol>.Empty, elementType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
 
-            var valueTaskBoolType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>));
+            var valueTaskBoolType = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.ValueTask<bool>), NullabilityFreeReason.TypeLiteral);
             var moveNextAsync = new FunctionSymbol("MoveNextAsync", ImmutableArray<ParameterSymbol>.Empty, valueTaskBoolType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
 
-            var valueTaskType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask));
+            var valueTaskType = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.ValueTask), NullabilityFreeReason.TypeLiteral);
             var disposeAsync = new FunctionSymbol("DisposeAsync", ImmutableArray<ParameterSymbol>.Empty, valueTaskType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
 
             var methods = ImmutableArray.CreateBuilder<FunctionSymbol>();
@@ -1165,15 +1165,15 @@ internal sealed class StateMachineEmitter
                         typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(typeof(object)),
                         typeof(System.Collections.Generic.IAsyncEnumerator<>),
                         ImmutableArray.Create<TypeSymbol>(elementType))
-                    : TypeSymbol.FromClrType(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementType.ClrType ?? typeof(object)));
-                var ctParam = new ParameterSymbol("cancellationToken", TypeSymbol.FromClrType(typeof(System.Threading.CancellationToken)));
+                    : TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Collections.Generic.IAsyncEnumerator<>).MakeGenericType(elementType.ClrType ?? typeof(object)), NullabilityFreeReason.TypeLiteral);
+                var ctParam = new ParameterSymbol("cancellationToken", TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.CancellationToken), NullabilityFreeReason.TypeLiteral));
                 getAsyncEnumerator = new FunctionSymbol("GetAsyncEnumerator", ImmutableArray.Create(ctParam), enumeratorType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
                 methods.Add(getAsyncEnumerator);
             }
 
             // IValueTaskSource<bool> methods
-            var shortType = TypeSymbol.FromClrType(typeof(short));
-            var vtsStatusType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ValueTaskSourceStatus));
+            var shortType = TypeSymbol.FromClrTypeWithoutNullability(typeof(short), NullabilityFreeReason.TypeLiteral);
+            var vtsStatusType = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.Sources.ValueTaskSourceStatus), NullabilityFreeReason.TypeLiteral);
             var getStatusParam = new ParameterSymbol("token", shortType);
             var getStatus = new FunctionSymbol("GetStatus", ImmutableArray.Create(getStatusParam), vtsStatusType, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             methods.Add(getStatus);
@@ -1183,15 +1183,15 @@ internal sealed class StateMachineEmitter
             methods.Add(getResult);
 
             var onCompletedParams = ImmutableArray.Create(
-                new ParameterSymbol("continuation", TypeSymbol.FromClrType(typeof(Action<object>))),
-                new ParameterSymbol("state", TypeSymbol.FromClrType(typeof(object))),
+                new ParameterSymbol("continuation", TypeSymbol.FromClrTypeWithoutNullability(typeof(Action<object>), NullabilityFreeReason.TypeLiteral)),
+                new ParameterSymbol("state", TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral)),
                 new ParameterSymbol("token", shortType),
-                new ParameterSymbol("flags", TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ValueTaskSourceOnCompletedFlags))));
+                new ParameterSymbol("flags", TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.Sources.ValueTaskSourceOnCompletedFlags), NullabilityFreeReason.TypeLiteral)));
             var onCompleted = new FunctionSymbol("OnCompleted", onCompletedParams, TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             methods.Add(onCompleted);
 
             // IAsyncStateMachine.SetStateMachine (no-op for class-based SM)
-            var setSmParam = new ParameterSymbol("stateMachine", TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.IAsyncStateMachine)));
+            var setSmParam = new ParameterSymbol("stateMachine", TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Runtime.CompilerServices.IAsyncStateMachine), NullabilityFreeReason.TypeLiteral));
             var setStateMachine = new FunctionSymbol("SetStateMachine", ImmutableArray.Create(setSmParam), TypeSymbol.Void, null, hostPackage, Accessibility.Public, (TypeSymbol)smClass);
             methods.Add(setStateMachine);
 
@@ -1318,7 +1318,7 @@ internal sealed class StateMachineEmitter
             jumpIfTrue: false));
 
         // Return a completed ValueTask<bool>(false)
-        stmts.Add(new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>)))));
+        stmts.Add(new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.ValueTask<bool>), NullabilityFreeReason.TypeLiteral))));
         stmts.Add(new BoundLabelStatement(null, finishedLabel));
 
         // promise.Reset();
@@ -1342,8 +1342,8 @@ internal sealed class StateMachineEmitter
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
         var versionCall = new BoundImportedInstanceCallExpression(
             null,
-            promiseAddr2, versionGetter, TypeSymbol.FromClrType(typeof(short)), ImmutableArray<BoundExpression>.Empty);
-        var versionLocal = new LocalVariableSymbol("<>version", isReadOnly: false, TypeSymbol.FromClrType(typeof(short)));
+            promiseAddr2, versionGetter, TypeSymbol.FromClrTypeWithoutNullability(typeof(short), NullabilityFreeReason.TypeLiteral), ImmutableArray<BoundExpression>.Empty);
+        var versionLocal = new LocalVariableSymbol("<>version", isReadOnly: false, TypeSymbol.FromClrTypeWithoutNullability(typeof(short), NullabilityFreeReason.TypeLiteral));
         stmts.Add(new BoundVariableDeclaration(null, versionLocal, versionCall));
 
         // return new ValueTask<bool>(this, version);
@@ -1359,7 +1359,7 @@ internal sealed class StateMachineEmitter
             ImmutableArray.Create<BoundExpression>(
                 new BoundVariableExpression(null, thisParam),
                 new BoundVariableExpression(null, versionLocal)),
-            TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>)));
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.ValueTask<bool>), NullabilityFreeReason.TypeLiteral));
         stmts.Add(new BoundReturnStatement(null, vtConstruct));
 
         return Lowerer.Lower(new BoundBlockStatement(null, stmts.ToImmutable()));
@@ -1385,7 +1385,7 @@ internal sealed class StateMachineEmitter
                 BoundBinaryOperator.Bind(SyntaxKind.EqualsEqualsToken, TypeSymbol.Int32, TypeSymbol.Int32),
                 "int32 equality operator exists for state-machine disposal"),
             new BoundLiteralExpression(null, StateMachineStates.FinishedState));
-        var earlyReturn = new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask))));
+        var earlyReturn = new BoundReturnStatement(null, new BoundDefaultExpression(null, TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.ValueTask), NullabilityFreeReason.TypeLiteral)));
         stmts.Add(new BoundIfStatement(null, finishedCheck, earlyReturn, null));
 
         // this.<>w__disposeMode = true;
@@ -1418,15 +1418,15 @@ internal sealed class StateMachineEmitter
                     smClass,
                     promiseField)),
             versionGetter,
-            TypeSymbol.FromClrType(typeof(short)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(short), NullabilityFreeReason.TypeLiteral),
             ImmutableArray<BoundExpression>.Empty);
         var versionLocal = new LocalVariableSymbol(
             "<>disposeVersion",
             isReadOnly: false,
-            TypeSymbol.FromClrType(typeof(short)));
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(short), NullabilityFreeReason.TypeLiteral));
         stmts.Add(new BoundVariableDeclaration(null, versionLocal, versionCall));
 
-        var valueTaskBoolType = TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask<bool>));
+        var valueTaskBoolType = TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.ValueTask<bool>), NullabilityFreeReason.TypeLiteral);
         var valueTaskBool = new BoundClrConstructorCallExpression(
             null,
             typeof(System.Threading.Tasks.ValueTask<bool>),
@@ -1450,7 +1450,7 @@ internal sealed class StateMachineEmitter
                 null,
                 new BoundVariableExpression(null, valueTaskBoolLocal)),
             BclMember.Method(typeof(System.Threading.Tasks.ValueTask<bool>), "AsTask", Type.EmptyTypes),
-            TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Task<bool>)),
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.Task<bool>), NullabilityFreeReason.TypeLiteral),
             ImmutableArray<BoundExpression>.Empty);
         var valueTask = new BoundClrConstructorCallExpression(
             null,
@@ -1459,7 +1459,7 @@ internal sealed class StateMachineEmitter
                 typeof(System.Threading.Tasks.ValueTask),
                 typeof(System.Threading.Tasks.Task)),
             ImmutableArray.Create<BoundExpression>(asTask),
-            TypeSymbol.FromClrType(typeof(System.Threading.Tasks.ValueTask)));
+            TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.ValueTask), NullabilityFreeReason.TypeLiteral));
         stmts.Add(new BoundReturnStatement(null, valueTask));
 
         return Lowerer.Lower(new BoundBlockStatement(null, stmts.ToImmutable()));
@@ -1570,7 +1570,7 @@ internal sealed class StateMachineEmitter
             new BoundFieldAccessExpression(null, new BoundVariableExpression(null, thisParam), smClass, promiseField));
         var call = new BoundImportedInstanceCallExpression(
             null,
-            promiseAddr, method, TypeSymbol.FromClrType(typeof(System.Threading.Tasks.Sources.ValueTaskSourceStatus)),
+            promiseAddr, method, TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Threading.Tasks.Sources.ValueTaskSourceStatus), NullabilityFreeReason.TypeLiteral),
             ImmutableArray.Create<BoundExpression>(new BoundVariableExpression(null, tokenParam)));
         return Lowerer.Lower(new BoundBlockStatement(null, ImmutableArray.Create<BoundStatement>(new BoundReturnStatement(null, call))));
     }
@@ -1649,7 +1649,7 @@ internal sealed class StateMachineEmitter
         var createMethod = BclMember.Method(
             typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder), "Create", Type.EmptyTypes);
         initializers.Add(new BoundFieldInitializer(builderField,
-            new BoundClrStaticCallExpression(null, createMethod, TypeSymbol.FromClrType(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder)), ImmutableArray<BoundExpression>.Empty)));
+            new BoundClrStaticCallExpression(null, createMethod, TypeSymbol.FromClrTypeWithoutNullability(typeof(System.Runtime.CompilerServices.AsyncIteratorMethodBuilder), NullabilityFreeReason.TypeLiteral), ImmutableArray<BoundExpression>.Empty)));
 
         foreach (var parameter in parameters)
         {

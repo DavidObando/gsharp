@@ -1,4 +1,4 @@
-// <copyright file="FunnelSurfaceAnalyzer.cs" company="GSharp">
+// <copyright file="NullabilityFunnelAnalyzer.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -12,18 +12,39 @@ using Microsoft.CodeAnalysis.Operations;
 namespace GSharp.InternalAnalyzers;
 
 /// <summary>
-/// ADR-0169 / issue #4436 parity fixture: a copy of the ADR-0193 GSA0007
-/// producer-funnel rule (PR #4427), kept here so the analyzer-API map rows it
-/// exercises are pinned before the rule itself lands. It uses every row the
-/// issue adds for GSA0007: an operation-block action, DescendantsAndSelf,
-/// IMethodReferenceOperation, IPropertyReferenceOperation,
-/// ILocalReferenceOperation, IAssignmentOperation,
-/// IVariableDeclaratorOperation (with its initializer), IForEachLoopOperation,
-/// IDeclarationExpressionOperation, GetAttributes/AttributeClass and
-/// IMethodSymbol.AssociatedSymbol.
+/// GSA0007 (ADR-0193 §3): the producer funnel. It polices the conversion
+/// <em>doors</em> — every Core path from a CLR <c>Type</c> (or its nullability
+/// metadata) to a <c>TypeSymbol</c> — rather than the arguments passed to
+/// them, because an argument-shape rule cannot hold across a helper
+/// boundary.
+/// <list type="bullet">
+/// <item>A call to (or method-group reference of) a door outside a member
+/// marked <c>[NullabilityFunnel]</c> is reported.</item>
+/// <item>The named escape hatches — <c>TypeSymbol.FromClrTypeWithoutNullability</c>
+/// and its twins <c>ImportedTypeSymbol.GetWithoutNullability</c> and
+/// <c>MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability</c>, each taking
+/// a required <c>NullabilityFreeReason</c> — are allowed anywhere,
+/// except when a <c>System.Type</c> argument is, within the same method, a
+/// signature accessor (<c>ReturnType</c>, <c>ReturnParameter</c>,
+/// <c>ParameterType</c>, <c>PropertyType</c>, <c>FieldType</c>,
+/// <c>EventHandlerType</c>, or anything derived from one, such as
+/// <c>GetGenericArguments()</c> or <c>GetElementType()</c>).</item>
+/// <item>Inside a funnel member that is not <c>NullabilityImportRule</c>'s,
+/// a direct <c>NullableTypeSymbol.Get</c> / <c>PlatformTypeSymbol.Get</c>
+/// call is reported: the walkers resolve classified positions through the
+/// rule.</item>
+/// </list>
+/// Exemption is per member, never per type. The rule runs once per operation
+/// block, so a lambda or local function is part of the member whose body
+/// contains it, and every local's sources are collected from that same body.
+/// <para>
+/// The rule is self-migrated to G# (ADR-0169), so it sticks to the analyzer
+/// surface cs2gs maps: an operation-block action, <c>DescendantsAndSelf()</c>,
+/// and symbol reads by <c>Name</c> / <c>ContainingType</c>.
+/// </para>
 /// </summary>
 [DiagnosticAnalyzer(LanguageNames.CSharp)]
-public sealed class FunnelSurfaceAnalyzer : DiagnosticAnalyzer
+public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
 {
     private const string FunnelAttributeName = "NullabilityFunnelAttribute";
     private const string ImportRuleTypeName = "NullabilityImportRule";

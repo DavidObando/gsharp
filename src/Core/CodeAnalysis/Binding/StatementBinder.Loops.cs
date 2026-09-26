@@ -67,7 +67,7 @@ internal sealed partial class StatementBinder
         var clr = type?.ClrType;
         if (clr == null)
         {
-            return TypeSymbol.FromClrType(typeof(object));
+            return TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral);
         }
 
         if (clr.IsGenericType && !clr.IsGenericTypeDefinition)
@@ -76,25 +76,25 @@ internal sealed partial class StatementBinder
             if (def.FullName == "System.Collections.Generic.IEnumerable`1" ||
                 def.FullName == "System.Collections.Generic.IEnumerator`1")
             {
-                return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+                return TypeSymbol.FromClrTypeWithoutNullability(clr.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
             }
 
             // Async iterators: IAsyncEnumerable<T> / IAsyncEnumerator<T>
             if (def.FullName == "System.Collections.Generic.IAsyncEnumerable`1" ||
                 def.FullName == "System.Collections.Generic.IAsyncEnumerator`1")
             {
-                return TypeSymbol.FromClrType(clr.GetGenericArguments()[0]);
+                return TypeSymbol.FromClrTypeWithoutNullability(clr.GetGenericArguments()[0], NullabilityFreeReason.TypeStructure);
             }
         }
 
-        return TypeSymbol.FromClrType(typeof(object));
+        return TypeSymbol.FromClrTypeWithoutNullability(typeof(object), NullabilityFreeReason.TypeLiteral);
     }
 
     private TypeSymbol? ResolveExceptionType()
     {
         if (scope.References.TryResolveType("System.Exception", out var t))
         {
-            return TypeSymbol.FromClrType(t);
+            return TypeSymbol.FromClrTypeWithoutNullability(t, NullabilityFreeReason.TypeLiteral);
         }
 
         return null;
@@ -306,12 +306,14 @@ internal sealed partial class StatementBinder
                         out var aDVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
-                    keyType = MemberLookup.MapOpenClrTypeToSymbolic(
+                    keyType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         Invariant.Required(aDKey, "a dictionary has a key type"),
-                        projected);
-                    valueType = MemberLookup.MapOpenClrTypeToSymbolic(
+                        projected,
+                        NullabilityFreeReason.TypeStructure);
+                    valueType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         Invariant.Required(aDVal, "a dictionary has a value type"),
-                        projected);
+                        projected,
+                        NullabilityFreeReason.TypeStructure);
                 }
                 else if (MemberLookup.GetProjectionReceiverImportedType(annotated) is ImportedTypeSymbol enumerable
                     && MemberLookup.TryGetClrEnumerableElementType(
@@ -322,22 +324,22 @@ internal sealed partial class StatementBinder
                 {
                     iterationKind = ForRangeKind.Enumerable;
                     keyType = TypeSymbol.Int32;
-                    valueType = MemberLookup.MapOpenClrTypeToSymbolic(
+                    valueType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         Invariant.Required(aElemType, "an enumerable has an element type"),
-                        enumerable);
+                        enumerable,
+                        NullabilityFreeReason.TypeStructure);
                 }
                 else if (MemberLookup.GetProjectionReceiverImportedType(annotated) is ImportedTypeSymbol pattern
-                    && MemberLookup.TryGetClrPatternEnumerableElementType(
+                    && MemberLookup.TryGetClrPatternEnumerableCurrentMember(
                         Invariant.Required(
                             pattern.OpenDefinition ?? pattern.ClrType,
                             "an imported projection receiver has a CLR type"),
-                        out var aPatternElemType))
+                        out var aPatternCurrent))
                 {
                     iterationKind = ForRangeKind.PatternEnumerator;
                     keyType = TypeSymbol.Int32;
-                    valueType = MemberLookup.MapOpenClrTypeToSymbolic(
-                        Invariant.Required(aPatternElemType, "a pattern enumerable has an element type"),
-                        pattern);
+                    valueType = MemberLookup.DereferenceByRefElement(
+                        MemberLookup.GetClrMemberValueTypeSymbol(aPatternCurrent, pattern.OpenDefinition, pattern.TypeArguments));
                 }
                 else
                 {
@@ -367,28 +369,30 @@ internal sealed partial class StatementBinder
                 if (MemberLookup.TryGetClrDictionaryTypes(openImp.OpenDefinition, out var openDKey, out var openDVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
-                    keyType = MapOpenClrTypeToSymbolic(
+                    keyType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         Invariant.Required(openDKey, "a dictionary definition has a key type"),
-                        openImp);
-                    valueType = MapOpenClrTypeToSymbolic(
+                        openImp,
+                        NullabilityFreeReason.TypeStructure);
+                    valueType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         Invariant.Required(openDVal, "a dictionary definition has a value type"),
-                        openImp);
+                        openImp,
+                        NullabilityFreeReason.TypeStructure);
                 }
                 else if (MemberLookup.TryGetClrEnumerableElementType(openImp.OpenDefinition, out var openElemType))
                 {
                     iterationKind = ForRangeKind.Enumerable;
                     keyType = TypeSymbol.Int32;
-                    valueType = MapOpenClrTypeToSymbolic(
+                    valueType = MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
                         Invariant.Required(openElemType, "an enumerable definition has an element type"),
-                        openImp);
+                        openImp,
+                        NullabilityFreeReason.TypeStructure);
                 }
-                else if (MemberLookup.TryGetClrPatternEnumerableElementType(openImp.OpenDefinition, out var openPatternElemType))
+                else if (MemberLookup.TryGetClrPatternEnumerableCurrentMember(openImp.OpenDefinition, out var openPatternCurrent))
                 {
                     iterationKind = ForRangeKind.PatternEnumerator;
                     keyType = TypeSymbol.Int32;
-                    valueType = MapOpenClrTypeToSymbolic(
-                        Invariant.Required(openPatternElemType, "a pattern enumerable definition has an element type"),
-                        openImp);
+                    valueType = MemberLookup.DereferenceByRefElement(
+                        MemberLookup.GetClrMemberValueTypeSymbol(openPatternCurrent, openImp.OpenDefinition, openImp.TypeArguments));
                 }
                 else
                 {
@@ -406,26 +410,27 @@ internal sealed partial class StatementBinder
                 {
                     iterationKind = ForRangeKind.Indexed;
                     keyType = TypeSymbol.Int32;
-                    valueType = TypeSymbol.FromClrType(
-                        Invariant.Required(imp.ClrType.GetElementType(), "a single-dimensional CLR array has an element type"));
+                    valueType = TypeSymbol.FromClrTypeWithoutNullability(
+                        Invariant.Required(imp.ClrType.GetElementType(), "a single-dimensional CLR array has an element type"),
+                        NullabilityFreeReason.TypeStructure);
                 }
                 else if (MemberLookup.TryGetClrDictionaryTypes(imp.ClrType, out var dKey, out var dVal))
                 {
                     iterationKind = ForRangeKind.Dictionary;
-                    keyType = TypeSymbol.FromClrType(dKey);
-                    valueType = TypeSymbol.FromClrType(dVal);
+                    keyType = TypeSymbol.FromClrTypeWithoutNullability(dKey, NullabilityFreeReason.TypeStructure);
+                    valueType = TypeSymbol.FromClrTypeWithoutNullability(dVal, NullabilityFreeReason.TypeStructure);
                 }
                 else if (MemberLookup.TryGetClrEnumerableElementType(imp.ClrType, out var elemType))
                 {
                     iterationKind = ForRangeKind.Enumerable;
                     keyType = TypeSymbol.Int32;
-                    valueType = TypeSymbol.FromClrType(elemType);
+                    valueType = TypeSymbol.FromClrTypeWithoutNullability(elemType, NullabilityFreeReason.TypeStructure);
                 }
-                else if (MemberLookup.TryGetClrPatternEnumerableElementType(imp.ClrType, out var patternElemType))
+                else if (MemberLookup.TryGetClrPatternEnumerableCurrentMember(imp.ClrType, out var patternCurrent))
                 {
                     iterationKind = ForRangeKind.PatternEnumerator;
                     keyType = TypeSymbol.Int32;
-                    valueType = TypeSymbol.FromClrType(patternElemType);
+                    valueType = MemberLookup.DereferenceByRefElement(MemberLookup.GetClrMemberValueTypeSymbol(patternCurrent));
                 }
                 else
                 {
@@ -552,45 +557,6 @@ internal sealed partial class StatementBinder
 
         return new BoundForRangeStatement(originatingSyntax, keyVariable, valueVariable, collection, iterationKind, body, breakLabel, continueLabel);
     }
-
-    /// <summary>
-    /// Issue #774: maps an open generic CLR <see cref="Type"/> (such as the
-    /// element type extracted from <c>IEnumerable&lt;TParam&gt;</c>) back to
-    /// the symbolic <see cref="TypeSymbol"/> carried on
-    /// <paramref name="openImp"/>'s <see cref="ImportedTypeSymbol.TypeArguments"/>.
-    /// </summary>
-    /// <remarks>
-    /// <para>
-    /// For a generic parameter declared on <see cref="ImportedTypeSymbol.OpenDefinition"/>,
-    /// the result is the symbolic argument at the same ordinal — e.g. the
-    /// <c>T</c> in <c>IEnumerable[T]</c> becomes the function-level
-    /// <see cref="TypeParameterSymbol"/> <c>T</c>.
-    /// </para>
-    /// <para>
-    /// For a constructed generic type whose arguments transitively reference
-    /// open parameters (e.g. <c>KeyValuePair&lt;TKey, TValue&gt;</c> on
-    /// <c>Dictionary&lt;TKey, TValue&gt;</c>), the helper recurses and
-    /// reconstructs the closed shape via <see cref="ImportedTypeSymbol.GetConstructed"/>
-    /// so downstream emit keeps the symbolic projection.
-    /// </para>
-    /// <para>
-    /// For anything else (closed primitive, unrelated CLR type, unmapped
-    /// parameter), falls back to <see cref="TypeSymbol.FromClrType"/>.
-    /// </para>
-    /// </remarks>
-    /// <summary>
-    /// Issue #774: maps an open generic CLR <see cref="Type"/> back to the
-    /// matching symbolic <see cref="TypeSymbol"/> on
-    /// <paramref name="openImp"/>. Thin local wrapper kept so the existing
-    /// case body reads cleanly; the implementation lives on
-    /// <see cref="MemberLookup"/> so the lowerer can reuse it when
-    /// synthesising symbolic enumerator types.
-    /// </summary>
-    /// <param name="openClr">The open CLR type to map.</param>
-    /// <param name="openImp">The receiver carrying symbolic type arguments.</param>
-    /// <returns>The mapped <see cref="TypeSymbol"/>.</returns>
-    private static TypeSymbol MapOpenClrTypeToSymbolic(Type openClr, ImportedTypeSymbol openImp)
-        => MemberLookup.MapOpenClrTypeToSymbolic(openClr, openImp);
 
     /// <summary>
     /// Issue #1328: builds the symbolic <c>KeyValuePair[K, V]</c> element type

@@ -103,7 +103,7 @@ public static class MoveNextBodyRewriter
             var builderInfo = plan.StateMachine.BuilderInfo;
             if (builderInfo.ResultType != null && !builderInfo.ResultType.IsSameAs(typeof(void)))
             {
-                var resultType = plan.StateMachine.ResultTypeSymbol ?? TypeSymbol.FromClrType(builderInfo.ResultType);
+                var resultType = plan.StateMachine.ResultTypeSymbol ?? TypeSymbol.FromClrTypeWithoutNullability(builderInfo.ResultType, NullabilityFreeReason.EmitShape);
                 this.retValLocal = new LocalVariableSymbol(
                     "<>retVal", isReadOnly: false, resultType);
                 allLocals.Add(retValLocal);
@@ -167,10 +167,10 @@ public static class MoveNextBodyRewriter
             var tryBody = new BoundBlockStatement(null, tryBodyStatements.ToImmutable());
 
             // catch (Exception ex) { this.<>1__state = -2; builder.SetException(ex); }
-            var exLocal = new LocalVariableSymbol("<>ex", isReadOnly: false, TypeSymbol.FromClrType(typeof(Exception)));
+            var exLocal = new LocalVariableSymbol("<>ex", isReadOnly: false, TypeSymbol.FromClrTypeWithoutNullability(typeof(Exception), NullabilityFreeReason.TypeLiteral));
             allLocals.Add(exLocal);
             var catchBody = BuildCatchBody(exLocal);
-            var catchClause = new BoundCatchClause(TypeSymbol.FromClrType(typeof(Exception)), exLocal, catchBody);
+            var catchClause = new BoundCatchClause(TypeSymbol.FromClrTypeWithoutNullability(typeof(Exception), NullabilityFreeReason.TypeLiteral), exLocal, catchBody);
             var tryStatement = new BoundTryStatement(null, tryBody, ImmutableArray.Create(catchClause), finallyBlock: null);
             statements.Add(tryStatement);
 
@@ -793,7 +793,7 @@ public static class MoveNextBodyRewriter
                 }
 
                 var awaiterClrType = shape.AwaiterType;
-                var awaiterTypeSymbol = awaitExpr.AwaiterTypeSymbol ?? TypeSymbol.FromClrType(awaiterClrType);
+                var awaiterTypeSymbol = awaitExpr.AwaiterTypeSymbol ?? TypeSymbol.FromClrTypeWithoutNullability(awaiterClrType, NullabilityFreeReason.EmitShape);
                 var awaiterLocal = new LocalVariableSymbol(
                     "<>awaiter_" + resumePoint.State, isReadOnly: false, awaiterTypeSymbol);
                 ctx.allLocals.Add(awaiterLocal);
@@ -827,7 +827,7 @@ public static class MoveNextBodyRewriter
                     // to load (`BadImageFormatException`) inside a generic async
                     // lambda closure. The reference-type awaitable path below
                     // already threads the symbolic operand type through unchanged.
-                    var awaitableTypeSymbol = awaitExpr.Expression?.Type ?? TypeSymbol.FromClrType(awaitableClrType);
+                    var awaitableTypeSymbol = awaitExpr.Expression?.Type ?? TypeSymbol.FromClrTypeWithoutNullability(awaitableClrType, NullabilityFreeReason.EmitShape);
                     var tempLocal = new LocalVariableSymbol(
                         "<>awaitable_" + resumePoint.State, isReadOnly: false, awaitableTypeSymbol);
                     ctx.allLocals.Add(tempLocal);
