@@ -78,30 +78,59 @@ largely does:
   reproduce the members. (This is exactly the loop ADR-0145's end-to-end test
   proves for `@ObservableProperty`.)
 
-**`GeneratedRegex` partial methods (issue #3086).** Their trigger is itself a
-non-void partial-method definition. G# had no partial methods when this was
-written (see the 2026-09-23 amendment below — it has them now, but this path is
-unchanged), so the generic partial-method elision rule would erase the
-declaration while value-position calls such as
-`Pattern().Match(...)` remain. cs2gs instead emits one private cached `Regex`
-constructed from the bound attribute's pattern, options, and timeout, plus an
-accessor preserving the original method's static/instance shape and visibility,
-and removes the generator attribute to avoid duplicate output from gsgen.
-An omitted timeout uses the two-argument `Regex` constructor so
-`REGEX_DEFAULT_MATCH_TIMEOUT` still applies; an explicitly supplied `-1` remains
-`Regex.InfiniteMatchTimeout`.
-Culture-sensitive ignore-case patterns — including inline `(?i)` option groups —
-are reported unsupported unless invariant construction preserves their
-semantics. This preserves runtime behavior without back-translating the
-generator's large specialized runner.
+**`GeneratedRegex` partial methods (issues #3086, #4301).** Their trigger is
+itself a non-void partial-method definition, so the generic partial-method
+elision rule would erase the declaration while value-position calls such as
+`Pattern().Match(...)` remain. cs2gs translates the definition to a G#
+declaring part (ADR-0192), the same form a native G# project writes:
 
-*Note (2026-09-24).* Native G# now has the build-time path this rewrite
-stands in for: a G# `@GeneratedRegex` declaring part in a `shared` block,
-whose implementing part gsgen produces from the real generator (ADR-0192
-follow-on 2; ADR-0145's 2026-09-24 amendment). The migrate side does not use
-it yet. `TryTranslateGeneratedRegex` still emits the cached-`Regex` rewrite
-until step 5 of that follow-on retires it in favour of emitting the declaring
-part (issue #4301).
+```gsharp
+partial class Patterns {
+    shared {
+        @GeneratedRegex("\\d+", RegexOptions.IgnoreCase)
+        private partial func Digits() Regex;
+    }
+}
+```
+
+A static method goes in the type's `shared` block and an instance method stays
+an instance member. The generated C# implementation is dropped like any other
+generator output, even when a committed file holds it. At build, gsgen runs
+the targeting pack's Regex generator and back-translates its implementation
+as the matching implementing part (ADR-0145's 2026-09-24 amendment), so the
+migrated project runs the generator's specialized matcher, not a cached
+`Regex` constructed by hand. The rules:
+
+- **The attribute** is recognized by its resolved type, never by its spelling
+  (an alias works). Its arguments, pattern, options, match timeout and
+  culture name, are re-spelled from their constant values, positionally in
+  constructor order, so a `const` pattern or a named
+  `matchTimeoutMilliseconds:` argument reaches gsgen as a literal, and the
+  flags are spelled as enum members.
+- **Culture-sensitive IgnoreCase** (a culture name, or an inline `(?i)`
+  without `CultureInvariant`) needs no special handling: the real generator
+  applies the culture.
+- **The entry class.** A C# entry class whose members are all private is
+  normally hoisted to top-level funcs, which cannot be partial. An entry class
+  that declares a `[GeneratedRegex]` method is kept as a class instead. When
+  it is the `Program` class of a top-level-statements program, its private
+  members are emitted `internal`: C# top-level statements are the body of
+  `Program`'s entry point, but G# top-level statements belong to the
+  compiler's own `<Program>` type, and hoisting was no stricter.
+- **Unsupported shapes** are reported rather than rewritten: a method of a
+  record, record struct or other type that is not a G# class or struct
+  (`GS0607`); of a nested type, because gsgen's stub renders only top-level
+  types, so no implementing part would be generated (`GS0609`); and in the
+  legacy merge mode, whose single merged type is not partial (`GS0608`).
+  The partial-property form of `[GeneratedRegex]` is reported too: G# has no
+  partial properties (ADR-0192 §F).
+
+*History.* Until 2026-09-25 cs2gs instead emitted one private cached `Regex`
+constructed from the bound attribute's pattern, options and timeout, in a
+field named `__generatedRegex_<method>`, plus an accessor, and reported
+culture-sensitive IgnoreCase as unsupported. Issue #4301 retired it: the
+synthesized name broke the no-synthetic-identifiers rule, and the rewrite gave
+up the generator's compile-time specialization.
 
 **File/options-driven generators (Avalonia `.axaml`, issue #2223).** Some
 generators consume non-source inputs rather than attributes — Avalonia's XAML
@@ -263,10 +292,8 @@ written only on the definition). ADR-0192 has since given G# partial methods
   user-implementation shape, which today still takes the pre-amendment path)
   and retiring the `GeneratedRegex` rewrite above in favour of a real
   declaring part plus a gsgen-produced implementing part (ADR-0192 follow-on
-  items 2–3, issue #4301). *Update (2026-09-24):* item 2 is done. gsgen
-  produces the implementing part for a user-written G# declaring part, but
-  the migrate side is still the `TryTranslateGeneratedRegex` rewrite until
-  item 3 (step 5) lands.
+  items 2–3, issue #4301). *Update (2026-09-25):* both are done; see the
+  `GeneratedRegex` rules in §B.
 
 ## Consequences
 

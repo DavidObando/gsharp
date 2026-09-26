@@ -83,8 +83,8 @@ Project-level detection, symbol-gated application:
   transformer, which has no compilation; the semantic check is authoritative
   for the translator.
 - Individual rewrites still gate per-use on "does this symbol live in a
-  `Microsoft.CodeAnalysis*` assembly" — the established
-  `TryTranslateGeneratedRegex`-style guard — so ordinary code in the same
+  `Microsoft.CodeAnalysis*` assembly" — an early-out guard keyed on the
+  resolved symbol — so ordinary code in the same
   project translates normally, and analyzer types in mixed projects are still
   caught when the flag is off.
 
