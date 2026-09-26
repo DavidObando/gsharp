@@ -585,7 +585,7 @@ def main() -> int:
         SPIKE / "go" / "go.mod",
         SPIKE / "aot" / "SpikeAot.csproj",
         SPIKE / "aot" / "Shim.cs",
-        Path(__file__),
+        Path(__file__).resolve(),
     )
     changes = repository_changes()
     milestone_eligible = not args.no_aot and not changes and not provenance_issues
