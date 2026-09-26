@@ -139,7 +139,7 @@ public class Issue4489FilterInFinallyIlVerifyTests
             var context = new AssemblyLoadContext("issue4489-" + Guid.NewGuid().ToString("N"), isCollectible: true);
             try
             {
-                Type inner = context.LoadFromAssemblyPath(clean).GetType("Demo.Outer+Inner", throwOnError: true);
+                Type inner = context.LoadFromStream(new MemoryStream(image)).GetType("Demo.Outer+Inner", throwOnError: true);
                 Assert.Equal("x", inner.GetMethod("Run").Invoke(null, new object[] { "x", 1 }));
             }
             finally

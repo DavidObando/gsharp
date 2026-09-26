@@ -70,7 +70,7 @@ public class Issue4489FilterInFinallyIlVerifyTests
             var context = new AssemblyLoadContext("issue4489-" + Guid.NewGuid().ToString("N"), isCollectible: true);
             try
             {
-                Type program = context.LoadFromAssemblyPath(dll).GetType("P.<Program>")
+                Type program = context.LoadFromStream(new MemoryStream(File.ReadAllBytes(dll))).GetType("P.<Program>")
                     ?? throw new XunitException("P.<Program> not emitted");
                 MethodInfo a = program.GetMethod("A") ?? throw new XunitException("A not emitted");
                 MethodInfo b = program.GetMethod("B") ?? throw new XunitException("B not emitted");
