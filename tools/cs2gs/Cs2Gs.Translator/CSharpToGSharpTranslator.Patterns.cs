@@ -3054,6 +3054,11 @@ public sealed partial class CSharpToGSharpTranslator
                 if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
                     && assignment.Left is ElementAccessExpressionSyntax elementAccess
                     && this.BindsTo(elementAccess.Expression, local)
+
+                    // A value C# flow proves non-null (`if (x == null) return;
+                    // values[0] = x;`) is not a nil write; it keeps the
+                    // established `!!` bridge instead.
+                    && this.context.GetTypeInfo(assignment.Right).Nullability.FlowState != NullableFlowState.NotNull
                     && (IsNullOrSuppressedNull(assignment.Right)
                         || this.IsNullableInitializer(assignment.Right)
                         || this.ShouldPromoteToNullableReference(this.context.GetSymbolInfo(assignment.Right).Symbol)))
