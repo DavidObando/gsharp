@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Collections.Generic;
 using System.Linq;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
@@ -272,9 +273,11 @@ internal static class AccessibilityChecker
     /// </summary>
     private static StructSymbol? GetReceiverClass(TypeSymbol type)
     {
-        // Bounded: a malformed constraint cycle must not hang the binder.
+        // A malformed constraint cycle (`T U`, `U T`) must not hang the
+        // binder; each type parameter is followed at most once.
+        HashSet<TypeParameterSymbol>? visited = null;
         TypeSymbol? current = type;
-        for (var depth = 0; current != null && depth < 32; depth++)
+        while (current != null)
         {
             switch (current)
             {
@@ -287,6 +290,12 @@ internal static class AccessibilityChecker
                     current = platform.UnderlyingType;
                     break;
                 case TypeParameterSymbol typeParameter:
+                    visited ??= new HashSet<TypeParameterSymbol>(ReferenceEqualityComparer.Instance);
+                    if (!visited.Add(typeParameter))
+                    {
+                        return null;
+                    }
+
                     current = typeParameter.ClassConstraint ?? typeParameter.TypeParameterBound;
                     break;
                 default:

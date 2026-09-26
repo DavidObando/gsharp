@@ -67,19 +67,24 @@ public sealed class ProtectedReceiverAccessBinderTests
     [InlineData("r.E += h", "E")]
     [InlineData("r.E -= h", "E")]
     [InlineData("let l = func() int32 { return r.f }", "f")]
+    [InlineData("let x = {{T}}{ f: 1 }", "f")]
+    [InlineData("let x = {{T}}{ Q: 1 }", "Q")]
     public void ThroughBaseOrSiblingReceiver_IsGS0379AtMember(string statement, string member)
     {
         foreach (var receiverType in new[] { "Source", "Sibling" })
         {
+            // A composite literal is written through the new instance, so
+            // its type plays the receiver's part.
+            var access = statement.Replace("{{T}}", receiverType, StringComparison.Ordinal);
             var source = Declarations + $$"""
                 class Accessor : Derived {
                     func Hook(r {{receiverType}}, h EventHandler) {
-                        {{statement}}
+                        {{access}}
                     }
                 }
                 """;
 
-            AssertSingleGS0379At(source, statement, member);
+            AssertSingleGS0379At(source, access, member);
         }
     }
 
@@ -161,8 +166,9 @@ public sealed class ProtectedReceiverAccessBinderTests
     /// <summary>
     /// The cells C# allows bind without diagnostics: <c>this</c>,
     /// <c>base</c>, bare names, receivers of the accessing class and of its
-    /// subclasses (including inside a lambda, a method group and a
-    /// null-conditional access), a type parameter constrained to the
+    /// subclasses (including inside a lambda, a method group, a
+    /// null-conditional access and a composite literal of the accessing
+    /// class or a subclass), a type parameter constrained to the
     /// accessing class, any construction of a generic accessing class, static
     /// members through the declaring type, and the declaring class itself
     /// through any receiver.
@@ -186,6 +192,8 @@ public sealed class ProtectedReceiverAccessBinderTests
                     let g = m.M
                     let n = a?.P
                     let s = Source.sf + Source.SM() + Derived.SM()
+                    let lit = Accessor{ f: 7, Q: 8 }
+                    let lit2 = MoreAccessor{ f: 9 }
                     return base.f + base.M() + a.M() + m.P + l() + g() + s + (n ?? 0)
                 }
                 func Constrained[X Accessor](x X) int32 -> x.f + x.M()
@@ -220,7 +228,8 @@ public sealed class ProtectedReceiverAccessBinderTests
         var line = text.Lines[error.Location.StartLine].ToString();
         var statementColumn = line.IndexOf(statement, StringComparison.Ordinal);
         Assert.True(statementColumn >= 0, $"GS0379 is on '{line}', not on the statement '{statement}'");
-        var memberColumn = statement.IndexOf(member, statement.IndexOf('.', StringComparison.Ordinal), StringComparison.Ordinal);
+        // The member follows the receiver's `.`, or a composite literal's `{`.
+        var memberColumn = statement.IndexOf(member, statement.IndexOfAny(new[] { '.', '{' }), StringComparison.Ordinal);
         Assert.Equal(statementColumn + memberColumn, error.Location.StartCharacter);
     }
 }

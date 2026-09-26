@@ -180,6 +180,31 @@ internal static class ProtectedReceiverDiagnostics
             base.VisitFieldAssignmentExpression(node);
         }
 
+        protected override void VisitStructLiteralExpression(BoundStructLiteralExpression node)
+        {
+            // A composite literal `Source{ f: 1 }` writes each named member
+            // through the new instance, whose static type is the literal's
+            // type (C# reports CS1540 for `new Source { f = 1 }` in a
+            // derived class). The initializers carry no syntax of their own,
+            // so each reports at its member name in the literal.
+            foreach (var init in node.Initializers)
+            {
+                if (init.Field is { IsStatic: false } field)
+                {
+                    var declaring = init.FieldDeclaringType
+                        ?? FindDeclaringClass(node.StructType, level => level.Fields.Contains(field));
+                    CheckLiteralMember(node, field.Name, field.Accessibility, declaring);
+                }
+                else if (init.Property is { IsStatic: false } property)
+                {
+                    var declaring = FindDeclaringClass(node.StructType, level => level.Properties.Contains(property));
+                    CheckLiteralMember(node, property.Name, property.SetterAccessibility, declaring);
+                }
+            }
+
+            base.VisitStructLiteralExpression(node);
+        }
+
         protected override void VisitPropertyAccessExpression(BoundPropertyAccessExpression node)
         {
             if (node.Receiver != null && !node.Property.IsStatic && node.StructType != null)
@@ -237,6 +262,44 @@ internal static class ProtectedReceiverDiagnostics
             base.VisitEventSubscriptionExpression(node);
         }
 
+        private void CheckLiteralMember(
+            BoundStructLiteralExpression node,
+            string memberName,
+            Accessibility accessibility,
+            StructSymbol declaringType)
+        {
+            if (!AccessibilityChecker.ViolatesProtectedReceiverRule(accessibility, declaringType, node.StructType, function))
+            {
+                return;
+            }
+
+            TextLocation? location = null;
+            if (node.Syntax is StructLiteralExpressionSyntax literalSyntax)
+            {
+                foreach (var element in literalSyntax.Elements)
+                {
+                    if (element is FieldInitializerSyntax initializer
+                        && string.Equals(initializer.FieldIdentifier.ValueText, memberName, StringComparison.Ordinal))
+                    {
+                        location = initializer.FieldIdentifier.Location;
+                        break;
+                    }
+                }
+            }
+
+            Report(location ?? GetMemberNameLocation(node.Syntax ?? anchor), memberName, declaringType, accessibility);
+        }
+
+        private void Report(TextLocation? location, string memberName, StructSymbol declaringType, Accessibility accessibility)
+        {
+            if (location is not { } reportedLocation || !reported.Add((reportedLocation, memberName)))
+            {
+                return;
+            }
+
+            diagnostics.ReportMemberInaccessible(reportedLocation, memberName, declaringType.Name, accessibility);
+        }
+
         private void Check(
             BoundNode node,
             TypeSymbol receiverType,
@@ -249,13 +312,7 @@ internal static class ProtectedReceiverDiagnostics
                 return;
             }
 
-            if (GetMemberNameLocation(node.Syntax ?? anchor) is not { } location
-                || !reported.Add((location, memberName)))
-            {
-                return;
-            }
-
-            diagnostics.ReportMemberInaccessible(location, memberName, declaringType.Name, accessibility);
+            Report(GetMemberNameLocation(node.Syntax ?? anchor), memberName, declaringType, accessibility);
         }
     }
 }

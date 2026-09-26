@@ -12,7 +12,10 @@ namespace GSharp.Compiler.Tests;
 /// prints. A derived class reaches its base's <c>protected</c> fields,
 /// methods, properties and events through <c>this</c>, <c>base</c>, a bare
 /// name, a receiver of its own type, a receiver of a subclass, a type
-/// parameter constrained to itself, inside a lambda and as a method group;
+/// parameter constrained to itself, inside a lambda, as a method group, and
+/// in a composite literal of a subclass; a generic class reaches them through
+/// any construction of itself (<c>G[int32]</c> inside <c>G[T]</c>, which C#
+/// allows as "a class type constructed from" the accessing class);
 /// static protected members are reached through the declaring type; and the
 /// declaring class reaches its own members through any receiver. (The
 /// rejected cells are binder diagnostics, covered in Core.Tests'
@@ -65,6 +68,8 @@ open class Derived : Source {
         let n = d?.P
         Console.WriteLine(""lambda ${l()} group ${g()} cond ${n ?? 0}"")
         Console.WriteLine(""static ${Source.sf} ${Source.SM()} ${Derived.SM()}"")
+        let lit = More{ f: 12, Q: 13 }
+        Console.WriteLine(""literal ${lit.f} ${lit.Q}"")
     }
     func Constrained[X Derived](x X) int32 {
         x.f = 11
@@ -73,6 +78,14 @@ open class Derived : Source {
 }
 
 class More : Derived {
+}
+
+open class G[T] : Source {
+    func Other(o G[int32], p G[T]) int32 {
+        o.f = 20
+        p.f = 21
+        return o.M() + p.P
+    }
 }
 
 let s = Source()
@@ -84,6 +97,7 @@ d.Hook(d, m, h)
 d.Raise()
 m.Raise()
 Console.WriteLine(""constrained ${d.Constrained(m)}"")
+Console.WriteLine(""generic ${G[string]().Other(G[int32](), G[string]())}"")
 ";
 
         const string csSource = """
@@ -129,6 +143,8 @@ Console.WriteLine(""constrained ${d.Constrained(m)}"")
                     int? n = d?.P;
                     Console.WriteLine($"lambda {l()} group {g()} cond {n ?? 0}");
                     Console.WriteLine($"static {Source.sf} {Source.SM()} {Derived.SM()}");
+                    var lit = new More { f = 12, Q = 13 };
+                    Console.WriteLine($"literal {lit.f} {lit.Q}");
                 }
 
                 public int Constrained<X>(X x) where X : Derived
@@ -140,6 +156,16 @@ Console.WriteLine(""constrained ${d.Constrained(m)}"")
 
             class More : Derived
             {
+            }
+
+            class G<T> : Source
+            {
+                public int Other(G<int> o, G<T> p)
+                {
+                    o.f = 20;
+                    p.f = 21;
+                    return o.M() + p.P;
+                }
             }
 
             static class Program
@@ -155,6 +181,7 @@ Console.WriteLine(""constrained ${d.Constrained(m)}"")
                     d.Raise();
                     m.Raise();
                     Console.WriteLine($"constrained {d.Constrained(m)}");
+                    Console.WriteLine($"generic {new G<string>().Other(new G<int>(), new G<string>())}");
                 }
             }
             """;
@@ -167,11 +194,13 @@ Console.WriteLine(""constrained ${d.Constrained(m)}"")
             "props 104 106 10 104",
             "lambda 10 group 60 cond 104",
             "static 7 8 8",
+            "literal 12 13",
             "raised",
             "raised",
             "raised",
             "raised",
             "constrained 110",
+            "generic 321",
         };
         EventAndBaseMethodGroupEmitTests.AssertMatchesCSharp("protected-receiver", source, csSource, expected);
     }
