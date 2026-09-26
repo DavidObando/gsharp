@@ -42,7 +42,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// members are enabled (csc picks each type's context byte by majority, so its
 /// exact rows vary with the member mix); what both compilers' metadata
 /// <em>says</em> is compared against Roslyn's actual output by
-/// <see cref="Csc_And_Gsc_Agree_On_Every_Oblivious_Position"/>.
+/// <see cref="Csc_And_Gsc_Agree_On_Every_Top_Level_Oblivious_Position"/>.
 /// </para>
 /// </summary>
 public class Adr0186ObliviousRoundTripEmitTests
@@ -95,9 +95,11 @@ public class Adr0186ObliviousRoundTripEmitTests
     }
 
     /// <summary>
-    /// Nested positions round-trip too: an oblivious <c>List[string]</c> is
-    /// <c>List[string!]!</c> on the way out and on the way back, and a stated
-    /// <c>?</c> inside an oblivious declaration survives as <c>T?</c>.
+    /// Nested positions round-trip as written. An oblivious scope makes only
+    /// the top level of a slot's type platform (the owner's 2026-09-25
+    /// amendment to open question 12), so an oblivious <c>List[string]</c> is
+    /// <c>List[string]!</c> on the way out and on the way back, and a stated
+    /// <c>?</c> inside it survives as <c>T?</c>.
     /// </summary>
     [Fact]
     public void Nested_Positions_Round_Trip()
@@ -105,12 +107,10 @@ public class Adr0186ObliviousRoundTripEmitTests
         WithCompiledType(MixedSource, "Probe.Holder", Array.Empty<string>(), holder =>
         {
             var list = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(holder.GetField("ObliviousList")!));
-            var listArguments = Assert.IsAssignableFrom<NullabilityAnnotatedTypeSymbol>(list.UnderlyingType);
-            AssertPlatformString(listArguments.GetTypeArgumentSymbol(0));
+            Assert.Same(TypeSymbol.String, TypeArgumentAt(list.UnderlyingType, 0));
 
             var stated = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(holder.GetField("ObliviousStatedElements")!));
-            var statedArguments = Assert.IsAssignableFrom<NullabilityAnnotatedTypeSymbol>(stated.UnderlyingType);
-            AssertNullableString(statedArguments.GetTypeArgumentSymbol(0));
+            AssertNullableString(TypeArgumentAt(stated.UnderlyingType, 0));
         });
     }
 
@@ -119,7 +119,8 @@ public class Adr0186ObliviousRoundTripEmitTests
     /// (found in review, PR #4357): a <c>map[string?, string]</c> used to be
     /// written from its erased CLR shape, so its flags said <c>1,1,1</c> —
     /// losing the stated <c>?</c> even in an enabled declaration, and unable
-    /// to say <c>0</c> for an oblivious one's value.
+    /// to say <c>0</c> for an oblivious one's top level. The value is nested,
+    /// so in an oblivious declaration it is what it spells.
     /// </summary>
     [Fact]
     public void Map_Positions_Round_Trip()
@@ -128,7 +129,7 @@ public class Adr0186ObliviousRoundTripEmitTests
         {
             var oblivious = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(holder.GetField("ObliviousMap")!));
             AssertNullableString(TypeArgumentAt(oblivious.UnderlyingType, 0));
-            AssertPlatformString(TypeArgumentAt(oblivious.UnderlyingType, 1));
+            Assert.Same(TypeSymbol.String, TypeArgumentAt(oblivious.UnderlyingType, 1));
 
             var enabled = ClrNullability.GetFieldTypeSymbol(holder.GetField("EnabledMap")!);
             Assert.IsNotType<PlatformTypeSymbol>(enabled);
@@ -139,9 +140,9 @@ public class Adr0186ObliviousRoundTripEmitTests
 
     /// <summary>
     /// The other G# structural shapes an oblivious scope now reaches, each
-    /// mixing a stated <c>?</c> with oblivious positions: a
+    /// mixing a stated <c>?</c> with a platform top level: a
     /// <c>sequence[List[string]?]</c> (element stated nullable, its own
-    /// argument oblivious) and a constructed source delegate
+    /// argument as written) and a constructed source delegate
     /// <c>Mapper[string?]</c>. Before the flags builder walked their symbolic
     /// arguments, both were written from the erased CLR shape.
     /// </summary>
@@ -152,7 +153,7 @@ public class Adr0186ObliviousRoundTripEmitTests
         {
             var sequence = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(holder.GetField("ObliviousSequence")!));
             var element = Assert.IsType<NullableTypeSymbol>(TypeArgumentAt(sequence.UnderlyingType, 0));
-            AssertPlatformString(TypeArgumentAt(element.UnderlyingType, 0));
+            Assert.Same(TypeSymbol.String, TypeArgumentAt(element.UnderlyingType, 0));
 
             var mapper = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetFieldTypeSymbol(holder.GetField("ObliviousMapper")!));
             AssertNullableString(TypeArgumentAt(mapper.UnderlyingType, 0));
@@ -196,9 +197,11 @@ public class Adr0186ObliviousRoundTripEmitTests
     {
         WithCompiledType(MixedSource, "Probe.Holder", Array.Empty<string>(), holder =>
         {
+            // The handler is the slot's top level, so it is platform; its type
+            // argument is nested and reads as written.
             var oblivious = Assert.IsType<PlatformTypeSymbol>(
                 GSharp.Core.CodeAnalysis.Binding.MemberLookup.GetClrEventHandlerTypeSymbol(holder.GetEvent("ObliviousEvent")!));
-            AssertPlatformString(FirstTypeArgument(oblivious.UnderlyingType));
+            Assert.Same(TypeSymbol.String, FirstTypeArgument(oblivious.UnderlyingType));
 
             var maybe = GSharp.Core.CodeAnalysis.Binding.MemberLookup.GetClrEventHandlerTypeSymbol(holder.GetEvent("MaybeArgsEvent")!);
             Assert.IsNotType<PlatformTypeSymbol>(maybe);
@@ -211,9 +214,11 @@ public class Adr0186ObliviousRoundTripEmitTests
     }
 
     /// <summary>
-    /// The emit shape §8 sanctions: explicit oblivious bytes. Every byte of an
-    /// oblivious position is <c>0</c> — never <c>1</c>, which would launder
-    /// "nobody said" into a non-null guarantee in metadata — and a method
+    /// The emit shape §8 sanctions: explicit oblivious bytes. The top level of
+    /// an oblivious position is <c>0</c> — never <c>1</c>, which would launder
+    /// "nobody said" into a non-null guarantee in metadata. A nested position
+    /// states what it spells, so an oblivious <c>List[string]</c> is written
+    /// <c>{0, 1}</c>. A method
     /// whose positions are all oblivious carries <c>[NullableContext(0)]</c>,
     /// exactly the attribute csc puts on a <c>#nullable disable</c> method of
     /// an enabled type.
@@ -224,7 +229,7 @@ public class Adr0186ObliviousRoundTripEmitTests
         WithCompiledType(MixedSource, "Probe.Holder", Array.Empty<string>(), holder =>
         {
             AssertAllZero(NullableBytes(holder.GetField("ObliviousField")!.GetCustomAttributesData()));
-            AssertAllZero(NullableBytes(holder.GetField("ObliviousList")!.GetCustomAttributesData()));
+            Assert.Equal(new byte[] { 0, 1 }, NullableBytes(holder.GetField("ObliviousList")!.GetCustomAttributesData()));
             AssertAllZero(NullableBytes(holder.GetProperty("ObliviousProp")!.GetCustomAttributesData()));
             Assert.Equal((byte)0, ContextByte(holder.GetMethod("ObliviousMethod")!.GetCustomAttributesData()));
 
@@ -277,10 +282,18 @@ public class Adr0186ObliviousRoundTripEmitTests
     /// §8's "validated against csc for free", made concrete. The same
     /// declarations are compiled by Roslyn with <c>#nullable disable</c>
     /// regions inside an enabled type and by gsc with <c>@Oblivious</c>, and
-    /// every position must re-import identically from both.
+    /// every top-level position must re-import identically from both.
+    /// <para>
+    /// Nested positions deliberately differ. csc writes a
+    /// <c>#nullable disable</c> <c>List&lt;string&gt;</c> as <c>{0, 0}</c>
+    /// (<c>List[string!]!</c>), while an oblivious G# <c>List[string]</c> is
+    /// <c>List[string]!</c> (<c>{0, 1}</c>). That is the owner's 2026-09-25
+    /// amendment to open question 12. G# states the element as written, which
+    /// is what cs2gs output already said before the scope existed.
+    /// </para>
     /// </summary>
     [Fact]
-    public void Csc_And_Gsc_Agree_On_Every_Oblivious_Position()
+    public void Csc_And_Gsc_Agree_On_Every_Top_Level_Oblivious_Position()
     {
         const string csharp = """
             #nullable enable
@@ -325,7 +338,7 @@ public class Adr0186ObliviousRoundTripEmitTests
             var csc = cscContext.LoadFromAssemblyPath(cscPath).GetType("Probe.Holder")!;
             var gsc = gscContext.LoadFromAssemblyPath(gscPath).GetType("Probe.Holder")!;
 
-            foreach (var name in new[] { "NonNullField", "MaybeField", "ObliviousField", "ObliviousList" })
+            foreach (var name in new[] { "NonNullField", "MaybeField", "ObliviousField" })
             {
                 Assert.Equal(
                     ClrNullability.GetFieldTypeSymbol(csc.GetField(name)!).ToString(),
@@ -350,15 +363,18 @@ public class Adr0186ObliviousRoundTripEmitTests
             AssertPlatformString(ClrNullability.GetFieldTypeSymbol(gsc.GetField("ObliviousField")!));
             AssertPlatformString(ClrNullability.GetReturnTypeSymbol(gscMethod));
 
+            // The one deliberate difference: the container's top level agrees
+            // (platform), its element does not (see the summary).
+            Assert.Equal("System.Collections.Generic.List[string!]!", ClrNullability.GetFieldTypeSymbol(csc.GetField("ObliviousList")!).ToString());
+            Assert.Equal("System.Collections.Generic.List[string]!", ClrNullability.GetFieldTypeSymbol(gsc.GetField("ObliviousList")!).ToString());
+
             // gsc's own bytes for those positions are all `0`. csc's raw shape
             // is not compared byte for byte: it chooses each type's
             // `[NullableContext]` by majority over the members, so which
             // members carry an explicit attribute at all depends on the mix.
             // What both must agree on is what the metadata SAYS, asserted above.
-            foreach (var name in new[] { "ObliviousField", "ObliviousList" })
-            {
-                AssertAllZero(NullableBytes(gsc.GetField(name)!.GetCustomAttributesData()));
-            }
+            AssertAllZero(NullableBytes(gsc.GetField("ObliviousField")!.GetCustomAttributesData()));
+            Assert.Equal(new byte[] { 0, 1 }, NullableBytes(gsc.GetField("ObliviousList")!.GetCustomAttributesData()));
 
             Assert.Equal((byte)0, ContextByte(gscMethod.GetCustomAttributesData()));
         }
@@ -373,6 +389,11 @@ public class Adr0186ObliviousRoundTripEmitTests
     private static TypeSymbol TypeArgumentAt(TypeSymbol type, int index) => type switch
     {
         NullabilityAnnotatedTypeSymbol annotated => annotated.GetTypeArgumentSymbol(index),
+
+        // A constructed CLR type whose arguments say nothing beyond their CLR
+        // types is kept erased, with no symbolic argument list.
+        ImportedTypeSymbol { TypeArguments.Length: 0, ClrType: { IsGenericType: true, IsGenericTypeDefinition: false } clr } =>
+            TypeSymbol.FromClrType(clr.GetGenericArguments()[index]),
         ImportedTypeSymbol imported => imported.TypeArguments[index],
         MapTypeSymbol map => index == 0 ? map.KeyType : map.ValueType,
         _ => throw new InvalidOperationException($"'{type}' ({type.GetType().Name}) carries no type arguments."),

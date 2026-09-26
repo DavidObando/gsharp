@@ -762,28 +762,27 @@ directives; ADR-0047/ADR-0175 established the annotation as the mechanism.
 > compilation default. Scopes are lexical (by source span), so a partial type's
 > annotation governs the part it is written on, as `#nullable` does per file.
 >
-> **Reach — open question 12, settled.** An oblivious scope makes every
-> unadorned reference position of every type *written inside it* `T!`, where a
-> position is a slot a value lives in. That is one rule, applied in one place
+> **Reach — open question 12, settled (amended 2026-09-25, see below).** An
+> oblivious scope makes the *top level* of every type written inside it as the
+> type of a slot `T!`, when that top level is an unadorned reference type.
+> Nested positions stay as written. That is one rule, applied in one place
 > (`Binder.BindTypeClause`, through `ObliviousScope`), not a list of
 > declaration kinds:
 >
 > | Written type | Top level | Nested positions |
 > | --- | --- | --- |
-> | declared type of a field, property, event, parameter (incl. receiver and lambda parameter), function/lambda/delegate return, local `var`/`let`, `for`-range variable, inline `out` declaration | **`T!`** | **`T!`** |
-> | explicit type argument (`F[string](x)`), array/slice element (`[]string{…}`) | **`T!`** | **`T!`** |
-> | construction target (`List[string]{}`), cast, `as`, `typeof`, `sizeof`, `default`, attribute type, type alias | unchanged | **`T!`** |
-> | type pattern, `catch` variable, `if let` / `guard let` / `while let` binding | unchanged (non-null) | **`T!`** |
+> | declared type of a field, property, event, parameter (incl. receiver and lambda parameter), function/lambda/delegate return, local `var`/`let`, `for`-range variable, inline `out` declaration | **`T!`** | as written |
+> | explicit type argument (`F[string](x)`), array/slice element (`[]string{…}`) | as written | as written |
+> | construction target (`List[string]{}`), cast, `as`, `typeof`, `sizeof`, `default`, attribute type, type alias | unchanged | as written |
+> | type pattern, `catch` variable, `if let` / `guard let` / `while let` binding | unchanged (non-null) | as written |
 > | base-type / interface list, generic constraint, explicit-interface qualifier (a *conformance* clause) | unchanged | unchanged |
 > | signature of an `@DllImport` / `@LibraryImport` function | unchanged | unchanged |
 >
-> Nested positions are oblivious *wherever* a type is written, expressions
-> included, and that is not a choice: §3 rule 3 gives `C[T]` and `C[T!]` no
-> conversion in either direction, so an oblivious
-> `var xs List[string] = List[string]{}` compiles only if both spellings of
-> `List[string]` name the same type — which is also `csc`'s rule for type
-> syntax inside `#nullable disable`. The top level of a type written for any
-> reason other than declaring a slot is not a position. A test-introduced
+> So `List[string]` in an oblivious scope is `List[string]!`, and `[]string`
+> is `[]!string`. A construction `List[string]{}` there is `List[string]`,
+> which converts to the declaration at the top level (`T → T!`). The top
+> level of a type written for any reason other than declaring a slot is not a
+> position. A test-introduced
 > binding keeps a non-null top level because §4 says it is non-null *because the
 > test succeeded*, so `T!` there would state less than the language already
 > knows. Value types and open type parameters have no oblivious reading, as in
@@ -834,13 +833,53 @@ directives; ADR-0047/ADR-0175 established the annotation as the mechanism.
 > Expression trees reject oblivious values by design (issue #2130) and will
 > reject EF Core shapes cs2gs emits in an oblivious scope.
 >
-> **What this does not change.** A `C[T!]` built in an oblivious scope still
-> cannot be passed where an enabled declaration says `C[T]` (§3 rule 3). That is
-> the cost §3 already accepts for imported oblivious containers, now reachable
-> from oblivious *source* too: an oblivious C# caller handing
-> `new List<string>()` to an enabled `List<string>` parameter has no
-> assertion-free translation. It is the generic-container analogue of open
-> question 2, and step 6 should measure it.
+> **Owner decision, 2026-09-25: nested positions stay as written.** Step 5
+> first settled this question the other way: nested positions were oblivious
+> wherever a type was written, expressions included, which is `csc`'s rule
+> inside `#nullable disable`. Step 6 measured what that costs, and the
+> repository owner reversed it.
+>
+> - **Why.** §3 rule 3 gives `C[T]` and `C[T!]` no conversion in either
+>   direction. Wrapping nested positions therefore made every container
+>   handed between an oblivious scope and an enabled declaration an error. A
+>   Roslyn probe over the 54 repo apps in the self-migration corpus counted
+>   about 2,700 such hand-offs with an unchanged container type (same generic
+>   definition, or an array). About 2,130 run oblivious to enabled (for
+>   example, `string[]` arguments to Compiler and Core APIs, or
+>   `new List<string>()` passed to an enabled `List<string>` parameter); about
+>   550 run enabled to oblivious (for example, `Enum.GetNames(...)` stored in
+>   an oblivious `string[]`). Each one compiled before the scope existed,
+>   because cs2gs wrote an untainted oblivious container as `List[string]`.
+>   Each one is GS0154 or GS0155 once nested positions are platform, and G#
+>   has no spelling for an explicit conversion there.
+> - **Soundness.** This is no weaker than what cs2gs emits without the scope,
+>   which writes `List[string]`, a non-null element. It also matches C#'s own
+>   semantics for oblivious code, which checks nothing at a nested position.
+>   The scope's job is the top level of a slot, where §4's check applies, and
+>   that is unchanged: a nil flowing out of an oblivious slot into a non-null
+>   destination is still checked there.
+> - **What is not affected.** Imported oblivious metadata keeps §2's reading
+>   at every position, nested included: an imported `List<string>` is still
+>   `List[string!]!`. The divergence is only between an oblivious G# *source*
+>   declaration and `csc`'s `#nullable disable`. `csc` writes the element of
+>   a `#nullable disable` `List<string>` as byte `0`; gsc writes `1` for an
+>   oblivious `List[string]`'s element and `0` for its top level.
+>   `Adr0186ObliviousRoundTripEmitTests` pins both, and states the difference.
+> - **Measured after the change.** The same probe, rerun under the new rule,
+>   classifies each side of a hand-off as oblivious *metadata* only when the
+>   member's own declaration leaves that position oblivious (not when the
+>   position is a type parameter whose argument happens to be oblivious). It
+>   finds 50 hand-offs where a written position meets a platform one.
+>   Almost all are lambdas converted to an unannotated library's
+>   `Func<object>` (xUnit's `Record.Exception`), which a lambda literal
+>   satisfies by target typing. They are also unchanged from the output
+>   cs2gs produces today. The remaining mismatches it reports (about 2,060)
+>   are between a written `T` and a stated `T?`. Those are independent of
+>   obliviousness and identical in today's output.
+> - **One consequence to know.** An unadorned nested position in an oblivious
+>   scope is non-null, so a nil stored there is an error, exactly as it is
+>   outside the scope. A container that carries nils must say `List[string?]`.
+>   cs2gs already writes it that way where the C# makes nil evidence visible.
 
 Hand-written G# never uses either. Both exist for one consumer — cs2gs — and
 both are removable per project as that project's C# source migrates, exactly as
@@ -1563,7 +1602,9 @@ Ordered by how much a wrong answer would cost.
     position, by one rule** — see the implementation note under §9, which
     lists what counts as a position and the two deliberate exceptions (the top
     level of a type written for a non-slot reason, and of a test-introduced
-    binding). The original question follows. The oblivious-scope mechanism as specified governs types,
+    binding). **Amended 2026-09-25 by the repository owner: only the top level
+    of a slot's type becomes `T!`, and nested positions stay as written**, for
+    the container-conversion reason given in the §9 note. The original question follows. The oblivious-scope mechanism as specified governs types,
     functions, properties, fields, events and parameters. cs2gs also renders
     **explicitly-typed locals**, and §9 says nothing about them — nor about `out`
     parameters, `foreach` variables, lambda parameters, or catch and pattern

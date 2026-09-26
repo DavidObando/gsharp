@@ -71,11 +71,12 @@ public class Adr0186ObliviousScopeTests
         AssertPlatform(TypeSymbol.String, method.Parameters.Single().Type);
         AssertPlatform(TypeSymbol.String, method.Type);
 
-        // The event's own type is the delegate, and its type argument is a
-        // position of it.
+        // The event's own type is the delegate, and it is the slot's top
+        // level. Its type argument is nested, so it stays as written
+        // (owner decision 2026-09-25, amending open question 12).
         var @event = Assert.Single(holder.Events, e => e.Name == "Changed");
         var eventType = Assert.IsType<PlatformTypeSymbol>(@event.Type);
-        AssertPlatform(TypeSymbol.String, TypeArgument(eventType.UnderlyingType, 0));
+        Assert.Same(TypeSymbol.String, TypeArgument(eventType.UnderlyingType, 0));
     }
 
     /// <summary>
@@ -126,10 +127,15 @@ public class Adr0186ObliviousScopeTests
     /// the nullability it states, a value type has no oblivious reading
     /// (ADR-0186 §2: there is no <c>int32!</c>), and an open type parameter
     /// keeps §2's exclusion — its nullability arrives with its type argument.
-    /// Nested positions of a written type are positions too.
+    /// Only the top level of the slot's type changes: nested positions (type
+    /// arguments, elements, map keys and values, function-type parameters and
+    /// returns) stay exactly as written. This is the owner's 2026-09-25
+    /// amendment to open question 12. Step 5 had wrapped nested positions too,
+    /// which made every container handed to or from an enabled declaration
+    /// an error under §3 rule 3.
     /// </summary>
     [Fact]
-    public void Only_Unadorned_Reference_Positions_Become_Platform_Including_Nested_Ones()
+    public void Only_The_Top_Level_Of_An_Unadorned_Reference_Position_Becomes_Platform()
     {
         var holder = BindStruct(
             """
@@ -155,25 +161,25 @@ public class Adr0186ObliviousScopeTests
         Assert.IsType<TypeParameterSymbol>(Field(holder, "Open"));
 
         var names = Assert.IsType<PlatformTypeSymbol>(Field(holder, "Names"));
-        AssertPlatform(TypeSymbol.String, TypeArgument(names.UnderlyingType, 0));
+        Assert.Same(TypeSymbol.String, TypeArgument(names.UnderlyingType, 0));
 
         var maybeNames = Assert.IsType<PlatformTypeSymbol>(Field(holder, "MaybeNames"));
         Assert.IsType<NullableTypeSymbol>(TypeArgument(maybeNames.UnderlyingType, 0));
 
         var slice = Assert.IsType<SliceTypeSymbol>(Assert.IsType<PlatformTypeSymbol>(Field(holder, "Slice")).UnderlyingType);
-        AssertPlatform(TypeSymbol.String, slice.ElementType);
+        Assert.Same(TypeSymbol.String, slice.ElementType);
 
         var elementNullable = Assert.IsType<SliceTypeSymbol>(Assert.IsType<PlatformTypeSymbol>(Field(holder, "ElementNullable")).UnderlyingType);
         Assert.IsType<NullableTypeSymbol>(elementNullable.ElementType);
 
         var lookup = Assert.IsType<MapTypeSymbol>(Assert.IsType<PlatformTypeSymbol>(Field(holder, "Lookup")).UnderlyingType);
-        AssertPlatform(TypeSymbol.String, lookup.KeyType);
-        var lookupValue = Assert.IsType<PlatformTypeSymbol>(lookup.ValueType);
-        AssertPlatform(TypeSymbol.String, TypeArgument(lookupValue.UnderlyingType, 0));
+        Assert.Same(TypeSymbol.String, lookup.KeyType);
+        Assert.IsNotType<PlatformTypeSymbol>(lookup.ValueType);
+        Assert.Same(TypeSymbol.String, TypeArgument(lookup.ValueType, 0));
 
         var callback = Assert.IsType<FunctionTypeSymbol>(Assert.IsType<PlatformTypeSymbol>(Field(holder, "Callback")).UnderlyingType);
-        AssertPlatform(TypeSymbol.String, callback.ParameterTypes.Single());
-        AssertPlatform(TypeSymbol.String, callback.ReturnType);
+        Assert.Same(TypeSymbol.String, callback.ParameterTypes.Single());
+        Assert.Same(TypeSymbol.String, callback.ReturnType);
     }
 
     // ---------------------------------------------------------------
@@ -226,14 +232,13 @@ public class Adr0186ObliviousScopeTests
         AssertPlatform(TypeSymbol.String, literal.ParameterTypes.Single());
         AssertPlatform(TypeSymbol.String, literal.ReturnType);
 
-        // A construction target is not a slot — the new list is non-null —
-        // but its type argument is a position, so it is `List[string!]`: the
-        // same type an oblivious `List[string]` declaration names. ADR-0186
-        // §3 rule 3 gives `C[T]` and `C[T!]` no conversion, so anything else
-        // would make `var xs List[string] = List[string]{}` an error.
+        // A construction target is not a slot, so the new list is non-null,
+        // and its type argument is nested, so it stays as written:
+        // `List[string]`, the same element an oblivious `List[string]`
+        // declaration (`List[string]!`) has.
         var construction = locals["construction"];
         Assert.IsNotType<PlatformTypeSymbol>(construction);
-        AssertPlatform(TypeSymbol.String, TypeArgument(construction, 0));
+        Assert.Same(TypeSymbol.String, TypeArgument(construction, 0));
     }
 
     /// <summary>
@@ -256,7 +261,9 @@ public class Adr0186ObliviousScopeTests
                 func Echo(value string) string { return value }
                 func Body() string {
                     var local string = nil
-                    var xs List[string] = List[string]{}
+                    // A nil element needs a nilable element type: nested
+                    // positions stay as written in an oblivious scope.
+                    var xs List[string?] = List[string?]{}
                     xs.Add(nil)
                     for item string in xs {
                         local = item
@@ -563,24 +570,26 @@ public class Adr0186ObliviousScopeTests
             Console.WriteLine(zoo.Channels())
             Console.WriteLine(zoo.Constrained())
             Console.WriteLine(zoo.Iterate(nil) == nil)
-            Console.WriteLine(zoo.Later(nil).Result == nil)
+            Console.WriteLine(zoo.Later("later").Result)
             Console.WriteLine(zoo.Project())
             """,
             "import System.Linq\nimport System.Threading.Tasks\n");
 
         Assert.Equal(
-            "dog\nfn!delegate?\n7\ndogdog\nFalse\nTrue\nAda\n",
+            "dog\nfn!delegate?\n7\ndogdog\nFalse\nlater\nAda\n",
             output.Replace("\r\n", "\n"));
     }
 
     /// <summary>
-    /// A <c>yield</c> of an oblivious value from an oblivious iterator, and a
-    /// <c>return</c> of one from an oblivious async function, are not
-    /// coercions to non-null: the element / awaited type is <c>string!</c>
-    /// (a platform <c>IEnumerable[string!]</c> or <c>Task[string!]</c> has
-    /// the underlying type's shape). Before the structural helpers read
-    /// through the wrapper they answered the erased <c>string</c>, and a nil
-    /// element threw.
+    /// An oblivious iterator and async function whose signatures are
+    /// platform-wrapped at the top level (<c>IEnumerable[string?]!</c>,
+    /// <c>Task[string?]!</c>) still read the element and awaited type
+    /// through the wrapper. Before the structural helpers did that, they
+    /// answered the erased type, and a nil element threw. The element type
+    /// is nested, so it is what the source writes: <c>string?</c> here
+    /// carries a nil. A <c>string</c> element would be non-null, as
+    /// <see cref="A_Nested_Position_In_An_Oblivious_Scope_Is_Not_Platform"/>
+    /// pins.
     /// </summary>
     [Fact]
     public void Oblivious_Iterators_And_Async_Functions_Carry_Nil_Elements()
@@ -589,14 +598,14 @@ public class Adr0186ObliviousScopeTests
             """
             @Oblivious
             class Source {
-                func Items() IEnumerable[string] {
-                    let xs List[string] = List[string]{"a", nil}
-                    for x string in xs {
+                func Items() IEnumerable[string?] {
+                    let xs List[string?] = List[string?]{"a", nil}
+                    for x string? in xs {
                         yield x
                     }
                 }
 
-                async func Later() Task[string] {
+                async func Later() Task[string?] {
                     await Task.Yield()
                     return nil
                 }
@@ -609,6 +618,35 @@ public class Adr0186ObliviousScopeTests
             "import System.Linq\nimport System.Threading.Tasks\n");
 
         Assert.Equal("2\nTrue\n", output.Replace("\r\n", "\n"));
+    }
+
+    /// <summary>
+    /// A nested position in an oblivious scope is exactly what it spells, so
+    /// an unadorned element is non-null: storing a nil into an element of an
+    /// oblivious <c>[]string</c> (now <c>[]!string</c>) is GS0155, as it is
+    /// outside the scope. This is
+    /// the owner's 2026-09-25 amendment to open question 12.
+    /// </summary>
+    [Fact]
+    public void A_Nested_Position_In_An_Oblivious_Scope_Is_Not_Platform()
+    {
+        var compilation = Compile(
+            """
+            @Oblivious
+            class Source {
+                func Items() []string {
+                    var xs []string = []string{"a"}
+                    xs[0] = nil
+                    return xs
+                }
+            }
+            """,
+            NullabilityMode.PlatformTypes);
+
+        // A binding diagnostic, so the bound program is enough; no emit. The
+        // nil store is the only error, so nothing else can make this pass.
+        var error = Assert.Single(compilation.BoundProgram.Diagnostics, d => d.IsError);
+        Assert.Equal("GS0155", error.Id);
     }
 
     /// <summary>
@@ -657,9 +695,11 @@ public class Adr0186ObliviousScopeTests
     /// Three shapes found in review (PR #4357): a user pattern enumerator
     /// returned from an oblivious <c>GetEnumerator</c> (the binder read its
     /// shape through the wrapper but lowering did not), an identifier-form
-    /// array literal (<c>[]string{…}</c> names its element by a bare token, so
-    /// the type-clause hook never saw it), and the two-value receive
-    /// <c>let (v, ok) = &lt;-ch</c> on an oblivious channel.
+    /// array literal assigned to an oblivious <c>[]string</c> (now
+    /// <c>[]!string</c>: the element is nested and stays as written, so the
+    /// literal's <c>[]string</c> converts at the top level), and the
+    /// two-value receive <c>let (v, ok) = &lt;-ch</c> on an oblivious
+    /// channel whose element is written <c>string?</c>.
     /// </summary>
     [Fact]
     public void Pattern_Enumerators_Array_Literals_And_Two_Value_Receives()
@@ -679,12 +719,12 @@ public class Adr0186ObliviousScopeTests
                 func GetEnumerator() Counter { return Counter{} }
 
                 func Literal() int32 {
-                    var xs []string = []string{"a", nil}
+                    var xs []string = []string{"a", "b"}
                     return xs.Length
                 }
 
                 func Receive() string {
-                    var ch chan[string] = chan[string](1)
+                    var ch chan[string?] = chan[string?](1)
                     ch <- nil
                     let (value, ok) = <-ch
                     return if ok && value == nil { "nil received" } else { "?" }
@@ -888,15 +928,16 @@ public class Adr0186ObliviousScopeTests
     }
 
     /// <summary>
-    /// Nested platform positions in conformance (found in review, PR #4357):
-    /// a function-typed parameter <c>(Item) -&gt; Item</c> and a tuple return
-    /// written over a G# class (no <c>ClrType</c>, so only a structural
-    /// comparison can match <c>(Item!) -&gt; Item!</c>), and a static member
-    /// whose platform position sits under an explicit <c>?</c>
-    /// (<c>List[Item!]?</c>) rather than at the top level.
+    /// Oblivious members conforming to enabled slots through nested
+    /// positions (found in review, PR #4357): a function-typed parameter
+    /// <c>(Item) -&gt; Item</c> and a tuple return written over a G# class,
+    /// and a static member typed <c>List[Item]?</c>. Since the owner's
+    /// 2026-09-25 amendment to open question 12 the nested positions stay as
+    /// written, so these match their slots position for position; the test
+    /// pins that they still conform.
     /// </summary>
     [Fact]
-    public void Nested_Platform_Positions_Conform()
+    public void Nested_Positions_Conform_As_Written()
     {
         var output = Run(
             """
@@ -947,13 +988,13 @@ public class Adr0186ObliviousScopeTests
         var output = Run(
             """
             @Oblivious
-            suspend func read(ch in chan[string]) string {
+            suspend func read(ch in chan[string?]) string {
                 return <-ch
             }
 
             @Oblivious
             suspend func run() bool {
-                let ch = chan[string](1)
+                let ch = chan[string?](1)
                 ch <- nil
                 let value = await read(ch)
                 return value == nil
@@ -1138,8 +1179,13 @@ public class Adr0186ObliviousScopeTests
         Assert.Same(expectedUnderlying, platform.UnderlyingType);
     }
 
+    // A constructed CLR type whose arguments carry no symbolic information
+    // (every argument is exactly what its CLR type says) is kept erased, with
+    // no symbolic argument list; its argument is then read off the CLR type.
     private static TypeSymbol TypeArgument(TypeSymbol type, int index) => type switch
     {
+        ImportedTypeSymbol { TypeArguments.Length: 0, ClrType: { IsGenericType: true, IsGenericTypeDefinition: false } clr } =>
+            TypeSymbol.FromClrType(clr.GetGenericArguments()[index]),
         ImportedTypeSymbol imported => imported.TypeArguments[index],
         DelegateTypeSymbol @delegate => @delegate.TypeArguments[index],
         StructSymbol @struct => @struct.TypeArguments[index],

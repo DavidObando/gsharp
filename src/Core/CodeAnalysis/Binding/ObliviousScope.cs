@@ -27,24 +27,30 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <para>
 /// <b>Which positions a scope reaches.</b> ADR-0186 open question 12 is the
 /// reason this is one rule applied in one place rather than a list of
-/// declaration kinds: an oblivious scope makes <em>every</em> unadorned
-/// reference position of every type written inside it <c>T!</c>, where a
-/// "position" is a slot a value lives in:
+/// declaration kinds. An oblivious scope makes the <em>top-level</em>
+/// position of every type written inside it as the type of a slot a value
+/// lives in <c>T!</c>, when that position is an unadorned reference type:
 /// </para>
 /// <list type="bullet">
 /// <item><description>the declared type of a field, property, event,
 /// parameter (including a receiver and a lambda parameter), function or
 /// lambda return, local (<c>var</c>/<c>let</c>), <c>for</c>-range variable, and
-/// inline <c>out</c> declaration;</description></item>
-/// <item><description>every nested position of any written type — a type
-/// argument, an array/slice/map/channel element, a tuple element, a function
-/// type's parameter or return — wherever that type is written, including in
-/// expressions (<c>List[string]{}</c>, <c>F[string](x)</c>,
-/// <c>[]string{…}</c>). This is not optional: ADR-0186 §3 rule 3 gives
-/// <c>C[T]</c> and <c>C[T!]</c> no conversion in either direction, so an
-/// oblivious <c>var xs List[string] = List[string]{}</c> compiles only if the
-/// two spellings of <c>List[string]</c> mean the same type.</description></item>
+/// inline <c>out</c> declaration.</description></item>
 /// </list>
+/// <para>
+/// <b>Nested positions stay as written</b> (owner decision, 2026-09-25,
+/// amending step 5's answer to open question 12): a type argument, an
+/// array/slice/map/channel element, a tuple element, and a function type's
+/// parameters and return keep exactly the nullability they are spelled with,
+/// in declarations and in expressions alike. So <c>List[string]</c> in an
+/// oblivious scope is <c>List[string]!</c>, not <c>List[string!]!</c>, and
+/// <c>[]string</c> is <c>[]!string</c>. ADR-0186 §3 rule 3 gives <c>C[T]</c>
+/// and <c>C[T!]</c> no conversion in either direction, so wrapping nested
+/// positions made every container handed between an oblivious scope and an
+/// enabled declaration an error (the ADR-0186 §9 note records the
+/// measurement). Imported oblivious metadata is not affected: its
+/// nested positions still read <c>T!</c> per §2.
+/// </para>
 /// <para>
 /// The top level of a type written for any other reason is left alone,
 /// because it is not a slot: a construction target, a cast, <c>as</c>,
@@ -54,8 +60,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <c>catch</c> variable, an <c>if let</c> / <c>guard let</c> /
 /// <c>while let</c> binding: ADR-0186 §4 is explicit that such a binding is
 /// non-null because the test succeeded, not because anything was checked, so
-/// <c>T!</c> there would state less than the language already knows. Nested
-/// positions of those types are still positions and are still oblivious.
+/// <c>T!</c> there would state less than the language already knows.
 /// </para>
 /// <para>
 /// Two places are exempt outright, nested positions included (see
@@ -181,28 +186,6 @@ internal static class ObliviousScope
     }
 
     /// <summary>
-    /// Applies ADR-0186 §9 to the element of an array or slice clause
-    /// (<c>[]T</c>, <c>[N]T</c>): an element is always a position, whatever
-    /// the array itself is written for.
-    /// </summary>
-    /// <param name="clause">The array/slice type clause.</param>
-    /// <param name="element">The resolved element type.</param>
-    /// <returns>The element type the clause denotes.</returns>
-    internal static TypeSymbol ApplyToElement(TypeClauseSyntax clause, TypeSymbol element)
-        => IsInObliviousScope(clause) && !IsExempt(clause) ? Wrap(element) : element;
-
-    /// <summary>
-    /// Applies ADR-0186 §9 to the element of an array literal whose element
-    /// is written as a bare identifier (<c>[]string{…}</c>, <c>[N]string{…}</c>)
-    /// rather than as a type clause. An element is always a position.
-    /// </summary>
-    /// <param name="literal">The array-creation syntax.</param>
-    /// <param name="element">The resolved element type.</param>
-    /// <returns>The element type the literal denotes.</returns>
-    internal static TypeSymbol ApplyToArrayLiteralElement(ArrayCreationExpressionSyntax literal, TypeSymbol element)
-        => IsInObliviousScope(literal) ? Wrap(element) : element;
-
-    /// <summary>
     /// Gets a value indicating whether <paramref name="node"/> lies in an
     /// oblivious scope: the nearest enclosing <c>@Oblivious</c> or
     /// <c>@NullabilityEnabled</c> answers, and with neither the compilation's
@@ -236,20 +219,12 @@ internal static class ObliviousScope
     {
         return clause.Parent switch
         {
-            // Every nested position of a written type — type arguments,
-            // element / key / value / channel / sequence types, tuple
-            // elements, function-type parameters and returns. A pointer's
-            // pointee is the one exception: a pointer to a managed reference
-            // is not a slot the platform model describes.
-            TypeClauseSyntax outer => !ReferenceEquals(outer.PointerPointeeType, clause),
-
-            // Explicit type arguments in expressions (`F[string](x)`,
-            // `Enumerable.Empty[string]()`): a type argument is a position
-            // of the constructed method or type, exactly as it is inside a
-            // written type. The intrinsics whose "type argument" is really a
-            // cast or adapter target (`cast[T]`, `adapt[I]`) read through the
-            // top-level wrapper where they bind it.
-            TypeArgumentListSyntax => true,
+            // A nested position of a written type — a type argument, an
+            // element / key / value / channel / sequence type, a tuple
+            // element, a function-type parameter or return — and an explicit
+            // type argument in an expression (`F[string](x)`) stay as
+            // written (see the class summary).
+            TypeClauseSyntax or TypeArgumentListSyntax => false,
 
             ParameterSyntax parameter => ReferenceEquals(parameter.Type, clause),
             FieldDeclarationSyntax field => ReferenceEquals(field.Type, clause),
@@ -263,11 +238,11 @@ internal static class ObliviousScope
             ForRangeStatementSyntax range => ReferenceEquals(range.TypeClause, clause),
             AwaitForRangeStatementSyntax awaitRange => ReferenceEquals(awaitRange.TypeClause, clause),
             RefArgumentExpressionSyntax outDeclaration => ReferenceEquals(outDeclaration.DeclaredType, clause),
-            ArrayCreationExpressionSyntax arrayCreation => ReferenceEquals(arrayCreation.ElementTypeClause, clause),
 
             // Deliberately not a position (base-type / interface lists and
             // constraints are additionally exempt outright — IsExempt):
-            // base-type / interface lists, constraints, construction targets, casts, `as`, `is` and type
+            // an array literal's element type (nested), base-type /
+            // interface lists, constraints, construction targets, casts, `as`, `is` and type
             // patterns, `catch`, `if let` / `guard let` / `while let`,
             // `typeof`, `sizeof`, `default`, explicit-interface qualifiers
             // (also exempt outright), attribute types, type aliases, and synthesized clauses with no
