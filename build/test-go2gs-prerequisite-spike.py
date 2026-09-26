@@ -101,6 +101,10 @@ class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "duplicate perf row: slice-view"):
             spike.parse_perf(performance_output(duplicate="slice-view"))
 
+    def test_malformed_performance_row_fails_exact_row_gate(self) -> None:
+        with self.assertRaisesRegex(SystemExit, "malformed perf row: perf malformed"):
+            spike.parse_perf(performance_output() + "\nperf malformed")
+
     def test_allocation_gate_checks_every_launch_not_only_the_median(self) -> None:
         samples = performance_samples(launches=5)
         samples["gsharp-jit"][0]["slice-view"]["allocated_bytes"] = 40

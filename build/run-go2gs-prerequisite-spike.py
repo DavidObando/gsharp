@@ -347,26 +347,29 @@ def parse_perf(output: str) -> dict[str, dict[str, float | int]]:
     rows: dict[str, dict[str, float | int]] = {}
     for line in output.splitlines():
         match = PERF.match(line)
-        if match:
-            name = match["name"]
-            if name in rows:
-                raise SystemExit(f"duplicate perf row: {name}\n{output}")
-            ticks = int(match["ticks"])
-            frequency = int(match["frequency"])
-            operations = int(match["operations"])
-            allocated_bytes = int(match["allocated_bytes"])
-            if frequency <= 0 or operations <= 0:
-                raise SystemExit(f"invalid raw timing/count fields: {line}")
-            rows[name] = {
-                "elapsed_ticks": ticks,
-                "timer_frequency": frequency,
-                "operations": operations,
-                "allocated_bytes": allocated_bytes,
-                "allocation_count": int(match["allocations"]),
-                "ns_per_op": ticks * 1_000_000_000 / frequency / operations,
-                "bytes_per_op": allocated_bytes / operations,
-                "checksum": int(match["checksum"]),
-            }
+        if not match:
+            if line.startswith("perf "):
+                raise SystemExit(f"malformed perf row: {line}\n{output}")
+            continue
+        name = match["name"]
+        if name in rows:
+            raise SystemExit(f"duplicate perf row: {name}\n{output}")
+        ticks = int(match["ticks"])
+        frequency = int(match["frequency"])
+        operations = int(match["operations"])
+        allocated_bytes = int(match["allocated_bytes"])
+        if frequency <= 0 or operations <= 0:
+            raise SystemExit(f"invalid raw timing/count fields: {line}")
+        rows[name] = {
+            "elapsed_ticks": ticks,
+            "timer_frequency": frequency,
+            "operations": operations,
+            "allocated_bytes": allocated_bytes,
+            "allocation_count": int(match["allocations"]),
+            "ns_per_op": ticks * 1_000_000_000 / frequency / operations,
+            "bytes_per_op": allocated_bytes / operations,
+            "checksum": int(match["checksum"]),
+        }
     if rows.keys() != EXPECTED_ROWS:
         raise SystemExit(f"expected {sorted(EXPECTED_ROWS)}, got {sorted(rows)}\n{output}")
     return rows
