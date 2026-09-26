@@ -1481,7 +1481,21 @@ internal sealed class ConversionClassifier
                     else if (argument.Type != targetType
                         && (parameterConversion.Exists || isExpressionTreeLiteralTarget || isMethodGroupTarget)
                         && !IsNaturalStructuralDelegateTarget(argument.Type, targetType)
-                        && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted))
+
+                        // ADR-0186 §4, #4451: a platform argument at a non-null
+                        // reference parameter is a coercion point even when both
+                        // sides erase to one CLR type (`string!` at `string`),
+                        // which is exactly when the CLR-shape test says "nothing
+                        // to do". Without this the check was never inserted for
+                        // any imported callee, so a nil from oblivious code
+                        // reached an enabled `string` parameter, or the `T` of an
+                        // oblivious generic closed as `WrapList[string]`, whose
+                        // `List<T>` return then read the nil as non-null. Gated
+                        // on the classifier's own decision, so an argument bound
+                        // for a `T?` or `T!` slot stays bare (#2348's
+                        // `[NotNullWhen]` narrowing needs the bare variable).
+                        && (NeedsBindClrParameterConversion(argument.Type, parameterType, substituted)
+                            || parameterConversion.RequiresPlatformNilCheck))
                     {
                         // Issue #506: the source-argument list may not align with
                         // the bound-argument list when a synthesised receiver
