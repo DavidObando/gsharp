@@ -2490,6 +2490,27 @@ internal sealed partial class MethodBodyEmitter
             return null;
         }
 
+        // Issue #4481: the generic-base walk matches a declaring level by NAME
+        // and skips non-generic levels, so a non-generic override of a generic
+        // base's property was read through the BASE accessor. For a covariant
+        // override that accessor returns the base's (wider) type, not the
+        // override's, which leaves the wrong type on the stack. When the
+        // resolved property is declared by a non-generic level of the receiver,
+        // read it through that level's own accessor.
+        foreach (var level in receiver.GetHierarchy())
+        {
+            if (level.IsConstructedNestedType || ReflectionMetadataEmitter.IsUserGenericTypeReference(level))
+            {
+                break;
+            }
+
+            var declared = property.IsStatic ? level.StaticProperties : level.Properties;
+            if (!declared.IsDefaultOrEmpty && declared.Contains(property))
+            {
+                return null;
+            }
+        }
+
         return receiver.FindConstructedGenericBase(def =>
         {
             return DefDeclaresProperty(def, property);

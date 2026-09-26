@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection.Metadata;
 using System.Text;
 using GSharp.Compiler;
 using Xunit;
@@ -242,6 +243,34 @@ Console.WriteLine(n.Items[0]!!.Name)
             new[] { "x" },
         };
 
+        // A constructed generic base: `Node[T].Property` (type `T`) narrowed
+        // from `Sym` to `PSym`. Exercises the base-type substitution and the
+        // MethodImpl declaration parented at the `Node[Sym]` TypeSpec.
+        yield return new object[]
+        {
+            "constructed-generic-base",
+            @"
+open class Node[T] {
+    open prop Property T { get; }
+}
+
+class Access : Node[Sym] {
+    init(p PSym) {
+        _property = p
+    }
+
+    private var _property PSym
+    override prop Property PSym -> _property
+}
+
+let n Node[Sym] = Access(PSym(""x""))
+Console.WriteLine(n.Property.Name)
+let a = Access(PSym(""y""))
+Console.WriteLine(a.Property.Tag)
+",
+            new[] { "x", "p:y" },
+        };
+
         // A same-type override (nullability aside) keeps reusing the base slot.
         yield return new object[]
         {
@@ -375,6 +404,188 @@ Console.WriteLine(n.Property!!.Name)
         finally
         {
             Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// The metadata-only (<c>/refout</c>) emit writes every accessor through
+    /// <c>MemberDefEmitter</c>'s fallback path rather than
+    /// <c>FunctionEmitter</c>, and the two have diverged before (#2870). MSBuild
+    /// hands the REFERENCE assembly to downstream compilations, so it must
+    /// carry the same covariant shape: <c>NewSlot</c>, the MethodImpl row and
+    /// <c>PreserveBaseOverridesAttribute</c>. A consumer compiled against it
+    /// then reads the property through the base at run time.
+    /// </summary>
+    [Fact]
+    public void ReferenceAssembly_CarriesTheCovariantShape_AndAConsumerRuns()
+    {
+        const string library = """
+            package I4481Lib
+
+            open class Sym {
+                init(name string) {
+                    Name = name
+                }
+
+                prop Name string { get; }
+            }
+
+            class PSym : Sym {
+                init(name string) : base(name) {
+                }
+            }
+
+            open class Node {
+                open prop Property Sym? { get; }
+            }
+
+            class Access : Node {
+                init(p PSym) {
+                    Property = p
+                }
+
+                override prop Property PSym { get; }
+            }
+            """;
+
+        const string consumer = """
+            package I4481Consumer
+            import System
+            import I4481Lib
+
+            let n Node = Access(PSym("ref"))
+            Console.WriteLine(n.Property!!.Name)
+            let a = Access(PSym("direct"))
+            Console.WriteLine(a.Property.Name)
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4481_ref_").FullName;
+        try
+        {
+            var libSrc = Path.Combine(tempDir, "lib.gs");
+            var libDll = Path.Combine(tempDir, "impl", "I4481Lib.dll");
+            var libRef = Path.Combine(tempDir, "ref", "I4481Lib.dll");
+            Directory.CreateDirectory(Path.GetDirectoryName(libDll)!); // Path.Combine of a directory and a file name has a directory.
+            Directory.CreateDirectory(Path.GetDirectoryName(libRef)!); // Path.Combine of a directory and a file name has a directory.
+            File.WriteAllText(libSrc, library);
+            var (libExit, libDiagnostics) = RunGsc(new[]
+            {
+                "/out:" + libDll,
+                "/refout:" + libRef,
+                "/target:library",
+                "/targetframework:net10.0",
+                libSrc,
+            });
+            Assert.True(libExit == 0, "library failed:\n" + libDiagnostics);
+
+            foreach (var assembly in new[] { libDll, libRef })
+            {
+                var shape = ReadCovariantGetterShape(assembly, "Access", "get_Property");
+                Assert.True(
+                    (shape.Attributes & System.Reflection.MethodAttributes.NewSlot) != 0,
+                    $"Access::get_Property in {assembly} must take a new slot, but is {shape.Attributes}.");
+                Assert.True(shape.HasMethodImpl, $"Access::get_Property in {assembly} has no MethodImpl row.");
+                Assert.True(shape.HasPreserveBaseOverrides, $"Access::get_Property in {assembly} lacks PreserveBaseOverridesAttribute.");
+            }
+
+            var consumerSrc = Path.Combine(tempDir, "consumer.gs");
+            var consumerDll = Path.Combine(tempDir, "impl", "consumer.dll");
+            File.WriteAllText(consumerSrc, consumer);
+
+            // Compile against the REFERENCE assembly, run beside the implementation.
+            var args = new List<string>
+            {
+                "/out:" + consumerDll,
+                "/target:exe",
+                "/targetframework:net10.0",
+                "/r:" + libRef,
+            };
+            args.AddRange(TrustedPlatformAssemblies().Select(reference => "/reference:" + reference));
+            args.Add(consumerSrc);
+            var (consumerExit, consumerDiagnostics) = RunGsc(args.ToArray());
+            Assert.True(consumerExit == 0, "consumer failed against the reference assembly:\n" + consumerDiagnostics);
+
+            var (exit, output) = RunDotnet(consumerDll);
+            Assert.True(exit == 0, $"consumer must load and run. Exit {exit}:\n{output}");
+            var lines = output
+                .Split('\n')
+                .Select(line => line.TrimEnd('\r'))
+                .Where(line => line.Length > 0)
+                .ToArray();
+            Assert.Equal(new[] { "ref", "direct" }, lines);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    private static (System.Reflection.MethodAttributes Attributes, bool HasMethodImpl, bool HasPreserveBaseOverrides) ReadCovariantGetterShape(
+        string assemblyPath,
+        string typeName,
+        string methodName)
+    {
+        using var stream = File.OpenRead(assemblyPath);
+        using var peReader = new System.Reflection.PortableExecutable.PEReader(stream);
+        var reader = peReader.GetMetadataReader();
+        foreach (var typeHandle in reader.TypeDefinitions)
+        {
+            var type = reader.GetTypeDefinition(typeHandle);
+            if (reader.GetString(type.Name) != typeName)
+            {
+                continue;
+            }
+
+            foreach (var methodHandle in type.GetMethods())
+            {
+                var method = reader.GetMethodDefinition(methodHandle);
+                if (reader.GetString(method.Name) != methodName)
+                {
+                    continue;
+                }
+
+                var hasMethodImpl = type.GetMethodImplementations()
+                    .Select(reader.GetMethodImplementation)
+                    .Any(impl => impl.MethodBody == (System.Reflection.Metadata.EntityHandle)methodHandle);
+                var hasPreserve = method.GetCustomAttributes()
+                    .Select(reader.GetCustomAttribute)
+                    .Any(attribute => AttributeTypeName(reader, attribute) == "PreserveBaseOverridesAttribute");
+                return (method.Attributes, hasMethodImpl, hasPreserve);
+            }
+        }
+
+        throw new InvalidOperationException($"'{typeName}::{methodName}' not found in '{assemblyPath}'.");
+    }
+
+    private static string AttributeTypeName(System.Reflection.Metadata.MetadataReader reader, System.Reflection.Metadata.CustomAttribute attribute)
+    {
+        if (attribute.Constructor.Kind != System.Reflection.Metadata.HandleKind.MemberReference)
+        {
+            return string.Empty;
+        }
+
+        var parent = reader.GetMemberReference((System.Reflection.Metadata.MemberReferenceHandle)attribute.Constructor).Parent;
+        return parent.Kind == System.Reflection.Metadata.HandleKind.TypeReference
+            ? reader.GetString(reader.GetTypeReference((System.Reflection.Metadata.TypeReferenceHandle)parent).Name)
+            : string.Empty;
+    }
+
+    private static (int ExitCode, string Diagnostics) RunGsc(string[] args)
+    {
+        using var compileOut = new StringWriter();
+        using var compileErr = new StringWriter();
+        var prevOut = Console.Out;
+        var prevErr = Console.Error;
+        Console.SetOut(compileOut);
+        Console.SetError(compileErr);
+        try
+        {
+            return (Program.Main(args), compileOut + "\n" + compileErr);
+        }
+        finally
+        {
+            Console.SetOut(prevOut);
+            Console.SetError(prevErr);
         }
     }
 
