@@ -35,7 +35,12 @@ internal static class MethodInfoHelpers
         => function.AssociatedSymbol is PropertySymbol property
             && ReferenceEquals(property.GetterSymbol, function)
             && property.OverriddenProperty is { } baseProperty
-            && !DeclarationBinder.TypeSignaturesEquivalent(property.Type, baseProperty.Type);
+            && DeclarationBinder.IsCovariantPropertyOverride(
+                baseProperty,
+                property.Type,
+                property.HasGetter,
+                property.HasSetter,
+                property.ReturnRefKind);
 
     /// <summary>
     /// Issue #409: determines whether a value-type instance method must keep

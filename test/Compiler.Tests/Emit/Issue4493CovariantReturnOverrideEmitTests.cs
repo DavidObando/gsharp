@@ -45,8 +45,8 @@ public sealed class Issue4493CovariantReturnOverrideEmitTests
         var reference = Path.Combine(fixture.Directory, "issue4493.ref.dll");
         var assembly = fixture.Compile(source, "issue4493", executable: true, "/refout:" + reference);
         IlVerifier.Verify(assembly);
-        AssertCovariantOverrideMetadata(assembly, HandleKind.MethodDefinition);
-        AssertCovariantOverrideMetadata(reference, HandleKind.MethodDefinition);
+        AssertCovariantOverrideMetadata(assembly, "Derived", HandleKind.MethodDefinition);
+        AssertCovariantOverrideMetadata(reference, "Derived", HandleKind.MethodDefinition);
         Assert.Equal("PropertySymbol\n", fixture.Run(assembly));
     }
 
@@ -85,17 +85,99 @@ public sealed class Issue4493CovariantReturnOverrideEmitTests
             executable: true,
             "/refout:" + reference);
         IlVerifier.Verify(assembly);
-        AssertCovariantOverrideMetadata(assembly, HandleKind.MemberReference);
-        AssertCovariantOverrideMetadata(reference, HandleKind.MemberReference);
+        AssertCovariantOverrideMetadata(assembly, "Derived", HandleKind.MemberReference);
+        AssertCovariantOverrideMetadata(reference, "Derived", HandleKind.MemberReference);
         Assert.Equal("PropertySymbol\n", fixture.Run(assembly));
     }
 
-    private static void AssertCovariantOverrideMetadata(string assemblyPath, HandleKind declarationKind)
+    [Fact]
+    public void ThreeLevelCovariantPropertyChain_DispatchesToLeaf()
+    {
+        const string source = """
+            package i4493chain
+            import System
+
+            open class Symbol { }
+            open class MiddleSymbol : Symbol { }
+            class LeafSymbol : MiddleSymbol { }
+
+            open class Base {
+                open prop Property Symbol {
+                    get;
+                }
+            }
+
+            open class Middle : Base {
+                open override prop Property MiddleSymbol -> MiddleSymbol()
+            }
+
+            class Leaf : Middle {
+                override prop Property LeafSymbol -> LeafSymbol()
+            }
+
+            func Main() {
+                let baseValue Base = Leaf()
+                let middleValue Middle = Leaf()
+                Console.WriteLine(baseValue.Property.GetType().Name)
+                Console.WriteLine(middleValue.Property.GetType().Name)
+            }
+            """;
+
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var assembly = fixture.Compile(source, "issue4493chain", executable: true);
+        IlVerifier.Verify(assembly);
+        AssertCovariantOverrideMetadata(assembly, "Middle", HandleKind.MethodDefinition);
+        AssertCovariantOverrideMetadata(assembly, "Leaf", HandleKind.MethodDefinition);
+        Assert.Equal("LeafSymbol\nLeafSymbol\n", fixture.Run(assembly));
+    }
+
+    [Theory]
+    [InlineData("""
+        open class Base {
+            open prop Property int32 {
+                get;
+            }
+        }
+        class Derived : Base {
+            override prop Property string -> ""
+        }
+        """)]
+    [InlineData("""
+        open class Symbol { }
+        class PropertySymbol : Symbol { }
+        open class Base {
+            open prop Property Symbol {
+                get;
+                set;
+            }
+        }
+        class Derived : Base {
+            override prop Property PropertySymbol {
+                get;
+                set;
+            }
+        }
+        """)]
+    public void InvalidCovariantPropertyShapes_ReportGS0185(string declarations)
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var (code, output) = fixture.TryCompile(
+            "package i4493invalid\n" + declarations,
+            "issue4493invalid",
+            executable: false);
+        Assert.NotEqual(0, code);
+        Assert.Equal(1, CountOccurrences(output, "error GS0185:"));
+    }
+
+    private static void AssertCovariantOverrideMetadata(
+        string assemblyPath,
+        string typeName,
+        HandleKind declarationKind)
     {
         using var stream = File.OpenRead(assemblyPath);
         using var peReader = new PEReader(stream);
         var reader = peReader.GetMetadataReader();
-        var derived = FindType(reader, "Derived");
+        var derived = FindType(reader, typeName);
         var getter = FindMethod(reader, derived, "get_Property");
         var getterDefinition = reader.GetMethodDefinition(getter);
         Assert.True((getterDefinition.Attributes & MethodAttributes.Virtual) != 0);
@@ -106,12 +188,53 @@ public sealed class Issue4493CovariantReturnOverrideEmitTests
             handle => reader.GetMethodImplementation(handle).MethodBody == getter);
         var declaration = reader.GetMethodImplementation(methodImpl).MethodDeclaration;
         Assert.Equal(declarationKind, declaration.Kind);
+        Assert.True(HasPreserveBaseOverridesAttribute(reader, getter));
         if (declarationKind == HandleKind.MemberReference)
         {
             Assert.Equal(
                 HandleKind.TypeSpecification,
                 reader.GetMemberReference((MemberReferenceHandle)declaration).Parent.Kind);
         }
+    }
+
+    private static bool HasPreserveBaseOverridesAttribute(
+        MetadataReader reader,
+        MethodDefinitionHandle method)
+    {
+        foreach (var attributeHandle in reader.GetMethodDefinition(method).GetCustomAttributes())
+        {
+            var attribute = reader.GetCustomAttribute(attributeHandle);
+            if (attribute.Constructor.Kind != HandleKind.MemberReference)
+            {
+                continue;
+            }
+
+            var constructor = reader.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+            if (constructor.Parent.Kind != HandleKind.TypeReference)
+            {
+                continue;
+            }
+
+            var attributeType = reader.GetTypeReference((TypeReferenceHandle)constructor.Parent);
+            if (reader.GetString(attributeType.Namespace) == "System.Runtime.CompilerServices"
+                && reader.GetString(attributeType.Name) == "PreserveBaseOverridesAttribute")
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static int CountOccurrences(string text, string value)
+    {
+        var count = 0;
+        for (var index = 0; (index = text.IndexOf(value, index, StringComparison.Ordinal)) >= 0; index += value.Length)
+        {
+            count++;
+        }
+
+        return count;
     }
 
     private static TypeDefinitionHandle FindType(MetadataReader reader, string name)

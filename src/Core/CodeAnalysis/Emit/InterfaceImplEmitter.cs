@@ -105,7 +105,12 @@ internal sealed class InterfaceImplEmitter
             }
 
             if (property.OverriddenProperty is { } overriddenProperty
-                && !DeclarationBinder.TypeSignaturesEquivalent(property.Type, overriddenProperty.Type)
+                && DeclarationBinder.IsCovariantPropertyOverride(
+                    overriddenProperty,
+                    property.Type,
+                    property.HasGetter,
+                    property.HasSetter,
+                    property.ReturnRefKind)
                 && accessors.Getter.HasValue)
             {
                 var declaration = this.ResolveSourcePropertyGetterToken(structSymbol, overriddenProperty);
