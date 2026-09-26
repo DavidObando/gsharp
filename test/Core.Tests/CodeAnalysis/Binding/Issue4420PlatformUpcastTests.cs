@@ -1,4 +1,4 @@
-// <copyright file="Issue4443PlatformInferenceTests.cs" company="GSharp">
+// <copyright file="Issue4420PlatformUpcastTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -64,6 +64,17 @@ public class Issue4420PlatformUpcastTests
 
         func Keep(s string) string { return s }
 
+        class Repo[T] : IEnumerable[T] {
+            private let items List[T] = List[T]()
+
+            init(value T) {
+                items.Add(value)
+            }
+
+            func GetEnumerator() IEnumerator[T] -> items.GetEnumerator()
+            private func GetEnumerator() IEnumerator -> GetEnumerator()
+        }
+
         """;
 
     /// <summary>
@@ -77,6 +88,7 @@ public class Issue4420PlatformUpcastTests
     [InlineData("TakeRo(Ob.Strings())")]
     [InlineData("TakeEnum(Ob.Lines())")]
     [InlineData("TakeRo(Ob.Lines())")]
+    [InlineData("TakeEnum(Repo(Ob.Strings()[0]))")]
     public void An_Upcast_To_A_NonNull_Element_Supertype_Is_Rejected(string call)
     {
         using var library = new CSharpFixture(LibrarySource);

@@ -3919,19 +3919,25 @@ public sealed class Conversion
             or "System.Collections.Generic.IReadOnlyCollection`1"
             or "System.Collections.Generic.IReadOnlyList`1";
 
-    private static IEnumerable<Type> SupertypesOf(Type definition)
+    private static bool AnyContainsPlatformType(ImmutableArray<TypeSymbol> types)
     {
-        Type[] interfaces;
-        try
+        foreach (var type in types)
         {
-            interfaces = definition.GetInterfaces();
-        }
-        catch (NotSupportedException)
-        {
-            interfaces = Array.Empty<Type>();
+            if (ContainsPlatformType(type))
+            {
+                return true;
+            }
         }
 
-        foreach (var candidate in interfaces)
+        return false;
+    }
+
+    private static IEnumerable<Type> SupertypesOf(Type definition)
+    {
+        // The repository's cached reader completes interfaces inherited
+        // through a base class, which `GetInterfaces` does not under every
+        // MetadataLoadContext.
+        foreach (var candidate in ClrTypeUtilities.SafeGetInterfaces(definition))
         {
             yield return candidate;
         }
@@ -3979,6 +3985,42 @@ public sealed class Conversion
         var positions = from.GetElementPositions();
         if (positions.IsDefaultOrEmpty)
         {
+            return false;
+        }
+
+        // Hot path: ordinary generic upcasts carry no platform position, so
+        // decline before any hierarchy walk. The vectors are checked rather
+        // than the outer types, because a flags-annotated array hides its
+        // element from the outer-type test.
+        if (!AnyContainsPlatformType(positions) && !AnyContainsPlatformType(targetArguments))
+        {
+            return false;
+        }
+
+        // A same-compilation G# class has no ClrType while binding. Its
+        // substituted `ImplementedClrInterfaces` are what admit the ordinary
+        // upcast, and they carry the symbolic arguments (a `Repo[string!]`'s
+        // `IEnumerable[string!]`), so project through them.
+        if (from is StructSymbol sourceStruct)
+        {
+            foreach (var level in GetStructHierarchy(sourceStruct))
+            {
+                foreach (var implemented in level.ImplementedClrInterfaces)
+                {
+                    if (implemented is not null
+                        && TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr)
+                        && implementedClr is { IsGenericType: true }
+                        && ClrTypeUtilities.AreSame(
+                            implementedClr.IsGenericTypeDefinition ? implementedClr : implementedClr.GetGenericTypeDefinition(),
+                            targetDefinition)
+                        && implementedArguments.Length == targetArguments.Length)
+                    {
+                        projected = implementedArguments;
+                        return true;
+                    }
+                }
+            }
+
             return false;
         }
 
@@ -4037,10 +4079,23 @@ public sealed class Conversion
                 continue;
             }
 
+            // Each supertype argument that is one of the source definition's
+            // own type parameters maps straight to that position, keeping its
+            // nested `T!`. A composite argument (`KeyValuePair<TKey, TValue>`
+            // for a dictionary) is declined to the ordinary rules as before:
+            // rebuilding it would need a nullability conversion door
+            // (ADR-0193, GSA0007), and this arm only ever adds rejections.
             var builder = ImmutableArray.CreateBuilder<TypeSymbol>(candidateArguments.Length);
             foreach (var argument in candidateArguments)
             {
-                builder.Add(MemberLookup.MapOpenClrTypeToSymbolic(argument, sourceDefinition, positions));
+                if (!argument.IsGenericParameter
+                    || argument.DeclaringMethod != null
+                    || (uint)argument.GenericParameterPosition >= (uint)positions.Length)
+                {
+                    return false;
+                }
+
+                builder.Add(positions[argument.GenericParameterPosition]);
             }
 
             projected = builder.MoveToImmutable();
