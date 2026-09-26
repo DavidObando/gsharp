@@ -2212,16 +2212,27 @@ public sealed class Conversion
     /// widening, and nullable lifts ride the general implicit lattice but
     /// require a real coercion at the boundary, which neither CLR delegate
     /// variance nor a target-typed <c>ldftn</c>+<c>newobj</c> binding can
-    /// perform.
+    /// perform. Reference nullability and platform wrappers are ignored only
+    /// when deciding whether each slot is reference-like; the annotated types
+    /// still drive conversion classification so nullable-to-non-nullable stays
+    /// rejected.
     /// </summary>
     /// <param name="from">The value-producing side of the slot.</param>
     /// <param name="to">The value-consuming side of the slot.</param>
     /// <returns><see langword="true"/> for a strict implicit reference conversion.</returns>
     internal static bool IsImplicitReferenceVariantSlot(TypeSymbol from, TypeSymbol to)
     {
-        if (from == null || to == null
-            || from == TypeSymbol.Void || to == TypeSymbol.Void
-            || !IsReferenceLikeTarget(from) || !IsReferenceLikeTarget(to))
+        if (from == null || to == null)
+        {
+            return false;
+        }
+
+        var referenceFrom = UnwrapPlatformAndNullable(UnwrapReferenceNullable(from));
+        var referenceTo = UnwrapPlatformAndNullable(UnwrapReferenceNullable(to));
+        if (from == TypeSymbol.Void || to == TypeSymbol.Void
+            || referenceFrom == null || referenceTo == null
+            || !IsReferenceLikeTarget(referenceFrom)
+            || !IsReferenceLikeTarget(referenceTo))
         {
             return false;
         }
@@ -4321,16 +4332,14 @@ public sealed class Conversion
     }
 
     /// <summary>
-    /// Issue #4165: unwraps a <see cref="NullableTypeSymbol"/> before an
-    /// <see cref="IsImplicitReferenceVariantSlot"/> query. Neither that
-    /// method nor <see cref="IsReferenceLikeTarget"/> looks through a
-    /// <c>Base?</c> wrapper, so a nullable-annotated same-compilation
-    /// class/interface slot (e.g. a bare method group's <c>x Base?</c>
-    /// parameter) was never recognised as reference-like at all — CLR
-    /// delegate variance doesn't distinguish <c>Base</c> from <c>Base?</c>
-    /// anyway (every reference type is nullable at the CLR level regardless
-    /// of G#'s own annotation), so unwrapping here only widens what this
-    /// reference-only check accepts.
+    /// Issue #4165: erases reference nullability before a CLR delegate
+    /// <see cref="IsImplicitReferenceVariantSlot"/> query. That method now
+    /// looks through nullable wrappers for reference-like eligibility while
+    /// preserving its original annotated operands for conversion
+    /// classification. This CLR fallback intentionally pre-erases those
+    /// operands too: CLR delegate variance does not distinguish
+    /// <c>Base</c> from <c>Base?</c> (every reference type is nullable at the
+    /// CLR level regardless of G#'s own annotation).
     /// <para>
     /// ADR-0186: a <see cref="PlatformTypeSymbol"/> comes off for exactly the
     /// same reason and with more force — <c>Base!</c> and <c>Base</c> are one
@@ -4552,11 +4561,8 @@ public sealed class Conversion
             // honor. Prefer the recovered symbolic delegate-side type (the
             // real `Derived`) over the erased CLR one (`object`) so this
             // works for a same-compilation delegate element type too.
-            // `IsImplicitReferenceVariantSlot`/`IsReferenceLikeTarget` don't
-            // unwrap a `NullableTypeSymbol` (`Base?`), so unwrap here before
-            // asking — CLR reference variance doesn't distinguish `Base`
-            // from `Base?` anyway (every reference type is nullable at the
-            // CLR level regardless of G#'s own annotation).
+            // `IsImplicitReferenceVariantSlot` preserves nullability during
+            // classification; this CLR delegate path intentionally erases it.
             if (fnParamType != null
                 && IsImplicitReferenceVariantSlot(
                     UnwrapNullableForVariance(symbolicParamTypes[i]) ?? TypeSymbol.FromClrTypeWithoutNullability(invokeParamTypes[i], NullabilityFreeReason.IdentityComparison),
