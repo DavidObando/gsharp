@@ -266,23 +266,43 @@ public class Issue3034NullableNarrowingDiagnosticTests
     }
 
     [Fact]
-    public void ImportedAndArrayNullableReceivers_KeepExistingSuccessfulBinding()
+    public void ImportedNullableReceiver_Reports_LikeASourceDeclaredOne()
     {
-        Assert.Empty(GetDiagnostics("""
+        // Issue #4287: an imported instance method on a stated `T?` receiver
+        // used to bind with no diagnostic (this test pinned that as "existing
+        // successful binding"). It now reports the same GS0159 a G#-declared
+        // method gets on the same receiver.
+        var diagnostic = GetGs0159("""
             import System.Text
 
             func Run() {
                 var value StringBuilder? = nil
                 value.ToString()
             }
-            """));
+            """);
 
-        Assert.Empty(GetDiagnostics("""
+        Assert.Equal(
+            "Cannot call function ToString because receiver 'value' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
+            diagnostic.Message);
+    }
+
+    [Fact]
+    public void ArrayNullableReceiver_Reports_LikeASourceDeclaredOne()
+    {
+        // Issue #4287, the other half this test used to pin as "existing
+        // successful binding": a nilable SLICE (`[]?T`, ADR-0132) is a
+        // `NullableTypeSymbol` over the array too, so an imported instance
+        // method on it now reports the same GS0159.
+        var diagnostic = GetGs0159("""
             func Run() {
                 var values []?int32 = nil
                 values.ToString()
             }
-            """));
+            """);
+
+        Assert.Equal(
+            "Cannot call function ToString because receiver 'values' may be nil. Use '?.' for a null-safe call or bind it with 'if let'.",
+            diagnostic.Message);
     }
 
     [Fact]

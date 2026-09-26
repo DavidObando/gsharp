@@ -970,6 +970,64 @@ public sealed partial class CSharpToGSharpTranslator
         /// <c>.</c> or <c>[</c>).</param>
         /// <returns>The translated receiver, wrapped in
         /// <see cref="NonNullAssertionExpression"/> when flow-proven non-null.</returns>
+        // Issue #4287: a generic method whose RESULT is its own type parameter,
+        // called with a C# `ref x!` / `out x!` / `in x!` argument whose declared
+        // type is `T?`. C# infers the type argument from the suppressed
+        // (non-null) view, so `Volatile.Read(ref cache!)` is non-null there. A
+        // by-ref argument cannot carry a G# `!!`, so cs2gs emits `&cache` and gsc
+        // infers the argument from the declared `Dictionary?`: the call result
+        // is `T?` in G#. Dereferencing it now reports GS0159, so the receiver
+        // needs the `!!` that re-states the C# author's own suppression.
+        private bool GenericResultInfersNilableThroughDroppedByRefSuppression(ExpressionSyntax recv)
+        {
+            if (Unparenthesize(recv) is not InvocationExpressionSyntax invocation
+                || this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
+                || !method.IsGenericMethod
+                || method.OriginalDefinition.ReturnType is not ITypeParameterSymbol returnParameter
+                || returnParameter.TypeParameterKind != TypeParameterKind.Method)
+            {
+                return false;
+            }
+
+            // Plain comparisons rather than property patterns over Roslyn enums:
+            // cs2gs translates its own source (issue #4167).
+            foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
+            {
+                if (argument.RefKindKeyword.RawKind == 0
+                    || argument.Expression is not PostfixUnaryExpressionSyntax suppressed
+                    || !suppressed.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+                {
+                    continue;
+                }
+
+                // Only the argument that SUPPLIES the returned type parameter
+                // matters: in `Pick<T, U>(ref T value, U result)` a suppressed
+                // `ref x!` fixes T, not the returned U (Copilot review). Map the
+                // argument (named or positional) to its parameter on the
+                // original definition and require that parameter's type to BE
+                // the returned type parameter.
+                IParameterSymbol parameter = DetermineParameter(argument, this.context);
+                if (parameter == null
+                    || parameter.Ordinal >= method.OriginalDefinition.Parameters.Length
+                    || !SymbolEqualityComparer.Default.Equals(
+                        method.OriginalDefinition.Parameters[parameter.Ordinal].Type,
+                        returnParameter))
+                {
+                    continue;
+                }
+
+                ITypeSymbol declared = this.GetDeclaredValueType(suppressed.Operand);
+                if (declared != null
+                    && declared.IsReferenceType
+                    && declared.NullableAnnotation == NullableAnnotation.Annotated)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private GExpression TranslateReceiverWithNullForgiveness(ExpressionSyntax recv)
         {
             GExpression translated = this.TranslateExpression(recv);
@@ -986,7 +1044,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             // ADR-0186 step 6 (PR 0): a read of oblivious CLR metadata is `T!`
             // in G#, and gsc checks a `T!` receiver itself (§4).
-            if (this.PlatformTypedImportNeedsNoBridge(recv))
+            //
+            // Issue #4287: not when ADR-0169 analyzer mode RETARGETS the member
+            // onto the G# analyzer API. The emitted read is then that API's
+            // member, which is `T?` (`method.ContainingType`), not the imported
+            // Roslyn position, and a call on it reports GS0159 without `!!`.
+            if (!this.IsGSharpNullableAnalyzerExpression(recv)
+                && this.PlatformTypedImportNeedsNoBridge(recv))
             {
                 return translated;
             }
@@ -995,9 +1059,12 @@ public sealed partial class CSharpToGSharpTranslator
                 this.IteratorForeachReceiverRequiresAssertion(recv);
             bool importedGenericTupleElementRequiresAssertion =
                 this.ImportedGenericTupleElementRequiresAssertion(recv);
+            bool byRefSuppressionDroppedRequiresAssertion =
+                this.GenericResultInfersNilableThroughDroppedByRefSuppression(recv);
 
             if (!iteratorForeachReceiverRequiresAssertion
                 && !importedGenericTupleElementRequiresAssertion
+                && !byRefSuppressionDroppedRequiresAssertion
                 && this.GSharpExpressionIsStaticallyNonNull(recv, translated))
             {
                 return ParenthesizeIfBareNumericLiteral(translated);
@@ -1005,6 +1072,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (iteratorForeachReceiverRequiresAssertion
                 || importedGenericTupleElementRequiresAssertion
+                || byRefSuppressionDroppedRequiresAssertion
 
                 // Issue #4356: `T?` only on the G# analyzer API. Asked outside
                 // the pattern-binding gate below: a `var` designation

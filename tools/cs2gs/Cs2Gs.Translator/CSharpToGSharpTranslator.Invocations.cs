@@ -395,8 +395,18 @@ public sealed partial class CSharpToGSharpTranslator
             else if (invocation.Expression is MemberAccessExpressionSyntax member
                 && member.Name is GenericNameSyntax memberGeneric)
             {
+                // Issue #4287: a generic method call dereferences its receiver
+                // exactly as a non-generic one does, so it takes the same
+                // receiver forgiveness the ordinary member-access path applies
+                // (TranslateMemberAccess), with the same exemption for an
+                // extension whose `this` parameter is itself nilable. It used to
+                // translate bare, which gsc accepted only because it did not
+                // check calls on a `T?` receiver: `expression.FirstAncestorOrSelf[T]()`
+                // on a promoted `ExpressionSyntax?` parameter.
                 target = new MemberAccessExpression(
-                    this.TranslateExpression(member.Expression),
+                    this.MemberBindsToNullableThisExtension(member)
+                        ? this.TranslateExpression(member.Expression)
+                        : this.TranslateReceiverWithNullForgiveness(member.Expression),
                     this.EmittedName(
                         this.context.GetSymbolInfo(invocation).Symbol,
                         memberGeneric.Identifier.ValueText));

@@ -715,8 +715,61 @@ public sealed partial class CSharpToGSharpTranslator
                 ? new ParenthesizedExpression(translated)
                 : translated;
 
+            // Issue #4287: a NILABLE reference operand concatenates as the empty
+            // string in C# (`"p:" + null` is "p:"), so the conversion is the
+            // null-conditional `x?.ToString()`, whose `string?` result G#
+            // concatenates the same way. `x.ToString()` was a call on a `T?`
+            // receiver: gsc now reports it (GS0159), and it threw on nil
+            // where C# did not. `?.` on a value that turns out non-null is
+            // legal and costs one branch.
+            if (this.ConcatOperandMayBeNilInEmittedGSharp(operandSyntax, operandType))
+            {
+                // Inside an expression-tree lambda `?.` is not available (gsc
+                // rejects a null-conditional access there, GS0473), so use the
+                // static `string.Concat(object?)`: null-as-empty like C#,
+                // evaluates its operand once, and a plain static call is
+                // representable in a tree (Copilot review).
+                if (this.IsWithinExpressionTreeLambda(operandSyntax))
+                {
+                    ITypeSymbol stringType = this.context.Compilation.GetSpecialType(SpecialType.System_String);
+                    return new InvocationExpression(
+                        new MemberAccessExpression(
+                            new TypeExpression(this.typeMapper.Map(stringType, this.context, operandSyntax.GetLocation())),
+                            "Concat"),
+                        new List<GExpression> { translated });
+                }
+
+                return new ConditionalAccessExpression(
+                    receiver,
+                    new InvocationExpression(new MemberAccessExpression(new ConditionalReceiverExpression(), "ToString")));
+            }
+
             return new InvocationExpression(new MemberAccessExpression(receiver, "ToString"));
         }
+
+        // Issue #4287: whether a string-concatenation operand may be `T?` in
+        // the EMITTED G#, so its `ToString()` conversion must be null-safe.
+        // Composed only from predicates cs2gs already uses for receivers and
+        // values, so it cannot drift from what gsc imports as nilable:
+        // - a C# `T?` reference declaration;
+        // - a Roslyn member that is `T?` only on the G# analyzer API, whatever
+        //   its C# shape (Roslyn's `SyntaxToken` is a struct, G#'s is a nilable
+        //   class);
+        // - anything the shared value and receiver predicates say gsc imports
+        //   as nilable, such as `Array.GetValue` (annotated `object?`) called
+        //   from an oblivious C# file, where Roslyn erases the annotation at
+        //   the call site.
+        // Plain equality rather than a property pattern over the Roslyn enum:
+        // cs2gs translates its own source, and a pattern test against a Roslyn
+        // enum constant does not survive that (issue #4167).
+        private bool ConcatOperandMayBeNilInEmittedGSharp(ExpressionSyntax operandSyntax, ITypeSymbol operandType) =>
+            (operandType != null
+                && operandType.IsReferenceType
+                && operandType.NullableAnnotation == NullableAnnotation.Annotated)
+            || this.IsGSharpNullableAnalyzerExpression(operandSyntax)
+            || this.NullableReferenceValueMayBeNull(operandSyntax)
+            || this.ReceiverValueIsObliviouslyReadAnnotatedResult(operandSyntax)
+            || this.ReceiverValueIsPromotedNullable(operandSyntax);
 
         // Issue #1960 item 2: true when `assignment` is a `+=`/`-=` whose LEFT
         // side is delegate-typed (TypeKind.Delegate covers both a named delegate

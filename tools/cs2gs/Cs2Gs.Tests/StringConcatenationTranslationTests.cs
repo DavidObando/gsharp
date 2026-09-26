@@ -108,6 +108,52 @@ namespace Demo
     }
 
     [Fact]
+    public void NilableReferenceOperand_GetsNullConditionalToStringCall()
+    {
+        // Issue #4287: C# concatenates a null operand as the empty string, so a
+        // `T?` operand converts through `?.ToString()`. `o.ToString()` was an
+        // instance call on a stated `T?` receiver, which gsc now rejects
+        // (GS0159), and which threw on nil where C# did not. `TranslateUnit`
+        // binds the output, so this also witnesses that it compiles.
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class Indent { public override string ToString() => ""i""; }
+    public class C
+    {
+        public string F(object? o, Indent? ind, Indent plain)
+            => ""o="" + o + ind + plain;
+    }
+}");
+
+        Assert.Contains("\"o=\" + o?.ToString() + ind?.ToString() + plain.ToString()", printed);
+    }
+
+    [Fact]
+    public void NilableReferenceOperand_InAnExpressionTree_UsesStringConcat()
+    {
+        // Issue #4287 (review): `?.` is not representable in an expression
+        // tree (GS0473), so there the nilable operand converts through the
+        // static `string.Concat(object?)`, which is null-as-empty like C# and
+        // evaluates the operand once. `TranslateUnit` binds the output.
+        string printed = TranslateUnit(@"
+#nullable enable
+using System;
+using System.Linq.Expressions;
+namespace Demo
+{
+    public class C
+    {
+        public Expression<Func<object?, string>> F() => o => ""p:"" + o;
+    }
+}");
+
+        Assert.Contains("Concat(o)", printed);
+        Assert.DoesNotContain("o?.ToString()", printed);
+    }
+
+    [Fact]
     public void PureStringConcatenation_IsUnchanged()
     {
         string printed = TranslateUnit(@"

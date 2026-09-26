@@ -473,6 +473,23 @@ internal sealed partial class ExpressionBinder
                         TryGetNarrowedType(variable),
                         makeNarrowedVariable);
                 }
+
+                // Issue #4287: a bare member name rebinds as `this.member` (or
+                // `Type.member`) above, and so does the nil test that guards it:
+                // `memo != nil` binds `memo` as a field access, and ADR-0069
+                // records that narrowing under the member's AccessPath, not under
+                // the implicit VariableSymbol the branches above look up. So
+                // `this.memo.TryGetValue(…)` was narrowed after the guard while
+                // `memo.TryGetValue(…)` was not. Consult the path too, the same way
+                // an explicit `this.memo` receiver does. This returns the read
+                // unchanged when it already carries a narrowing.
+                if (variable is ImplicitFieldVariableSymbol
+                    or ImplicitStaticFieldVariableSymbol
+                    or ImplicitPropertyVariableSymbol
+                    or ImplicitStaticPropertyVariableSymbol)
+                {
+                    receiver = ApplyMemberNarrowing(receiver);
+                }
             }
             else if (TryBindInheritedClrInstanceMemberByBareName(name, out var inheritedClrHead))
             {

@@ -1791,13 +1791,11 @@ public sealed partial class Adr0186PlatformTypeBindingTests
     /// while believing the work is cleanup.
     /// </para>
     /// <para>
-    /// The <b>read</b> is what is asserted, not a call. Member lookup is what
+    /// The <b>read</b> is what is asserted here. Member lookup is what
     /// <c>CanBindClrInstanceMember</c> gates; an instance <em>call</em> on a
-    /// nilable receiver resolves through a different path that still reports
-    /// nothing on <c>main</c> — #4287's own fix was never merged (PR #4308 was
-    /// closed when this work pivoted to platform types), so that half is an
-    /// open gap this step neither closes nor widens, and pinning it here would
-    /// pin a defect rather than a guarantee.
+    /// nilable receiver resolves through a different path, which #4287 gated
+    /// separately (<c>TryReportStatedNullableReceiverCall</c>, covered by
+    /// <c>Issue4287StatedNullableReceiverCallTests</c>).
     /// </para>
     /// </summary>
     [Fact]
@@ -1839,21 +1837,25 @@ public sealed partial class Adr0186PlatformTypeBindingTests
     /// nullability.
     /// </para>
     /// <para>
-    /// <c>SelectedReverseDeclaringType</c> tolerates a <c>GS0159</c> on the
-    /// nilable probe, so this is <b>not</b> an assertion that a nilable
-    /// receiver <em>should</em> call an instance method with no diagnostic.
-    /// That it currently does is #4287's still-open call-path half (see
-    /// <see cref="Step4_ASourceDeclaredNilableFieldReceiver_Still_Reports"/>);
-    /// this test's subject is <em>which</em> method, not whether the access is
-    /// reported, and it keeps passing when that half is fixed.
+    /// <b>Since #4287</b> the unguarded <c>xs.Reverse()</c> on a
+    /// <c>List[int32]?</c> reports GS0159 rather than binding either candidate,
+    /// so the selection question is asked through the spelling that diagnostic
+    /// recommends, <c>xs?.Reverse()</c>. That is the shape an author ends up
+    /// with, and it must still pick <c>List&lt;T&gt;.Reverse</c>. The #4287
+    /// gate runs after selection, so it cannot change which member is chosen;
+    /// it can only reject the call.
     /// </para>
     /// </summary>
     [Fact]
     public void Step4_ASourceDeclaredNilableContainer_Selects_TheInstanceMember()
     {
-        const string nilable = """
+        const string unguarded = """
                 let xs List[int32]? = List[int32]()
                 xs.Reverse()
+            """;
+        const string nilable = """
+                let xs List[int32]? = List[int32]()
+                xs?.Reverse()
             """;
         const string baseline = """
                 let xs = List[int32]()
@@ -1864,9 +1866,10 @@ public sealed partial class Adr0186PlatformTypeBindingTests
 
         foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
         {
+            Assert.Contains(world.Compile(unguarded, mode).Diagnostics, d => d.Id == "GS0159");
             Assert.Equal(
                 world.SelectedReverseDeclaringType(baseline, mode),
-                world.SelectedReverseDeclaringType(nilable, mode, tolerateNilableReceiverReport: true));
+                world.SelectedReverseDeclaringType(nilable, mode));
         }
     }
 
@@ -1887,18 +1890,22 @@ public sealed partial class Adr0186PlatformTypeBindingTests
     /// two — running the probe would not, since both print the same text.
     /// </para>
     /// <para>
-    /// As with the <c>ListReverse</c> witness, the nilable probe is bound with
-    /// <c>tolerateNilableReceiverReport</c>, so this is not an assertion that an
-    /// instance call on a nilable receiver <em>should</em> go unreported
-    /// (#4287's open call-path half).
+    /// As with the <c>ListReverse</c> witness, since #4287 the unguarded
+    /// <c>s.Trim()</c> reports GS0159, and the selection is asserted through
+    /// the recommended <c>s?.Trim()</c>. Its result is <c>string?</c>, whose
+    /// CLR type is still <c>string</c> and never <c>ReadOnlySpan&lt;char&gt;</c>.
     /// </para>
     /// </summary>
     [Fact]
     public void Step4_ASourceDeclaredNilableString_Trim_Stays_TheStringInstanceMember()
     {
+        const string unguarded = """
+                let s string? = "  a  "
+                Console.WriteLine(s.Trim())
+            """;
         const string nilable = """
             let s string? = "  a  "
-            let probe = s.Trim()
+            let probe = s?.Trim()
             """;
         const string baseline = """
             let s = "  a  "
@@ -1909,8 +1916,10 @@ public sealed partial class Adr0186PlatformTypeBindingTests
 
         foreach (var mode in new[] { NullabilityMode.Enabled, NullabilityMode.PlatformTypes })
         {
+            Assert.Contains(world.Compile(unguarded, mode).Diagnostics, d => d.Id == "GS0159");
+
             var expected = world.GlobalProbeType(baseline, mode);
-            var actual = world.GlobalProbeType(nilable, mode, tolerateNilableReceiverReport: true);
+            var actual = world.GlobalProbeType(nilable, mode);
 
             Assert.Equal(typeof(string), expected.ClrType);
             Assert.Equal(expected.ClrType, actual.ClrType);
@@ -2304,12 +2313,8 @@ public sealed partial class Adr0186PlatformTypeBindingTests
         /// </summary>
         /// <param name="globals">Top-level G# statements declaring <c>probe</c>.</param>
         /// <param name="mode">The nullability mode.</param>
-        /// <param name="tolerateNilableReceiverReport">
-        /// Accept a <c>GS0159</c> in the probe — see
-        /// <see cref="IsToleratedNilableReceiverReport"/>.
-        /// </param>
         /// <returns>The bound type of <c>probe</c>.</returns>
-        internal TypeSymbol GlobalProbeType(string globals, NullabilityMode mode, bool tolerateNilableReceiverReport = false)
+        internal TypeSymbol GlobalProbeType(string globals, NullabilityMode mode)
         {
             using var resolver = ReferenceResolver.WithReferences(new[] { this.LibraryPath });
             resolver.CurrentAssemblyName = Consumer;
@@ -2333,9 +2338,7 @@ public sealed partial class Adr0186PlatformTypeBindingTests
             };
 
             var scope = compilation.GlobalScope;
-            Assert.DoesNotContain(
-                scope.Diagnostics,
-                d => d.IsError && !(tolerateNilableReceiverReport && IsToleratedNilableReceiverReport(d)));
+            Assert.DoesNotContain(scope.Diagnostics, d => d.IsError);
             var type = Assert.Single(scope.Variables, v => v.Name == "probe").Type;
 
             // Rendered while the metadata context is still alive: an imported
@@ -2399,13 +2402,8 @@ public sealed partial class Adr0186PlatformTypeBindingTests
         /// </summary>
         /// <param name="body">The probe body containing exactly one <c>Reverse()</c> call.</param>
         /// <param name="mode">The nullability mode.</param>
-        /// <param name="tolerateNilableReceiverReport">
-        /// Accept a <c>GS0159</c> in the probe — see
-        /// <see cref="IsToleratedNilableReceiverReport"/>. Only a nilable probe
-        /// should pass <see langword="true"/>.
-        /// </param>
         /// <returns>The selected method's declaring type name.</returns>
-        internal string SelectedReverseDeclaringType(string body, NullabilityMode mode, bool tolerateNilableReceiverReport = false)
+        internal string SelectedReverseDeclaringType(string body, NullabilityMode mode)
         {
             using var resolver = ReferenceResolver.WithReferences(new[] { this.LibraryPath });
             resolver.CurrentAssemblyName = Consumer;
@@ -2417,15 +2415,8 @@ public sealed partial class Adr0186PlatformTypeBindingTests
                 Nullability = mode,
             };
 
-            // Opt-in, for a NILABLE probe only: its call is allowed to be
-            // REPORTED, because this helper's subject is which method was
-            // selected and #4287's still-open call-path half would add exactly
-            // that report once fixed. Baselines and platform probes stay
-            // strict, so a regression that makes THEM report is still caught.
             var program = compilation.BoundProgram;
-            Assert.DoesNotContain(
-                program.Diagnostics,
-                d => d.IsError && !(tolerateNilableReceiverReport && IsToleratedNilableReceiverReport(d)));
+            Assert.DoesNotContain(program.Diagnostics, d => d.IsError);
 
             var collector = new ReverseCallCollector();
             foreach (var function in program.Functions)
@@ -2435,19 +2426,6 @@ public sealed partial class Adr0186PlatformTypeBindingTests
 
             return Assert.Single(collector.Found);
         }
-
-        /// <summary>
-        /// Whether <paramref name="diagnostic"/> is the report an instance
-        /// call on a nilable receiver would carry once #4287's call-path half
-        /// is fixed (PR #4308 reported it as <c>GS0159</c>). The selection
-        /// witnesses tolerate it so they assert only which member was chosen,
-        /// not that the call goes unreported — pinning the latter would pin
-        /// the open defect.
-        /// </summary>
-        /// <param name="diagnostic">A binder diagnostic.</param>
-        /// <returns><see langword="true"/> for a <c>GS0159</c>.</returns>
-        private static bool IsToleratedNilableReceiverReport(GSharp.Core.CodeAnalysis.Diagnostic diagnostic)
-            => diagnostic.Id == "GS0159";
 
         /// <summary>
         /// Finds the declaring type of every <c>Reverse</c> call in a bound

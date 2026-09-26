@@ -240,7 +240,7 @@ func middle() {
 try {
     middle()
 } catch (e Exception) {
-    Console.WriteLine(e.StackTrace.Contains(""thrower""))
+    Console.WriteLine(e.StackTrace!!.Contains(""thrower""))
 }
 ";
         Assert.Equal("True", CompileLoadRun(source, "Adr0177-StackTrace").Trim());

@@ -36,7 +36,7 @@ public class Issue1229UserClassToObjectEmitTests
 
             class Sink {
                 func Takes(o object) string { return o.GetType().Name }
-                func TakesN(o object?) string { return o.GetType().Name }
+                func TakesN(o object?) string { return o!!.GetType().Name }
                 func Give(d D) object? { return d }
             }
 
@@ -49,13 +49,13 @@ public class Issue1229UserClassToObjectEmitTests
 
             // Return position.
             let r = s.Give(d)
-            Console.WriteLine(r.GetType().Name)
+            Console.WriteLine(r!!.GetType().Name)
 
             // Local assignment.
             let o object = d
             Console.WriteLine(o.GetType().Name)
             let n object? = d
-            Console.WriteLine(n.GetType().Name)
+            Console.WriteLine(n!!.GetType().Name)
 
             // Collection-element position: a user class flows into List[object]
             // as a reference upcast, then reads back as an object reference.

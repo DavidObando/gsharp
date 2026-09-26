@@ -316,6 +316,32 @@ public class HotReloadDeltaBuilderTests
     }
 
     [Fact]
+    public void MethodThatStartsSuspending_WithAReferenceResult_ReportsGshr1002RestartDiagnostic()
+    {
+        // Issue #4287: a `string` result becomes `ValueTask<string>`, whose
+        // [Nullable] flags ([0, 1]) put a sequence-0 RETURN row into the
+        // method's Param table that the plain method did not have. The
+        // suspension-flip pairing key counts parameters, and counted that
+        // return row too, so the two versions stopped pairing and the flip
+        // fell through to the generic GSHR1001 shape diagnostic.
+        var baseline = Emit(
+            """
+            package HotReloadTests
+            func Value(ch chan[string]) string { return "a" }
+            """);
+        var current = Emit(
+            """
+            package HotReloadTests
+            func Value(ch chan[string]) string { return <-ch }
+            """);
+
+        var update = new HotReloadDeltaBuilder(baseline).CreateUpdate(current);
+
+        Assert.Equal(HotReloadDeltaStatus.Unsupported, update.Status);
+        Assert.StartsWith("GSHR1002: method 'HotReloadTests.<Program>.Value' changed suspension", update.Diagnostic, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void MethodThatStopsSuspending_ReportsGshr1002RestartDiagnostic()
     {
         var baseline = Emit(

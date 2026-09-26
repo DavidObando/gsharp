@@ -153,6 +153,29 @@ public sealed partial class Adr0186PlatformTypeBindingTests
             world.Run(body, NullabilityMode.PlatformTypes, AuditHelpers).Trim().ReplaceLineEndings("\n"));
     }
 
+    /// <summary>
+    /// Issue #4287, against a real imported class: invoking a delegate-typed
+    /// FIELD or PROPERTY through a receiver stated <c>Fns?</c> reports GS0159,
+    /// like an imported method call on it. The delegate-member fallback runs
+    /// after instance-method selection, so it needs the gate too. A live
+    /// <c>?.</c> call runs.
+    /// </summary>
+    /// <param name="body">The probe body.</param>
+    [Theory]
+    [InlineData("    let x Fns? = Ob.LiveFns()\n    Console.WriteLine(x.F())")]
+    [InlineData("    let x Fns? = Ob.LiveFns()\n    Console.WriteLine(x.P())")]
+    public void StatedNullableReceiver_DelegateMemberInvocation_Reports(string body)
+    {
+        using var world = new World();
+
+        var compiled = world.Compile(body, NullabilityMode.PlatformTypes);
+        Assert.Contains(compiled.Diagnostics, d => d.Id == "GS0159" && d.Message.Contains("may be nil", StringComparison.Ordinal));
+
+        Assert.Equal(
+            "F",
+            world.Run("    let x Fns? = Ob.LiveFns()\n    Console.WriteLine(x?.F())", NullabilityMode.PlatformTypes).Trim());
+    }
+
     private const string AuditHelpers = """
         @Oblivious
         class GsFns {

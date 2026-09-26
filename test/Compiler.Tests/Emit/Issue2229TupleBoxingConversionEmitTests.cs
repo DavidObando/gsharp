@@ -31,7 +31,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             import System
 
             func Take(t (string, object?)) string {
-                return t.Item1 + ":" + t.Item2.ToString()
+                return t.Item1 + ":" + t.Item2!!.ToString()
             }
 
             func F(n int32?) string { return Take(("count", n)) }
@@ -51,7 +51,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             import System
 
             func Take(t (string, object?)) string {
-                return t.Item1 + ":" + t.Item2.ToString()
+                return t.Item1 + ":" + t.Item2!!.ToString()
             }
 
             func F(b bool?) string { return Take(("ok", b)) }
@@ -74,7 +74,7 @@ public class Issue2229TupleBoxingConversionEmitTests
                 if t.Item2 == nil {
                     return t.Item1 + ":nil"
                 }
-                return t.Item1 + ":" + t.Item2.ToString()
+                return t.Item1 + ":" + t.Item2!!.ToString()
             }
 
             func F(n int32?) string { return Take(("count", n)) }
@@ -99,7 +99,7 @@ public class Issue2229TupleBoxingConversionEmitTests
             func Args(pairs ...(string, object?)) string {
                 var result string = ""
                 for p in pairs {
-                    result = result + p.Item1 + "=" + p.Item2.ToString() + ";"
+                    result = result + p.Item1 + "=" + p.Item2!!.ToString() + ";"
                 }
                 return result
             }

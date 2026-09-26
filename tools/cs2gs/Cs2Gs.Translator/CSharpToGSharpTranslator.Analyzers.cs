@@ -2252,9 +2252,16 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 this.typeMapper.TrackSubstitutedNamespace("GSharp.Core.CodeAnalysis.Symbols");
+
+                // Issue #4287: the synthesized `.ToDisplayString(…)` CALL
+                // dereferences `x` exactly as the C# `x.SpecialType` read did,
+                // so its receiver takes the same forgiveness as any other
+                // dereference. `method.ContainingType` is `T?` on the G#
+                // analyzer API, and gsc now rejects an instance call on a stated
+                // `T?` receiver (GS0159) as it already rejected a member read.
                 result = new BinaryExpression(
                     new InvocationExpression(
-                        new MemberAccessExpression(this.TranslateExpression(specialAccess.Expression), "ToDisplayString", isArrow: false),
+                        new MemberAccessExpression(this.TranslateReceiverWithNullForgiveness(specialAccess.Expression), "ToDisplayString", isArrow: false),
                         new List<GExpression>
                         {
                             new MemberAccessExpression(new IdentifierExpression("DisplayFormat"), "FullyQualified", isArrow: false),
@@ -2285,7 +2292,7 @@ public sealed partial class CSharpToGSharpTranslator
                 string op = constructorKind == isEquals ? "==" : "!=";
                 result = new BinaryExpression(
                     new MemberAccessExpression(
-                        this.TranslateExpression(methodKindAccess.Expression),
+                        this.TranslateReceiverWithNullForgiveness(methodKindAccess.Expression),
                         "Name",
                         isArrow: false),
                     op,
