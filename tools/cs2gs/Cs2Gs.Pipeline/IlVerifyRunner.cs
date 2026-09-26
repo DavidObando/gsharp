@@ -43,6 +43,11 @@ public class IlVerifyRunner
         @"(?:\[(?<location>.*?)\]\s*\[offset[^\]]*\]\s*)?(?<message>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // ilverify's trailing summary, e.g. `2 Error(s) Verifying /abs/App.dll`.
+    private static readonly Regex SummaryPattern = new Regex(
+        @"^(?<count>\d+) Error\(s\) Verifying ",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex AvaloniaXamlClosureBuildPattern = new Regex(
         @"(?:^|\+)XamlClosure_\d+::Build_\d+\(\[System\.ComponentModel\]System\.IServiceProvider\)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -148,7 +153,8 @@ public class IlVerifyRunner
     /// the output are preferred, then <paramref name="additionalReferences"/>
     /// (the corpus app's compile-time references) are appended. The
     /// <see cref="KnownIlVerifyFalsePositives"/> codes are passed as ignore
-    /// flags and filtered from the parsed errors.
+    /// flags and filtered from the parsed errors, and the offset-exact #4489
+    /// filter-in-finally rule is applied (<see cref="FilterKnownFalsePositives"/>).
     /// </summary>
     /// <param name="assemblyPath">The absolute path of the .dll to verify.</param>
     /// <param name="additionalReferences">The app's extra references, or null.</param>
@@ -195,7 +201,8 @@ public class IlVerifyRunner
         (int exit, string output) = this.RunDotnet(args);
         int initialExit = exit;
         var outputs = new List<string> { output };
-        var errors = new List<IlVerifyError>(FilterIgnored(ParseErrors(output)));
+        var filterInFinally = GSharp.Tests.IlVerifyFilterInFinallyRule.Load(assemblyPath);
+        var errors = new List<IlVerifyError>(FilterKnownFalsePositives(filterInFinally, ParseErrors(output)));
         var excludedMembers = new List<string>();
 
         // An unhandled ilverify exception exits with neither 0 (verified) nor
@@ -221,7 +228,7 @@ public class IlVerifyRunner
 
             (exit, output) = this.RunDotnet(retryArgs);
             outputs.Add(output);
-            errors.AddRange(FilterIgnored(ParseErrors(output)));
+            errors.AddRange(FilterKnownFalsePositives(filterInFinally, ParseErrors(output)));
         }
 
         string combinedOutput = CombineOutputs(outputs, excludedMembers);
@@ -230,8 +237,15 @@ public class IlVerifyRunner
             .Select(group => group.First())
             .ToList();
         IReadOnlyList<IlVerifyError> initialParsedErrors = ParseErrors(outputs[0]);
-        IReadOnlyList<IlVerifyError> initialErrors = FilterIgnored(initialParsedErrors);
-        if (initialExit == 2 && initialParsedErrors.Count > 0 && initialErrors.Count == 0)
+        IReadOnlyList<IlVerifyError> initialErrors = FilterKnownFalsePositives(filterInFinally, initialParsedErrors);
+
+        // Exit 2 with every finding filtered passes only when the parsed lines
+        // account for ilverify's own "N Error(s)" count: a verifier error in a
+        // shape ParseErrors does not recognize must never be silently dropped.
+        if (initialExit == 2
+            && initialParsedErrors.Count > 0
+            && initialErrors.Count == 0
+            && ReadSummaryErrorCount(outputs[0]) == initialParsedErrors.Count)
         {
             return IlVerifyResult.Passed(combinedOutput, distinctErrors);
         }
@@ -308,6 +322,26 @@ public class IlVerifyRunner
         }
     }
 
+    /// <summary>
+    /// Applies <see cref="FilterIgnored"/> and then the assembly-aware #4489
+    /// rule: ilverify 10.0.8 reports <c>StackUnderflow</c> at the first
+    /// instruction of an exception filter whose start lies inside a
+    /// <c>finally</c>/<c>fault</c> handler (upstream
+    /// https://github.com/dotnet/runtime/issues/134711; Roslyn's IL for the same
+    /// C# fails identically). This is NOT a category-wide ignore, which is why
+    /// <c>StackUnderflow</c> is absent from <see cref="KnownIlVerifyFalsePositives"/>:
+    /// only an error whose method and offset resolve, in the verified
+    /// assembly's metadata, to exactly such a filter start is dropped. See
+    /// <c>test/Shared/IlVerifyFilterInFinallyRule.cs</c>.
+    /// </summary>
+    /// <param name="filterInFinally">The rule loaded for the verified assembly.</param>
+    /// <param name="errors">The parsed ilverify errors.</param>
+    /// <returns>The errors with every known false positive removed.</returns>
+    internal static IReadOnlyList<IlVerifyError> FilterKnownFalsePositives(
+        GSharp.Tests.IlVerifyFilterInFinallyRule filterInFinally,
+        IEnumerable<IlVerifyError> errors) =>
+        FilterIgnored(errors).Where(e => !filterInFinally.Matches(e.Code, e.RawLine)).ToList();
+
     /// <summary>Runs the repo-local dotnet tool command.</summary>
     /// <param name="arguments">The dotnet arguments.</param>
     /// <returns>The process exit code and combined output.</returns>
@@ -317,6 +351,20 @@ public class IlVerifyRunner
         // directory; anchor at the repo root. All paths are passed absolute.
         ProcessRunResult result = ProcessRunner.Run("dotnet", arguments, this.RepoRoot, DotnetToolTimeout);
         return (result.ExitCode, result.Output);
+    }
+
+    private static int? ReadSummaryErrorCount(string output)
+    {
+        foreach (string rawLine in (output ?? string.Empty).Replace("\r\n", "\n").Split('\n'))
+        {
+            Match match = SummaryPattern.Match(rawLine.Trim());
+            if (match.Success)
+            {
+                return int.Parse(match.Groups["count"].Value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        return null;
     }
 
     private static string ExtractMethod(string location)
