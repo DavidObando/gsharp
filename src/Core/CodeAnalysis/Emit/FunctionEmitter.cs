@@ -993,8 +993,29 @@ internal sealed class FunctionEmitter
             return ImmutableArray<byte>.Empty;
         }
 
-        var flags = ImmutableArray.CreateBuilder<byte>();
         var taskType = taskProperty.PropertyType;
+
+        // `function.Type` IS the awaited result: the declaration binder
+        // (NormalizeAsyncDeclaredReturnType) already removed one declared
+        // `Task[T]` / `ValueTask[T]`. Unwrapping again here would drop a real
+        // nested task: `async func F() Task[Task[string?]]` awaits a
+        // `Task[string?]`, and its flags are `[1, 1, 2]`, not `[1, 2]`.
+        var awaitedFlags = taskType.IsGenericType
+            ? NullableFlagsBuilder.Build(function.Type)
+            : ImmutableArray<byte>.Empty;
+
+        // A VALUE task over an awaited type with no nullable positions
+        // (`ValueTask<int32>`, every suspending `func … int32`) has nothing to
+        // describe, and csc writes no [Nullable] for it. Emitting a lone
+        // placeholder `[0]` would add a sequence-0 return Param row that means
+        // nothing, and hot reload pairs a method across a suspension flip by
+        // its parameter rows.
+        if (taskType.IsValueType && awaitedFlags.IsEmpty)
+        {
+            return ImmutableArray<byte>.Empty;
+        }
+
+        var flags = ImmutableArray.CreateBuilder<byte>();
         if (!taskType.IsValueType)
         {
             flags.Add(NullableFlagsBuilder.NotAnnotated);
@@ -1009,16 +1030,7 @@ internal sealed class FunctionEmitter
             flags.Add(NullableFlagsBuilder.Oblivious);
         }
 
-        if (taskType.IsGenericType)
-        {
-            // `function.Type` IS the awaited result: the declaration binder
-            // (NormalizeAsyncDeclaredReturnType) already removed one declared
-            // `Task[T]` / `ValueTask[T]`. Unwrapping again here would drop a
-            // real nested task: `async func F() Task[Task[string?]]` awaits a
-            // `Task[string?]`, and its flags are `[1, 1, 2]`, not `[1, 2]`.
-            flags.AddRange(NullableFlagsBuilder.Build(function.Type));
-        }
-
+        flags.AddRange(awaitedFlags);
         return flags.ToImmutable();
     }
 

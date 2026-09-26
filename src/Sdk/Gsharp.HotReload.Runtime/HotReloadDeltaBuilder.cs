@@ -353,7 +353,22 @@ internal sealed class HotReloadDeltaBuilder
         // The count excludes a trailing `Context` (ADR-0174 D7): gaining or
         // losing suspension gains or loses that parameter, and the key has to
         // pair the two versions of the same method across exactly that change.
-        var parameterCount = method.GetParameters().Count;
+        //
+        // Only real parameters count (sequence > 0). A method's Param rows also
+        // include an optional sequence-0 row for its RETURN, which exists
+        // whenever the return carries an attribute such as [Nullable]. Whether
+        // it exists can change with the suspension flip itself (an `R` return
+        // becomes a `ValueTask[R]`), so counting it would unpair the very
+        // methods this key exists to pair.
+        var parameterCount = 0;
+        foreach (var parameterHandle in method.GetParameters())
+        {
+            if (reader.GetParameter(parameterHandle).SequenceNumber > 0)
+            {
+                parameterCount++;
+            }
+        }
+
         if (parameterCount > 0 && HasTrailingHiddenContext(reader, method))
         {
             parameterCount--;
