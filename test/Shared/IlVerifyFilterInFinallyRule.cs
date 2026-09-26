@@ -30,10 +30,12 @@ namespace GSharp.Tests;
 ///
 /// The rule is deliberately narrow. It never ignores <c>StackUnderflow</c> as a
 /// category: the reported method must resolve in the assembly's metadata, the
-/// reported offset must equal one of its filter regions' <c>FilterOffset</c>,
-/// and the innermost handler region enclosing that offset must be
-/// <c>Finally</c> or <c>Fault</c>. Anything else, including a line this class
-/// cannot parse or resolve, stays an error.
+/// reported method identity (type, name, parameter count) must be unique in
+/// the assembly, the reported offset must equal one of its filter regions'
+/// <c>FilterOffset</c>, the instruction there must pop exactly one value, and
+/// the innermost handler region enclosing that offset must be <c>Finally</c>
+/// or <c>Fault</c>. Anything else, including a line this class cannot parse or
+/// resolve, stays an error.
 ///
 /// Shared (linked source) between the Compiler.Tests <c>IlVerifier</c> and the
 /// cs2gs self-migration <c>IlVerifyRunner</c>.
@@ -82,10 +84,24 @@ internal sealed class IlVerifyFilterInFinallyRule
                 }
 
                 MetadataReader reader = pe.GetMetadataReader();
+
+                // An ilverify line names a method only by type, name and
+                // parameter list, so same-arity overloads are indistinguishable.
+                // Fail closed: a method whose identity is shared by another
+                // MethodDef in the assembly never becomes a candidate.
+                var identityCounts = new Dictionary<string, int>(StringComparer.Ordinal);
+                foreach (MethodDefinitionHandle handle in reader.MethodDefinitions)
+                {
+                    string key = IdentityKey(reader, reader.GetMethodDefinition(handle));
+                    identityCounts.TryGetValue(key, out int count);
+                    identityCounts[key] = count + 1;
+                }
+
                 foreach (MethodDefinitionHandle handle in reader.MethodDefinitions)
                 {
                     MethodDefinition method = reader.GetMethodDefinition(handle);
-                    if (method.RelativeVirtualAddress == 0)
+                    if (method.RelativeVirtualAddress == 0
+                        || identityCounts[IdentityKey(reader, method)] != 1)
                     {
                         continue;
                     }
@@ -103,11 +119,13 @@ internal sealed class IlVerifyFilterInFinallyRule
                             region.Kind == ExceptionRegionKind.Filter ? region.FilterOffset : -1));
                     }
 
+                    byte[] il = body.GetILBytes() ?? Array.Empty<byte>();
                     var offsets = new List<int>();
                     foreach (Region region in regions)
                     {
                         if (region.Kind == ExceptionRegionKind.Filter
-                            && IsFilterStartInsideFinallyOrFault(regions, region.FilterOffset))
+                            && IsFilterStartInsideFinallyOrFault(regions, region.FilterOffset)
+                            && PopsExactlyOne(il, region.FilterOffset))
                         {
                             offsets.Add(region.FilterOffset);
                         }
@@ -132,6 +150,41 @@ internal sealed class IlVerifyFilterInFinallyRule
         }
 
         return new IlVerifyFilterInFinallyRule(found);
+    }
+
+    /// <summary>
+    /// Returns whether the instruction at <paramref name="offset"/> pops exactly
+    /// one stack value. ilverify models the filter's entry stack as empty, so an
+    /// underflow at a one-pop first instruction is explained entirely by the
+    /// missing exception object; an instruction that pops two (e.g. <c>add</c>)
+    /// would underflow even with the object present, so it stays an error.
+    /// gsc and Roslyn both open a filter with <c>isinst</c>. Unknown opcodes
+    /// fail closed.
+    /// </summary>
+    /// <param name="il">The method body's IL bytes.</param>
+    /// <param name="offset">The instruction offset.</param>
+    /// <returns><see langword="true"/> for a known one-pop opcode.</returns>
+    public static bool PopsExactlyOne(byte[] il, int offset)
+    {
+        if (offset < 0 || offset >= il.Length)
+        {
+            return false;
+        }
+
+        byte op = il[offset];
+        if (op == 0xFE)
+        {
+            // starg (FE 0B), stloc (FE 0E).
+            return offset + 1 < il.Length && (il[offset + 1] == 0x0B || il[offset + 1] == 0x0E);
+        }
+
+        return op == 0x75 // isinst
+            || op == 0x74 // castclass
+            || op == 0x26 // pop
+            || op == 0x25 // dup
+            || (op >= 0x0A && op <= 0x0D) // stloc.0 .. stloc.3
+            || op == 0x13 // stloc.s
+            || op == 0x10; // starg.s
     }
 
     /// <summary>
@@ -310,6 +363,10 @@ internal sealed class IlVerifyFilterInFinallyRule
         || (rendered.StartsWith(metadataName, StringComparison.Ordinal)
             && rendered.Length > metadataName.Length
             && rendered[metadataName.Length] == '<');
+
+    private static string IdentityKey(MetadataReader reader, MethodDefinition method) =>
+        GetTypeName(reader, method.GetDeclaringType()) + "::" + reader.GetString(method.Name) + "/" +
+        GetParameterCount(reader, method).ToString(CultureInfo.InvariantCulture);
 
     // The Param table can omit parameters or carry a return-value row, so read
     // the count from the method signature blob instead.

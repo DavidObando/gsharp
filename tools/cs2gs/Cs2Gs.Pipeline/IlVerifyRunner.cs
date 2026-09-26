@@ -43,6 +43,11 @@ public class IlVerifyRunner
         @"(?:\[(?<location>.*?)\]\s*\[offset[^\]]*\]\s*)?(?<message>.*)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
 
+    // ilverify's trailing summary, e.g. `2 Error(s) Verifying /abs/App.dll`.
+    private static readonly Regex SummaryPattern = new Regex(
+        @"^(?<count>\d+) Error\(s\) Verifying ",
+        RegexOptions.Compiled | RegexOptions.CultureInvariant);
+
     private static readonly Regex AvaloniaXamlClosureBuildPattern = new Regex(
         @"(?:^|\+)XamlClosure_\d+::Build_\d+\(\[System\.ComponentModel\]System\.IServiceProvider\)$",
         RegexOptions.Compiled | RegexOptions.CultureInvariant);
@@ -233,7 +238,14 @@ public class IlVerifyRunner
             .ToList();
         IReadOnlyList<IlVerifyError> initialParsedErrors = ParseErrors(outputs[0]);
         IReadOnlyList<IlVerifyError> initialErrors = FilterKnownFalsePositives(filterInFinally, initialParsedErrors);
-        if (initialExit == 2 && initialParsedErrors.Count > 0 && initialErrors.Count == 0)
+
+        // Exit 2 with every finding filtered passes only when the parsed lines
+        // account for ilverify's own "N Error(s)" count: a verifier error in a
+        // shape ParseErrors does not recognize must never be silently dropped.
+        if (initialExit == 2
+            && initialParsedErrors.Count > 0
+            && initialErrors.Count == 0
+            && ReadSummaryErrorCount(outputs[0]) == initialParsedErrors.Count)
         {
             return IlVerifyResult.Passed(combinedOutput, distinctErrors);
         }
@@ -339,6 +351,20 @@ public class IlVerifyRunner
         // directory; anchor at the repo root. All paths are passed absolute.
         ProcessRunResult result = ProcessRunner.Run("dotnet", arguments, this.RepoRoot, DotnetToolTimeout);
         return (result.ExitCode, result.Output);
+    }
+
+    private static int? ReadSummaryErrorCount(string output)
+    {
+        foreach (string rawLine in (output ?? string.Empty).Replace("\r\n", "\n").Split('\n'))
+        {
+            Match match = SummaryPattern.Match(rawLine.Trim());
+            if (match.Success)
+            {
+                return int.Parse(match.Groups["count"].Value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        return null;
     }
 
     private static string ExtractMethod(string location)

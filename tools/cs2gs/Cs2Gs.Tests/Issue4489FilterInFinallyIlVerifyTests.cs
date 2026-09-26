@@ -150,7 +150,7 @@ public class Issue4489FilterInFinallyIlVerifyTests
             // Broken(): `ldnull; call GC.KeepAlive; ret` -> `pop; ...`, a real
             // underflow at offset 0 of a method with no exception regions.
             string broken = Path.Combine(directory, "Broken.dll");
-            File.WriteAllBytes(broken, PatchFirstIlByte(image, "Broken", expected: 0x14, replacement: 0x26));
+            File.WriteAllBytes(broken, PatchIl(image, "Broken", atFilterStart: false, expected: 0x14, new byte[] { 0x26 }));
             IlVerifyResult brokenResult = new IlVerifyRunner().Verify(broken);
             Assert.False(brokenResult.Succeeded, brokenResult.Output);
             Assert.Contains("Demo.Outer+Inner::Run(string, int32)", brokenResult.Output, StringComparison.Ordinal);
@@ -164,9 +164,104 @@ public class Issue4489FilterInFinallyIlVerifyTests
         }
     }
 
-    private static byte[] CompileFixture()
+    /// <summary>
+    /// Thread 1 (fail closed on the opcode): the same exact-offset layout, but
+    /// the filter's first instruction is patched from <c>isinst</c> to
+    /// <c>add</c>, which pops two values and so underflows even with the
+    /// exception object present. Real ilverify reports it and the rule keeps it.
+    /// </summary>
+    [Fact]
+    public void FilterStartingWithTwoPopOpcode_IsStillReported()
     {
-        const string Source = """
+        Assert.True(IlVerifyFilterInFinallyRule.PopsExactlyOne(new byte[] { 0x75, 0, 0, 0, 0 }, 0));
+        Assert.False(IlVerifyFilterInFinallyRule.PopsExactlyOne(new byte[] { 0x58 }, 0));
+
+        string directory = NewDirectory();
+        try
+        {
+            // isinst <token> (5 bytes) -> add; nop x4
+            string path = Path.Combine(directory, "AddFilter.dll");
+            File.WriteAllBytes(
+                path,
+                PatchIl(CompileFixture(), "Run", atFilterStart: true, expected: 0x75, new byte[] { 0x58, 0, 0, 0, 0 }));
+            Assert.False(IlVerifyFilterInFinallyRule.Load(path).Matches("StackUnderflow", RunLine(FilterOffset(path, "Run"))));
+
+            if (IlVerifyRunner.IsEnabled && new IlVerifyRunner().EnsureToolAvailable())
+            {
+                IlVerifyResult result = new IlVerifyRunner().Verify(path);
+                Assert.False(result.Succeeded, result.Output);
+                IlVerifyError error = Assert.Single(result.Errors);
+                Assert.Equal("StackUnderflow", error.Code);
+                Assert.Equal("Demo.Outer+Inner::Run(string, int32)", error.Method);
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    /// <summary>
+    /// Thread 2 (ambiguous identity): with a same-arity overload
+    /// <c>Run(string, long)</c> the ilverify line cannot say which MethodDef it
+    /// means, so the rule suppresses nothing for that identity.
+    /// </summary>
+    [Fact]
+    public void SameArityOverloads_AreNeverSuppressed()
+    {
+        const string Overload = "public static string Run(string s, long n) { return s; }";
+        string directory = NewDirectory();
+        try
+        {
+            string single = Path.Combine(directory, "Single.dll");
+            File.WriteAllBytes(single, CompileFixture());
+            int offset = FilterOffset(single, "Run");
+            Assert.True(IlVerifyFilterInFinallyRule.Load(single).Matches("StackUnderflow", RunLine(offset)));
+
+            string path = Path.Combine(directory, "Overloads.dll");
+            File.WriteAllBytes(path, CompileFixture(Overload));
+            Assert.Equal(offset, FilterOffset(path, "Run"));
+            Assert.False(IlVerifyFilterInFinallyRule.Load(path).Matches("StackUnderflow", RunLine(offset)));
+
+            if (IlVerifyRunner.IsEnabled && new IlVerifyRunner().EnsureToolAvailable())
+            {
+                IlVerifyResult result = new IlVerifyRunner().Verify(path);
+                Assert.False(result.Succeeded, result.Output);
+                Assert.Equal("Demo.Outer+Inner::Run(string, int32)", Assert.Single(result.Errors).Method);
+            }
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    private static string RunLine(int offset) =>
+        "[IL]: Error [StackUnderflow]: [/abs/Demo.dll : Demo.Outer+Inner::Run(string, int32)]" +
+        $"[offset 0x{offset:X8}] Stack underflow.";
+
+    private static int FilterOffset(string path, string methodName)
+    {
+        using var pe = new PEReader(File.OpenRead(path));
+        MetadataReader md = pe.GetMetadataReader();
+        MethodDefinition method = md.MethodDefinitions
+            .Select(md.GetMethodDefinition)
+            .First(m => md.GetString(m.Name) == methodName
+                && pe.GetMethodBody(m.RelativeVirtualAddress).ExceptionRegions.Length > 0);
+        return pe.GetMethodBody(method.RelativeVirtualAddress).ExceptionRegions
+            .Single(r => r.Kind == ExceptionRegionKind.Filter).FilterOffset;
+    }
+
+    private static string NewDirectory()
+    {
+        string directory = Path.Combine(AppContext.BaseDirectory, "pipeline-tests", "issue4489", Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(directory);
+        return directory;
+    }
+
+    private static byte[] CompileFixture(string extraMembers = "")
+    {
+        string source = """
             namespace Demo
             {
                 public static class Outer
@@ -195,14 +290,16 @@ public class Issue4489FilterInFinallyIlVerifyTests
                         {
                             System.GC.KeepAlive(null);
                         }
+
+                        EXTRA_MEMBERS
                     }
                 }
             }
-            """;
+            """.Replace("EXTRA_MEMBERS", extraMembers, StringComparison.Ordinal);
         string runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location);
         var compilation = CSharpCompilation.Create(
             "Issue4489Fixture" + Guid.NewGuid().ToString("N"),
-            new[] { CSharpSyntaxTree.ParseText(Source) },
+            new[] { CSharpSyntaxTree.ParseText(source) },
             new[]
             {
                 MetadataReference.CreateFromFile(typeof(object).Assembly.Location),
@@ -215,7 +312,7 @@ public class Issue4489FilterInFinallyIlVerifyTests
         return stream.ToArray();
     }
 
-    private static byte[] PatchFirstIlByte(byte[] image, string methodName, byte expected, byte replacement)
+    private static byte[] PatchIl(byte[] image, string methodName, bool atFilterStart, byte expected, byte[] replacement)
     {
         byte[] bytes = (byte[])image.Clone();
         using var pe = new PEReader(new MemoryStream(image, writable: false));
@@ -224,15 +321,24 @@ public class Issue4489FilterInFinallyIlVerifyTests
             .Select(md.GetMethodDefinition)
             .Single(m => md.GetString(m.Name) == methodName);
         MethodBodyBlock body = pe.GetMethodBody(method.RelativeVirtualAddress);
-        Assert.Empty(body.ExceptionRegions);
-        Assert.Equal(expected, body.GetILBytes()[0]);
+        int ilOffset = 0;
+        if (atFilterStart)
+        {
+            ilOffset = body.ExceptionRegions.Single(r => r.Kind == ExceptionRegionKind.Filter).FilterOffset;
+        }
+        else
+        {
+            Assert.Empty(body.ExceptionRegions);
+        }
+
+        Assert.Equal(expected, body.GetILBytes()[ilOffset]);
         SectionHeader section = pe.PEHeaders.SectionHeaders.Single(h =>
             method.RelativeVirtualAddress >= h.VirtualAddress
             && method.RelativeVirtualAddress < h.VirtualAddress + h.SizeOfRawData);
         int header = method.RelativeVirtualAddress - section.VirtualAddress + section.PointerToRawData;
         bool tiny = (bytes[header] & 0x3) == 0x2;
         int code = header + (tiny ? 1 : (bytes[header + 1] >> 4) * 4);
-        bytes[code] = replacement;
+        replacement.CopyTo(bytes, code + ilOffset);
         return bytes;
     }
 }
