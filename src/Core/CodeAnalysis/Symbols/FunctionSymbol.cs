@@ -340,6 +340,15 @@ public sealed class FunctionSymbol : Symbol
     public MethodInfo? ExternalOverriddenMethod { get; set; }
 
     /// <summary>
+    /// Gets or sets a value indicating whether this override returns a
+    /// narrower type than the slot it overrides (issue #4481: the getter of a
+    /// covariant property override). Its CLR signature differs from the base
+    /// slot's, so it is emitted with a new slot and bound to the base slot
+    /// by an explicit MethodImpl row rather than reusing the slot by name.
+    /// </summary>
+    public bool IsCovariantReturnOverride { get; set; }
+
+    /// <summary>
     /// Gets or sets the imported constructed base type that owns
     /// <see cref="ExternalOverriddenMethod"/>. Preserves symbolic generic type
     /// arguments when the base is inherited as <c>Base[T]</c>.

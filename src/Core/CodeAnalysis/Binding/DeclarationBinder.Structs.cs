@@ -1971,6 +1971,7 @@ internal sealed partial class DeclarationBinder
                 PropertyInfo? externalOverriddenProperty = null;
                 TypeSymbol? externalPropertyContainingType = null;
                 PropertySymbol? overriddenProperty = null;
+                StructSymbol? covariantOverrideOwner = null;
                 if (isOverride)
                 {
                     if (structSymbol.BaseClass != null && TryGetOverriddenPropertyCandidate(structSymbol.BaseClass, propName, isIndexer, indexerParameters, out var baseProp))
@@ -1990,9 +1991,30 @@ internal sealed partial class DeclarationBinder
                             // wrong and both report the same signature mismatch.
                             Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
                         }
-                        else
+                        else if (PropertyOverrideTypeConforms(structSymbol, baseProp, propType))
                         {
                             overriddenProperty = baseProp;
+                        }
+                        else if (!hasSetter
+                            && FindPropertyOwner(structSymbol.BaseClass, baseProp) is { } covariantOwner)
+                        {
+                            // Issue #4481: a get-only override may narrow the
+                            // type to one with an implicit reference conversion
+                            // to the base type (C# 9 covariant returns). Its
+                            // getter has a different CLR signature, so it cannot
+                            // reuse the base slot by name: the emitter gives it a
+                            // new slot and binds the base getter to it with a
+                            // MethodImpl. Before this check the type was never
+                            // compared, so the getter silently left the base slot
+                            // unimplemented (a TypeLoadException at run time).
+                            // Whether it IS a narrowing is decided once every
+                            // type is bound (see RegisterCovariantPropertyOverrideCheck).
+                            overriddenProperty = baseProp;
+                            covariantOverrideOwner = covariantOwner;
+                        }
+                        else
+                        {
+                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
                         }
                     }
                     else
@@ -2048,6 +2070,15 @@ internal sealed partial class DeclarationBinder
                     ReturnRefKind = propReturnRefKind,
                 };
                 propertySymbol.OverriddenProperty = overriddenProperty;
+                if (covariantOverrideOwner != null)
+                {
+                    RegisterCovariantPropertyOverrideCheck(
+                        structSymbol,
+                        propertySymbol,
+                        covariantOverrideOwner,
+                        propSyntax.Identifier.Location);
+                }
+
                 Binder.AttachDocumentation(propertySymbol, propSyntax);
                 if (externalOverriddenProperty != null)
                 {
@@ -3659,6 +3690,48 @@ internal sealed partial class DeclarationBinder
         }
 
         pendingParameterDefaultValueBindings.Clear();
+    }
+
+    /// <summary>
+    /// Issue #4481: decides, once every type body is bound, whether each
+    /// get-only property override whose type differs from its base property's
+    /// is a covariant narrowing. A narrowing is marked for the emitter (a new
+    /// getter slot bound to the base getter by a MethodImpl); anything else
+    /// has no CLR override form and reports GS0185.
+    /// </summary>
+    internal void CheckPendingCovariantPropertyOverrides()
+    {
+        foreach (var check in pendingCovariantPropertyOverrideChecks)
+        {
+            check();
+        }
+
+        pendingCovariantPropertyOverrideChecks.Clear();
+    }
+
+    private void RegisterCovariantPropertyOverrideCheck(
+        StructSymbol structSymbol,
+        PropertySymbol propertySymbol,
+        StructSymbol overriddenOwner,
+        TextLocation location)
+    {
+        pendingCovariantPropertyOverrideChecks.Add(() =>
+        {
+            if (propertySymbol.OverriddenProperty is { } baseProperty
+                && IsCovariantPropertyType(structSymbol, baseProperty.Type, propertySymbol.Type))
+            {
+                propertySymbol.CovariantOverrideContainingType = overriddenOwner;
+                if (propertySymbol.GetterSymbol is { } getter)
+                {
+                    getter.IsCovariantReturnOverride = true;
+                }
+
+                return;
+            }
+
+            propertySymbol.OverriddenProperty = null;
+            Diagnostics.ReportOverrideSignatureMismatch(location, propertySymbol.Name);
+        });
     }
 
     private void RegisterStructInterfaceChecks(

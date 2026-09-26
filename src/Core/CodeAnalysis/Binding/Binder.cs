@@ -1397,6 +1397,10 @@ public sealed class Binder
         binder.declarations.DetectClassInheritanceCycles(
             declaredStructs.Where(d => d.Symbol.IsClass).Select(d => d.Symbol));
 
+        // Issue #4481: every type's base class is installed now, so a property
+        // override's narrowed type can be tested against its base type.
+        binder.declarations.CheckPendingCovariantPropertyOverrides();
+
         // Issue #4183 (Copilot finding on PR #4192): drain default-parameter-
         // value expressions HERE, before interfaces and top-level functions
         // bind their own members below, rather than after (as originally

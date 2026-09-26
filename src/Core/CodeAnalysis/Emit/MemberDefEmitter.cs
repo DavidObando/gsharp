@@ -415,6 +415,14 @@ internal sealed class MemberDefEmitter
         if (prop.IsOverride)
         {
             methodAttrs |= MethodAttributes.Virtual;
+
+            // Issue #4481: a covariant override's getter has a different CLR
+            // signature from the base getter, so it takes a new slot and
+            // InterfaceImplEmitter binds the base slot to it with a MethodImpl.
+            if (prop.CovariantOverrideContainingType != null)
+            {
+                methodAttrs |= MethodAttributes.NewSlot;
+            }
         }
         else if (prop.IsVirtual)
         {

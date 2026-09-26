@@ -88,6 +88,31 @@ internal sealed class InterfaceImplEmitter
                 continue;
             }
 
+            if (property.CovariantOverrideContainingType is { } covariantOwner
+                && property.OverriddenProperty is { } overriddenProperty
+                && accessors.Getter.HasValue)
+            {
+                // Issue #4481: a covariant property override's getter has its
+                // own slot (a narrower return type), so bind the overridden
+                // source getter to it explicitly, exactly as Roslyn does for
+                // a C# 9 covariant override: a MethodImpl row plus
+                // PreserveBaseOverridesAttribute, so a call through the base
+                // slot still reaches a further override of this one.
+                var declaration = this.outer.userTokens.ResolveUserPropertyAccessorToken(
+                    covariantOwner,
+                    overriddenProperty,
+                    wantSetter: false);
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Getter.Value, declaration);
+
+                var valueBlob = new BlobBuilder();
+                valueBlob.WriteUInt16(0x0001);
+                valueBlob.WriteUInt16(0);
+                this.emitCtx.Metadata.AddCustomAttribute(
+                    accessors.Getter.Value,
+                    this.outer.wellKnown.GetPreserveBaseOverridesAttributeCtorRef(),
+                    this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+            }
+
             if (property.ExternalOverriddenGetter != null && accessors.Getter.HasValue)
             {
                 var declaration = this.outer.memberRefs.GetMethodEntityHandle(
