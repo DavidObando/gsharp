@@ -3097,24 +3097,17 @@ internal sealed partial class ExpressionBinder
             //
             // A friend assembly (one that named this compilation in an
             // `InternalsVisibleTo`) also exposes its `internal` properties and
-            // fields, exactly as it does to a plain `x.Member = v` assignment
-            // (#3684, #3705); only metadata `assembly` accessibility is
-            // admitted, never `private` or `protected`.
-            var includeInternal = CanAccessInternalsOf(clrType);
-            var lookupFlags = ClrMemberVisibility.Widen(BindingFlags.Public | BindingFlags.Instance, includeInternal);
-            MemberInfo? member = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrType, memberName, lookupFlags);
-            if (member is PropertyInfo idxProp
-                && (idxProp.GetIndexParameters().Length != 0 || !ClrMemberVisibility.IsVisible(idxProp, includeInternal)))
+            // fields. The probes are the ones plain `x.Member = v` uses
+            // (#3705): public first, then a friend's `assembly` members only,
+            // with the #3704 own-field ordering, so the two paths cannot
+            // disagree.
+            MemberInfo? member = SafeGetVisibleInstanceProperty(clrType, memberName);
+            if (member is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
             {
                 member = null;
             }
 
-            if (member == null
-                && ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrType, memberName, lookupFlags) is { } candidateField
-                && ClrMemberVisibility.IsVisible(candidateField, includeInternal))
-            {
-                member = candidateField;
-            }
+            member ??= SafeGetVisibleInstanceField(clrType, memberName);
 
             if (member == null)
             {

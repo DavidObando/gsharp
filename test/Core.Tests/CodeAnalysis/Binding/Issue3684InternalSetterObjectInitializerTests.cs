@@ -58,6 +58,16 @@ public sealed class Issue3684InternalSetterObjectInitializerTests
 
             private protected int ProtectedAndFriend { get; set; }
         }
+
+        public class ShadowBase
+        {
+            public int Shadow { get; set; }
+        }
+
+        public class ShadowDerived : ShadowBase
+        {
+            private new int Shadow { get; set; }
+        }
         """;
 
     /// <summary>
@@ -295,6 +305,39 @@ public sealed class Issue3684InternalSetterObjectInitializerTests
             Assert.True(
                 assignment.Success == initializer.Success,
                 "assignment: " + Describe(assignment) + "\ninitializer: " + Describe(initializer));
+        }
+        finally
+        {
+            DeleteOutputDirectory(directory);
+        }
+    }
+
+    /// <summary>
+    /// A friend's widened lookup must not let an inaccessible <c>private</c>
+    /// member of a derived type hide a same-named public base member: the
+    /// initializer binds the public <c>ShadowBase.Shadow</c>, as plain
+    /// assignment does.
+    /// </summary>
+    [Fact]
+    public void FriendAssembly_ObjectInitializer_Private_Derived_Member_Does_Not_Hide_Public_Base_Member()
+    {
+        var directory = CreateOutputDirectory();
+        try
+        {
+            var libraryPath = EmitCSharpLibrary(directory, "Issue3684.Library", CSharpLibrarySource);
+            var result = CompileGSharp(
+                """
+                package Issue3684.Friend
+                import Issue3684.Library
+
+                func Run() ShadowDerived {
+                    return ShadowDerived{Shadow: 1}
+                }
+                """,
+                "Issue3684.Friend",
+                libraryPath);
+
+            Assert.True(result.Success, Describe(result));
         }
         finally
         {
