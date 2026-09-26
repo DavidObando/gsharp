@@ -79,6 +79,14 @@ internal sealed class InterfaceImplEmitter
                     method.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, declaration);
             }
+            else if (MethodInfoHelpers.IsCovariantSourceOverride(method)
+                && method.OverriddenMethod is { } overriddenMethod
+                && this.cache.MethodHandles.TryGetValue(method, out var sourceImplHandle)
+                && this.cache.MethodHandles.TryGetValue(overriddenMethod, out var sourceDeclarationHandle))
+            {
+                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, sourceImplHandle, sourceDeclarationHandle);
+                this.AddPreserveBaseOverridesAttribute(sourceImplHandle);
+            }
         }
 
         foreach (var property in structSymbol.Properties)
@@ -102,6 +110,19 @@ internal sealed class InterfaceImplEmitter
                     property.ExternalOverriddenSetter,
                     property.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Setter.Value, declaration);
+            }
+
+            if (property.OverriddenProperty is { } overriddenProperty
+                && !DeclarationBinder.TypeSignaturesEquivalent(property.Type, overriddenProperty.Type)
+                && accessors.Getter.HasValue
+                && this.cache.PropertyAccessorHandles.TryGetValue(overriddenProperty, out var baseAccessors)
+                && baseAccessors.Getter.HasValue)
+            {
+                this.emitCtx.Metadata.AddMethodImplementation(
+                    implTypeDef,
+                    accessors.Getter.Value,
+                    baseAccessors.Getter.Value);
+                this.AddPreserveBaseOverridesAttribute(accessors.Getter.Value);
             }
         }
 
@@ -136,6 +157,17 @@ internal sealed class InterfaceImplEmitter
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Raise.Value, declaration);
             }
         }
+    }
+
+    private void AddPreserveBaseOverridesAttribute(MethodDefinitionHandle method)
+    {
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+        this.emitCtx.Metadata.AddCustomAttribute(
+            method,
+            this.outer.wellKnown.GetPreserveBaseOverridesAttributeCtorRef(),
+            this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
     }
 
     /// <summary>
