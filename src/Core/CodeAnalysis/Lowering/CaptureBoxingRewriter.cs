@@ -442,7 +442,8 @@ internal static class CaptureBoxingRewriter
         BoxedVariable box,
         BoundExpression? initialValue)
     {
-        var statements = ImmutableArray.CreateBuilder<BoundStatement>(box.RetainedCapture == null ? 2 : 3);
+        var statements = ImmutableArray.CreateBuilder<BoundStatement>(
+            1 + (initialValue == null ? 0 : 1) + (box.RetainedCapture == null ? 0 : 1));
         statements.Add(new BoundVariableDeclaration(
             null,
             box.BoxLocal,

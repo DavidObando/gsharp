@@ -59,6 +59,21 @@ type manualRichPair struct {
 	second int32
 }
 
+type richPair struct {
+	left   *int32
+	right  *int32
+	first  int32
+	second int32
+}
+
+func (c *richPair) Increment() {
+	*c.left++
+	*c.right++
+}
+func (c *richPair) Read() int32 {
+	return *c.left + *c.right + c.first + c.second
+}
+
 func (c *manualRichPair) Increment() {
 	c.left.value++
 	c.right.value++
@@ -461,11 +476,11 @@ func benchFreshRootManualRichConstruction(count int32) {
 }
 
 func benchMultipleRichConstruction(count int32) {
-	left := &intBox{value: 1}
-	right := &intBox{value: 2}
+	left := int32(1)
+	right := int32(2)
 	var checksum int64
 	for range 20_000 {
-		counter := &manualRichPair{left: left, right: right, first: left.value, second: right.value}
+		counter := &richPair{left: &left, right: &right, first: left, second: right}
 		checksum += int64(counter.Read())
 	}
 	checksum = 0
@@ -473,10 +488,7 @@ func benchMultipleRichConstruction(count int32) {
 	allocated := allocatedBytes(func() {
 		start := time.Now()
 		for range count {
-			counter := &manualRichPair{
-				left: left, right: right,
-				first: left.value, second: right.value,
-			}
+			counter := &richPair{left: &left, right: &right, first: left, second: right}
 			checksum += int64(counter.Read())
 		}
 		elapsed = time.Since(start)
