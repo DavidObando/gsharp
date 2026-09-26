@@ -483,8 +483,9 @@ public static partial class Registry
     [Fact]
     public void GeneratedRegexPartialProperty_IsReportedNotSilentlyDropped()
     {
-        // TryTranslateGeneratedRegex rewrites partial METHODS only; the
-        // property form would otherwise vanish (GS0157 at its uses).
+        // Issue #4301: cs2gs translates the partial METHOD form to a G#
+        // declaring part, but G# has no partial properties (ADR-0192 §F), so
+        // the property form would otherwise vanish (GS0157 at its uses).
         const string source = @"
 using System.Text.RegularExpressions;
 
@@ -511,7 +512,8 @@ public static partial class Rx
             diagnostics,
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
         Assert.Contains("Rx.AbProp", unsupported.Message, StringComparison.Ordinal);
-        Assert.Contains("partial METHODS", unsupported.Message, StringComparison.Ordinal);
+        Assert.Contains("G# has no partial properties", unsupported.Message, StringComparison.Ordinal);
+        Assert.Contains("partial METHOD,", unsupported.Message, StringComparison.Ordinal);
     }
 
     [Fact]

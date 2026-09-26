@@ -602,6 +602,21 @@ and it is covered by its own test.
    `samples/GeneratedRegex`.
 3. **Retire `TryTranslateGeneratedRegex`'s `__generatedRegex_` family** once (1)
    and (2) land — the actual close of issue #4301.
+   **Done** (2026-09-25, step 5, closes #4301): `cs2gs migrate` translates a C#
+   `[GeneratedRegex]` partial method definition to a G# declaring part, the
+   form above, and drops the generated C# implementation, so the migrated
+   project's build gets its implementing part from gsgen, as a native project
+   does. `TryTranslateGeneratedRegex`, its cached-`Regex` field and the
+   `__generatedRegex_` names are removed. The attribute is matched by its
+   resolved type, and its arguments (pattern, options, match timeout, culture
+   name) are re-spelled from their constant values, positionally. Culture-
+   sensitive IgnoreCase, which the rewrite reported as unsupported, now
+   migrates. A top-level-statements `Program` class that declares one is kept
+   as a class, with its private members widened to `internal`. A method of a
+   record or of a nested type, and the partial-property form, are reported as
+   unsupported. ADR-0143 has the details, and
+   `e2etests/cs2gs-migrate-generated-regex-e2e.sh` migrates a C# project and
+   runs it through the packed SDK.
 4. **Partial properties** (§F), if a native scenario asks for them.
 5. **Tooling**: go-to-definition on a partial method returning *both* part
    locations, the member-level analogue of ADR-0144 §G's
