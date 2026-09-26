@@ -74,7 +74,9 @@ public abstract class BoundNode
             {
                 var collector = new NodeCollector(this);
                 collector.Visit(this);
-                ImmutableInterlocked.InterlockedInitialize(ref childNodes, collector.Nodes.ToImmutable());
+
+                // The builder is not reused, so its contents move without a copy.
+                ImmutableInterlocked.InterlockedInitialize(ref childNodes, collector.Nodes.DrainToImmutable());
             }
 
             return childNodes;
