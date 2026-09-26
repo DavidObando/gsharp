@@ -250,15 +250,18 @@ public sealed class GsStubRenderer
         }
 
         // A G# `data class` / `data struct` is the spelling of a C# `record` /
-        // `record struct` (ADR-0192 amendment, partial data types), so the
-        // generator sees the real shape: a generator can check `IsRecord` or
-        // read the positional parameters, and C# supplies the record's
-        // synthesized members itself (the positional list gives it the primary
-        // constructor and `Deconstruct`). Fidelity only: the back-translation
-        // spells a generated part of a data type as a `data` part from
-        // DataTypes, whatever keyword the generator re-declared it with.
-        var isRecord = RendersAsRecord(structSymbol);
-        if (isRecord)
+        // `record struct` (ADR-0192 amendment, partial data types), so a
+        // generator that checks `IsRecord` sees the real shape; C# supplies
+        // the record's synthesized members itself. The positional parameter
+        // list is NOT rendered: the properties and constructors below already
+        // carry the type's shape, and with a positional list C# rejects an
+        // explicit constructor that does not chain to it (CS8862) and a
+        // property whose type differs from its parameter's (CS8866, a variadic
+        // `...T` parameter is `T[]` but its property a slice). Fidelity only:
+        // the back-translation spells a generated part of a data type as a
+        // `data` part from DataTypes, whatever keyword the generator
+        // re-declared it with.
+        if (RendersAsRecord(structSymbol))
         {
             sb.Append(structSymbol.IsClass ? "record " : "record struct ");
         }
@@ -269,10 +272,6 @@ public sealed class GsStubRenderer
 
         sb.Append(structSymbol.Name);
         sb.Append(RenderTypeParameters(structSymbol.TypeParameters));
-        if (isRecord && structSymbol.HasPrimaryConstructor)
-        {
-            sb.Append('(').Append(RenderParameters(structSymbol.PrimaryConstructorParameters)).Append(')');
-        }
 
         var bases = CollectBaseTypes(structSymbol);
         if (bases.Count > 0)
@@ -327,10 +326,8 @@ public sealed class GsStubRenderer
     }
 
     // A C# record may derive only from `object` or another record (CS8864),
-    // while a G# data class may derive from any open class; and a record
-    // derived from a positional record must pass its base constructor
-    // arguments, which the stub does not carry (CS7036). So only a data type
-    // with no base class renders as a record; any other stays a class.
+    // while a G# data class may derive from any open class. So only a data
+    // type with no base class renders as a record; any other stays a class.
     private static bool RendersAsRecord(StructSymbol structSymbol) =>
         structSymbol.IsData
         && structSymbol.BaseClass == null

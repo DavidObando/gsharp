@@ -601,13 +601,15 @@ a `data class` or `data struct` qualifies, because "`partial class` or
 
 **gsgen** (ADR-0145) needed two changes:
 
-- The stub renders a G# data type with no base class as a C# `partial record`
-  / `partial record struct`, with its positional parameter list, so a
-  generator sees a record (`IsRecord`, the positional parameters) and C#
-  supplies the record members. A data class with a base class stays a C#
-  `class` in the stub: a record derives only from a record (CS8864), and a
-  record derived from a positional record needs base-constructor arguments
-  the stub does not have.
+- The stub renders a G# data type with no base class as a C# `record` /
+  `record struct` (`partial` when the G# type is), so a generator sees a
+  record (`IsRecord`) and C# supplies the record members. It renders no
+  positional parameter list: the properties and constructors it already
+  renders carry the shape, and a positional list makes C# reject an explicit
+  constructor that does not chain to it (CS8862) and a variadic parameter
+  whose property is a slice (CS8866). A data class with a base class stays a
+  C# `class` in the stub, because a record derives only from a record
+  (CS8864).
 - The back-translation spells every generated part of a user data type as a
   `partial data class` / `partial data struct` part, whatever keyword the
   generated C# re-declared the type with. The generated part carries no

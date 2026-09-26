@@ -233,6 +233,27 @@ HEADER Url(Owner string, Name string, Pr int32?) {
         Assert.True(DeclaredMethod(stub, "Digits").IsPartialDefinition);
     }
 
+    // Every data type with no base class now renders as a record, not only one
+    // with partial funcs, so the other data shapes must still bind: an extra
+    // constructor, a variadic or defaulted positional parameter, a generic
+    // data class, and a non-positional data struct with fields.
+    [Theory]
+    [InlineData("data class Q(A int32) {\n    init(s string) {\n        A = 1\n    }\n}")]
+    [InlineData("data class Names(prefix string, items ...string)")]
+    [InlineData("data class D(A int32, B string = \"x\")")]
+    [InlineData("data class Box[T](Value T)")]
+    [InlineData("data struct Point {\n    var X int32\n    var Y int32\n}")]
+    [InlineData("data class Lower(x int32)")]
+    public void DataTypeShapes_RenderAsRecordsThatBindClean(string declaration)
+    {
+        var stub = Project("package App\n\n" + declaration + "\n");
+
+        AssertParses(stub);
+        var errors = BindStub(stub).GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, stub + "\n\n" + string.Join("\n", errors));
+        Assert.Contains(" record ", stub.Replace("record struct", "record ", System.StringComparison.Ordinal), System.StringComparison.Ordinal);
+    }
+
     private static System.Collections.Generic.List<MethodDeclarationSyntax> Methods(string stub, string name) =>
         Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(stub).GetRoot()
             .DescendantNodes()
