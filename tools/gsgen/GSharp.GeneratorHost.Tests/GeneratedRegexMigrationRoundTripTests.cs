@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Globalization;
 using System.Linq;
 using System.Reflection;
 using Cs2Gs.CodeModel.Printing;
@@ -95,6 +96,23 @@ partial class P
 
     [Fact]
     public void MigratedGeneratedRegex_IsImplementedByTheRealGenerator_AndKeepsEveryArgument()
+    {
+        // `(?i)^i$` (InlineI) carries no culture name, so pin the current
+        // culture for generation and matching: under tr-TR its IgnoreCase would
+        // not fold ASCII `I`, and the assertion must not depend on the machine.
+        CultureInfo previous = CultureInfo.CurrentCulture;
+        CultureInfo.CurrentCulture = CultureInfo.InvariantCulture;
+        try
+        {
+            this.AssertMigratedGeneratedRegex();
+        }
+        finally
+        {
+            CultureInfo.CurrentCulture = previous;
+        }
+    }
+
+    private void AssertMigratedGeneratedRegex()
     {
         string migrated = TranslateCSharp(MigratedSource, MigratedGenerated);
         this.output.WriteLine(migrated);
