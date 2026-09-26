@@ -3094,13 +3094,21 @@ internal sealed partial class ExpressionBinder
             // Resolve a public instance property (non-indexer) or field on the
             // imported CLR type. A settable member binds to a CLR property/field
             // assignment; a get-only/read-only member stays diagnosed (GS0127).
-            MemberInfo? member = ClrTypeUtilities.SafeGetPropertyIncludingInterfaces(clrType, memberName, BindingFlags.Public | BindingFlags.Instance);
+            //
+            // A friend assembly (one that named this compilation in an
+            // `InternalsVisibleTo`) also exposes its `internal` properties and
+            // fields. The probes are the ones plain `x.Member = v` uses
+            // (#3705): public first, then a friend's `assembly` members only,
+            // with the #3704 own-field ordering, so the two paths cannot
+            // disagree.
+            MemberInfo? member = SafeGetVisibleInstanceProperty(clrType, memberName);
             if (member is PropertyInfo idxProp && idxProp.GetIndexParameters().Length != 0)
             {
                 member = null;
             }
 
-            member ??= ClrTypeUtilities.SafeGetFieldIncludingInterfaces(clrType, memberName, BindingFlags.Public | BindingFlags.Instance);
+            member ??= SafeGetVisibleInstanceField(clrType, memberName);
+
             if (member == null)
             {
                 Diagnostics.ReportUnableToFindMember(initSyntax.FieldIdentifier.Location, memberName);
