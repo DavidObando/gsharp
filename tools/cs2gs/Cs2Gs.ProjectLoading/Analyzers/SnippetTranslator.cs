@@ -229,8 +229,11 @@ public static class SnippetTranslator
                 string candidate = renamed.Text;
                 int candidateOrdinal = ExpressionOrdinal(
                     document, marked, packages, unitIndex);
-                TryFormattingTolerantOccurrence(
-                    searchable, candidate, candidateOrdinal, out index, out length);
+                if (candidateOrdinal >= 0)
+                {
+                    TryFormattingTolerantOccurrence(
+                        searchable, candidate, candidateOrdinal, out index, out length);
+                }
             }
 
             if (index < 0)
@@ -449,8 +452,13 @@ public static class SnippetTranslator
     {
         ExpressionSyntax markedExpression = document.GetRoot().DescendantNodes()
             .OfType<ExpressionSyntax>()
-            .First(expression => expression.SpanStart == marked.Start
+            .FirstOrDefault(expression => expression.SpanStart == marked.Start
                 && expression.Span.Length == marked.Text.Length);
+        if (markedExpression is null)
+        {
+            return -1;
+        }
+
         string markedTokens = ExpressionTokenKey(document, markedExpression);
         return document.GetRoot().DescendantNodes()
             .OfType<ExpressionSyntax>()
@@ -475,7 +483,7 @@ public static class SnippetTranslator
                     return "default";
                 }
 
-                if (token.Parent is TypeSyntax type
+                if (token.Parent is PredefinedTypeSyntax type
                     && document.SemanticModel.GetTypeInfo(type).Type is { } symbol
                     && CSharpTypeMapper.GetPredefinedName(symbol.SpecialType) is { } predefined)
                 {

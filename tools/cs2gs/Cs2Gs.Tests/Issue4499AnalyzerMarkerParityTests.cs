@@ -124,4 +124,65 @@ class GlobalConsumer
             "[|Math.Abs(value)|]", StringComparison.Ordinal);
         Assert.True(earlierPackageCall >= 0 && markedGlobalCall > earlierPackageCall);
     }
+
+    [Fact]
+    public void FormattingFallbackPreservesAliasSpellingInItsOrdinal()
+    {
+        const string source = """
+using System;
+
+namespace Sample
+{
+    using integer = System.Int32;
+
+    static class Door
+    {
+        public static object Map(int value, object other, object last) => value;
+    }
+
+    class Consumer
+    {
+        void Use()
+        {
+            _ = Door.Map(integer.Parse("1"), null, default);
+            _ = [|Door.Map(int.Parse("1"), null, default)|];
+        }
+    }
+}
+""";
+
+        SnippetTranslationResult result = SnippetTranslator.Translate(source);
+
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.True(
+            result.UnplacedMarkers.Count == 0,
+            result.GsWithMarkers + Environment.NewLine + string.Join(Environment.NewLine, result.UnplacedMarkers));
+        int earlierAliasCall = result.GsWithMarkers.IndexOf(
+            "Door.Map(", StringComparison.Ordinal);
+        int markedPredefinedCall = result.GsWithMarkers.IndexOf(
+            "[|Door.Map(", StringComparison.Ordinal);
+        Assert.True(earlierAliasCall >= 0 && markedPredefinedCall > earlierAliasCall);
+        Assert.Contains("integer.Parse", result.GsWithMarkers, StringComparison.Ordinal);
+        Assert.Contains("int32.Parse", result.GsWithMarkers, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NonExpressionMarkerIsReportedUnplacedInsteadOfThrowing()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate("""
+class Consumer
+{
+    void Use()
+    {
+        [|return;|]
+    }
+}
+""");
+
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.Equal(new[] { "return;" }, result.UnplacedMarkers);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.DiagnosticId == SnippetTranslator.SnippetDiagnosticId);
+    }
 }
