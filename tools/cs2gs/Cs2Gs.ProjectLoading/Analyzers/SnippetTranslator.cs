@@ -211,7 +211,10 @@ public static class SnippetTranslator
                 MarkedText renamed = renaming.Rename(marked);
                 if (!string.Equals(renamed.Text, marked.Text, StringComparison.Ordinal))
                 {
-                    index = NthOccurrence(searchable, renamed.Text, ordinal);
+                    int renamedOrdinal = packages.Count > 1
+                        ? OccurrenceOrdinal(document, renaming, renamed, markedPackage)
+                        : OccurrenceOrdinal(renaming.Source, renamed.Text, renamed.Start);
+                    index = NthOccurrence(searchable, renamed.Text, renamedOrdinal);
                     length = renamed.Text.Length;
                 }
             }
@@ -227,8 +230,10 @@ public static class SnippetTranslator
             {
                 MarkedText renamed = renaming.Rename(marked);
                 string candidate = renamed.Text;
+                int candidateOrdinal = ExpressionOrdinal(
+                    document, marked, packages.Count > 1 ? markedPackage : null);
                 TryFormattingTolerantOccurrence(
-                    searchable, candidate, ordinal, out index, out length);
+                    searchable, candidate, candidateOrdinal, out index, out length);
             }
 
             if (index < 0)
@@ -426,12 +431,53 @@ public static class SnippetTranslator
         return ordinal;
     }
 
+    private static int OccurrenceOrdinal(
+        LoadedDocument document, PredefinedRenaming renaming, MarkedText marked, string package)
+    {
+        var ordinal = 0;
+        for (int i = renaming.Source.IndexOf(marked.Text, StringComparison.Ordinal);
+             i >= 0 && i < marked.Start;
+             i = renaming.Source.IndexOf(marked.Text, i + marked.Text.Length, StringComparison.Ordinal))
+        {
+            if (string.Equals(
+                DeclaredPackageAt(document, renaming.OriginalOffset(i)),
+                package,
+                StringComparison.Ordinal))
+            {
+                ordinal++;
+            }
+        }
+
+        return ordinal;
+    }
+
     private static string DeclaredPackageAt(LoadedDocument document, int offset)
-        => document.GetRoot().FindToken(offset).Parent?
+    {
+        BaseNamespaceDeclarationSyntax declaration = document.GetRoot().FindToken(offset).Parent?
             .AncestorsAndSelf()
             .OfType<BaseNamespaceDeclarationSyntax>()
-            .FirstOrDefault()?
-            .Name.ToString() ?? string.Empty;
+            .FirstOrDefault();
+        return declaration is not null
+            && document.SemanticModel.GetDeclaredSymbol(declaration) is INamespaceSymbol symbol
+                ? symbol.ToDisplayString()
+                : string.Empty;
+    }
+
+    private static int ExpressionOrdinal(
+        LoadedDocument document, MarkedText marked, string package)
+    {
+        string markedTokens = ExpressionTokenKey(SyntaxFactory.ParseExpression(marked.Text));
+        return document.GetRoot().DescendantNodes()
+            .OfType<ExpressionSyntax>()
+            .Where(expression => expression.SpanStart < marked.Start)
+            .Where(expression => package is null
+                || string.Equals(DeclaredPackageAt(document, expression.SpanStart), package, StringComparison.Ordinal))
+            .Count(expression => string.Equals(
+                ExpressionTokenKey(expression), markedTokens, StringComparison.Ordinal));
+    }
+
+    private static string ExpressionTokenKey(SyntaxNode expression)
+        => string.Join("\u001f", expression.DescendantTokens().Select(token => token.Text));
 
     private static int PackageUnitIndex(IReadOnlyList<string> packages, string package)
     {
@@ -540,7 +586,7 @@ public static class SnippetTranslator
             }
             else if (token.IsKind(SyntaxKind.DefaultKeyword))
             {
-                pattern.Append(@"default(?:\s*\([^)]*\))?");
+                pattern.Append(@"default(?:\s*\((?>[^()]|\((?<depth>)|\)(?<-depth>))*(?(depth)(?!))\))?");
             }
             else
             {
@@ -720,6 +766,32 @@ public static class SnippetTranslator
             int start = this.Shift(marked.Start);
             int end = this.Shift(marked.Start + marked.Text.Length);
             return new MarkedText(this.Source.Substring(start, end - start), start);
+        }
+
+        /// <summary>Maps an offset in <see cref="Source"/> back to the original C# source.</summary>
+        /// <param name="offset">The renamed-source offset.</param>
+        /// <returns>The corresponding original-source offset.</returns>
+        public int OriginalOffset(int offset)
+        {
+            var delta = 0;
+            foreach ((int Start, int End, int Delta) entry in this.deltas)
+            {
+                int renamedStart = entry.Start + delta;
+                int renamedEnd = entry.End + entry.Delta;
+                if (offset < renamedStart)
+                {
+                    break;
+                }
+
+                if (offset < renamedEnd)
+                {
+                    return entry.Start;
+                }
+
+                delta = entry.Delta;
+            }
+
+            return offset - delta;
         }
 
         // The renamed offset of a C# offset: shifted by every replacement that

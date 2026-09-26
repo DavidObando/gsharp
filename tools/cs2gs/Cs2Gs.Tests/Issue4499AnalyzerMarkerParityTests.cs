@@ -15,20 +15,25 @@ using System;
 using System.Collections.Immutable;
 using System.Reflection;
 
-namespace Symbols
+namespace Outer
 {
-    static class Door
+    namespace Symbols
     {
-        public static Type Convert(Type type) => type;
+        static class Door
+        {
+            public static Type Convert(Type type) => type;
 
-        public static Type Map(Type type, Type definition, ImmutableArray<Type> arguments)
-            => Door.Convert(type);
+            public static Type Map(Type type, Type definition, ImmutableArray<Type> arguments)
+                => Door.Convert(type);
+
+            public static object Tuple((int, string) value) => value;
+        }
     }
 }
 
 namespace Binding
 {
-    using Symbols;
+    using Outer.Symbols;
 
     class EarlierOtherUnit
     {
@@ -36,14 +41,22 @@ namespace Binding
     }
 }
 
-namespace Symbols
+namespace Outer
 {
-    class Consumer
+    namespace Symbols
     {
-        void Use(Type type, EventInfo evt)
+        class Consumer
         {
-            _ = [|Door.Convert(type)|];
-            _ = [|Door.Map(evt.EventHandlerType, null, default)|];
+            // typeof(int32) is already the translated spelling.
+            Type Primitive() => [|typeof(int)|];
+
+            void Use(Type type, EventInfo evt)
+            {
+                _ = [|Door.Convert(type)|];
+                // Door.Map(evt.EventHandlerType, null, default) must not affect expression ordinals.
+                _ = [|Door.Map(evt.EventHandlerType, null, default)|];
+                _ = [|Door.Tuple(default)|];
+            }
         }
     }
 }
@@ -56,20 +69,23 @@ namespace Symbols
 
         Assert.NotNull(result.GsWithMarkers);
         Assert.Empty(result.UnplacedMarkers);
-        Assert.Equal(2, result.GsWithMarkers.Split("[|", StringSplitOptions.None).Length - 1);
+        Assert.Equal(4, result.GsWithMarkers.Split("[|", StringSplitOptions.None).Length - 1);
 
         string[] units = result.GsWithMarkers.Split(
             SnippetTranslator.UnitSeparator,
             StringSplitOptions.None);
         Assert.Equal(2, units.Length);
-        string symbols = Assert.Single(units, unit => unit.Contains("package Symbols", StringComparison.Ordinal));
+        string symbols = Assert.Single(units, unit => unit.Contains("package Outer.Symbols", StringComparison.Ordinal));
         string binding = Assert.Single(units, unit => unit.Contains("package Binding", StringComparison.Ordinal));
 
-        Assert.Equal(2, symbols.Split("[|", StringSplitOptions.None).Length - 1);
+        Assert.Equal(4, symbols.Split("[|", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("[|", binding, StringComparison.Ordinal);
+        Assert.Contains("-> [|typeof(int32)|]", symbols, StringComparison.Ordinal);
+        Assert.DoesNotContain("// [|typeof(int32)|]", symbols, StringComparison.Ordinal);
         Assert.Contains("[|Door.Convert(type)|]", symbols, StringComparison.Ordinal);
         Assert.Contains("[|Door.Map(", symbols, StringComparison.Ordinal);
         Assert.Contains("nil", symbols, StringComparison.Ordinal);
         Assert.Contains("default(ImmutableArray[Type])", symbols, StringComparison.Ordinal);
+        Assert.Contains("))|]", symbols, StringComparison.Ordinal);
     }
 }
