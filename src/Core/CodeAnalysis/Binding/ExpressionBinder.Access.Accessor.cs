@@ -4393,7 +4393,7 @@ internal sealed partial class ExpressionBinder
                         var variadicParam = method.Parameters[method.Parameters.Length - 1];
                         var variadicElementType = VariadicCarriers.GetElementType(variadicParam.Type);
                         var trailingCount = arguments.Length - fixedParamCount;
-                        if (trailingCount == 1 && arguments[fixedParamCount].Type is SliceTypeSymbol singleSlice)
+                        if (trailingCount == 1 && RefCapabilities.GetValueArgumentInferenceType(arguments[fixedParamCount].Type) is SliceTypeSymbol singleSlice)
                         {
                             Binder.InferTypeArguments(variadicElementType, singleSlice.ElementType, substitution);
                         }

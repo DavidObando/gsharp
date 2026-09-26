@@ -2115,7 +2115,7 @@ internal sealed partial class OverloadResolver
                         && paramType is SliceTypeSymbol variadicSlice)
                     {
                         var trailingCount = boundArguments.Count - i;
-                        if (trailingCount == 1 && boundArguments[i].Type is SliceTypeSymbol)
+                        if (trailingCount == 1 && RefCapabilities.GetValueArgumentInferenceType(boundArguments[i].Type) is SliceTypeSymbol)
                         {
                             inferTypeArguments(paramType, RefCapabilities.GetValueArgumentInferenceType(boundArguments[i].Type), substitution);
                         }

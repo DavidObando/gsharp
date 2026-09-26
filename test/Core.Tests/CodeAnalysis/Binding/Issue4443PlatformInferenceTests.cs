@@ -200,6 +200,40 @@ public class Issue4443PlatformInferenceTests
     }
 
     /// <summary>
+    /// A platform slice passed to a variadic <c>...T</c> slot is still a
+    /// pass-through carrier: <c>Of(values)</c> over an <c>@Oblivious</c>
+    /// <c>[]string</c> (<c>[]string</c> with a platform top level) infers
+    /// <c>T = string</c> and returns the two elements, as it does for a plain
+    /// slice, for a free function and for an instance method. Deciding the
+    /// carrier shape before stripping the top-level <c>!</c> inferred
+    /// <c>T = []string</c> and wrapped the slice as one element.
+    /// </summary>
+    [Fact]
+    public void A_Platform_Slice_Passes_Through_A_Variadic_Slot()
+    {
+        using var library = new CSharpFixture(LibrarySource);
+
+        const string program = """
+            func Of[T](values ...T) []T { return values }
+
+            class Maker {
+                func Of[T](values ...T) []T { return values }
+            }
+
+            @Oblivious
+            func Pass(values []string) int32 {
+                let free = Of(values)
+                let member = Maker().Of(values)
+                return free.Length * 10 + member.Length
+            }
+
+            Console.WriteLine(Pass([]string{"a", "b"}))
+            """;
+
+        Assert.Equal("22\n", Run(library, program));
+    }
+
+    /// <summary>
     /// A by-reference argument infers from its exact type in the call that is
     /// actually bound, not only while candidates are ranked: <c>Get(ref a)</c>
     /// over a <c>string!</c> local infers <c>T = string!</c>, so the result

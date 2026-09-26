@@ -1734,7 +1734,9 @@ internal sealed partial class OverloadResolver
                         && VariadicCarriers.GetElementType(paramType) is { } variadicInferElement
                         && variadicInferElement != TypeSymbol.Error)
                     {
-                        var argType = permutedArguments[i].Type;
+                        // Normalized first, so a top-level `T!` over a slice is still a
+                        // pass-through carrier.
+                        var argType = RefCapabilities.GetValueArgumentInferenceType(permutedArguments[i].Type);
                         if (permutedArguments.Length - i == 1 && argType is SliceTypeSymbol passThroughSlice)
                         {
                             inferTypeArguments(variadicInferElement, passThroughSlice.ElementType, substitution);
@@ -1744,7 +1746,7 @@ internal sealed partial class OverloadResolver
                         {
                             // Carrier pass-through (`f(existingList)`): let the
                             // general structural walk unify the carrier shapes.
-                            inferTypeArguments(paramType, RefCapabilities.GetValueArgumentInferenceType(argType), substitution);
+                            inferTypeArguments(paramType, argType, substitution);
                         }
                         else
                         {
