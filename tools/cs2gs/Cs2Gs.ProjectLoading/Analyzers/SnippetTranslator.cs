@@ -469,29 +469,42 @@ public static class SnippetTranslator
     }
 
     private static string ExpressionTokenKey(LoadedDocument document, SyntaxNode expression)
-        => string.Join(
-            "\u001f",
-            expression.DescendantTokens().Select(token =>
+    {
+        var tokens = new List<string>();
+        foreach (SyntaxToken token in expression.DescendantTokens())
+        {
+            if (token.Parent?.AncestorsAndSelf().OfType<DefaultExpressionSyntax>().Any() == true)
             {
-                if (token.IsKind(SyntaxKind.NullKeyword))
-                {
-                    return "nil";
-                }
-
                 if (token.IsKind(SyntaxKind.DefaultKeyword))
                 {
-                    return "default";
+                    tokens.Add("default");
                 }
 
-                if (token.Parent is PredefinedTypeSyntax type
-                    && document.SemanticModel.GetTypeInfo(type).Type is { } symbol
-                    && CSharpTypeMapper.GetPredefinedName(symbol.SpecialType) is { } predefined)
-                {
-                    return predefined;
-                }
+                continue;
+            }
 
-                return token.Text;
-            }));
+            if (token.IsKind(SyntaxKind.NullKeyword))
+            {
+                tokens.Add("nil");
+            }
+            else if (token.IsKind(SyntaxKind.DefaultKeyword))
+            {
+                tokens.Add("default");
+            }
+            else if (token.Parent is PredefinedTypeSyntax type
+                && document.SemanticModel.GetTypeInfo(type).Type is { } symbol
+                && CSharpTypeMapper.GetPredefinedName(symbol.SpecialType) is { } predefined)
+            {
+                tokens.Add(predefined);
+            }
+            else
+            {
+                tokens.Add(token.Text);
+            }
+        }
+
+        return string.Join("\u001f", tokens);
+    }
 
     private static bool BelongsToUnit(
         LoadedDocument document, int offset, IReadOnlyList<string> packages, int unitIndex)

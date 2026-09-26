@@ -74,6 +74,7 @@ namespace Outer
                 _ = SomeDoor.Map(typeof(int), null, default);
                 _ = Door.Map(typeof(int32), null, default);
                 _ = [|Door.Map(typeof(int), null, default)|];
+                _ = Door.Tuple(default((int, string)));
                 _ = [|Door.Tuple(default)|];
             }
         }
@@ -118,6 +119,11 @@ class GlobalConsumer
         Assert.Contains("nil", symbols, StringComparison.Ordinal);
         Assert.Contains("default(ImmutableArray[Type])", symbols, StringComparison.Ordinal);
         Assert.Contains("))|]", symbols, StringComparison.Ordinal);
+        int earlierExplicitDefault = symbols.IndexOf(
+            "Door.Tuple(default((int32, string)))", StringComparison.Ordinal);
+        int markedContextualDefault = symbols.IndexOf(
+            "[|Door.Tuple(default((int32, string)))|]", StringComparison.Ordinal);
+        Assert.True(earlierExplicitDefault >= 0 && markedContextualDefault > earlierExplicitDefault);
         int earlierPackageCall = symbols.IndexOf(
             "Math.Abs(value)", StringComparison.Ordinal);
         int markedGlobalCall = symbols.IndexOf(
