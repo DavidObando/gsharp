@@ -41,6 +41,13 @@ type richCounter struct {
 func (c *richCounter) Increment()  { *c.captured++ }
 func (c *richCounter) Read() int32 { return *c.captured + c.snapshot }
 
+type captureCounter struct {
+	captured *int32
+}
+
+func (c *captureCounter) Increment()  { *c.captured++ }
+func (c *captureCounter) Read() int32 { return *c.captured }
+
 type intBox struct {
 	value int32
 }
@@ -84,7 +91,7 @@ func (c *manualRichPair) Read() int32 {
 
 func makeRichCounter(seed int32) Counter {
 	captured := seed
-	return &richCounter{captured: &captured}
+	return &captureCounter{captured: &captured}
 }
 
 func makeManualRichCounter(seed int32) Counter {
@@ -281,7 +288,7 @@ func benchAdaptLocation(count int32) {
 
 func benchRichCapture(count int32) {
 	captured := int32(0)
-	var counter Counter = &richCounter{captured: &captured}
+	var counter Counter = &captureCounter{captured: &captured}
 	for range 20_000 {
 		counter.Increment()
 	}
@@ -361,7 +368,7 @@ func benchRichConstruction(count int32) {
 	captured := int32(1)
 	var checksum int64
 	for range 20_000 {
-		var counter Counter = &richCounter{captured: &captured}
+		var counter Counter = &captureCounter{captured: &captured}
 		checksum += int64(counter.Read())
 	}
 	checksum = 0
@@ -369,7 +376,7 @@ func benchRichConstruction(count int32) {
 	allocated := allocatedBytes(func() {
 		start := time.Now()
 		for range count {
-			var counter Counter = &richCounter{captured: &captured}
+			var counter Counter = &captureCounter{captured: &captured}
 			checksum += int64(counter.Read())
 		}
 		elapsed = time.Since(start)
@@ -402,7 +409,7 @@ func benchRetainedRichConstruction(count int32) {
 	retained := make([]Counter, count)
 	var checksum int64
 	for range 20_000 {
-		counter := &richCounter{captured: &captured}
+		counter := &captureCounter{captured: &captured}
 		checksum += int64(counter.Read())
 	}
 	checksum = 0
@@ -410,7 +417,7 @@ func benchRetainedRichConstruction(count int32) {
 	allocated := allocatedBytes(func() {
 		start := time.Now()
 		for i := range count {
-			counter := &richCounter{captured: &captured}
+			counter := &captureCounter{captured: &captured}
 			retained[i] = counter
 			checksum += int64(counter.Read())
 		}
