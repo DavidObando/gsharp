@@ -31,7 +31,7 @@ namespace GSharp.Compiler.Tests;
 /// not a covariant narrowing is rejected instead of silently accepted.</para>
 /// <para>Each case compiles, IL-verifies, LOADS and runs, reading the property
 /// through the base-typed reference: compiling alone passed before the fix.
-/// Every executable case failed with the TypeLoadException before it.</para>
+/// Every covariant executable case failed with the TypeLoadException before it.</para>
 /// </remarks>
 public class Issue4481CovariantPropertyOverrideTests
 {
@@ -173,6 +173,75 @@ Console.WriteLine(n.Property!!.Name)
             new[] { "x" },
         };
 
+        // A narrowing to a SOURCE interface: the check must run after interface
+        // base clauses and class interface closures are bound, or `IDerived`
+        // (and a class implementing `IBase` only through `IDerived`) does not
+        // yet convert to `IBase`.
+        yield return new object[]
+        {
+            "interface-and-transitive-narrowing",
+            @"
+open class Node {
+    open prop Property IBase? { get; }
+    open prop Other IBase? { get; }
+}
+
+class Access : Node {
+    init(p Impl) {
+        _property = p
+        _other = p
+    }
+
+    private var _property IDerived
+    private var _other Impl
+    override prop Property IDerived -> _property
+    override prop Other Impl -> _other
+}
+
+interface IBase { func Name() string; }
+interface IDerived : IBase { }
+class Impl : IDerived { func Name() string -> ""impl"" }
+
+let n Node = Access(Impl())
+Console.WriteLine(n.Property!!.Name())
+Console.WriteLine(n.Other!!.Name())
+",
+            new[] { "impl", "impl" },
+        };
+
+        // Reference nullability is metadata only at every nesting level, so
+        // `List[Sym]` over `List[Sym?]` (and the slice / dictionary shapes, which
+        // the old top-level-only strip rejected) is the SAME slot type.
+        // The setter makes that observable: a type change with a setter has no
+        // covariant form, so treating it as one would report GS0185.
+        yield return new object[]
+        {
+            "nested-nullability-same-slot",
+            @"
+open class Node {
+    open prop Items List[Sym?] { get; set; }
+    open prop Arr []Sym? { get; set; }
+    open prop Map Dictionary[string, Sym?] { get; set; }
+}
+
+class Access : Node {
+    init(items List[Sym]) {
+        Items = items
+    }
+
+    override prop Items List[Sym] { get; set; }
+    override prop Arr []Sym { get; set; }
+    override prop Map Dictionary[string, Sym] { get; set; }
+}
+
+let items = List[Sym]()
+items.Add(Sym(""x""))
+let n Node = Access(items)
+Console.WriteLine(n.Items[0]!!.Name)
+",
+            new[] { "x" },
+        };
+
         // A same-type override (nullability aside) keeps reusing the base slot.
         yield return new object[]
         {
@@ -267,10 +336,52 @@ Console.WriteLine(n.Property!!.Name)
         }
     }
 
+    /// <summary>
+    /// A narrowing the CLR covariant-return form cannot express: a by-ref
+    /// property (covariant returns are by-value only), or a base with no
+    /// getter to bind the override's getter to (the emitter used to throw).
+    /// </summary>
+    /// <param name="name">The case name.</param>
+    /// <param name="baseDeclaration">The base class member declarations.</param>
+    /// <param name="overrideDeclaration">The override class member declarations.</param>
+    [Theory]
+    [InlineData(
+        "by-ref-narrowing",
+        "var slot Sym = Sym(\"a\")\nopen prop Property ref Sym { get { return ref slot } }",
+        "var own PSym = PSym(\"b\")\noverride prop Property ref PSym { get { return ref own } }")]
+    [InlineData(
+        "getter-over-setter-only-base",
+        "open prop Property Sym { set { } }",
+        "override prop Property PSym -> PSym(\"s\")")]
+    public void NarrowingWithNoCovariantForm_IsRejected(string name, string baseDeclaration, string overrideDeclaration)
+    {
+        var body = $$"""
+            open class Node {
+                {{baseDeclaration}}
+            }
+
+            class Access : Node {
+                {{overrideDeclaration}}
+            }
+            """;
+        var tempDir = Directory.CreateTempSubdirectory("gs_4481_").FullName;
+        try
+        {
+            var (exitCode, diagnostics, _) = Compile(tempDir, name, body);
+            Assert.True(exitCode != 0, $"'{name}' must be rejected.");
+            Assert.Contains("GS0185", diagnostics, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
     private static (int ExitCode, string Diagnostics, string OutPath) Compile(string tempDir, string name, string body)
     {
         var srcPath = Path.Combine(tempDir, "Program.gs");
-        File.WriteAllText(srcPath, "package P\nimport System\n" + Symbols + body);
+        File.WriteAllText(srcPath, "package P\nimport System\nimport System.Collections.Generic\n" + Symbols + body);
         var outPath = Path.Combine(tempDir, name + ".dll");
 
         var args = new List<string>

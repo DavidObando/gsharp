@@ -1996,6 +1996,8 @@ internal sealed partial class DeclarationBinder
                             overriddenProperty = baseProp;
                         }
                         else if (!hasSetter
+                            && baseProp.HasGetter
+                            && propReturnRefKind == RefKind.None
                             && FindPropertyOwner(structSymbol.BaseClass, baseProp) is { } covariantOwner)
                         {
                             // Issue #4481: a get-only override may narrow the
@@ -2009,6 +2011,9 @@ internal sealed partial class DeclarationBinder
                             // unimplemented (a TypeLoadException at run time).
                             // Whether it IS a narrowing is decided once every
                             // type is bound (see RegisterCovariantPropertyOverrideCheck).
+                            // The base must have a getter to bind to, and the
+                            // CLR covariant-return form covers by-value returns
+                            // only, so a by-ref narrowing has no override form.
                             overriddenProperty = baseProp;
                             covariantOverrideOwner = covariantOwner;
                         }

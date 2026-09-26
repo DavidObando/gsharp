@@ -1397,10 +1397,6 @@ public sealed class Binder
         binder.declarations.DetectClassInheritanceCycles(
             declaredStructs.Where(d => d.Symbol.IsClass).Select(d => d.Symbol));
 
-        // Issue #4481: every type's base class is installed now, so a property
-        // override's narrowed type can be tested against its base type.
-        binder.declarations.CheckPendingCovariantPropertyOverrides();
-
         // Issue #4183 (Copilot finding on PR #4192): drain default-parameter-
         // value expressions HERE, before interfaces and top-level functions
         // bind their own members below, rather than after (as originally
@@ -1449,6 +1445,13 @@ public sealed class Binder
         binder.declarations.BindPendingFieldInitializers();
 
         binder.declarations.ExpandStructInterfaceClosures();
+
+        // Issue #4481: every class's base class, every source interface's base
+        // clause and every class's implemented-interface closure are populated
+        // now, so a property override's narrowed type (a class, or a source
+        // interface reached transitively) can be tested against its base
+        // type. Only the emitter reads the result.
+        binder.declarations.CheckPendingCovariantPropertyOverrides();
 
         // Issues #4089/#4090: every same-compilation declaration's
         // type-parameter constraints are now resolved (class bodies, then

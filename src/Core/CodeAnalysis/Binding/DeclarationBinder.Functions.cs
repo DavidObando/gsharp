@@ -3005,12 +3005,26 @@ internal sealed partial class DeclarationBinder
         }
 
         var substitution = BuildBaseTypeArgumentSubstitution(derived);
-        return ConformanceSignaturesEquivalent(baseType, overrideType, substitution)
-            || ConformanceSignaturesEquivalent(
-                StripPlatformOrReferenceNullable(baseType),
-                StripPlatformOrReferenceNullable(overrideType),
-                substitution);
+        if (ConformanceSignaturesEquivalent(baseType, overrideType, substitution))
+        {
+            return true;
+        }
+
+        // Reference nullability is metadata only at EVERY nesting level:
+        // `List[Sym?]` and `List[Sym]` are one CLR slot type.
+        return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            SubstituteBaseType(baseType, substitution),
+            overrideType);
     }
+
+    // Issue #4481: reads a base member's type through the derived type's
+    // base-class type arguments (`Node[T]`'s `T` is `Sym` in `: Node[Sym]`).
+    private static TypeSymbol SubstituteBaseType(
+        TypeSymbol baseType,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? substitution)
+        => substitution == null || substitution.Count == 0
+            ? baseType
+            : Binder.SubstituteType(baseType, new Dictionary<TypeParameterSymbol, TypeSymbol>(substitution));
 
     /// <summary>
     /// Issue #4481: whether <paramref name="overrideType"/> is a covariant
@@ -3024,13 +3038,7 @@ internal sealed partial class DeclarationBinder
     /// <returns><see langword="true"/> for a covariant narrowing.</returns>
     internal static bool IsCovariantPropertyType(StructSymbol derived, TypeSymbol baseType, TypeSymbol overrideType)
     {
-        if (baseType is TypeParameterSymbol baseTypeParameter
-            && BuildBaseTypeArgumentSubstitution(derived) is { } substitution
-            && substitution.TryGetValue(baseTypeParameter, out var substituted))
-        {
-            baseType = substituted;
-        }
-
+        baseType = SubstituteBaseType(baseType, BuildBaseTypeArgumentSubstitution(derived));
         var from = StripPlatformOrReferenceNullable(overrideType);
         var to = StripPlatformOrReferenceNullable(baseType);
         return from != null && to != null && Conversion.IsImplicitReferenceVariantSlot(from, to);
