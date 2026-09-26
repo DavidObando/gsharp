@@ -8,7 +8,9 @@
 # and the SDK's gsgen runs the targeting pack's Regex generator to supply the
 # implementing parts. The project covers:
 #   - a simple pattern, a pattern with options and a match timeout, a
-#     backtracking pattern, a const pattern with escapes and non-ASCII text;
+#     backtracking pattern, one that backtracks inside a loop (the generator's
+#     `ref base.runstack!`, #4422), a const pattern with escapes and non-ASCII
+#     text;
 #   - culture-sensitive IgnoreCase (tr-TR), which the retired cached-Regex
 #     rewrite reported as unsupported;
 #   - an instance method, a second namespace, and a top-level-statements
@@ -16,7 +18,6 @@
 #     method (the entry class is kept as a class, not hoisted, and its
 #     private members become internal so the G# top-level statements reach
 #     them).
-# Pattern shapes are the ones `generated-regex-e2e.sh` proves build today.
 #
 # Work files go under $E2E_WORK_ROOT when set (default: a fresh mktemp dir).
 set -euo pipefail
@@ -84,6 +85,11 @@ public static partial class Patterns
     [GeneratedRegex("^i$", RegexOptions.IgnoreCase, "tr-TR")]
     private static partial Regex TurkishI();
 
+    [GeneratedRegex(@"(foo|ba+r)+\w*?baz", RegexOptions.IgnoreCase)]
+    private static partial Regex Loop();
+
+    public static bool LoopMatches(string s) => Loop().IsMatch(s);
+
     [GeneratedRegex(Odd)]
     private static partial Regex OddPattern();
 
@@ -135,6 +141,7 @@ Console.WriteLine("month: " + Patterns.Month("2024-05"));
 Console.WriteLine("no month: " + Patterns.Month("May 2024"));
 Console.WriteLine("tail: " + Patterns.Tail("abc12345"));
 Console.WriteLine("turkish: " + Patterns.Turkish());
+Console.WriteLine("loop: " + Patterns.LoopMatches("xxFOObaarQQbaz") + "/" + Patterns.LoopMatches("baz"));
 Console.WriteLine("odd: " + Patterns.OddRoundTrips());
 Console.WriteLine("timeout: " + Patterns.Timeout());
 Console.WriteLine("words: " + new Words().Count("one two  three"));
@@ -213,7 +220,17 @@ cat > "$MIGRATED/NuGet.config" <<EOF
 </configuration>
 EOF
 rm -rf "$MIGRATED/bin" "$MIGRATED/obj"
-(cd "$MIGRATED" && dotnet build "$(basename "$GSPROJ")" --nologo)
+BUILD_LOG=$(cd "$MIGRATED" && dotnet build "$(basename "$GSPROJ")" --nologo 2>&1) || {
+    echo "$BUILD_LOG"
+    echo "FAIL: the migrated project did not build."
+    exit 1
+}
+echo "$BUILD_LOG" | tail -5
+if echo "$BUILD_LOG" | grep -Eq "(warning|error) GS[0-9]+"; then
+    echo "FAIL: the migrated project must build with no G# diagnostics:"
+    echo "$BUILD_LOG" | grep -E "(warning|error) GS[0-9]+" | sort -u
+    exit 1
+fi
 
 if ! ls "$MIGRATED"/obj/Debug/net10.0/gsgen/RegexGenerator*.g.gs >/dev/null 2>&1; then
     echo "FAIL: gsgen did not run the Regex generator for the migrated project."

@@ -22,7 +22,7 @@ namespace Cs2Gs.Tests;
 public sealed class Issue3086GeneratedRegexPipelineTests
 {
     [Fact]
-    public async Task PartialRecord_GeneratedRegex_TranslatesCompilesVerifiesAndRuns()
+    public async Task GeneratedRegexDeclaringParts_TranslateCompileVerifyAndRun()
     {
         string compiler = FindCompiler();
         string repoRoot = GsharpTestProjectRunner.FindRepoRoot();
@@ -77,8 +77,12 @@ public sealed class Issue3086GeneratedRegexPipelineTests
         // compile. The const pattern and the named timeout are re-spelled
         // positionally from their values.
         Assert.DoesNotContain("__generatedRegex_", translated, StringComparison.Ordinal);
-        Assert.Contains("@GeneratedRegex(\"^https://", translated, StringComparison.Ordinal);
-        Assert.Contains("RegexOptions.ExplicitCapture, 1000)", translated, StringComparison.Ordinal);
+        // The gsfmt post-pass wraps the long GitHub-URL attribute across lines,
+        // so its arguments are checked one at a time. That pattern also
+        // backtracks inside a loop, which builds since #4422.
+        Assert.Contains("\"^https://(www\\\\.)?github\\\\.com/", translated, StringComparison.Ordinal);
+        Assert.Contains("RegexOptions.ExplicitCapture,", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("matchTimeoutMilliseconds", translated, StringComparison.Ordinal);
         Assert.Contains("internal partial func Pattern() Regex;", translated, StringComparison.Ordinal);
         Assert.Contains("@GeneratedRegex(\"^infinite$$\", RegexOptions.None, -1)", translated, StringComparison.Ordinal);
         Assert.Contains("@GeneratedRegex(\"^i$$\", RegexOptions.IgnoreCase, \"tr-TR\")", translated, StringComparison.Ordinal);
