@@ -69,6 +69,8 @@ public sealed class ProtectedReceiverAccessBinderTests
     [InlineData("let l = func() int32 { return r.f }", "f")]
     [InlineData("let x = {{T}}{ f: 1 }", "f")]
     [InlineData("let x = {{T}}{ Q: 1 }", "Q")]
+    [InlineData("let x = r is { f: 1 }", "f")]
+    [InlineData("let x = r is { P: 2 }", "P")]
     public void ThroughBaseOrSiblingReceiver_IsGS0379AtMember(string statement, string member)
     {
         foreach (var receiverType in new[] { "Source", "Sibling" })
@@ -145,6 +147,31 @@ public sealed class ProtectedReceiverAccessBinderTests
     }
 
     /// <summary>
+    /// Nested classes that share a simple name and package are still
+    /// different classes: inside <c>B.D</c>, a receiver of <c>A.D</c> is a
+    /// sibling, as C# (CS1540) and the CLR see it.
+    /// </summary>
+    [Fact]
+    public void ThroughNestedHomonymReceiver_IsGS0379()
+    {
+        const string statement = "let x = r.f";
+        var source = Declarations + $$"""
+            class A {
+                class D : Source { }
+            }
+            class B {
+                class D : Source {
+                    func Hook(r A.D) {
+                        {{statement}}
+                    }
+                }
+            }
+            """;
+
+        AssertSingleGS0379At(source, statement, "f");
+    }
+
+    /// <summary>
     /// An unrelated class already fails the class-level check; the receiver
     /// rule must not report the same access a second time.
     /// </summary>
@@ -167,8 +194,8 @@ public sealed class ProtectedReceiverAccessBinderTests
     /// The cells C# allows bind without diagnostics: <c>this</c>,
     /// <c>base</c>, bare names, receivers of the accessing class and of its
     /// subclasses (including inside a lambda, a method group, a
-    /// null-conditional access and a composite literal of the accessing
-    /// class or a subclass), a type parameter constrained to the
+    /// null-conditional access, a composite literal and a property pattern
+    /// of the accessing class or a subclass), a type parameter constrained to the
     /// accessing class, any construction of a generic accessing class, static
     /// members through the declaring type, and the declaring class itself
     /// through any receiver.
@@ -194,6 +221,7 @@ public sealed class ProtectedReceiverAccessBinderTests
                     let s = Source.sf + Source.SM() + Derived.SM()
                     let lit = Accessor{ f: 7, Q: 8 }
                     let lit2 = MoreAccessor{ f: 9 }
+                    let pat = a is { f: 1, P: 2 } || m is { Q: 3 }
                     return base.f + base.M() + a.M() + m.P + l() + g() + s + (n ?? 0)
                 }
                 func Constrained[X Accessor](x X) int32 -> x.f + x.M()

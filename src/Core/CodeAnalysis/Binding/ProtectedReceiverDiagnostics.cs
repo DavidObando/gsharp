@@ -205,6 +205,47 @@ internal static class ProtectedReceiverDiagnostics
             base.VisitStructLiteralExpression(node);
         }
 
+        protected override void VisitPropertyPattern(BoundPropertyPattern node)
+        {
+            // `s is { f: 1 }` reads each named member through the pattern's
+            // input, whose static type is the pattern's type.
+            foreach (var member in node.Fields)
+            {
+                string name;
+                Accessibility accessibility;
+                Func<StructSymbol, bool> declares;
+                if (member.Field is { IsStatic: false } field)
+                {
+                    (name, accessibility) = (field.Name, field.Accessibility);
+                    declares = level => level.Fields.Contains(field);
+                }
+                else if (member.Property is { IsStatic: false } property)
+                {
+                    (name, accessibility) = (property.Name, property.GetterAccessibility);
+                    declares = level => level.Properties.Contains(property);
+                }
+                else
+                {
+                    continue;
+                }
+
+                var declaring = member.DeclaringType as StructSymbol
+                    ?? (node.Type as StructSymbol is { } owner ? FindDeclaringClass(owner, declares) : null);
+                if (declaring == null
+                    || !AccessibilityChecker.ViolatesProtectedReceiverRule(accessibility, declaring, node.Type, function))
+                {
+                    continue;
+                }
+
+                var location = member.Syntax is PropertyPatternFieldSyntax fieldSyntax
+                    ? fieldSyntax.Identifier.Location
+                    : GetMemberNameLocation(member.Syntax ?? node.Syntax ?? anchor);
+                Report(location, name, declaring, accessibility);
+            }
+
+            base.VisitPropertyPattern(node);
+        }
+
         protected override void VisitPropertyAccessExpression(BoundPropertyAccessExpression node)
         {
             if (node.Receiver != null && !node.Property.IsStatic && node.StructType != null)

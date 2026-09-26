@@ -112,7 +112,7 @@ internal static class AccessibilityChecker
 
         // Inside the declaring class itself, any receiver is fine: C# applies
         // the receiver rule only to access from a derived class.
-        if (enclosingClass == null || SameDeclaringType(enclosingClass, declaringClass))
+        if (enclosingClass == null || SameClassDefinition(enclosingClass, declaringClass))
         {
             return false;
         }
@@ -140,11 +140,9 @@ internal static class AccessibilityChecker
             return false;
         }
 
-        var enclosingDefinition = enclosingClass.Definition;
         foreach (var level in receiverClass.GetHierarchy())
         {
-            if (ReferenceEquals(level.Definition, enclosingDefinition)
-                || SameDeclaringType(level.Definition, enclosingDefinition))
+            if (SameClassDefinition(level, enclosingClass))
             {
                 return true;
             }
@@ -263,6 +261,23 @@ internal static class AccessibilityChecker
         }
 
         return !IsAccessible(accessibility, declaringType, currentFunction);
+    }
+
+    /// <summary>
+    /// Issue #4453: whether two classes are the same generic definition. Any
+    /// construction counts as its definition, but, unlike
+    /// <see cref="SameDeclaringType"/>, there is no fallback on the simple
+    /// name and package: two nested classes <c>A.D</c> and <c>B.D</c> share
+    /// both and are still different classes, and the receiver rule must not
+    /// confuse them.
+    /// </summary>
+    private static bool SameClassDefinition(StructSymbol left, StructSymbol right)
+    {
+        var leftDefinition = left.Definition;
+        var rightDefinition = right.Definition;
+        return ReferenceEquals(leftDefinition, rightDefinition)
+            || (leftDefinition.Declaration != null
+                && ReferenceEquals(leftDefinition.Declaration, rightDefinition.Declaration));
     }
 
     /// <summary>
