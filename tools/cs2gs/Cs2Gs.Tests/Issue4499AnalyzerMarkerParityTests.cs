@@ -31,6 +31,17 @@ namespace Outer
 
             public static object Tuple((int, string) value) => value;
         }
+
+        static class SomeDoor
+        {
+            public static Type Map(Type type, Type definition, ImmutableArray<Type> arguments)
+                => type;
+        }
+
+        class EarlierPackageMember
+        {
+            int Use(int value) => Math.Abs(value);
+        }
     }
 }
 
@@ -60,12 +71,18 @@ namespace Outer
                 _ = [|Door.Convert(type)|];
                 // Door.Map(evt.EventHandlerType, null, default) must not affect expression ordinals.
                 _ = [|Door.Map(evt.EventHandlerType, null, default)|];
+                _ = SomeDoor.Map(typeof(int), null, default);
                 _ = Door.Map(typeof(int32), null, default);
                 _ = [|Door.Map(typeof(int), null, default)|];
                 _ = [|Door.Tuple(default)|];
             }
         }
     }
+}
+
+class GlobalConsumer
+{
+    int Use(int value) => [|Math.Abs(value)|];
 }
 """;
 
@@ -78,7 +95,7 @@ namespace Outer
             result.GsWithMarkers is not null,
             string.Join(Environment.NewLine, result.Diagnostics.Select(diagnostic => diagnostic.Message)));
         Assert.Empty(result.UnplacedMarkers);
-        Assert.Equal(5, result.GsWithMarkers.Split("[|", StringSplitOptions.None).Length - 1);
+        Assert.Equal(6, result.GsWithMarkers.Split("[|", StringSplitOptions.None).Length - 1);
 
         string[] units = result.GsWithMarkers.Split(
             SnippetTranslator.UnitSeparator,
@@ -87,7 +104,7 @@ namespace Outer
         string symbols = Assert.Single(units, unit => unit.Contains("package Outer.Symbols", StringComparison.Ordinal));
         string binding = Assert.Single(units, unit => unit.Contains("package Binding", StringComparison.Ordinal));
 
-        Assert.Equal(5, symbols.Split("[|", StringSplitOptions.None).Length - 1);
+        Assert.Equal(6, symbols.Split("[|", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("[|", binding, StringComparison.Ordinal);
         Assert.Contains("-> [|typeof(int32)|]", symbols, StringComparison.Ordinal);
         Assert.DoesNotContain("// [|typeof(int32)|]", symbols, StringComparison.Ordinal);
@@ -101,5 +118,10 @@ namespace Outer
         Assert.Contains("nil", symbols, StringComparison.Ordinal);
         Assert.Contains("default(ImmutableArray[Type])", symbols, StringComparison.Ordinal);
         Assert.Contains("))|]", symbols, StringComparison.Ordinal);
+        int earlierPackageCall = symbols.IndexOf(
+            "Math.Abs(value)", StringComparison.Ordinal);
+        int markedGlobalCall = symbols.IndexOf(
+            "[|Math.Abs(value)|]", StringComparison.Ordinal);
+        Assert.True(earlierPackageCall >= 0 && markedGlobalCall > earlierPackageCall);
     }
 }

@@ -138,9 +138,8 @@ public static class SnippetTranslator
                 : 0;
             string searchable = printedUnits[unitIndex];
             int unitOffset = unitOffsets[unitIndex];
-            int ordinal = packages.Count > 1
-                ? OccurrenceOrdinal(document, cleanSource, marked.Text, marked.Start, markedPackage)
-                : OccurrenceOrdinal(cleanSource, marked.Text, marked.Start);
+            int ordinal = OccurrenceOrdinal(
+                document, cleanSource, marked.Text, marked.Start, packages, unitIndex);
             int length = marked.Text.Length;
 
             // Issue #3794: a marker on a DECLARATION's name is placed on a
@@ -154,8 +153,7 @@ public static class SnippetTranslator
             // is a fact about the C# node, and "is preceded by a declaration
             // keyword" is the printed G# counterpart, so the two ordinals are
             // counted over declarations only and agree again.
-            int? declarationOrdinal = DeclarationOrdinal(
-                document, marked, packages.Count > 1 ? markedPackage : null);
+            int? declarationOrdinal = DeclarationOrdinal(document, marked, packages, unitIndex);
             int index = declarationOrdinal is { } d
                 ? NthDeclarationOccurrence(searchable, marked.Text, d)
                 : -1;
@@ -211,9 +209,8 @@ public static class SnippetTranslator
                 MarkedText renamed = renaming.Rename(marked);
                 if (!string.Equals(renamed.Text, marked.Text, StringComparison.Ordinal))
                 {
-                    int renamedOrdinal = packages.Count > 1
-                        ? OccurrenceOrdinal(document, renaming, renamed, markedPackage)
-                        : OccurrenceOrdinal(renaming.Source, renamed.Text, renamed.Start);
+                    int renamedOrdinal = OccurrenceOrdinal(
+                        document, renaming, renamed, packages, unitIndex);
                     index = NthOccurrence(searchable, renamed.Text, renamedOrdinal);
                     length = renamed.Text.Length;
                 }
@@ -231,7 +228,7 @@ public static class SnippetTranslator
                 MarkedText renamed = renaming.Rename(marked);
                 string candidate = renamed.Text;
                 int candidateOrdinal = ExpressionOrdinal(
-                    document, marked, packages.Count > 1 ? markedPackage : null);
+                    document, marked, packages, unitIndex);
                 TryFormattingTolerantOccurrence(
                     searchable, candidate, candidateOrdinal, out index, out length);
             }
@@ -270,9 +267,11 @@ public static class SnippetTranslator
     /// </summary>
     /// <param name="document">The loaded snippet document.</param>
     /// <param name="marked">The marker.</param>
-    /// <param name="package">The package containing the marker, or null to count the whole source.</param>
+    /// <param name="packages">The emitted packages.</param>
+    /// <param name="unitIndex">The unit containing the marker.</param>
     /// <returns>The declaration ordinal, or <see langword="null"/>.</returns>
-    private static int? DeclarationOrdinal(LoadedDocument document, MarkedText marked, string package)
+    private static int? DeclarationOrdinal(
+        LoadedDocument document, MarkedText marked, IReadOnlyList<string> packages, int unitIndex)
     {
         var ordinal = 0;
         var isDeclarationName = false;
@@ -281,13 +280,7 @@ public static class SnippetTranslator
             if (!token.IsKind(SyntaxKind.IdentifierToken)
                 || !string.Equals(token.ValueText, marked.Text, StringComparison.Ordinal)
                 || !IsDeclarationName(token)
-                || (package is not null && !string.Equals(
-                    token.Parent?.AncestorsAndSelf()
-                        .OfType<BaseNamespaceDeclarationSyntax>()
-                        .FirstOrDefault()?
-                        .Name.ToString() ?? string.Empty,
-                    package,
-                    StringComparison.Ordinal)))
+                || !BelongsToUnit(document, token.SpanStart, packages, unitIndex))
             {
                 continue;
             }
@@ -393,36 +386,20 @@ public static class SnippetTranslator
         };
     }
 
-    /// <summary>
-    /// Counts how many non-overlapping occurrences of <paramref name="text"/>
-    /// start before <paramref name="start"/> in <paramref name="source"/>.
-    /// </summary>
-    /// <param name="source">The text to scan.</param>
-    /// <param name="text">The occurrence text.</param>
-    /// <param name="start">The offset of the occurrence being ranked.</param>
-    /// <returns>The zero-based occurrence ordinal.</returns>
-    private static int OccurrenceOrdinal(string source, string text, int start)
-    {
-        var ordinal = 0;
-        for (int i = source.IndexOf(text, StringComparison.Ordinal);
-             i >= 0 && i < start;
-             i = source.IndexOf(text, i + text.Length, StringComparison.Ordinal))
-        {
-            ordinal++;
-        }
-
-        return ordinal;
-    }
-
     private static int OccurrenceOrdinal(
-        LoadedDocument document, string source, string text, int start, string package)
+        LoadedDocument document,
+        string source,
+        string text,
+        int start,
+        IReadOnlyList<string> packages,
+        int unitIndex)
     {
         var ordinal = 0;
         for (int i = source.IndexOf(text, StringComparison.Ordinal);
              i >= 0 && i < start;
              i = source.IndexOf(text, i + text.Length, StringComparison.Ordinal))
         {
-            if (string.Equals(DeclaredPackageAt(document, i), package, StringComparison.Ordinal))
+            if (BelongsToUnit(document, i, packages, unitIndex))
             {
                 ordinal++;
             }
@@ -432,17 +409,18 @@ public static class SnippetTranslator
     }
 
     private static int OccurrenceOrdinal(
-        LoadedDocument document, PredefinedRenaming renaming, MarkedText marked, string package)
+        LoadedDocument document,
+        PredefinedRenaming renaming,
+        MarkedText marked,
+        IReadOnlyList<string> packages,
+        int unitIndex)
     {
         var ordinal = 0;
         for (int i = renaming.Source.IndexOf(marked.Text, StringComparison.Ordinal);
              i >= 0 && i < marked.Start;
              i = renaming.Source.IndexOf(marked.Text, i + marked.Text.Length, StringComparison.Ordinal))
         {
-            if (string.Equals(
-                DeclaredPackageAt(document, renaming.OriginalOffset(i)),
-                package,
-                StringComparison.Ordinal))
+            if (BelongsToUnit(document, renaming.OriginalOffset(i), packages, unitIndex))
             {
                 ordinal++;
             }
@@ -464,7 +442,10 @@ public static class SnippetTranslator
     }
 
     private static int ExpressionOrdinal(
-        LoadedDocument document, MarkedText marked, string package)
+        LoadedDocument document,
+        MarkedText marked,
+        IReadOnlyList<string> packages,
+        int unitIndex)
     {
         ExpressionSyntax markedExpression = document.GetRoot().DescendantNodes()
             .OfType<ExpressionSyntax>()
@@ -474,8 +455,7 @@ public static class SnippetTranslator
         return document.GetRoot().DescendantNodes()
             .OfType<ExpressionSyntax>()
             .Where(expression => expression.SpanStart < marked.Start)
-            .Where(expression => package is null
-                || string.Equals(DeclaredPackageAt(document, expression.SpanStart), package, StringComparison.Ordinal))
+            .Where(expression => BelongsToUnit(document, expression.SpanStart, packages, unitIndex))
             .Count(expression => string.Equals(
                 ExpressionTokenKey(document, expression), markedTokens, StringComparison.Ordinal));
     }
@@ -504,6 +484,19 @@ public static class SnippetTranslator
 
                 return token.Text;
             }));
+
+    private static bool BelongsToUnit(
+        LoadedDocument document, int offset, IReadOnlyList<string> packages, int unitIndex)
+    {
+        if (packages.Count <= 1)
+        {
+            return true;
+        }
+
+        string package = DeclaredPackageAt(document, offset);
+        return string.Equals(package, packages[unitIndex], StringComparison.Ordinal)
+            || (unitIndex == 0 && package.Length == 0);
+    }
 
     private static int PackageUnitIndex(IReadOnlyList<string> packages, string package)
     {
@@ -608,18 +601,23 @@ public static class SnippetTranslator
             string text = token.Text;
             if (token.IsKind(SyntaxKind.NullKeyword))
             {
-                pattern.Append("nil");
+                AppendIdentifierPattern(pattern, "nil");
             }
             else if (token.IsKind(SyntaxKind.DefaultKeyword))
             {
-                pattern.Append(@"default(?:\s*\((?>[^()]|\((?<depth>)|\)(?<-depth>))*(?(depth)(?!))\))?");
+                AppendIdentifierPattern(pattern, "default");
+                pattern.Append(@"(?:\s*\((?>[^()]|\((?<depth>)|\)(?<-depth>))*(?(depth)(?!))\))?");
             }
             else
             {
-                pattern.Append(Regex.Escape(text));
                 if (token.IsKind(SyntaxKind.IdentifierToken))
                 {
+                    AppendIdentifierPattern(pattern, text);
                     pattern.Append("(?:!!)?");
+                }
+                else
+                {
+                    pattern.Append(Regex.Escape(text));
                 }
             }
         }
@@ -638,6 +636,13 @@ public static class SnippetTranslator
         index = -1;
         length = 0;
         return false;
+    }
+
+    private static void AppendIdentifierPattern(StringBuilder pattern, string identifier)
+    {
+        pattern.Append(@"(?<![\p{L}\p{Nd}_$])");
+        pattern.Append(Regex.Escape(identifier));
+        pattern.Append(@"(?![\p{L}\p{Nd}_$])");
     }
 
     // Builds a regex that matches `text` literally except that an optional
