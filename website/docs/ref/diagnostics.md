@@ -405,6 +405,7 @@ the generator's IDs (for example `SYSLIB1043`).
 | GS9206 | Reserved | Reserved: a generator matched nothing although its trigger attribute appears in user code. |
 | GS9207 | Info | A note about the `gsgen` invocation, such as an unrecognized or malformed argument that was ignored. |
 | GS9208 | Error | A generated implementing part of a partial method could not take its declaring part's header (ADR-0192). It is reported at the declaring part in two cases. First, the generated implementation names a parameter differently: its body uses the generated names, so the header is left as generated and `gsc` reports the two parts as mismatched. Second, an alias the header needs is already bound to a different target in the generated file: either by the generated code, or by another file's declaring part whose header went into the same file. Give the alias one meaning across the partial class's files, or spell the type without it. |
+| GS9209 | Error | A generator declared a positional parameter list on a G# `data class` or `data struct` that already has one (ADR-0192 amendment, partial data types). Only one part of a data type may state it, so the generated part keeps its list and `gsc` also reports the two parts (`GS0482`). It is reported at your positional list. Remove your list if the generator is meant to supply it. |
 
 ### Internal diagnostics (GS9996–GS9999)
 

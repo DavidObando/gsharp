@@ -254,6 +254,35 @@ HEADER Url(Owner string, Name string, Pr int32?) {
         Assert.Contains(" record ", stub.Replace("record struct", "record ", System.StringComparison.Ordinal), System.StringComparison.Ordinal);
     }
 
+    // Records are planned across the inheritance graph: a C# record derives
+    // only from a record (CS8864) and only a record derives from one (CS8865),
+    // so a data type renders as a record only when its whole chain can. Each
+    // row lists the types expected as records; every other type is a class.
+    [Theory]
+    [InlineData("open data class Base(A int32)\ndata class Derived(A int32, B int32) : Base(A)", "Base,Derived")]
+    [InlineData("open data class Base(A int32)\nclass Plain : Base(1) {\n}", "")]
+    [InlineData("open data class Root(A int32)\nopen data class Mid(A int32) : Root(A)\nclass Leaf : Mid(1) {\n}\ndata class Other(A int32) : Root(A)", "")]
+    [InlineData("open class Entity {\n}\ndata class Tag(Name string) : Entity", "")]
+    [InlineData("open class Entity {\n}\ndata class Tag(Name string) : Entity\ndata class Free(A int32)", "Free")]
+    public void DataTypeHierarchies_RenderRecordsOnlyWhereTheWholeChainCan(string declarations, string expectedRecords)
+    {
+        var stub = Project("package App\n\n" + declarations + "\n");
+
+        AssertParses(stub);
+        var compilation = BindStub(stub);
+        var errors = compilation.GetDiagnostics().Where(d => d.Severity == DiagnosticSeverity.Error).ToList();
+        Assert.True(errors.Count == 0, stub + "\n\n" + string.Join("\n", errors));
+
+        var records = compilation.GetSymbolsWithName(_ => true, SymbolFilter.Type)
+            .OfType<INamedTypeSymbol>()
+            .Where(type => type.IsRecord)
+            .Select(type => type.Name)
+            .OrderBy(name => name, System.StringComparer.Ordinal);
+        Assert.Equal(
+            expectedRecords.Split(',', System.StringSplitOptions.RemoveEmptyEntries),
+            records);
+    }
+
     private static System.Collections.Generic.List<MethodDeclarationSyntax> Methods(string stub, string name) =>
         Microsoft.CodeAnalysis.CSharp.CSharpSyntaxTree.ParseText(stub).GetRoot()
             .DescendantNodes()

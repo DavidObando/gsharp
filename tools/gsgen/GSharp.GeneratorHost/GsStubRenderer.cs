@@ -34,6 +34,9 @@ public sealed class GsStubRenderer
     private readonly List<StubPartialDefinition> partialDefinitions = new();
     private readonly List<StubDataType> dataTypes = new();
 
+    // The data types the last render projects as C# records: see PlanRecords.
+    private HashSet<StructSymbol> recordTypes = new();
+
     // Identifier locations gsc reported GS0610 (wrong partial part count) at.
     // PartialMethodMerger's error recovery keeps one bodiless declaring part
     // when a group has several and no implementation; that survivor must not
@@ -128,6 +131,7 @@ public sealed class GsStubRenderer
             .ToHashSet();
         this.partialDefinitions.Clear();
         this.dataTypes.Clear();
+        this.recordTypes = PlanRecords(scope.Structs);
 
         var builder = new StringBuilder();
         builder.AppendLine("#nullable enable");
@@ -158,7 +162,17 @@ public sealed class GsStubRenderer
 
             if (structSymbol.IsData)
             {
-                dataTypes.Add(new StubDataType(structSymbol.PackageName, structSymbol.Name, structSymbol.TypeParameters.Length, structSymbol.IsClass));
+                // The user's positional list, if any, which a generated part
+                // must not also carry (GS9209): the merged declaration takes it
+                // from the one part that states it (ADR-0144, GS0482).
+                var declaration = structSymbol.Declaration;
+                TextLocation? positionalList = declaration?.PrimaryConstructorOpenParenthesisToken?.Location;
+                dataTypes.Add(new StubDataType(
+                    structSymbol.PackageName,
+                    structSymbol.Name,
+                    structSymbol.TypeParameters.Length,
+                    structSymbol.IsClass,
+                    positionalList));
             }
 
             AddType(structSymbol.PackageName, (sb, indent) => RenderStruct(sb, indent, structSymbol));
@@ -261,7 +275,7 @@ public sealed class GsStubRenderer
         // the back-translation spells a generated part of a data type as a
         // `data` part from DataTypes, whatever keyword the generator
         // re-declared it with.
-        if (RendersAsRecord(structSymbol))
+        if (recordTypes.Contains(structSymbol))
         {
             sb.Append(structSymbol.IsClass ? "record " : "record struct ");
         }
@@ -325,13 +339,53 @@ public sealed class GsStubRenderer
         }
     }
 
-    // A C# record may derive only from `object` or another record (CS8864),
-    // while a G# data class may derive from any open class. So only a data
-    // type with no base class renders as a record; any other stays a class.
-    private static bool RendersAsRecord(StructSymbol structSymbol) =>
-        structSymbol.IsData
-        && structSymbol.BaseClass == null
-        && structSymbol.ImportedBaseType == null;
+    /// <summary>
+    /// Decides which data types render as C# records, across the inheritance
+    /// graph rather than per type. A C# record derives only from <c>object</c>
+    /// or another record (CS8864), and only a record derives from a record
+    /// (CS8865), while a G# data class may derive from any open class and any
+    /// open class may derive from a data class. So a data type renders as a
+    /// record only when its base class is a record-rendered data type (or it
+    /// has none) and every source class deriving from it renders as a record
+    /// too. Otherwise the whole connected chain stays classes, which is how
+    /// every data type rendered before (a generator just sees no
+    /// <c>IsRecord</c>). A base class declared elsewhere (a referenced
+    /// assembly) is never a record here, so its data descendants stay classes.
+    /// </summary>
+    private static HashSet<StructSymbol> PlanRecords(ImmutableArray<StructSymbol> structs)
+    {
+        var records = new HashSet<StructSymbol>(structs.Where(type =>
+            type.IsData
+            && type.ImportedBaseType == null
+            && (type.BaseClass == null || DefinitionOf(type.BaseClass).IsData)));
+
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var type in structs)
+            {
+                if (type.BaseClass == null)
+                {
+                    continue;
+                }
+
+                var baseType = DefinitionOf(type.BaseClass);
+
+                // A record deriving from a class, or a class deriving from a
+                // record: both sides of the edge become classes.
+                if (records.Contains(type) != records.Contains(baseType))
+                {
+                    changed |= records.Remove(type);
+                    changed |= records.Remove(baseType);
+                }
+            }
+        }
+
+        return records;
+    }
+
+    private static StructSymbol DefinitionOf(StructSymbol type) => type.Definition ?? type;
 
     private List<string> CollectBaseTypes(StructSymbol structSymbol)
     {

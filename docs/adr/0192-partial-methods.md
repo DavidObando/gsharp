@@ -601,20 +601,27 @@ a `data class` or `data struct` qualifies, because "`partial class` or
 
 **gsgen** (ADR-0145) needed two changes:
 
-- The stub renders a G# data type with no base class as a C# `record` /
-  `record struct` (`partial` when the G# type is), so a generator sees a
-  record (`IsRecord`) and C# supplies the record members. It renders no
-  positional parameter list: the properties and constructors it already
-  renders carry the shape, and a positional list makes C# reject an explicit
-  constructor that does not chain to it (CS8862) and a variadic parameter
-  whose property is a slice (CS8866). A data class with a base class stays a
-  C# `class` in the stub, because a record derives only from a record
-  (CS8864).
+- The stub renders a G# data type as a C# `record` / `record struct`
+  (`partial` when the G# type is) where its inheritance chain allows, so a
+  generator sees a record (`IsRecord`) and C# supplies the record members. A
+  record derives only from a record (CS8864), and only a record derives from
+  one (CS8865), while G# lets a data class derive from any open class and any
+  open class derive from a data class. So the stub plans records across the
+  inheritance graph: a data type is a record only when its base is a
+  record-rendered data type (or it has none) and every source class deriving
+  from it is one too. Otherwise the whole connected chain renders as classes,
+  as every data type did before. The stub renders no positional parameter
+  list: the properties and constructors it already renders carry the shape,
+  and a positional list makes C# reject an explicit constructor that does not
+  chain to it (CS8862) and a variadic parameter whose property is a slice
+  (CS8866).
 - The back-translation spells every generated part of a user data type as a
   `partial data class` / `partial data struct` part, whatever keyword the
-  generated C# re-declared the type with. The generated part carries no
-  `open`, no `sealed` and no positional list, which are the user's parts to
-  state. Without this, cs2gs spells a non-sealed record `open` (its
+  generated C# re-declared the type with, record or class. The generated
+  part carries no `open` and no `sealed`, which are the user's to state. A
+  positional list the generator supplies is kept when no user part states
+  one; when one does, gsgen reports `GS9209` at the user's list rather than
+  dropping either, and gsc reports `GS0482`. Without this, cs2gs spells a non-sealed record `open` (its
   synthesized members are virtual), which conflicts with a user part that
   says `sealed` (GS0478); and a data class the stub rendered as a class came
   back as a plain `partial class` (GS0479). The translator also emits a

@@ -2,6 +2,8 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using GSharp.Core.CodeAnalysis.Text;
+
 namespace GSharp.GeneratorHost;
 
 /// <summary>
@@ -20,8 +22,10 @@ public sealed class StubDataType
     /// <param name="typeName">The type's name.</param>
     /// <param name="typeArity">The type's number of type parameters.</param>
     /// <param name="isClass"><see langword="true"/> for a <c>data class</c>, <see langword="false"/> for a <c>data struct</c>.</param>
-    public StubDataType(string packageName, string typeName, int typeArity, bool isClass)
+    /// <param name="positionalList">The location of the user's positional parameter list, or <see langword="null"/> when no part states one.</param>
+    public StubDataType(string packageName, string typeName, int typeArity, bool isClass, TextLocation? positionalList = null)
     {
+        PositionalList = positionalList;
         PackageName = packageName;
         TypeName = typeName;
         TypeArity = typeArity;
@@ -39,4 +43,11 @@ public sealed class StubDataType
 
     /// <summary>Gets a value indicating whether the type is a <c>data class</c> (otherwise a <c>data struct</c>).</summary>
     public bool IsClass { get; }
+
+    /// <summary>
+    /// Gets the location of the user's positional parameter list, or
+    /// <see langword="null"/> when no user part states one (a generated part
+    /// may then supply it).
+    /// </summary>
+    public TextLocation? PositionalList { get; }
 }

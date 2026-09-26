@@ -691,6 +691,64 @@ partial data class Tag(Name string) : Entity {
         Assert.Equal(false, Invoke(run.Type("Tag"), "Test", "ab1"));
     }
 
+    // A positional parameter list a generator supplies on a user data type
+    // with none is kept, not dropped, so the generated part still supplies
+    // the primary constructor and its properties.
+    [Fact]
+    public void GeneratorSuppliedPositionalList_IsKept_WhenTheUserDataTypeHasNone()
+    {
+        const string UserSource = @"package App
+
+partial data class Point {
+    shared {
+        public func Sum() int32 {
+            let p = Point(3, 4)
+            return p.X + p.Y
+        }
+    }
+}
+";
+        const string Generated = @"namespace App
+{
+    partial record Point(int X, int Y);
+}
+";
+        Run run = this.GenerateAndCompile(
+            new[] { UserSource },
+            new FixedSourceGenerator(("Point.g.cs", Generated)));
+
+        Assert.Contains("partial data class Point(X int32, Y int32)", run.File("Point.g.cs"), StringComparison.Ordinal);
+        Assert.Equal(7, Invoke(run.Type("Point"), "Sum"));
+    }
+
+    // Only one part may state the positional list (GS0482). When the user's
+    // data type already has one, a generated one is reported as GS9209 at the
+    // user's list rather than silently dropped.
+    [Fact]
+    public void GeneratorSuppliedPositionalList_OnAUserDataTypeWithOne_ReportsGS9209()
+    {
+        const string UserSource = @"package App
+
+partial data class Point(X int32) {
+}
+";
+        const string Generated = @"namespace App
+{
+    partial record Point(int X);
+}
+";
+        GeneratorHostResult result = GeneratorHostRunner.Run(
+            new Compilation(ParseUser(new[] { UserSource }).ToArray()),
+            CSharpProjectLoader.RuntimeReferences(),
+            new IIncrementalGenerator[] { new FixedSourceGenerator(("Point.g.cs", Generated)) });
+
+        GeneratorHostDiagnostic diagnostic = Assert.Single(result.HostDiagnostics);
+        Assert.Equal("GS9209", diagnostic.Id);
+        Assert.Equal("User0.gs", diagnostic.Location.FileName);
+        Assert.Equal(2, diagnostic.Location.StartLine);
+        Assert.Contains("partial data class Point(X int32)", result.GeneratedGsFiles.Single().GSharpSource, StringComparison.Ordinal);
+    }
+
     private static string RegexGenerator() => RegexGeneratorPath();
 
     private static object Invoke(Type type, string method, params object[] arguments) =>
