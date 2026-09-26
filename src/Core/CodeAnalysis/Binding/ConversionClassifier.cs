@@ -1425,6 +1425,21 @@ internal sealed class ConversionClassifier
                             allowConcreteSymbolic: TypeSymbol.ContainsNullLiteralType(argument.Type));
                     }
 
+                    // #4451 (ADR-0193 amendment): a slot that IS a method type
+                    // parameter bound to a platform type (an explicit argument
+                    // at an oblivious declaration) is `T!`, and takes a nil
+                    // unchecked. The closed CLR parameter says only `string`.
+                    if (substituted == null
+                        && method is { IsGenericMethod: true }
+                        && symbolicMethodTypeArgs is { IsDefaultOrEmpty: false } methodTypeArguments
+                        && (method.IsGenericMethodDefinition ? method : method.GetGenericMethodDefinition()).GetParameters()[paramIndex].ParameterType
+                            is { IsGenericParameter: true, DeclaringMethod: not null } openSlot
+                        && openSlot.GenericParameterPosition < methodTypeArguments.Length
+                        && methodTypeArguments[openSlot.GenericParameterPosition] is PlatformTypeSymbol platformSlot)
+                    {
+                        substituted = platformSlot;
+                    }
+
                     var targetType = substituted
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
 

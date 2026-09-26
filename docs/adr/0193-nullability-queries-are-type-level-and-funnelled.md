@@ -381,6 +381,39 @@ internal static class NullabilityImportRule
   classified position by calling this class. None may construct a
   `NullableTypeSymbol` or `PlatformTypeSymbol` for a classified position itself.
 
+> **Amendment (2026-09-26, owner decision, #4451): an explicit method type
+> argument at an oblivious slot reads as `T!`.** When a call closes a method
+> type parameter with an **explicit** type argument, and the open declaration
+> leaves the parameter slot that type parameter fills **oblivious** (no
+> `[Nullable]` byte, no `[NullableContext]`), the type parameter is bound to
+> the platform type `T!`, at the parameter and at the return, instead of the
+> table's `Unchanged`. So `Ob.WrapList[string](x)` over an oblivious
+> `List<T> WrapList<T>(T value)` returns `List[string!]`, and
+> `Ob.Echo[string](x)` returns `string!`. The parameter takes a nil
+> unchecked (ADR-0186 §4 inserts no check at a `T!` slot), which keeps C#
+> parity (`IsNil<string>(null)` returns `true`), and a nil element read
+> through the result is checked where it is used.
+>
+> Scope, stated narrowly:
+>
+> - It narrows the settled "oblivious slot → `Unchanged`" decision above
+>   **only for explicit method type arguments**. The table, the projection
+>   reader (`ProjectNullableFlags`) and generic *type* arguments are unchanged,
+>   so #4361's `Array.Empty[string]()` shapes are unaffected.
+> - An annotated or enabled slot keeps `Unchanged`, and ADR-0186 §4's call-site
+>   check stays for it. So do value-type arguments and an argument that states
+>   its own nullability (`string?`, `string!`).
+> - The type parameter's state is read from a parameter slot it fills
+>   directly. A type parameter that fills no parameter slot directly (it
+>   appears only nested, or only in the return) keeps the argument as written.
+>
+> It is implemented once, as `NullabilityImportRule.ApplyExplicitOpenSlotArgument`,
+> and applied where explicit type arguments enter the symbolic vector
+> (`MemberLookup.BuildSymbolicMethodTypeArgs`, and the return-exactly-`T`
+> shortcuts). Inference reaches the same answer on its own: #4459 keeps a `T!`
+> argument at an oblivious slot. #4385 (revisiting `T!` for an in-scope
+> unconstrained type parameter) is a separate question and remains open.
+
 ### 2. The consumer choke point: a type-level query API on `TypeSymbol`
 
 Consumers stop asking *"what wrapper is this?"* and ask *"what is this type's

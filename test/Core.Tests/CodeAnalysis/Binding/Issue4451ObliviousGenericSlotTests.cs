@@ -47,6 +47,10 @@ public class Issue4451ObliviousGenericSlotTests
 
                 public static List<T> WrapList<T>(T value) { return new List<T> { value }; }
 
+                public static T Echo<T>(T value) { return value; }
+
+                public static bool IsNil<T>(T value) where T : class { return value == null; }
+
                 public static int TakeOblivious(string value) { return value == null ? -1 : value.Length; }
             }
 
@@ -54,6 +58,8 @@ public class Issue4451ObliviousGenericSlotTests
             public static class En
             {
                 public static int TakeEnabled(string value) { return 7; }
+
+                public static T EchoEnabled<T>(T value) { return value; }
 
                 public static int TakeNilable(string? value) { return value == null ? -1 : value.Length; }
             }
@@ -93,7 +99,7 @@ public class Issue4451ObliviousGenericSlotTests
     /// </summary>
     /// <param name="program">The G# statements.</param>
     [Theory]
-    [InlineData("let xs = Ob.WrapList[string](Ob.Nil())\nConsole.WriteLine(xs[0].Length)")]
+    [InlineData("Console.WriteLine(En.EchoEnabled[string](Ob.Nil()))")]
     [InlineData("Console.WriteLine(En.TakeEnabled(Ob.Nil()))")]
     [InlineData("let b = Box(Ob.Name())\nConsole.WriteLine(b.Measure(Ob.Nil()))")]
     [InlineData("let b = Box(Ob.Nil())\nConsole.WriteLine(b.Value.Length)")]
@@ -148,6 +154,52 @@ public class Issue4451ObliviousGenericSlotTests
             """;
 
         Assert.Equal("-1\n-1\nempty\nn\n1\n-1\n", Run(library, declarations + program));
+    }
+
+    /// <summary>
+    /// ADR-0193 amendment (owner decision, 2026-09-26): an explicit type
+    /// argument that closes an open slot an oblivious declaration leaves
+    /// unstated reads as <c>T!</c>, at the parameter and at the return.
+    /// <c>Ob.WrapList[string]</c> returns a <c>List[string!]</c> and
+    /// <c>Ob.Echo[string]</c> a <c>string!</c>. No check is inserted at the
+    /// call, so <c>IsNil[string](nil)</c> keeps the C# answer, <c>true</c>, and
+    /// a nil element read through the list is checked where it is used.
+    /// </summary>
+    [Fact]
+    public void An_Explicit_Argument_At_An_Oblivious_Slot_Reads_As_Platform()
+    {
+        using var library = new CSharpFixture(LibrarySource);
+
+        Assert.StartsWith(
+            "System.Collections.Generic.List[string!]",
+            ProbeType(library, "let probe = Ob.WrapList[string](Ob.Name())"),
+            StringComparison.Ordinal);
+        Assert.Equal("string!", ProbeType(library, "let probe = Ob.Echo[string](Ob.Name())"));
+
+        Assert.Equal(
+            "1\nTrue\n",
+            Run(library, "let xs = Ob.WrapList[string](Ob.Nil())\nConsole.WriteLine(xs.Count)\nConsole.WriteLine(Ob.IsNil[string](Ob.Nil()))"));
+
+        var thrown = Assert.Throws<NullReferenceException>(
+            () => Run(library, "let xs = Ob.WrapList[string](Ob.Nil())\nConsole.WriteLine(xs.Count)\nConsole.WriteLine(xs[0].Length)"));
+        Assert.Contains("nullability-oblivious", thrown.Message, StringComparison.Ordinal);
+        Assert.Contains("coerced at", thrown.Message, StringComparison.Ordinal);
+    }
+
+    private static string ProbeType(CSharpFixture library, string globals)
+    {
+        using var resolver = ReferenceResolver.WithReferences(new[] { library.AssemblyPath });
+        var compilation = new GsCompilation(resolver, GsSyntaxTree.Parse(SourceText.From(Prelude + globals)))
+        {
+            Nullability = NullabilityMode.PlatformTypes,
+        };
+
+        var scope = compilation.GlobalScope;
+        Assert.False(
+            scope.Diagnostics.Any(d => d.IsError),
+            string.Join(Environment.NewLine, scope.Diagnostics.Select(d => d.Id + ": " + d.Message)));
+        var type = Assert.Single(scope.Variables, v => v.Name == "probe").Type;
+        return GSharp.Core.CodeAnalysis.Symbols.Display.SymbolDisplay.ToTypeDisplayString(type);
     }
 
     private static string Run(CSharpFixture library, string program)

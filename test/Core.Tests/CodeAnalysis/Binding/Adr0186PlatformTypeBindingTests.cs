@@ -424,9 +424,15 @@ public sealed partial class Adr0186PlatformTypeBindingTests
 
         Assert.Equal("Entry", baseline.Name);
 
+        // #4451 (ADR-0193 amendment): the explicit `[Entry]` at the oblivious
+        // `Wrap<T>` slot binds `T = Entry!`, so the element read is `Entry!`.
+        // §5b is about the UNDERLYING type, which must still be the symbolic
+        // `Entry`, not an erasure.
+        var platformElement = Assert.IsType<PlatformTypeSymbol>(platform);
+
         // The load-bearing assertion. With §5b broken this reads "object".
-        Assert.Equal(baseline.Name, platform.Name);
-        Assert.DoesNotContain("object", platform.Name, StringComparison.Ordinal);
+        Assert.Equal(baseline.Name, platformElement.UnderlyingType.Name);
+        Assert.DoesNotContain("object", platformElement.UnderlyingType.Name, StringComparison.Ordinal);
     }
 
     /// <summary>

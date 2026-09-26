@@ -1689,9 +1689,14 @@ internal sealed class MemberLookup
         // `ResolveImportedGenericReturnType` for a constructed-generic return)
         // were written, measured to change nothing once these two were in
         // place, and dropped.
+        // #4451 (ADR-0193 amendment): a return that IS a method type
+        // parameter bound to `T!` (an explicit argument at an oblivious
+        // declaration, or #4459's oblivious-slot inference) keeps it. The CLR
+        // fallback reads the closed `string` and would drop the `!`.
         return TypeSymbol.RequiresSymbolicProjection(mapped)
             || TypeSymbol.ContainsNamedTupleElements(mapped)
             || TypeSymbol.ContainsSourceArrayShape(mapped)
+            || mapped is PlatformTypeSymbol
             ? mapped
             : null;
     }
@@ -1790,6 +1795,38 @@ internal sealed class MemberLookup
         ImmutableArray<TypeSymbol?> methodTypeArguments = default)
         => MapOpenClrTypeToSymbolic(openClr, openDefinition, typeArguments, openMethodDefinition, methodTypeArguments);
 #pragma warning restore GSA0007
+
+    /// <summary>
+    /// ADR-0193 amendment (2026-09-26, #4451): the type an explicit method
+    /// type argument binds, decided by
+    /// <see cref="NullabilityImportRule.ApplyExplicitOpenSlotArgument"/> from
+    /// what the open declaration says about a parameter slot the type
+    /// parameter fills directly. A type parameter that fills no parameter
+    /// slot directly keeps the argument as written.
+    /// </summary>
+    /// <param name="closedOrOpenMethod">The called method.</param>
+    /// <param name="ordinal">The type parameter's position.</param>
+    /// <param name="argument">The explicit type argument.</param>
+    /// <returns>The type the type parameter is bound to.</returns>
+    public static TypeSymbol ApplyExplicitMethodTypeArgument(MethodInfo closedOrOpenMethod, int ordinal, TypeSymbol argument)
+    {
+        var openMethod = closedOrOpenMethod.IsGenericMethodDefinition || !closedOrOpenMethod.IsGenericMethod
+            ? closedOrOpenMethod
+            : closedOrOpenMethod.GetGenericMethodDefinition();
+        foreach (var parameter in openMethod.GetParameters())
+        {
+            var parameterType = parameter.ParameterType.IsByRef ? parameter.ParameterType.GetElementType() : parameter.ParameterType;
+            if (parameterType is { IsGenericParameter: true, DeclaringMethod: not null }
+                && parameterType.GenericParameterPosition == ordinal)
+            {
+                return NullabilityImportRule.ApplyExplicitOpenSlotArgument(
+                    argument,
+                    ClrNullability.GetParameterDeclaredState(parameter));
+            }
+        }
+
+        return argument;
+    }
 
     /// <summary>
     /// Issue #833: build the per-MVar symbolic type-argument vector for an
@@ -1976,7 +2013,7 @@ internal sealed class MemberLookup
             {
                 if (explicitTypeArgSymbols[i] != null)
                 {
-                    inferred[i] = explicitTypeArgSymbols[i];
+                    inferred[i] = ApplyExplicitMethodTypeArgument(openMethod, i, explicitTypeArgSymbols[i]);
                 }
             }
         }

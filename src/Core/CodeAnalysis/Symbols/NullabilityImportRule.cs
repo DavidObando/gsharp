@@ -182,6 +182,31 @@ internal static class NullabilityImportRule
                 : argument;
 
     /// <summary>
+    /// ADR-0193 amendment (2026-09-26, #4451, owner decision): an explicit
+    /// method type argument that closes an open slot the declaration leaves
+    /// oblivious reads as <c>T!</c>. <c>Ob.WrapList[string](x)</c> over an
+    /// oblivious <c>List&lt;T&gt; WrapList&lt;T&gt;(T value)</c> binds
+    /// <c>T = string!</c>: its parameter takes a nil unchecked, as the C#
+    /// does, and its return is <c>List[string!]</c>, so a nil element is
+    /// checked where it is read. This narrows <see cref="DecideOpenSlot"/>'s
+    /// <c>Unchanged</c> only for an explicit reference type argument at an
+    /// oblivious slot; an annotated or enabled slot, a value-type argument,
+    /// and an argument that already states its nullability (<c>string?</c>,
+    /// <c>string!</c>) are unchanged. Inference reaches the same answer on
+    /// its own (#4459: an oblivious slot keeps the argument's <c>T!</c>).
+    /// </summary>
+    /// <param name="argument">The explicit type argument.</param>
+    /// <param name="declaredState">What the open declaration says about the slot the type parameter fills.</param>
+    /// <returns>The type the type parameter is bound to.</returns>
+    internal static TypeSymbol ApplyExplicitOpenSlotArgument(TypeSymbol argument, ClrNullabilityState declaredState)
+        => declaredState == ClrNullabilityState.Oblivious
+            && argument is not NullableTypeSymbol
+            && argument is not PlatformTypeSymbol
+            && ClassifyArgument(argument) == TypeArgumentKind.Reference
+                ? Apply(argument, ImportedReferenceNullability.Platform)
+                : argument;
+
+    /// <summary>
     /// Issue #4403: the direct parameter reader lifts a reference parameter
     /// whose default value is <c>null</c> to <c>T?</c>. That is a G#-side
     /// inference from the default value, not a classified metadata position,
