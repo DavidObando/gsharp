@@ -43,6 +43,8 @@ public class Issue4420PlatformUpcastTests
                 public static List<string> Strings() { return new List<string> { "a", null }; }
 
                 public static string[] Lines() { return new[] { "a", "b" }; }
+
+                public static IEnumerable<string> Seq() { return new List<string> { "a", null }; }
             }
 
             public interface IChild<T> : IEnumerable<T>
@@ -93,6 +95,18 @@ public class Issue4420PlatformUpcastTests
         }
 
         func TakeOut(x IOut[object]) int32 { return 1 }
+
+        interface IIn[in T] {
+            func Put(value T) int32;
+        }
+
+        class ObjectSink : IIn[object] {
+            func Put(value object) int32 -> 1
+        }
+
+        // A sink of `string!` elements: inferred from the list's nested
+        // element, so the parameter type is `IIn[string!]`.
+        func TakeInPlatformOf[T](xs List[T], sink IIn[T]) int32 { return sink.Put(xs[0]) }
 
         interface IView[T] : IEnumerable[T] {
         }
@@ -164,6 +178,8 @@ public class Issue4420PlatformUpcastTests
     [InlineData("TakeObjects(AsEnumerable(Ob.Strings()))")]
     [InlineData("TakeOut(OutRepo(Ob.Strings()[0]))")]
     [InlineData("TakeEnum(ViewOfFirst(Ob.Strings()))")]
+    [InlineData("TakeObjects(Ob.Seq())")]
+    [InlineData("TakeInPlatformOf(Ob.Strings(), ObjectSink())")]
     public void An_Upcast_To_A_NonNull_Element_Supertype_Is_Rejected(string call)
     {
         using var library = new CSharpFixture(LibrarySource);

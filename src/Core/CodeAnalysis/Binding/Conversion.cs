@@ -2102,8 +2102,11 @@ public sealed class Conversion
                     // Contravariant: the TARGET argument must implicitly
                     // convert to the SOURCE argument (object -> string),
                     // so the narrower interface accepts the wider one.
+                    // #4420: symmetric to the covariant arm. A view that
+                    // writes `string!` (possibly nil) into a sink declared
+                    // non-null `object` has no per-element check point.
                     var contravariant = Classify(toArg, fromArg);
-                    if (!contravariant.Exists || !contravariant.IsImplicit)
+                    if (!contravariant.Exists || !contravariant.IsImplicit || contravariant.RequiresPlatformNilCheck)
                     {
                         return false;
                     }
@@ -3188,7 +3191,7 @@ public sealed class Conversion
                 System.Reflection.GenericParameterAttributes.Contravariant =>
                     IsReferenceTypeArgument(sourceArgument)
                     && IsReferenceTypeArgument(targetArgument)
-                    && Classify(targetArgument, sourceArgument) is { Exists: true, IsImplicit: true },
+                    && Classify(targetArgument, sourceArgument) is { Exists: true, IsImplicit: true, RequiresPlatformNilCheck: false },
                 _ => false,
             };
             if (!compatible)
@@ -3730,6 +3733,18 @@ public sealed class Conversion
         var widens = false;
         for (var i = 0; i < fromArguments.Length; i++)
         {
+            // #4420: a same-definition variant view is decided here too. A
+            // metadata-backed `IEnumerable[string!]!` reaches the ordinary
+            // variance check only after its argument flags are stripped, so
+            // the guard there never sees the `!`. A pair of DIFFERENT types
+            // at an invariant position is rejected by the ordinary rules
+            // anyway, so rejecting the escape here costs nothing.
+            if (IsCovariantPlatformEscape(fromArguments[i], toArguments[i]))
+            {
+                conversion = Conversion.None;
+                return true;
+            }
+
             switch (RelatePlatformArguments(fromArguments[i], toArguments[i]))
             {
                 case PlatformArgumentRelation.Same:
@@ -3941,13 +3956,22 @@ public sealed class Conversion
     /// <param name="target">The target's argument at the same position.</param>
     /// <returns><see langword="true"/> when the view must be rejected.</returns>
     private static bool IsCovariantPlatformEscape(TypeSymbol? projected, TypeSymbol? target)
-        => projected is PlatformTypeSymbol platform
-            && target is not null
-            && target is not NullableTypeSymbol
-            && target is not PlatformTypeSymbol
-            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(platform.UnderlyingType, target)
-            && IsNonNullReferenceDestination(target)
-            && ClassifyCore(platform.UnderlyingType, target, allowStructuralProjection: false).IsImplicit;
+        => IsVariantPlatformEscape(projected, target) || IsVariantPlatformEscape(target, projected);
+
+    // One direction of the escape: a platform element on one side, a
+    // different non-null reference type on the other, related by an implicit
+    // conversion from the platform's underlying type. Read as covariance
+    // (`List[string!]` -> `IEnumerable[object]`) or, reversed, as
+    // contravariance (`IIn[object]` -> `IIn[string!]`, which writes a
+    // possibly-nil `string!` into a sink declared non-null `object`).
+    private static bool IsVariantPlatformEscape(TypeSymbol? platformSide, TypeSymbol? otherSide)
+        => platformSide is PlatformTypeSymbol platform
+            && otherSide is not null
+            && otherSide is not NullableTypeSymbol
+            && otherSide is not PlatformTypeSymbol
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(platform.UnderlyingType, otherSide)
+            && IsNonNullReferenceDestination(otherSide)
+            && ClassifyCore(platform.UnderlyingType, otherSide, allowStructuralProjection: false).IsImplicit;
 
     private static bool AnyContainsPlatformType(ImmutableArray<TypeSymbol> types)
     {
@@ -4145,10 +4169,25 @@ public sealed class Conversion
         }
 
         var sourceDefinition = sourceClr.IsGenericTypeDefinition ? sourceClr : sourceClr.GetGenericTypeDefinition();
-        if (ClrTypeUtilities.AreSame(sourceDefinition, targetDefinition)
-            || sourceDefinition.GetGenericArguments().Length != positions.Length)
+        if (sourceDefinition.GetGenericArguments().Length != positions.Length)
         {
             return false;
+        }
+
+        // The source's own definition is a valid projection too: a
+        // metadata-backed `IEnumerable[string!]!` against `IEnumerable[object]`
+        // compares closed CLR types that differ (`<string>` vs `<object>`),
+        // so the same-shape comparison declines it, and the variance check
+        // below only ever sees the flag-stripped `string`.
+        if (ClrTypeUtilities.AreSame(sourceDefinition, targetDefinition))
+        {
+            // Compare against the target's own positions: a magic collection
+            // (`map[K, V?]`) reports nullability-erased constructed arguments,
+            // which would turn rule 2's legal `string! -> string?` into an
+            // apparent `string! -> string`.
+            projected = positions;
+            targetArguments = to.GetElementPositions();
+            return positions.Length == targetArguments.Length;
         }
 
         foreach (var candidate in SupertypesOf(sourceDefinition))
