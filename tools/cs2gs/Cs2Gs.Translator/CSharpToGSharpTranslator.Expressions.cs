@@ -4109,7 +4109,20 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // Flow analysis must have proven the receiver non-null at this site.
-            if (this.context.GetTypeInfo(recv).Nullability.FlowState != NullableFlowState.NotNull)
+            // Issue #4500: in a `<Nullable>annotations</Nullable>` context the
+            // declarations are annotated but Roslyn runs no flow analysis, so a
+            // `T?` receiver's flow state is None rather than NotNull, even after
+            // an `Assert.NotNull(x)` or an earlier `x!` that C# relies on. G#
+            // narrows neither, and the receiver keeps its `T?` type, so the
+            // dereference is asserted exactly as a flow-proven one is: C#
+            // throws on a null here too.
+            NullableFlowState flowState = this.context.GetTypeInfo(recv).Nullability.FlowState;
+            bool annotationsWithoutFlowAnalysis = isDereferenceReceiver
+                && flowState == NullableFlowState.None
+                && !this.IsObliviousCompilation()
+                && this.context.SemanticModel.GetNullableContext(recv.SpanStart).HasFlag(NullableContext.AnnotationsEnabled)
+                && !this.context.SemanticModel.GetNullableContext(recv.SpanStart).HasFlag(NullableContext.WarningsEnabled);
+            if (flowState != NullableFlowState.NotNull && !annotationsWithoutFlowAnalysis)
             {
                 return false;
             }
@@ -4152,6 +4165,19 @@ public sealed partial class CSharpToGSharpTranslator
             if (declared.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return NullForgivenessTelemetry.Record("flow-proven-declared-nullable");
+            }
+
+            // Issue #4500: without flow analysis an implicitly typed local's
+            // own annotation is None, but G# infers it from its initializer,
+            // so it is `T?` exactly when that initializer is.
+            if (annotationsWithoutFlowAnalysis
+                && symbol is ILocalSymbol implicitLocal
+                && IsImplicitlyTypedLocal(implicitLocal)
+                && implicitLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } implicitInitializer }
+                && this.IsNullableInitializer(implicitInitializer))
+            {
+                return NullForgivenessTelemetry.Record("4500-annotations-context-nullable-local");
             }
 
             if (this.ShouldPromoteToNullableReference(symbol))

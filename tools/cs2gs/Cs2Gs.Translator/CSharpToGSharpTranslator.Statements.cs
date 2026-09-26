@@ -2088,6 +2088,17 @@ public sealed partial class CSharpToGSharpTranslator
 
         private GExpression TranslateAssignmentValue(AssignmentExpressionSyntax assignment)
         {
+            // Issue #4500: a write into an element of an array whose element
+            // cs2gs widened to `T?` (IsWidenedArrayElementLocal) accepts nil,
+            // so no bridge may assert the value.
+            if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                && assignment.Left is ElementAccessExpressionSyntax elementTarget
+                && this.context.GetSymbolInfo(elementTarget.Expression).Symbol is ILocalSymbol widenedArray
+                && this.IsWidenedArrayElementLocal(widenedArray))
+            {
+                return this.TranslateExpression(assignment.Right);
+            }
+
             GExpression value = this.CoerceConstantToUnsigned(
                 assignment.Right,
                 this.TranslateExpression(assignment.Right));
