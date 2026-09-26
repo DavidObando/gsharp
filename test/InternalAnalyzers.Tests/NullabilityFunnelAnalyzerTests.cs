@@ -278,6 +278,14 @@ namespace GSharp.Core.CodeAnalysis.Binding
             _ = [|TypeSymbol.FromClrTypeWithoutNullability(fromOut, NullabilityFreeReason.TypeStructure)|];
         }
 
+        // A reassigned parameter is traced like a local; an untouched one is not.
+        void Reassigned(MethodInfo method, Type type, Type untouched)
+        {
+            _ = TypeSymbol.FromClrTypeWithoutNullability(untouched, NullabilityFreeReason.TypeStructure);
+            type = method.ReturnType;
+            _ = [|TypeSymbol.FromClrTypeWithoutNullability(type, NullabilityFreeReason.TypeStructure)|];
+        }
+
         static void Split(Type type, out Type result) => result = type;
     }
 }
@@ -286,6 +294,7 @@ namespace GSharp.Core.CodeAnalysis.Binding
         return AnalyzerTestHelper.AssertDiagnosticsAsync(
             new NullabilityFunnelAnalyzer(),
             Source,
+            "GSA0007",
             "GSA0007",
             "GSA0007",
             "GSA0007",

@@ -292,6 +292,10 @@ internal static class RoslynAnalyzerApiMap
             "GSharp.Core.CodeAnalysis.Binding",
             "BoundVariableExpression",
             "G# binds every variable read (local, parameter or global) to BoundVariableExpression."),
+        ["Microsoft.CodeAnalysis.Operations.IParameterReferenceOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundVariableExpression",
+            "G# binds a parameter read to the same BoundVariableExpression as a local read; ParameterSymbol is a variable symbol."),
         ["Microsoft.CodeAnalysis.Operations.IAssignmentOperation"] = new(
             "GSharp.Core.CodeAnalysis.Binding",
             "BoundAssignmentExpression",
@@ -370,6 +374,7 @@ internal static class RoslynAnalyzerApiMap
         [("Microsoft.CodeAnalysis.OperationKind", "MethodReference")] = new(null, "MethodGroupExpression"),
         [("Microsoft.CodeAnalysis.OperationKind", "PropertyReference")] = new(null, "PropertyAccessExpression"),
         [("Microsoft.CodeAnalysis.OperationKind", "LocalReference")] = new(null, "VariableExpression"),
+        [("Microsoft.CodeAnalysis.OperationKind", "ParameterReference")] = new(null, "VariableExpression"),
         [("Microsoft.CodeAnalysis.OperationKind", "SimpleAssignment")] = new(null, "AssignmentExpression"),
         [("Microsoft.CodeAnalysis.OperationKind", "VariableDeclarator")] = new(null, "VariableDeclaration"),
         [("Microsoft.CodeAnalysis.OperationKind", "IsType")] = new(null, "IsExpression"),
@@ -478,6 +483,7 @@ internal static class RoslynAnalyzerApiMap
             "A G# function has exactly one bound body."),
         [("Microsoft.CodeAnalysis.IOperation", "ChildOperations")] = new(null, "ChildNodes"),
         [("Microsoft.CodeAnalysis.Operations.ILocalReferenceOperation", "Local")] = new(null, "Variable"),
+        [("Microsoft.CodeAnalysis.Operations.IParameterReferenceOperation", "Parameter")] = new(null, "Variable"),
         [("Microsoft.CodeAnalysis.Operations.IVariableDeclaratorOperation", "Symbol")] = new(null, "Variable"),
         [("Microsoft.CodeAnalysis.Operations.IDeclarationExpressionOperation", "Expression")] = new(null, "Operand"),
         [("Microsoft.CodeAnalysis.Operations.IIsTypeOperation", "TypeOperand")] = new(

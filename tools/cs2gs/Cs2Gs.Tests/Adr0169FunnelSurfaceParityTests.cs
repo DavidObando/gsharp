@@ -50,10 +50,10 @@ public sealed class Adr0169FunnelSurfaceParityTests : IDisposable
     public void TranslatedFunnelRule_MatchesRoslyn_OverTranslatedCorpus()
     {
         // Door, door in a lambda, door in a field initializer, wrapper
-        // factory, the five signature-accessor shapes (direct, declared local,
-        // assignment, foreach, out var), method group and unattributed
-        // property getter.
-        AssertParity("FunnelSurfaceAnalyzer", "Corpus.cs", expected: 11);
+        // factory, the six signature-accessor shapes (direct, declared local,
+        // assignment, reassigned parameter, foreach, out var), method group
+        // and unattributed property getter.
+        AssertParity("FunnelSurfaceAnalyzer", "Corpus.cs", expected: 12);
     }
 
     [Fact]

@@ -90,9 +90,11 @@ public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
                 }
                 else if (node is IAssignmentOperation assignment)
                 {
-                    if (assignment.Target is ILocalReferenceOperation assigned)
+                    // A reassigned parameter is a source exactly as a local is.
+                    var assigned = VariableOf(assignment.Target);
+                    if (assigned != null)
                     {
-                        AddSource(sources, assigned.Local, assignment.Value);
+                        AddSource(sources, assigned, assignment.Value);
                     }
                 }
                 else if (node is IForEachLoopOperation loop)
@@ -318,22 +320,59 @@ public sealed class NullabilityFunnelAnalyzer : DiagnosticAnalyzer
                     return true;
                 }
             }
-            else if (node is ILocalReferenceOperation reference)
+            else if (node is ILocalReferenceOperation local)
             {
-                if (visited.Add(reference.Local) && sources.TryGetValue(reference.Local, out var localSources))
+                if (DerivesThroughVariable(local.Local, sources, visited))
                 {
-                    foreach (var source in localSources)
-                    {
-                        if (DerivesFromSignatureAccessor(source, sources, visited))
-                        {
-                            return true;
-                        }
-                    }
+                    return true;
+                }
+            }
+            else if (node is IParameterReferenceOperation parameter)
+            {
+                // A reassigned parameter is traced exactly as a local is.
+                if (DerivesThroughVariable(parameter.Parameter, sources, visited))
+                {
+                    return true;
                 }
             }
         }
 
         return false;
+    }
+
+    private static bool DerivesThroughVariable(
+        ISymbol variable,
+        Dictionary<ISymbol, List<IOperation>> sources,
+        HashSet<ISymbol> visited)
+    {
+        if (visited.Add(variable) && sources.TryGetValue(variable, out var variableSources))
+        {
+            foreach (var source in variableSources)
+            {
+                if (DerivesFromSignatureAccessor(source, sources, visited))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
+    // The local or parameter a reference reads or writes, or null.
+    private static ISymbol? VariableOf(IOperation operation)
+    {
+        if (operation is ILocalReferenceOperation local)
+        {
+            return local.Local;
+        }
+
+        if (operation is IParameterReferenceOperation parameter)
+        {
+            return parameter.Parameter;
+        }
+
+        return null;
     }
 
     private static bool IsSignatureAccessor(ISymbol? property)

@@ -1031,10 +1031,12 @@ something the plan left open:
   position through a symbolic receiver: an implemented `IEnumerable<T>`'s
   argument, an interface or base type's arguments. Those have no declaration
   `[Nullable]` to merge. `MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability`
-  substitutes exactly as the door does and states why. The analyzer matches
-  every escape hatch by shape: its name ends in `WithoutNullability` and it
-  takes a `NullabilityFreeReason`. So a new twin is checked without an analyzer
-  change, and so is its signature-accessor clause.
+  substitutes exactly as the door does and states why. The analyzer
+  recognizes the three escape hatches by name (`TypeSymbol.FromClrTypeWithoutNullability`,
+  `ImportedTypeSymbol.GetWithoutNullability` and this one), so a new
+  `*WithoutNullability` twin must be added to `IsEscapeHatch` (and to the
+  ADR-0169 parity fixture that mirrors it) before its signature-accessor
+  clause is checked.
 - **The walker clause and its three named exceptions.** Inside a funnel member,
   a direct `NullableTypeSymbol.Get` / `PlatformTypeSymbol.Get` is reported.
   Three existing calls were legitimately not a classified position, and each
