@@ -2095,6 +2095,19 @@ public sealed partial class CSharpToGSharpTranslator
             value = this.CoerceCovariantArrayConversion(
                 assignment.Right,
                 this.CoercePointerConversion(assignment.Right, value));
+
+            // Issue #4500: a write into an element of an array whose element
+            // cs2gs widened to `T?` (IsWidenedArrayElementLocal) accepts nil,
+            // so none of the null-forgiveness bridges below may assert the
+            // value. The coercions above still apply.
+            if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                && assignment.Left is ElementAccessExpressionSyntax elementTarget
+                && this.context.GetSymbolInfo(elementTarget.Expression).Symbol is ILocalSymbol widenedArray
+                && this.IsWidenedArrayElementLocal(widenedArray))
+            {
+                return value;
+            }
+
             value = this.ForgiveElementAccessAssignmentRhs(assignment, value);
             value = this.ForgiveObliviousExternalAssignmentRhs(assignment, value);
             if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
