@@ -56,6 +56,32 @@ namespace Demo
     }
 
     [Fact]
+    public void DroppedByRefSuppression_OnAnotherTypeParameter_IsNotAsserted()
+    {
+        // Review finding: the suppressed `ref name!` fixes T, but the call
+        // returns U (int), so nothing about the result became nilable and a
+        // `!!` there would be spurious (and invalid on a value type).
+        string printed = TranslateUnit(@"
+#nullable enable
+namespace Demo
+{
+    public class C
+    {
+        private string? name = ""n"";
+
+        private static U Pick<T, U>(ref T value, U result) => result;
+
+        public int F() => Pick(ref name!, 1).CompareTo(0);
+    }
+}", bind: false);
+
+        // Not bound: a source-declared `ref T` parameter call is a separate,
+        // pre-existing translation gap; only the receiver decision is asserted.
+        Assert.Contains("Pick(", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(")!!.CompareTo", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void GenericStaticCall_OnATypeReceiver_IsNotAsserted()
     {
         // The control: a type is not a value, so a generic static call through
@@ -75,7 +101,7 @@ namespace Demo
         Assert.DoesNotContain("Array!!", printed, StringComparison.Ordinal);
     }
 
-    private static string TranslateUnit(string source)
+    private static string TranslateUnit(string source, bool bind = true)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -88,6 +114,11 @@ namespace Demo
         CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
 
         string printed = GSharpPrinter.Print(unit);
+        if (!bind)
+        {
+            return printed;
+        }
+
         RoundTripResult result = TranslationTestValidation.AssertBinds(printed);
         Assert.True(
             result.Success,

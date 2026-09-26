@@ -1000,6 +1000,22 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                // Only the argument that SUPPLIES the returned type parameter
+                // matters: in `Pick<T, U>(ref T value, U result)` a suppressed
+                // `ref x!` fixes T, not the returned U (Copilot review). Map the
+                // argument (named or positional) to its parameter on the
+                // original definition and require that parameter's type to BE
+                // the returned type parameter.
+                IParameterSymbol parameter = DetermineParameter(argument, this.context);
+                if (parameter == null
+                    || parameter.Ordinal >= method.OriginalDefinition.Parameters.Length
+                    || !SymbolEqualityComparer.Default.Equals(
+                        method.OriginalDefinition.Parameters[parameter.Ordinal].Type,
+                        returnParameter))
+                {
+                    continue;
+                }
+
                 ITypeSymbol declared = this.GetDeclaredValueType(suppressed.Operand);
                 if (declared != null
                     && declared.IsReferenceType
