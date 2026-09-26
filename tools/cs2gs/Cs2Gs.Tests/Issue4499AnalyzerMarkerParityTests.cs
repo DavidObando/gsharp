@@ -251,4 +251,35 @@ namespace Two
             result.Diagnostics,
             diagnostic => diagnostic.DiagnosticId == SnippetTranslator.SnippetDiagnosticId);
     }
+
+    [Fact]
+    public void FormattingFallbackCanPlaceMarkerInsideInterpolationHole()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate("""
+using System;
+using System.Collections.Immutable;
+
+static class Door
+{
+    public static object Map(Type type, object other, ImmutableArray<Type> arguments) => type;
+}
+
+class Consumer
+{
+    string Use()
+    {
+        // Door.Map(typeof(int32), nil, default(ImmutableArray[Type]))
+        string collision = "Door.Map(typeof(int32), nil, default(ImmutableArray[Type]))";
+        Console.WriteLine(collision);
+        return $"{[|Door.Map(typeof(int), null, default)|]}";
+    }
+}
+""");
+
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.Empty(result.UnplacedMarkers);
+        Assert.Contains("${[|Door.Map(", result.GsWithMarkers, StringComparison.Ordinal);
+        Assert.DoesNotContain("// [|Door.Map", result.GsWithMarkers, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"[|Door.Map", result.GsWithMarkers, StringComparison.Ordinal);
+    }
 }

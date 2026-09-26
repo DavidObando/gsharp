@@ -690,44 +690,47 @@ public static class SnippetTranslator
 
     private static bool[] FindNonCodeInteriors(string source)
     {
-        var result = new bool[source.Length];
-        for (var i = 0; i < source.Length; i++)
-        {
-            if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '/')
-            {
-                for (i += 2; i < source.Length && source[i] != '\n'; i++)
-                {
-                    result[i] = true;
-                }
-            }
-            else if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '*')
-            {
-                for (i += 2; i + 1 < source.Length && (source[i] != '*' || source[i + 1] != '/'); i++)
-                {
-                    result[i] = true;
-                }
+        var spans = new List<(int Start, int Length, bool NonCode)>();
 
-                i++;
-            }
-            else if (source[i] is '"' or '\'')
+        void AddTokenSpans(string text, int offset)
+        {
+            foreach (GSharp.Core.CodeAnalysis.Syntax.SyntaxToken token
+                in GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.ParseTokens(text))
             {
-                char quote = source[i];
-                for (i++; i < source.Length && source[i] != quote; i++)
+                int start = offset + token.Span.Start;
+                if (token.Kind is GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.CommentToken
+                    or GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.DocumentationCommentToken)
                 {
-                    result[i] = true;
-                    if (source[i] == '\\' && i + 1 < source.Length)
-                    {
-                        result[++i] = true;
-                    }
+                    spans.Add((start, token.Span.Length, true));
+                }
+                else if (token.Kind is GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.StringToken
+                    or GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.InterpolatedStringToken
+                    or GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.CharacterToken
+                    && token.Span.Length > 2)
+                {
+                    spans.Add((start + 1, token.Span.Length - 2, true));
                 }
             }
-            else if (source[i] == '`')
+        }
+
+        AddTokenSpans(source, 0);
+        GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree =
+            GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(source);
+        foreach (GSharp.Core.CodeAnalysis.Syntax.InterpolatedStringExpressionSyntax interpolation
+            in tree.Root.DescendantNodesAndSelf()
+                .OfType<GSharp.Core.CodeAnalysis.Syntax.InterpolatedStringExpressionSyntax>())
+        {
+            foreach (GSharp.Core.CodeAnalysis.Syntax.SyntaxNode hole in interpolation.HoleExpressions)
             {
-                for (i++; i < source.Length && source[i] != '`'; i++)
-                {
-                    result[i] = true;
-                }
+                spans.Add((hole.Span.Start, hole.Span.Length, false));
+                AddTokenSpans(source.Substring(hole.Span.Start, hole.Span.Length), hole.Span.Start);
             }
+        }
+
+        var result = new bool[source.Length];
+        foreach ((int start, int length, bool nonCode) in spans.OrderByDescending(span => span.Length))
+        {
+            Array.Fill(result, nonCode, start, length);
         }
 
         return result;
