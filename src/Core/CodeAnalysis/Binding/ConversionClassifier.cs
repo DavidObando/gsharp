@@ -3235,6 +3235,25 @@ internal sealed class ConversionClassifier
                     GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs: default),
                     parameter: null);
             }
+            else if (paramIndex < parameters.Length
+                && arguments[i].Type is PlatformTypeSymbol
+                && parameters[paramIndex].ParameterType is { IsByRef: false, IsGenericParameter: false }
+                && ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]) is { } parameterType
+                && Conversion.Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck)
+            {
+                // ADR-0186 §4, #4451: a platform argument at a non-null
+                // parameter of a constrained call is a coercion point like any
+                // other. This path otherwise passes arguments unconverted (the
+                // `!0` slots are reified), so it inserts only the check and
+                // leaves the value's CLR shape alone; a generic-parameter slot
+                // is skipped for the same reason.
+                var location = i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+                builder ??= arguments.ToBuilder();
+                builder[i] = PlatformCoercion.InsertCheck(
+                    arguments[i],
+                    location,
+                    $"a conversion to the non-null type '{parameterType.Name}'");
+            }
         }
 
         return builder?.ToImmutable() ?? arguments;

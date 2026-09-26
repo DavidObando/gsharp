@@ -1,4 +1,4 @@
-// <copyright file="Issue4443PlatformInferenceTests.cs" company="GSharp">
+// <copyright file="Issue4451ObliviousGenericSlotTests.cs" company="GSharp">
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
@@ -66,6 +66,11 @@ public class Issue4451ObliviousGenericSlotTests
 
                 public int Measure(string other) { return other.Length; }
             }
+
+            public interface ITaker
+            {
+                int Take(string value);
+            }
         #nullable restore
         }
         """;
@@ -87,6 +92,7 @@ public class Issue4451ObliviousGenericSlotTests
     [InlineData("Console.WriteLine(En.TakeEnabled(Ob.Nil()))")]
     [InlineData("let b = Box(Ob.Name())\nConsole.WriteLine(b.Measure(Ob.Nil()))")]
     [InlineData("let b = Box(Ob.Nil())\nConsole.WriteLine(b.Value.Length)")]
+    [InlineData("class Taker : ITaker {\n    func Take(value string) int32 { return 7 }\n}\nfunc Via[T ITaker](x T) int32 { return x.Take(Ob.Nil()) }\nConsole.WriteLine(Via(Taker()))")]
     public void A_Nil_Platform_Argument_To_A_NonNull_Imported_Parameter_Fails_At_The_Call(string program)
     {
         using var library = new CSharpFixture(LibrarySource);
