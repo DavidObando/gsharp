@@ -19,7 +19,8 @@ The paired programs assert identical observable results for:
 The benchmark rows additionally compare:
 
 - slice view creation and amortized append growth;
-- managed-location access and creation;
+- managed-location access, immediate creation, retained creation, first and
+  warmed identity observation, and direct readonly creation;
 - adapted reference and managed-location calls;
 - rich-capture calls and construction;
 - generated adapters against hand-written ordinary wrappers;
@@ -53,7 +54,11 @@ launches.
 | Slice view | 2.11 | 11.97 | 3.32 | 0 | 0 |
 | Slice append | 4.03 | 9.11 | 6.64 | 8.39 | 8.39 |
 | Managed access | 2.08 | 27.02 | 2.17 | 0 | 0 |
-| Managed creation | 0.32 | 29.30 | 27.13 | 80 | 80 |
+| Managed immediate creation | 0.32 | 20.91 | 12.18 | 40 | 40 |
+| Managed retained creation | 0.79 | 56.37 | 49.86 | 40 | 40 |
+| Managed first identity | 0.42 | 105.79 | 98.85 | 40 | 40 |
+| Managed warmed identity | 0.54 | 11.94 | 4.68 | 0 | 0 |
+| Managed direct readonly creation | 0.33 | 36.12 | 26.93 | 40 | 40 |
 | Adapted reference call | 2.07 | 27.58 | 0.66 | 0 | 0 |
 | Adapted location call | 2.10 | 28.44 | 2.15 | 0 | 0 |
 | Adapter construction | 1.19 | 19.53 | 8.71 | 24 | 24 |
@@ -69,6 +74,12 @@ launches.
   form allocated 248 B under JIT and 176 B under AOT, and took 3.42x/6.50x as
   long to construct.
 - Every steady-state G# row allocated zero bytes per operation.
+- Before #4511, immediate managed creation measured 29.30 ns/op and 80 B/op
+  under JIT, and 27.13 ns/op and 80 B/op under NativeAOT. Lazy key creation
+  halves construction allocation to 40 B/op. Retained handles use the same
+  budget; their destination array is allocated before measurement and consumed
+  afterward. First identity observation pays the deferred 40 B key cost, while
+  warmed identity allocates zero.
 
 ## Viability conclusion
 
@@ -80,7 +91,9 @@ removes the apparent steady-state adapter/location throughput gap.
 The prerequisite set is **not yet performance-complete for mechanical Go
 translation**:
 
-- #4511 tracks the 80 B cost of creating a managed location.
+- #4511 reduces managed-location creation from 80 B to the ordinary 40 B
+  handle allocation; further reduction would require a broader representation
+  or escape-analysis change.
 - #4512 tracks excess rich-object capture/environment construction.
 - #4513 tracks translator rules and JIT/AOT performance gates, including
   hoisting address/interface conversions out of hot loops when semantics allow.
