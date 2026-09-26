@@ -20,20 +20,24 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Translator-fidelity tests for issue #2202: a call to an EXTERNAL (metadata)
 /// method whose return type is oblivious (<c>NullableAnnotation.None</c>, i.e.
-/// the declaring assembly was compiled without a nullable context) produces a
-/// value that gsc considers nullable (<c>T?</c>) per <c>ClrNullability.cs</c>'s
-/// "unannotated → nullable" fallback. When such a call result appears as the
-/// return/expression-body value in an oblivious compilation, cs2gs must assert
-/// <c>!!</c> to bridge the gap between C#'s implicit acceptance and gsc's strict
-/// nullability. This mirrors the RECEIVER-position handling (issue #2113) but
-/// for VALUE positions (return statements, expression bodies).
+/// the declaring assembly was compiled without a nullable context), used as the
+/// return/expression-body value in an oblivious compilation. gsc used to import
+/// such a value as nullable (<c>T?</c>, ADR-0136), so cs2gs asserted <c>!!</c>
+/// to bridge C#'s implicit acceptance and gsc's strict nullability, mirroring
+/// the RECEIVER-position handling (issue #2113) for VALUE positions (return
+/// statements, expression bodies). Since ADR-0186 step 3 gsc imports the value
+/// as the platform type <c>T!</c> and checks it itself, so these tests now pin
+/// that cs2gs emits no <c>!!</c> (ADR-0186 step 6, PR 0).
+/// <para>
+/// The test names (<c>…AssertsNonNull</c>) predate ADR-0186 step 6 and are kept
+/// for issue traceability; the assertions state the current contract.
+/// </para>
 /// </summary>
 public class Issue2202ExternalObliviousReturnForgivenessTranslationTests
 {
     /// <summary>
-    /// Positive test: an oblivious external method's return value used directly
-    /// as the expression body of a method (non-null declared return type) gets
-    /// <c>!!</c> forgiveness.
+    /// An oblivious external method's return value returned directly from a
+    /// method with a non-null declared return type is emitted bare.
     /// </summary>
     [Fact]
     public void ExpressionBody_ObliviousExternalReturn_AssertsNonNull()
@@ -50,13 +54,16 @@ namespace Demo
     }
 }");
 
-        // The return value from ext.Combine(...) must be asserted with !!
-        Assert.Contains("ext.Combine(\"hello\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("ext.Combine(\"hello\")", printed);
+        Assert.DoesNotContain("ext.Combine(\"hello\")!!", printed);
     }
 
     /// <summary>
-    /// Positive test: the oblivious external method return used as a direct
-    /// expression-bodied member (arrow syntax) also gets <c>!!</c>.
+    /// The oblivious external method return used as a direct expression-bodied
+    /// member (arrow syntax) is also emitted bare.
     /// </summary>
     [Fact]
     public void ArrowBody_ObliviousExternalReturn_AssertsNonNull()
@@ -70,13 +77,17 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("ext.Combine(\"world\")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("ext.Combine(\"world\")", printed);
+        Assert.DoesNotContain("ext.Combine(\"world\")!!", printed);
     }
 
     /// <summary>
-    /// Positive test: an oblivious external extension method's return value
-    /// used as a return statement gets <c>!!</c> — mirrors the real
-    /// <c>Oahu.Data</c> <c>Combine</c> extension pattern.
+    /// An oblivious external extension method's return value used as a return
+    /// statement is emitted bare — mirrors the real <c>Oahu.Data</c>
+    /// <c>Combine</c> extension pattern.
     /// </summary>
     [Fact]
     public void ReturnStatement_ObliviousExternalExtensionReturn_AssertsNonNull()
@@ -95,17 +106,19 @@ namespace Demo
     }
 }");
 
-        // The extension method Merge returns string (oblivious) → needs !!
-        Assert.Contains("items.Merge(\" - \")!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("items.Merge(\" - \")", printed);
+        Assert.DoesNotContain("items.Merge(\" - \")!!", printed);
     }
 
     /// <summary>
     /// Negative test: the SAME external library but compiled WITH nullable
     /// annotations enabled — a genuinely <c>string?</c>-returning method
     /// represents a REAL, deliberate nullability that cs2gs should NOT paper
-    /// over with blind <c>!!</c>. Only the truly oblivious/unannotated case
-    /// (where gsc's fallback default is nullable purely due to lack of
-    /// information) is safe to bridge.
+    /// over with blind <c>!!</c>. (The truly oblivious case, which cs2gs used
+    /// to bridge with <c>!!</c>, is now emitted bare and checked by gsc.)
     /// </summary>
     [Fact]
     public void AnnotatedExternalNullableReturn_IsNotForgiven()

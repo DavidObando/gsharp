@@ -833,7 +833,10 @@ public sealed partial class CSharpToGSharpTranslator
             if (!this.IsObliviousCompilation()
                 || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
                 || translatedRhs is NonNullAssertionExpression
-                || !this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(assignment.Right).Symbol))
+                || !this.IsImportedObliviousNullableMember(this.context.GetSymbolInfo(assignment.Right).Symbol)
+
+                // ADR-0186 step 6 (PR 0): gsc checks a `T!` right-hand side.
+                || this.PlatformTypedImportNeedsNoBridge(assignment.Right))
             {
                 return translatedRhs;
             }
@@ -2134,8 +2137,11 @@ public sealed partial class CSharpToGSharpTranslator
                         new ThisExpression(),
                         this.EmittedName(receiverId, receiverId.Identifier));
 
-                    if (this.ReceiverNeedsNullForgiveness(receiverId, isDereferenceReceiver: true) ||
-                        this.ReceiverIsNullableReferenceFieldOrProperty(receiverId))
+                    // ADR-0186 step 6 (PR 0): an inherited oblivious-metadata
+                    // member is `T!`, which gsc checks itself.
+                    if (!this.PlatformTypedImportNeedsNoBridge(receiverId) &&
+                        (this.ReceiverNeedsNullForgiveness(receiverId, isDereferenceReceiver: true) ||
+                        this.ReceiverIsNullableReferenceFieldOrProperty(receiverId)))
                     {
                         qualifiedReceiver = EnsureNonNullAssertion(qualifiedReceiver);
                     }
@@ -2145,11 +2151,14 @@ public sealed partial class CSharpToGSharpTranslator
                         this.EmittedName(member, member.Name.Identifier));
                 }
 
-                if (this.ReceiverNeedsNullForgiveness(member.Expression, isDereferenceReceiver: true) ||
+                // ADR-0186 step 6 (PR 0): an oblivious-metadata receiver is
+                // `T!`, which gsc checks itself.
+                if (!this.PlatformTypedImportNeedsNoBridge(member.Expression) &&
+                    (this.ReceiverNeedsNullForgiveness(member.Expression, isDereferenceReceiver: true) ||
                     this.ReceiverIsNullableReferenceFieldOrProperty(member.Expression) ||
                     (member.Expression is IdentifierNameSyntax hoistedId &&
                      this.context.GetSymbolInfo(hoistedId).Symbol is { } hoistedSymbol &&
-                     this.state.HoistedNullableGuardLocals.Contains(hoistedSymbol)))
+                     this.state.HoistedNullableGuardLocals.Contains(hoistedSymbol))))
                 {
                     return new MemberAccessExpression(
                         EnsureNonNullAssertion(this.TranslateExpression(member.Expression)),

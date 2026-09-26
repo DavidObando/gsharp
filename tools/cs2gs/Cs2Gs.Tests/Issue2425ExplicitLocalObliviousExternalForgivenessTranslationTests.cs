@@ -372,10 +372,13 @@ namespace Demo
     }
 
     /// <summary>
-    /// Direct-return parity: an explicit local later returned and a direct
-    /// return of the identical call both end up with exactly one <c>!!</c>
-    /// bridging the same oblivious external member — the local-declaration fix
-    /// reproduces the #2202 direct-return outcome rather than a different one.
+    /// Direct-return parity, as it stands after ADR-0186 step 6 (PR 0). The
+    /// local keeps exactly one <c>!!</c>, at its initializer: cs2gs may drop the
+    /// type clause, and the local then takes its type from the initializer, so
+    /// the <c>!!</c> keeps it a non-null <c>T</c> rather than the platform type
+    /// <c>T!</c>. The direct return needs none, because gsc reads the oblivious
+    /// result as <c>T!</c> and checks it at the return itself. Neither shape
+    /// asserts twice.
     /// </summary>
     [Fact]
     public void ExplicitLocalThenReturn_MatchesDirectReturnForgivenessCount()
@@ -408,7 +411,7 @@ namespace Demo
         int CountForgiveness(string printed) => printed.Split("!!").Length - 1;
 
         Assert.Equal(1, CountForgiveness(viaLocal));
-        Assert.Equal(1, CountForgiveness(direct));
+        Assert.Equal(0, CountForgiveness(direct));
     }
 
     /// <summary>

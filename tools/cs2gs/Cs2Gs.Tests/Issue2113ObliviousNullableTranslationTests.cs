@@ -131,9 +131,10 @@ namespace Demo
     {
         // `Ext.Get()` comes from an assembly compiled WITHOUT a nullable context,
         // so Roslyn reports its `List<int>` return as oblivious (NullableAnnotation
-        // .None) and gsc maps it to `List[int32]?`. A plain `for x in ext.Get()`
-        // is then rejected (GS0116 "not indexable"); the source must be asserted
-        // non-null (`ext.Get()!!`), matching C#'s throw-on-null foreach semantics.
+        // .None). gsc used to import it as `List[int32]?` (ADR-0136), which
+        // rejected a plain `for x in ext.Get()` (GS0116), so cs2gs asserted
+        // `ext.Get()!!`. The foreach source still throws on nil, as in C#.
+        // (The test name predates ADR-0186 step 6; kept for issue traceability.)
         string printed = TranslateObliviousWithObliviousLibrary(@"
 namespace Demo
 {
@@ -146,17 +147,22 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("for x in ext.Get()!!", printed);
+        // ADR-0186 step 6 (PR 0): gsc reads oblivious CLR metadata as the platform
+        // type `T!` and checks it itself at this coercion, so cs2gs no longer
+        // emits `!!` here (a `!!` on `T!` only duplicated that check).
+        Assert.Contains("for x in ext.Get()", printed);
+        Assert.DoesNotContain("for x in ext.Get()!!", printed);
     }
 
     [Fact]
     public void Oblivious_ForEachOverLocalFromObliviousExternalCall_ForgivesSource()
     {
         // Same as above but the oblivious external result is bound to a `let` local
-        // first (`let items = ext.Get()`). gsc infers the local as `List[int32]?`,
-        // so the foreach source needs `items!!`. Promoting the local's declaration
-        // to `T?` would cascade nullable-conversion errors at its non-null uses, so
-        // the `!!` is applied at the use site only.
+        // first (`let items = ext.Get()`). gsc used to infer the local as
+        // `List[int32]?`; since ADR-0186 step 3 it infers the platform type
+        // `List[int32]!`. cs2gs still asserts `items!!` at the local's use site
+        // because ADR-0186 step 6 PR 0 trims only direct metadata reads; the `!!`
+        // is legal on `T!` and only redundant with gsc's own check.
         string printed = TranslateObliviousWithObliviousLibrary(@"
 namespace Demo
 {

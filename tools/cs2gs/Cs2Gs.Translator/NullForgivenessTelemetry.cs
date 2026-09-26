@@ -42,7 +42,30 @@ namespace Cs2Gs.Translator;
 /// </summary>
 internal static class NullForgivenessTelemetry
 {
+    private const string DumpPathVariable = "CS2GS_NULL_FORGIVENESS_TELEMETRY";
+
     private static readonly ConcurrentDictionary<string, int> Counts = new ConcurrentDictionary<string, int>();
+
+    // The dump path as it was when the exit hook was armed. Read once, so a
+    // host that changes or clears the variable before shutdown cannot make
+    // the hook write somewhere else, or fail on a null path.
+    private static readonly string DumpPath = System.Environment.GetEnvironmentVariable(DumpPathVariable);
+
+    /// <summary>
+    /// Initializes static members of the <see cref="NullForgivenessTelemetry"/> class.
+    /// When <c>CS2GS_NULL_FORGIVENESS_TELEMETRY</c> names a file, the snapshot
+    /// is written there (one <c>count&lt;TAB&gt;reason</c> line per rule) when
+    /// the process exits. ADR-0186 step 6 uses it for a whole-corpus per-rule
+    /// count: set it for <c>build/run-cs2gs-selfmig-migrate.sh</c>. Unset, the
+    /// class behaves exactly as before.
+    /// </summary>
+    static NullForgivenessTelemetry()
+    {
+        if (!string.IsNullOrWhiteSpace(DumpPath))
+        {
+            System.AppDomain.CurrentDomain.ProcessExit += WriteSnapshotOnExit;
+        }
+    }
 
     /// <summary>
     /// Records one occurrence of <paramref name="reason"/> and returns
@@ -84,4 +107,58 @@ internal static class NullForgivenessTelemetry
     /// so nothing else resets this).
     /// </summary>
     public static void Reset() => Counts.Clear();
+
+    /// <summary>
+    /// Runs the static constructor, so that the exit dump is armed even for a
+    /// run in which <see cref="Record"/> is never called; such a run then
+    /// writes an empty file rather than none. Called when a translator is
+    /// constructed.
+    /// </summary>
+    internal static void EnsureInitialized()
+    {
+        // Explicit rather than relying on the call itself: the type has a
+        // static constructor (so it is not beforefieldinit and any static
+        // call would run it), but this states the intent and survives a
+        // later refactor that removes that constructor.
+        System.Runtime.CompilerServices.RuntimeHelpers.RunClassConstructor(typeof(NullForgivenessTelemetry).TypeHandle);
+    }
+
+    // Best effort: a measurement dump must never fail a run that otherwise
+    // succeeded, so an unwritable path is reported on stderr and dropped.
+    // Snapshot() is ordered (count, then reason), so dumps compare line for
+    // line across runs.
+    private static void WriteSnapshotOnExit(object sender, System.EventArgs e)
+    {
+        var lines = new List<string>();
+        foreach ((string reason, int count) in Snapshot())
+        {
+            lines.Add(count.ToString(System.Globalization.CultureInfo.InvariantCulture) + "\t" + reason);
+        }
+
+        try
+        {
+            string directory = System.IO.Path.GetDirectoryName(System.IO.Path.GetFullPath(DumpPath));
+            if (!string.IsNullOrEmpty(directory))
+            {
+                System.IO.Directory.CreateDirectory(directory);
+            }
+
+            // Written beside the destination and moved over it, so a reader
+            // never sees a half-written file and concurrent runs targeting
+            // one path leave one run's complete snapshot, not an interleaving.
+            string staging = DumpPath + "." + System.Environment.ProcessId.ToString(System.Globalization.CultureInfo.InvariantCulture) + ".tmp";
+            System.IO.File.WriteAllLines(staging, lines);
+            System.IO.File.Move(staging, DumpPath, overwrite: true);
+        }
+        catch (System.Exception exception) when (exception is System.IO.IOException
+            or System.UnauthorizedAccessException
+            or System.ArgumentException
+            or System.NotSupportedException
+            or System.Security.SecurityException)
+        {
+            System.Console.Error.WriteLine(
+                "cs2gs: could not write the null-forgiveness telemetry snapshot to '" + DumpPath
+                + "' (from " + DumpPathVariable + "): " + exception.Message);
+        }
+    }
 }
