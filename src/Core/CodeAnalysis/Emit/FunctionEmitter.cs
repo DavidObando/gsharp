@@ -604,7 +604,7 @@ internal sealed class FunctionEmitter
             {
                 methodAttrs |= MethodAttributes.Virtual;
                 if ((!function.IsOverride && !isDataToStringOverride)
-                    || MethodInfoHelpers.IsCovariantSourceOverride(function))
+                    || MethodInfoHelpers.IsCovariantSourcePropertyGetter(function))
                 {
                     methodAttrs |= MethodAttributes.NewSlot;
                 }

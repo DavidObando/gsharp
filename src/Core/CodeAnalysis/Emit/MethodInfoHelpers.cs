@@ -31,9 +31,11 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </summary>
 internal static class MethodInfoHelpers
 {
-    public static bool IsCovariantSourceOverride(FunctionSymbol function)
-        => function.OverriddenMethod is { } baseMethod
-            && !DeclarationBinder.TypeSignaturesEquivalent(function.Type, baseMethod.Type);
+    public static bool IsCovariantSourcePropertyGetter(FunctionSymbol function)
+        => function.AssociatedSymbol is PropertySymbol property
+            && ReferenceEquals(property.GetterSymbol, function)
+            && property.OverriddenProperty is { } baseProperty
+            && !DeclarationBinder.TypeSignaturesEquivalent(property.Type, baseProperty.Type);
 
     /// <summary>
     /// Issue #409: determines whether a value-type instance method must keep

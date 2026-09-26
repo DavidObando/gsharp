@@ -79,14 +79,6 @@ internal sealed class InterfaceImplEmitter
                     method.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, implHandle, declaration);
             }
-            else if (MethodInfoHelpers.IsCovariantSourceOverride(method)
-                && method.OverriddenMethod is { } overriddenMethod
-                && this.cache.MethodHandles.TryGetValue(method, out var sourceImplHandle)
-                && this.cache.MethodHandles.TryGetValue(overriddenMethod, out var sourceDeclarationHandle))
-            {
-                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, sourceImplHandle, sourceDeclarationHandle);
-                this.AddPreserveBaseOverridesAttribute(sourceImplHandle);
-            }
         }
 
         foreach (var property in structSymbol.Properties)
@@ -114,14 +106,13 @@ internal sealed class InterfaceImplEmitter
 
             if (property.OverriddenProperty is { } overriddenProperty
                 && !DeclarationBinder.TypeSignaturesEquivalent(property.Type, overriddenProperty.Type)
-                && accessors.Getter.HasValue
-                && this.cache.PropertyAccessorHandles.TryGetValue(overriddenProperty, out var baseAccessors)
-                && baseAccessors.Getter.HasValue)
+                && accessors.Getter.HasValue)
             {
+                var declaration = this.ResolveSourcePropertyGetterToken(structSymbol, overriddenProperty);
                 this.emitCtx.Metadata.AddMethodImplementation(
                     implTypeDef,
                     accessors.Getter.Value,
-                    baseAccessors.Getter.Value);
+                    declaration);
                 this.AddPreserveBaseOverridesAttribute(accessors.Getter.Value);
             }
         }
@@ -168,6 +159,44 @@ internal sealed class InterfaceImplEmitter
             method,
             this.outer.wellKnown.GetPreserveBaseOverridesAttributeCtorRef(),
             this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    private EntityHandle ResolveSourcePropertyGetterToken(StructSymbol structSymbol, PropertySymbol property)
+    {
+        var containingType = structSymbol.FindConstructedGenericBase(
+            definition => DeclaresProperty(definition, property));
+        if (containingType == null)
+        {
+            foreach (var candidate in structSymbol.GetHierarchy())
+            {
+                if (DeclaresProperty(candidate.Definition ?? candidate, property))
+                {
+                    containingType = candidate;
+                    break;
+                }
+            }
+        }
+
+        return this.outer.userTokens.ResolveUserPropertyAccessorToken(
+            containingType ?? throw new InvalidOperationException(
+                $"The declaring type for overridden property '{property.Name}' was not found."),
+            property,
+            wantSetter: false);
+    }
+
+    private static bool DeclaresProperty(StructSymbol definition, PropertySymbol property)
+    {
+        foreach (var candidate in definition.Properties)
+        {
+            if (ReferenceEquals(candidate, property)
+                || (property.Declaration != null
+                    && ReferenceEquals(candidate.Declaration, property.Declaration)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>
