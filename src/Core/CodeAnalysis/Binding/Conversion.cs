@@ -2079,8 +2079,12 @@ public sealed class Conversion
 
                     // Covariant: the source argument must implicitly
                     // convert to the target argument (string -> object).
+                    // #4420: an element conversion that needs ADR-0186 §4's
+                    // nil check (`string!` -> `object`) is not variance: a
+                    // variance conversion reads every element through the
+                    // target view with no per-element check point.
                     var covariant = Classify(fromArg, toArg);
-                    if (!covariant.Exists || !covariant.IsImplicit)
+                    if (!covariant.Exists || !covariant.IsImplicit || covariant.RequiresPlatformNilCheck)
                     {
                         return false;
                     }
@@ -3174,10 +3178,13 @@ public sealed class Conversion
                 & System.Reflection.GenericParameterAttributes.VarianceMask;
             var compatible = variance switch
             {
+                // #4420: an element conversion that needs ADR-0186 §4's nil
+                // check (`string!` -> `object`) is not variance: the target
+                // view reads every element with no per-element check point.
                 System.Reflection.GenericParameterAttributes.Covariant =>
                     IsReferenceTypeArgument(sourceArgument)
                     && IsReferenceTypeArgument(targetArgument)
-                    && Classify(sourceArgument, targetArgument) is { Exists: true, IsImplicit: true },
+                    && Classify(sourceArgument, targetArgument) is { Exists: true, IsImplicit: true, RequiresPlatformNilCheck: false },
                 System.Reflection.GenericParameterAttributes.Contravariant =>
                     IsReferenceTypeArgument(sourceArgument)
                     && IsReferenceTypeArgument(targetArgument)
@@ -3972,6 +3979,48 @@ public sealed class Conversion
     }
 
     /// <summary>
+    /// #4420: projects a same-compilation type's substituted imported
+    /// supertype (an implemented CLR interface or an imported base class)
+    /// onto <paramref name="to"/>. The supertype either IS the target's
+    /// definition, or reaches it through its own CLR hierarchy, which the
+    /// imported arm of <see cref="TryProjectPlatformArgumentsToSupertype"/>
+    /// walks; an imported symbol is never a same-compilation one, so that
+    /// recursion is one level.
+    /// </summary>
+    /// <param name="implemented">The substituted imported supertype.</param>
+    /// <param name="to">The conversion target.</param>
+    /// <param name="targetDefinition">The target's generic definition.</param>
+    /// <param name="targetArguments">The target's arguments.</param>
+    /// <param name="projected">The supertype's arguments at the target's definition.</param>
+    /// <param name="projectedTargetArguments">The target arguments to compare against.</param>
+    /// <returns><see langword="true"/> when a projection was found.</returns>
+    private static bool TryProjectOntoImportedSupertype(
+        TypeSymbol implemented,
+        TypeSymbol to,
+        Type targetDefinition,
+        ImmutableArray<TypeSymbol> targetArguments,
+        out ImmutableArray<TypeSymbol> projected,
+        out ImmutableArray<TypeSymbol> projectedTargetArguments)
+    {
+        projectedTargetArguments = targetArguments;
+        if (TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr)
+            && implementedClr is { IsGenericType: true }
+            && ClrTypeUtilities.AreSame(
+                implementedClr.IsGenericTypeDefinition ? implementedClr : implementedClr.GetGenericTypeDefinition(),
+                targetDefinition)
+            && implementedArguments.Length == targetArguments.Length)
+        {
+            projected = implementedArguments;
+            return true;
+        }
+
+        projected = ImmutableArray<TypeSymbol>.Empty;
+        return implemented is not StructSymbol
+            && implemented is not InterfaceSymbol
+            && TryProjectPlatformArgumentsToSupertype(implemented, to, out projected, out projectedTargetArguments);
+    }
+
+    /// <summary>
     /// #4420: projects <paramref name="from"/>'s element positions onto the
     /// generic definition of <paramref name="to"/>, when that definition is a
     /// base type or interface of the source's (or an array-compatible
@@ -4020,6 +4069,27 @@ public sealed class Conversion
             return false;
         }
 
+        // A same-compilation G# interface has no ClrType either; its
+        // substituted `BaseClrInterfaces` (across its base interfaces) are
+        // what admit the ordinary upcast.
+        if (from is InterfaceSymbol sourceInterface)
+        {
+            foreach (var level in sourceInterface.SelfAndAllBaseInterfaces())
+            {
+                foreach (var implemented in level.BaseClrInterfaces)
+                {
+                    if (implemented is not null
+                        && TryProjectOntoImportedSupertype(implemented, to, targetDefinition, targetArguments, out projected, out var interfaceTargetArguments))
+                    {
+                        targetArguments = interfaceTargetArguments;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
         // A same-compilation G# class has no ClrType while binding. Its
         // substituted `ImplementedClrInterfaces` are what admit the ordinary
         // upcast, and they carry the symbolic arguments (a `Repo[string!]`'s
@@ -4039,25 +4109,10 @@ public sealed class Conversion
                     : level.ImplementedClrInterfaces;
                 foreach (var implemented in importedSupertypes)
                 {
-                    if (implemented is null)
+                    if (implemented is not null
+                        && TryProjectOntoImportedSupertype(implemented, to, targetDefinition, targetArguments, out projected, out var classTargetArguments))
                     {
-                        continue;
-                    }
-
-                    if (TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr)
-                        && implementedClr is { IsGenericType: true }
-                        && ClrTypeUtilities.AreSame(
-                            implementedClr.IsGenericTypeDefinition ? implementedClr : implementedClr.GetGenericTypeDefinition(),
-                            targetDefinition)
-                        && implementedArguments.Length == targetArguments.Length)
-                    {
-                        projected = implementedArguments;
-                        return true;
-                    }
-
-                    if (implemented is not StructSymbol
-                        && TryProjectPlatformArgumentsToSupertype(implemented, to, out projected, out targetArguments))
-                    {
+                        targetArguments = classTargetArguments;
                         return true;
                     }
                 }
