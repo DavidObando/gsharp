@@ -2978,7 +2978,51 @@ public sealed partial class CSharpToGSharpTranslator
                 length = LiteralExpression.Int("0");
             }
 
+            // Issue #4482: an element of this array passed by `out`/`ref` to a
+            // parameter cs2gs emits `T?` is storage the callee may write nil
+            // into, and gsc requires by-ref storage to match the parameter's
+            // nullability exactly (GS0612). Widen the ELEMENT (`[n]T?`).
+            if (elementType is { IsNullable: false }
+                && elementTypeSymbol is { IsReferenceType: true }
+                && this.ResolveValueSink(creation) is ILocalSymbol arrayLocal
+                && this.ElementPassedToNullableByRefParameter(arrayLocal))
+            {
+                elementType = MakeNullable(elementType);
+            }
+
             return new ArrayAllocationExpression(elementType, length);
+        }
+
+        // Issue #4482: whether some `local[i]` in the local's scope is passed
+        // by `out`/`ref` to a parameter whose emitted type is `T?`.
+        private bool ElementPassedToNullableByRefParameter(ILocalSymbol local)
+        {
+            SyntaxNode scope = this.GetNullabilityScope(local);
+            if (scope == null)
+            {
+                return false;
+            }
+
+            foreach (ArgumentSyntax argument in scope.DescendantNodes().OfType<ArgumentSyntax>())
+            {
+                if (!argument.RefKindKeyword.IsKind(SyntaxKind.OutKeyword)
+                    && !argument.RefKindKeyword.IsKind(SyntaxKind.RefKeyword))
+                {
+                    continue;
+                }
+
+                if (argument.Expression is ElementAccessExpressionSyntax elementAccess
+                    && this.BindsTo(elementAccess.Expression, local)
+                    && this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } parameter }
+                    && parameter.Type.IsReferenceType
+                    && (parameter.Type.NullableAnnotation == NullableAnnotation.Annotated
+                        || this.ShouldPromoteToNullableReference(parameter)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         private GExpression TranslateRectangularInitializerDimension(ExpressionSyntax size)

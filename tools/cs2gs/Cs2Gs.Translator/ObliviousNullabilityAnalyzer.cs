@@ -2430,7 +2430,13 @@ internal static class ObliviousNullabilityAnalyzer
             // now-`T?` deconstructed local). `ref` stays excluded too: the
             // caller's variable was initialized before the call, so its own
             // initializer/assignment edges already model its nullability.
-            if (parameter.RefKind == RefKind.Out
+            //
+            // Issue #4482: `ref` now flows the same way. The caller's
+            // initializer does model its own nullability, but a by-ref slot is
+            // storage the callee writes through, and gsc requires it to match
+            // the parameter's nullability exactly (GS0612): a `ref string?`
+            // parameter needs `string?` storage however it was initialized.
+            if ((parameter.RefKind == RefKind.Out || parameter.RefKind == RefKind.Ref)
                 && (parameter.ContainingSymbol is not IMethodSymbol containingMethod
                     || containingMethod.Name != "Deconstruct"))
             {
