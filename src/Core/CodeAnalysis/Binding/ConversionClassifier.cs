@@ -1425,6 +1425,21 @@ internal sealed class ConversionClassifier
                             allowConcreteSymbolic: TypeSymbol.ContainsNullLiteralType(argument.Type));
                     }
 
+                    // #4451 (ADR-0193 amendment): a slot that IS a method type
+                    // parameter bound to a platform type (an explicit argument
+                    // at an oblivious declaration) is `T!`, and takes a nil
+                    // unchecked. The closed CLR parameter says only `string`.
+                    if (substituted == null
+                        && method is { IsGenericMethod: true }
+                        && symbolicMethodTypeArgs is { IsDefaultOrEmpty: false } methodTypeArguments
+                        && (method.IsGenericMethodDefinition ? method : method.GetGenericMethodDefinition()).GetParameters()[paramIndex].ParameterType
+                            is { IsGenericParameter: true, DeclaringMethod: not null } openSlot
+                        && openSlot.GenericParameterPosition < methodTypeArguments.Length
+                        && methodTypeArguments[openSlot.GenericParameterPosition] is PlatformTypeSymbol platformSlot)
+                    {
+                        substituted = platformSlot;
+                    }
+
                     var targetType = substituted
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
 
@@ -1481,7 +1496,21 @@ internal sealed class ConversionClassifier
                     else if (argument.Type != targetType
                         && (parameterConversion.Exists || isExpressionTreeLiteralTarget || isMethodGroupTarget)
                         && !IsNaturalStructuralDelegateTarget(argument.Type, targetType)
-                        && NeedsBindClrParameterConversion(argument.Type, parameterType, substituted))
+
+                        // ADR-0186 §4, #4451: a platform argument at a non-null
+                        // reference parameter is a coercion point even when both
+                        // sides erase to one CLR type (`string!` at `string`),
+                        // which is exactly when the CLR-shape test says "nothing
+                        // to do". Without this the check was never inserted for
+                        // any imported callee, so a nil from oblivious code
+                        // reached an enabled `string` parameter, or the `T` of an
+                        // oblivious generic closed as `WrapList[string]`, whose
+                        // `List<T>` return then read the nil as non-null. Gated
+                        // on the classifier's own decision, so an argument bound
+                        // for a `T?` or `T!` slot stays bare (#2348's
+                        // `[NotNullWhen]` narrowing needs the bare variable).
+                        && (NeedsBindClrParameterConversion(argument.Type, parameterType, substituted)
+                            || parameterConversion.RequiresPlatformNilCheck))
                     {
                         // Issue #506: the source-argument list may not align with
                         // the bound-argument list when a synthesised receiver
@@ -3220,6 +3249,31 @@ internal sealed class ConversionClassifier
                     arguments[i],
                     GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs: default),
                     parameter: null);
+            }
+            else if (paramIndex < parameters.Length
+                && arguments[i].Type is PlatformTypeSymbol
+                && parameters[paramIndex].ParameterType is { IsByRef: false, IsGenericParameter: false }
+                && method != null
+                && receiverType != null
+
+                // Receiver-aware: a constrained `ITaker[string?]` reflects its
+                // `Take(T)` as a CLR `string`, and only the receiver's
+                // symbolic argument says the slot is `string?`.
+                && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType
+                && Conversion.Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck)
+            {
+                // ADR-0186 §4, #4451: a platform argument at a non-null
+                // parameter of a constrained call is a coercion point like any
+                // other. This path otherwise passes arguments unconverted (the
+                // `!0` slots are reified), so it inserts only the check and
+                // leaves the value's CLR shape alone; a generic-parameter slot
+                // is skipped for the same reason.
+                var location = i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+                builder ??= arguments.ToBuilder();
+                builder[i] = PlatformCoercion.InsertCheck(
+                    arguments[i],
+                    location,
+                    $"a conversion to the non-null type '{parameterType.Name}'");
             }
         }
 
