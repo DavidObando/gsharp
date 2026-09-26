@@ -26,6 +26,7 @@ public sealed class BoundLocalFunctionDeclaration : BoundStatement
     public BoundLocalFunctionDeclaration(SyntaxNode? syntax, BoundFunctionLiteralExpression literal)
         : base(syntax)
     {
+        literal.Function.IsLocalFunction = true;
         Literal = literal;
     }
 

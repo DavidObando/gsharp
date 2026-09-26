@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System.Threading;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -12,6 +13,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </summary>
 public sealed class BoundAssignmentExpression : BoundExpression
 {
+    private BoundExpression? target;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="BoundAssignmentExpression"/> class.
     /// </summary>
@@ -47,6 +50,42 @@ public sealed class BoundAssignmentExpression : BoundExpression
     /// Gets the expression.
     /// </summary>
     public BoundExpression Expression { get; }
+
+    /// <summary>
+    /// Gets the assigned variable as an expression — the Roslyn
+    /// <c>IAssignmentOperation.Target</c> analogue (ADR-0169, issue #4436).
+    /// G# stores the target as <see cref="Variable"/>, so this is a
+    /// <see cref="BoundVariableExpression"/> over it, built on first use for
+    /// the analyzer surface; the binder and emitter never read it.
+    /// </summary>
+    public BoundExpression Target
+    {
+        get
+        {
+            var cached = Volatile.Read(ref target);
+            if (cached != null)
+            {
+                return cached;
+            }
+
+            // Analyzers may run concurrently: publish the first node built. A
+            // node built before the assignment is anchored is not cached, so
+            // the target never keeps a missing location.
+            BoundExpression built = new BoundVariableExpression(Syntax, Variable);
+            if (Syntax == null)
+            {
+                return built;
+            }
+
+            return Interlocked.CompareExchange(ref target, built, null) ?? built;
+        }
+    }
+
+    /// <summary>
+    /// Gets the assigned value — the Roslyn <c>IAssignmentOperation.Value</c>
+    /// analogue; the same node as <see cref="Expression"/>.
+    /// </summary>
+    public BoundExpression Value => Expression;
 
     /// <summary>
     /// Gets the static type of the right-hand side value before conversion to

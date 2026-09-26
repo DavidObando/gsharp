@@ -98,6 +98,66 @@ silently sees a fraction of the program; it is how the migrated GSA0002
 observed none of the reflection-`Type` code it exists to police, since imported
 operands are exactly the ones it cares about.
 
+### Operation-block surface (issue #4436)
+
+The ADR-0193 funnel rules (GSA0007 now, GSA0008 in its Phase 3) look at a
+whole body at once and read signature-level facts off symbols, so the covered
+API grew by one registration and the members those rules reach. Everything
+below is mapped in `RoslynAnalyzerApiMap` and pinned by the funnel-surface
+parity tests (`Adr0169FunnelSurfaceParityTests`: Roslyn over a C# corpus
+against the translated analyzer over the translated corpus) or, where a parity
+corpus cannot reach a row, by a snippet translation test.
+
+- `RegisterOperationBlockAction` → `RegisterBoundBodyAction`, receiving a
+  `BoundBodyAnalysisContext` (`OwningSymbol`, `OwningFunction`, `Bodies`,
+  `Compilation`, `ReportDiagnostic`). The driver dispatches it once per bound
+  function body and once per field initializer (owned by the field, as a
+  Roslyn field-initializer block is); lambdas and local functions are nested
+  in their enclosing body, as Roslyn nests them in the operation block. A
+  property accessor, which has no declaration of its own, takes its
+  property's source tree for generated-code skipping.
+- `IOperation.ChildOperations` → `BoundNode.ChildNodes` (built once per
+  node), and `Descendants()` / `DescendantsAndSelf()` (lazy, pre-order, over
+  the cached child lists). They follow Roslyn's operation
+  tree where the compiler walker does not: a function literal's body is
+  inside it (the walker leaves the literal opaque), an assignment's
+  children are its target and then its value (G# stores the target as a
+  symbol), and a plain `x is T` has only its operand under it. Node-action
+  dispatch does not yet enter lambda bodies or assignment targets (#4457).
+- `IMethodReferenceOperation` / `IPropertyReferenceOperation` map onto two new
+  analyzer-facing bases in the style of #3920,
+  `BoundMethodReferenceOperationExpression` (`Method`, `Instance`) and
+  `BoundPropertyReferenceOperationExpression` (`Property`, `Instance`), each
+  spanning the user and CLR provenance of the method group or property access;
+  the operation kinds dispatch to both nodes. An imported field read shares
+  the CLR property node (Roslyn's `FieldReference`), with a nil `Property`,
+  so cs2gs wraps a `PropertyReference` handler in a guard that drops it (as
+  it drops a pattern `is` from `IsType`, and an empty group from
+  `MethodReference`).
+- `ILocalReferenceOperation.Local` → `BoundVariableExpression.Variable`;
+  `ISimpleAssignmentOperation.{Target,Value}` → `BoundAssignmentExpression`;
+  `IVariableDeclaratorOperation` → `BoundVariableDeclaration` (the initializer
+  wrapper collapses — G# has no `IVariableInitializerOperation`);
+  `IForEachLoopOperation.{Locals,Collection}` → `BoundForRangeStatement`;
+  an inline `out var` (`IDeclarationExpressionOperation`) is
+  `BoundAddressOfExpression` over the declared local.
+- The type-test surface: `IIsTypeOperation.{TypeOperand,ValueOperand}` →
+  `BoundIsExpression.{TypeOperand,Expression}` (`TypeOperand` is set only for
+  a plain type test, so the pattern of `x is T` is not also dispatched as a
+  type pattern). G# binds a pattern `is` (`x is T v`) to the same node, which
+  Roslyn sends to `IsPattern` instead, so cs2gs wraps an `IsType` handler in
+  a guard that drops those nodes; the type, declaration and recursive patterns →
+  `BoundTypePattern.TargetType`; `ITypeOfOperation.TypeOperand` →
+  `BoundTypeOfExpression.OperandType`. Three Roslyn pattern kinds reach one
+  G# kind, so the registry de-duplicates kinds and a rule naming all three
+  still runs once per pattern.
+- Symbols: `ISymbol.GetAttributes()` → `Symbol.GetAttributes()` (with
+  `AttributeData.AttributeClass` → `BoundAttribute.AttributeClass`),
+  `IMethodSymbol.AssociatedSymbol` and `MethodKind` (`Ordinary`,
+  `AnonymousFunction`, `LocalFunction`, `PropertyGet`, `PropertySet`,
+  `StaticConstructor`) on `FunctionSymbol`, and `ILocalSymbol` →
+  `VariableSymbol`.
+
 ### Supporting infrastructure promoted into Core
 
 - `DiagnosticDescriptor` becomes public and Roslyn-shaped

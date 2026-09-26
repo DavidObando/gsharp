@@ -13,7 +13,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <summary>
 /// Represents a read access to a user-defined property (ADR-0051).
 /// </summary>
-public sealed class BoundPropertyAccessExpression : BoundExpression
+public sealed class BoundPropertyAccessExpression : BoundPropertyReferenceOperationExpression
 {
     public BoundPropertyAccessExpression(SyntaxNode? syntax, BoundExpression? receiver, StructSymbol? structType, PropertySymbol property)
         : this(syntax, receiver, structType, property, substitutedType: null, narrowedType: null)
@@ -109,7 +109,7 @@ public sealed class BoundPropertyAccessExpression : BoundExpression
     /// <summary>Gets the effective interface construction that declares <see cref="Property"/>.</summary>
     public InterfaceSymbol? InterfaceType { get; }
 
-    public PropertySymbol Property { get; }
+    public override PropertySymbol Property { get; }
 
     /// <summary>
     /// Gets the narrowed type for flow-analysis smart-cast (ADR-0069 addendum /
@@ -124,6 +124,9 @@ public sealed class BoundPropertyAccessExpression : BoundExpression
     public TypeSymbol? SubstitutedType { get; }
 
     public override TypeSymbol Type => NarrowedType ?? SubstitutedType ?? Property.Type;
+
+    /// <inheritdoc/>
+    public override BoundExpression? Instance => Receiver;
 
     public override BoundNodeKind Kind => BoundNodeKind.PropertyAccessExpression;
 }

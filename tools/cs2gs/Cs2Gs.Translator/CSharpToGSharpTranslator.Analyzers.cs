@@ -442,6 +442,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            if (member.Name.Identifier.Text == "Value"
+                && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "Value" } initializerValue
+                && RoslynTypeMetadataName(initializerValue.ContainingType) is "Microsoft.CodeAnalysis.Operations.IVariableInitializerOperation"
+                    or "Microsoft.CodeAnalysis.Operations.ISymbolInitializerOperation")
+            {
+                // Issue #4436: IVariableInitializerOperation.Value drops — a G#
+                // declaration's Initializer is the bound expression directly.
+                result = this.TranslateExpression(member.Expression);
+                return true;
+            }
+
             if (member.Name.Identifier.Text == "ArgumentList"
                 && member.Parent is MemberAccessExpressionSyntax { Name.Identifier.Text: "Arguments" }
                 && this.context.GetSymbolInfo(member).Symbol is IPropertySymbol { Name: "ArgumentList" } argumentListProperty
@@ -1527,6 +1538,8 @@ public sealed partial class CSharpToGSharpTranslator
             var arguments = new List<GExpression>();
             var expanded = false;
             var unexpandable = false;
+            var guardedKinds = new List<string>();
+            var handlerIndex = -1;
             foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
             {
                 if (argument.Expression is MemberAccessExpressionSyntax kindAccess
@@ -1535,6 +1548,11 @@ public sealed partial class CSharpToGSharpTranslator
                     && RoslynAnalyzerApiMap.TryMapOperationKindDispatch(kindField.Name, out string[] boundNodeKinds))
                 {
                     expanded = true;
+                    if (kindField.Name is "IsType" or "PropertyReference" or "MethodReference")
+                    {
+                        guardedKinds.Add(kindField.Name);
+                    }
+
                     foreach (string boundNodeKind in boundNodeKinds)
                     {
                         arguments.Add(new MemberAccessExpression(
@@ -1562,10 +1580,16 @@ public sealed partial class CSharpToGSharpTranslator
                 // and the round-trip binder already backstops a renamed kind
                 // that does not exist. Flagging those would trade a silent wrong
                 // answer for a loud wrong one.
-                if (BindsToOperationKindsParameter(argument, this.context)
-                    && !IsDirectOperationKindAccess(argument.Expression, this.context))
+                if (BindsToOperationKindsParameter(argument, this.context))
                 {
-                    unexpandable = true;
+                    if (!IsDirectOperationKindAccess(argument.Expression, this.context))
+                    {
+                        unexpandable = true;
+                    }
+                }
+                else
+                {
+                    handlerIndex = arguments.Count;
                 }
 
                 arguments.Add(this.TranslateExpression(argument.Expression));
@@ -1605,6 +1629,23 @@ public sealed partial class CSharpToGSharpTranslator
                 DiagnosticId = "CS2GS-ANALYZER-SHAPE",
             });
 
+            if (guardedKinds.Count > 0 && handlerIndex >= 0)
+            {
+                arguments[handlerIndex] = GuardOperationHandler(arguments[handlerIndex], guardedKinds);
+                const string GuardNote =
+                    "'RegisterOperationAction' registered as a wrapper lambda that drops the nodes G# shares with another Roslyn "
+                    + "operation: a pattern 'is' (Roslyn's IsPattern) for IsType, an imported field read (Roslyn's "
+                    + "FieldReference) for PropertyReference, and an empty method group for MethodReference.";
+                this.context.Report(new TranslationDiagnostic(
+                    "analyzer-api",
+                    GuardNote,
+                    invocation.GetLocation(),
+                    TranslationSeverity.Warning)
+                {
+                    DiagnosticId = "CS2GS-ANALYZER-SHAPE",
+                });
+            }
+
             result = new InvocationExpression(
                 new MemberAccessExpression(
                     this.TranslateExpression(receiver.Expression),
@@ -1612,6 +1653,64 @@ public sealed partial class CSharpToGSharpTranslator
                     isArrow: false),
                 arguments);
             return true;
+        }
+
+        /// <summary>
+        /// Issue #4436: wraps a handler registered for an operation kind whose
+        /// G# node also carries a form Roslyn sends elsewhere, so the handler
+        /// never sees that form. Each form shows as a nil member Roslyn
+        /// declares non-null, which a handler written against Roslyn would
+        /// dereference:
+        /// <list type="bullet">
+        /// <item><c>IsType</c>: a declaration or recursive pattern <c>is</c>
+        /// (Roslyn's <c>IIsPatternOperation</c>) has a nil
+        /// <c>BoundIsExpression.TypeOperand</c>;</item>
+        /// <item><c>PropertyReference</c>: an imported field read (Roslyn's
+        /// <c>IFieldReferenceOperation</c>) has a nil <c>Property</c>;</item>
+        /// <item><c>MethodReference</c>: an empty method group has a nil
+        /// <c>Method</c>.</item>
+        /// </list>
+        /// The guard rejects only those nodes, so it composes with any other
+        /// kinds named in the same registration.
+        /// </summary>
+        /// <param name="handler">The translated handler.</param>
+        /// <param name="guardedKinds">The guarded Roslyn kinds the registration names.</param>
+        /// <returns>The guarded wrapper lambda.</returns>
+        private static GExpression GuardOperationHandler(GExpression handler, List<string> guardedKinds)
+        {
+            GExpression ctxNode = new MemberAccessExpression(new IdentifierExpression("ctx"), "BoundNode", isArrow: false);
+            GExpression rejected = null;
+            foreach (string kind in guardedKinds)
+            {
+                (string type, string member) = kind switch
+                {
+                    "IsType" => ("BoundIsExpression", "TypeOperand"),
+                    "PropertyReference" => ("BoundPropertyReferenceOperationExpression", "Property"),
+                    _ => ("BoundMethodReferenceOperationExpression", "Method"),
+                };
+                GExpression test = new PatternTestExpression(
+                    ctxNode,
+                    new TypePattern(
+                        "_",
+                        new NamedTypeReference(type),
+                        new PropertyPattern(new List<PropertyPatternField>
+                        {
+                            new PropertyPatternField(member, new ConstantPattern(LiteralExpression.Null())),
+                        }),
+                        designationAfterType: true));
+                rejected = rejected == null ? test : new BinaryExpression(rejected, "||", test);
+            }
+
+            GExpression handlerCall = new InvocationExpression(handler, new List<GExpression> { new IdentifierExpression("ctx") });
+            var body = new BlockStatement(new List<GStatement>
+            {
+                new IfStatement(
+                    new UnaryExpression("!", new ParenthesizedExpression(rejected)),
+                    new BlockStatement(new List<GStatement> { new ExpressionStatement(handlerCall) })),
+            });
+            return new LambdaExpression(
+                new List<Parameter> { new Parameter("ctx", new NamedTypeReference("BoundNodeAnalysisContext")) },
+                blockBody: body);
         }
 
         /// <summary>

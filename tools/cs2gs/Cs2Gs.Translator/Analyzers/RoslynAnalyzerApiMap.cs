@@ -61,6 +61,14 @@ internal static class RoslynAnalyzerApiMap
             "BoundNodeAnalysisContext",
             "G# has no IOperation; bound-node actions receive BoundNode, whose member shapes are stable at the kind level only."),
         ["Microsoft.CodeAnalysis.Diagnostics.GeneratedCodeAnalysisFlags"] = new("GSharp.Core.CodeAnalysis.Analyzers", "GeneratedCodeAnalysisFlags"),
+
+        // Issue #4436: the operation-block action. G# bound nodes have no
+        // parent link, so a rule that relates nodes of one body to each other
+        // registers per body and walks down.
+        ["Microsoft.CodeAnalysis.Diagnostics.OperationBlockAnalysisContext"] = new(
+            "GSharp.Core.CodeAnalysis.Analyzers",
+            "BoundBodyAnalysisContext",
+            "A G# body action runs once per declared function body; function literals and local functions are part of the body that declares them, and top-level statements are not dispatched."),
         ["Microsoft.CodeAnalysis.DiagnosticDescriptor"] = new("GSharp.Core.CodeAnalysis", "DiagnosticDescriptor"),
         ["Microsoft.CodeAnalysis.Diagnostic"] = new("GSharp.Core.CodeAnalysis", "Diagnostic"),
         ["Microsoft.CodeAnalysis.DiagnosticSeverity"] = new("GSharp.Core.CodeAnalysis", "DiagnosticSeverity"),
@@ -203,6 +211,17 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.SymbolKind"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolKind"),
         ["Microsoft.CodeAnalysis.SymbolEqualityComparer"] = new("GSharp.Core.CodeAnalysis.Symbols", "SymbolEqualityComparer"),
 
+        // Issue #4436: symbol surface the ADR-0193 funnel analyzers read.
+        ["Microsoft.CodeAnalysis.MethodKind"] = new(
+            "GSharp.Core.CodeAnalysis.Symbols",
+            "MethodKind",
+            "G# MethodKind has Ordinary, AnonymousFunction, LocalFunction, PropertyGet, PropertySet and StaticConstructor only; G# constructors are ConstructorSymbols, not functions."),
+        ["Microsoft.CodeAnalysis.AttributeData"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundAttribute"),
+        ["Microsoft.CodeAnalysis.ILocalSymbol"] = new(
+            "GSharp.Core.CodeAnalysis.Symbols",
+            "VariableSymbol",
+            "G# variable references share one node for locals, parameters and globals, so a local-symbol value can also be a parameter."),
+
         // Issue #3794: the SLICE, not the fixed-length array. cs2gs translates
         // C# `T[]` to G# `[]T`, which binds to `SliceTypeSymbol`;
         // `ArrayTypeSymbol` is G#'s `[N]T`, a shape this translator never
@@ -257,6 +276,60 @@ internal static class RoslynAnalyzerApiMap
             "BoundConversionExpression",
             "G# inserts different implicit conversions than C#; conversion-unwrap loops need review."),
         ["Microsoft.CodeAnalysis.OperationKind"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundNodeKind"),
+
+        // Issue #4436: the operation surface the ADR-0193 funnel analyzers use.
+        // As for IInvocationOperation, a Roslyn operation G# splits by
+        // provenance maps to the analyzer-facing base spanning the nodes.
+        ["Microsoft.CodeAnalysis.Operations.IMethodReferenceOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundMethodReferenceOperationExpression",
+            "G# has one method-group node per callee provenance; the analyzer-facing base spans them. An unresolved group reports its first candidate as Method."),
+        ["Microsoft.CodeAnalysis.Operations.IPropertyReferenceOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundPropertyReferenceOperationExpression",
+            "G# has one property-read node per provenance; the analyzer-facing base spans them. The imported node also reads fields, for which Property is nil."),
+        ["Microsoft.CodeAnalysis.Operations.ILocalReferenceOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundVariableExpression",
+            "G# binds every variable read (local, parameter or global) to BoundVariableExpression."),
+        ["Microsoft.CodeAnalysis.Operations.IAssignmentOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundAssignmentExpression",
+            "BoundAssignmentExpression assigns a variable; field, property and index writes are separate G# nodes this row does not reach."),
+        ["Microsoft.CodeAnalysis.Operations.ISimpleAssignmentOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundAssignmentExpression",
+            "BoundAssignmentExpression assigns a variable; field, property and index writes are separate G# nodes this row does not reach."),
+        ["Microsoft.CodeAnalysis.Operations.IVariableDeclaratorOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundVariableDeclaration",
+            "G# declarations are single-declarator statements; the declarator is the declaration itself."),
+        ["Microsoft.CodeAnalysis.Operations.IVariableInitializerOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundExpression",
+            "A G# initializer is the bound expression directly; IVariableInitializerOperation.Value accesses drop."),
+        ["Microsoft.CodeAnalysis.Operations.IForEachLoopOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundForRangeStatement",
+            "A G# for-in loop has a value variable and an optional key variable; Locals lists both."),
+        ["Microsoft.CodeAnalysis.Operations.IDeclarationExpressionOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundAddressOfExpression",
+            "An inline `out var x` binds to the address of the declared variable; the same node also takes the address of an existing variable (`&x`)."),
+        ["Microsoft.CodeAnalysis.Operations.IIsTypeOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundIsExpression",
+            "G# is-expressions carry a pattern; a plain type test has IsSimpleTypeTest set and its type in TargetType."),
+        ["Microsoft.CodeAnalysis.Operations.ITypePatternOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundTypePattern"),
+        ["Microsoft.CodeAnalysis.Operations.IDeclarationPatternOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundTypePattern",
+            "G# binds a declaration pattern to the type pattern with a binding (HasBinding)."),
+        ["Microsoft.CodeAnalysis.Operations.IRecursivePatternOperation"] = new(
+            "GSharp.Core.CodeAnalysis.Binding",
+            "BoundTypePattern",
+            "G# binds a typed recursive pattern to the type pattern with a PropertyPattern; an untyped property pattern is a separate node this row does not reach."),
+        ["Microsoft.CodeAnalysis.Operations.ITypeOfOperation"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundTypeOfExpression"),
         ["Microsoft.CodeAnalysis.Operations.BinaryOperatorKind"] = new("GSharp.Core.CodeAnalysis.Binding", "BoundBinaryOperatorKind"),
         ["Microsoft.CodeAnalysis.ITypeSymbol"] = new("GSharp.Core.CodeAnalysis.Symbols", "TypeSymbol"),
         ["Microsoft.CodeAnalysis.SymbolDisplayFormat"] = new(
@@ -291,6 +364,18 @@ internal static class RoslynAnalyzerApiMap
         [("Microsoft.CodeAnalysis.SymbolKind", "Method")] = new(null, "Function"),
         [("Microsoft.CodeAnalysis.SymbolKind", "NamedType")] = new(null, "Type"),
         [("Microsoft.CodeAnalysis.OperationKind", "TypeOf")] = new(null, "TypeOfExpression"),
+
+        // Issue #4436. A kind G# splits by provenance names its first node for
+        // a single-kind read; OperationKindDispatch registers all of them.
+        [("Microsoft.CodeAnalysis.OperationKind", "MethodReference")] = new(null, "MethodGroupExpression"),
+        [("Microsoft.CodeAnalysis.OperationKind", "PropertyReference")] = new(null, "PropertyAccessExpression"),
+        [("Microsoft.CodeAnalysis.OperationKind", "LocalReference")] = new(null, "VariableExpression"),
+        [("Microsoft.CodeAnalysis.OperationKind", "SimpleAssignment")] = new(null, "AssignmentExpression"),
+        [("Microsoft.CodeAnalysis.OperationKind", "VariableDeclarator")] = new(null, "VariableDeclaration"),
+        [("Microsoft.CodeAnalysis.OperationKind", "IsType")] = new(null, "IsExpression"),
+        [("Microsoft.CodeAnalysis.OperationKind", "TypePattern")] = new(null, "TypePattern"),
+        [("Microsoft.CodeAnalysis.OperationKind", "DeclarationPattern")] = new(null, "TypePattern"),
+        [("Microsoft.CodeAnalysis.OperationKind", "RecursivePattern")] = new(null, "TypePattern"),
     };
 
     /// <summary>
@@ -322,6 +407,15 @@ internal static class RoslynAnalyzerApiMap
         // the binary handler; separating the two needs the bound tree to record
         // that a call came from operator syntax.
         ["BinaryOperator"] = new[] { "BinaryExpression", "ClrBinaryOperatorExpression" },
+
+        // Issue #4436: the method-group and property-read families.
+        ["MethodReference"] = new[] { "MethodGroupExpression", "ClrMethodGroupExpression" },
+        ["PropertyReference"] = new[] { "PropertyAccessExpression", "ClrPropertyAccessExpression" },
+
+        // One kind, but it must go through the registration expansion: G#
+        // binds a pattern `is` to the same node, so the translator wraps the
+        // handler in a guard that drops those (GuardIsTypeHandler).
+        ["IsType"] = new[] { "IsExpression" },
 
         // Every node a Roslyn Invocation reaches. `receiver.Method()` — the most
         // ordinary call there is — is a UserInstanceCallExpression, and leaving
@@ -372,6 +466,29 @@ internal static class RoslynAnalyzerApiMap
             "RegisterBoundNodeAction",
             "Operation actions become bound-node actions; BoundNode member shapes are stable at the kind level only."),
         [("Microsoft.CodeAnalysis.Operations.IBinaryOperation", "LeftOperand")] = new(null, "Left"),
+
+        // Issue #4436.
+        [("Microsoft.CodeAnalysis.Diagnostics.AnalysisContext", "RegisterOperationBlockAction")] = new(
+            null,
+            "RegisterBoundBodyAction",
+            "Operation-block actions become bound-body actions, dispatched once per declared function body."),
+        [("Microsoft.CodeAnalysis.Diagnostics.OperationBlockAnalysisContext", "OperationBlocks")] = new(
+            null,
+            "Bodies",
+            "A G# function has exactly one bound body."),
+        [("Microsoft.CodeAnalysis.IOperation", "ChildOperations")] = new(null, "ChildNodes"),
+        [("Microsoft.CodeAnalysis.Operations.ILocalReferenceOperation", "Local")] = new(null, "Variable"),
+        [("Microsoft.CodeAnalysis.Operations.IVariableDeclaratorOperation", "Symbol")] = new(null, "Variable"),
+        [("Microsoft.CodeAnalysis.Operations.IDeclarationExpressionOperation", "Expression")] = new(null, "Operand"),
+        [("Microsoft.CodeAnalysis.Operations.IIsTypeOperation", "TypeOperand")] = new(
+            null,
+            "TypeOperand",
+            "BoundIsExpression.TypeOperand is nil unless the is-expression is a plain type test; a G# is-type registration also receives the pattern forms, whose type is on their BoundTypePattern."),
+        [("Microsoft.CodeAnalysis.Operations.IIsTypeOperation", "ValueOperand")] = new(null, "Expression"),
+        [("Microsoft.CodeAnalysis.Operations.ITypePatternOperation", "MatchedType")] = new(null, "TargetType"),
+        [("Microsoft.CodeAnalysis.Operations.IDeclarationPatternOperation", "MatchedType")] = new(null, "TargetType"),
+        [("Microsoft.CodeAnalysis.Operations.IRecursivePatternOperation", "MatchedType")] = new(null, "TargetType"),
+        [("Microsoft.CodeAnalysis.Operations.ITypeOfOperation", "TypeOperand")] = new(null, "OperandType"),
         [("Microsoft.CodeAnalysis.Operations.IBinaryOperation", "RightOperand")] = new(null, "Right"),
         [("Microsoft.CodeAnalysis.Operations.IInvocationOperation", "TargetMethod")] = new(
             null,
@@ -461,6 +578,13 @@ internal static class RoslynAnalyzerApiMap
         // IOperation.Syntax maps to BoundNode.Syntax, which is `SyntaxNode?`: a
         // synthesized bound node may have no syntax of its own.
         ("Microsoft.CodeAnalysis.IOperation", "Syntax"),
+
+        // Issue #4436. BoundIsExpression.TypeOperand is nil for a pattern
+        // `is`; the reference bases report no symbol for an empty method
+        // group or for an imported field read.
+        ("Microsoft.CodeAnalysis.Operations.IIsTypeOperation", "TypeOperand"),
+        ("Microsoft.CodeAnalysis.Operations.IMethodReferenceOperation", "Method"),
+        ("Microsoft.CodeAnalysis.Operations.IPropertyReferenceOperation", "Property"),
     };
 
     /// <summary>

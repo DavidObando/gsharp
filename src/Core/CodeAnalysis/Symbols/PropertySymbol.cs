@@ -13,6 +13,9 @@ namespace GSharp.Core.CodeAnalysis.Symbols;
 /// </summary>
 public sealed class PropertySymbol : Symbol
 {
+    private FunctionSymbol? getterSymbol;
+    private FunctionSymbol? setterSymbol;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="PropertySymbol"/> class.
     /// </summary>
@@ -162,11 +165,35 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets or sets the synthesized backing field symbol for auto-properties. Null for computed properties.</summary>
     public FieldSymbol? BackingField { get; set; }
 
-    /// <summary>Gets or sets the synthesized getter function symbol.</summary>
-    public FunctionSymbol? GetterSymbol { get; set; }
+    /// <summary>
+    /// Gets or sets the synthesized getter function symbol. Assigning one
+    /// records this property as its <see cref="FunctionSymbol.AssociatedSymbol"/>.
+    /// </summary>
+    public FunctionSymbol? GetterSymbol
+    {
+        get => getterSymbol;
+        set
+        {
+            ReleaseAccessor(getterSymbol, value);
+            getterSymbol = value;
+            AssociateAccessor(value);
+        }
+    }
 
-    /// <summary>Gets or sets the synthesized setter function symbol.</summary>
-    public FunctionSymbol? SetterSymbol { get; set; }
+    /// <summary>
+    /// Gets or sets the synthesized setter function symbol. Assigning one
+    /// records this property as its <see cref="FunctionSymbol.AssociatedSymbol"/>.
+    /// </summary>
+    public FunctionSymbol? SetterSymbol
+    {
+        get => setterSymbol;
+        set
+        {
+            ReleaseAccessor(setterSymbol, value);
+            setterSymbol = value;
+            AssociateAccessor(value);
+        }
+    }
 
     /// <summary>Gets or sets the imported CLR getter slot overridden by this property.</summary>
     public MethodInfo? ExternalOverriddenGetter { get; set; }
@@ -281,5 +308,29 @@ public sealed class PropertySymbol : Symbol
     internal void RepointDeclaration(PropertyDeclarationSyntax declaration)
     {
         Declaration = declaration;
+    }
+
+    // An accessor keeps the property that first claimed it. A constructed
+    // generic property reuses its definition's accessors, and repointing them
+    // at the substitution would lose the definition's attributes, which is
+    // what an analyzer reads through AssociatedSymbol.
+    private void AssociateAccessor(FunctionSymbol? accessor)
+    {
+        if (accessor != null && accessor.AssociatedSymbol == null)
+        {
+            accessor.AssociatedSymbol = this;
+        }
+    }
+
+    // An accessor that is replaced or removed stops naming this property as
+    // its associated symbol, unless it is being assigned again.
+    private void ReleaseAccessor(FunctionSymbol? previous, FunctionSymbol? next)
+    {
+        if (previous != null
+            && !ReferenceEquals(previous, next)
+            && ReferenceEquals(previous.AssociatedSymbol, this))
+        {
+            previous.AssociatedSymbol = null;
+        }
     }
 }

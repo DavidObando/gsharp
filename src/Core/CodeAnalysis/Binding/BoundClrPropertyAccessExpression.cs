@@ -19,7 +19,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// receiver. Examples: <c>lst.Count</c>, <c>sb.Length</c>, <c>kvp.Key</c>,
 /// <c>Console.Out</c> (static, since Stream B).
 /// </summary>
-public sealed class BoundClrPropertyAccessExpression : BoundExpression
+public sealed class BoundClrPropertyAccessExpression : BoundPropertyReferenceOperationExpression
 {
     public BoundClrPropertyAccessExpression(
         SyntaxNode? syntax,
@@ -91,6 +91,12 @@ public sealed class BoundClrPropertyAccessExpression : BoundExpression
     public bool IsConstrainedTypeParameterAccess => ConstrainedReceiverTypeParameter != null;
 
     public override TypeSymbol Type { get; }
+
+    /// <inheritdoc/>
+    public override Symbol? Property => ImportedProperty(Member, Type);
+
+    /// <inheritdoc/>
+    public override BoundExpression? Instance => Receiver;
 
     public override BoundNodeKind Kind => BoundNodeKind.ClrPropertyAccessExpression;
 

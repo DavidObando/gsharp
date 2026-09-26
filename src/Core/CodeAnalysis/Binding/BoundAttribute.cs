@@ -55,6 +55,13 @@ public sealed class BoundAttribute : BoundNode
     public TypeSymbol AttributeType { get; }
 
     /// <summary>
+    /// Gets the attribute's type — the Roslyn <c>AttributeData.AttributeClass</c>
+    /// analogue (ADR-0169, issue #4436); the same symbol as
+    /// <see cref="AttributeType"/>.
+    /// </summary>
+    public TypeSymbol? AttributeClass => AttributeType;
+
+    /// <summary>
     /// Gets the effective use-site target.
     /// </summary>
     public AttributeTargetKind Target { get; }

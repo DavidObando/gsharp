@@ -94,6 +94,7 @@ public sealed class GSharpAnalyzerDriver
         DispatchSyntax();
         DispatchSymbols(program);
         DispatchBoundNodes(program);
+        DispatchBoundBodies(program);
         DispatchSemanticModels();
 
         foreach (var entry in registry.CompilationEndActions.Concat(registry.CompilationActions))
@@ -165,12 +166,67 @@ public sealed class GSharpAnalyzerDriver
         foreach (var (function, body) in program.Functions)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var isGenerated = function.Declaration is { } declaration && IsGeneratedTree(declaration.SyntaxTree);
+            var isGenerated = ProvenanceTree(function, body) is { } tree && IsGeneratedTree(tree);
             new DispatchingBoundTreeWalker(this, function, isGenerated).Visit(body);
         }
 
         new DispatchingBoundTreeWalker(this, containingFunction: null, isGenerated: false).Visit(program.Statement);
     }
+
+    private void DispatchBoundBodies(BoundProgram program)
+    {
+        if (registry.BoundBodyActions.Count == 0)
+        {
+            return;
+        }
+
+        foreach (var (function, body) in program.Functions)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+
+            DispatchBoundBody(function, body, ProvenanceTree(function, body));
+        }
+
+        // Roslyn runs operation-block actions on field-initializer blocks too,
+        // owned by the field. G# keeps them on the declaring type, outside any
+        // function body (not even the constructor's).
+        foreach (var declaredStruct in program.Structs)
+        {
+            // The owning field must answer ContainingType/ContainingNamespace,
+            // as the symbol-action path anchors them (idempotent).
+            SymbolContainment.AnchorMembers(declaredStruct);
+            foreach (var (field, initializer) in declaredStruct.StaticFieldInitializers.Concat(declaredStruct.InstanceFieldInitializers))
+            {
+                cancellationToken.ThrowIfCancellationRequested();
+                var tree = field.Declaration?.SyntaxTree
+                    ?? initializer.FirstAnchoredSyntax()?.SyntaxTree;
+                DispatchBoundBody(field, initializer, tree);
+            }
+        }
+    }
+
+    private void DispatchBoundBody(Symbol owner, BoundNode body, SyntaxTree? provenance)
+    {
+        var isGenerated = provenance is { } tree && IsGeneratedTree(tree);
+        foreach (var entry in registry.BoundBodyActions)
+        {
+            if (SkipsGenerated(entry.Owner, isGenerated))
+            {
+                continue;
+            }
+
+            var context = new BoundBodyAnalysisContext(owner, body, compilation, Sink(entry.Owner), cancellationToken);
+            Guarded(entry.Owner, () => entry.Action(context));
+        }
+    }
+
+    // The tree a function body came from. A property accessor is synthesized
+    // with no declaration of its own, so it takes its property's; failing
+    // that, the first anchored node in the body says where it was written.
+    private static SyntaxTree? ProvenanceTree(FunctionSymbol function, BoundBlockStatement body)
+        => function.Declaration?.SyntaxTree
+            ?? (function.AssociatedSymbol as PropertySymbol)?.Declaration?.SyntaxTree
+            ?? body.FirstAnchoredSyntax()?.SyntaxTree;
 
     private void DispatchSemanticModels()
     {
@@ -436,6 +492,23 @@ public sealed class GSharpAnalyzerDriver
         {
             Dispatch(node);
             base.VisitPattern(node);
+        }
+
+        // Issue #4436: a plain `x is T` is ONE Roslyn is-type operation, with
+        // no pattern operation under it. G# binds it as an is-expression over
+        // a type pattern, so dispatching that pattern would report the same
+        // test twice to a rule registered for both kinds. The pattern of a
+        // declaration or recursive test is a real pattern in Roslyn too, and
+        // is dispatched.
+        protected override void VisitIsExpression(BoundIsExpression node)
+        {
+            if (node.IsSimpleTypeTest)
+            {
+                VisitExpression(node.Expression);
+                return;
+            }
+
+            base.VisitIsExpression(node);
         }
 
         private void Dispatch(BoundNode? node)

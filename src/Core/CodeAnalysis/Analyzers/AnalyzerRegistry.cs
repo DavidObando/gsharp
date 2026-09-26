@@ -24,6 +24,8 @@ internal sealed class AnalyzerRegistry
 
     public Dictionary<BoundNodeKind, List<AnalyzerActionEntry<BoundNodeAnalysisContext>>> BoundNodeActions { get; } = new();
 
+    public List<AnalyzerActionEntry<BoundBodyAnalysisContext>> BoundBodyActions { get; } = new();
+
     public List<AnalyzerActionEntry<SyntaxTreeAnalysisContext>> SyntaxTreeActions { get; } = new();
 
     public List<AnalyzerActionEntry<SemanticModelAnalysisContext>> SemanticModelActions { get; } = new();
@@ -43,8 +45,18 @@ internal sealed class AnalyzerRegistry
         TKind[] kinds)
         where TKind : notnull
     {
+        // Issue #4436: several Roslyn kinds can map to one G# kind (a type,
+        // declaration and recursive pattern are all a G# TypePattern), so one
+        // registration naming them all must still dispatch each node once.
+        // First-seen order is kept so registration order stays deterministic.
+        var seen = new HashSet<TKind>();
         foreach (var kind in kinds)
         {
+            if (!seen.Add(kind))
+            {
+                continue;
+            }
+
             if (!bucket.TryGetValue(kind, out var entries))
             {
                 entries = new List<AnalyzerActionEntry<TContext>>();

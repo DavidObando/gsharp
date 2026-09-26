@@ -172,6 +172,42 @@ public sealed class FunctionSymbol : Symbol
     public override SymbolKind Kind => SymbolKind.Function;
 
     /// <summary>
+    /// Gets the property this function is an accessor of, or
+    /// <see langword="null"/> — the Roslyn <c>IMethodSymbol.AssociatedSymbol</c>
+    /// analogue (ADR-0169, issue #4436). Set when a property's
+    /// <see cref="PropertySymbol.GetterSymbol"/> or
+    /// <see cref="PropertySymbol.SetterSymbol"/> is assigned.
+    /// </summary>
+    public Symbol? AssociatedSymbol { get; internal set; }
+
+    /// <summary>
+    /// Gets what kind of function this is — the Roslyn
+    /// <c>IMethodSymbol.MethodKind</c> analogue (ADR-0169, issue #4436).
+    /// </summary>
+    public MethodKind MethodKind
+    {
+        get
+        {
+            if (AssociatedSymbol is PropertySymbol property)
+            {
+                return ReferenceEquals(property.SetterSymbol, this) ? MethodKind.PropertySet : MethodKind.PropertyGet;
+            }
+
+            if (IsStaticInitializer)
+            {
+                return MethodKind.StaticConstructor;
+            }
+
+            if (IsLocalFunction || LocalDeclaration != null)
+            {
+                return MethodKind.LocalFunction;
+            }
+
+            return IsFunctionLiteral ? MethodKind.AnonymousFunction : MethodKind.Ordinary;
+        }
+    }
+
+    /// <summary>
     /// Gets the parameters of the function.
     /// </summary>
     public ImmutableArray<ParameterSymbol> Parameters { get; }
@@ -577,6 +613,12 @@ public sealed class FunctionSymbol : Symbol
         LexicalEnclosingType is { } owner
         && owner is StructSymbol { TypeParameters.IsEmpty: true } or InterfaceSymbol { TypeParameters.IsEmpty: true }
         && StructSymbol.CollectEnclosingTypeParameters(owner).IsEmpty;
+
+    /// <summary>Gets or sets a value indicating whether a function literal's body is bound under this symbol.</summary>
+    internal bool IsFunctionLiteral { get; set; }
+
+    /// <summary>Gets or sets a value indicating whether this is a local function's symbol.</summary>
+    internal bool IsLocalFunction { get; set; }
 
     /// <summary>Gets or sets a value indicating whether this synthetic function represents a type's static-constructor context.</summary>
     internal bool IsStaticInitializer { get; set; }

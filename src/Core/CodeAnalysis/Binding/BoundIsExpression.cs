@@ -58,6 +58,17 @@ public sealed class BoundIsExpression : BoundExpression
     /// <summary>Gets the synthesized local that holds the expression value exactly once.</summary>
     public LocalVariableSymbol InputVariable { get; }
 
+    /// <summary>
+    /// Gets the tested type of a plain type test — the Roslyn
+    /// <c>IIsTypeOperation.TypeOperand</c> analogue (ADR-0169, issue #4436).
+    /// Roslyn models only a plain <c>x is T</c> as an is-type operation (a
+    /// declaration or recursive pattern is an is-pattern operation over a
+    /// pattern), so this is <see langword="null"/> unless
+    /// <see cref="IsSimpleTypeTest"/>; the pattern forms are reached through
+    /// their <see cref="BoundTypePattern"/>.
+    /// </summary>
+    public TypeSymbol? TypeOperand => IsSimpleTypeTest ? TargetType : null;
+
     /// <summary>Gets the direct tested type when the pattern starts with a type test.</summary>
     public TypeSymbol? TargetType => Pattern is BoundTypePattern typePattern ? typePattern.TargetType : null;
 
