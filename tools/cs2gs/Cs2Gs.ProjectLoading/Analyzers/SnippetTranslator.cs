@@ -663,11 +663,18 @@ public static class SnippetTranslator
             }
         }
 
-        bool[] nonCodeInteriors = FindNonCodeInteriors(printed);
+        HashSet<(int Start, int Length)> expressionSpans = GSharp.Core.CodeAnalysis.Syntax.SyntaxTree
+            .Parse(printed)
+            .Root
+            .DescendantNodesAndSelf()
+            .OfType<GSharp.Core.CodeAnalysis.Syntax.ExpressionSyntax>()
+            .Select(expression => (expression.Span.Start, expression.Span.Length))
+            .ToHashSet();
         var seen = 0;
         for (Match match = Regex.Match(printed, pattern.ToString()); match.Success; match = match.NextMatch())
         {
-            if (nonCodeInteriors[match.Index])
+            if (!expressionSpans.Contains((match.Index, match.Length))
+                || (match.Index > 0 && printed[match.Index - 1] == '.'))
             {
                 continue;
             }
@@ -687,54 +694,6 @@ public static class SnippetTranslator
 
     private static bool IsInExplicitDefault(SyntaxToken token) =>
         token.Parent?.AncestorsAndSelf().OfType<DefaultExpressionSyntax>().Any() == true;
-
-    private static bool[] FindNonCodeInteriors(string source)
-    {
-        var spans = new List<(int Start, int Length, bool NonCode)>();
-
-        void AddTokenSpans(string text, int offset)
-        {
-            foreach (GSharp.Core.CodeAnalysis.Syntax.SyntaxToken token
-                in GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.ParseTokens(text))
-            {
-                int start = offset + token.Span.Start;
-                if (token.Kind is GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.CommentToken
-                    or GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.DocumentationCommentToken)
-                {
-                    spans.Add((start, token.Span.Length, true));
-                }
-                else if (token.Kind is GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.StringToken
-                    or GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.InterpolatedStringToken
-                    or GSharp.Core.CodeAnalysis.Syntax.SyntaxKind.CharacterToken
-                    && token.Span.Length > 2)
-                {
-                    spans.Add((start + 1, token.Span.Length - 2, true));
-                }
-            }
-        }
-
-        AddTokenSpans(source, 0);
-        GSharp.Core.CodeAnalysis.Syntax.SyntaxTree tree =
-            GSharp.Core.CodeAnalysis.Syntax.SyntaxTree.Parse(source);
-        foreach (GSharp.Core.CodeAnalysis.Syntax.InterpolatedStringExpressionSyntax interpolation
-            in tree.Root.DescendantNodesAndSelf()
-                .OfType<GSharp.Core.CodeAnalysis.Syntax.InterpolatedStringExpressionSyntax>())
-        {
-            foreach (GSharp.Core.CodeAnalysis.Syntax.SyntaxNode hole in interpolation.HoleExpressions)
-            {
-                spans.Add((hole.Span.Start, hole.Span.Length, false));
-                AddTokenSpans(source.Substring(hole.Span.Start, hole.Span.Length), hole.Span.Start);
-            }
-        }
-
-        var result = new bool[source.Length];
-        foreach ((int start, int length, bool nonCode) in spans.OrderByDescending(span => span.Length))
-        {
-            Array.Fill(result, nonCode, start, length);
-        }
-
-        return result;
-    }
 
     private static void AppendIdentifierPattern(StringBuilder pattern, string identifier)
     {

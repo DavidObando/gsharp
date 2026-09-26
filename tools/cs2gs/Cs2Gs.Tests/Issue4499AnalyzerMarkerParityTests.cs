@@ -282,4 +282,35 @@ class Consumer
         Assert.DoesNotContain("// [|Door.Map", result.GsWithMarkers, StringComparison.Ordinal);
         Assert.DoesNotContain("\"[|Door.Map", result.GsWithMarkers, StringComparison.Ordinal);
     }
+
+    [Fact]
+    public void FormattingFallbackMatchesOnlyWholeTargetExpressions()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate("""
+using System;
+using System.Collections.Immutable;
+
+class Door
+{
+    public object Map(Type type, object other, ImmutableArray<Type> arguments) => type;
+}
+
+class Consumer
+{
+    Door Door { get; } = new Door();
+
+    void Use()
+    {
+        _ = this.Door.Map(typeof(int), null, default);
+        _ = [|Door.Map(typeof(int), null, default)|];
+    }
+}
+""");
+
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.Empty(result.UnplacedMarkers);
+        int qualified = result.GsWithMarkers.IndexOf("this.Door.Map(", StringComparison.Ordinal);
+        int marked = result.GsWithMarkers.IndexOf("[|Door.Map(", StringComparison.Ordinal);
+        Assert.True(qualified >= 0 && marked > qualified, result.GsWithMarkers);
+    }
 }
