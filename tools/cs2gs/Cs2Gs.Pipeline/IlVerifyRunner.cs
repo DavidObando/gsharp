@@ -201,8 +201,23 @@ public class IlVerifyRunner
         (int exit, string output) = this.RunDotnet(args);
         int initialExit = exit;
         var outputs = new List<string> { output };
-        var filterInFinally = GSharp.Tests.IlVerifyFilterInFinallyRule.Load(assemblyPath);
-        var errors = new List<IlVerifyError>(FilterKnownFalsePositives(filterInFinally, ParseErrors(output)));
+
+        // The #4489 rule reads every method body, so load it only once a
+        // parsed StackUnderflow needs it; a clean run skips that pass.
+        GSharp.Tests.IlVerifyFilterInFinallyRule filterInFinallyRule = null;
+        IReadOnlyList<IlVerifyError> FilterFalsePositives(IEnumerable<IlVerifyError> parsed)
+        {
+            List<IlVerifyError> kept = FilterIgnored(parsed).ToList();
+            if (!kept.Any(e => string.Equals(e.Code, "StackUnderflow", StringComparison.Ordinal)))
+            {
+                return kept;
+            }
+
+            filterInFinallyRule ??= GSharp.Tests.IlVerifyFilterInFinallyRule.Load(assemblyPath);
+            return FilterKnownFalsePositives(filterInFinallyRule, kept);
+        }
+
+        var errors = new List<IlVerifyError>(FilterFalsePositives(ParseErrors(output)));
         var excludedMembers = new List<string>();
 
         // An unhandled ilverify exception exits with neither 0 (verified) nor
@@ -228,7 +243,7 @@ public class IlVerifyRunner
 
             (exit, output) = this.RunDotnet(retryArgs);
             outputs.Add(output);
-            errors.AddRange(FilterKnownFalsePositives(filterInFinally, ParseErrors(output)));
+            errors.AddRange(FilterFalsePositives(ParseErrors(output)));
         }
 
         string combinedOutput = CombineOutputs(outputs, excludedMembers);
@@ -237,7 +252,7 @@ public class IlVerifyRunner
             .Select(group => group.First())
             .ToList();
         IReadOnlyList<IlVerifyError> initialParsedErrors = ParseErrors(outputs[0]);
-        IReadOnlyList<IlVerifyError> initialErrors = FilterKnownFalsePositives(filterInFinally, initialParsedErrors);
+        IReadOnlyList<IlVerifyError> initialErrors = FilterFalsePositives(initialParsedErrors);
 
         // Exit 2 with every finding filtered passes only when the parsed lines
         // account for ilverify's own "N Error(s)" count: a verifier error in a
