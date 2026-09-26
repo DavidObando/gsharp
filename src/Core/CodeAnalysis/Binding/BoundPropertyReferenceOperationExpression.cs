@@ -26,7 +26,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// <para>
 /// <c>BoundClrPropertyAccessExpression</c> also reads imported FIELDS, which
 /// Roslyn models as <c>IFieldReferenceOperation</c>. For those
-/// <see cref="Property"/> is <see langword="null"/>, so a rule written against
+/// <see cref="ReferencedProperty"/> is <see langword="null"/>, so a rule written against
 /// the property surface does not mistake a field for a property.
 /// </para>
 /// </remarks>
@@ -49,8 +49,14 @@ public abstract class BoundPropertyReferenceOperationExpression : BoundExpressio
     /// property is represented by a symbol carrying its name, type and
     /// declaring type. <see langword="null"/> when the node reads an imported
     /// field instead.
+    /// <para>
+    /// Named <c>ReferencedProperty</c>, not <c>Property</c>, so that
+    /// <see cref="BoundPropertyAccessExpression.Property"/> can keep its
+    /// narrower <see cref="PropertySymbol"/> type without a covariant-return
+    /// override, which gsc miscompiles in the self-migrated Core (#4493).
+    /// </para>
     /// </summary>
-    public abstract Symbol? Property { get; }
+    public abstract Symbol? ReferencedProperty { get; }
 
     /// <summary>
     /// Gets the receiver — the Roslyn <c>IPropertyReferenceOperation.Instance</c>

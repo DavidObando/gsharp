@@ -93,7 +93,7 @@ public sealed class BoundClrPropertyAccessExpression : BoundPropertyReferenceOpe
     public override TypeSymbol Type { get; }
 
     /// <inheritdoc/>
-    public override Symbol? Property => ImportedProperty(Member, Type);
+    public override Symbol? ReferencedProperty => ImportedProperty(Member, Type);
 
     /// <inheritdoc/>
     public override BoundExpression? Instance => Receiver;
