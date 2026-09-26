@@ -70,6 +70,10 @@ public class Issue4420PlatformUpcastTests
 
         func TakeUntyped(xs IEnumerable) int32 { return 1 }
 
+        func TakeObjects(xs IEnumerable[object]) int32 { return xs.Count() }
+
+        func TakeNilableObjects(xs IEnumerable[object?]) int32 { return xs.Count() }
+
         func Keep(s string) string { return s }
 
         class Repo[T] : IEnumerable[T] {
@@ -116,6 +120,8 @@ public class Issue4420PlatformUpcastTests
     [InlineData("TakeEnum(Repo(Ob.Strings()[0]))")]
     [InlineData("TakeEnum(ChildRepo(Ob.Strings()[0]))")]
     [InlineData("TakeEnum(BaseRepo(Ob.Strings()[0]))")]
+    [InlineData("TakeObjects(Ob.Strings())")]
+    [InlineData("TakeObjects(Ob.Lines())")]
     public void An_Upcast_To_A_NonNull_Element_Supertype_Is_Rejected(string call)
     {
         using var library = new CSharpFixture(LibrarySource);
@@ -136,8 +142,8 @@ public class Issue4420PlatformUpcastTests
         using var library = new CSharpFixture(LibrarySource);
 
         Assert.Equal(
-            "2\n1\n",
-            Run(library, "Console.WriteLine(TakeNilable(Ob.Strings()))\nConsole.WriteLine(TakeUntyped(Ob.Strings()))"));
+            "2\n1\n2\n",
+            Run(library, "Console.WriteLine(TakeNilable(Ob.Strings()))\nConsole.WriteLine(TakeUntyped(Ob.Strings()))\nConsole.WriteLine(TakeNilableObjects(Ob.Strings()))"));
 
         const string bridge = """
             let checked = List[string]()

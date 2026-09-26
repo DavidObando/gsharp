@@ -3620,7 +3620,8 @@ public sealed class Conversion
         {
             for (var i = 0; i < projected.Length; i++)
             {
-                if (RelatePlatformArguments(projected[i], supertypeArguments[i]) == PlatformArgumentRelation.Illegal)
+                if (RelatePlatformArguments(projected[i], supertypeArguments[i]) == PlatformArgumentRelation.Illegal
+                    || IsCovariantPlatformEscape(projected[i], supertypeArguments[i]))
                 {
                     return true;
                 }
@@ -3918,6 +3919,28 @@ public sealed class Conversion
             or "System.Collections.Generic.IList`1"
             or "System.Collections.Generic.IReadOnlyCollection`1"
             or "System.Collections.Generic.IReadOnlyList`1";
+
+    /// <summary>
+    /// #4420: whether a supertype view reads a platform element as a
+    /// DIFFERENT non-null reference type through CLR variance
+    /// (<c>List[string!]</c> to <c>IEnumerable[object]</c>).
+    /// <see cref="RelatePlatformArguments"/> only compares the same underlying
+    /// type, so it calls this pair unrelated and hands it to the ordinary
+    /// covariance rule, which admits it. The view is then a non-null read of
+    /// an element that may be nil, which is rule 3's hazard. A nilable
+    /// (<c>object?</c>) or platform target argument is not an escape.
+    /// </summary>
+    /// <param name="projected">The source element, projected onto the target's definition.</param>
+    /// <param name="target">The target's argument at the same position.</param>
+    /// <returns><see langword="true"/> when the view must be rejected.</returns>
+    private static bool IsCovariantPlatformEscape(TypeSymbol? projected, TypeSymbol? target)
+        => projected is PlatformTypeSymbol platform
+            && target is not null
+            && target is not NullableTypeSymbol
+            && target is not PlatformTypeSymbol
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(platform.UnderlyingType, target)
+            && IsNonNullReferenceDestination(target)
+            && ClassifyCore(platform.UnderlyingType, target, allowStructuralProjection: false).IsImplicit;
 
     private static bool AnyContainsPlatformType(ImmutableArray<TypeSymbol> types)
     {
