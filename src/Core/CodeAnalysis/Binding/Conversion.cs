@@ -4331,16 +4331,14 @@ public sealed class Conversion
     }
 
     /// <summary>
-    /// Issue #4165: unwraps a <see cref="NullableTypeSymbol"/> before an
-    /// <see cref="IsImplicitReferenceVariantSlot"/> query. Neither that
-    /// method nor <see cref="IsReferenceLikeTarget"/> looks through a
-    /// <c>Base?</c> wrapper, so a nullable-annotated same-compilation
-    /// class/interface slot (e.g. a bare method group's <c>x Base?</c>
-    /// parameter) was never recognised as reference-like at all — CLR
-    /// delegate variance doesn't distinguish <c>Base</c> from <c>Base?</c>
-    /// anyway (every reference type is nullable at the CLR level regardless
-    /// of G#'s own annotation), so unwrapping here only widens what this
-    /// reference-only check accepts.
+    /// Issue #4165: erases reference nullability before a CLR delegate
+    /// <see cref="IsImplicitReferenceVariantSlot"/> query. That method now
+    /// looks through nullable wrappers for reference-like eligibility while
+    /// preserving its original annotated operands for conversion
+    /// classification. This CLR fallback intentionally pre-erases those
+    /// operands too: CLR delegate variance does not distinguish
+    /// <c>Base</c> from <c>Base?</c> (every reference type is nullable at the
+    /// CLR level regardless of G#'s own annotation).
     /// <para>
     /// ADR-0186: a <see cref="PlatformTypeSymbol"/> comes off for exactly the
     /// same reason and with more force — <c>Base!</c> and <c>Base</c> are one
