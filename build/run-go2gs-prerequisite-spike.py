@@ -52,6 +52,8 @@ GO_BENCHMARK_ENVIRONMENT_KEYS = (
     "GOGC",
     "GOMEMLIMIT",
     "CGO_ENABLED",
+    "GOENV",
+    "GOTOOLCHAIN",
 )
 EXPECTED_ROWS = {
     "slice-view",
@@ -638,10 +640,11 @@ def main() -> int:
                 for key, value in environment.items()
                 if key.upper().startswith(("DOTNET_", "COMPLUS_"))
             },
-            "go_benchmark_environment": {
-                key: environment.get(key)
-                for key in GO_BENCHMARK_ENVIRONMENT_KEYS
-            },
+            "go_benchmark_environment": json.loads(
+                command_output(
+                    ["go", "env", "-json", *GO_BENCHMARK_ENVIRONMENT_KEYS]
+                )
+            ),
             "removed_runtime_settings": removed_runtime_settings,
             "jit_mode": "pinned-tiered-pgo-steady-state",
             "commands": commands,
