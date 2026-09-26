@@ -71,6 +71,11 @@ public class Issue4451ObliviousGenericSlotTests
             {
                 int Take(string value);
             }
+
+            public interface IBox<T>
+            {
+                int Put(T value);
+            }
         #nullable restore
         }
         """;
@@ -105,8 +110,11 @@ public class Issue4451ObliviousGenericSlotTests
     /// <summary>
     /// The check is inserted only where the parameter is non-null. An
     /// oblivious parameter and a <c>string?</c> parameter both receive the nil
-    /// unchecked, and a <c>[NotNullWhen]</c> guard still narrows the bare
-    /// platform variable it is handed.
+    /// unchecked, including a slot that is <c>string?</c> only through the
+    /// receiver's type argument (<c>List[string?].Add</c>, and a constrained
+    /// <c>IBox[string?]</c>, both of which reflect as a CLR <c>string</c>), and
+    /// a <c>[NotNullWhen]</c> guard still narrows the bare platform variable it
+    /// is handed.
     /// </summary>
     [Fact]
     public void A_Nil_Reaches_An_Oblivious_Or_Nilable_Parameter_Unchecked()
@@ -124,9 +132,22 @@ public class Issue4451ObliviousGenericSlotTests
             }
             let named = Ob.Name()
             Console.WriteLine(Ob.WrapList[string](named)[0])
+            let nilables = List[string?]()
+            nilables.Add(Ob.Nil())
+            Console.WriteLine(nilables.Count)
+            Console.WriteLine(ViaBox(NilBox()))
             """;
 
-        Assert.Equal("-1\n-1\nempty\nn\n", Run(library, program));
+        const string declarations = """
+            class NilBox : IBox[string?] {
+                func Put(value string?) int32 { return value == nil ? -1 : 1 }
+            }
+
+            func ViaBox[T IBox[string?]](x T) int32 { return x.Put(Ob.Nil()) }
+
+            """;
+
+        Assert.Equal("-1\n-1\nempty\nn\n1\n-1\n", Run(library, declarations + program));
     }
 
     private static string Run(CSharpFixture library, string program)

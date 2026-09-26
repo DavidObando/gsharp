@@ -3238,7 +3238,13 @@ internal sealed class ConversionClassifier
             else if (paramIndex < parameters.Length
                 && arguments[i].Type is PlatformTypeSymbol
                 && parameters[paramIndex].ParameterType is { IsByRef: false, IsGenericParameter: false }
-                && ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]) is { } parameterType
+                && method != null
+                && receiverType != null
+
+                // Receiver-aware: a constrained `ITaker[string?]` reflects its
+                // `Take(T)` as a CLR `string`, and only the receiver's
+                // symbolic argument says the slot is `string?`.
+                && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType
                 && Conversion.Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck)
             {
                 // ADR-0186 §4, #4451: a platform argument at a non-null
