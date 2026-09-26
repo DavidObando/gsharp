@@ -71,6 +71,32 @@ public class Holder
         Assert.Equal("-h1Nh1", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
     }
 
+    /// <summary>
+    /// Review of #4505: a parenthesized allocation widens like a bare one, and
+    /// a widened write still gets the ordinary conversions (here the covariant
+    /// array upcast G# requires).
+    /// </summary>
+    [Fact]
+    public void ParenthesizedAndCovariantElementWrites_CompileAndRun()
+    {
+        string printed = Translate(@"
+public class Holder
+{
+    public static string Run()
+    {
+        var names = (new string[2]);
+        names[0] = null;
+        names[1] = ""b"";
+        object[][] values = new object[2][];
+        values[0] = null;
+        values[1] = new string[] { ""s"" };
+        return (names[0] ?? ""-"") + names[1] + (values[0] == null ? ""N"" : ""Y"") + values[1].Length;
+    }
+}", NullableContextOptions.Disable);
+
+        Assert.Equal("-bN1", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
+    }
+
     [Fact]
     public void AnnotationsContextLocal_NarrowedOnlyInCSharp_IsAsserted_CompilesAndRuns()
     {

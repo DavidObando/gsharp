@@ -2995,13 +2995,14 @@ public sealed partial class CSharpToGSharpTranslator
         // Issues #4482 and #4500: the one decision "this local's `new T[n]`
         // allocation has a `T?` element". Both the allocation and every
         // element write ask it, so they cannot disagree.
+        // Only a rank-1 allocation takes the widening branch in
+        // TranslateArrayCreation (a rectangular one returns earlier), and the
+        // initializer may be parenthesized.
         private bool IsWidenedArrayElementLocal(ILocalSymbol local) =>
-            local.Type is IArrayTypeSymbol { ElementType: { IsReferenceType: true } }
+            local.Type is IArrayTypeSymbol { Rank: 1, ElementType: { IsReferenceType: true } }
             && local.DeclaringSyntaxReferences.Any(reference =>
-                reference.GetSyntax() is VariableDeclaratorSyntax
-                {
-                    Initializer.Value: ArrayCreationExpressionSyntax { Initializer: null },
-                })
+                reference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
+                && StripParentheses(initializer) is ArrayCreationExpressionSyntax { Initializer: null })
             && (this.ElementPassedToNullableByRefParameter(local) || this.ElementWrittenMaybeNil(local));
 
         // Issue #4482: whether some `local[i]` in the local's scope is passed
