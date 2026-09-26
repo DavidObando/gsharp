@@ -28,8 +28,18 @@ namespace Cs2Gs.Pipeline;
 public sealed class SdkCompileRunner
 {
     /// <summary>
-    /// Issue #3931: the wall-clock budget for a mirrored <c>dotnet build</c>,
-    /// and the FLOOR of the budget for a mirrored <c>dotnet test</c> run
+    /// Issue #4498: the wall-clock budget for a mirrored <c>dotnet build</c>.
+    /// It is separate from <see cref="MirroredTestRunTimeout"/>, which it used to
+    /// share. One build invocation compiles the app AND its whole project-reference
+    /// closure (Core.Tests builds Core, the analyzers and the runtime libraries
+    /// first), so a healthy hot-core test app already takes 6 to 8+ minutes on a
+    /// nightly runner, and ordinary runner variance pushed it past ten (nightly
+    /// 36236554862). Twenty minutes still fails a genuinely hung build promptly.
+    /// </summary>
+    internal static readonly TimeSpan MirroredBuildTimeout = TimeSpan.FromMinutes(20);
+
+    /// <summary>
+    /// Issue #3931: the FLOOR of the budget for a mirrored <c>dotnet test</c> run
     /// (see <see cref="MirroredTestRunTimeoutFor"/>). Named (rather than
     /// inline) so the parity stage can report the exact budget a killed run
     /// exceeded instead of describing a nameless timeout.
@@ -241,7 +251,7 @@ public sealed class SdkCompileRunner
                 "dotnet",
                 args,
                 projectDirectory,
-                MirroredTestRunTimeout,
+                MirroredBuildTimeout,
                 IsolatedNugetEnvironment(artifactDirectory));
             File.WriteAllText(Path.Combine(artifactDirectory, "sdk.build.log"), result.Output ?? string.Empty);
 
