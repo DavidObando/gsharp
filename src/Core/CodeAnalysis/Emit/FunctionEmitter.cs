@@ -603,7 +603,10 @@ internal sealed class FunctionEmitter
             else if (isDataToStringOverride || !receiverIsValueType || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
                 methodAttrs |= MethodAttributes.Virtual;
-                if (!function.IsOverride && !isDataToStringOverride)
+                // Issue #4481: a covariant-return override differs from the
+                // base slot's CLR signature, so it takes a new slot that a
+                // MethodImpl row binds to the base (as Roslyn emits it).
+                if ((!function.IsOverride && !isDataToStringOverride) || function.IsCovariantReturnOverride)
                 {
                     methodAttrs |= MethodAttributes.NewSlot;
                 }

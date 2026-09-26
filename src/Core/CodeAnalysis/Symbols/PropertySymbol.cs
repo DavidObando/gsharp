@@ -204,6 +204,17 @@ public sealed class PropertySymbol : Symbol
     /// <summary>Gets or sets the source-declared base property overridden by this property.</summary>
     public PropertySymbol? OverriddenProperty { get; set; }
 
+    /// <summary>
+    /// Gets or sets the base class (as seen from this property's declaring
+    /// type, so possibly a constructed generic) that declares
+    /// <see cref="OverriddenProperty"/>, when this property overrides it with
+    /// a narrower (covariant) type. Such a getter has a different CLR
+    /// signature from the base getter, so it takes a new slot and is bound to
+    /// the base slot with a MethodImpl row (issue #4481). <see langword="null"/>
+    /// for an ordinary same-type override.
+    /// </summary>
+    public StructSymbol? CovariantOverrideContainingType { get; set; }
+
     /// <summary>Gets or sets the imported interface getter slot explicitly implemented by this property.</summary>
     public MethodInfo? ExplicitInterfaceGetterSlot { get; set; }
 

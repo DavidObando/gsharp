@@ -2985,6 +2985,88 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
+    /// Issue #4481: whether an override property's type conforms to the base
+    /// property's, so the override can reuse the base accessor slot. The base
+    /// type is read through the derived type's base-class type arguments, and
+    /// reference-type nullability is ignored: <c>Sym</c> and <c>Sym?</c> have
+    /// the same CLR signature, as C# nullability variance allows.
+    /// </summary>
+    /// <param name="derived">The overriding type.</param>
+    /// <param name="baseProperty">The base property being overridden.</param>
+    /// <param name="overrideType">The override's declared type.</param>
+    /// <returns><see langword="true"/> when the two types are the same slot type.</returns>
+    internal static bool PropertyOverrideTypeConforms(StructSymbol derived, PropertySymbol baseProperty, TypeSymbol overrideType)
+    {
+        var baseType = baseProperty.Type;
+        if (ReferenceEquals(baseType, TypeSymbol.Error) || ReferenceEquals(overrideType, TypeSymbol.Error))
+        {
+            // The type already failed to bind and has its own diagnostic.
+            return true;
+        }
+
+        var substitution = BuildBaseTypeArgumentSubstitution(derived);
+        return ConformanceSignaturesEquivalent(baseType, overrideType, substitution)
+            || ConformanceSignaturesEquivalent(
+                StripPlatformOrReferenceNullable(baseType),
+                StripPlatformOrReferenceNullable(overrideType),
+                substitution);
+    }
+
+    /// <summary>
+    /// Issue #4481: whether <paramref name="overrideType"/> is a covariant
+    /// narrowing of <paramref name="baseType"/> — an implicit reference
+    /// conversion between reference types, the only change of return type a
+    /// CLR covariant-return override (a MethodImpl to the base slot) permits.
+    /// </summary>
+    /// <param name="derived">The overriding type.</param>
+    /// <param name="baseType">The overridden property's type.</param>
+    /// <param name="overrideType">The override's declared type.</param>
+    /// <returns><see langword="true"/> for a covariant narrowing.</returns>
+    internal static bool IsCovariantPropertyType(StructSymbol derived, TypeSymbol baseType, TypeSymbol overrideType)
+    {
+        if (baseType is TypeParameterSymbol baseTypeParameter
+            && BuildBaseTypeArgumentSubstitution(derived) is { } substitution
+            && substitution.TryGetValue(baseTypeParameter, out var substituted))
+        {
+            baseType = substituted;
+        }
+
+        var from = StripPlatformOrReferenceNullable(overrideType);
+        var to = StripPlatformOrReferenceNullable(baseType);
+        return from != null && to != null && Conversion.IsImplicitReferenceVariantSlot(from, to);
+    }
+
+    /// <summary>
+    /// Issue #4481: finds the class in <paramref name="baseClass"/>'s
+    /// hierarchy that declares <paramref name="property"/>, as seen from the
+    /// derived type (a constructed generic base stays constructed), so the
+    /// emitter can reference the overridden getter.
+    /// </summary>
+    /// <param name="baseClass">The overriding type's base class.</param>
+    /// <param name="property">The overridden property.</param>
+    /// <returns>The declaring class, or <see langword="null"/> when not found.</returns>
+    internal static StructSymbol? FindPropertyOwner(StructSymbol? baseClass, PropertySymbol property)
+    {
+        if (baseClass == null)
+        {
+            return null;
+        }
+
+        foreach (var level in baseClass.GetHierarchy())
+        {
+            foreach (var candidate in level.Properties)
+            {
+                if (ReferenceEquals(candidate, property))
+                {
+                    return level;
+                }
+            }
+        }
+
+        return null;
+    }
+
+    /// <summary>
     /// ADR-0187 / issue #4350: whether two indexers declare the same
     /// index-parameter signature (count, types, and ref-kinds). Indexers
     /// overload by this signature, exactly as in C#.
