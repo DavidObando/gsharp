@@ -603,7 +603,8 @@ internal sealed class FunctionEmitter
             else if (isDataToStringOverride || !receiverIsValueType || MethodInfoHelpers.RequiresVirtualOnValueType(function, receiverStruct))
             {
                 methodAttrs |= MethodAttributes.Virtual;
-                if (!function.IsOverride && !isDataToStringOverride)
+                if ((!function.IsOverride && !isDataToStringOverride)
+                    || MethodInfoHelpers.IsCovariantSourceOverride(function))
                 {
                     methodAttrs |= MethodAttributes.NewSlot;
                 }

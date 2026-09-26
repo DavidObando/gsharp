@@ -2140,6 +2140,7 @@ internal sealed partial class DeclarationBinder
                         // it (and a plain `return` a GS0252), and what makes
                         // FunctionEmitter encode the MethodDef return as `T&`.
                         getterSymbol.ReturnRefKind = propReturnRefKind;
+                        getterSymbol.OverriddenMethod = propertySymbol.OverriddenProperty?.GetterSymbol;
                         getterSymbol.ExternalOverriddenMethod = propertySymbol.ExternalOverriddenGetter;
                         propertySymbol.GetterSymbol = getterSymbol;
                         propertySymbol.GetterBodySyntax = getAccessor.Body;
