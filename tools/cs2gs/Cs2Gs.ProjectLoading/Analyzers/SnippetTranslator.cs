@@ -136,6 +136,12 @@ public static class SnippetTranslator
             int unitIndex = packages.Count > 1
                 ? PackageUnitIndex(packages, markedPackage)
                 : 0;
+            if (unitIndex < 0)
+            {
+                ReportUnplacedMarker(marked, 0, unplaced, diagnostics);
+                continue;
+            }
+
             string searchable = printedUnits[unitIndex];
             int unitOffset = unitOffsets[unitIndex];
             int ordinal = OccurrenceOrdinal(
@@ -238,15 +244,7 @@ public static class SnippetTranslator
 
             if (index < 0)
             {
-                unplaced.Add(marked.Text);
-                diagnostics.Add(new TranslationDiagnostic(
-                    "analyzer-snippet",
-                    $"Marker text '{marked.Text}' does not survive translation verbatim (occurrence {ordinal + 1} not found); re-place the [|…|] marker in the G# snippet by hand.",
-                    location: null,
-                    TranslationSeverity.Warning)
-                {
-                    DiagnosticId = SnippetDiagnosticId,
-                });
+                ReportUnplacedMarker(marked, ordinal, unplaced, diagnostics);
                 continue;
             }
 
@@ -473,7 +471,7 @@ public static class SnippetTranslator
         var tokens = new List<string>();
         foreach (SyntaxToken token in expression.DescendantTokens())
         {
-            if (token.Parent?.AncestorsAndSelf().OfType<DefaultExpressionSyntax>().Any() == true)
+            if (IsInExplicitDefault(token))
             {
                 if (token.IsKind(SyntaxKind.DefaultKeyword))
                 {
@@ -534,7 +532,24 @@ public static class SnippetTranslator
             }
         }
 
-        throw new InvalidOperationException($"No translated compilation unit was emitted for package '{package}'.");
+        return -1;
+    }
+
+    private static void ReportUnplacedMarker(
+        MarkedText marked,
+        int ordinal,
+        List<string> unplaced,
+        List<TranslationDiagnostic> diagnostics)
+    {
+        unplaced.Add(marked.Text);
+        diagnostics.Add(new TranslationDiagnostic(
+            "analyzer-snippet",
+            $"Marker text '{marked.Text}' does not survive translation verbatim (occurrence {ordinal + 1} not found); re-place the [|…|] marker in the G# snippet by hand.",
+            location: null,
+            TranslationSeverity.Warning)
+        {
+            DiagnosticId = SnippetDiagnosticId,
+        });
     }
 
     /// <summary>
@@ -614,6 +629,11 @@ public static class SnippetTranslator
         var pattern = new StringBuilder();
         foreach (SyntaxToken token in expression.DescendantTokens())
         {
+            if (IsInExplicitDefault(token) && !token.IsKind(SyntaxKind.DefaultKeyword))
+            {
+                continue;
+            }
+
             if (pattern.Length > 0)
             {
                 pattern.Append(@"\s*");
@@ -643,9 +663,15 @@ public static class SnippetTranslator
             }
         }
 
+        bool[] nonCodeInteriors = FindNonCodeInteriors(printed);
         var seen = 0;
         for (Match match = Regex.Match(printed, pattern.ToString()); match.Success; match = match.NextMatch())
         {
+            if (nonCodeInteriors[match.Index])
+            {
+                continue;
+            }
+
             if (seen++ == ordinal)
             {
                 index = match.Index;
@@ -657,6 +683,54 @@ public static class SnippetTranslator
         index = -1;
         length = 0;
         return false;
+    }
+
+    private static bool IsInExplicitDefault(SyntaxToken token) =>
+        token.Parent?.AncestorsAndSelf().OfType<DefaultExpressionSyntax>().Any() == true;
+
+    private static bool[] FindNonCodeInteriors(string source)
+    {
+        var result = new bool[source.Length];
+        for (var i = 0; i < source.Length; i++)
+        {
+            if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '/')
+            {
+                for (i += 2; i < source.Length && source[i] != '\n'; i++)
+                {
+                    result[i] = true;
+                }
+            }
+            else if (i + 1 < source.Length && source[i] == '/' && source[i + 1] == '*')
+            {
+                for (i += 2; i + 1 < source.Length && (source[i] != '*' || source[i + 1] != '/'); i++)
+                {
+                    result[i] = true;
+                }
+
+                i++;
+            }
+            else if (source[i] is '"' or '\'')
+            {
+                char quote = source[i];
+                for (i++; i < source.Length && source[i] != quote; i++)
+                {
+                    result[i] = true;
+                    if (source[i] == '\\' && i + 1 < source.Length)
+                    {
+                        result[++i] = true;
+                    }
+                }
+            }
+            else if (source[i] == '`')
+            {
+                for (i++; i < source.Length && source[i] != '`'; i++)
+                {
+                    result[i] = true;
+                }
+            }
+        }
+
+        return result;
     }
 
     private static void AppendIdentifierPattern(StringBuilder pattern, string identifier)

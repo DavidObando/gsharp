@@ -72,6 +72,9 @@ namespace Outer
                 // Door.Map(evt.EventHandlerType, null, default) must not affect expression ordinals.
                 _ = [|Door.Map(evt.EventHandlerType, null, default)|];
                 _ = SomeDoor.Map(typeof(int), null, default);
+                // Door.Map(typeof(int32), nil, default(ImmutableArray[Type]))
+                string collision = "Door.Map(typeof(int32), nil, default(ImmutableArray[Type]))";
+                Console.WriteLine(collision);
                 _ = Door.Map(typeof(int32), null, default);
                 _ = [|Door.Map(typeof(int), null, default)|];
                 _ = Door.Tuple(default((int, string)));
@@ -116,6 +119,11 @@ class GlobalConsumer
         int markedRenamedCall = symbols.IndexOf(
             "[|Door.Map(typeof(int32), nil,", StringComparison.Ordinal);
         Assert.True(earlierTranslatedSpelling >= 0 && markedRenamedCall > earlierTranslatedSpelling);
+        Assert.Contains("let _ = [|Door.Map(", symbols, StringComparison.Ordinal);
+        Assert.Contains("// Door.Map(typeof(int32), nil, default(ImmutableArray[Type]))", symbols, StringComparison.Ordinal);
+        Assert.Contains("\"Door.Map(typeof(int32), nil, default(ImmutableArray[Type]))\"", symbols, StringComparison.Ordinal);
+        Assert.DoesNotContain("// [|Door.Map", symbols, StringComparison.Ordinal);
+        Assert.DoesNotContain("\"[|Door.Map", symbols, StringComparison.Ordinal);
         Assert.Contains("nil", symbols, StringComparison.Ordinal);
         Assert.Contains("default(ImmutableArray[Type])", symbols, StringComparison.Ordinal);
         Assert.Contains("))|]", symbols, StringComparison.Ordinal);
@@ -187,6 +195,58 @@ class Consumer
 
         Assert.NotNull(result.GsWithMarkers);
         Assert.Equal(new[] { "return;" }, result.UnplacedMarkers);
+        Assert.Contains(
+            result.Diagnostics,
+            diagnostic => diagnostic.DiagnosticId == SnippetTranslator.SnippetDiagnosticId);
+    }
+
+    [Fact]
+    public void FormattingFallbackCountsExplicitDefaultsIndependentOfTheirType()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate("""
+static class Door
+{
+    public static object Map(object value, object other, object last) => value;
+}
+
+class Consumer
+{
+    void Use()
+    {
+        _ = Door.Map(default(int), null, default);
+        _ = [|Door.Map(default(string), null, default)|];
+    }
+}
+""");
+
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.Empty(result.UnplacedMarkers);
+        int earlier = result.GsWithMarkers.IndexOf("Door.Map(", StringComparison.Ordinal);
+        int marked = result.GsWithMarkers.IndexOf("[|Door.Map(", StringComparison.Ordinal);
+        Assert.True(earlier >= 0 && marked > earlier);
+    }
+
+    [Fact]
+    public void MarkerInNamespaceWithoutAnEmittedUnitIsReportedUnplaced()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate("""
+namespace One
+{
+    class First { }
+}
+
+namespace [|Empty|]
+{
+}
+
+namespace Two
+{
+    class Second { }
+}
+""");
+
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.Equal(new[] { "Empty" }, result.UnplacedMarkers);
         Assert.Contains(
             result.Diagnostics,
             diagnostic => diagnostic.DiagnosticId == SnippetTranslator.SnippetDiagnosticId);
