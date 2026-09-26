@@ -1630,6 +1630,151 @@ partial class A {
     }
 
     // ─────────────────────────────────────────────────────────────────────────
+    // Partial data types (ADR-0192 amendment): a `partial data class` /
+    // `partial data struct` — the G# spelling of a C# `partial record` /
+    // `partial record struct` — holds partial funcs like any partial class or
+    // struct, and its parts merge into ONE declaration before the record
+    // members are synthesized, so equality, ToString, `with` and deconstruction
+    // see every part.
+    // ─────────────────────────────────────────────────────────────────────────
+
+    [Theory]
+    [InlineData("data class")]
+    [InlineData("data struct")]
+    public void PartialDataType_AcrossThreeFiles_MergesPartialFuncsAndKeepsRecordSemantics(string kind)
+    {
+        // The positional list is on the part that sorts LAST (Z.gs), so the
+        // merged declaration must take it from that part, not from the first.
+        var implementingFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+
+partial KIND Url {
+    partial func Describe() string {
+        return Owner + ""/"" + Name
+    }
+
+    shared {
+        partial func Scheme() string {
+            return ""https""
+        }
+    }
+}
+".Replace("KIND", kind, StringComparison.Ordinal),
+            "A.gs"));
+
+        var declaringFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+import System
+
+partial KIND Url {
+    @Obsolete(""declaring-part attribute"")
+    partial func Describe() string;
+
+    shared {
+        partial func Scheme() string;
+    }
+}
+".Replace("KIND", kind, StringComparison.Ordinal),
+            "M.gs"));
+
+        var positionalFile = SyntaxTree.Parse(SourceText.From(
+            @"package App
+import System
+
+partial KIND Url(Owner string, Name string)
+
+let u = Url(""o"", ""n"")
+Console.WriteLine(u)
+Console.WriteLine(u == Url(""o"", ""n""))
+Console.WriteLine(u == Url(""o"", ""x""))
+let v = u with { Name = ""m"" }
+Console.WriteLine(v.Describe())
+let (owner, name) = v
+Console.WriteLine(owner + "" "" + name)
+Console.WriteLine(Url.Scheme())
+var describeCount = 0
+for m in typeof(Url).GetMethods() {
+    if m.Name == ""Describe"" {
+        describeCount = describeCount + 1
+    }
+}
+Console.WriteLine(""Describe methods: ${describeCount}"")
+Console.WriteLine(""Obsolete: ${typeof(Url).GetMethod(""Describe"")!!.GetCustomAttributes(typeof(ObsoleteAttribute), false).Length}"")
+".Replace("KIND", kind, StringComparison.Ordinal),
+            "Z.gs"));
+
+        var output = CompileLoadInvokeCaptureStdout(
+            new[] { implementingFile, declaringFile, positionalFile },
+            "Adr0192-PartialData-" + kind.Replace(' ', '-'));
+
+        Assert.Equal(
+            new[]
+            {
+                "Url(Owner=o, Name=n)",
+                "True",
+                "False",
+                "o/m",
+                "o m",
+                "https",
+                "Describe methods: 1",
+                "Obsolete: 1",
+            },
+            NonEmptyLines(output));
+    }
+
+    [Fact]
+    public void PartialDataType_PositionalListOnTwoParts_ReportsGS0482()
+    {
+        // Only one part may carry the positional parameter list: it is the
+        // primary constructor, and the record members are synthesized from it.
+        var diagnostics = Compile(@"package App
+
+partial data class Url(Owner string) {
+    partial func F() int32;
+}
+
+partial data class Url(Name string) {
+    partial func F() int32 { return 1 }
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0482" && d.Location.StartLine == 6);
+    }
+
+    [Fact]
+    public void PartialDataType_PartWithoutData_ReportsGS0479()
+    {
+        // `data` changes how a part binds, so it must be on every part — the
+        // shape gsgen would produce if it back-translated a generated record
+        // part as a plain `partial class`.
+        var diagnostics = Compile(@"package App
+
+partial data class Url(Owner string) {
+    partial func F() int32;
+}
+
+partial class Url {
+    partial func F() int32 { return 1 }
+}
+");
+        Assert.Contains(diagnostics, d => d.Id == "GS0479" && d.Location.StartLine == 6);
+    }
+
+    [Fact]
+    public void PartialFuncInNonPartialDataType_ReportsGS0608()
+    {
+        var diagnostics = Compile(@"package App
+
+data struct Url(Owner string) {
+    partial func F() int32;
+    partial func F() int32 { return 1 }
+}
+");
+        var gs0608 = Assert.Single(diagnostics, d => d.Id == "GS0608");
+        Assert.Equal(3, gs0608.Location.StartLine);
+        Assert.Contains("'data class' or 'data struct'", gs0608.Message, StringComparison.Ordinal);
+    }
+
+    // ─────────────────────────────────────────────────────────────────────────
     // Helpers
     // ─────────────────────────────────────────────────────────────────────────
 

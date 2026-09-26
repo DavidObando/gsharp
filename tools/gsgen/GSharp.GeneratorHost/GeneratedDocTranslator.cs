@@ -10,6 +10,7 @@ using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using GSharp.Core.CodeAnalysis.Text;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 
@@ -40,6 +41,9 @@ public static class GeneratedDocTranslator
     /// </summary>
     public const string StubPath = "<gsgen-stub>.cs";
 
+    /// <summary>The gsgen diagnostic id for a positional list stated on both a user and a generated part.</summary>
+    public const string PositionalListConflictId = "GS9209";
+
     /// <summary>
     /// Back-translates the generated C# documents into G# partial parts.
     /// </summary>
@@ -52,12 +56,18 @@ public static class GeneratedDocTranslator
     /// with (<see cref="ImplementingPartHeaders"/>); <see langword="null"/> or
     /// empty to keep every header as back-translated.
     /// </param>
+    /// <param name="dataTypes">
+    /// The top-level G# data types the stub rendered, whose generated parts
+    /// are spelled as <c>data</c> parts (<see cref="SpellDataTypeParts"/>);
+    /// <see langword="null"/> or empty for none.
+    /// </param>
     /// <returns>The back-translated G# parts: one per namespace of each generated document with members or file-level attributes.</returns>
     public static IReadOnlyList<TranslatedGsDocument> Translate(
         string stubCSharp,
         IReadOnlyList<GeneratedCsDocument> generated,
         IReadOnlyList<MetadataReference> references,
-        IReadOnlyList<StubPartialDefinition> declaringParts = null)
+        IReadOnlyList<StubPartialDefinition> declaringParts = null,
+        IReadOnlyList<StubDataType> dataTypes = null)
     {
         ArgumentNullException.ThrowIfNull(stubCSharp);
         ArgumentNullException.ThrowIfNull(generated);
@@ -144,6 +154,8 @@ public static class GeneratedDocTranslator
                     translatedFilePaths: translatedFilePaths,
                     emitGeneratedImplementingParts: true)
                     .TranslateDocument(loaded);
+                var hostDiagnostics = new List<GeneratorHostDiagnostic>();
+                unit = SpellDataTypeParts(unit, dataTypes ?? Array.Empty<StubDataType>(), hostDiagnostics);
 
                 // Skip a unit that carried no translatable content.
                 if (unit.Members.Count == 0 && unit.FileAttributes.Count == 0)
@@ -151,7 +163,6 @@ public static class GeneratedDocTranslator
                     continue;
                 }
 
-                var hostDiagnostics = new List<GeneratorHostDiagnostic>();
                 string gs = ImplementingPartHeaders.Apply(
                     unit,
                     GSharpPrinter.Print(unit),
@@ -165,6 +176,86 @@ public static class GeneratedDocTranslator
         }
 
         return results;
+    }
+
+    /// <summary>
+    /// ADR-0192 amendment (partial data types): spells each top-level part of
+    /// a user G# data type as a <c>partial data class</c> / <c>partial data
+    /// struct</c> part with no <c>open</c> and no <c>sealed</c>. gsc requires
+    /// <c>data</c> on every part of a data type (GS0479), but the generated C#
+    /// re-declares the type with whatever keyword the stub gave it: a
+    /// <c>class</c> for a data type the stub cannot render as a record (see
+    /// <c>GsStubRenderer.PlanRecords</c>), and a record's synthesized virtual
+    /// members make the translator spell a non-sealed record <c>open</c>,
+    /// which contradicts a user part that says <c>sealed</c> (GS0478).
+    /// Openness and sealedness are the user's to state (gsc unions them across
+    /// parts, ADR-0144 §C), so a generated part states neither.
+    /// <para>
+    /// A positional parameter list a generator supplies is kept when no user
+    /// part states one. Only one part may (GS0482), so when both do, the
+    /// generated list is not silently dropped: it is reported as
+    /// <c>GS9209</c> at the user's list, and the part keeps it, so gsc
+    /// reports the conflict too.
+    /// </para>
+    /// </summary>
+    private static CompilationUnit SpellDataTypeParts(
+        CompilationUnit unit,
+        IReadOnlyList<StubDataType> dataTypes,
+        List<GeneratorHostDiagnostic> diagnostics)
+    {
+        if (dataTypes.Count == 0)
+        {
+            return unit;
+        }
+
+        var members = new List<GNode>(unit.Members.Count);
+        bool changed = false;
+        foreach (GNode member in unit.Members)
+        {
+            StubDataType dataType = member is TypeDeclaration { IsPartial: true } type
+                ? dataTypes.FirstOrDefault(candidate =>
+                    string.Equals(candidate.PackageName ?? string.Empty, unit.Package ?? string.Empty, StringComparison.Ordinal)
+                    && string.Equals(candidate.TypeName, type.Name, StringComparison.Ordinal)
+                    && candidate.TypeArity == type.TypeParameters.Count)
+                : null;
+            if (dataType == null)
+            {
+                members.Add(member);
+                continue;
+            }
+
+            var part = (TypeDeclaration)member;
+            if (part.PrimaryConstructorParameters != null && dataType.PositionalList is TextLocation userList)
+            {
+                string message = $"a generator declared a positional parameter list on '{part.Name}', which already has one; "
+                    + "only one part of a data type may state it";
+                diagnostics.Add(new GeneratorHostDiagnostic(PositionalListConflictId, message, userList));
+            }
+
+            members.Add(new TypeDeclaration(
+                dataType.IsClass ? TypeDeclarationKind.DataClass : TypeDeclarationKind.DataStruct,
+                part.Name,
+                part.TypeParameters,
+                part.PrimaryConstructorParameters,
+                part.BaseType,
+                part.BaseConstructorArguments,
+                part.Interfaces,
+                part.Members,
+                part.Visibility,
+                isOpen: false,
+                isSealed: false,
+                isAbstract: false,
+                isPartial: true,
+                part.HasBody,
+                part.Attributes,
+                part.IsUnsafe,
+                part.IsRefLike));
+            changed = true;
+        }
+
+        return changed
+            ? new CompilationUnit(unit.Package, unit.Imports, members, unit.LeadingComments, unit.FileAttributes)
+            : unit;
     }
 
     /// <summary>
