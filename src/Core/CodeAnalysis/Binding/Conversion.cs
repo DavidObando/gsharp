@@ -3467,7 +3467,10 @@ public sealed class Conversion
         // A pair this cannot compare — `[]string! -> object`,
         // `[]string! -> IEnumerable[string]`, anything that is not the same
         // container shape — is DECLINED here, not rejected, and falls
-        // through to the ordinary rows below.
+        // through to the ordinary rows below. A supertype view that promises
+        // non-null elements (`IEnumerable[string]`) is then rejected by
+        // `TryClassifyPlatformTypeArgumentMismatch` when the underlying pair
+        // is classified (#4420); `object` and a nilable element view are not.
         if (TryGetPlatformArgumentPairs(underlying, to, out var elementSource, out var elementTarget))
         {
             for (var i = 0; i < elementSource.Length; i++)
@@ -3591,8 +3594,40 @@ public sealed class Conversion
         out Conversion conversion)
     {
         conversion = Conversion.None;
-        if (from is null || to is null
-            || (!ContainsPlatformType(from) && !ContainsPlatformType(to)))
+        if (from is null || to is null)
+        {
+            return false;
+        }
+
+        // #4420: an UPCAST (`List[string!]` to `IEnumerable[string]`,
+        // `[]string!` to `IReadOnlyList[string]`) is the same aliasing hazard
+        // through a supertype view: the callee reads non-null elements from a
+        // container that may hold nil, and no check point exists. The pair
+        // has two different generic definitions, so the same-shape comparison
+        // below declines it, and the ordinary upcast rules strip the nested
+        // annotation and admit it. Project the source's own positions onto
+        // the destination's definition through its bases and interfaces and
+        // apply rule 3 there. It runs before the platform-presence gate
+        // because that gate does not look inside a flags-annotated array
+        // (`[]!string!`); the projection reads positions itself. Only the
+        // illegal direction is decided here; a legal pair falls through to
+        // the rules below, unchanged. Function shapes and value-type
+        // containers are excluded for the reasons given below.
+        if (from is not FunctionTypeSymbol
+            && to is not FunctionTypeSymbol
+            && UnwrapPlatformAndNullable(from) is not { ClrType.IsValueType: true }
+            && TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments))
+        {
+            for (var i = 0; i < projected.Length; i++)
+            {
+                if (RelatePlatformArguments(projected[i], supertypeArguments[i]) == PlatformArgumentRelation.Illegal)
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (!ContainsPlatformType(from) && !ContainsPlatformType(to))
         {
             return false;
         }
@@ -3875,6 +3910,144 @@ public sealed class Conversion
         }
 
         return relation;
+    }
+
+    private static bool IsArrayElementInterface(Type definition)
+        => definition.FullName is "System.Collections.Generic.IEnumerable`1"
+            or "System.Collections.Generic.ICollection`1"
+            or "System.Collections.Generic.IList`1"
+            or "System.Collections.Generic.IReadOnlyCollection`1"
+            or "System.Collections.Generic.IReadOnlyList`1";
+
+    private static IEnumerable<Type> SupertypesOf(Type definition)
+    {
+        Type[] interfaces;
+        try
+        {
+            interfaces = definition.GetInterfaces();
+        }
+        catch (NotSupportedException)
+        {
+            interfaces = Array.Empty<Type>();
+        }
+
+        foreach (var candidate in interfaces)
+        {
+            yield return candidate;
+        }
+
+        for (var current = definition.BaseType; current != null && current.FullName != "System.Object"; current = current.BaseType)
+        {
+            yield return current;
+        }
+    }
+
+    /// <summary>
+    /// #4420: projects <paramref name="from"/>'s element positions onto the
+    /// generic definition of <paramref name="to"/>, when that definition is a
+    /// base type or interface of the source's (or an array-compatible
+    /// interface of an array or slice source). The positions are the source's
+    /// own, read through <see cref="TypeSymbol.GetElementPositions"/>, so a
+    /// nested <c>T!</c> survives the projection; a CLR-shape projection would
+    /// erase it.
+    /// </summary>
+    /// <param name="from">The conversion source.</param>
+    /// <param name="to">The conversion target.</param>
+    /// <param name="projected">The source's arguments at the target's definition.</param>
+    /// <param name="targetArguments">The target's arguments.</param>
+    /// <returns><see langword="true"/> when a projection was found.</returns>
+    private static bool TryProjectPlatformArgumentsToSupertype(
+        TypeSymbol? from,
+        TypeSymbol? to,
+        out ImmutableArray<TypeSymbol> projected,
+        out ImmutableArray<TypeSymbol> targetArguments)
+    {
+        projected = ImmutableArray<TypeSymbol>.Empty;
+        targetArguments = ImmutableArray<TypeSymbol>.Empty;
+        from = UnwrapPlatformAndNullable(from);
+        to = UnwrapPlatformAndNullable(to);
+        if (from is null
+            || to is null
+            || !TryGetConstructedGenericArguments(to, out targetArguments, out var targetClr)
+            || targetArguments.IsDefaultOrEmpty
+            || targetClr is not { IsGenericType: true })
+        {
+            return false;
+        }
+
+        var targetDefinition = targetClr.IsGenericTypeDefinition ? targetClr : targetClr.GetGenericTypeDefinition();
+        var positions = from.GetElementPositions();
+        if (positions.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        var sourceIsArray = from is SliceTypeSymbol or ArrayTypeSymbol
+            || (from is NullabilityAnnotatedTypeSymbol { ClrType.IsArray: true } && from.ClrType?.GetArrayRank() == 1);
+        if (sourceIsArray)
+        {
+            if (targetArguments.Length == 1
+                && positions.Length == 1
+                && IsArrayElementInterface(targetDefinition))
+            {
+                projected = positions;
+                return true;
+            }
+
+            return false;
+        }
+
+        var sourceClr = from is ImportedTypeSymbol { OpenDefinition: { } importedOpen }
+            ? importedOpen
+            : from.ClrType;
+        if (sourceClr is not { IsGenericType: true })
+        {
+            return false;
+        }
+
+        var sourceDefinition = sourceClr.IsGenericTypeDefinition ? sourceClr : sourceClr.GetGenericTypeDefinition();
+        if (ClrTypeUtilities.AreSame(sourceDefinition, targetDefinition)
+            || sourceDefinition.GetGenericArguments().Length != positions.Length)
+        {
+            return false;
+        }
+
+        foreach (var candidate in SupertypesOf(sourceDefinition))
+        {
+            Type candidateDefinition;
+            Type[] candidateArguments;
+            try
+            {
+                if (!candidate.IsGenericType)
+                {
+                    continue;
+                }
+
+                candidateDefinition = candidate.IsGenericTypeDefinition ? candidate : candidate.GetGenericTypeDefinition();
+                candidateArguments = candidate.GetGenericArguments();
+            }
+            catch (NotSupportedException)
+            {
+                continue;
+            }
+
+            if (!ClrTypeUtilities.AreSame(candidateDefinition, targetDefinition)
+                || candidateArguments.Length != targetArguments.Length)
+            {
+                continue;
+            }
+
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(candidateArguments.Length);
+            foreach (var argument in candidateArguments)
+            {
+                builder.Add(MemberLookup.MapOpenClrTypeToSymbolic(argument, sourceDefinition, positions));
+            }
+
+            projected = builder.MoveToImmutable();
+            return true;
+        }
+
+        return false;
     }
 
     /// <summary>
