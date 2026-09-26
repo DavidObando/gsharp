@@ -287,7 +287,7 @@ internal static class RoslynAnalyzerApiMap
         ["Microsoft.CodeAnalysis.Operations.IPropertyReferenceOperation"] = new(
             "GSharp.Core.CodeAnalysis.Binding",
             "BoundPropertyReferenceOperationExpression",
-            "G# has one property-read node per provenance; the analyzer-facing base spans them. The imported node also reads fields, for which Property is nil."),
+            "G# has one property-read node per provenance; the analyzer-facing base spans them. The imported node also reads fields, for which ReferencedProperty (Roslyn's Property) is nil."),
         ["Microsoft.CodeAnalysis.Operations.ILocalReferenceOperation"] = new(
             "GSharp.Core.CodeAnalysis.Binding",
             "BoundVariableExpression",

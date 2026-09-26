@@ -127,10 +127,12 @@ corpus cannot reach a row, by a snippet translation test.
 - `IMethodReferenceOperation` / `IPropertyReferenceOperation` map onto two new
   analyzer-facing bases in the style of #3920,
   `BoundMethodReferenceOperationExpression` (`Method`, `Instance`) and
-  `BoundPropertyReferenceOperationExpression` (`Property`, `Instance`), each
+  `BoundPropertyReferenceOperationExpression` (`ReferencedProperty`, `Instance`;
+  Roslyn's `Property` maps to `ReferencedProperty`, so that the user node keeps
+  its own narrower `Property` without a covariant-return override, #4493), each
   spanning the user and CLR provenance of the method group or property access;
   the operation kinds dispatch to both nodes. An imported field read shares
-  the CLR property node (Roslyn's `FieldReference`), with a nil `Property`,
+  the CLR property node (Roslyn's `FieldReference`), with a nil `ReferencedProperty`,
   so cs2gs wraps a `PropertyReference` handler in a guard that drops it (as
   it drops a pattern `is` from `IsType`, and an empty group from
   `MethodReference`).
