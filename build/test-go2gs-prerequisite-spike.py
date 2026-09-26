@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import importlib.util
+import statistics
 import unittest
 from pathlib import Path
 
@@ -54,6 +55,21 @@ def performance_output(*, duplicate: str | None = None) -> str:
     return "\n".join(rows)
 
 
+def make_asymmetric_timing_failure(
+    samples,
+    measured: str,
+    control: str,
+) -> None:
+    for sample, measured_ns, control_ns in zip(
+        samples["gsharp-jit"],
+        (2.0, 120.0, 101.0),
+        (1.0, 100.0, 1000.0),
+        strict=True,
+    ):
+        sample[measured]["ns_per_op"] = measured_ns
+        sample[control]["ns_per_op"] = control_ns
+
+
 class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
     def test_milestone_runs_require_five_launches(self) -> None:
         with self.assertRaisesRegex(ValueError, "milestone.*at least 5"):
@@ -99,11 +115,26 @@ class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
         )
 
     def test_adapter_call_timing_gate_uses_paired_launch_ratio(self) -> None:
-        samples = performance_samples()
-        samples["gsharp-jit"][0]["adapt-reference"]["ns_per_op"] = 1.11
+        samples = performance_samples(launches=3)
+        make_asymmetric_timing_failure(
+            samples,
+            "adapt-reference",
+            "nominal-reference",
+        )
 
         status = spike.performance_gate_status(samples)
 
+        self.assertLessEqual(
+            statistics.median(
+                sample["adapt-reference"]["ns_per_op"]
+                for sample in samples["gsharp-jit"]
+            )
+            / statistics.median(
+                sample["nominal-reference"]["ns_per_op"]
+                for sample in samples["gsharp-jit"]
+            ),
+            1.10,
+        )
         self.assertFalse(
             status["runtimes"]["gsharp-jit"]["checks"][
                 "adapter_call_time_at_most_1_10x_named_control"
@@ -111,11 +142,26 @@ class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
         )
 
     def test_adapter_construction_timing_gate_uses_paired_launch_ratio(self) -> None:
-        samples = performance_samples()
-        samples["gsharp-jit"][0]["adapt-create"]["ns_per_op"] = 1.11
+        samples = performance_samples(launches=3)
+        make_asymmetric_timing_failure(
+            samples,
+            "adapt-create",
+            "nominal-create",
+        )
 
         status = spike.performance_gate_status(samples)
 
+        self.assertLessEqual(
+            statistics.median(
+                sample["adapt-create"]["ns_per_op"]
+                for sample in samples["gsharp-jit"]
+            )
+            / statistics.median(
+                sample["nominal-create"]["ns_per_op"]
+                for sample in samples["gsharp-jit"]
+            ),
+            1.10,
+        )
         self.assertFalse(
             status["runtimes"]["gsharp-jit"]["checks"][
                 "adapter_construction_time_at_most_1_10x_named_control"

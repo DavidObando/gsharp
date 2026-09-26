@@ -112,6 +112,85 @@ def command_output(command: list[str]) -> str:
     return run(command, cwd=REPO).strip()
 
 
+def optional_command_output(command: list[str]) -> str | None:
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except OSError:
+        return None
+    return result.stdout.strip() if result.returncode == 0 and result.stdout.strip() else None
+
+
+def cpu_model() -> str:
+    cpuinfo = Path("/proc/cpuinfo")
+    if cpuinfo.exists():
+        fields = {}
+        for line in cpuinfo.read_text().splitlines():
+            if ":" in line:
+                key, value = line.split(":", 1)
+                fields.setdefault(key.strip().lower(), value.strip())
+        for key in ("model name", "hardware"):
+            if fields.get(key):
+                return fields[key]
+
+    if platform.system() == "Darwin":
+        for key in ("machdep.cpu.brand_string", "hw.model"):
+            model = optional_command_output(["sysctl", "-n", key])
+            if model:
+                return model
+
+    model = (
+        os.environ.get("PROCESSOR_IDENTIFIER")
+        if platform.system() == "Windows"
+        else platform.processor()
+    )
+    if model and model.lower() not in {"amd64", "arm64", "aarch64", "x64", "x86_64"}:
+        return model
+    return "unknown-cpu"
+
+
+def read_distinct(pattern: str) -> list[str]:
+    values = set()
+    for path in Path("/").glob(pattern.lstrip("/")):
+        try:
+            value = path.read_text().strip()
+        except OSError:
+            continue
+        if value:
+            values.add(value)
+    return sorted(values)
+
+
+def environment_sample() -> dict[str, object]:
+    affinity = sorted(os.sched_getaffinity(0)) if hasattr(os, "sched_getaffinity") else None
+    try:
+        load_average = [round(value, 3) for value in os.getloadavg()]
+    except (AttributeError, OSError):
+        load_average = None
+    power = {
+        "governors": read_distinct("/sys/devices/system/cpu/cpu*/cpufreq/scaling_governor"),
+        "scaling_drivers": read_distinct(
+            "/sys/devices/system/cpu/cpu*/cpufreq/scaling_driver"
+        ),
+    }
+    if platform.system() == "Darwin":
+        output = optional_command_output(["pmset", "-g", "batt"])
+        power["power_source"] = output.splitlines()[0] if output else None
+    else:
+        online = {}
+        for path in Path("/sys/class/power_supply").glob("*/online"):
+            try:
+                online[path.parent.name] = path.read_text().strip()
+            except OSError:
+                pass
+        power["power_source"] = online
+    return {
+        "recorded_utc": datetime.now(UTC).isoformat(),
+        "load_average": load_average,
+        "cpu_affinity": affinity,
+        "power": power,
+    }
+
+
 def sha256(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as stream:
@@ -430,6 +509,8 @@ def main() -> int:
     out.mkdir(parents=True, exist_ok=True)
     commands = build(out, not args.no_aot)
     environment, removed_runtime_settings = clean_runtime_environment(os.environ)
+    model = cpu_model()
+    start_environment = environment_sample()
 
     semantic_outputs = {
         runtime: run(command, cwd=out, env=environment)
@@ -454,6 +535,16 @@ def main() -> int:
             samples[runtime].append(parse_perf(run(commands[runtime], cwd=out, env=environment)))
 
     validate_cross_runtime_checksums(samples)
+    end_environment = environment_sample()
+    provenance_issues = []
+    if model == "unknown-cpu":
+        provenance_issues.append("the host exposes no identifiable CPU model")
+    if not any(start_environment["power"].values()):
+        provenance_issues.append("the host exposes no observable power-state identity")
+    if start_environment["power"] != end_environment["power"]:
+        provenance_issues.append("power state changed while the benchmark was running")
+    if start_environment["cpu_affinity"] != end_environment["cpu_affinity"]:
+        provenance_issues.append("CPU affinity changed while the benchmark was running")
     summary = {runtime: summarize(runtime_samples) for runtime, runtime_samples in samples.items()}
     performance_gates = performance_gate_status(samples)
     for runtime in (name for name in summary if name.startswith("gsharp-")):
@@ -497,7 +588,7 @@ def main() -> int:
         Path(__file__),
     )
     changes = repository_changes()
-    milestone_eligible = not args.no_aot and not changes
+    milestone_eligible = not args.no_aot and not changes and not provenance_issues
     result = {
         "evidence": {
             "milestone_eligible": milestone_eligible,
@@ -506,7 +597,11 @@ def main() -> int:
                 None if milestone_eligible else (
                     "--no-aot omits required NativeAOT semantic and performance evidence"
                     if args.no_aot
-                    else "repository has uncommitted source changes"
+                    else (
+                        "repository has uncommitted source changes"
+                        if changes
+                        else "; ".join(provenance_issues)
+                    )
                 )
             ),
             "unsupported_boundaries": UNSUPPORTED_BOUNDARIES,
@@ -517,7 +612,10 @@ def main() -> int:
         "host": {
             "platform": platform.platform(),
             "machine": platform.machine(),
+            "cpu_model": model,
             "cpu_count": os.cpu_count(),
+            "start_environment": start_environment,
+            "end_environment": end_environment,
         },
         "provenance": {
             "recorded_utc": datetime.now(UTC).isoformat(),

@@ -673,7 +673,8 @@ evidence must contain:
 evidence. Missing AOT, an empty semantic set, semantic drift in only one
 runtime, a paired checksum mismatch, or absent provenance fails the applicable
 gate; no success-shaped default or silent fallback is permitted. The runner's
-gate tests carry ADR-0154 mutants for those first three failure classes.
+gate tests carry ADR-0154 mutants for an empty semantic set, single-runtime
+semantic drift and paired checksum mismatch.
 Milestone evidence also requires at least five launches from a committed
 source state. The JIT environment removes ambient overrides and pins the
 repository's tiered-PGO steady-state configuration; that is reproducible launch
@@ -777,12 +778,13 @@ small non-escaping Go construction rows.
 For the prerequisite mechanisms, steady-state slice/location/interface calls
 must allocate zero, and generated adapter construction/allocation must match a
 shape-equivalent named wrapper. The initial investigation threshold is a
-median time ratio no greater than 1.10 to the matched control in each execution
-mode, using at least five rotated launches and retained samples; it is not a
-universal cross-machine promise. No prerequisite performance-ready claim is
-allowed until the approved allocation gates tracked by #4511 and #4512 pass.
-Those issues are open dependencies, not capabilities assumed by this ADR.
-No NativeAOT result hides an unreported JIT regression.
+median of each launch's measured/control time ratio no greater than 1.10 in
+each execution mode. Every measured row is paired with its same-launch,
+same-runtime control across at least five rotated launches with retained
+samples; this is not a universal cross-machine promise. No prerequisite
+performance-ready claim is allowed until the approved allocation gates tracked
+by #4511 and #4512 pass. Those issues are open dependencies, not capabilities
+assumed by this ADR. No NativeAOT result hides an unreported JIT regression.
 
 M2 additionally needs package-specific controls and approved latency/allocation
 budgets for its exact closure. M3 needs measured workload budgets and no
