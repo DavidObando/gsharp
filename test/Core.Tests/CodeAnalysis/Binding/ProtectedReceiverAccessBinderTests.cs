@@ -147,6 +147,42 @@ public sealed class ProtectedReceiverAccessBinderTests
     }
 
     /// <summary>
+    /// A protected source indexer through a base-typed receiver: one GS0379
+    /// naming the indexer, even for a compound write that calls both the
+    /// getter and the setter.
+    /// </summary>
+    /// <param name="statement">The indexer access.</param>
+    [Theory]
+    [InlineData("let x = r[0]")]
+    [InlineData("r[0] = 1")]
+    [InlineData("r[0] += 1")]
+    public void IndexerThroughBaseReceiver_IsGS0379Once(string statement)
+    {
+        var source = """
+            open class Source {
+                protected prop this[i int32] int32 {
+                    get -> i
+                    set { }
+                }
+            }
+            open class Derived : Source {
+            }
+
+            """ + $$"""
+            class Accessor : Derived {
+                func Hook(r Source) {
+                    {{statement}}
+                }
+            }
+            """;
+
+        var errors = EmittedOracle.Evaluate(source).Diagnostics.Where(d => d.IsError).ToArray();
+        var error = Assert.Single(errors);
+        Assert.Equal("GS0379", error.Id);
+        Assert.Contains("'Source.Item'", error.Message, StringComparison.Ordinal);
+    }
+
+    /// <summary>
     /// Nested classes that share a simple name and package are still
     /// different classes: inside <c>B.D</c>, a receiver of <c>A.D</c> is a
     /// sibling, as C# (CS1540) and the CLR see it.

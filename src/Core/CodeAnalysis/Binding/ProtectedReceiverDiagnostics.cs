@@ -278,7 +278,20 @@ internal static class ProtectedReceiverDiagnostics
         {
             if (!node.Method.IsStatic && node.Method.ReceiverType is StructSymbol declaring)
             {
-                Check(node, node.Receiver.Type, node.Method.Name, node.Method.Accessibility, declaring);
+                // A source indexer binds as a call to its get/set accessor.
+                // Name the indexer, so `r[i] += 1` reports once, as `Item`.
+                var name = node.Method.Name;
+                foreach (var property in declaring.Properties)
+                {
+                    if (ReferenceEquals(property.GetterSymbol, node.Method)
+                        || ReferenceEquals(property.SetterSymbol, node.Method))
+                    {
+                        name = property.Name;
+                        break;
+                    }
+                }
+
+                Check(node, node.Receiver.Type, name, node.Method.Accessibility, declaring);
             }
 
             base.VisitUserInstanceCallExpression(node);
