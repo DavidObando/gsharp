@@ -42,6 +42,17 @@ RUNTIME_SETTING_PREFIXES = (
     "DOTNET_ALTJIT",
     "COMPLUS_ALTJIT",
 )
+GO_BENCHMARK_ENVIRONMENT_KEYS = (
+    "GOMAXPROCS",
+    "GODEBUG",
+    "GOAMD64",
+    "GOARM64",
+    "GOFLAGS",
+    "GOEXPERIMENT",
+    "GOGC",
+    "GOMEMLIMIT",
+    "CGO_ENABLED",
+)
 EXPECTED_ROWS = {
     "slice-view",
     "slice-append",
@@ -258,13 +269,16 @@ def parse_perf(output: str) -> dict[str, dict[str, float | int]]:
     for line in output.splitlines():
         match = PERF.match(line)
         if match:
+            name = match["name"]
+            if name in rows:
+                raise SystemExit(f"duplicate perf row: {name}\n{output}")
             ticks = int(match["ticks"])
             frequency = int(match["frequency"])
             operations = int(match["operations"])
             allocated_bytes = int(match["allocated_bytes"])
             if frequency <= 0 or operations <= 0:
                 raise SystemExit(f"invalid raw timing/count fields: {line}")
-            rows[match["name"]] = {
+            rows[name] = {
                 "elapsed_ticks": ticks,
                 "timer_frequency": frequency,
                 "operations": operations,
@@ -441,19 +455,19 @@ def main() -> int:
 
     validate_cross_runtime_checksums(samples)
     summary = {runtime: summarize(runtime_samples) for runtime, runtime_samples in samples.items()}
+    performance_gates = performance_gate_status(samples)
     for runtime in (name for name in summary if name.startswith("gsharp-")):
+        runtime_gate = performance_gates["runtimes"][runtime]
         for name in summary[runtime]:
             go_ns = float(summary["go"][name]["median_ns_per_op"])
             summary[runtime][name]["ratio_vs_go"] = (
                 float(summary[runtime][name]["median_ns_per_op"]) / go_ns if go_ns else None
             )
         summary[runtime]["adapt-reference"]["ratio_vs_nominal"] = (
-            float(summary[runtime]["adapt-reference"]["median_ns_per_op"])
-            / float(summary[runtime]["nominal-reference"]["median_ns_per_op"])
+            runtime_gate["median_paired_call_ratio"]
         )
         summary[runtime]["adapt-create"]["ratio_vs_nominal"] = (
-            float(summary[runtime]["adapt-create"]["median_ns_per_op"])
-            / float(summary[runtime]["nominal-create"]["median_ns_per_op"])
+            runtime_gate["median_paired_construction_ratio"]
         )
         summary[runtime]["rich-capture"]["ratio_vs_manual"] = (
             float(summary[runtime]["rich-capture"]["median_ns_per_op"])
@@ -463,8 +477,6 @@ def main() -> int:
             float(summary[runtime]["rich-create"]["median_ns_per_op"])
             / float(summary[runtime]["manual-rich-create"]["median_ns_per_op"])
         )
-    performance_gates = performance_gate_status(samples)
-
     artifacts = {
         "gsc": REPO / "out" / "bin" / "Release" / "Compiler" / "gsc",
         "gsc_dll": REPO / "out" / "bin" / "Release" / "Compiler" / "gsc.dll",
@@ -520,6 +532,15 @@ def main() -> int:
             "reported_runtimes": reported_runtimes,
             "aot_rid": aot_rid() if not args.no_aot else None,
             "tier_environment": TIER_ENV,
+            "runtime_environment": {
+                key: value
+                for key, value in environment.items()
+                if key.upper().startswith(("DOTNET_", "COMPLUS_"))
+            },
+            "go_benchmark_environment": {
+                key: environment.get(key)
+                for key in GO_BENCHMARK_ENVIRONMENT_KEYS
+            },
             "removed_runtime_settings": removed_runtime_settings,
             "jit_mode": "pinned-tiered-pgo-steady-state",
             "commands": commands,
