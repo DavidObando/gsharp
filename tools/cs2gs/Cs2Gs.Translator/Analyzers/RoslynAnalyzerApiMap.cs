@@ -482,6 +482,7 @@ internal static class RoslynAnalyzerApiMap
             "Bodies",
             "A G# function has exactly one bound body."),
         [("Microsoft.CodeAnalysis.IOperation", "ChildOperations")] = new(null, "ChildNodes"),
+        [("Microsoft.CodeAnalysis.Operations.IPropertyReferenceOperation", "Property")] = new(null, "ReferencedProperty"),
         [("Microsoft.CodeAnalysis.Operations.ILocalReferenceOperation", "Local")] = new(null, "Variable"),
         [("Microsoft.CodeAnalysis.Operations.IParameterReferenceOperation", "Parameter")] = new(null, "Variable"),
         [("Microsoft.CodeAnalysis.Operations.IVariableDeclaratorOperation", "Symbol")] = new(null, "Variable"),

@@ -1685,7 +1685,7 @@ public sealed partial class CSharpToGSharpTranslator
                 (string type, string member) = kind switch
                 {
                     "IsType" => ("BoundIsExpression", "TypeOperand"),
-                    "PropertyReference" => ("BoundPropertyReferenceOperationExpression", "Property"),
+                    "PropertyReference" => ("BoundPropertyReferenceOperationExpression", "ReferencedProperty"),
                     _ => ("BoundMethodReferenceOperationExpression", "Method"),
                 };
                 GExpression test = new PatternTestExpression(

@@ -109,7 +109,10 @@ public sealed class BoundPropertyAccessExpression : BoundPropertyReferenceOperat
     /// <summary>Gets the effective interface construction that declares <see cref="Property"/>.</summary>
     public InterfaceSymbol? InterfaceType { get; }
 
-    public override PropertySymbol Property { get; }
+    public PropertySymbol Property { get; }
+
+    /// <inheritdoc/>
+    public override Symbol? ReferencedProperty => Property;
 
     /// <summary>
     /// Gets the narrowed type for flow-analysis smart-cast (ADR-0069 addendum /
