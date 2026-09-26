@@ -174,11 +174,15 @@ public sealed class ProtectedReceiverAccessBinderTests
     /// <summary>
     /// A <c>: base(...)</c> argument is bound outside the constructor body,
     /// for explicit and primary constructors alike, and is still class code.
+    /// A block argument is target-dependent: constructor resolution rebinds
+    /// it after the first pass, so the check runs on the final arguments.
     /// </summary>
     /// <param name="declaration">The derived class, reading <c>s.f</c> in its base-constructor arguments.</param>
     [Theory]
     [InlineData("class Accessor : Seeded {\n    init(s Source) : base(s.f) {}\n}")]
     [InlineData("class Accessor(s Source) : Seeded(s.f) {\n}")]
+    [InlineData("class Accessor : Seeded {\n    init(s Source) : base({ let x = s.f x }) {}\n}")]
+    [InlineData("class Accessor(s Source) : Seeded({ let x = s.f x }) {\n}")]
     public void InBaseConstructorArguments_ThroughBaseReceiver_IsGS0379(string declaration)
     {
         var source = Declarations + """

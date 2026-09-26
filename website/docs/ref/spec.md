@@ -851,7 +851,8 @@ inaccessible from unrelated external code. It mirrors C# `protected`:
 - As in C# (CS1540), a derived class reaches a `protected` **instance** member
   only through a receiver whose static type is that derived class or a class
   derived from it: `this`, `base`, a bare name, or a variable of the derived
-  type. A receiver typed as the base class or as a sibling subclass may be an
+  type. Any construction of a generic accessing class counts as that class
+  (inside `G[T]`, a `G[int32]` receiver is valid), as in C#. A receiver typed as the base class or as a sibling subclass may be an
   instance of some other subclass, so `s.f` with `s Source` inside
   `class Derived : Source` reports **GS0379**. Static `protected` members have
   no receiver and are exempt; the declaring class itself may use any receiver.
