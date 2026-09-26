@@ -2572,7 +2572,7 @@ public sealed partial class CSharpToGSharpTranslator
             // discarded slot has no matching member.
             var names = new string[arity];
             var members = new ISymbol[arity];
-            var failures = new string[arity];
+            var failures = CreateNullableFailureArray(arity);
             for (int i = 0; i < arity; i++)
             {
                 ISymbol member = this.FindDeconstructSlotMember(
