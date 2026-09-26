@@ -6,29 +6,42 @@ import System.Globalization
 
 interface Counter {
     func Increment();
+
     func Read() int32;
 }
 
 struct ValueCounter {
     var Value int32
-    func Increment() { Value += 1 }
+    func Increment() {
+        Value += 1
+    }
+
     func Read() int32 -> Value
 }
 
 class ReferenceCounter(Value int32) {
-    func Increment() { Value += 1 }
+    func Increment() {
+        Value += 1
+    }
+
     func Read() int32 -> Value
 }
 
 class ForwardingCounter(Source ReferenceCounter) : Counter {
-    func Increment() { Source.Increment() }
+    func Increment() {
+        Source.Increment()
+    }
+
     func Read() int32 -> Source.Read()
 }
 
 class IntBox(Value int32) { }
 
 class ManualRichCounter(Box IntBox) : Counter {
-    func Increment() { Box.Value += 1 }
+    func Increment() {
+        Box.Value += 1
+    }
+
     func Read() int32 -> Box.Value
 }
 
@@ -36,10 +49,12 @@ func semanticWitnesses() {
     var shared = slice[int32].Create(2, 4)
     shared[0] = 1
     shared[1] = 2
-    let window = shared[0..2]
+    let window = shared[0 .. 2]
     window[0] = 9
     shared = shared.Append(3)
-    Console.WriteLine("semantic slice-shared " + shared[0].ToString() + " " + window[0].ToString() + " " + shared[2].ToString())
+    Console.WriteLine(
+        "semantic slice-shared " + shared[0].ToString() + " " + window[0].ToString() + " " + shared[2].ToString()
+    )
 
     var detached = slice[int32].Create(1, 1)
     detached[0] = 7
@@ -47,17 +62,26 @@ func semanticWitnesses() {
     let element = managed(detached[0])
     detached = detached.Append(8)
     *element = 11
-    Console.WriteLine("semantic managed-detach " + oldStorage[0].ToString() + " " + detached[0].ToString() + " " + detached[1].ToString())
+    Console.WriteLine(
+        "semantic managed-detach " + oldStorage[0].ToString() + " " + detached[0].ToString() +
+            " " +
+            detached[1].ToString()
+    )
 
     var captured = 1
-    let rich = object : Counter {
+    let rich = object: Counter{
         let Snapshot = captured
-        func Increment() { captured += 1 }
+        func Increment() {
+            captured += 1
+        }
+
         func Read() int32 -> captured + Snapshot
     }
     captured = 5
     rich.Increment()
-    Console.WriteLine("semantic rich-capture " + rich.Snapshot.ToString() + " " + captured.ToString() + " " + rich.Read().ToString())
+    Console.WriteLine(
+        "semantic rich-capture " + rich.Snapshot.ToString() + " " + captured.ToString() + " " + rich.Read().ToString()
+    )
 
     var copiedSource = ValueCounter{Value: 10}
     let copied = adapt[Counter](copiedSource)
@@ -73,7 +97,9 @@ func semanticWitnesses() {
     let referenceSource = ReferenceCounter(30)
     let reference = adapt[Counter](referenceSource)
     reference.Increment()
-    Console.WriteLine("semantic adapt-reference " + reference.Read().ToString() + " " + referenceSource.Value.ToString())
+    Console.WriteLine(
+        "semantic adapt-reference " + reference.Read().ToString() + " " + referenceSource.Value.ToString()
+    )
 }
 
 func report(name string, elapsed TimeSpan, count int32, allocated int64, checksum int64) {
@@ -83,7 +109,8 @@ func report(name string, elapsed TimeSpan, count int32, allocated int64, checksu
         "perf " + name + " "
         + ns.ToString("F2", CultureInfo.InvariantCulture) + " "
         + bytes.ToString("F2", CultureInfo.InvariantCulture) + " "
-        + checksum.ToString())
+        + checksum.ToString()
+    )
 }
 
 func benchSlice(count int32) {
@@ -91,7 +118,7 @@ func benchSlice(count int32) {
     values[1] = 1
     var checksum int64
     for warmup in 0 ... 20000 {
-        let view = values[1..3]
+        let view = values[1 .. 3]
         view[0] += 1
         checksum += view[0]
     }
@@ -99,7 +126,7 @@ func benchSlice(count int32) {
     let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
     for i in 0 ... count {
-        let view = values[1..3]
+        let view = values[1 .. 3]
         view[0] += 1
         checksum += view[0]
     }
@@ -121,7 +148,9 @@ func benchSliceAppend(count int32) {
 func benchManaged(count int32) {
     var value = 0
     let location = managed(value)
-    for warmup in 0 ... 20000 { *location += 1 }
+    for warmup in 0 ... 20000 {
+        *location += 1
+    }
     var checksum int64
     let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
@@ -154,7 +183,9 @@ func benchManagedConstruction(count int32) {
 func benchAdaptReference(count int32) {
     let source = ReferenceCounter(0)
     let counter = adapt[Counter](source)
-    for warmup in 0 ... 20000 { counter.Increment() }
+    for warmup in 0 ... 20000 {
+        counter.Increment()
+    }
     var checksum int64
     let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
@@ -169,7 +200,9 @@ func benchAdaptReference(count int32) {
 func benchNominalReference(count int32) {
     let source = ReferenceCounter(0)
     let counter Counter = ForwardingCounter(source)
-    for warmup in 0 ... 20000 { counter.Increment() }
+    for warmup in 0 ... 20000 {
+        counter.Increment()
+    }
     var checksum int64
     let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
@@ -185,7 +218,9 @@ func benchAdaptLocation(count int32) {
     var source = ValueCounter{Value: 0}
     let location = managed(source)
     let counter = adapt[Counter](ref location)
-    for warmup in 0 ... 20000 { counter.Increment() }
+    for warmup in 0 ... 20000 {
+        counter.Increment()
+    }
     var checksum int64
     let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
@@ -199,11 +234,16 @@ func benchAdaptLocation(count int32) {
 
 func benchRichCapture(count int32) {
     var captured = 0
-    let counter = object : Counter {
-        func Increment() { captured += 1 }
+    let counter = object: Counter{
+        func Increment() {
+            captured += 1
+        }
+
         func Read() int32 -> captured
     }
-    for warmup in 0 ... 20000 { counter.Increment() }
+    for warmup in 0 ... 20000 {
+        counter.Increment()
+    }
     var checksum int64
     let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
@@ -218,7 +258,9 @@ func benchRichCapture(count int32) {
 func benchManualRichCapture(count int32) {
     let box = IntBox(0)
     let counter Counter = ManualRichCounter(box)
-    for warmup in 0 ... 20000 { counter.Increment() }
+    for warmup in 0 ... 20000 {
+        counter.Increment()
+    }
     var checksum int64
     let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
@@ -270,8 +312,11 @@ func benchRichConstruction(count int32) {
     var captured = 1
     var checksum int64
     for warmup in 0 ... 20000 {
-        let counter = object : Counter {
-            func Increment() { captured += 1 }
+        let counter = object: Counter{
+            func Increment() {
+                captured += 1
+            }
+
             func Read() int32 -> captured
         }
         checksum += counter.Read()
@@ -280,8 +325,11 @@ func benchRichConstruction(count int32) {
     let before = GC.GetAllocatedBytesForCurrentThread()
     let sw = Stopwatch.StartNew()
     for i in 0 ... count {
-        let counter = object : Counter {
-            func Increment() { captured += 1 }
+        let counter = object: Counter{
+            func Increment() {
+                captured += 1
+            }
+
             func Read() int32 -> captured
         }
         checksum += counter.Read()
