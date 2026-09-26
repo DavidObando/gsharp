@@ -30,7 +30,7 @@ namespace GSharp.GeneratorHost.Tests;
 /// with user types), and the implementing part is spelled with the user's own
 /// header so a differently spelled declaring part still pairs.
 /// </summary>
-public class GeneratedRegexImplementingPartTests
+public partial class GeneratedRegexImplementingPartTests
 {
     private const string UserSourceTemplate = @"package App
 

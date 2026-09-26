@@ -651,6 +651,12 @@ public sealed partial class CSharpToGSharpTranslator
                         return Visibility.Default;
                     }
 
+                    // Issue #4301: see IsMemberOfKeptTopLevelProgram.
+                    if (IsMemberOfKeptTopLevelProgram(symbol))
+                    {
+                        return Visibility.Internal;
+                    }
+
                     return Visibility.Private;
                 case Accessibility.Internal:
                     return Visibility.Internal;

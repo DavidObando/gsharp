@@ -1905,11 +1905,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             // Issue #4370: a `[LibraryImport]` definition is never elided (it
             // translates to a native `@LibraryImport` func), even when the
-            // compilation carries no generated implementation.
+            // compilation carries no generated implementation. Issue #4301: nor
+            // is a `[GeneratedRegex]` one (it translates to a declaring part).
             IMethodSymbol definition = method.PartialDefinitionPart ?? method;
             return definition.IsPartialDefinition
                 && definition.PartialImplementationPart == null
-                && !IsLibraryImportDefinition(definition);
+                && !IsLibraryImportDefinition(definition)
+                && !IsGeneratedRegexDefinition(definition);
         }
 
         private GStatement TranslateExpressionStatement(ExpressionSyntax expression)

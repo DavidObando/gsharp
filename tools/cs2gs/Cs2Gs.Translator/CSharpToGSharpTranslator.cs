@@ -377,12 +377,16 @@ public sealed partial class CSharpToGSharpTranslator
         // class whenever hoisting would erase externally visible surface makes
         // the decision local and total; a `private`-only entry class exports
         // nothing and still hoists to the canonical top-level form.
+        // Issue #4301: an entry class declaring a `[GeneratedRegex]` partial
+        // method is kept too. That method translates to a G# declaring part,
+        // and a top-level func cannot be partial.
         IMethodSymbol entryPoint = context.Compilation.GetEntryPoint(default);
         INamedTypeSymbol entryType = entryPoint?.ContainingType;
         bool preserveEntryType = entryType is not null
             && (this.preserveEntryType
                 || entryType.GetTypeMembers().Any(type => type.TypeKind != TypeKind.Delegate)
-                || EntryTypeExportsNonEntryMembers(entryType, entryPoint));
+                || EntryTypeExportsNonEntryMembers(entryType, entryPoint)
+                || DeclaresGeneratedRegexDefinition(entryType));
 
         // Issue #1910 (gap 3): a merged-in member from a non-primary partial
         // part (see `VisitAggregateCore`) is translated using ITS OWN file's

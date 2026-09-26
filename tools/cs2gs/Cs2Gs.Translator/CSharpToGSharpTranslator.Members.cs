@@ -48,21 +48,6 @@ public sealed partial class CSharpToGSharpTranslator
                         break;
                     }
 
-                    // A GeneratedRegex trigger is a non-void partial definition,
-                    // so ordinary partial-method elision would drop its declaration
-                    // while value-position calls remain.
-                    if (this.TryTranslateGeneratedRegex(
-                        method,
-                        out FieldDeclaration generatedRegexField,
-                        out MethodDeclaration generatedRegexMethod))
-                    {
-                        yield return (generatedRegexField, true);
-                        yield return (
-                            generatedRegexMethod,
-                            method.Modifiers.Any(SyntaxKind.StaticKeyword));
-                        break;
-                    }
-
                     // ADR-0169 M5 / issue #3686: private plumbing of a Roslyn
                     // analyzer test harness whose body is being replaced by a
                     // delegation to the G# verifier is dead code that would
@@ -293,279 +278,6 @@ public sealed partial class CSharpToGSharpTranslator
                         $"member '{member.Kind()}' has no canonical G# mapping yet (ADR-0115 §B.11).");
                     break;
             }
-        }
-
-        private bool TryTranslateGeneratedRegex(
-            MethodDeclarationSyntax node,
-            out FieldDeclaration cacheField,
-            out MethodDeclaration method)
-        {
-            cacheField = null;
-            method = null;
-
-            var symbol = this.context.GetDeclaredSymbol(node) as IMethodSymbol;
-            if (symbol == null ||
-                !symbol.IsPartialDefinition ||
-                symbol.Parameters.Length != 0 ||
-                symbol.TypeParameters.Length != 0)
-            {
-                return false;
-            }
-
-            AttributeData attribute = symbol.GetAttributes().FirstOrDefault(
-                candidate => candidate.AttributeClass?.ToDisplayString() ==
-                    "System.Text.RegularExpressions.GeneratedRegexAttribute");
-            if (attribute?.AttributeConstructor == null)
-            {
-                return false;
-            }
-
-            string pattern = null;
-            object optionsValue = 0;
-            ITypeSymbol optionsType = this.context.Compilation.GetTypeByMetadataName(
-                "System.Text.RegularExpressions.RegexOptions");
-            int timeoutMilliseconds = -1;
-            bool hasMatchTimeoutArgument = false;
-            string cultureName = string.Empty;
-
-            ImmutableArray<IParameterSymbol> constructorParameters = attribute.AttributeConstructor.Parameters;
-            ImmutableArray<TypedConstant> constructorArguments = attribute.ConstructorArguments;
-            if (constructorParameters.Length != constructorArguments.Length)
-            {
-                return false;
-            }
-
-            for (int i = 0; i < constructorParameters.Length; i++)
-            {
-                object value = constructorArguments[i].Value;
-                switch (constructorParameters[i].Name)
-                {
-                    case "pattern":
-                        pattern = value as string;
-                        break;
-                    case "options":
-                        optionsValue = value;
-                        optionsType = constructorArguments[i].Type ?? optionsType;
-                        break;
-                    case "matchTimeoutMilliseconds" when value is int timeoutArgument:
-                        timeoutMilliseconds = timeoutArgument;
-                        hasMatchTimeoutArgument = true;
-                        break;
-                    case "cultureName":
-                        cultureName = value as string ?? string.Empty;
-                        break;
-                }
-            }
-
-            if (pattern == null || optionsType == null)
-            {
-                return false;
-            }
-
-            long optionBits = Convert.ToInt64(optionsValue, CultureInfo.InvariantCulture);
-            const long IgnoreCase = 1;
-            const long CultureInvariant = 512;
-            bool usesIgnoreCase = (optionBits & IgnoreCase) != 0 ||
-                PatternEnablesInlineIgnoreCase(pattern);
-            if (usesIgnoreCase &&
-                ((optionBits & CultureInvariant) == 0 || cultureName.Length > 0))
-            {
-                const string Message = "GeneratedRegex with culture-sensitive IgnoreCase, including inline " +
-                    "option groups, cannot be lowered to Regex construction without changing culture or " +
-                    "Regex.Options semantics.";
-                this.context.ReportUnsupported(node, Message);
-                return false;
-            }
-
-            GTypeReference regexType = this.typeMapper.Map(
-                symbol.ReturnType,
-                this.context,
-                node.ReturnType.GetLocation());
-            GExpression options = this.MapConstantValue(
-                optionsValue,
-                optionsType,
-                node,
-                "GeneratedRegex options");
-            if (options == null)
-            {
-                return false;
-            }
-
-            var constructionArguments = new List<GExpression>
-            {
-                LiteralExpression.String(pattern),
-                options,
-            };
-            if (hasMatchTimeoutArgument)
-            {
-                string regexTypeName = regexType is NamedTypeReference namedRegex
-                    ? namedRegex.Name
-                    : "Regex";
-                GExpression matchTimeout = timeoutMilliseconds == -1
-                    ? new MemberAccessExpression(
-                        new IdentifierExpression(regexTypeName),
-                        "InfiniteMatchTimeout")
-                    : new InvocationExpression(
-                        new MemberAccessExpression(
-                            new IdentifierExpression("TimeSpan"),
-                            "FromMilliseconds"),
-                        new[]
-                        {
-                            LiteralExpression.Float(
-                                timeoutMilliseconds.ToString(CultureInfo.InvariantCulture) + ".0"),
-                        });
-                constructionArguments.Add(matchTimeout);
-            }
-
-            string emittedMethodName = this.EmittedName(symbol, node.Identifier.ValueText);
-            string cacheName = "__generatedRegex_" + emittedMethodName;
-            var occupiedNames = new HashSet<string>(
-                symbol.ContainingType.GetMembers().Select(member => member.Name),
-                StringComparer.Ordinal);
-            while (occupiedNames.Contains(cacheName))
-            {
-                cacheName += "_";
-            }
-
-            cacheField = new FieldDeclaration(
-                BindingKind.Let,
-                cacheName,
-                regexType,
-                BuildConstruction(regexType, constructionArguments),
-                Visibility.Private);
-
-            List<AttributeUse> attributes = this.MapAttributes(node.AttributeLists)
-                .Where(mapped => !IsGeneratedRegexAttributeName(mapped.Name))
-                .ToList();
-            method = new MethodDeclaration(
-                emittedMethodName,
-                returnType: regexType,
-                visibility: MapVisibility(symbol, this.context, node),
-                attributes: attributes,
-                expressionBody: new ReturnStatement(new IdentifierExpression(cacheName)));
-            return true;
-        }
-
-        private static bool IsGeneratedRegexAttributeName(string name)
-        {
-            string simpleName = name.Substring(name.LastIndexOf('.') + 1);
-            return simpleName == "GeneratedRegex" || simpleName == "GeneratedRegexAttribute";
-        }
-
-        private static bool PatternEnablesInlineIgnoreCase(string pattern)
-        {
-            bool inCharacterClass = false;
-            bool firstCharacterInClass = false;
-
-            for (int i = 0; i < pattern.Length; i++)
-            {
-                char current = pattern[i];
-                if (current == '\\')
-                {
-                    if (inCharacterClass)
-                    {
-                        firstCharacterInClass = false;
-                    }
-
-                    i++;
-                    continue;
-                }
-
-                if (inCharacterClass)
-                {
-                    if (current == ']' && !firstCharacterInClass)
-                    {
-                        inCharacterClass = false;
-                    }
-                    else if (current != '^' || !firstCharacterInClass)
-                    {
-                        firstCharacterInClass = false;
-                    }
-
-                    continue;
-                }
-
-                if (current == '[')
-                {
-                    inCharacterClass = true;
-                    firstCharacterInClass = true;
-                    continue;
-                }
-
-                if (current != '(' ||
-                    i + 2 >= pattern.Length ||
-                    pattern[i + 1] != '?')
-                {
-                    continue;
-                }
-
-                if (pattern[i + 2] == '#')
-                {
-                    int commentEnd = pattern.IndexOf(')', i + 3);
-                    if (commentEnd < 0)
-                    {
-                        return false;
-                    }
-
-                    i = commentEnd;
-                    continue;
-                }
-
-                if (InlineOptionsEnableIgnoreCase(pattern, i + 2))
-                {
-                    return true;
-                }
-            }
-
-            return false;
-        }
-
-        private static bool InlineOptionsEnableIgnoreCase(string pattern, int start)
-        {
-            bool disabling = false;
-            bool sawOption = false;
-            bool sawDisabledOption = false;
-            bool enabledIgnoreCase = false;
-            bool disabledIgnoreCase = false;
-            int i = start;
-
-            for (; i < pattern.Length; i++)
-            {
-                char option = pattern[i];
-                if (option == '-')
-                {
-                    if (disabling)
-                    {
-                        return false;
-                    }
-
-                    disabling = true;
-                    continue;
-                }
-
-                if (option is not ('i' or 'm' or 'n' or 's' or 'x'))
-                {
-                    break;
-                }
-
-                sawOption = true;
-                if (disabling)
-                {
-                    sawDisabledOption = true;
-                    disabledIgnoreCase |= option == 'i';
-                }
-                else
-                {
-                    enabledIgnoreCase |= option == 'i';
-                }
-            }
-
-            return sawOption &&
-                (!disabling || sawDisabledOption) &&
-                i < pattern.Length &&
-                pattern[i] is ')' or ':' &&
-                enabledIgnoreCase &&
-                !disabledIgnoreCase;
         }
 
         private bool CanLowerOwnedExtension(MethodDeclarationSyntax method)
@@ -1183,7 +895,8 @@ public sealed partial class CSharpToGSharpTranslator
             INamedTypeSymbol ownedExtensionTarget = null,
             bool forceExtensionReceiver = false,
             IMethodSymbol declaringPartSignature = null,
-            bool isNativeImportDefinition = false)
+            bool isNativeImportDefinition = false,
+            bool isGeneratedRegexDefinition = false)
         {
             var symbol = declaringPartSignature ?? this.context.GetDeclaredSymbol(node) as IMethodSymbol;
             bool isStatic = symbol != null && symbol.IsStatic;
@@ -1247,14 +960,26 @@ public sealed partial class CSharpToGSharpTranslator
             // and gsc spells the import natively as a body-less
             // `@LibraryImport` func (see CSharpToGSharpTranslator.LibraryImport.cs),
             // so the DEFINITION translates and the generated implementation
-            // does not. Any other definition whose implementation is
-            // untranslated generated code is reported, never silently
-            // dropped.
-            if (symbol != null && symbol.IsPartialDefinition && !isNativeImportDefinition)
+            // does not. Issue #4301: a `[GeneratedRegex]` definition likewise
+            // translates, to a G# declaring part (`@GeneratedRegex(...)
+            // partial func F() Regex;`) whose implementing part gsgen
+            // generates at build (see CSharpToGSharpTranslator.GeneratedRegex.cs),
+            // and its generated C# implementation does not. Any other
+            // definition whose implementation is untranslated generated code
+            // is reported, never silently dropped.
+            if (symbol != null
+                && symbol.IsPartialDefinition
+                && !isNativeImportDefinition
+                && !isGeneratedRegexDefinition)
             {
                 if (isOrdinaryMemberPosition && IsLibraryImportDefinition(symbol))
                 {
                     return this.TranslateLibraryImportDefinition(node, ownerKind, symbol);
+                }
+
+                if (isOrdinaryMemberPosition && IsGeneratedRegexDefinition(symbol))
+                {
+                    return this.TranslateGeneratedRegexDefinition(node, ownerKind, symbol);
                 }
 
                 if (isOrdinaryMemberPosition
@@ -1272,6 +997,20 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (symbol?.PartialDefinitionPart is IMethodSymbol importDefinition
                 && IsLibraryImportDefinition(importDefinition))
+            {
+                return (null, false);
+            }
+
+            // Issue #4301: the implementation of a `[GeneratedRegex]`
+            // definition this run translates (to a declaring part) is the
+            // generator's output, which gsgen regenerates at build. It is
+            // dropped even when it sits in a translated tree (a committed
+            // generator output). gsgen itself translates it: there the
+            // definition is only in the stub rendered from the user's G#.
+            if (symbol?.PartialDefinitionPart is IMethodSymbol regexDefinition
+                && IsGeneratedRegexDefinition(regexDefinition)
+                && regexDefinition.DeclaringSyntaxReferences.Any(reference =>
+                    this.IsTranslatedByThisRun(reference.SyntaxTree)))
             {
                 return (null, false);
             }
@@ -1624,10 +1363,13 @@ public sealed partial class CSharpToGSharpTranslator
             bool isEmittedAsync = !isAnalyzerHarness && !isEmittedSuspend && symbol != null && symbol.IsAsync;
 
             // Issue #4370: a `[LibraryImport]` definition's import arguments
-            // are re-spelled from their constant values.
+            // are re-spelled from their constant values; issue #4301: so are
+            // a `[GeneratedRegex]` definition's.
             List<AttributeUse> methodAttributes = isNativeImportDefinition
                 ? this.MapLibraryImportMethodAttributes(node, symbol)
-                : this.MapAttributes(node.AttributeLists);
+                : isGeneratedRegexDefinition
+                    ? this.MapGeneratedRegexMethodAttributes(node, symbol)
+                    : this.MapAttributes(node.AttributeLists);
 
             // ADR-0192 §C: method-level attributes are unioned across the
             // parts by gsc, so each part carries only its OWN — `node` is the
@@ -1651,7 +1393,7 @@ public sealed partial class CSharpToGSharpTranslator
                 isRefReturn: symbol != null && (symbol.ReturnsByRef || symbol.ReturnsByRefReadonly),
                 isReadOnlyRefReturn: symbol?.ReturnsByRefReadonly == true,
                 isSuspend: isEmittedSuspend,
-                isPartial: isPartialPart || isGeneratedImplementingPart,
+                isPartial: isPartialPart || isGeneratedImplementingPart || isGeneratedRegexDefinition,
                 partialPairKey: isPartialPart ? PartialPairKeyOf(symbol) : null);
 
             return (method, isStatic);
@@ -1750,13 +1492,14 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            // Out of scope for this slice: `[GeneratedRegex]` keeps its own
-            // TryTranslateGeneratedRegex rewrite, and an ADR-0169 analyzer test
-            // harness rewrite changes the implementation's signature (drops
-            // `async`) in a way the declaring part would not see.
-            if (definition.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.ToDisplayString() ==
-                        "System.Text.RegularExpressions.GeneratedRegexAttribute")
+            // Not a hand-authored pair: a `[GeneratedRegex]` definition
+            // translates to a declaring part on its own (issue #4301), and its
+            // implementation is generator output that gsgen regenerates, so a
+            // translated implementation is dropped rather than paired. An
+            // ADR-0169 analyzer test harness rewrite changes the
+            // implementation's signature (drops `async`) in a way the
+            // declaring part would not see.
+            if (IsGeneratedRegexDefinition(definition)
                 || this.IsAnalyzerHarnessEntry(implementation)
                 || this.IsAnalyzerHarnessSupportMemberInOwnTree(definitionNode)
                 || this.IsAnalyzerHarnessSupportMemberInOwnTree(implNode))
