@@ -3,6 +3,8 @@
 - **Status**: Proposed (flips to Accepted on merge; the decisions below were
   approved through the design-and-decision process that produced this ADR)
 - **Date**: 2026-09-17
+- **Amended**: 2026-09-27 for issue #4292 — interface members and
+  override/interface implementations now use a CS9102-compatible slot contract.
 - **Amends**: [ADR-0058](0058-ref-safe-to-escape.md) §4 — corrects its
   "Follow-ups (completed): ✅ Full RSTE for `ref` returns and `[UnscopedRef]`
   enforcement" claim. Only a narrow `IsScoped`-clearing sliver had actually
@@ -181,26 +183,37 @@ through to the escape check naturally. GS0589 is therefore reported from inside
 the escape-scope branch, and GS0253 is left alone so `return ref this.<letField>`
 still reports the accurate readonly error.
 
-### 6. GS0590, placement validation (D4)
+### 6. GS0590, placement and slot-contract validation (D4, amended by #4292)
 
 `@UnscopedRef` is rejected, with a specific reason, on: a class member; a
 `shared` (static) member or property; a receiver-clause function (ADR-0182 makes
 every receiver clause an extension, whose receiver is an ordinary by-value
 parameter — un-scoping it would hand out a reference into the extension's own
-stack copy); a free function; and — per D4 — an `override`, an explicit
-interface implementation, or an interface member. There is deliberately no
-constructor or `init` arm: a G# constructor binds no annotations at all, and an
-`init` accessor — like every property accessor — has no attribute list of its
-own, so neither shape can reach the check carrying the annotation. One descriptor
-with a free-text reason, following the GS0360 (`@MarshalAs`) / GS9306
+stack copy); and a free function. There is deliberately no constructor or
+`init` arm: a G# constructor binds no annotations at all, and an `init` accessor
+— like every property accessor — has no attribute list of its own, so neither
+shape can reach the check carrying the annotation. One descriptor with a
+free-text reason, following the GS0360 (`@MarshalAs`) / GS9306
 (`@ExtensionOwner`) convention.
 
-The `override`/interface rejection is the C# CS9102 case and is explicitly
-**deferred work, not a permanent rule**: honouring it would require matching the
-ref-safe-context contract across a whole override chain, which this release does
-not attempt. Note the check catches an *explicit* interface implementation; an
-implicit one is not detected at declaration-binding time, and is left as a known
-hole in the deferral rather than a claimed guarantee.
+Interface members may carry the annotation. An override or interface
+implementation may carry it only when the matched slot does too; otherwise
+GS0590 reports the mismatch at the implementation's annotation, matching C#'s
+CS9102 direction. The reverse is legal: an implementation may omit
+`@UnscopedRef` from an annotated slot and keep its own receiver scoped. The
+interface contract is checked for every matched slot, as C# does. Override
+matching follows C#'s ref-safety relevance rule: a mismatch matters when the
+member returns by reference or a byref-like value, or accepts a by-reference
+byref-like parameter; an ordinary value-returning struct override such as
+`ToString` may carry the otherwise inert attribute.
+
+Override checks reuse the base slot already selected by override resolution.
+Explicit and implicit interface checks reuse the implementation selected by the
+existing interface-verification pass, so the rule covers both forms without a
+second signature matcher. Imported CLR slots are read from their real
+`UnscopedRefAttribute` metadata. This closes the original declaration-time gap:
+an implicit implementation is diagnosed after interface satisfaction resolves
+it, rather than guessed from its name before the interface contract is known.
 
 `@UnscopedRef` also requires no `unsafe` context (D3). It expresses a lifetime
 contract the compiler then enforces; it does not weaken any check.
@@ -404,9 +417,6 @@ It reports GS0254 rather than GS0591, which is accurate: by the time the
 
 **What it does NOT address**
 
-- `override` and interface members (D4). Deferred, with an explicit diagnostic
-  rather than silent acceptance. Implicit interface implementations are not
-  detected.
 - **`out` parameters and `ref`-to-`ref struct` parameters are not implicitly
   scoped.** C# scopes both by default; G# does not, which makes G# *less* safe
   than C# in that corner today. It is a separate, pre-existing gap with its own

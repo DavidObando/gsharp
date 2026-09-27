@@ -215,6 +215,28 @@ internal static class RefCapabilities
             || method.DeclaringType?.GetCustomAttributesData().Any(
                 attribute => attribute.AttributeType.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute") == true;
 
+    /// <summary>Returns whether an imported method advertises <c>[UnscopedRef]</c>.</summary>
+    /// <param name="method">The imported method.</param>
+    /// <returns><see langword="true"/> when the method carries the attribute.</returns>
+    internal static bool HasUnscopedRef(MethodInfo method)
+    {
+        if (HasUnscopedRefAttribute(method.GetCustomAttributesData()))
+        {
+            return true;
+        }
+
+        if (!method.IsSpecialName || method.DeclaringType == null)
+        {
+            return false;
+        }
+
+        return method.DeclaringType
+            .GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
+            .Any(property =>
+                property.GetMethod == method
+                && HasUnscopedRefAttribute(property.GetCustomAttributesData()));
+    }
+
     /// <summary>
     /// Issue #4265 soundness guard: true when <paramref name="indexer"/> (or
     /// its getter) carries <c>[UnscopedRef]</c> (<c>System.Diagnostics.CodeAnalysis.UnscopedRefAttribute</c>).

@@ -61,8 +61,8 @@ internal sealed partial class DeclarationBinder
 
     /// <summary>
     /// ADR-0184 / issue #376: validates that <c>@UnscopedRef</c> sits on a shape
-    /// where it means something — a non-<c>shared</c>, non-<c>override</c>
-    /// instance member declared in a struct body — and reports GS0590 otherwise.
+    /// where it means something — a non-<c>shared</c> instance member declared
+    /// in a struct body or on an interface — and reports GS0590 otherwise.
     /// Silent when the attribute is absent.
     /// </summary>
     /// <param name="function">The member to validate.</param>
@@ -78,6 +78,21 @@ internal sealed partial class DeclarationBinder
         if (reason != null)
         {
             Diagnostics.ReportUnscopedRefInvalidTarget(annotation.Syntax.Location, reason);
+            return;
+        }
+
+        if (RequiresUnscopedRefOverrideContract(function)
+            && function.OverriddenMethod is { } overriddenMethod)
+        {
+            ValidateUnscopedRefContract(function, overriddenMethod.HasUnscopedRef, $"overridden member '{overriddenMethod.Name}'");
+        }
+        else if (RequiresUnscopedRefOverrideContract(function)
+            && function.ExternalOverriddenMethod is { } externalOverriddenMethod)
+        {
+            ValidateUnscopedRefContract(
+                function,
+                RefCapabilities.HasUnscopedRef(externalOverriddenMethod),
+                $"overridden member '{externalOverriddenMethod.DeclaringType?.Name}.{externalOverriddenMethod.Name}'");
         }
     }
 
@@ -97,17 +112,9 @@ internal sealed partial class DeclarationBinder
             return;
         }
 
-        // ADR-0184 D4: `PropertySymbol.IsOverride` does NOT imply an
-        // explicit-interface clause for a property (ADR-0149's
-        // `prop (IFoo) P T`) — found in adversarial review of PR #4291, where
-        // that spelling escaped GS0590 entirely while its `func (IFoo) M()`
-        // sibling was rejected by DescribeUnscopedRefRejection's own
-        // HasExplicitInterfaceClause arm. Both spellings are deferred alike, so
-        // both must say so.
         var reason =
             property.IsStatic ? "requires an instance member; a 'shared' (static) member has no receiver to un-scope"
-            : property.IsOverride || property.HasExplicitInterfaceClause ? "is not supported on an 'override' or an explicit interface implementation yet (ADR-0184 D4); the ref-safe-context contract would have to match across the whole override chain"
-            : owner is InterfaceSymbol ? "is not supported on an interface member yet (ADR-0184 D4)"
+            : owner is InterfaceSymbol ? null
             : owner is not StructSymbol { IsClass: false } ? "requires a struct instance member; a class receiver is a reference that already outlives the call"
             : null;
 
@@ -115,6 +122,23 @@ internal sealed partial class DeclarationBinder
         {
             Diagnostics.ReportUnscopedRefInvalidTarget(annotation.Syntax.Location, reason);
             return;
+        }
+
+        if (RequiresUnscopedRefOverrideContract(property.Type, property.ReturnRefKind)
+            && property.OverriddenProperty is { } overriddenProperty)
+        {
+            ValidateUnscopedRefContract(
+                annotation,
+                overriddenProperty.GetterSymbol?.HasUnscopedRef == true,
+                $"overridden property '{overriddenProperty.Name}'");
+        }
+        else if (RequiresUnscopedRefOverrideContract(property.Type, property.ReturnRefKind)
+            && property.ExternalOverriddenGetter is { } externalOverriddenGetter)
+        {
+            ValidateUnscopedRefContract(
+                annotation,
+                RefCapabilities.HasUnscopedRef(externalOverriddenGetter),
+                $"overridden property '{externalOverriddenGetter.DeclaringType?.Name}.{property.Name}'");
         }
 
         // ADR-0184 §8: the annotation is spelled once, on the property, and
@@ -127,6 +151,42 @@ internal sealed partial class DeclarationBinder
         property.GetterSymbol?.MarkUnscopedRef();
         property.SetterSymbol?.MarkUnscopedRef();
     }
+
+    /// <summary>
+    /// Issue #4292: enforces C#'s CS9102-compatible one-way slot rule.
+    /// An implementation may remove <c>@UnscopedRef</c>, but may not add it
+    /// when the overridden or implemented slot does not advertise it.
+    /// </summary>
+    private void ValidateUnscopedRefContract(
+        FunctionSymbol implementation,
+        bool slotHasUnscopedRef,
+        string slotDescription)
+        => ValidateUnscopedRefContract(
+            FindUnscopedRefAttribute(implementation.Attributes),
+            slotHasUnscopedRef,
+            slotDescription);
+
+    private void ValidateUnscopedRefContract(
+        BoundAttribute? implementationAttribute,
+        bool slotHasUnscopedRef,
+        string slotDescription)
+    {
+        if (implementationAttribute != null && !slotHasUnscopedRef)
+        {
+            Diagnostics.ReportUnscopedRefInvalidTarget(
+                implementationAttribute.Syntax.Location,
+                $"cannot be applied because {slotDescription} does not have this attribute");
+        }
+    }
+
+    private static bool RequiresUnscopedRefOverrideContract(FunctionSymbol function)
+        => RequiresUnscopedRefOverrideContract(function.Type, function.ReturnRefKind)
+            || function.Parameters.Any(parameter =>
+                parameter.RefKind is RefKind.Ref or RefKind.Out
+                && TypeSymbol.IsByRefLike(parameter.Type));
+
+    private static bool RequiresUnscopedRefOverrideContract(TypeSymbol returnType, RefKind returnRefKind)
+        => returnRefKind != RefKind.None || TypeSymbol.IsByRefLike(returnType);
 
     /// <summary>
     /// ADR-0184: returns the <c>@UnscopedRef</c> entry of a bound attribute list,
@@ -172,17 +232,9 @@ internal sealed partial class DeclarationBinder
             return "cannot be applied to a receiver-clause function; ADR-0182 makes every receiver clause an extension, whose receiver is an ordinary by-value parameter";
         }
 
-        // ADR-0184 D4: deferred. C# rejects the same shape (CS9102) unless the
-        // whole override/implementation chain agrees on the annotation, which
-        // needs contract matching this release does not do.
-        if (function.IsOverride || function.HasExplicitInterfaceClause || function.ExternalOverriddenMethod != null)
-        {
-            return "is not supported on an 'override' or an explicit interface implementation yet (ADR-0184 D4); the ref-safe-context contract would have to match across the whole override chain";
-        }
-
         if (function.ContainingType is InterfaceSymbol)
         {
-            return "is not supported on an interface member yet (ADR-0184 D4)";
+            return null;
         }
 
         if (function.ReceiverType is not StructSymbol { IsClass: false })

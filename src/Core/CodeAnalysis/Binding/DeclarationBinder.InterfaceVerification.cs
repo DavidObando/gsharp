@@ -394,8 +394,12 @@ internal sealed partial class DeclarationBinder
             // Skip the name-based lookup entirely once found; no
             // diagnostic, and the emitter binds the slot via
             // `FunctionSymbol.ExplicitInterfaceMember`.
-            if (TryResolveExplicitInterfaceImplementation(structSymbol, iface, imethod) != null)
+            if (TryResolveExplicitInterfaceImplementation(structSymbol, iface, imethod) is { } explicitImplementation)
             {
+                ValidateUnscopedRefContract(
+                    explicitImplementation,
+                    imethod.HasUnscopedRef,
+                    $"implemented member '{iface.Name}.{imethod.Name}'");
                 continue;
             }
 
@@ -425,6 +429,11 @@ internal sealed partial class DeclarationBinder
 
             if (signatureMatch != null)
             {
+                ValidateUnscopedRefContract(
+                    signatureMatch,
+                    imethod.HasUnscopedRef,
+                    $"implemented member '{iface.Name}.{imethod.Name}'");
+
                 // The class itself provides an implementation that exactly
                 // matches the interface signature — no default needed and
                 // any earlier-seen conflicting default is preempted.
@@ -574,6 +583,11 @@ internal sealed partial class DeclarationBinder
                 out var explicitSetterKindMismatch);
             if (explicitImplementation != null)
             {
+                ValidateUnscopedRefContract(
+                    FindUnscopedRefAttribute(explicitImplementation.Attributes),
+                    iprop.GetterSymbol?.HasUnscopedRef == true,
+                    $"implemented property '{iface.Name}.{iprop.Name}'");
+
                 if (explicitSetterKindMismatch)
                 {
                     ReportInterfacePropertySetterKindMismatch(
@@ -607,6 +621,11 @@ internal sealed partial class DeclarationBinder
 
             if (found && implProp != null)
             {
+                ValidateUnscopedRefContract(
+                    FindUnscopedRefAttribute(implProp.Attributes),
+                    iprop.GetterSymbol?.HasUnscopedRef == true,
+                    $"implemented property '{iface.Name}.{iprop.Name}'");
+
                 if (iprop.HasGetter && !implProp.HasGetter)
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
@@ -1765,8 +1784,13 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                if (MemberLookup.HasMatchingMethodForClrSignature(structSymbol, clrMethod))
+                var implementation = MemberLookup.FindMatchingMethodForClrSignature(structSymbol, clrMethod);
+                if (implementation != null)
                 {
+                    ValidateUnscopedRefContract(
+                        implementation,
+                        RefCapabilities.HasUnscopedRef(clrMethod),
+                        $"implemented member '{interfaceName}.{clrMethod.Name}'");
                     continue;
                 }
 
@@ -1822,6 +1846,11 @@ internal sealed partial class DeclarationBinder
                         clrProp.Name);
                     continue;
                 }
+
+                ValidateUnscopedRefContract(
+                    FindUnscopedRefAttribute(implProp.Attributes),
+                    clrProp.GetMethod != null && RefCapabilities.IsUnscopedRefIndexerGetter(clrProp),
+                    $"implemented property '{interfaceName}.{clrProp.Name}'");
 
                 if (requiresGetter && !implProp.HasGetter)
                 {
@@ -1903,12 +1932,16 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                if (StructSatisfiesClrSlot(structSymbol, slot))
+                reported.Add(slotKey);
+                if (FindClrSlotImplementation(structSymbol, slot) is { } implementation)
                 {
+                    ValidateUnscopedRefContract(
+                        implementation,
+                        RefCapabilities.HasUnscopedRef(slot.Method),
+                        $"implemented member '{slotKey}'");
                     continue;
                 }
 
-                reported.Add(slotKey);
                 var interfaceName = declaringType == null
                     ? "interface"
                     : SymbolDisplay.ToTypeDisplayString(declaringType);
@@ -1921,7 +1954,7 @@ internal sealed partial class DeclarationBinder
         }
     }
 
-    private static bool StructSatisfiesClrSlot(StructSymbol structSymbol, MemberLookup.ClrInterfaceSlot slot)
+    private static FunctionSymbol? FindClrSlotImplementation(StructSymbol structSymbol, MemberLookup.ClrInterfaceSlot slot)
     {
         // Note: do NOT route through GetMethodsIncludingInherited here — it
         // dedups same-name overloads by parameter signature (ignoring return
@@ -1940,12 +1973,12 @@ internal sealed partial class DeclarationBinder
                 if (candidate.Name == slot.Method.Name
                     && MemberLookup.MethodSatisfiesClrSlot(candidate, slot))
                 {
-                    return true;
+                    return candidate;
                 }
             }
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>
@@ -1972,8 +2005,16 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            if (MemberLookup.HasMatchingMethodForSymbolicClrInterface(structSymbol, openMethod, symbolicArgs))
+            var implementation = MemberLookup.FindMatchingMethodForSymbolicClrInterface(
+                structSymbol,
+                openMethod,
+                symbolicArgs);
+            if (implementation != null)
             {
+                ValidateUnscopedRefContract(
+                    implementation,
+                    RefCapabilities.HasUnscopedRef(openMethod),
+                    $"implemented member '{interfaceName}.{openMethod.Name}'");
                 continue;
             }
 
@@ -1996,6 +2037,11 @@ internal sealed partial class DeclarationBinder
                     openProp.Name);
                 continue;
             }
+
+            ValidateUnscopedRefContract(
+                FindUnscopedRefAttribute(implProp.Attributes),
+                RefCapabilities.IsUnscopedRefIndexerGetter(openProp),
+                $"implemented property '{interfaceName}.{openProp.Name}'");
 
             if (openProp.GetMethod != null && !implProp.HasGetter)
             {

@@ -3884,16 +3884,26 @@ internal sealed class MemberLookup
     /// <param name="clrMethod">The CLR method whose signature to match.</param>
     /// <returns><see langword="true"/> when a matching overload exists.</returns>
     public static bool HasMatchingMethodForClrSignature(StructSymbol structSymbol, MethodInfo clrMethod)
+        => FindMatchingMethodForClrSignature(structSymbol, clrMethod) != null;
+
+    /// <summary>
+    /// Finds the user method whose CLR-projected signature satisfies an
+    /// imported interface slot.
+    /// </summary>
+    /// <param name="structSymbol">The user struct symbol to inspect.</param>
+    /// <param name="clrMethod">The imported interface slot.</param>
+    /// <returns>The matching method, or <see langword="null"/>.</returns>
+    public static FunctionSymbol? FindMatchingMethodForClrSignature(StructSymbol structSymbol, MethodInfo clrMethod)
     {
         foreach (var candidate in structSymbol.GetMethodsIncludingInherited(clrMethod.Name))
         {
             if (MethodMatchesClrSignature(candidate, clrMethod))
             {
-                return true;
+                return candidate;
             }
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>Determines whether one G# method matches an imported CLR method signature.</summary>
@@ -4037,16 +4047,27 @@ internal sealed class MemberLookup
         StructSymbol structSymbol,
         MethodInfo openMethod,
         ImmutableArray<TypeSymbol> symbolicArgs)
+        => FindMatchingMethodForSymbolicClrInterface(structSymbol, openMethod, symbolicArgs) != null;
+
+    /// <summary>Finds the method satisfying a symbolically closed CLR interface slot.</summary>
+    /// <param name="structSymbol">The user struct symbol to inspect.</param>
+    /// <param name="openMethod">The interface method from the open definition.</param>
+    /// <param name="symbolicArgs">The symbolic type arguments closing the interface.</param>
+    /// <returns>The matching method, or <see langword="null"/>.</returns>
+    public static FunctionSymbol? FindMatchingMethodForSymbolicClrInterface(
+        StructSymbol structSymbol,
+        MethodInfo openMethod,
+        ImmutableArray<TypeSymbol> symbolicArgs)
     {
         foreach (var candidate in structSymbol.GetMethodsIncludingInherited(openMethod.Name))
         {
             if (MethodMatchesSymbolicClrInterfaceSignature(candidate, openMethod, symbolicArgs))
             {
-                return true;
+                return candidate;
             }
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>
