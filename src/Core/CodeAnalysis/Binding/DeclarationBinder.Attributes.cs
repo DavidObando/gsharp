@@ -481,6 +481,7 @@ internal sealed partial class DeclarationBinder
         // NamedArgumentExpressionSyntax wrappers.
         var positional = ImmutableArray.CreateBuilder<BoundAttributeArgument>();
         var named = ImmutableArray.CreateBuilder<BoundAttributeArgument>();
+        var sawMemberAssignment = false;
         if (annotation.Arguments != null)
         {
             foreach (var argSyntax in annotation.Arguments)
@@ -522,15 +523,30 @@ internal sealed partial class DeclarationBinder
                         isMemberAssignment);
                     if (isConstructorArgument)
                     {
+                        if (sawMemberAssignment)
+                        {
+                            Diagnostics.ReportAttributeConstructorArgumentAfterMemberAssignment(
+                                namedArg.NameToken.Location);
+                            continue;
+                        }
+
                         positional.Add(argument);
                     }
                     else
                     {
+                        sawMemberAssignment = true;
                         named.Add(argument);
                     }
                 }
                 else
                 {
+                    if (sawMemberAssignment)
+                    {
+                        Diagnostics.ReportAttributeConstructorArgumentAfterMemberAssignment(
+                            argSyntax.Location);
+                        continue;
+                    }
+
                     if (!TryBindAttributeArgument(argSyntax, out var value, out var valueType))
                     {
                         Diagnostics.ReportAttributeArgumentNotConstant(argSyntax.Location);

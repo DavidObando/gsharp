@@ -201,6 +201,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     [InlineData("@ImportedNamedConstructor(\"a\", Item = 1)", "GS0613")]
     [InlineData("@ImportedNamedConstructor(\"a\", Unsupported = nil)", "GS0615")]
     [InlineData("@ImportedNamedConstructor(third: 3, 2)", "GS0583")]
+    [InlineData("@ImportedNamedConstructor(Label = \"ok\", \"a\")", "GS0616")]
     public void InvalidNamedAttributeArguments_ReportClearDiagnostics(string annotation, string expectedId)
     {
         var result = Emit(

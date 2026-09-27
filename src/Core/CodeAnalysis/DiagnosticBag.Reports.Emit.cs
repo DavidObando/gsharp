@@ -39,6 +39,11 @@ public sealed partial class DiagnosticBag
     public void ReportNamedArgumentsNotSupportedOnUserAttribute(TextLocation location, string attributeName, string argumentName)
     => Report(location, DiagnosticDescriptors.NamedArgumentsNotSupportedOnUserAttribute, argumentName, attributeName);
 
+    /// <summary>Reports an attribute constructor argument placed after a member assignment.</summary>
+    /// <param name="location">The source location of the constructor argument.</param>
+    public void ReportAttributeConstructorArgumentAfterMemberAssignment(TextLocation location)
+    => Report(location, DiagnosticDescriptors.AttributeConstructorArgumentAfterMemberAssignment);
+
     /// <summary>GS9001: Cannot take address of a non-lvalue expression.</summary>
     /// <param name="location">The text location of the <c>&amp;</c> operator.</param>
     /// <param name="expressionText">A textual representation of the offending expression.</param>
