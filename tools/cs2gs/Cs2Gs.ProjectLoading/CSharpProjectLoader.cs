@@ -695,14 +695,17 @@ public static class CSharpProjectLoader
         CompilationUnitSyntax root = (CompilationUnitSyntax)tree.GetRoot();
         bool foundImplementation = false;
         var declarationsToRemove = new List<SyntaxNode>();
+        bool allMembersGenerated = root.Members.Count > 0;
         foreach (MemberDeclarationSyntax member in root.Members)
         {
             var nestedDeclarations = new List<SyntaxNode>();
-            if (IsRegexGeneratorMember(
+            bool memberGenerated = IsRegexGeneratorMember(
                 member,
                 semanticModel,
                 ref foundImplementation,
-                nestedDeclarations))
+                nestedDeclarations);
+            allMembersGenerated &= memberGenerated;
+            if (memberGenerated)
             {
                 declarationsToRemove.Add(member);
             }
@@ -717,7 +720,7 @@ public static class CSharpProjectLoader
             return false;
         }
 
-        if (root.AttributeLists.Count == 0 && declarationsToRemove.Count == root.Members.Count)
+        if (root.AttributeLists.Count == 0 && allMembersGenerated)
         {
             return true;
         }

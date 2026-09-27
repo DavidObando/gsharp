@@ -385,6 +385,7 @@ namespace Sample
 
             internal static string? Maybe => null;
             """);
+        generated += "\nnamespace Extra { internal class RootKeep { } }\n";
         File.WriteAllText(generatedPath, generated);
         string projectPath = Path.Combine(projectDir, "GeneratedRegex.csproj");
         File.WriteAllText(
@@ -404,6 +405,7 @@ namespace Sample
             candidate => string.Equals(candidate.FilePath, generatedPath, StringComparison.OrdinalIgnoreCase));
         string retainedSource = document.SyntaxTree.GetText().ToString();
         Assert.Contains("Maybe", retainedSource, StringComparison.Ordinal);
+        Assert.Contains("RootKeep", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Digits_0", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Utilities", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Digits() =>", retainedSource, StringComparison.Ordinal);
