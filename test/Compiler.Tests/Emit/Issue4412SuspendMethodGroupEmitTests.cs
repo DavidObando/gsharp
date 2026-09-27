@@ -321,6 +321,42 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
     }
 
     [Fact]
+    public void UnresolvedSuspendMethodGroupInStaticInitializer_ReportsWithoutCrashing()
+    {
+        const string source = """
+            package Issue4412
+
+            suspend func Pick(value int32) int32 {
+                return value
+            }
+
+            func Pick(value string) string {
+                return value
+            }
+
+            class Holder {
+                shared {
+                    init {
+                        let callback = Pick
+                    }
+                }
+            }
+            """;
+
+        var directory = PrepareDirectory(nameof(UnresolvedSuspendMethodGroupInStaticInitializer_ReportsWithoutCrashing));
+        try
+        {
+            var diagnostics = CompileExpectingError(directory, "App", source, "/target:library");
+            Assert.Contains("GS0582", diagnostics, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SuspendMethodGroupInsideAsyncLet_CapturesCellContext()
     {
         const string source = """
@@ -589,6 +625,40 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         Array.Clear(bytes, matches[0], source.Length);
         replacement.CopyTo(bytes, matches[0]);
         File.WriteAllBytes(assemblyPath, bytes);
+    }
+
+    private static string CompileExpectingError(string directory, string assemblyName, string source, params string[] extra)
+    {
+        var sourcePath = Path.Combine(directory, assemblyName + ".gs");
+        var outputPath = Path.Combine(directory, assemblyName + ".dll");
+        File.WriteAllText(sourcePath, source);
+        var arguments = new List<string>
+        {
+            "/out:" + outputPath,
+            "/targetframework:net10.0",
+        };
+        arguments.AddRange(extra);
+        arguments.AddRange(TrustedPlatformAssemblies().Select(reference => "/reference:" + reference));
+        arguments.Add(sourcePath);
+
+        using var stdout = new StringWriter();
+        using var stderr = new StringWriter();
+        var previousOut = Console.Out;
+        var previousError = Console.Error;
+        Console.SetOut(stdout);
+        Console.SetError(stderr);
+        try
+        {
+            Program.Main(arguments.ToArray());
+        }
+        finally
+        {
+            Console.SetOut(previousOut);
+            Console.SetError(previousError);
+        }
+
+        Assert.False(File.Exists(outputPath));
+        return stdout.ToString() + stderr.ToString();
     }
 
     private static string Run(string assemblyPath)

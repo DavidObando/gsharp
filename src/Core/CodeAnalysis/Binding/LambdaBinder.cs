@@ -1992,7 +1992,17 @@ internal sealed class LambdaBinder
                 declaringSyntax: group.Syntax,
                 refKind: function.Parameters[sourceParameterIndex].RefKind);
             adapterParameters.Add(parameter);
-            arguments.Add(new BoundVariableExpression(null, parameter));
+            BoundExpression argument = new BoundVariableExpression(null, parameter);
+            if (parameter.RefKind != RefKind.None)
+            {
+                argument = new BoundAddressOfExpression(
+                    null,
+                    argument,
+                    unmanaged: false,
+                    isReadOnly: parameter.RefKind == RefKind.In);
+            }
+
+            arguments.Add(argument);
         }
 
         var callArguments = arguments.MoveToImmutable();

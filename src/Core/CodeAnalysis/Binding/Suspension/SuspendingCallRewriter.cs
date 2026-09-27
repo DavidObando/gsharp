@@ -265,7 +265,7 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     protected override BoundExpression RewriteMethodGroupExpression(BoundMethodGroupExpression node)
     {
         var rewritten = (BoundMethodGroupExpression)base.RewriteMethodGroupExpression(node);
-        if (rewritten.Function?.IsSuspending != true)
+        if (rewritten.Function?.IsSuspending != true || rewritten.FunctionType == null)
         {
             return rewritten;
         }
