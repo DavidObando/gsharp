@@ -124,7 +124,8 @@ internal sealed partial class OverloadResolver
             foreach (var possibleMethod in clrGroup.Candidates)
             {
                 var candidateOffset = clrGroup.Receiver != null && possibleMethod.IsStatic ? 1 : 0;
-                if (possibleMethod.GetParameters().Length - candidateOffset != delegateArity)
+                var candidateParameters = ImportedFunctionSymbol.GetLogicalParameters(possibleMethod, out _);
+                if (candidateParameters.Length - candidateOffset != delegateArity)
                 {
                     continue;
                 }
@@ -147,7 +148,7 @@ internal sealed partial class OverloadResolver
             // method group's signature feeds type inference, which has always
             // seen the erased shapes here; inferring from the declared
             // nullability instead is a Phase 4 change (issue #4363).
-            var methodParameters = method.GetParameters();
+            var methodParameters = ImportedFunctionSymbol.GetLogicalParameters(method, out _);
             parameters = new TypeSymbol[delegateArity];
             for (var i = 0; i < parameters.Length; i++)
             {

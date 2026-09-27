@@ -1798,17 +1798,12 @@ internal sealed class LambdaBinder
             group.ResolvedMethod,
             "a CLR method-group adapter has a resolved method");
         var methodParameters = ImportedFunctionSymbol.GetLogicalParameters(method, out var hasHiddenContext);
+        var methodRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(method);
         var logicalParameterCount = methodParameters.Length;
         var closesStaticReceiver = method.IsStatic && group.Receiver != null;
         var parameterOffset = closesStaticReceiver ? 1 : 0;
-        var hasByRefParameter = false;
-        for (var i = 0; i < logicalParameterCount; i++)
-        {
-            hasByRefParameter |= methodParameters[i].ParameterType.IsByRef;
-        }
 
-        if (logicalParameterCount != targetFunctionType.ParameterTypes.Length + parameterOffset
-            || hasByRefParameter)
+        if (logicalParameterCount != targetFunctionType.ParameterTypes.Length + parameterOffset)
         {
             return group;
         }
@@ -1838,6 +1833,7 @@ internal sealed class LambdaBinder
 
         var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(targetFunctionType.ParameterTypes.Length);
         var arguments = ImmutableArray.CreateBuilder<BoundExpression>(logicalParameterCount);
+        var argumentRefKinds = ImmutableArray.CreateBuilder<RefKind>(logicalParameterCount);
         LocalVariableSymbol? receiverTemp = null;
         BoundExpression? adapterReceiver = group.Receiver;
         if (group.Receiver != null)
@@ -1851,12 +1847,14 @@ internal sealed class LambdaBinder
 
         if (closesStaticReceiver)
         {
+            var receiverRefKind = methodRefKinds[0];
             arguments.Add(new BoundConversionExpression(
                 null,
                 ClrNullability.GetParameterTypeSymbol(methodParameters[0]),
                 Invariant.Required(
                     adapterReceiver,
                     "a closed static method-group adapter has a receiver")));
+            argumentRefKinds.Add(receiverRefKind);
         }
 
         for (var i = 0; i < targetFunctionType.ParameterTypes.Length; i++)
@@ -1865,22 +1863,40 @@ internal sealed class LambdaBinder
             // method group produced by an earlier rewrite has none -- and
             // ParameterSymbol.declaringSyntax is nullable for exactly that
             // reason, so this passes through rather than asserting.
+            var methodParameter = methodParameters[i + parameterOffset];
+            var refKind = methodRefKinds[i + parameterOffset];
             var parameter = new ParameterSymbol(
                 $"arg{i}",
                 targetFunctionType.ParameterTypes[i],
-                declaringSyntax: group.Syntax);
+                declaringSyntax: group.Syntax,
+                refKind: refKind);
             adapterParameters.Add(parameter);
-            arguments.Add(new BoundConversionExpression(
-                null,
-                ClrNullability.GetParameterTypeSymbol(methodParameters[i + parameterOffset]),
-                new BoundVariableExpression(null, parameter)));
+            BoundExpression argument = new BoundVariableExpression(null, parameter);
+            if (refKind != RefKind.None)
+            {
+                argument = new BoundAddressOfExpression(
+                    null,
+                    argument,
+                    unmanaged: false,
+                    isReadOnly: refKind == RefKind.In);
+            }
+
+            arguments.Add(refKind == RefKind.None
+                ? new BoundConversionExpression(
+                    null,
+                    ClrNullability.GetParameterTypeSymbol(methodParameter),
+                    argument)
+                : argument);
+            argumentRefKinds.Add(refKind);
         }
 
         var methodReturnType = method.ReturnType.IsSameAs(typeof(void))
             ? TypeSymbol.Void
             : ClrNullability.GetReturnTypeSymbol(method);
+        var callArguments = arguments.MoveToImmutable();
+        var callRefKinds = argumentRefKinds.MoveToImmutable();
         BoundExpression call = method.IsStatic
-            ? new BoundClrStaticCallExpression(null, method, methodReturnType, arguments.MoveToImmutable())
+            ? new BoundClrStaticCallExpression(null, method, methodReturnType, callArguments, callRefKinds)
             : new BoundImportedInstanceCallExpression(
                 null,
                 Invariant.Required(
@@ -1888,7 +1904,8 @@ internal sealed class LambdaBinder
                     "an instance method-group adapter has a receiver"),
                 method,
                 methodReturnType,
-                arguments.MoveToImmutable());
+                callArguments,
+                callRefKinds);
 
         BoundStatement statement = methodReturnType == TypeSymbol.Void
             ? new BoundBlockStatement(

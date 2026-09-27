@@ -198,6 +198,13 @@ internal static class SuspensionInference
                 runtime,
                 bag,
                 createMethodGroupAdapter));
+            type.SetStaticInitializerStatements(RewriteStaticInitializerStatements(
+                type.StaticInitializerStatements,
+                type,
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter));
             type.SetInstanceFieldInitializers(RewriteInitializers(
                 type.InstanceFieldInitializers,
                 type,
@@ -319,6 +326,42 @@ internal static class SuspensionInference
         }
 
         return IteratorDetection.ContainsYield(body) || ContainsFixed(body);
+    }
+
+    private static ImmutableArray<BoundStatement> RewriteStaticInitializerStatements(
+        ImmutableArray<BoundStatement> statements,
+        StructSymbol owner,
+        ImmutableHashSet<FunctionSymbol> newlySuspending,
+        ChannelRuntimeBinder runtime,
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
+    {
+        if (statements.IsDefaultOrEmpty)
+        {
+            return statements;
+        }
+
+        var container = new FunctionSymbol(
+            "<static-initializer>",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void,
+            declaration: null,
+            package: null,
+            Accessibility.Private)
+        {
+            IsStatic = true,
+            IsStaticInitializer = true,
+            StaticOwnerType = owner,
+            LexicalEnclosingType = owner,
+        };
+        return SuspendingCallRewriter.Rewrite(
+            new BoundBlockStatement(null, statements),
+            container,
+            containerIsRoot: false,
+            newlySuspending,
+            runtime,
+            diagnostics,
+            createMethodGroupAdapter).Statements;
     }
 
     private static BaseConstructorInitializer RewriteBaseInitializer(

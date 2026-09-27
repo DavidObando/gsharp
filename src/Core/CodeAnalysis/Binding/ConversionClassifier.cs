@@ -2472,6 +2472,22 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
+            var byRefTypesMatch = true;
+            for (var i = 0; i < targetParameterRefKinds.Length; i++)
+            {
+                if (targetParameterRefKinds[i] != RefKind.None
+                    && !candidateParameters[i + (closesExtensionReceiver ? 1 : 0)].ParameterType.IsSameAs(invokeParameterTypes[i]))
+                {
+                    byRefTypesMatch = false;
+                    break;
+                }
+            }
+
+            if (!byRefTypesMatch)
+            {
+                continue;
+            }
+
             applicable.Add(candidate);
         }
 
@@ -2486,13 +2502,15 @@ internal sealed class ConversionClassifier
             // interpolated-string literal in the first place.
             // The same applies to constant-narrowing: there are no bound call
             // arguments here, only the target delegate signature.
-            var resolution = ClrOverloadResolution.Resolve(applicable, argTypes);
-            if (resolution.Outcome == ClrOverloadResolution.ResolutionOutcome.Resolved)
+            var resolvedMethod = targetParameterRefKinds.Any(kind => kind != RefKind.None) && applicable.Count == 1
+                ? applicable[0]
+                : ClrOverloadResolution.Resolve(applicable, argTypes).Best;
+            if (resolvedMethod != null)
             {
                 var resolved = new BoundClrMethodGroupExpression(
                     group.Syntax,
                     group.Receiver,
-                    Invariant.Required(resolution.Best, "a resolved overload has a best method"),
+                    resolvedMethod,
                     Invariant.Required(targetType, "method-group conversion has a target type"));
                 var requiredTargetType = Invariant.Required(
                     targetType,

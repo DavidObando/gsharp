@@ -8,6 +8,8 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using GSharp.Compiler;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace GSharp.Compiler.Tests.Emit;
@@ -175,6 +177,10 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             import System.Linq
             import Lib
 
+            func Register[T](callback (int32) -> T) T {
+                return callback(11)
+            }
+
             class Holder {
                 let instanceCallback (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
                 shared {
@@ -191,6 +197,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 let add (int32) -> System.Threading.Tasks.ValueTask[int32] = Number(10).Add
                 Console.WriteLine(await twice(3))
                 Console.WriteLine(await add(4))
+                Console.WriteLine(await Register(Twice))
             }
 
             let top (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
@@ -209,8 +216,103 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 appPath,
                 new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
             Assert.Equal(
-                $"10{Environment.NewLine}16{Environment.NewLine}18{Environment.NewLine}14{Environment.NewLine}6{Environment.NewLine}14{Environment.NewLine}",
+                $"10{Environment.NewLine}16{Environment.NewLine}18{Environment.NewLine}14{Environment.NewLine}6{Environment.NewLine}14{Environment.NewLine}22{Environment.NewLine}",
                 Run(appPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ImportedByRefSuspendMethodGroup_VerifiesAndRuns()
+    {
+        const string library = """
+            using System.Threading.Tasks;
+            using Gsharp.Concurrency;
+
+            namespace Interop;
+
+            public delegate ValueTask<int> RefRunner(ref int value);
+
+            public static class Api
+            {
+                [Suspending]
+                public static ValueTask<int> Increment(ref int value, Context context)
+                {
+                    value++;
+                    return new ValueTask<int>(value);
+                }
+            }
+            """;
+        const string app = """
+            package App
+            import System
+            import Interop
+
+            suspend func run() {
+                var value = 4
+                let callback RefRunner = Api.Increment
+                Console.WriteLine(await callback(ref value))
+                Console.WriteLine(value)
+            }
+
+            run()
+            """;
+
+        var directory = PrepareDirectory(nameof(ImportedByRefSuspendMethodGroup_VerifiesAndRuns));
+        try
+        {
+            var libraryPath = CompileCSharpLibrary(directory, "Interop", library);
+            var appPath = Compile(directory, "App", app, "/target:exe", "/reference:" + libraryPath);
+            IlVerifier.Verify(
+                appPath,
+                new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"5{Environment.NewLine}5{Environment.NewLine}", Run(appPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void StaticInitializerSuspendMethodGroups_VerifyAndRun()
+    {
+        const string source = """
+            package Issue4412
+            import System
+            import System.Threading.Tasks
+
+            suspend func Declared(value int32) int32 {
+                return value + 1
+            }
+
+            func Inferred(value int32) int32 {
+                return await Task.FromResult(value + 2)
+            }
+
+            class Holder {
+                shared {
+                    var Result int32
+                    init {
+                        let declared = Declared
+                        let inferred = Inferred
+                        Result = declared(3).AsTask().GetAwaiter().GetResult() + inferred(4)
+                    }
+                }
+            }
+
+            Console.WriteLine(Holder.Result)
+            """;
+
+        var directory = PrepareDirectory(nameof(StaticInitializerSuspendMethodGroups_VerifyAndRun));
+        try
+        {
+            var outputPath = Compile(directory, "App", source, "/target:exe");
+            IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"10{Environment.NewLine}", Run(outputPath));
         }
         finally
         {
@@ -453,6 +555,40 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             File.Exists(outputPath) && new FileInfo(outputPath).Length > 0,
             stdout.ToString() + stderr.ToString());
         return outputPath;
+    }
+
+    private static string CompileCSharpLibrary(string directory, string assemblyName, string source)
+    {
+        var references = TrustedPlatformAssemblies()
+            .Select(path => (MetadataReference)MetadataReference.CreateFromFile(path))
+            .Append(MetadataReference.CreateFromFile(typeof(Gsharp.Concurrency.Context).Assembly.Location));
+        var compilation = CSharpCompilation.Create(
+            assemblyName,
+            new[] { CSharpSyntaxTree.ParseText(source) },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var outputPath = Path.Combine(directory, assemblyName + ".dll");
+        var result = compilation.Emit(outputPath);
+        Assert.True(
+            result.Success,
+            string.Join(Environment.NewLine, result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
+        RewriteMetadataString(outputPath, "context", "<>ctx");
+        return outputPath;
+    }
+
+    private static void RewriteMetadataString(string assemblyPath, string from, string to)
+    {
+        var bytes = File.ReadAllBytes(assemblyPath);
+        var source = System.Text.Encoding.UTF8.GetBytes(from + "\0");
+        var replacement = System.Text.Encoding.UTF8.GetBytes(to + "\0");
+        Assert.True(replacement.Length <= source.Length);
+        var matches = Enumerable.Range(0, bytes.Length - source.Length + 1)
+            .Where(offset => bytes.AsSpan(offset, source.Length).SequenceEqual(source))
+            .ToArray();
+        Assert.Single(matches);
+        Array.Clear(bytes, matches[0], source.Length);
+        replacement.CopyTo(bytes, matches[0]);
+        File.WriteAllBytes(assemblyPath, bytes);
     }
 
     private static string Run(string assemblyPath)
