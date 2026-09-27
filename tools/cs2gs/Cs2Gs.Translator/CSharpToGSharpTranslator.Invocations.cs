@@ -2397,8 +2397,9 @@ public sealed partial class CSharpToGSharpTranslator
         // Issue #3468: a synthesized method-group wrapper parameter takes its
         // name from the TARGET method's corresponding parameter (`path`,
         // `value`) so the wrapper reads like the surrounding arrow lambdas;
-        // `__arg{i}` remains only the fallback for missing, discard, reserved,
-        // or colliding names. For extension-method groups the delegate's
+        // the established underscore suffix resolves reserved spellings and
+        // collisions; `__arg{i}` remains only the fallback when no usable
+        // source name exists. For extension-method groups the delegate's
         // parameters align to the ORIGINAL method's parameters AFTER the
         // receiver, so callers pass the receiver-stripped list, and the
         // captured receiver identifier is pre-seeded into
@@ -2443,15 +2444,30 @@ public sealed partial class CSharpToGSharpTranslator
             string candidate = index < targetParameters.Length
                 ? targetParameters[index].Name
                 : null;
-            if (string.IsNullOrEmpty(candidate)
-                || candidate == "_"
-                || GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
-                    candidate,
-                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Parameter)
-                || !usedNames.Add(candidate))
+            var occupied = new HashSet<string>(usedNames, StringComparer.Ordinal);
+            for (int parameterIndex = 0; parameterIndex < targetParameters.Length; parameterIndex++)
+            {
+                if (parameterIndex != index)
+                {
+                    occupied.Add(targetParameters[parameterIndex].Name);
+                }
+            }
+
+            if (string.IsNullOrEmpty(candidate) || candidate == "_")
             {
                 candidate = $"__arg{index}";
-                usedNames.Add(candidate);
+            }
+            else
+            {
+                candidate = GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.GetEmittedIdentifier(
+                    candidate,
+                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Parameter,
+                    occupied);
+            }
+
+            while (occupied.Contains(candidate) || !usedNames.Add(candidate))
+            {
+                candidate += "_";
             }
 
             return candidate;

@@ -262,6 +262,7 @@ grep -Fq '| lines >300 chars (reducible) | n/a | 1 |' <<< "$report"
 grep -Fq '| lines >300 chars (single-atom-bounded) | n/a | 0 |' <<< "$report"
 grep -Fq '| lines >300 chars (total) | n/a | 1 |' <<< "$report"
 grep -Fq '| synthetic `__` identifiers | 3 | 3 |' <<< "$report"
+grep -Fq '| `__cs2gs_` | 0 | 0 | never emitted; reserved alias prefix was not implemented (#4299) |' <<< "$report"
 
 # Issue #4198: one retained helper means three CODE occurrences, not one
 # identifier or four raw occurrences (the lift comment is not code).

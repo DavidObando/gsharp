@@ -4,7 +4,9 @@
 
 using System;
 using System.Collections.Generic;
+using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
@@ -125,6 +127,97 @@ namespace Cs2Gs.Tests
             Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
             Assert.Null(result.UnhandledException);
             Assert.Equal(3, result.Value);
+        }
+
+        [Fact]
+        public void WrapperParameterCollision_UsesSourceDerivedSuffixes()
+        {
+            // Issue #4298: preserve the legal future source name `value_`
+            // while suffixing the colliding `value`.
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                new[] { ("Snippet.cs", "class C { void M(object value, object value_) {} }") });
+            INamedTypeSymbol type = Assert.IsAssignableFrom<INamedTypeSymbol>(
+                project.Compilation.GetTypeByMetadataName("C"));
+            IMethodSymbol method = Assert.Single(type.GetMembers("M").OfType<IMethodSymbol>());
+            var usedNames = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "value",
+            };
+
+            Assert.Equal(
+                "value__",
+                WrapperParameterName(method.Parameters, 0, usedNames));
+            Assert.Equal(
+                "value_",
+                WrapperParameterName(method.Parameters, 1, usedNames));
+        }
+
+        [Fact]
+        public void ReservedWrapperParameter_UsesSourceDerivedSuffix()
+        {
+            string printed = Translate("""
+                using System;
+
+                public static class W
+                {
+                    public static void Bind()
+                        => Use((Func<string, string>)Normalize);
+
+                    private static string Normalize(object? @params)
+                        => @params?.ToString() ?? "";
+
+                    private static void Use(Func<string, string> transform)
+                    {
+                    }
+                }
+                """);
+
+            Assert.Contains(
+                "(params_ string) -> W.Normalize(params_)",
+                printed,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("__arg", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
+        public void MissingWrapperParameterName_UsesUniqueSyntheticFallback()
+        {
+            var usedNames = new HashSet<string>(StringComparer.Ordinal)
+            {
+                "__arg0",
+            };
+
+            string name = WrapperParameterName(
+                ImmutableArray<IParameterSymbol>.Empty,
+                0,
+                usedNames);
+
+            Assert.Equal("__arg0_", name);
+            Assert.Contains(name, usedNames);
+        }
+
+        private static string WrapperParameterName(
+            ImmutableArray<IParameterSymbol> parameters,
+            int index,
+            HashSet<string> usedNames)
+        {
+            Type visitor = Assert.IsAssignableFrom<Type>(
+                typeof(CSharpToGSharpTranslator).GetNestedType(
+                    "DeclarationVisitor",
+                    BindingFlags.NonPublic));
+            MethodInfo method = Assert.IsAssignableFrom<MethodInfo>(
+                visitor.GetMethod(
+                    "MethodGroupWrapperParameterName",
+                    BindingFlags.NonPublic | BindingFlags.Static));
+            return Assert.IsType<string>(method.Invoke(
+                null,
+                new object[]
+                {
+                    parameters,
+                    index,
+                    usedNames,
+                }));
         }
 
         private static string Translate(
