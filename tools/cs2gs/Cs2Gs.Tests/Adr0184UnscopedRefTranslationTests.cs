@@ -82,6 +82,65 @@ namespace Demo
     }
 
     [Fact]
+    public void AliasedMemberUnscopedRef_PreventsDuplicateGetterHoist()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
+using U = System.Diagnostics.CodeAnalysis.UnscopedRefAttribute;
+
+namespace Demo
+{
+    public ref struct Ring
+    {
+        private int value;
+
+        [U]
+        public ref int Slot
+        {
+            [System.Diagnostics.CodeAnalysis.UnscopedRef]
+            get { return ref this.value; }
+        }
+    }
+}");
+
+        Assert.Contains("@U", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("@System.Diagnostics.CodeAnalysis.UnscopedRef", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            diagnostics,
+            diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
+    }
+
+    [Fact]
+    public void UnrelatedMemberUnscopedRef_DoesNotSuppressRealGetterHoist()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
+using U = System.Diagnostics.CodeAnalysis.UnscopedRefAttribute;
+
+namespace Demo
+{
+    [System.AttributeUsage(System.AttributeTargets.Property)]
+    public sealed class UnscopedRefAttribute : System.Attribute { }
+
+    public ref struct Ring
+    {
+        private int value;
+
+        [UnscopedRef]
+        public ref int Slot
+        {
+            [U]
+            get { return ref this.value; }
+        }
+    }
+}");
+
+        Assert.Contains("@UnscopedRef", printed, StringComparison.Ordinal);
+        Assert.Contains("@U", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            diagnostics,
+            diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
+    }
+
+    [Fact]
     public void UnscopedRefOnTheIndexerItself_StillTranslates()
     {
         string printed = TranslateUnit(@"

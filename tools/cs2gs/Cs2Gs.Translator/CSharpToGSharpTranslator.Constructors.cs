@@ -1516,7 +1516,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return attributes;
             }
 
-            bool hasUnscopedRef = attributes.Any(attribute => IsUnscopedRefAttributeName(attribute.Name));
+            IPropertySymbol propertySymbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
+            bool hasUnscopedRef = propertySymbol?.GetAttributes()
+                .Any(attribute => this.IsUnscopedRefAttribute(attribute.AttributeClass)) == true;
             foreach (AccessorDeclarationSyntax accessor in node.AccessorList.Accessors)
             {
                 foreach (AttributeListSyntax list in accessor.AttributeLists)
@@ -1528,8 +1530,7 @@ public sealed partial class CSharpToGSharpTranslator
                             attribute,
                             out INamedTypeSymbol attributeType,
                             out IAliasSymbol sourceAlias);
-                        bool isUnscopedRef =
-                            attributeType?.ToDisplayString() == UnscopedRefAttributeFullName;
+                        bool isUnscopedRef = this.IsUnscopedRefAttribute(attributeType);
 
                         // Only a GET-level `[UnscopedRef]` is equivalent to the
                         // member-level placement: the member-level G# annotation
@@ -1573,13 +1574,12 @@ public sealed partial class CSharpToGSharpTranslator
             return attributes;
         }
 
-        // ADR-0184: matches every spelling MapAttributes can produce for the
-        // attribute — bare, `Attribute`-suffixed, and namespace-qualified.
-        private static bool IsUnscopedRefAttributeName(string name) =>
-            name == "UnscopedRef"
-            || name == "UnscopedRefAttribute"
-            || name.EndsWith(".UnscopedRef", StringComparison.Ordinal)
-            || name.EndsWith(".UnscopedRefAttribute", StringComparison.Ordinal);
+        private bool IsUnscopedRefAttribute(INamedTypeSymbol attributeType)
+        {
+            INamedTypeSymbol unscopedRefType =
+                this.context.Compilation.GetTypeByMetadataName(UnscopedRefAttributeFullName);
+            return SymbolEqualityComparer.Default.Equals(attributeType, unscopedRefType);
+        }
 
         // Issue #3445: resolve attributes semantically so their containing
         // namespaces and aliases participate in synthesized imports, while
