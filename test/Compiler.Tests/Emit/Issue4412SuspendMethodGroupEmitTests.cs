@@ -334,6 +334,78 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         }
     }
 
+    [Fact]
+    public void BaseConstructorSuspendMethodGroups_VerifyAndRun()
+    {
+        const string source = """
+            package Issue4412
+            import System
+
+            delegate AsyncRunner(value int32) System.Threading.Tasks.ValueTask[int32];
+
+            suspend func Twice(value int32) int32 {
+                return value * 2
+            }
+
+            func Take(ch chan[int32]) int32 {
+                return <-ch
+            }
+
+            open class AsyncBase {
+                let callback AsyncRunner
+                init(callback AsyncRunner) {
+                    this.callback = callback
+                }
+                func Run(value int32) int32 {
+                    return callback(value).AsTask().GetAwaiter().GetResult()
+                }
+            }
+
+            class PrimaryAsync : AsyncBase(Twice) { }
+            class ExplicitAsync : AsyncBase {
+                init() : base(Twice) { }
+            }
+
+            open class SyncBase {
+                let callback (chan[int32]) -> int32
+                init(callback (chan[int32]) -> int32) {
+                    this.callback = callback
+                }
+                func Run(ch chan[int32]) int32 {
+                    return callback(ch)
+                }
+            }
+
+            class PrimarySync : SyncBase(Take) { }
+            class ExplicitSync : SyncBase {
+                init() : base(Take) { }
+            }
+
+            Console.WriteLine(PrimaryAsync().Run(3))
+            Console.WriteLine(ExplicitAsync().Run(4))
+            let first = chan[int32](1)
+            first <- 5
+            Console.WriteLine(PrimarySync().Run(first))
+            let second = chan[int32](1)
+            second <- 6
+            Console.WriteLine(ExplicitSync().Run(second))
+            """;
+
+        var directory = PrepareDirectory(nameof(BaseConstructorSuspendMethodGroups_VerifyAndRun));
+        try
+        {
+            var outputPath = Compile(directory, "App", source, "/target:exe");
+            IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal(
+                $"6{Environment.NewLine}8{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}",
+                Run(outputPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string PrepareDirectory(string name)
     {
         var path = Path.Combine(AppContext.BaseDirectory, name);

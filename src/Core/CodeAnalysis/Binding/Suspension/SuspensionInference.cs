@@ -151,6 +151,45 @@ internal static class SuspensionInference
 
         foreach (var type in structs)
         {
+            if (type.BaseConstructorInitializer is { } primaryBaseInitializer)
+            {
+                var primaryConstructor = type.EffectiveExplicitConstructors
+                    .FirstOrDefault(constructor => constructor.IsSynthesizedFromPrimaryConstructor)
+                    ?.Function
+                    ?? new FunctionSymbol(
+                        ".ctor",
+                        type.PrimaryConstructorParameters,
+                        TypeSymbol.Void,
+                        declaration: null,
+                        package: null,
+                        Accessibility.Public,
+                        receiverType: type)
+                    {
+                        IsExpressionInitializer = true,
+                    };
+                type.SetBaseConstructorInitializer(RewriteBaseInitializer(
+                    primaryBaseInitializer,
+                    primaryConstructor,
+                    newlySuspending,
+                    runtime,
+                    bag,
+                    createMethodGroupAdapter));
+            }
+
+            foreach (var constructor in type.ExplicitConstructors)
+            {
+                if (constructor.BaseInitializer is { } baseInitializer)
+                {
+                    constructor.SetBaseInitializer(RewriteBaseInitializer(
+                        baseInitializer,
+                        constructor.Function,
+                        newlySuspending,
+                        runtime,
+                        bag,
+                        createMethodGroupAdapter));
+                }
+            }
+
             type.SetStaticFieldInitializers(RewriteInitializers(
                 type.StaticFieldInitializers,
                 type,
@@ -271,6 +310,29 @@ internal static class SuspensionInference
         }
 
         return IteratorDetection.ContainsYield(body) || ContainsFixed(body);
+    }
+
+    private static BaseConstructorInitializer RewriteBaseInitializer(
+        BaseConstructorInitializer initializer,
+        FunctionSymbol constructor,
+        ImmutableHashSet<FunctionSymbol> newlySuspending,
+        ChannelRuntimeBinder runtime,
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
+    {
+        var arguments = ImmutableArray.CreateBuilder<BoundExpression>(initializer.Arguments.Length);
+        foreach (var argument in initializer.Arguments)
+        {
+            arguments.Add(SuspendingCallRewriter.RewriteInitializer(
+                argument,
+                constructor,
+                newlySuspending,
+                runtime,
+                diagnostics,
+                createMethodGroupAdapter));
+        }
+
+        return initializer.WithArguments(arguments.MoveToImmutable());
     }
 
     private static bool ContainsFixed(BoundStatement body)
