@@ -1157,6 +1157,7 @@ internal sealed class CustomAttributeEncoder
             attributeType,
             attribute,
             out effectiveArguments,
+            out var duplicateNamedArgument,
             out var positionalConflict);
         if (constructor != null)
         {
@@ -1210,6 +1211,14 @@ internal sealed class CustomAttributeEncoder
             return constructor;
         }
 
+        if (duplicateNamedArgument != null)
+        {
+            EmitDiagnosticException.ThrowDiagnostic(
+                duplicateNamedArgument.Syntax ?? attribute.Syntax,
+                DiagnosticDescriptors.DuplicateNamedArgument,
+                duplicateNamedArgument.Name);
+        }
+
         if (positionalConflict != null)
         {
             EmitDiagnosticException.ThrowDiagnostic(
@@ -1226,9 +1235,11 @@ internal sealed class CustomAttributeEncoder
         Type attributeType,
         BoundAttribute attribute,
         out object?[] effectiveArguments,
+        out BoundAttributeArgument? duplicateNamedArgument,
         out BoundAttributeArgument? positionalConflict)
     {
         effectiveArguments = Array.Empty<object?>();
+        duplicateNamedArgument = null;
         positionalConflict = null;
         var constructors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
 
@@ -1244,8 +1255,10 @@ internal sealed class CustomAttributeEncoder
                         attribute.PositionalArguments,
                         desiredForm,
                         out var candidateArguments,
+                        out var duplicate,
                         out var conflict))
                 {
+                    duplicateNamedArgument ??= duplicate;
                     positionalConflict ??= conflict;
                     continue;
                 }
@@ -1283,9 +1296,11 @@ internal sealed class CustomAttributeEncoder
         ImmutableArray<BoundAttributeArgument> arguments,
         AttributeConstructorArgumentForm desiredForm,
         out object?[] effective,
+        out BoundAttributeArgument? duplicateNamedArgument,
         out BoundAttributeArgument? positionalConflict)
     {
         effective = Array.Empty<object?>();
+        duplicateNamedArgument = null;
         positionalConflict = null;
         var expanded = desiredForm == AttributeConstructorArgumentForm.ParamsExpanded;
         var hasParams = parameters.Length > 0 && IsParamsArray(parameters[parameters.Length - 1]);
@@ -1347,9 +1362,24 @@ internal sealed class CustomAttributeEncoder
                 return false;
             }
 
-            if (parameterIndex >= parameters.Length || filled[parameterIndex])
+            if (parameterIndex >= parameters.Length)
             {
                 positionalConflict = argument;
+                return false;
+            }
+
+            if (filled[parameterIndex])
+            {
+                if (argument.Name != null
+                    && slots[parameterIndex] is BoundAttributeArgument { Name: not null })
+                {
+                    duplicateNamedArgument = argument;
+                }
+                else
+                {
+                    positionalConflict = argument;
+                }
+
                 return false;
             }
 

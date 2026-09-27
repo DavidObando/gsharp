@@ -237,6 +237,23 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
         Assert.False(result.Success);
     }
 
+    [Fact]
+    public void ConstructorParameterAliases_ReportDuplicateNamedDiagnostic()
+    {
+        var result = Emit(
+            """
+            import GSharp.Core.Tests.Fixtures
+
+            @ImportedReservedNamed($params: "a", params__: "b")
+            class Tagged {
+            }
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, item => item.Id == "GS0245");
+        Assert.Equal(2, diagnostic.Location.StartLine);
+        Assert.False(result.Success);
+    }
+
     private static EmitResult Emit(string source)
     {
         using var resolver = ReferenceResolver.WithReferences(

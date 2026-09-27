@@ -126,6 +126,7 @@ public sealed class BoundAttribute : BoundNode
             clrType,
             this,
             out _,
+            out _,
             out _);
         if (constructor == null)
         {
