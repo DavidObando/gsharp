@@ -2992,18 +2992,64 @@ public sealed partial class CSharpToGSharpTranslator
             return new ArrayAllocationExpression(elementType, length);
         }
 
-        // Issues #4482 and #4500: the one decision "this local's `new T[n]`
-        // allocation has a `T?` element". Both the allocation and every
-        // element write ask it, so they cannot disagree.
+        // Issues #4482, #4500 and #4507: the one decision "this local's
+        // `new T[n]` allocation has a `T?` element". The allocation, its
+        // inferred local aliases, and every element read/write ask it, so they
+        // cannot disagree.
         // Only a rank-1 allocation takes the widening branch in
         // TranslateArrayCreation (a rectangular one returns earlier), and the
         // initializer may be parenthesized.
-        private bool IsWidenedArrayElementLocal(ILocalSymbol local) =>
-            local.Type is IArrayTypeSymbol { Rank: 1, ElementType: { IsReferenceType: true } }
-            && local.DeclaringSyntaxReferences.Any(reference =>
-                reference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
-                && StripParentheses(initializer) is ArrayCreationExpressionSyntax { Initializer: null })
-            && (this.ElementPassedToNullableByRefParameter(local) || this.ElementWrittenMaybeNil(local));
+        private bool IsWidenedArrayElementLocal(ILocalSymbol local)
+        {
+            ILocalSymbol owner = this.GetArrayAllocationOwner(
+                local,
+                new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default));
+            return owner != null
+                && (this.ElementPassedToNullableByRefParameter(owner)
+                    || this.ElementWrittenMaybeNil(owner));
+        }
+
+        private ILocalSymbol GetArrayAllocationOwner(
+            ILocalSymbol local,
+            HashSet<ILocalSymbol> visited)
+        {
+            if (local.Type is not IArrayTypeSymbol { Rank: 1, ElementType: { IsReferenceType: true } }
+                || !visited.Add(local))
+            {
+                return null;
+            }
+
+            foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is not VariableDeclaratorSyntax
+                    { Initializer.Value: { } initializer } declarator)
+                {
+                    continue;
+                }
+
+                ExpressionSyntax value = StripParentheses(initializer);
+                if (value is ArrayCreationExpressionSyntax { Initializer: null })
+                {
+                    return local;
+                }
+
+                if (declarator.Parent is VariableDeclarationSyntax { Type.IsVar: true }
+                    && this.context.GetSymbolInfo(value).Symbol is ILocalSymbol source)
+                {
+                    return this.GetArrayAllocationOwner(source, visited);
+                }
+            }
+
+            return null;
+        }
+
+        private bool IsArrayAllocationAlias(ExpressionSyntax expression, ILocalSymbol owner) =>
+            this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
+            && SymbolEqualityComparer.Default.Equals(
+                this.GetArrayAllocationOwner(
+                    local,
+                    new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default)),
+                owner);
 
         // Issue #4482: whether some `local[i]` in the local's scope is passed
         // by `out`/`ref` to a parameter whose emitted type is `T?`.
@@ -3024,7 +3070,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 if (argument.Expression is ElementAccessExpressionSyntax elementAccess
-                    && this.BindsTo(elementAccess.Expression, local)
+                    && this.IsArrayAllocationAlias(elementAccess.Expression, local)
                     && this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } parameter }
                     && parameter.Type.IsReferenceType
                     && (parameter.Type.NullableAnnotation == NullableAnnotation.Annotated
@@ -3054,7 +3100,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
                     && assignment.Left is ElementAccessExpressionSyntax elementAccess
-                    && this.BindsTo(elementAccess.Expression, local)
+                    && this.IsArrayAllocationAlias(elementAccess.Expression, local)
 
                     // A literal or suppressed null always writes nil: Roslyn
                     // reports `null!` as NotNull, but cs2gs erases it to `nil`.
