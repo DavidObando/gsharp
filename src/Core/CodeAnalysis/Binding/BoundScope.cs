@@ -982,8 +982,33 @@ public sealed class BoundScope
         int preferredArity,
         [NotNullWhen(true)] out TypeSymbol? type)
     {
-        type = null;
         if (string.IsNullOrEmpty(packageName) || string.IsNullOrEmpty(name))
+        {
+            type = null;
+            return false;
+        }
+
+        return TryLookupQualifiedSourceType(
+            packageName + "." + name,
+            preferredArity,
+            out type);
+    }
+
+    /// <summary>
+    /// Resolves a dotted source type name by its exact package and possibly
+    /// nested type identity.
+    /// </summary>
+    /// <param name="qualifiedName">The package-qualified source type name.</param>
+    /// <param name="preferredArity">The requested generic arity, or -1/0 for none.</param>
+    /// <param name="type">The matching source type, when unambiguous.</param>
+    /// <returns>Whether the qualified name resolves to exactly one source type.</returns>
+    public bool TryLookupQualifiedSourceType(
+        string qualifiedName,
+        int preferredArity,
+        [NotNullWhen(true)] out TypeSymbol? type)
+    {
+        type = null;
+        if (string.IsNullOrEmpty(qualifiedName))
         {
             return false;
         }
@@ -994,28 +1019,19 @@ public sealed class BoundScope
         foreach (var pair in EnumerateTypeAliasesInChain())
         {
             var candidate = TypeDefinition(pair.Value);
-            if (!seen.Add(candidate))
+            if (!seen.Add(candidate)
+                || GetTypeAliasArity(candidate) != wantedArity
+                || IsDeclaredInImplicitPackage(candidate))
             {
                 continue;
             }
 
-            if (GetTypeAliasArity(candidate) != wantedArity)
-            {
-                continue;
-            }
-
-            // A type declared in a file with no `package` declaration lands in
-            // the implicit package; it is not addressable by a qualified name,
-            // so it must not answer one.
-            if (IsDeclaredInImplicitPackage(candidate))
-            {
-                continue;
-            }
-
-            var candidatePackage = TypePackageName(candidate);
-            if (string.IsNullOrEmpty(candidatePackage)
-                || !string.Equals(candidatePackage, packageName, System.StringComparison.Ordinal)
-                || !string.Equals(QualifiedTypeName(candidate), name, System.StringComparison.Ordinal))
+            var package = TypePackageName(candidate);
+            if (string.IsNullOrEmpty(package)
+                || !string.Equals(
+                    package + "." + QualifiedTypeName(candidate),
+                    qualifiedName,
+                    System.StringComparison.Ordinal))
             {
                 continue;
             }

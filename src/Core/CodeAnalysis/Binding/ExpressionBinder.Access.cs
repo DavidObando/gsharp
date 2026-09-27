@@ -507,10 +507,16 @@ internal sealed partial class ExpressionBinder
         var peeledSegments = new List<string>();
         while (current is AccessorExpressionSyntax accessor
                && !accessor.IsNullConditional
-               && accessor.LeftPart is NameExpressionSyntax leftName
-               && IsNamespacePrefixSegment(leftName.IdentifierToken.ValueText, isLeadingSegment: !peeledAny))
+               && accessor.LeftPart is NameExpressionSyntax leftName)
         {
-            peeledSegments.Add(leftName.IdentifierToken.ValueText);
+            var segment = leftName.IdentifierToken.ValueText;
+            if (IsQualifiedSourceTypeBoundary(peeledSegments, segment)
+                || !IsNamespacePrefixSegment(segment, isLeadingSegment: !peeledAny))
+            {
+                break;
+            }
+
+            peeledSegments.Add(segment);
             current = accessor.RightPart;
             peeledAny = true;
         }
@@ -536,7 +542,7 @@ internal sealed partial class ExpressionBinder
         var previousHint = scope.SetQualifiedConstructionPackageHint(peeledPackageName);
         try
         {
-            if (!RemainderHeadIsSourceType(current))
+            if (!RemainderHeadIsSourceType(current, peeledPackageName))
             {
                 return false;
             }
@@ -563,16 +569,16 @@ internal sealed partial class ExpressionBinder
     /// or a static-member access rooted at a type name <c>Type.Member</c> /
     /// generic type reference <c>Type[Args].Member</c>.
     /// </summary>
-    private bool RemainderHeadIsSourceType(ExpressionSyntax remainder)
+    private bool RemainderHeadIsSourceType(ExpressionSyntax remainder, string packageName)
     {
         string simpleName;
         int arity;
         switch (remainder)
         {
             case CollectionInitializerExpressionSyntax { Target: { } target }:
-                return RemainderHeadIsSourceType(target);
+                return RemainderHeadIsSourceType(target, packageName);
             case AccessorExpressionSyntax { LeftPart: CollectionInitializerExpressionSyntax collection }:
-                return RemainderHeadIsSourceType(collection);
+                return RemainderHeadIsSourceType(collection, packageName);
             case CallExpressionSyntax call when !call.Identifier.IsMissing:
                 simpleName = call.Identifier.ValueText;
                 arity = call.TypeArgumentList?.Arguments.Count ?? 0;
@@ -606,8 +612,11 @@ internal sealed partial class ExpressionBinder
                 return false;
         }
 
-        return scope.TryLookupTypeAlias(simpleName, arity > 0 ? arity : -1, out var terminalType)
-            && IsUserAggregateType(terminalType);
+        return scope.TryLookupQualifiedSourceType(
+                packageName + "." + simpleName,
+                arity > 0 ? arity : -1,
+                out var qualifiedType)
+            && IsUserAggregateType(qualifiedType);
     }
 
     /// <summary>

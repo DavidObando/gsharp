@@ -114,6 +114,24 @@ class Utilities {
         Assert.Equal(GeneratedPackage + ".Digits_0", Invoke(p, "Kind"));
     }
 
+    [Fact]
+    public void GeneratedHelperReference_BindsWhenUserImportDeclaresTheSameSimpleName()
+    {
+        string userSource = UserSourceTemplate.Replace("ARGUMENTS", @"""\\d+""", StringComparison.Ordinal);
+        const string CollisionSource = """
+            package System.Text.RegularExpressions
+
+            class Digits_0 {
+            }
+            """;
+
+        Run run = this.GenerateAndCompile(new[] { userSource, CollisionSource }, RegexGenerator());
+
+        Type p = run.Type("P");
+        Assert.Equal(true, Invoke(p, "Test", "a1"));
+        Assert.Equal(GeneratedPackage + ".Digits_0", Invoke(p, "Kind"));
+    }
+
     // Two user packages that each use the generator: the generator emits ONE
     // file with one `Generated` namespace, so there is exactly one set of
     // helper types, shared by both packages' implementing parts.

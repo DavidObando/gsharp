@@ -14122,6 +14122,12 @@ public sealed class Binder
             return null;
         }
 
+        if (name.IndexOf('.') >= 0
+            && scope.TryLookupQualifiedSourceType(name, preferredArity, out var qualifiedSourceType))
+        {
+            return qualifiedSourceType;
+        }
+
         // Phase 4.1 / ADR-0020: a generic function's type parameters shadow
         // outer type names while we are binding its signature and body.
         if (binderCtx.CurrentTypeParameters != null && binderCtx.CurrentTypeParameters.TryGetValue(name, out var tp))
