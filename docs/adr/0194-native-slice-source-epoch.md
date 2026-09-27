@@ -158,18 +158,23 @@ in incremental-compilation, generated-source, and migration cache keys.
 Rollout is staged:
 
 1. **Preparation release.** The default remains `legacy-array-syntax`.
-   cs2gs and repository-owned generators begin emitting explicit `array[T]`.
-   Ambiguous legacy `[]T` uses receive a deprecation diagnostic with a
-   binding-aware fix to `array[T]`. Explicit `slice[T]` remains available.
+   cs2gs and repository-owned generators gain epoch-specific output profiles.
+   The legacy profile continues emitting `[]T`; only a profile that also writes
+   `GsharpSourceEpoch=native-slice-syntax` may emit intrinsic `array[T]`.
+   Ambiguous legacy `[]T` uses receive a deprecation diagnostic directing the
+   user to the binding-aware project migration. Explicit `slice[T]` remains
+   available.
 2. **Transition release.** New SDK templates select
-   `native-slice-syntax`. A compilation containing unsized `[]T` syntax with no
-   selected epoch fails with an actionable diagnostic; it is never guessed
-   from compiler version, imports, expected types, or surrounding operations.
-   `legacy-array-syntax` remains accepted for one release and warns.
+   `native-slice-syntax`. A compilation containing either unsized `[]T` or an
+   unescaped, unqualified `array[...]` with no selected epoch fails with an
+   actionable diagnostic. Its meaning is never guessed from compiler version,
+   imports, expected types, or surrounding operations. `legacy-array-syntax`
+   remains accepted for one release and warns.
 3. **Completed transition.** `legacy-array-syntax` is rejected. Missing epoch
-   remains an error for source containing unsized `[]T`; source without that
-   syntax remains unaffected. `native-slice-syntax` may become the generated
-   project default, but an old ambiguous file is never silently reinterpreted.
+   remains an error for source containing either epoch-sensitive spelling;
+   source without those spellings remains unaffected. `native-slice-syntax`
+   may become the generated project default, but an old ambiguous file is
+   never silently reinterpreted.
 
 The exact release numbers and diagnostic IDs are assigned by the implementation
 plan. The semantic staging above is required. Published packages, source
@@ -204,8 +209,10 @@ containers/elements, and rectangular rank must remain unchanged.
 
 cs2gs preserves C# storage semantics:
 
-- every C# SZARRAY type becomes `array[T]`;
-- every C# array literal becomes `array[T]{...}`;
+- the legacy output profile renders C# SZARRAY types/literals as `[]T` /
+  `[]T{...}` and selects `legacy-array-syntax`;
+- the native output profile renders them as `array[T]` / `array[T]{...}` and
+  writes `GsharpSourceEpoch=native-slice-syntax` into the generated project;
 - rectangular arrays retain ADR-0164 syntax;
 - C# `Gsharp.Values.Slice<T>` and `ReadOnlySlice<T>` remain native slice
   categories and may print as `slice[T]` / `readonly slice[T]`;
@@ -224,8 +231,11 @@ remain translator concerns; this spelling does not claim full Go semantics.
 
 The syntax switch cannot ship until all of the following pass:
 
-1. cs2gs emits explicit arrays for rank-one types/literals, nested and nullable
-   forms, generated source, `params`, and interop signatures.
+1. cs2gs's native output profile atomically selects the native epoch and emits
+   explicit arrays for rank-one types/literals, nested and nullable forms,
+   generated source, `params`, and interop signatures. Its legacy profile
+   retains legacy array syntax; neither profile depends on ordinary-name
+   shadowing.
 2. A binding-aware migration preserves CLR metadata and behavior for old G#
    array source, including ordinary `array` name collisions.
 3. Parser, formatter, completion, diagnostics, symbol display, REPL, direct
@@ -238,8 +248,8 @@ The syntax switch cannot ship until all of the following pass:
 6. A mutant that binds an array node as a native slice, or a slice node as an
    array, fails semantic or metadata tests. Text snapshots alone are
    insufficient.
-7. Old source with ambiguous `[]T` and no epoch fails rather than silently
-   changing meaning.
+7. Old source with ambiguous `[]T` or unescaped, unqualified `array[...]` and
+   no epoch fails rather than silently changing meaning.
 
 The transition is no-go if exact CLR-array spelling, ordinary-name migration,
 or old-source detection cannot be guaranteed. That does not block ADR-0191 M0;
