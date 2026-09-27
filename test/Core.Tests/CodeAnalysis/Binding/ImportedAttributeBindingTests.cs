@@ -38,6 +38,17 @@ public class ImportedAttributeBindingTests
         return Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree), FixtureResolver());
     }
 
+    private static BoundGlobalScope BindWithIssue4503Contracts(string source)
+    {
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { Issue4503ImportedAttributeContracts.Path });
+        return Binder.BindGlobalScope(
+            previous: null,
+            ImmutableArray.Create(tree),
+            resolver);
+    }
+
     [Fact]
     public void Imported_Attribute_With_Usage_Binds_Without_Crash()
     {
@@ -106,10 +117,10 @@ public class ImportedAttributeBindingTests
     [Fact]
     public void NamedConstructorArguments_UseTheCompleteAllocatedParameterScope()
     {
-        var globalScope = BindWithFixtures(
+        var globalScope = BindWithIssue4503Contracts(
             """
             package Demo
-            import GSharp.Core.Tests.Fixtures
+            import Issue4503.Contracts
 
             @ImportedReservedNamed(params__: "a", params_: "b")
             class Hello {
@@ -124,10 +135,10 @@ public class ImportedAttributeBindingTests
     [Fact]
     public void NamedConstructorMetadataName_ComesFromTheSelectedOverload()
     {
-        var globalScope = BindWithFixtures(
+        var globalScope = BindWithIssue4503Contracts(
             """
             package Demo
-            import GSharp.Core.Tests.Fixtures
+            import Issue4503.Contracts
 
             @ImportedOverloadedReserved(params_: 1)
             class Hello {
@@ -142,10 +153,10 @@ public class ImportedAttributeBindingTests
     [Fact]
     public void EscapedRawClrConstructorParameterName_IsRecognized()
     {
-        var globalScope = BindWithFixtures(
+        var globalScope = BindWithIssue4503Contracts(
             """
             package Demo
-            import GSharp.Core.Tests.Fixtures
+            import Issue4503.Contracts
 
             @ImportedReservedNamed($params: "a", params_: "b")
             class Hello {

@@ -104,62 +104,6 @@ public sealed class ImportedInt32CtorAttribute : Attribute
     public int Value { get; }
 }
 
-/// <summary>Issue #4503 fixture for named constructor and member arguments.</summary>
-[AttributeUsage(AttributeTargets.All)]
-public sealed class ImportedNamedConstructorAttribute : Attribute
-{
-    /// <summary>Initializes a new instance.</summary>
-    public ImportedNamedConstructorAttribute(string first, int second = 2, int third = 3)
-    {
-        First = first;
-        Second = second;
-        Third = third;
-    }
-
-    /// <summary>Gets the first constructor value.</summary>
-    public string First { get; }
-
-    /// <summary>Gets the second constructor value.</summary>
-    public int Second { get; }
-
-    /// <summary>Gets the third constructor value.</summary>
-    public int Third { get; }
-
-    /// <summary>Gets or sets a named property value.</summary>
-    public string Label { get; set; }
-
-    /// <summary>A named field value.</summary>
-    public int Code;
-
-    /// <summary>An indexer must not be accepted as a named attribute property.</summary>
-    public int this[int index]
-    {
-        get => index;
-        set { }
-    }
-
-    /// <summary>A writable member whose type is not legal in an attribute blob.</summary>
-    public System.IO.Stream Unsupported { get; set; }
-}
-
-/// <summary>Issue #4503 fixture for direct and expanded params constructor arguments.</summary>
-[AttributeUsage(AttributeTargets.All)]
-public sealed class ImportedParamsConstructorAttribute : Attribute
-{
-    /// <summary>Initializes a new instance.</summary>
-    public ImportedParamsConstructorAttribute(string name, params int[] values)
-    {
-        Name = name;
-        Values = values;
-    }
-
-    /// <summary>Gets the name.</summary>
-    public string Name { get; }
-
-    /// <summary>Gets the params values.</summary>
-    public int[] Values { get; }
-}
-
 /// <summary>Attribute fixture with reserved and colliding CLR identifier names.</summary>
 [AttributeUsage(AttributeTargets.All)]
 public sealed class ImportedReservedNamedAttribute : Attribute
@@ -174,21 +118,6 @@ public sealed class ImportedReservedNamedAttribute : Attribute
 
     /// <summary>Gets or sets colliding legal-name data.</summary>
     public string type_ { get; set; }
-}
-
-/// <summary>Attribute fixture whose overloads give the same G# spelling different meanings.</summary>
-[AttributeUsage(AttributeTargets.All)]
-public sealed class ImportedOverloadedReservedAttribute : Attribute
-{
-    /// <summary>Initializes an instance from the escaped CLR parameter.</summary>
-    public ImportedOverloadedReservedAttribute(int @params)
-    {
-    }
-
-    /// <summary>Initializes an instance from the literal suffixed parameter.</summary>
-    public ImportedOverloadedReservedAttribute(string params_)
-    {
-    }
 }
 
 /// <summary>

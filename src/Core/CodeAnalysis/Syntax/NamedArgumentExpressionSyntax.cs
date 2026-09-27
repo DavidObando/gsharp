@@ -12,7 +12,7 @@ namespace GSharp.Core.CodeAnalysis.Syntax;
 /// kinds of call site:
 /// <list type="bullet">
 ///   <item><description>The scoped <c>.copy(field: value, ...)</c> sugar (ADR-0032).</description></item>
-///   <item><description>Attribute argument lists (<c>[Attr(prop: value)]</c>, ADR-0047).</description></item>
+///   <item><description>Attribute argument lists (<c>[Attr(parameter: value, Property = value)]</c>, ADR-0047).</description></item>
 ///   <item><description>Issue #343: ordinary call sites — free functions, user methods, user
 ///   constructors, user extension functions, imported CLR static/instance methods, imported
 ///   CLR constructors, imported extension methods, and inherited CLR instance methods —

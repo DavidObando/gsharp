@@ -48,7 +48,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     {
         var result = Emit(
             """
-            import GSharp.Core.Tests.Fixtures
+            import Issue4503.Contracts
 
             @ImportedNamedConstructor("first", third: 30, Label = "ok", Code = 40)
             class Tagged {
@@ -59,8 +59,10 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
         var assembly = Assembly.Load(result.Image);
         var tagged = assembly.GetTypes().Single(type => type.Name == "Tagged");
 
+        var namedAttributeType = Issue4503ImportedAttributeContracts.Assembly.GetTypes()
+            .Single(type => type.Name == "ImportedNamedConstructorAttribute");
         var data = tagged.GetCustomAttributesData()
-            .Single(attribute => attribute.AttributeType == typeof(ImportedNamedConstructorAttribute));
+            .Single(attribute => attribute.AttributeType == namedAttributeType);
         Assert.Equal(new object[] { "first", 2, 30 }, data.ConstructorArguments.Select(argument => argument.Value));
         Assert.Equal(
             new[] { "Code", "Label" },
@@ -68,13 +70,12 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
         Assert.True(data.NamedArguments.Single(argument => argument.MemberName == "Label").IsField == false);
         Assert.True(data.NamedArguments.Single(argument => argument.MemberName == "Code").IsField);
 
-        var instance = Assert.IsType<ImportedNamedConstructorAttribute>(
-            tagged.GetCustomAttributes(typeof(ImportedNamedConstructorAttribute), inherit: false).Single());
-        Assert.Equal("first", instance.First);
-        Assert.Equal(2, instance.Second);
-        Assert.Equal(30, instance.Third);
-        Assert.Equal("ok", instance.Label);
-        Assert.Equal(40, instance.Code);
+        var instance = tagged.GetCustomAttributes(namedAttributeType, inherit: false).Single();
+        Assert.Equal("first", namedAttributeType.GetProperty("First")?.GetValue(instance));
+        Assert.Equal(2, namedAttributeType.GetProperty("Second")?.GetValue(instance));
+        Assert.Equal(30, namedAttributeType.GetProperty("Third")?.GetValue(instance));
+        Assert.Equal("ok", namedAttributeType.GetProperty("Label")?.GetValue(instance));
+        Assert.Equal(40, namedAttributeType.GetField("Code")?.GetValue(instance));
     }
 
     [Fact]
@@ -105,7 +106,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     {
         var result = Emit(
             """
-            import GSharp.Core.Tests.Fixtures
+            import Issue4503.Contracts
 
             @ImportedParamsConstructor("expanded", 1, 2)
             class Expanded {
@@ -118,17 +119,17 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
 
         Assert.True(result.Success, FormatDiagnostics(result));
         var assembly = Assembly.Load(result.Image);
-        var expanded = Assert.IsType<ImportedParamsConstructorAttribute>(
-            assembly.GetTypes().Single(type => type.Name == "Expanded")
-                .GetCustomAttributes(typeof(ImportedParamsConstructorAttribute), inherit: false).Single());
-        var direct = Assert.IsType<ImportedParamsConstructorAttribute>(
-            assembly.GetTypes().Single(type => type.Name == "Direct")
-                .GetCustomAttributes(typeof(ImportedParamsConstructorAttribute), inherit: false).Single());
+        var paramsAttributeType = Issue4503ImportedAttributeContracts.Assembly.GetTypes()
+            .Single(type => type.Name == "ImportedParamsConstructorAttribute");
+        var expanded = assembly.GetTypes().Single(type => type.Name == "Expanded")
+            .GetCustomAttributes(paramsAttributeType, inherit: false).Single();
+        var direct = assembly.GetTypes().Single(type => type.Name == "Direct")
+            .GetCustomAttributes(paramsAttributeType, inherit: false).Single();
 
-        Assert.Equal("expanded", expanded.Name);
-        Assert.Equal(new[] { 1, 2 }, expanded.Values);
-        Assert.Equal("direct", direct.Name);
-        Assert.Equal(new[] { 3, 4 }, direct.Values);
+        Assert.Equal("expanded", paramsAttributeType.GetProperty("Name")?.GetValue(expanded));
+        Assert.Equal(new[] { 1, 2 }, paramsAttributeType.GetProperty("Values")?.GetValue(expanded));
+        Assert.Equal("direct", paramsAttributeType.GetProperty("Name")?.GetValue(direct));
+        Assert.Equal(new[] { 3, 4 }, paramsAttributeType.GetProperty("Values")?.GetValue(direct));
     }
 
     [Fact]
@@ -137,7 +138,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
         var result = Emit(
             """
             import System
-            import GSharp.Core.Tests.Fixtures
+            import Issue4503.Contracts
 
             @ImportedNamedConstructor(first: "imported", 20, third: 30)
             class ImportedMixed {
@@ -153,9 +154,11 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
 
         Assert.True(result.Success, FormatDiagnostics(result));
         var assembly = Assembly.Load(result.Image);
+        var namedAttributeType = Issue4503ImportedAttributeContracts.Assembly.GetTypes()
+            .Single(type => type.Name == "ImportedNamedConstructorAttribute");
         var importedData = assembly.GetTypes().Single(type => type.Name == "ImportedMixed")
             .GetCustomAttributesData()
-            .Single(attribute => attribute.AttributeType == typeof(ImportedNamedConstructorAttribute));
+            .Single(attribute => attribute.AttributeType == namedAttributeType);
         var localData = assembly.GetTypes().Single(type => type.Name == "LocalMixed")
             .GetCustomAttributesData()
             .Single(attribute => attribute.AttributeType.Name == "LocalAttribute");
@@ -232,7 +235,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     {
         var result = Emit(
             $$"""
-            import GSharp.Core.Tests.Fixtures
+            import Issue4503.Contracts
 
             {{annotation}}
             class Tagged {
@@ -269,7 +272,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     {
         var result = Emit(
             """
-            import GSharp.Core.Tests.Fixtures
+            import Issue4503.Contracts
 
             @ImportedReservedNamed($params: "a", params__: "b")
             class Tagged {
@@ -284,7 +287,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     private static EmitResult Emit(string source)
     {
         using var resolver = ReferenceResolver.WithReferences(
-            new[] { typeof(ImportedNamedConstructorAttribute).Assembly.Location });
+            new[] { Issue4503ImportedAttributeContracts.Path });
         var compilation = new Compilation(
             resolver,
             SyntaxTree.Parse(SourceText.From(source)));
