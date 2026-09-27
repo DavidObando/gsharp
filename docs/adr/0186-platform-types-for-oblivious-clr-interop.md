@@ -113,7 +113,7 @@ this machinery.
 | 1 | `ea0cad22` | **Read and call paths drifted.** The read path (`CanBindClrInstanceMember`) had always carved out an oblivious CLR receiver mid-chain; the new call-path check had no equivalent. `Environment.Version.Major` compiled while `Environment.Version.ToString()` reported GS0159. Seven CI jobs and the self-migration hot core went down. |
 | 2 | `a967928a` | **One translator branch forgot the helper.** In cs2gs, a generic instance call carrying explicit type arguments (`x.M<T>(...)`) has its own branch of `TranslateInvocationCore` that built its target with a bare `TranslateExpression`. Every sibling receiver position called `TranslateReceiverWithNullForgiveness`. `x.Parent` and `x.Plain()` were asserted; `x.Up<T>()` beside them was bare. |
 | 3 | `db3b9422` | **A message-formatting detail gated the safety check.** The #4287 check ran only when there was receiver syntax available *to quote in the diagnostic message*. A chained call has none — the bound intermediate receivers are built with a null `Syntax`. So `s.ToUpper()` reported and `s.ToUpper().Trim()`, `s.ToUpper().Length`, `s.ToUpper()[0]` and `sb.Append("a").Append("b")` bound straight through. **The bug #4287 was filed about still shipped, in full, for every chained call.** Parenthesising the receiver "fixed" it. |
-| 4 | `539d8c3a` | **A narrowing asymmetry with no principle behind it.** cs2gs assumed gsc narrows `X != nil && X.Contains(i)` for a member `X`. gsc narrows only the **qualified** form: `this.X != nil && this.X.Contains(i)` compiles, the identical bare `X` does not, for a readonly field and a get-only property alike, for reads exactly as for calls — the smart-cast frame is keyed by an `AccessPath` that an implicit-`this` reference never produces. Filed as issue #4310 and explicitly *not* fixed. |
+| 4 | `539d8c3a` | **A narrowing asymmetry with no principle behind it.** cs2gs assumed gsc narrows `X != nil && X.Contains(i)` for a member `X`. gsc narrowed only the **qualified** form: `this.X != nil && this.X.Contains(i)` compiled, while the identical bare `X` did not, for a readonly field and a get-only property alike, for reads exactly as for calls — the smart-cast frame was keyed by an `AccessPath` that an implicit-`this` reference did not consult. Filed as issue #4310 and later closed incidentally by #4287's fix (`f1cbbe25`). |
 | 5 | `359538cd` | **A silent miscompile, strictly worse than the crash.** The fix for (3) added an extension-method probe ahead of own-surface CLR lookup for any nilable receiver. It did not distinguish an extension *declared* to accept a nilable receiver from one merely *reachable* by implicit conversion. From one source line `xs.Reverse()`: a plain `List[int32]` receiver bound `List<T>.Reverse` (void, in place, first element `2`); a `List[int32]?` receiver bound `Enumerable.Reverse` (lazy, copying, result discarded, first element `1`). **Same line, opposite runtime meaning, chosen purely by the receiver's static nullability, with no diagnostic either way.** The same mechanism silently retyped `string?.Trim()` from `string` to `ReadOnlySpan<char>` via `MemoryExtensions`. |
 | 6 | `81a9400d` | **A scope question the narrow fix could not answer.** Gating the probe on a *declared*-nilable receiver fixed (5) but split the newly-reported sites in two: where a competing instance member exists the gate prevents a miscompile (must fix); where none exists — `IEnumerable[T]?.Min()`, `List[int32]?.Count()` — the extension was the right method all along and only its receiver was unguarded, a *pre-existing* latent-throw class the new gate incidentally started flagging. |
 
@@ -966,11 +966,11 @@ impact claim and an inflated one.
   rules. This exists *only* because G# cannot spell "nothing was stated", and it
   goes away.
 - **Bucket (b) — narrowing compensation.** Everything that bridges a **declared**
-  `T?` through a guard: gsc's Kotlin-style smart casts never narrow a
-  property/field-access chain (`ReceiverIsNullableReferenceFieldOrProperty`'s own
-  doc comment states the invariant), and gsc does not narrow a bare member
-  reference where it narrows the `this.`-qualified one (issue #4310). **None of
-  that is about obliviousness, and none of it changes.**
+  `T?` through a guard when the member path is unstable or the guard does not
+  dominate the use. Stable member paths narrow within the same condition,
+  including bare implicit-`this` references (the #4310 gap was closed incidentally
+  by #4287's fix, `f1cbbe25`). **None of that is about obliviousness, and none of
+  it changes.**
 
 #### Deleted (bucket a)
 
@@ -1119,13 +1119,10 @@ they did not.
 
 **4. `X != nil && X.Contains(i)` vs `this.X != nil && this.X.Contains(i)`.** If
 `X` is an oblivious CLR member, its type is `T!` and **neither form needs
-narrowing** — both compile, both emit the same IL, and the asymmetry is
-*irrelevant* rather than fixed. If `X` is a G#-declared `T?`, issue #4310 is
-unchanged: the qualified form narrows, the bare form does not, and this ADR does
-not close that gap. Stating both halves matters — the design removes the
-asymmetry's *reach into CLR interop*, which is where it was doing damage, and
-leaves the underlying `AccessPath`-keying gap exactly as #4310 describes it, for
-#4310 to fix.
+narrowing** — both compile and emit the same IL. This ADR did not itself change
+G#-declared `T?` member narrowing; #4287's later fix (`f1cbbe25`) incidentally
+closed #4310 by making the bare and `this.`-qualified forms consult the same
+stable `AccessPath`.
 
 **5. `xs.Reverse()` on `List[int32]!` — the silent miscompile.** §5 is the whole
 answer: lookup runs against `List[int32]`, finds the instance member
@@ -1318,8 +1315,9 @@ This ADR changes **nothing** about G#'s own nullability story:
   GS0154, and every conversion rule.
 - `!!`, `?.`, `?[`, `??`, `??=`, `if let` / `guard let` / `while let`: unchanged
   in meaning and in lowering; they gain `T!` as an accepted operand.
-- ADR-0069 smart-cast narrowing for G#-native code: unchanged. Issue #4310's
-  bare-vs-qualified gap is untouched.
+- ADR-0069 smart-cast narrowing for G#-native code: unchanged by this ADR.
+  #4287's later fix (`f1cbbe25`) incidentally closed the bare-vs-qualified
+  stable-member gap tracked as issue #4310.
 - Value-type nullability and `Nullable<T>` lowering: untouched.
 - Annotated imported members, including the whole modern BCL: untouched.
 - ADR-0155's C#-side migration rules, `Invariant.Required`, and the
