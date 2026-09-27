@@ -91,6 +91,35 @@ class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
                 }
             )
 
+    def test_benchmark_launch_semantic_drift_fails_parity(self) -> None:
+        expected = spike.semantic_lines(semantic_output(), "go")
+        retained = []
+
+        with self.assertRaisesRegex(SystemExit, "benchmark launch 1"):
+            spike.retain_benchmark_launch(
+                retained,
+                semantic_output(mutation="launch-drift") + "\nperf malformed",
+                "gsharp-jit",
+                expected,
+                1,
+            )
+        self.assertEqual(retained, [])
+
+    def test_benchmark_launch_row_error_includes_launch_context(self) -> None:
+        expected = spike.semantic_lines(semantic_output(), "go")
+
+        with self.assertRaisesRegex(
+            SystemExit,
+            "gsharp-aot benchmark launch 4",
+        ):
+            spike.retain_benchmark_launch(
+                [],
+                "runtime test\nsemantic ",
+                "gsharp-aot",
+                expected,
+                4,
+            )
+
     def test_paired_checksum_corruption_fails_cross_runtime_parity(self) -> None:
         with self.assertRaisesRegex(SystemExit, "checksum differs across runtimes"):
             spike.validate_cross_runtime_checksums(

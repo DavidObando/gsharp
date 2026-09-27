@@ -334,7 +334,7 @@ def build(out: Path, include_aot: bool) -> dict[str, list[str]]:
 
 def semantic_lines(output: str, runtime: str) -> list[str]:
     lines = [line for line in output.splitlines() if line.startswith("semantic ")]
-    names = [line.split(maxsplit=2)[1] for line in lines]
+    names = [line.removeprefix("semantic ").partition(" ")[0] for line in lines]
     if tuple(names) != EXPECTED_SEMANTIC_ROWS:
         raise SystemExit(
             f"{runtime} semantic rows must be non-empty and exactly "
@@ -359,6 +359,27 @@ def validate_semantics(outputs: dict[str, str]) -> list[str]:
                 f"go:\n{chr(10).join(expected)}"
             )
     return expected
+
+
+def retain_benchmark_launch(
+    samples: list[dict[str, dict[str, float | int]]],
+    output: str,
+    runtime: str,
+    expected: list[str],
+    launch: int,
+) -> None:
+    try:
+        actual = semantic_lines(output, runtime)
+    except SystemExit as error:
+        raise SystemExit(
+            f"{runtime} benchmark launch {launch}: {error}"
+        ) from error
+    if actual != expected:
+        raise SystemExit(
+            f"semantic parity failed for {runtime} benchmark launch {launch} "
+            "versus initial go"
+        )
+    samples.append(parse_perf(output))
 
 
 def runtime_line(output: str, runtime: str) -> str:
@@ -605,7 +626,14 @@ def main() -> int:
         rotated = order[launch % len(order) :] + order[: launch % len(order)]
         launch_orders.append(rotated)
         for runtime in rotated:
-            samples[runtime].append(parse_perf(run(commands[runtime], cwd=out, env=environment)))
+            output = run(commands[runtime], cwd=out, env=environment)
+            retain_benchmark_launch(
+                samples[runtime],
+                output,
+                runtime,
+                semantics,
+                launch + 1,
+            )
 
     validate_cross_runtime_checksums(samples)
     end_environment = environment_sample()
