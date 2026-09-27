@@ -199,6 +199,16 @@ Provide a migration command that binds source using
 - ordinary unqualified `array[...]` references to `$array[...]` or a stable
   qualification when they refer to user types.
 
+Project migration is transactional: it writes
+`GsharpSourceEpoch=native-slice-syntax` together with the source edits and
+leaves both unchanged if either write fails. Loose-file migration requires
+`--target-source-epoch=native-slice-syntax`, writes to an explicit output path
+rather than replacing the input by default, and emits a machine-readable
+migration result containing the required
+`--source-epoch=native-slice-syntax` compiler/REPL argument. This ADR adds no
+source-local epoch directive. A migrated loose file without that argument
+therefore fails the missing-epoch diagnostic instead of being reinterpreted.
+
 The migration preserves comments and source maps and does not rewrite indexing,
 comments, strings, or unrelated bracket syntax. A lexical search-and-replace is
 not an accepted implementation.
@@ -242,7 +252,9 @@ The syntax switch cannot ship until all of the following pass:
    retains legacy array syntax; neither profile depends on ordinary-name
    shadowing.
 2. A binding-aware migration preserves CLR metadata and behavior for old G#
-   array source, including ordinary `array` name collisions.
+   array source, including ordinary `array` name collisions. Project migration
+   commits source and `GsharpSourceEpoch` together; loose-file migration reports
+   the required target compiler argument and the output fails without it.
 3. Parser, formatter, completion, diagnostics, symbol display, REPL, direct
    compiler, SDK, and generated-source paths all honor the same epoch.
 4. Conformance tests distinguish array copies from shared slice views,
