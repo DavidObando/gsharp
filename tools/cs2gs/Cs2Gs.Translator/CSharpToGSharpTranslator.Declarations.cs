@@ -1321,15 +1321,14 @@ public sealed partial class CSharpToGSharpTranslator
                 && GeneratedSourceDetection.IsGeneratedSource(node.SyntaxTree, this.projectDirectory)
                 && IsRegexGeneratorDeclaration(symbol))
             {
-                bool hasRetainedImplementation =
-                    this.HasRegexGeneratorImplementation(node.SyntaxTree, definitionIsTranslated: false);
-                if (!hasRetainedImplementation)
+                (bool retained, bool regenerated) =
+                    this.GetRegexGeneratorImplementationState(node.SyntaxTree);
+                if (!retained)
                 {
                     return null;
                 }
 
-                if (this.HasRegexGeneratorImplementation(node.SyntaxTree, definitionIsTranslated: true)
-                    && this.reportedMixedRegexGeneratorTrees.Add(node.SyntaxTree))
+                if (regenerated && this.reportedMixedRegexGeneratorTrees.Add(node.SyntaxTree))
                 {
                     const string message =
                         "this RegexGenerator document contains implementations whose [GeneratedRegex] " +

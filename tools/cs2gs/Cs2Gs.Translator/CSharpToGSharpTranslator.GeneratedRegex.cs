@@ -104,10 +104,20 @@ public sealed partial class CSharpToGSharpTranslator
 
     private sealed partial class DeclarationVisitor
     {
+        private readonly Dictionary<SyntaxTree, (bool Retained, bool Regenerated)> regexGeneratorImplementationStates =
+            new();
+
         private readonly HashSet<SyntaxTree> reportedMixedRegexGeneratorTrees = new();
 
-        private bool HasRegexGeneratorImplementation(SyntaxTree tree, bool definitionIsTranslated)
+        private (bool Retained, bool Regenerated) GetRegexGeneratorImplementationState(SyntaxTree tree)
         {
+            if (this.regexGeneratorImplementationStates.TryGetValue(tree, out var cached))
+            {
+                return cached;
+            }
+
+            bool retained = false;
+            bool regenerated = false;
             foreach (MemberDeclarationSyntax node in tree.GetRoot().DescendantNodes()
                 .OfType<MemberDeclarationSyntax>())
             {
@@ -125,15 +135,24 @@ public sealed partial class CSharpToGSharpTranslator
                         when HasAttribute(property, GeneratedRegexAttributeName) => property,
                     _ => null,
                 };
-                if (definition != null
-                    && definition.DeclaringSyntaxReferences.Any(reference =>
-                        this.IsTranslatedByThisRun(reference.SyntaxTree)) == definitionIsTranslated)
+                if (definition == null)
                 {
-                    return true;
+                    continue;
+                }
+
+                bool definitionIsTranslated = definition.DeclaringSyntaxReferences.Any(reference =>
+                    this.IsTranslatedByThisRun(reference.SyntaxTree));
+                regenerated |= definitionIsTranslated;
+                retained |= !definitionIsTranslated;
+                if (retained && regenerated)
+                {
+                    break;
                 }
             }
 
-            return false;
+            var state = (retained, regenerated);
+            this.regexGeneratorImplementationStates.Add(tree, state);
+            return state;
         }
 
         /// <summary>
