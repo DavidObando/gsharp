@@ -651,6 +651,15 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var def = s.Definition ?? s;
+            if (!def.ReifiedFromTypeParameters.IsDefaultOrEmpty)
+            {
+                // Synthesized closure/box types already carry the complete
+                // enclosing-plus-own parameter vector. Record only the split;
+                // reifying again would duplicate the enclosing parameters.
+                this.remaps.SetNestedTypeEnclosingArity(def, enclosing.Length);
+                continue;
+            }
+
             var own = originalOwnParams.TryGetValue(def, out var snapshot) ? snapshot : def.TypeParameters;
 
             var combined = ImmutableArray.CreateBuilder<TypeParameterSymbol>(

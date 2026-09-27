@@ -256,6 +256,9 @@ internal static class CaptureBoxingRewriter
         var boxInfo = new Dictionary<VariableSymbol, BoxedVariable>();
         var dropFromCapture = new HashSet<VariableSymbol>();
         var packageName = function.Package?.Name ?? program.PackageName ?? string.Empty;
+        var enclosingType = function.ReceiverType
+            ?? function.StaticOwnerType
+            ?? function.LexicalEnclosingType;
 
         foreach (var variable in capturedSet)
         {
@@ -291,12 +294,48 @@ internal static class CaptureBoxingRewriter
             // `Box<…enclosing args…>` TypeSpec; the open definition (added to
             // newStructs) gets the TypeDef + generic-param rows.
             var origTPs = SynthesizedClosureReifier.CollectOrdered(new[] { variable.Type });
+            if (enclosingType is StructSymbol or InterfaceSymbol)
+            {
+                // A nested helper must redeclare every enclosing type parameter,
+                // even when its Value field does not reference all of them.
+                var ownerTypeParameters = StructSymbol.CollectEnclosingTypeParameters(enclosingType).AddRange(
+                    enclosingType switch
+                    {
+                        StructSymbol enclosingStruct => (enclosingStruct.Definition ?? enclosingStruct).TypeParameters,
+                        InterfaceSymbol enclosingInterface => enclosingInterface.Definition.TypeParameters,
+                        _ => ImmutableArray<TypeParameterSymbol>.Empty,
+                    });
+                if (!ownerTypeParameters.IsDefaultOrEmpty)
+                {
+                    var seeded = ImmutableArray.CreateBuilder<TypeParameterSymbol>(ownerTypeParameters.Length + origTPs.Length);
+                    seeded.AddRange(ownerTypeParameters);
+                    foreach (var typeParameter in origTPs)
+                    {
+                        if (!ownerTypeParameters.Contains(typeParameter))
+                        {
+                            seeded.Add(typeParameter);
+                        }
+                    }
+
+                    origTPs = seeded.ToImmutable();
+                }
+            }
+
             StructSymbol boxReference = boxClass;
             FieldSymbol fieldSymbol = boxClass.Fields[0];
             if (!origTPs.IsDefaultOrEmpty)
             {
                 boxReference = SynthesizedClosureReifier.Reify(boxClass, origTPs, mapClrType);
                 fieldSymbol = boxReference.Fields[0];
+            }
+
+            // Issue #4526: a box field can expose a private nested type from the
+            // enclosing member. Keep the helper in that member's CLR access domain.
+            // Set this after reification, matching closure synthesis: constructing
+            // an already-nested generic symbol would prepend owner arguments twice.
+            if (enclosingType is StructSymbol or InterfaceSymbol)
+            {
+                boxClass.SetContainingType(enclosingType);
             }
 
             // For captured locals: a new LocalVariableSymbol of the box type

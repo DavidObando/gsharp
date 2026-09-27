@@ -137,6 +137,38 @@ public class ClosureEmitTests
         Assert.Equal($"6{Environment.NewLine}101{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void CapturedPrivateNestedStructInSharedMethodRuns()
+    {
+        var source = """
+            package Issue4526
+            import System
+
+            class Outer {
+                private data struct Hidden(Value int32) {
+                }
+
+                shared {
+                    private func Read(hidden Hidden) int32 {
+                        let read = () -> hidden.Value
+                        return read()
+                    }
+
+                    func Run() int32 {
+                        return Read(Hidden(42))
+                    }
+                }
+            }
+
+            func Main() {
+                Console.WriteLine(Outer.Run())
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"42{Environment.NewLine}", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_closure_emit_").FullName;
