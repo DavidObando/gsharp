@@ -180,6 +180,80 @@ func benchManagedConstruction(count int32) {
     report("managed-create", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
 }
 
+func benchManagedRetained(count int32) {
+    let values = slice[int32]{1}
+    var retained = [count]managed[int32]? {}
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        retained[i] = managed(values[0])
+    }
+    sw.Stop()
+    let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+    var checksum int64
+    for i in 0 ... count {
+        checksum += *retained[i]!!
+    }
+    report("managed-retained", sw.Elapsed, count, allocated, checksum)
+}
+
+func benchManagedFirstIdentity(count int32) {
+    let values = slice[int32]{1}
+    var locations = [count]managed[int32]? {}
+    for i in 0 ... count {
+        locations[i] = managed(values[0])
+    }
+    let expected = managed(values[0])
+    var checksum int64
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        if locations[i]!!== expected {
+            checksum += 1
+        }
+    }
+    sw.Stop()
+    report("managed-first-identity", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+}
+
+func benchManagedWarmedIdentity(count int32) {
+    let values = slice[int32]{1}
+    let left = managed(values[0])
+    let right = managed(values[0])
+    let warm = left == right
+    var checksum int64
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        if left == right {
+            checksum += 1
+        }
+    }
+    sw.Stop()
+    if warm {
+        checksum += 1
+    }
+    report("managed-warmed-identity", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+}
+
+func benchManagedDirectReadOnly(count int32) {
+    let values = slice[int32]{1}
+    var checksum int64
+    for warmup in 0 ... 20000 {
+        let location = readonly managed(values[0])
+        checksum += *location
+    }
+    checksum = 0
+    let before = GC.GetAllocatedBytesForCurrentThread()
+    let sw = Stopwatch.StartNew()
+    for i in 0 ... count {
+        let location = readonly managed(values[0])
+        checksum += *location
+    }
+    sw.Stop()
+    report("managed-readonly-create", sw.Elapsed, count, GC.GetAllocatedBytesForCurrentThread() - before, checksum)
+}
+
 func benchAdaptReference(count int32) {
     let source = ReferenceCounter(0)
     let counter = adapt[Counter](source)
@@ -364,6 +438,10 @@ func Main() {
         benchSliceAppend(count)
         benchManaged(count)
         benchManagedConstruction(count)
+        benchManagedRetained(count)
+        benchManagedFirstIdentity(count)
+        benchManagedWarmedIdentity(count)
+        benchManagedDirectReadOnly(count)
         benchAdaptReference(count)
         benchNominalReference(count)
         benchAdaptLocation(count)
