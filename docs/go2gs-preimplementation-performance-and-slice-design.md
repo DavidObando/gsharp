@@ -803,7 +803,7 @@ These distinguish existing requirements from proposed new gates.
   profile. Warmed identity has no per-operation allocation.
 - Shared-root, retained, and multi-capture rich construction match their
   corresponding raw control totals. Preserve the runner's bounded
-  **128-byte fixed allowance only at at least one million operations**, not
+  **128-byte fixed allowance only at least one million operations**, not
   rounded per-operation comparisons or an allowance for every operation.
   Fresh-root setup remains separately visible.
 - Preserve [runner discrimination tests][prereq-tests]. A performance-ready
