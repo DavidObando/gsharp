@@ -1997,6 +1997,7 @@ internal sealed partial class DeclarationBinder
                         }
                         else if (!hasSetter
                             && baseProp.HasGetter
+                            && !baseProp.HasSetter
                             && propReturnRefKind == RefKind.None
                             && FindPropertyOwner(structSymbol.BaseClass, baseProp) is { } covariantOwner)
                         {
@@ -2011,6 +2012,10 @@ internal sealed partial class DeclarationBinder
                             // unimplemented (a TypeLoadException at run time).
                             // Whether it IS a narrowing is decided once every
                             // type is bound (see RegisterCovariantPropertyOverrideCheck).
+                            // As in C#, the overridden property must be
+                            // read-only: only the getter gets a MethodImpl, so a
+                            // base setter would stay unimplemented (for an
+                            // abstract base, a TypeLoadException).
                             // The base must have a getter to bind to, and the
                             // CLR covariant-return form covers by-value returns
                             // only, so a by-ref narrowing has no override form.

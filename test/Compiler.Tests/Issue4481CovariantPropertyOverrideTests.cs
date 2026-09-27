@@ -271,6 +271,81 @@ Console.WriteLine(a.Property.Tag)
             new[] { "x", "p:y" },
         };
 
+        // The read resolves the level that DECLARES the bound property, at any
+        // depth and whether or not the levels between are generic. A generic
+        // leaf over the non-generic covariant override, a generic middle level
+        // below it, and a generic level that itself holds the override: each
+        // is read through every receiver type in its chain.
+        yield return new object[]
+        {
+            "generic-levels-around-the-override",
+            @"
+open class Node[T] {
+    open prop Property T { get; }
+}
+
+open class Access : Node[Sym] {
+    init(p PSym) {
+        _property = p
+    }
+
+    private var _property PSym
+    override prop Property PSym -> _property
+}
+
+class GenericLeaf[T] : Access {
+    init(p PSym) : base(p) {
+    }
+}
+
+open class Mid[U] : Access {
+    init(p PSym) : base(p) {
+    }
+}
+
+class MidLeaf : Mid[int32] {
+    init(p PSym) : base(p) {
+    }
+}
+
+open class GenericAccess[U] : Node[Sym] {
+    init(p PSym) {
+        _property = p
+    }
+
+    private var _property PSym
+    override prop Property PSym -> _property
+}
+
+class GenericAccessLeaf : GenericAccess[int32] {
+    init(p PSym) : base(p) {
+    }
+}
+
+let leaf = GenericLeaf[int32](PSym(""a""))
+Console.WriteLine(leaf.Property.Tag)
+let leafAsAccess Access = leaf
+Console.WriteLine(leafAsAccess.Property.Tag)
+let leafAsNode Node[Sym] = leaf
+Console.WriteLine(leafAsNode.Property.Name)
+
+let midLeaf = MidLeaf(PSym(""b""))
+Console.WriteLine(midLeaf.Property.Tag)
+let midLeafAsMid Mid[int32] = midLeaf
+Console.WriteLine(midLeafAsMid.Property.Tag)
+let midLeafAsNode Node[Sym] = midLeaf
+Console.WriteLine(midLeafAsNode.Property.Name)
+
+let genericAccessLeaf = GenericAccessLeaf(PSym(""c""))
+Console.WriteLine(genericAccessLeaf.Property.Tag)
+let genericAccess GenericAccess[int32] = genericAccessLeaf
+Console.WriteLine(genericAccess.Property.Tag)
+let genericAccessAsNode Node[Sym] = genericAccessLeaf
+Console.WriteLine(genericAccessAsNode.Property.Name)
+",
+            new[] { "p:a", "p:a", "a", "p:b", "p:b", "b", "p:c", "p:c", "c" },
+        };
+
         // A same-type override (nullability aside) keeps reusing the base slot.
         yield return new object[]
         {
@@ -378,6 +453,10 @@ Console.WriteLine(n.Property!!.Name)
         "by-ref-narrowing",
         "var slot Sym = Sym(\"a\")\nopen prop Property ref Sym { get { return ref slot } }",
         "var own PSym = PSym(\"b\")\noverride prop Property ref PSym { get { return ref own } }")]
+    [InlineData(
+        "get-only-narrowing-over-read-write-base",
+        "open prop Property Sym { get; set; }",
+        "override prop Property PSym -> PSym(\"s\")")]
     [InlineData(
         "getter-over-setter-only-base",
         "open prop Property Sym { set { } }",

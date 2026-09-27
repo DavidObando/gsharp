@@ -2490,31 +2490,70 @@ internal sealed partial class MethodBodyEmitter
             return null;
         }
 
-        // Issue #4481: the generic-base walk matches a declaring level by NAME
-        // and skips non-generic levels, so a non-generic override of a generic
-        // base's property was read through the BASE accessor. For a covariant
-        // override that accessor returns the base's (wider) type, not the
-        // override's, which leaves the wrong type on the stack. When the
-        // resolved property is declared by a non-generic level of the receiver,
-        // read it through that level's own accessor.
-        foreach (var level in receiver.GetHierarchy())
+        // Issue #4481: the bound expression carries the exact PropertySymbol,
+        // so find the hierarchy level that DECLARES it (by reference, at every
+        // level, generic or not) and read through that level's accessor. The
+        // name-based walk below matches the first GENERIC level declaring any
+        // property of that name, so it picked an overridden base declaration
+        // whenever an override sat on a level it skipped — for a covariant
+        // override that accessor returns the base's wider type, leaving the
+        // wrong type on the stack.
+        if (FindDeclaringLevel(receiver, property) is { } declaringLevel)
         {
-            if (level.IsConstructedNestedType || ReflectionMetadataEmitter.IsUserGenericTypeReference(level))
+            if (!declaringLevel.IsConstructedNestedType
+                && !ReflectionMetadataEmitter.IsUserGenericTypeReference(declaringLevel))
             {
-                break;
-            }
-
-            var declared = property.IsStatic ? level.StaticProperties : level.Properties;
-            if (!declared.IsDefaultOrEmpty && declared.Contains(property))
-            {
+                // A non-generic declaring type: its own accessor MethodDef.
                 return null;
             }
+
+            // The declaring generic type as seen from the receiver, with the
+            // receiver's type arguments composed through the chain.
+            var declaringDefinition = declaringLevel.Definition ?? declaringLevel;
+            return receiver.FindConstructedGenericBase(def => ReferenceEquals(def, declaringDefinition))
+                ?? declaringLevel;
         }
 
         return receiver.FindConstructedGenericBase(def =>
         {
             return DefDeclaresProperty(def, property);
         });
+    }
+
+    // Issue #4481: the level of `receiver`'s hierarchy whose property list
+    // holds `property` itself — as constructed from the receiver, or in its
+    // open definition (constructed members are position-parallel copies of
+    // the definition's). Null when no level holds that exact symbol.
+    private static StructSymbol? FindDeclaringLevel(StructSymbol receiver, PropertySymbol property)
+    {
+        foreach (var level in receiver.GetHierarchy())
+        {
+            if (HoldsProperty(level, property) || HoldsProperty(level.Definition ?? level, property))
+            {
+                return level;
+            }
+        }
+
+        return null;
+    }
+
+    private static bool HoldsProperty(StructSymbol type, PropertySymbol property)
+    {
+        var declared = property.IsStatic ? type.StaticProperties : type.Properties;
+        if (declared.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        foreach (var candidate in declared)
+        {
+            if (ReferenceEquals(candidate, property))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     private static bool DefDeclaresProperty(StructSymbol def, PropertySymbol property)
