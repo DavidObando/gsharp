@@ -389,7 +389,7 @@ namespace Sample
         Assert.Contains("OtherGeneratedOutput", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Digits_0", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Utilities", retainedSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("partial Regex Digits()", retainedSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Digits() =>", retainedSource, StringComparison.Ordinal);
     }
 
     /// <summary>
