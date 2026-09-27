@@ -91,6 +91,13 @@ internal sealed class CustomAttributeEncoder
         this.resolveExplicitCtorToken = resolveExplicitCtorToken;
     }
 
+    private enum AttributeConstructorArgumentForm
+    {
+        Normal,
+        Defaulted,
+        ParamsExpanded,
+    }
+
     /// <summary>
     /// Emits a fixed-shape custom attribute whose constructor takes a single
     /// <see cref="string"/> argument, used by assembly-level helpers such as
@@ -1132,7 +1139,7 @@ internal sealed class CustomAttributeEncoder
         // Keep the existing precedence: normal form, omitted optionals, then
         // params expansion. Named constructor arguments only change which
         // parameter slot receives each supplied value.
-        for (var desiredForm = 0; desiredForm <= 2; desiredForm++)
+        foreach (var desiredForm in Enum.GetValues<AttributeConstructorArgumentForm>())
         {
             foreach (var constructor in constructors)
             {
@@ -1234,13 +1241,13 @@ internal sealed class CustomAttributeEncoder
     private static bool TryMapAttributeConstructorArguments(
         ParameterInfo[] parameters,
         ImmutableArray<BoundAttributeArgument> arguments,
-        int desiredForm,
+        AttributeConstructorArgumentForm desiredForm,
         out object?[] effective,
         out BoundAttributeArgument? positionalConflict)
     {
         effective = Array.Empty<object?>();
         positionalConflict = null;
-        var expanded = desiredForm == 2;
+        var expanded = desiredForm == AttributeConstructorArgumentForm.ParamsExpanded;
         var hasParams = parameters.Length > 0 && IsParamsArray(parameters[parameters.Length - 1]);
         var fixedCount = expanded && hasParams ? parameters.Length - 1 : parameters.Length;
         if ((expanded && !hasParams) || (!expanded && arguments.Length > parameters.Length))
@@ -1252,6 +1259,15 @@ internal sealed class CustomAttributeEncoder
         var filled = new bool[parameters.Length];
         var expandedTail = new List<BoundAttributeArgument>();
         var parameterNames = parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray();
+        var parameterIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            parameterIndexes[SyntaxFacts.GetEmittedIdentifier(
+                parameters[i].Name ?? string.Empty,
+                IdentifierNameContext.Parameter,
+                parameterNames)] = i;
+        }
+
         var sawOutOfPositionName = false;
         for (var sourceIndex = 0; sourceIndex < arguments.Length; sourceIndex++)
         {
@@ -1259,12 +1275,9 @@ internal sealed class CustomAttributeEncoder
             var parameterIndex = sourceIndex;
             if (argument.Name is { } sourceName)
             {
-                parameterIndex = Array.FindIndex(
-                    parameters,
-                    parameter => SyntaxFacts.GetEmittedIdentifier(
-                        parameter.Name ?? string.Empty,
-                        IdentifierNameContext.Parameter,
-                        parameterNames) == sourceName);
+                parameterIndex = parameterIndexes.TryGetValue(sourceName, out var matchedIndex)
+                    ? matchedIndex
+                    : -1;
                 sawOutOfPositionName |= parameterIndex != sourceIndex;
             }
             else
@@ -1334,7 +1347,8 @@ internal sealed class CustomAttributeEncoder
                 }
             }
 
-            if ((desiredForm == 0 && usedDefault) || (desiredForm == 1 && !usedDefault))
+            if ((desiredForm == AttributeConstructorArgumentForm.Normal && usedDefault)
+                || (desiredForm == AttributeConstructorArgumentForm.Defaulted && !usedDefault))
             {
                 return false;
             }

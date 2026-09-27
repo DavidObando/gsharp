@@ -84,9 +84,14 @@ public sealed class BoundAttribute : BoundNode
     /// <returns>The supplied argument, or <see langword="null"/> when omitted.</returns>
     public BoundAttributeArgument? GetConstructorArgument(int position, string parameterName)
     {
+        var emittedParameterName = SyntaxFacts.GetEmittedIdentifier(
+            parameterName,
+            IdentifierNameContext.Parameter,
+            new[] { parameterName });
         foreach (var argument in PositionalArguments)
         {
-            if (string.Equals(argument.Name, parameterName, System.StringComparison.Ordinal))
+            if (string.Equals(argument.Name, parameterName, System.StringComparison.Ordinal)
+                || string.Equals(argument.Name, emittedParameterName, System.StringComparison.Ordinal))
             {
                 return argument;
             }
