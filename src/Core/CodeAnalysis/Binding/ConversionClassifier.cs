@@ -2510,7 +2510,11 @@ internal sealed class ConversionClassifier
             // arguments here, only the target delegate signature.
             var resolvedMethod = targetParameterRefKinds.Any(kind => kind != RefKind.None) && applicable.Count == 1
                 ? applicable[0]
-                : ClrOverloadResolution.Resolve(applicable, argTypes).Best;
+                : ClrOverloadResolution.Resolve(
+                    applicable,
+                    argTypes,
+                    trailingParameterCountToIgnore: static candidate =>
+                        ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0).Best;
             if (resolvedMethod != null)
             {
                 var resolved = new BoundClrMethodGroupExpression(

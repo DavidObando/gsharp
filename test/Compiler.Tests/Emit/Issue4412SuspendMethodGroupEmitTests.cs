@@ -235,6 +235,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             namespace Interop;
 
             public delegate ValueTask<int> RefRunner(ref int value);
+            public delegate ValueTask<int> ValueRunner(int value);
 
             public static class Api
             {
@@ -244,6 +245,10 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                     value++;
                     return new ValueTask<int>(value);
                 }
+
+                [Suspending]
+                public static ValueTask<int> Echo(int value, Context context) =>
+                    new(value);
             }
             """;
         const string app = """
@@ -256,6 +261,8 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 let callback RefRunner = Api.Increment
                 Console.WriteLine(await callback(ref value))
                 Console.WriteLine(value)
+                let echo ValueRunner = Api.Echo
+                Console.WriteLine(await echo(6))
             }
 
             run()
@@ -269,7 +276,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             IlVerifier.Verify(
                 appPath,
                 new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
-            Assert.Equal($"5{Environment.NewLine}5{Environment.NewLine}", Run(appPath));
+            Assert.Equal($"5{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}", Run(appPath));
         }
         finally
         {
@@ -379,6 +386,33 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             var diagnostics = CompileExpectingError(directory, "App", source, "/target:library");
             Assert.Contains("GS0422", diagnostics, StringComparison.Ordinal);
             Assert.Contains("suspend function", diagnostics, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InferredSuspendMethodWithByRefParameter_IsRejectedBeforeAdapterEmission()
+    {
+        const string source = """
+            package Issue4412
+            import System.Threading.Tasks
+
+            func Increment(ref value int32) int32 {
+                value++
+                return await Task.FromResult(value)
+            }
+            """;
+
+        var directory = PrepareDirectory(nameof(InferredSuspendMethodWithByRefParameter_IsRejectedBeforeAdapterEmission));
+        try
+        {
+            var diagnostics = CompileExpectingError(directory, "App", source, "/target:library");
+            Assert.Contains("GS0422", diagnostics, StringComparison.Ordinal);
+            Assert.Contains("inferred-suspending function", diagnostics, StringComparison.Ordinal);
             Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
         }
         finally

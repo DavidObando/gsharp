@@ -74,19 +74,21 @@ internal static class SuspensionInference
 
         var ordered = bodies.Keys.OrderBy(SortKey, StringComparer.Ordinal).ToList();
         var facts = new Dictionary<FunctionSymbol, SuspensionPointCollector.Facts>();
+        var bag = new DiagnosticBag();
         foreach (var function in ordered)
         {
             facts[function] = SuspensionPointCollector.Collect(bodies[function]);
         }
 
         var inferred = new HashSet<FunctionSymbol>();
+        var rejected = new HashSet<FunctionSymbol>();
         var changed = true;
         while (changed)
         {
             changed = false;
             foreach (var function in ordered)
             {
-                if (function.IsSuspending || function.IsAsync || ReferenceEquals(function, entryPoint) || IsBoundary(function, bodies[function]))
+                if (function.IsSuspending || function.IsAsync || rejected.Contains(function) || ReferenceEquals(function, entryPoint) || IsBoundary(function, bodies[function]))
                 {
                     continue;
                 }
@@ -94,6 +96,27 @@ internal static class SuspensionInference
                 var own = facts[function];
                 if (own.HasDirectPoint || own.Callees.Any(static callee => callee.IsSuspending))
                 {
+                    var hasRefKindParameter = false;
+                    foreach (var parameter in function.Parameters)
+                    {
+                        if (parameter.RefKind == RefKind.None || parameter.DeclaringSyntax == null)
+                        {
+                            continue;
+                        }
+
+                        bag.ReportRefKindOnAsyncOrIterator(
+                            parameter.DeclaringSyntax.Location,
+                            parameter.Name,
+                            "inferred-suspending");
+                        hasRefKindParameter = true;
+                    }
+
+                    if (hasRefKindParameter)
+                    {
+                        rejected.Add(function);
+                        continue;
+                    }
+
                     function.SuspendingKind = SuspendingKind.Inferred;
                     function.AsyncReturnsValueTask = true;
                     inferred.Add(function);
@@ -123,7 +146,6 @@ internal static class SuspensionInference
             }
         }
 
-        var bag = new DiagnosticBag();
         var newlySuspending = inferred.ToImmutableHashSet();
         foreach (var function in ordered)
         {

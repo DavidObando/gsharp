@@ -826,7 +826,11 @@ internal static class ClrOverloadResolution
     /// implicit conversion to the candidate parameter. Imported arguments keep
     /// using the CLR classifier unchanged.
     /// </param>
-    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null, Func<int, Type, ImplicitConversionKind?>? symbolicArgumentConversionClassifier = null)
+    /// <param name="trailingParameterCountToIgnore">
+    /// Optional per-candidate count of trailing ABI-only parameters excluded
+    /// from applicability and ranking.
+    /// </param>
+    public static Result<T> Resolve<T>(IEnumerable<T> candidates, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs = null, Func<Type, Type>? projectTypeArgument = null, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null, Func<int, Type, ImplicitConversionKind?>? symbolicArgumentConversionClassifier = null, Func<T, int>? trailingParameterCountToIgnore = null)
         where T : MethodBase
     {
         var applicable = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)>();
@@ -855,7 +859,7 @@ internal static class ClrOverloadResolution
             // rest.
             try
             {
-                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, methodGroupInference, methodGroupArgumentCheck, deferredInferenceArgs, functionLiteralArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, openLiteralArgumentCheck, symbolicArgTypes, symbolicArgumentConversionClassifier);
+                EvaluateCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, methodGroupInference, methodGroupArgumentCheck, deferredInferenceArgs, functionLiteralArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, openLiteralArgumentCheck, symbolicArgTypes, symbolicArgumentConversionClassifier, trailingParameterCountToIgnore);
             }
             catch (Exception ex) when (IsMetadataLoadFailure(ex))
             {
@@ -879,7 +883,7 @@ internal static class ClrOverloadResolution
 
                 try
                 {
-                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, methodGroupInference, methodGroupArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, deferredInferenceArgs, openLiteralArgumentCheck, symbolicArgTypes, symbolicArgumentConversionClassifier);
+                    EvaluateExpandedParamsCandidate(rawCandidate, argTypes, explicitTypeArgs, projectTypeArgument, applicable, interpolatedStringArgs, argumentNames, recoverTypeArgSymbols, supplementaryInterfaceCheck, constantNarrowingArgumentCheck, structuralProjectionArgumentCheck, delegateRefKindArgumentCheck, methodGroupInference, methodGroupArgumentCheck, erasedArgumentMismatchCheck, explicitTypeArgIsGenuine, explicitTypeArgumentMismatchCheck, deferredInferenceArgs, openLiteralArgumentCheck, symbolicArgTypes, symbolicArgumentConversionClassifier, trailingParameterCountToIgnore);
                 }
                 catch (Exception ex) when (IsMetadataLoadFailure(ex))
                 {
@@ -3110,7 +3114,7 @@ internal static class ClrOverloadResolution
     /// so the per-candidate work can be guarded against reflection load
     /// failures (issue #321) without disturbing the surrounding control flow.
     /// </summary>
-    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null, Func<int, Type, ImplicitConversionKind?>? symbolicArgumentConversionClassifier = null)
+    private static void EvaluateCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, bool>? functionLiteralArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null, Func<int, Type, ImplicitConversionKind?>? symbolicArgumentConversionClassifier = null, Func<T, int>? trailingParameterCountToIgnore = null)
         where T : MethodBase
     {
         {
@@ -3443,6 +3447,11 @@ internal static class ClrOverloadResolution
             }
 
             var parameters = candidate.GetParameters();
+            var ignoredTrailingParameters = trailingParameterCountToIgnore?.Invoke(candidate) ?? 0;
+            if (ignoredTrailingParameters > 0)
+            {
+                parameters = parameters[..^ignoredTrailingParameters];
+            }
 
             // Issue #343: build a per-source-index → parameter-position mapping
             // when named arguments are present. Reject the candidate if any
@@ -3813,7 +3822,7 @@ internal static class ClrOverloadResolution
     /// applicability check in <see cref="EvaluateCandidate"/> but rewrites the
     /// trailing parameter type to the element type for ranking purposes.
     /// </summary>
-    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null, Func<int, Type, ImplicitConversionKind?>? symbolicArgumentConversionClassifier = null)
+    private static void EvaluateExpandedParamsCandidate<T>(T rawCandidate, IReadOnlyList<Type?> argTypes, IReadOnlyList<Type>? explicitTypeArgs, Func<Type, Type>? projectTypeArgument, List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<bool>? interpolatedStringArgs = null, IReadOnlyList<string?>? argumentNames = null, Func<MethodInfo, bool, ImmutableArray<TypeSymbol?>>? recoverTypeArgSymbols = null, Func<Type, Type, bool>? supplementaryInterfaceCheck = null, Func<int, Type, bool>? constantNarrowingArgumentCheck = null, Func<int, Type, bool>? structuralProjectionArgumentCheck = null, Func<int, Type, bool?>? delegateRefKindArgumentCheck = null, Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null, Func<int, bool>? methodGroupArgumentCheck = null, Func<int, Type, bool>? erasedArgumentMismatchCheck = null, IReadOnlyList<bool>? explicitTypeArgIsGenuine = null, Func<int, MethodBase, bool>? explicitTypeArgumentMismatchCheck = null, IReadOnlyList<bool>? deferredInferenceArgs = null, Func<int, Type, bool>? openLiteralArgumentCheck = null, IReadOnlyList<TypeSymbol>? symbolicArgTypes = null, Func<int, Type, ImplicitConversionKind?>? symbolicArgumentConversionClassifier = null, Func<T, int>? trailingParameterCountToIgnore = null)
         where T : MethodBase
     {
         T candidate = rawCandidate;
@@ -3990,6 +3999,12 @@ internal static class ClrOverloadResolution
         }
 
         var parameters = candidate.GetParameters();
+        var ignoredTrailingParameters = trailingParameterCountToIgnore?.Invoke(candidate) ?? 0;
+        if (ignoredTrailingParameters > 0)
+        {
+            parameters = parameters[..^ignoredTrailingParameters];
+        }
+
         if (parameters.Length == 0)
         {
             return;
