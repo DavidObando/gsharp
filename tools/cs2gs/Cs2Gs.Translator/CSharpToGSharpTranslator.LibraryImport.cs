@@ -357,13 +357,16 @@ public sealed partial class CSharpToGSharpTranslator
                             : this.MapLibraryImportArgumentConstant(data, argument.Name, node);
                     hasStringMarshalling |= argument.Name == "StringMarshalling";
                     arguments.Add(constant == null
-                        ? new AttributeArgument(argument.Value, emittedName)
-                        : new AttributeArgument(constant, emittedName));
+                        ? new AttributeArgument(argument.Value, emittedName, isMemberAssignment: true)
+                        : new AttributeArgument(constant, emittedName, isMemberAssignment: true));
                 }
 
                 if (!hasStringMarshalling && foldedStringMarshalling != null)
                 {
-                    arguments.Add(new AttributeArgument(foldedStringMarshalling, "StringMarshalling"));
+                    arguments.Add(new AttributeArgument(
+                        foldedStringMarshalling,
+                        "StringMarshalling",
+                        isMemberAssignment: true));
                 }
 
                 result.Add(new AttributeUse(attribute.Name, arguments, null));

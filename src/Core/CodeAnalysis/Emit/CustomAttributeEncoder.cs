@@ -49,8 +49,7 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </list>
 /// <para>
 /// Plus the private static blob-encoding helpers:
-/// <c>ResolveAttributeConstructor</c>, <c>ParametersMatch</c>,
-/// <c>ArgAssignable</c>, <c>BuildCtorArgumentValues</c>,
+/// <c>ResolveAttributeConstructor</c>, <c>ArgAssignable</c>,
 /// <c>NormalizeWellKnownType</c>, <c>IsTriviallyConvertible</c>,
 /// <c>EncodeClrTypeForCtorSig</c>, <c>WriteCustomAttributeFixedArg</c>,
 /// <c>WriteCustomAttributeArrayArg</c>, <c>GetSerializedTypeName</c>,
@@ -611,8 +610,11 @@ internal sealed class CustomAttributeEncoder
             resolved = clrType;
         }
 
-        var positional = attr.PositionalArguments;
-        var ctor = ResolveAttributeConstructor(resolved, positional);
+        var ctor = ResolveAttributeConstructor(
+            resolved,
+            attr,
+            out var effective,
+            out var memberArguments);
         if (ctor == null)
         {
             // Issue #4097: "no candidate matched" is the right ANSWER for this
@@ -623,7 +625,7 @@ internal sealed class CustomAttributeEncoder
             EmitDiagnosticException.ThrowAttributeConstructorNotFound(
                 attr.Syntax,
                 attr.AttributeType.Name,
-                DescribeArgumentList(positional));
+                DescribeArgumentList(attr.PositionalArguments));
         }
 
         var ctorParams = ctor.GetParameters();
@@ -646,11 +648,6 @@ internal sealed class CustomAttributeEncoder
             this.emitCtx.Metadata.GetOrAddString(".ctor"),
             this.emitCtx.Metadata.GetOrAddBlob(ctorSig));
 
-        // Map the supplied positional arguments onto the constructor parameters,
-        // collapsing a trailing params-array (e.g. InlineData(params object[]))
-        // into a single synthesized array argument.
-        var effective = BuildCtorArgumentValues(ctorParams, positional);
-
         var valueBlob = new BlobBuilder();
         valueBlob.WriteUInt16(0x0001);
         for (int i = 0; i < ctorParams.Length; i++)
@@ -662,9 +659,8 @@ internal sealed class CustomAttributeEncoder
             WriteCustomAttributeFixedArg(valueBlob, writeType, effective[i]);
         }
 
-        var named = attr.NamedArguments;
-        valueBlob.WriteUInt16((ushort)named.Length);
-        foreach (var arg in named)
+        valueBlob.WriteUInt16((ushort)memberArguments.Length);
+        foreach (var arg in memberArguments)
         {
             WriteCustomAttributeNamedArg(valueBlob, resolved, arg);
         }
@@ -709,6 +705,7 @@ internal sealed class CustomAttributeEncoder
                 attr,
                 out var ctorToken,
                 out var paramTypes,
+                out var effectiveArguments,
                 out var unsupportedParameter))
         {
             // Issue #4097: both failure modes used to drop the row silently.
@@ -738,7 +735,7 @@ internal sealed class CustomAttributeEncoder
         for (int i = 0; i < paramTypes.Length; i++)
         {
             var writeType = NormalizeWellKnownType(paramTypes[i]);
-            WriteCustomAttributeFixedArg(valueBlob, writeType, attr.PositionalArguments[i]);
+            WriteCustomAttributeFixedArg(valueBlob, writeType, effectiveArguments[i]);
         }
 
         valueBlob.WriteUInt16(0); // NumNamed — see remarks above.
@@ -773,30 +770,40 @@ internal sealed class CustomAttributeEncoder
         BoundAttribute attr,
         out EntityHandle ctorToken,
         [NotNullWhen(true)] out Type[]? paramTypes,
+        [NotNullWhen(true)] out object?[]? effectiveArguments,
         out ParameterSymbol? unsupportedParameter)
     {
         var argCount = attr.PositionalArguments.Length;
         ctorToken = default;
         paramTypes = null;
+        effectiveArguments = null;
         unsupportedParameter = null;
         var sawProjectableCandidate = false;
+        BoundAttributeArgument? positionalConflict = null;
 
         if (attributeType.HasPrimaryConstructor
-            && attributeType.PrimaryConstructorParameters.Length == argCount
             && this.resolvePrimaryCtorToken != null)
         {
             if (!TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes, out var offending))
             {
                 unsupportedParameter = offending;
             }
-            else if (SawProjectable(ref sawProjectableCandidate)
-                && ArgumentsAssignable(attr.PositionalArguments, paramTypes))
-            {
-                ctorToken = this.resolvePrimaryCtorToken(attributeType);
-                return true;
-            }
             else
             {
+                SawProjectable(ref sawProjectableCandidate);
+                if (TryMapUserAttributeConstructorArguments(
+                        attributeType.PrimaryConstructorParameters,
+                        paramTypes,
+                        attr,
+                        out effectiveArguments,
+                        out var conflict))
+                {
+                    ctorToken = this.resolvePrimaryCtorToken(attributeType);
+                    return true;
+                }
+
+                positionalConflict ??= conflict;
+
                 // Issue #4097: this arm used to be missing entirely. A primary
                 // constructor was accepted on ARITY alone, so `@Note(1)` at
                 // `NoteAttribute(Text string)` reached the blob writer with an
@@ -812,15 +819,11 @@ internal sealed class CustomAttributeEncoder
         {
             ConstructorSymbol? matchedCtor = null;
             Type[]? matchedParamTypes = null;
+            object?[]? matchedArguments = null;
             ConstructorSymbol? ambiguousCtor = null;
 
             foreach (var ctor in attributeType.EffectiveExplicitConstructors)
             {
-                if (ctor.Parameters.Length != argCount)
-                {
-                    continue;
-                }
-
                 if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes, out var offending))
                 {
                     // Recorded, but only provisionally — see the
@@ -837,8 +840,14 @@ internal sealed class CustomAttributeEncoder
                 }
 
                 sawProjectableCandidate = true;
-                if (!ArgumentsAssignable(attr.PositionalArguments, candidateParamTypes))
+                if (!TryMapUserAttributeConstructorArguments(
+                        ctor.Parameters,
+                        candidateParamTypes,
+                        attr,
+                        out var candidateArguments,
+                        out var conflict))
                 {
+                    positionalConflict ??= conflict;
                     continue;
                 }
 
@@ -850,19 +859,21 @@ internal sealed class CustomAttributeEncoder
 
                 matchedCtor = ctor;
                 matchedParamTypes = candidateParamTypes;
+                matchedArguments = candidateArguments;
             }
 
             if (ambiguousCtor != null)
             {
                 EmitDiagnosticException.Throw(
                     attr.Syntax,
-                    $"Ambiguous constructor for attribute '{attributeType.Name}': more than one 'init(...)' overload with {argCount} parameter(s) accepts the given argument types. Add an explicit conversion or change the argument types to disambiguate.");
+                    $"Ambiguous constructor for attribute '{attributeType.Name}': more than one 'init(...)' overload accepts the given arguments. Add an explicit conversion or change the argument types to disambiguate.");
             }
 
-            if (matchedCtor != null && matchedParamTypes != null)
+            if (matchedCtor != null && matchedParamTypes != null && matchedArguments != null)
             {
                 ctorToken = this.resolveExplicitCtorToken(attributeType, matchedCtor);
                 paramTypes = matchedParamTypes;
+                effectiveArguments = matchedArguments;
                 return true;
             }
         }
@@ -880,6 +891,15 @@ internal sealed class CustomAttributeEncoder
             unsupportedParameter = null;
         }
 
+        if (positionalConflict != null)
+        {
+            EmitDiagnosticException.ThrowDiagnostic(
+                positionalConflict.Syntax ?? attr.Syntax,
+                DiagnosticDescriptors.NamedArgumentAlsoSpecifiedPositionally,
+                positionalConflict.Name,
+                positionalConflict.Name);
+        }
+
         if (argCount == 0 && this.resolveDefaultCtorToken != null)
         {
             try
@@ -895,11 +915,93 @@ internal sealed class CustomAttributeEncoder
             }
 
             paramTypes = Array.Empty<Type>();
+            effectiveArguments = Array.Empty<object?>();
             return true;
         }
 
         paramTypes = null;
+        effectiveArguments = null;
         return false;
+    }
+
+    private static bool TryMapUserAttributeConstructorArguments(
+        ImmutableArray<ParameterSymbol> parameters,
+        Type[] parameterTypes,
+        BoundAttribute attribute,
+        [NotNullWhen(true)] out object?[]? effectiveArguments,
+        out BoundAttributeArgument? positionalConflict)
+    {
+        effectiveArguments = null;
+        positionalConflict = null;
+        var positional = attribute.PositionalArguments.Where(argument => argument.Name == null).ToImmutableArray();
+        var named = attribute.PositionalArguments.Where(argument => argument.Name != null).ToImmutableArray();
+        if (positional.Length > parameters.Length)
+        {
+            return false;
+        }
+
+        var slots = new object?[parameters.Length];
+        var filled = new bool[parameters.Length];
+        for (var i = 0; i < positional.Length; i++)
+        {
+            slots[i] = positional[i];
+            filled[i] = true;
+        }
+
+        foreach (var argument in named)
+        {
+            var name = Invariant.Required(argument.Name, "a named attribute argument has a name");
+            var index = -1;
+            for (var i = 0; i < parameters.Length; i++)
+            {
+                if (parameters[i].Name == name)
+                {
+                    index = i;
+                    break;
+                }
+            }
+
+            if (index < 0)
+            {
+                return false;
+            }
+
+            if (filled[index])
+            {
+                positionalConflict = argument;
+                return false;
+            }
+
+            slots[index] = argument;
+            filled[index] = true;
+        }
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            if (!filled[i])
+            {
+                if (!parameters[i].HasExplicitDefaultValue)
+                {
+                    return false;
+                }
+
+                slots[i] = parameters[i].ExplicitDefaultValue;
+                continue;
+            }
+
+            if (slots[i] is not BoundAttributeArgument supplied)
+            {
+                return false;
+            }
+
+            if (!ArgAssignable(supplied.Value, parameterTypes[i], supplied.Type))
+            {
+                return false;
+            }
+        }
+
+        effectiveArguments = slots;
+        return true;
     }
 
     /// <summary>
@@ -1011,135 +1113,223 @@ internal sealed class CustomAttributeEncoder
                 argument.Type?.Name
                     ?? (argument.Value is { } value ? value.GetType().Name : "nil")));
 
-    private static ConstructorInfo? ResolveAttributeConstructor(Type attributeType, ImmutableArray<BoundAttributeArgument> positional)
+    private static ConstructorInfo? ResolveAttributeConstructor(
+        Type attributeType,
+        BoundAttribute attribute,
+        out object?[] effectiveArguments,
+        out ImmutableArray<BoundAttributeArgument> memberArguments)
     {
-        var ctors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        effectiveArguments = Array.Empty<object?>();
+        memberArguments = ImmutableArray<BoundAttributeArgument>.Empty;
+        var constructors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
+        BoundAttributeArgument? positionalConflict = null;
+        var positional = attribute.PositionalArguments.Where(argument => argument.Name == null).ToImmutableArray();
+        var namedConstructorArguments = attribute.PositionalArguments.Where(argument => argument.Name != null).ToImmutableArray();
 
-        // First pass: exact-arity match (the common case).
-        foreach (var ctor in ctors)
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var argument in namedConstructorArguments)
         {
-            var pars = ctor.GetParameters();
-            if (pars.Length != positional.Length)
+            var name = Invariant.Required(argument.Name, "a named attribute argument has a name");
+            if (!seenNames.Add(name))
             {
-                continue;
-            }
-
-            if (ParametersMatch(pars, positional, expandLast: false))
-            {
-                return ctor;
+                EmitDiagnosticException.ThrowDiagnostic(
+                    argument.Syntax ?? attribute.Syntax,
+                    DiagnosticDescriptors.DuplicateNamedArgument,
+                    name);
             }
         }
 
-        // Second pass: trailing OPTIONAL parameters. `ToStringAttribute(Type
-        // type, string format = null)` applied as `@ToString(typeof(X))` is
-        // legal C# and legal G#, and the blob still carries a value for every
-        // constructor parameter — the defaulted one included.
-        //
-        // Issue #4097 found this in the Oahu corpus rather than by reasoning:
-        // no pass admitted it, so the attribute was DROPPED from every Oahu
-        // assembly that used it, silently, and had been for as long as the
-        // corpus has been pinned. That is the defect this issue is about, seen
-        // from the other side — the silence was hiding a matcher gap, not just
-        // a user error. Reporting GS0583 here would be wrong: the program is
-        // one the language accepts.
-        //
-        // Placed before the params-array pass because normal form beats
-        // expanded form, which is also what C# overload resolution does.
-        foreach (var ctor in ctors)
+        // Keep the existing precedence: normal form, omitted optionals, then
+        // params expansion. Named constructor arguments only change which
+        // parameter slot receives each supplied value.
+        for (var desiredForm = 0; desiredForm <= 2; desiredForm++)
         {
-            var pars = ctor.GetParameters();
-            if (pars.Length <= positional.Length)
+            foreach (var constructor in constructors)
             {
-                continue;
-            }
-
-            if (!TrailingParametersAreOptional(pars, positional.Length))
-            {
-                continue;
-            }
-
-            var applicable = true;
-            for (int i = 0; i < positional.Length; i++)
-            {
-                if (!ArgAssignable(positional[i].Value, pars[i].ParameterType, positional[i].Type))
+                if (!TryMapAttributeConstructorArguments(
+                        constructor.GetParameters(),
+                        positional,
+                        namedConstructorArguments,
+                        desiredForm,
+                        out var candidateArguments,
+                        out var conflict))
                 {
-                    applicable = false;
-                    break;
+                    positionalConflict ??= conflict;
+                    continue;
                 }
-            }
 
-            if (applicable)
-            {
-                return ctor;
+                var seenMemberNames = new HashSet<string>(StringComparer.Ordinal);
+                foreach (var memberArgument in attribute.NamedArguments)
+                {
+                    var memberName = Invariant.Required(
+                        memberArgument.Name,
+                        "a named attribute member argument has a name");
+                    if (!seenMemberNames.Add(memberName))
+                    {
+                        EmitDiagnosticException.ThrowDiagnostic(
+                            memberArgument.Syntax ?? attribute.Syntax,
+                            DiagnosticDescriptors.DuplicateNamedArgument,
+                            memberName);
+                    }
+
+                    if (!TryResolveNamedMember(attributeType, memberArgument, out _, out _))
+                    {
+                        EmitDiagnosticException.ThrowDiagnostic(
+                            memberArgument.Syntax ?? attribute.Syntax,
+                            DiagnosticDescriptors.AttributeNamedArgumentNotFound,
+                            memberArgument.Name,
+                            attributeType.Name);
+                    }
+                }
+
+                effectiveArguments = candidateArguments;
+                memberArguments = attribute.NamedArguments;
+                return constructor;
             }
         }
 
-        // Third pass: params-array expansion. A constructor whose last
-        // parameter is a PARAMS array can absorb zero or more trailing
-        // positional arguments, each assignable to the element type — e.g.
-        // xUnit's InlineData(params object[] data). The exact-arity pass above
-        // already handles passing the array directly.
-        //
-        // Review feedback on PR #4137: this used to test the parameter's SHAPE
-        // (one-dimensional array) rather than whether it is actually declared
-        // `params`, so an ordinary array parameter absorbed trailing arguments
-        // too. `@Many(typeof(A), typeof(B))` at `ManyAttribute(Type[] values)`
-        // matched and emitted a constructor call the source cannot write — C#
-        // reports CS1729 for the same program. That is the soundness rule
-        // PR #4087 established for `ArgAssignable`: anything the matcher admits
-        // is a call the emitter is willing to write, so it must admit only
-        // calls the language accepts.
-        foreach (var ctor in ctors)
+        if (positionalConflict != null)
         {
-            var pars = ctor.GetParameters();
-            if (pars.Length == 0)
-            {
-                continue;
-            }
-
-            if (!IsParamsArray(pars[pars.Length - 1]))
-            {
-                continue;
-            }
-
-            if (positional.Length < pars.Length - 1)
-            {
-                continue;
-            }
-
-            if (ParametersMatch(pars, positional, expandLast: true))
-            {
-                return ctor;
-            }
+            EmitDiagnosticException.ThrowDiagnostic(
+                positionalConflict.Syntax ?? attribute.Syntax,
+                DiagnosticDescriptors.NamedArgumentAlsoSpecifiedPositionally,
+                positionalConflict.Name,
+                positionalConflict.Name);
         }
 
         return null;
     }
 
-    /// <summary>
-    /// Whether every parameter from <paramref name="suppliedCount"/> onward is
-    /// optional AND carries a default the attribute blob can actually write.
-    /// </summary>
-    /// <remarks>
-    /// An ECMA-335 II.23.3 fixed-argument list has one entry per constructor
-    /// parameter, so "the caller may omit it" is not enough — a value has to be
-    /// produced. A parameter marked <c>[Optional]</c> with no constant gives
-    /// nothing to write for a value type, so it is refused rather than guessed
-    /// at; a reference type takes <c>nil</c>, which is what the CLR would pass.
-    /// </remarks>
-    /// <param name="pars">The candidate constructor's parameters.</param>
-    /// <param name="suppliedCount">How many arguments the source supplied.</param>
-    /// <returns>Whether the omitted tail can be defaulted.</returns>
-    private static bool TrailingParametersAreOptional(ParameterInfo[] pars, int suppliedCount)
+    private static bool TryMapAttributeConstructorArguments(
+        ParameterInfo[] parameters,
+        ImmutableArray<BoundAttributeArgument> positional,
+        ImmutableArray<BoundAttributeArgument> named,
+        int desiredForm,
+        out object?[] effective,
+        out BoundAttributeArgument? positionalConflict)
     {
-        for (int i = suppliedCount; i < pars.Length; i++)
+        effective = Array.Empty<object?>();
+        positionalConflict = null;
+        var expanded = desiredForm == 2;
+        var hasParams = parameters.Length > 0 && IsParamsArray(parameters[parameters.Length - 1]);
+        var fixedCount = expanded && hasParams ? parameters.Length - 1 : parameters.Length;
+        if ((expanded && !hasParams) || (!expanded && positional.Length > parameters.Length))
         {
-            if (!TryGetOptionalDefault(pars[i], out _))
+            return false;
+        }
+
+        var slots = new object?[parameters.Length];
+        var filled = new bool[parameters.Length];
+        var positionalToMap = Math.Min(positional.Length, fixedCount);
+        for (var i = 0; i < positionalToMap; i++)
+        {
+            slots[i] = positional[i];
+            filled[i] = true;
+        }
+
+        var parameterNames = parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray();
+        foreach (var argument in named)
+        {
+            var sourceName = Invariant.Required(argument.Name, "a named attribute argument has a name");
+            var parameterIndex = Array.FindIndex(
+                parameters,
+                parameter => SyntaxFacts.GetEmittedIdentifier(
+                    parameter.Name ?? string.Empty,
+                    IdentifierNameContext.Parameter,
+                    parameterNames) == sourceName);
+            if (parameterIndex < 0)
+            {
+                return false;
+            }
+
+            if (expanded && parameterIndex == parameters.Length - 1)
+            {
+                return false;
+            }
+
+            if (filled[parameterIndex])
+            {
+                positionalConflict = argument;
+                return false;
+            }
+
+            slots[parameterIndex] = argument;
+            filled[parameterIndex] = true;
+        }
+
+        var usedDefault = false;
+        for (var i = 0; i < fixedCount; i++)
+        {
+            if (!filled[i])
+            {
+                if (!TryGetOptionalDefault(parameters[i], out var fallback))
+                {
+                    return false;
+                }
+
+                usedDefault = true;
+                slots[i] = fallback;
+                filled[i] = true;
+                continue;
+            }
+
+            if (slots[i] is not BoundAttributeArgument supplied)
+            {
+                return false;
+            }
+
+            if (!ArgAssignable(supplied.Value, parameters[i].ParameterType, supplied.Type))
             {
                 return false;
             }
         }
 
+        if (!expanded)
+        {
+            for (var i = fixedCount; i < parameters.Length; i++)
+            {
+                if (!filled[i])
+                {
+                    return false;
+                }
+            }
+
+            if ((desiredForm == 0 && usedDefault) || (desiredForm == 1 && !usedDefault))
+            {
+                return false;
+            }
+
+            effective = slots;
+            return true;
+        }
+
+        var elementType = parameters[parameters.Length - 1].ParameterType.GetElementType();
+        if (elementType == null)
+        {
+            return false;
+        }
+
+        var tailCount = Math.Max(0, positional.Length - fixedCount);
+        var tail = new object?[tailCount];
+        for (var i = 0; i < tailCount; i++)
+        {
+            var argument = positional[fixedCount + i];
+            if (!ArgAssignable(argument.Value, elementType, argument.Type))
+            {
+                return false;
+            }
+
+            tail[i] = argument;
+        }
+
+        var result = new object?[parameters.Length];
+        for (var i = 0; i < fixedCount; i++)
+        {
+            result[i] = slots[i];
+        }
+
+        result[parameters.Length - 1] = tail;
+        effective = result;
         return true;
     }
 
@@ -1230,32 +1420,6 @@ internal sealed class CustomAttributeEncoder
         }
 
         return false;
-    }
-
-    private static bool ParametersMatch(ParameterInfo[] pars, ImmutableArray<BoundAttributeArgument> positional, bool expandLast)
-    {
-        var fixedCount = expandLast ? pars.Length - 1 : pars.Length;
-        for (int i = 0; i < fixedCount; i++)
-        {
-            if (!ArgAssignable(positional[i].Value, pars[i].ParameterType, positional[i].Type))
-            {
-                return false;
-            }
-        }
-
-        if (expandLast)
-        {
-            var elementType = pars[pars.Length - 1].ParameterType.GetElementType()!;
-            for (int i = fixedCount; i < positional.Length; i++)
-            {
-                if (!ArgAssignable(positional[i].Value, elementType, positional[i].Type))
-                {
-                    return false;
-                }
-            }
-        }
-
-        return true;
     }
 
     /// <summary>
@@ -1361,105 +1525,6 @@ internal sealed class CustomAttributeEncoder
         }
 
         return IsTriviallyConvertible(supplied.GetType(), paramType);
-    }
-
-    /// <summary>
-    /// Issue #1921 code review (overload disambiguation): checks every
-    /// positional argument against the corresponding same-compilation
-    /// constructor parameter type using the same <see cref="ArgAssignable"/>
-    /// rule the CLR-attribute path applies via <see cref="ParametersMatch"/>.
-    /// No params-array expansion — no G# constructor declaration can express
-    /// a trailing params array.
-    /// </summary>
-    private static bool ArgumentsAssignable(ImmutableArray<BoundAttributeArgument> positional, Type[] paramTypes)
-    {
-        for (int i = 0; i < paramTypes.Length; i++)
-        {
-            if (!ArgAssignable(positional[i].Value, paramTypes[i], positional[i].Type))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
-
-    /// <summary>
-    /// Maps the supplied positional arguments onto the constructor parameters,
-    /// collapsing a trailing params-array into a single synthesized
-    /// <see cref="object"/>[] when the call site supplied the elements inline
-    /// (params expansion). Returns one value per constructor parameter.
-    /// </summary>
-    private static object?[] BuildCtorArgumentValues(ParameterInfo[] ctorParams, ImmutableArray<BoundAttributeArgument> positional)
-    {
-        var lastIsArray = ctorParams.Length > 0
-            && IsParamsArray(ctorParams[ctorParams.Length - 1]);
-
-        // Direct (non-expanded) form: arity matches and the final argument is
-        // itself assignable to the array parameter (or there is no array tail).
-        var lastSupplied = positional.Length == ctorParams.Length && positional.Length > 0
-            ? positional[positional.Length - 1].Value
-            : null;
-
-        // Issue #4097: a constructor selected through its trailing OPTIONAL
-        // parameters supplies fewer arguments than it has slots, and the blob
-        // needs one entry per slot. That is the normal form, never the expanded
-        // one, so it short-circuits the params-array reasoning below.
-        //
-        // The `TrailingParametersAreOptional` half is NOT redundant, and the
-        // first version of this fix omitted it. "Fewer arguments than slots" is
-        // ALSO true of a params tail absorbing zero trailing elements —
-        // `@MemberData("ShapeAreas")` at
-        // `MemberDataAttribute(string, params object[])` supplies one argument
-        // for two slots. Without the guard that took the direct path, and since
-        // a params array is not `IsOptional` (measured), nothing filled the
-        // slot: the blob got `nil` where the expanded form writes an EMPTY
-        // ARRAY. Well-formed blob, wrong content — it compiled, IL-verified,
-        // and xunit then found a theory with no data rows, reporting one
-        // dataless test instead of three cases. Caught by the cs2gs corpus
-        // gate, which is the only gate that runs the migrated tests.
-        var defaulted = positional.Length < ctorParams.Length
-            && TrailingParametersAreOptional(ctorParams, positional.Length);
-        var direct = defaulted
-            || !lastIsArray
-            || (positional.Length == ctorParams.Length
-                && (lastSupplied == null
-                    || ctorParams[ctorParams.Length - 1].ParameterType.IsInstanceOfType(lastSupplied)
-                    || lastSupplied.GetType().IsArray));
-
-        if (direct)
-        {
-            var values = new object?[ctorParams.Length];
-            for (int i = 0; i < ctorParams.Length; i++)
-            {
-                if (i < positional.Length)
-                {
-                    values[i] = positional[i];
-                }
-                else if (TryGetOptionalDefault(ctorParams[i], out var fallback))
-                {
-                    values[i] = fallback;
-                }
-            }
-
-            return values;
-        }
-
-        var result = new object?[ctorParams.Length];
-        for (int i = 0; i < ctorParams.Length - 1; i++)
-        {
-            result[i] = positional[i];
-        }
-
-        var tail = positional.Length - (ctorParams.Length - 1);
-        var array = new object?[tail];
-        for (int i = 0; i < tail; i++)
-        {
-            array[i] = positional[ctorParams.Length - 1 + i];
-        }
-
-        result[ctorParams.Length - 1] = array;
-        return result;
     }
 
     /// <summary>
@@ -2265,51 +2330,57 @@ internal sealed class CustomAttributeEncoder
 
     private void WriteCustomAttributeNamedArg(BlobBuilder bb, Type attributeType, BoundAttributeArgument arg)
     {
-        string emittedName = Invariant.Required(
-            arg.Name,
-            "a named attribute argument always has a member name");
-        MemberInfo[] members = attributeType
-            .GetMembers(BindingFlags.Public | BindingFlags.Instance)
-            .ToArray();
-        string[] memberNames = members
-            .Select(member => member.Name)
-            .Distinct(StringComparer.Ordinal)
-            .ToArray();
-        string name = members
-            .Where(member => member is PropertyInfo or FieldInfo)
-            .Select(member => member.Name)
-            .FirstOrDefault(candidate =>
-                SyntaxFacts.GetEmittedIdentifier(
-                    candidate,
-                    IdentifierNameContext.General,
-                    memberNames) == emittedName)
-            ?? emittedName;
-        var prop = attributeType.GetProperty(name, BindingFlags.Public | BindingFlags.Instance);
-        var field = prop == null
-            ? attributeType.GetField(name, BindingFlags.Public | BindingFlags.Instance)
-            : null;
+        if (!TryResolveNamedMember(attributeType, arg, out var member, out var name))
+        {
+            throw new InvalidOperationException("Named attribute members must be validated before encoding.");
+        }
+
         Type memberType;
         byte kindTag;
-        if (prop != null)
+        if (member is PropertyInfo prop)
         {
             kindTag = 0x54;
             memberType = prop.PropertyType;
         }
-        else if (field != null)
-        {
-            kindTag = 0x53;
-            memberType = field.FieldType;
-        }
         else
         {
-            // Unknown member — skip silently; binder owns user diagnostics.
-            return;
+            var field = (FieldInfo)member;
+            kindTag = 0x53;
+            memberType = field.FieldType;
         }
 
         bb.WriteByte(kindTag);
         WriteCustomAttributeFieldOrPropertyType(bb, memberType);
         bb.WriteSerializedString(name);
         WriteCustomAttributeFixedArg(bb, memberType, arg);
+    }
+
+    private static bool TryResolveNamedMember(
+        Type attributeType,
+        BoundAttributeArgument argument,
+        [NotNullWhen(true)] out MemberInfo? member,
+        [NotNullWhen(true)] out string? metadataName)
+    {
+        var emittedName = Invariant.Required(
+            argument.Name,
+            "a named attribute argument always has a member name");
+        var members = attributeType
+            .GetMembers(BindingFlags.Public | BindingFlags.Instance)
+            .Where(candidate =>
+                candidate is PropertyInfo { SetMethod.IsPublic: true }
+                || candidate is FieldInfo { IsInitOnly: false, IsLiteral: false })
+            .ToArray();
+        var memberNames = members
+            .Select(candidate => candidate.Name)
+            .Distinct(StringComparer.Ordinal)
+            .ToArray();
+        member = members.FirstOrDefault(candidate =>
+            SyntaxFacts.GetEmittedIdentifier(
+                candidate.Name,
+                IdentifierNameContext.General,
+                memberNames) == emittedName);
+        metadataName = member?.Name;
+        return member != null;
     }
 
     private static void WriteCustomAttributeFieldOrPropertyType(BlobBuilder bb, Type t)

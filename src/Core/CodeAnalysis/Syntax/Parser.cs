@@ -639,7 +639,7 @@ public partial class Parser
         if (Current.Kind == SyntaxKind.OpenParenthesisToken)
         {
             openParen = MatchToken(SyntaxKind.OpenParenthesisToken);
-            arguments = ParseArguments();
+            arguments = ParseArguments(attributeArguments: true);
             closeParen = MatchToken(SyntaxKind.CloseParenthesisToken);
         }
 

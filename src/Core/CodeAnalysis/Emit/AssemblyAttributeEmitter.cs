@@ -121,11 +121,10 @@ internal sealed class AssemblyAttributeEmitter
     {
         // Assembly identity and informational/product version are distinct.
         // The SDK supplies the former through its generated AssemblyInfo.
-        var declaredVersion = this.emitCtx.Program.AssemblyAttributes
+        var versionAttribute = this.emitCtx.Program.AssemblyAttributes
             .FirstOrDefault(attribute =>
-                attribute.AttributeType.ClrType?.FullName == "System.Reflection.AssemblyVersionAttribute"
-                && attribute.PositionalArguments.Length == 1)
-            ?.PositionalArguments[0].Value as string;
+                attribute.AttributeType.ClrType?.FullName == "System.Reflection.AssemblyVersionAttribute");
+        var declaredVersion = versionAttribute?.GetConstructorArgument(0, "version")?.Value as string;
         var versionStr = declaredVersion ?? this.emitCtx.AssemblyVersionOverride;
         if (string.IsNullOrEmpty(versionStr))
         {

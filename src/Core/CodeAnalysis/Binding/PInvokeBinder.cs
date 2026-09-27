@@ -531,8 +531,7 @@ internal static class PInvokeBinder
     {
         // 1) Required positional library name.
         string? libraryName = null;
-        if (!attribute.PositionalArguments.IsDefaultOrEmpty
-            && attribute.PositionalArguments[0].Value is string s
+        if (attribute.GetConstructorArgument(0, "dllName")?.Value is string s
             && !string.IsNullOrEmpty(s))
         {
             libraryName = s;
@@ -682,8 +681,7 @@ internal static class PInvokeBinder
     {
         // 1) Required positional library name.
         string? libraryName = null;
-        if (!attribute.PositionalArguments.IsDefaultOrEmpty
-            && attribute.PositionalArguments[0].Value is string s
+        if (attribute.GetConstructorArgument(0, "libraryName")?.Value is string s
             && !string.IsNullOrEmpty(s))
         {
             libraryName = s;
@@ -879,13 +877,13 @@ internal static class PInvokeBinder
 
         // 1) Required positional UnmanagedType.
         UnmanagedType unmanagedType;
-        if (attr.PositionalArguments.IsDefaultOrEmpty
-            || attr.PositionalArguments[0].Value is not { } positionalValue
+        var unmanagedTypeArgument = attr.GetConstructorArgument(0, "unmanagedType");
+        if (unmanagedTypeArgument?.Value is not { } positionalValue
             || !KnownAttributes.TryConvertAttributeEnum<UnmanagedType>(positionalValue, out unmanagedType))
         {
             diagnostics.ReportMarshalAsUnsupportedUnmanagedType(
                 annotationLocation,
-                attr.PositionalArguments.IsDefaultOrEmpty ? "<missing>" : attr.PositionalArguments[0].Value?.ToString() ?? "<null>");
+                unmanagedTypeArgument?.Value?.ToString() ?? "<missing>");
             return;
         }
 

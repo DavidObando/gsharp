@@ -152,6 +152,19 @@ internal sealed class EmitDiagnosticException : Exception
             anchor);
     }
 
+    /// <summary>Throws a specific user-facing emit diagnostic.</summary>
+    /// <param name="anchor">The source construct nearest the failure.</param>
+    /// <param name="descriptor">The diagnostic to report.</param>
+    /// <param name="arguments">Message-format arguments.</param>
+    [DoesNotReturn]
+    public static void ThrowDiagnostic(SyntaxNode? anchor, DiagnosticDescriptor descriptor, params object?[] arguments)
+    {
+        throw new EmitDiagnosticException(
+            descriptor.Id,
+            string.Format(System.Globalization.CultureInfo.InvariantCulture, descriptor.MessageFormat, arguments),
+            anchor);
+    }
+
     /// <summary>
     /// Throws an <see cref="EmitDiagnosticException"/> anchored at the given
     /// syntax node. Use this helper at call sites that previously threw

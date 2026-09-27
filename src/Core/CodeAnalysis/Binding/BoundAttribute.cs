@@ -21,7 +21,7 @@ public sealed class BoundAttribute : BoundNode
     /// <param name="syntax">The originating syntax node.</param>
     /// <param name="attributeType">The resolved <see cref="System.Attribute"/>-derived type.</param>
     /// <param name="target">The use-site target (defaulted from declaration position when omitted).</param>
-    /// <param name="positionalArguments">Positional constructor arguments in source order.</param>
+    /// <param name="positionalArguments">Positional and colon-named constructor arguments in source order.</param>
     /// <param name="namedArguments">Named property/field arguments in source order.</param>
     public BoundAttribute(
         AnnotationSyntax syntax,
@@ -67,7 +67,7 @@ public sealed class BoundAttribute : BoundNode
     public AttributeTargetKind Target { get; }
 
     /// <summary>
-    /// Gets the bound positional arguments in source order.
+    /// Gets the bound constructor arguments in source order.
     /// </summary>
     public ImmutableArray<BoundAttributeArgument> PositionalArguments { get; }
 
@@ -75,4 +75,39 @@ public sealed class BoundAttribute : BoundNode
     /// Gets the bound named arguments in source order.
     /// </summary>
     public ImmutableArray<BoundAttributeArgument> NamedArguments { get; }
+
+    /// <summary>
+    /// Gets a constructor argument by its resolved parameter position/name.
+    /// </summary>
+    /// <param name="position">The zero-based constructor parameter position.</param>
+    /// <param name="parameterName">The CLR constructor parameter name.</param>
+    /// <returns>The supplied argument, or <see langword="null"/> when omitted.</returns>
+    public BoundAttributeArgument? GetConstructorArgument(int position, string parameterName)
+    {
+        foreach (var argument in PositionalArguments)
+        {
+            if (string.Equals(argument.Name, parameterName, System.StringComparison.Ordinal))
+            {
+                return argument;
+            }
+        }
+
+        var positionalIndex = 0;
+        foreach (var argument in PositionalArguments)
+        {
+            if (argument.Name != null)
+            {
+                continue;
+            }
+
+            if (positionalIndex == position)
+            {
+                return argument;
+            }
+
+            positionalIndex++;
+        }
+
+        return null;
+    }
 }

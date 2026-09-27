@@ -94,11 +94,12 @@ internal static class StructLayoutBinder
                 continue;
             }
 
-            if (!TryReadInt32(fieldOffsetAttr.PositionalArguments, out var offset) || offset < 0)
+            var offsetArgument = fieldOffsetAttr.GetConstructorArgument(0, "offset");
+            if (offsetArgument == null
+                || !TryReadInt32(ImmutableArray.Create(offsetArgument), out var offset)
+                || offset < 0)
             {
-                var raw = fieldOffsetAttr.PositionalArguments.IsDefaultOrEmpty
-                    ? "<missing>"
-                    : (fieldOffsetAttr.PositionalArguments[0].Value?.ToString() ?? "<null>");
+                var raw = offsetArgument?.Value?.ToString() ?? "<missing>";
                 diagnostics.ReportFieldOffsetInvalidValue(fieldOffsetAttr.Syntax.Location, raw);
                 continue;
             }
@@ -279,9 +280,9 @@ internal static class StructLayoutBinder
 
         // 1) Positional LayoutKind. Reject Auto (ADR-0093 §1 / GS0346).
         var layout = LayoutKind.Sequential;
-        if (!attribute.PositionalArguments.IsDefaultOrEmpty)
+        if (attribute.GetConstructorArgument(0, "layoutKind") is { } layoutArgument)
         {
-            var raw = attribute.PositionalArguments[0].Value;
+            var raw = layoutArgument.Value;
             if (raw != null && KnownAttributes.TryConvertAttributeEnum<LayoutKind>(raw, out var parsed))
             {
                 if (parsed != LayoutKind.Sequential && parsed != LayoutKind.Explicit)

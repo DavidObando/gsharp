@@ -1464,7 +1464,10 @@ public sealed partial class CSharpToGSharpTranslator
                             string name = this.TranslateAttributeArgumentName(
                                 argument,
                                 attributeType);
-                            arguments.Add(new AttributeArgument(value, name));
+                            arguments.Add(new AttributeArgument(
+                                value,
+                                name,
+                                isMemberAssignment: argument.NameEquals != null));
                         }
                     }
 
