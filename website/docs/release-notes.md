@@ -86,6 +86,27 @@ Before moving an application to a different compiler version, pin the intended S
 
 ### Added
 
+- **ADR-0191 now defines conservative Go interface/address lowering and staged
+  performance gates** (issue
+  [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values
+  snapshot at conversion, pointers retain their selected location, existing and
+  converted interfaces preserve original Go dynamic identity, and value
+  receivers copy per call. Wrapper reuse requires explicit proof that evaluation
+  timing, typed-nil/comparability behavior, mutable adapter state, and observable
+  CLR interop identity cannot change; address reuse similarly preserves dynamic
+  bindings, slice owner/index selection, append reallocation, side effects and
+  throwing behavior. The prerequisite spike merged in
+  [#4514](https://github.com/DavidObando/gsharp/pull/4514) now requires non-empty
+  Go/JIT/NativeAOT semantic parity, paired checksums, raw samples/allocation totals
+  and exact provenance. Its runner has ADR-0154 failure mutants, while `--no-aot`
+  is explicitly exploratory. The allocation fixes for issues
+  [#4511](https://github.com/DavidObando/gsharp/issues/4511) and
+  [#4512](https://github.com/DavidObando/gsharp/issues/4512), implemented by PRs
+  [#4515](https://github.com/DavidObando/gsharp/pull/4515) and
+  [#4516](https://github.com/DavidObando/gsharp/pull/4516), are enforced by the
+  integrated prerequisite gate; semantic completion and later
+  package/application performance readiness remain separate. This is policy and
+  native-mechanism evidence, not a `go2gs` translator implementation.
 - **`@GeneratedRegex` works in native G# projects** (ADR-0192 follow-on 2, ADR-0145 amendment). Declare the method as a partial method in a `shared` block, `shared { @GeneratedRegex("\\d+") private partial func Digits() Regex; }`, and the SDK runs the real Regex source generator through `gsgen`. The generated implementation becomes a G# implementing part that pairs with your declaring part, so calls run through the generated `Regex` subclass. The same applies to other generators that implement partial methods, such as `@LoggerMessage`.
 - **A `partial data class` or `partial data struct` can hold partial methods, and `@GeneratedRegex` works in one** (ADR-0192 amendment). This is the G# spelling of a C# `partial record` with a `[GeneratedRegex]` method, e.g. `public sealed partial data class GitHubUrl(Owner string, Name string) { shared { @GeneratedRegex("^https://...$") private partial func Pattern() Regex; } }`. `gsgen` now shows generators a data type as a C# `record` when its inheritance chain allows it: it has no base class other than record-rendered data types, and no plain class derives from it. Otherwise the type is still a C# `class`. Either way, the generated part gets `data` so it merges with yours. A positional parameter list a generator adds to a data type that already has one is reported as `GS9209`. Before, the build failed with `GS0479`. `GS0607` and `GS0608` now say that a data class or data struct qualifies.
   - The implementing part is spelled with your declaring part's header, so `System.Text.RegularExpressions.Regex` or `count int` pair as well as `Regex` or `count int32`. A parameter-name mismatch between your declaring part and the generated implementation is reported as `GS9208` instead of being paired.

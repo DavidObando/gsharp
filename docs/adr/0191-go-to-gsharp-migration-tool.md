@@ -17,7 +17,8 @@
 - **Dependency status**: ADRs 0190, 0188, and 0189 are Accepted and
   implemented. The paired
   [prerequisite viability spike](../../bench/go2gs-prerequisites/README.md)
-  confirms the covered semantics; performance follow-ups #4511-#4513 remain
+  confirms the covered semantics. Performance fixes #4511 and #4512 are
+  implemented; #4513 defines the remaining translator and workload policy
   before application-scale performance readiness is claimed.
   Approval of their design direction is not implementation availability.
   This ADR neither accepts nor changes them.
@@ -465,6 +466,71 @@ still copies on each Go call, unlike mutation retained in a native adapter's
 owned struct field. These are translator obligations, not amendments to
 ADR-0189.
 
+#### Interface conversion and reuse policy
+
+The normalization/storage plan owns Go interface semantics. Native `adapt`
+is forwarding machinery, not the Go interface representation:
+
+| Source operation | Required lowering |
+| --- | --- |
+| Concrete value to interface | Snapshot a fresh value at that evaluation point. Recursively preserve ordinary Go value-copy behavior while retaining the sharing of reference-like fields. Never substitute a live location merely to avoid the snapshot. |
+| Pointer to interface | Capture the pointer value/location at conversion time. Later reassignment of the pointer variable does not retarget the interface payload. A nil pointer payload produces a non-nil interface through the typed-nil bridge, not `adapt` on null. |
+| Existing interface assignment/copy | Preserve the original dynamic Go type tag and semantic payload. Do not infer either from an adapter's CLR type or rebuild the value through another concrete conversion. |
+| Interface to interface conversion/assertion | Preserve original dynamic identity and apply Go method-set/assertion rules. A forwarding wrapper may change, but the wrapper is never the dynamic Go type. |
+
+Interface nilness, typed-nil payloads, comparability, equality, hashing, type
+switches, map keys and assertion results operate on the explicit Go dynamic
+type and value/location. They never use adapter `ReferenceEquals`,
+`GetType()`, unrestricted CLR equality, or G# nullability. Go typed nil is not
+`T?`, `T!`, a nullable managed handle, or a nullable referent; those continue
+through the existing nullability import/query rules.
+
+A Go value-receiver call copies the receiver for **each call**. A native
+adapter over a mutable struct retains one adapter-owned copy and therefore
+cannot by itself implement this rule. The generated Go dispatch bridge must
+make the call copy, including when one interface value is invoked repeatedly.
+
+Wrapper reuse or conversion hoisting is allowed only when all of these proof
+obligations hold:
+
+1. the Go dynamic type and semantic payload are unchanged;
+2. source evaluation, nil/assertion checks, panic timing and side effects occur
+   at the same point and frequency;
+3. wrapper identity cannot escape to observable G#/CLR interop, reflection,
+   callbacks, storage or user code;
+4. reuse does not merge mutable adapter-owned state that Go conversions keep
+   independent; and
+5. the proof is recorded by the normalization/storage plan rather than guessed
+   by the printer.
+
+Initial lowering may reuse explicitly retained interface values and obvious
+local dominance/stability cases. Otherwise it converts at the source
+evaluation point and reports the cost. There is no global adapter cache,
+blanket immutable-input rule or speculative loop-invariant optimizer.
+ADR-0189 continues to promise a fresh ordinary wrapper for each exposed native
+G# `adapt` evaluation; go2gs cannot erase that behavior across an observable
+CLR boundary.
+
+#### Address-taking and retained-location policy
+
+An existing Go pointer value maps to one retained managed location; repeated
+dereference does not reconstruct a handle. Repeated `&local` may share a root
+only for the same dynamic variable instance. Per-iteration bindings, factory
+calls and addressed by-value parameter/receiver copies create distinct roots.
+
+For `&slice[i]`, capture the selected backing owner and absolute index, not the
+slice variable. Later reslicing or append reallocation must not retarget the
+location. Reuse of repeated address expressions requires proof that the
+selected location and every required evaluation/check are equivalent.
+Reassignment, changed indices, append reallocation, replaced reference fields,
+and effectful or throwing owner/index expressions defeat that proof. Never
+hoist such an expression before a conditional or zero-trip loop.
+
+A borrowed `ref` lowering is permitted only inside a proven non-escaping
+segment with no retained identity requirement. It is not the default Go
+pointer representation. Zero-size and unsafe pointer identity remain explicit
+unsupported boundaries.
+
 ### 8. Demand-driven compatibility and dependency policy
 
 Keep Go-specific contracts in a small versioned go2gs compatibility library,
@@ -587,6 +653,35 @@ Each semantic witness follows ADR-0154: a known wrong lowering, pre-fix
 version or controlled mutant must fail the relevant assertion. Maintain
 independent fixtures as well as translated tests to detect common-mode errors.
 
+The
+[prerequisite spike](../../bench/go2gs-prerequisites/README.md) is a native
+mechanism and benchmark-policy gate, not a translator test. Its milestone
+evidence must contain:
+
+- the exact non-empty expected semantic row set from independent Go, pinned-tier
+  JIT and NativeAOT executions, with pairwise equality;
+- paired checksum equality across all three runtimes as well as stability
+  across launches;
+- at least five rotated launches, retained raw launch rows, raw elapsed timer
+  values/frequencies, operation counts, allocated-byte totals and available
+  allocation counts;
+- exact repository, source, artifact, compiler, SDK, runtime, Go toolchain,
+  target RID, host and tier-configuration provenance; and
+- explicit unsupported witnesses where current native mechanisms cannot
+  represent Go semantics without fabrication.
+
+`--no-aot` is an exploratory iteration mode and is marked non-milestone
+evidence. Missing AOT, an empty semantic set, semantic drift in only one
+runtime, a paired checksum mismatch, or absent provenance fails the applicable
+gate; no success-shaped default or silent fallback is permitted. The runner's
+gate tests carry ADR-0154 mutants for an empty semantic set, single-runtime
+semantic drift and paired checksum mismatch.
+Milestone evidence also requires at least five launches from a committed
+source state. The JIT environment removes ambient overrides and pins the
+repository's tiered-PGO steady-state configuration; that is reproducible launch
+configuration, not a false assertion that CoreCLR reports the internal tier of
+every measured method.
+
 ### 10. Diagnostics, ownership, and coverage ratchets
 
 Diagnostic identifiers and serialization are a go2gs contract, not reused
@@ -673,6 +768,36 @@ allocation for stereo frames, allocation-free handle dereference as specified
 by ADR-0188, and no hidden whole-buffer copies on subslicing. Benchmarks may
 guide later optimization but never override fidelity gates.
 
+Semantic completion and performance readiness are separate statuses at every
+milestone. A semantic milestone can complete with a reported performance
+blocker; it cannot be described as performance-ready until its selected
+profile passes both pinned-tier CoreCLR JIT and NativeAOT budgets.
+Same-runtime, shape-equivalent hand-written controls determine implementation
+overhead. Go results and ratios remain informational, including unusually
+small non-escaping Go construction rows.
+
+For the prerequisite mechanisms, steady-state slice/location/interface calls
+must allocate zero, and generated adapter construction/allocation must match a
+shape-equivalent named wrapper. For adapter reference calls and adapter
+construction, the initial investigation threshold is a median of each launch's
+measured/control time ratio no greater than 1.10 in each execution mode. Those
+two measured rows are paired with their same-launch, same-runtime named
+controls across at least five rotated launches with retained samples; this is
+not a universal cross-machine promise. The #4511 gate caps immediate, retained,
+first-identity and direct-readonly managed handles at 40 B/op per launch and
+requires warmed identity to allocate zero. The #4512 gate requires shared-root,
+retained and multi-capture rich construction to match their shape-equivalent
+named controls on every launch; fresh-root construction retains its measured
+once-per-dynamic-binding setup cost. No NativeAOT result hides an unreported
+JIT regression.
+
+M2 additionally needs package-specific controls and approved latency/allocation
+budgets for its exact closure. M3 needs measured workload budgets and no
+per-frame boxing, inner arrays, hidden slice copies, or avoidable per-sample
+conversion/location creation. M4-M5 require approved representative
+throughput, tail-latency, allocation-rate, GC and memory budgets per profile;
+microbenchmarks alone cannot pass application readiness.
+
 ### 12. Milestones and objective rollout gates
 
 Each milestone selects a named dependency closure and profile before work
@@ -681,14 +806,14 @@ package. The three native capability issues remain independently tracked;
 using a feature depends on its implemented and verified surface, not just this
 ADR or the approval of its design.
 
-| Milestone | Selected scope and dependencies | Done / blocked criterion |
+| Milestone | Semantic completion | Performance readiness |
 | --- | --- | --- |
-| M0: typed inventory and correctness spikes | Go helper/driver boundary; cliamp selected leaf graphs and then its platform/test graph matrix. No native G# capabilities required to report blockers. | Done when active versus ignored/test/native/embed inputs and full relevant module/package edges have reproducible hashes, typed facts and classified gaps; loader failures reproduce as incomplete inventory. Include small witnesses for byte strings, simultaneous assignment, value receivers, typed nil and nil/empty slices. No bulk `main.go` emission as the first deliverable. |
-| M1: semantic corpus | Small standalone Go fixtures and their explicit stdlib/compatibility closures; native ADR-0190/0188/0189 surfaces only as delivered. | Done when each admitted semantic family has an independent Go/G# witness, a discrimination witness, stable generated text/maps and all four stages green; every deliberately unsupported neighbor yields an attributed diagnostic. Fixed-array and interface-identity gates cannot be waved through by parsing. |
-| M2: real leaf packages | `internal/fuzzy`, then `internal/tomlutil`, then `internal/deeplink`, with all their active files, tests and selected compatibility imports, including Unicode, strings/iterator, errors/fmt and URL rules. | Each package is banked separately only when its complete selected test variant/closure and paired behavior pass. Tomlutil stays blocked until iterator early-stop and shared captures work; deeplink until wrapping, byte limits and rejection rules match. No unrelated third-party application dependency is silently counted as covered. |
-| M3: offline audio fixtures | Source-attributed fixtures from EQ/gapless and alias-sensitive ring-buffer behavior, with explicit streamer contracts, math, synchronization/atomic support, ADR-0190, required ADR-0188 origins, and real fixed-frame value lowering. | Done for the named fixtures when original buffers mutate correctly, frame copies stay independent, numerical/state/chunk behavior matches and no audio device/network is opened. Extracted fixtures do not mark the full `player` package or Beep closure green; their remaining imports/native paths stay blocked in the inventory. |
-| M4: headless application, IPC and providers | Actual selected application packages/test binaries and their complete closures: initialization, serialization, context/sync, sockets/files, CLI, provider interfaces and deterministic local protocol peers. | Done per headless profile only after protocol, error/typed-nil, security rejection, cancellation, permissions and shutdown/resource behavior agree. A headless harness does not excuse omitted production dependencies; it declares its separate scope. Unknown optional capabilities or incomplete library closures block. |
-| M5: TUI, playback, plugins and platform matrix | Full selected cliamp entry/test closures, Bubble Tea/Lip Gloss/ANSI, Beep/backends/codecs, Gopher-Lua, provider/network libraries, embed resources, and each supported OS/architecture/CGo configuration. | Done only with controlled interactive oracles, real supported platform/entry/callback ownership, playback/plugin lifecycle and independent end-to-end gates. Every mandatory dependency has an accepted disposition. Native-adapted/hybrid profiles are labeled as such; unresolved CGo, unsafe, reflection or Go-sidecar requirements block an all-managed claim. |
+| M0: typed inventory and correctness spikes | Active versus ignored/test/native/embed inputs and all relevant module/package edges have reproducible hashes, typed facts and classified gaps. Loader failures reproduce as incomplete inventory. Small witnesses cover byte strings, simultaneous assignment, value receivers, typed nil and nil/empty slices. No bulk `main.go` emission is the first deliverable. | Record reproducible translator and prerequisite profiles with honest unsupported cases. Performance is evidence, not a condition for completing inventory. |
+| M1: semantic corpus | Each admitted family has independent Go, JIT and AOT witnesses, an ADR-0154 discrimination witness, stable generated text/maps and all four verification stages green. Every unsupported neighbor yields an attributed diagnostic; fixed-array and interface-identity gates cannot be waved through by parsing. | The prerequisite spike passes its evidence gates; steady-state paths, adapter controls and the integrated #4511/#4512 allocation budgets meet the rules above. |
+| M2: real leaf packages | `internal/fuzzy`, then `internal/tomlutil`, then `internal/deeplink` are banked separately only when each complete selected test variant/closure and paired behavior pass. Required iterator, shared-capture, wrapping, byte-limit and rejection semantics remain blockers until admitted. | Each selected package closure passes approved JIT and AOT latency/allocation budgets against package-specific same-runtime controls. |
+| M3: offline audio fixtures | Source-attributed EQ/gapless and alias-sensitive ring-buffer fixtures preserve mutation, frame-copy independence, numerical/state/chunk behavior and avoid devices/network. Extracted fixtures do not mark the full `player` or Beep closure green. | The measured workload meets approved JIT/AOT latency and allocation budgets with no per-frame boxing/inner arrays, hidden slice copies, or avoidable per-sample conversion/location creation. |
+| M4: headless application, IPC and providers | The actual selected application/test closures pass protocol, error/typed-nil, security rejection, cancellation, permission and shutdown/resource oracles. Omitted production dependencies and unknown optional capabilities remain visible blockers. | Each representative headless profile passes approved throughput, tail-latency, allocation-rate, GC and memory budgets in JIT and AOT. |
+| M5: TUI, playback, plugins and platform matrix | Full selected cliamp closures pass controlled interactive, platform, callback/lifecycle and end-to-end gates. Every mandatory dependency has an accepted disposition; adapted/hybrid profiles remain labeled. | Each supported application/platform profile passes its approved representative JIT/AOT budgets. Synthetic microbenchmarks cannot substitute for these profiles. |
 
 Full cliamp is the eventual gate, not evidence inferred from M2 or M3.
 Implementation proceeds in focused issues/PRs, with one approved native
@@ -706,6 +831,8 @@ concrete evidence before their milestone is enabled:
 | M0 frontend release | Select/pin the compatible Go/x/tools versions and schema v1 encoding, freeze stable identity/constant/span rules, and demonstrate loader/offline/CGo failure provenance. |
 | M1 runtime contracts | Finalize Go byte-string/map/interface/panic support APIs and the legal G# lowering for eager defer, direct recovery and iterator nonlocal control flow. A candidate that changes user-visible behavior stays blocked. |
 | Native integration | Detect and pin actual compiler/runtime versions providing ADR-0190, ADR-0188 and the necessary ADR-0189 stages. Never fall back to copying arrays, unknown byrefs or reflection proxies when one is missing. |
+| Interface bridge and interop boundary | Define the explicit typed-nil/dynamic-type representation and the boundary at which CLR wrapper identity becomes observable before enabling reuse beyond explicit retained values. Native `adapt` cannot supply this contract. |
+| Performance budgets | Carry the approved prerequisite control-relative threshold and integrated #4511/#4512 allocation ceilings forward, then approve representative M2-M5 profile budgets. The current spike does not approve universal application limits. |
 | Value-array expansion | Prove representation, copies, equality, dynamic addressability and slice sharing for additional shapes before admitting them. A future native value-array proposal is possible but not silently included in ADR-0190. |
 | Concurrency closure | Establish channel/select/memory-model witnesses and suspension propagation across functions, delegates, interfaces and foreign callbacks. Blocking I/O/locks cannot simply occupy arbitrary pooled workers forever and be called Go scheduling equivalence. |
 | Separate library distribution | Specify public CLR ABI, package-private access, cross-unit dynamic type identity/adaptation and versioning before splitting the default closed-world assembly into reusable package assemblies. |
