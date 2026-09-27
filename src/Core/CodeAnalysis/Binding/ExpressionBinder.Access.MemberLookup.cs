@@ -2784,18 +2784,6 @@ internal sealed partial class ExpressionBinder
                     ? ConvertIndexValue(paramType)
                     : conversions.BindConversion(indexSyntax.Location, writeArguments[0], paramType);
 
-                var writesThroughGetter = selectedIndexer.SetterSymbol == null
-                    && targetType is StructSymbol
-                    && selectedIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref };
-                if (!CheckUserIndexerAccessibility(
-                    selectedIndexer,
-                    requireGetter: writesThroughGetter,
-                    requireSetter: selectedIndexer.SetterSymbol != null,
-                    diagnosticLocation))
-                {
-                    return new BoundErrorExpression(null);
-                }
-
                 if (selectedIndexer.SetterSymbol == null)
                 {
                     // Issue #4224: a writable-ref-returning indexer getter (no
@@ -2816,6 +2804,15 @@ internal sealed partial class ExpressionBinder
                         var refElementType = SubstituteIndexerType(refIndexerGetter.Type, writeSubstitution);
                         var refIndexArg = ConvertWriteIndex();
                         var refValue = BindValue(refElementType);
+                        if (!CheckUserIndexerAccessibility(
+                            selectedIndexer,
+                            requireGetter: true,
+                            requireSetter: false,
+                            diagnosticLocation))
+                        {
+                            return new BoundErrorExpression(null);
+                        }
+
                         var refGetCall = new BoundUserInstanceCallExpression(
                             null,
                             target,
@@ -2832,6 +2829,15 @@ internal sealed partial class ExpressionBinder
                 var elementType = SubstituteIndexerType(selectedIndexer.SetterSymbol.Parameters[^1].Type, writeSubstitution);
                 var indexArg = ConvertWriteIndex();
                 var value = BindValue(elementType);
+                if (!CheckUserIndexerAccessibility(
+                    selectedIndexer,
+                    requireGetter: false,
+                    requireSetter: true,
+                    diagnosticLocation))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 return MakeUserIndexAssignment(
                     selectedIndexer.SetterSymbol,
                     indexArg,
@@ -3400,18 +3406,6 @@ internal sealed partial class ExpressionBinder
         {
             target = ViewIndexerReceiver(target, indexView, diagnosticLocation);
             var parameterType = SubstituteIndexerType(userIndexer.Parameters[0].Type, substitution);
-            var writesThroughGetter = userIndexer.SetterSymbol == null
-                && targetType is StructSymbol
-                && userIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref };
-            if (!CheckUserIndexerAccessibility(
-                userIndexer,
-                requireGetter: writesThroughGetter,
-                requireSetter: userIndexer.SetterSymbol != null,
-                diagnosticLocation))
-            {
-                return new BoundErrorExpression(null);
-            }
-
             if (userIndexer.SetterSymbol != null)
             {
                 if (isReadOnlyReceiver)
@@ -3421,13 +3415,24 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var valueType = SubstituteIndexerType(userIndexer.Type, substitution);
+                var convertedIndex = conversions.BindConversion(diagnosticLocation, indexValue, parameterType);
+                var value = bindValue(valueType);
+                if (!CheckUserIndexerAccessibility(
+                    userIndexer,
+                    requireGetter: false,
+                    requireSetter: true,
+                    diagnosticLocation))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 return new BoundUserInstanceCallExpression(
                     null,
                     target,
                     userIndexer.SetterSymbol,
                     ImmutableArray.Create(
-                        conversions.BindConversion(diagnosticLocation, indexValue, parameterType),
-                        bindValue(valueType)));
+                        convertedIndex,
+                        value));
             }
 
             if (targetType is StructSymbol
@@ -3440,16 +3445,27 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var refElementType = SubstituteIndexerType(refGetter.Type, substitution);
+                var convertedIndex = conversions.BindConversion(diagnosticLocation, indexValue, parameterType);
+                var value = bindValue(refElementType);
+                if (!CheckUserIndexerAccessibility(
+                    userIndexer,
+                    requireGetter: true,
+                    requireSetter: false,
+                    diagnosticLocation))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 var refGetCall = new BoundUserInstanceCallExpression(
                     null,
                     target,
                     refGetter,
-                    ImmutableArray.Create(conversions.BindConversion(diagnosticLocation, indexValue, parameterType)),
+                    ImmutableArray.Create(convertedIndex),
                     refElementType);
                 return new BoundIndirectAssignmentExpression(
                     null,
                     new BoundAddressOfExpression(null, refGetCall, unmanaged: false),
-                    bindValue(refElementType));
+                    value);
             }
         }
 

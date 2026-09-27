@@ -376,11 +376,6 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
-        if (!CheckUserIndexerAccessibility(indexer, requireGetter: true, requireSetter: false, targetLocation))
-        {
-            return new BoundErrorExpression(null);
-        }
-
         var arguments = ImmutableArray.CreateBuilder<BoundExpression>(indexer.Parameters.Length);
         for (var i = 0; i < indexer.Parameters.Length; i++)
         {
@@ -388,6 +383,11 @@ internal sealed partial class ExpressionBinder
             arguments.Add(i < argumentCount
                 ? convert(i, parameterType)
                 : IndexerDefaultArgument(indexer.Parameters[i], parameterType));
+        }
+
+        if (!CheckUserIndexerAccessibility(indexer, requireGetter: true, requireSetter: false, targetLocation))
+        {
+            return new BoundErrorExpression(null);
         }
 
         return new BoundUserInstanceCallExpression(
@@ -408,6 +408,8 @@ internal sealed partial class ExpressionBinder
     /// <param name="indexSyntaxes">The written index arguments.</param>
     /// <param name="bindValue">Binds the stored value given the element type
     /// and a read of the current element (for compound assignment).</param>
+    /// <param name="bindValueForRecovery">Binds the stored-value syntax without
+    /// requiring an indexer read when accessibility recovery stops the write.</param>
     /// <param name="location">The location for diagnostics.</param>
     /// <param name="requiresRead">Whether the assignment also invokes the getter.</param>
     /// <param name="returnsPreviousValue">Whether the result is the element's previous value (postfix increment/decrement).</param>
@@ -417,6 +419,7 @@ internal sealed partial class ExpressionBinder
         BoundExpression target,
         SeparatedSyntaxList<ExpressionSyntax> indexSyntaxes,
         Func<TypeSymbol, Func<BoundExpression>, BoundExpression> bindValue,
+        Action<TypeSymbol> bindValueForRecovery,
         TextLocation location,
         bool requiresRead,
         bool returnsPreviousValue = false)
@@ -472,15 +475,6 @@ internal sealed partial class ExpressionBinder
             && indexer.GetterSymbol is { ReturnRefKind: RefKind.Ref } getter
                 ? getter
                 : null;
-        if (!CheckUserIndexerAccessibility(
-            indexer,
-            requireGetter: setter == null || requiresRead,
-            requireSetter: setter != null,
-            location))
-        {
-            return new BoundErrorExpression(null);
-        }
-
         var storedType = refGetter?.Type ?? setter?.Parameters[^1].Type;
         if (storedType == null)
         {
@@ -511,6 +505,15 @@ internal sealed partial class ExpressionBinder
 
         var capturedArguments = arguments.MoveToImmutable();
         var elementType = SubstituteIndexerType(storedType, substitution);
+        if (!CheckUserIndexerAccessibility(
+            indexer,
+            requireGetter: setter == null || requiresRead,
+            requireSetter: setter != null,
+            location))
+        {
+            bindValueForRecovery(elementType);
+            return new BoundErrorExpression(null);
+        }
 
         // No setter: storedType came from the writable ref getter. Review
         // finding (#4350): call that getter exactly ONCE and hoist the

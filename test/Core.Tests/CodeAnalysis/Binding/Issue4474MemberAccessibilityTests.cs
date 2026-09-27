@@ -64,6 +64,85 @@ public sealed class Issue4474MemberAccessibilityTests
     }
 
     [Theory]
+    [InlineData("private", "GS0472")]
+    [InlineData("protected", "GS0379")]
+    public void SourceIndexer_RestrictedSetter_ReadsButDoesNotWrite(
+        string accessibility,
+        string expectedId)
+    {
+        var declaration = $$"""
+            open class Source {
+                prop this[i int32] int32 {
+                    get -> i
+                    {{accessibility}} set { }
+                }
+            }
+            """;
+
+        var read = EmittedOracle.Evaluate(declaration + "\nlet value = Source()[0]");
+        Assert.Empty(read.Diagnostics.Where(d => d.IsError));
+        Assert.Equal(0, read.Value);
+
+        AssertSingleError(declaration + "\nSource()[0] = 1", expectedId, "Source()");
+    }
+
+    [Theory]
+    [InlineData("private", "GS0472")]
+    [InlineData("protected", "GS0379")]
+    public void SourceIndexer_RestrictedGetter_WritesButDoesNotRead(
+        string accessibility,
+        string expectedId)
+    {
+        var declaration = $$"""
+            open class Source {
+                prop this[i int32] int32 {
+                    {{accessibility}} get -> i
+                    set { }
+                }
+            }
+            """;
+
+        var write = EmittedOracle.Evaluate(declaration + "\nSource()[0] = 1");
+        Assert.Empty(write.Diagnostics.Where(d => d.IsError));
+
+        AssertSingleError(declaration + "\nlet value = Source()[0]", expectedId, "Source()");
+    }
+
+    [Fact]
+    public void InaccessibleIndexer_StillBindsIndexAndValueForDiagnostics()
+    {
+        const string declaration = """
+            class Source {
+                private prop this[i int32] int32 {
+                    get -> i
+                    set { }
+                }
+            }
+            """;
+        var read = EmittedOracle.Evaluate(declaration + """
+
+            class Other {
+                func Use(source Source) {
+                    let read = source[missingIndex]
+                }
+            }
+            """).Diagnostics.Where(d => d.IsError).ToArray();
+        Assert.Contains(read, d => d.Id == "GS0125" && d.Message.Contains("missingIndex", StringComparison.Ordinal));
+
+        var write = EmittedOracle.Evaluate(declaration + """
+
+            class Other {
+                func Use(source Source) {
+                    source[missingIndex] = missingValue
+                }
+            }
+            """).Diagnostics.Where(d => d.IsError).ToArray();
+        Assert.Single(write, d => d.Id == "GS0472");
+        Assert.Contains(write, d => d.Id == "GS0125" && d.Message.Contains("missingIndex", StringComparison.Ordinal));
+        Assert.Contains(write, d => d.Id == "GS0125" && d.Message.Contains("missingValue", StringComparison.Ordinal));
+    }
+
+    [Theory]
     [InlineData("private", "let value = source[0, 1]", "GS0472")]
     [InlineData("protected", "source[0, 1] = 1", "GS0379")]
     public void MultiParameterSourceIndexer_FromUnrelatedClass_IsInaccessible(
