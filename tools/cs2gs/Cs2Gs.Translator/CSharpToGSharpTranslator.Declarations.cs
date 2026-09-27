@@ -1317,7 +1317,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
-            if (!this.emitGeneratedImplementingParts && IsRegexGeneratorDeclaration(symbol))
+            if (!this.emitGeneratedImplementingParts
+                && GeneratedSourceDetection.IsGeneratedSource(node.SyntaxTree, this.projectDirectory)
+                && IsRegexGeneratorDeclaration(symbol))
             {
                 return null;
             }

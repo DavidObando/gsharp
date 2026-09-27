@@ -27,8 +27,9 @@ namespace Cs2Gs.Tests;
 /// <remarks>
 /// The fixtures model the generator output as a second
 /// <c>// &lt;auto-generated/&gt;</c> document holding the implementation, the
-/// shape a real build hands cs2gs: the loader drops that document, and the
-/// compilation still sees it.
+/// shape a repository migration hands cs2gs: the loader retains explicitly
+/// included generated documents, and the translator omits generator-owned
+/// declarations while preserving the original compilation.
 /// </remarks>
 public class Issue4301GeneratedRegexTranslationTests
 {
@@ -160,6 +161,26 @@ partial class P
             translator.TranslateDocument(new LoadedDocument(generatedTree.FilePath, generatedTree, model), context));
 
         Assert.DoesNotContain("func Digits", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void HandWrittenTypeWithRegexGeneratorMetadata_IsPreserved()
+    {
+        const string source = """
+            using System.CodeDom.Compiler;
+
+            [GeneratedCode("System.Text.RegularExpressions.Generator", "test")]
+            internal class HandWritten
+            {
+                internal static int Value => 42;
+            }
+            """;
+
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = Translate(("HandWritten.cs", source));
+
+        Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("class HandWritten", printed, StringComparison.Ordinal);
+        Assert.Contains("Value", printed, StringComparison.Ordinal);
     }
 
     [Theory]
