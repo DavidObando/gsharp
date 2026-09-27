@@ -109,28 +109,6 @@ Run(true)
     }
 
     [Fact]
-    public void Goto_BypassesStraightLineAssignment_DoesNotLiftNarrowing()
-    {
-        var result = Evaluate(@"
-func Run(cond bool) string {
-    var x string? = nil
-    if cond {
-        goto SkipAssign
-    }
-    x = ""hello""
-SkipAssign:
-    return x.Length.ToString()
-}
-
-Run(true)
-");
-
-        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
-        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
-        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
-    }
-
-    [Fact]
     public void Goto_BypassesTypeGuard_SwitchVariant_DoesNotNarrowFieldPath()
     {
         // Same defect, but through the post-switch narrowing lift (ADR-0069

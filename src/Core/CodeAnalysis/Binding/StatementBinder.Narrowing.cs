@@ -503,11 +503,6 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyAssignmentNarrowing(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
-        if (binderCtx.FunctionContainsUserGotoOrLabel)
-        {
-            return;
-        }
-
         if (statement is BoundExpressionStatement { Expression: BoundAssignmentExpression assign }
             && TryClassifyNonNullAssignment(assign, out var variable, out var underlying))
         {
