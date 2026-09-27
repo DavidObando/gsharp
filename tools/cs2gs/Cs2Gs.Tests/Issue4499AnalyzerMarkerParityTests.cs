@@ -253,6 +253,31 @@ namespace Two
     }
 
     [Fact]
+    public void MarkerInEmptyNamespaceIsUnplacedWithOneEmittedPackage()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate("""
+namespace [|Empty|]
+{
+}
+
+namespace One
+{
+    class Consumer
+    {
+        void Use()
+        {
+            int Empty = 0;
+        }
+    }
+}
+""");
+
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.Equal(new[] { "Empty" }, result.UnplacedMarkers);
+        Assert.DoesNotContain("[|Empty|]", result.GsWithMarkers, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void FormattingFallbackCanPlaceMarkerInsideInterpolationHole()
     {
         SnippetTranslationResult result = SnippetTranslator.Translate("""
@@ -312,5 +337,35 @@ class Consumer
         int qualified = result.GsWithMarkers.IndexOf("this.Door.Map(", StringComparison.Ordinal);
         int marked = result.GsWithMarkers.IndexOf("[|Door.Map(", StringComparison.Ordinal);
         Assert.True(qualified >= 0 && marked > qualified, result.GsWithMarkers);
+    }
+
+    [Fact]
+    public void FormattingFallbackToleratesNullAssertionAfterCompositeReceivers()
+    {
+        SnippetTranslationResult result = SnippetTranslator.Translate("""
+using System.Collections.Immutable;
+
+class Door
+{
+    public object Map(object other, ImmutableArray<object> arguments) => this;
+}
+
+class Consumer
+{
+    Door? Find() => null;
+    ImmutableArray<Door?> Nodes => default;
+
+    void Use()
+    {
+        _ = [|Find().Map(null, default)|];
+        _ = [|Nodes[0].Map(null, default)|];
+    }
+}
+""");
+
+        Assert.NotNull(result.GsWithMarkers);
+        Assert.Empty(result.UnplacedMarkers);
+        Assert.Contains("[|Find()!!.Map(nil, default(", result.GsWithMarkers, StringComparison.Ordinal);
+        Assert.Contains("[|Nodes[0]!!.Map(nil, default(", result.GsWithMarkers, StringComparison.Ordinal);
     }
 }

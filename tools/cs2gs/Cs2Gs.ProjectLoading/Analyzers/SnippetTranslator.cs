@@ -133,9 +133,7 @@ public static class SnippetTranslator
         foreach (MarkedText marked in markedTexts)
         {
             string markedPackage = DeclaredPackageAt(document, marked.Start);
-            int unitIndex = packages.Count > 1
-                ? PackageUnitIndex(packages, markedPackage)
-                : 0;
+            int unitIndex = PackageUnitIndex(packages, markedPackage);
             if (unitIndex < 0)
             {
                 ReportUnplacedMarker(marked, 0, unplaced, diagnostics);
@@ -659,6 +657,11 @@ public static class SnippetTranslator
                 else
                 {
                     pattern.Append(Regex.Escape(text));
+                    if (token.IsKind(SyntaxKind.CloseParenToken)
+                        || token.IsKind(SyntaxKind.CloseBracketToken))
+                    {
+                        pattern.Append("(?:!!)?");
+                    }
                 }
             }
         }
