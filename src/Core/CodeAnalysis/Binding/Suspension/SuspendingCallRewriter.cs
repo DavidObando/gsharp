@@ -89,6 +89,32 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
         return (BoundBlockStatement)rewriter.RewriteStatement(body);
     }
 
+    /// <summary>Rewrites a field initializer after suspension inference.</summary>
+    /// <param name="expression">The initializer expression.</param>
+    /// <param name="container">A synthetic container carrying the field owner's lexical context.</param>
+    /// <param name="newlySuspending">The functions inference marked in this pass.</param>
+    /// <param name="runtime">The channel runtime binder.</param>
+    /// <param name="diagnostics">Receives suspension diagnostics.</param>
+    /// <param name="createMethodGroupAdapter">Creates a verifier-safe inferred-suspension adapter.</param>
+    /// <returns>The rewritten initializer.</returns>
+    public static BoundExpression RewriteInitializer(
+        BoundExpression expression,
+        FunctionSymbol container,
+        ImmutableHashSet<FunctionSymbol> newlySuspending,
+        ChannelRuntimeBinder runtime,
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
+    {
+        var rewriter = new SuspendingCallRewriter(
+            container,
+            containerIsRoot: false,
+            newlySuspending,
+            runtime,
+            diagnostics,
+            createMethodGroupAdapter);
+        return rewriter.RewriteExpression(expression);
+    }
+
     /// <inheritdoc/>
     protected override BoundStatement RewriteBlockStatement(BoundBlockStatement node)
     {

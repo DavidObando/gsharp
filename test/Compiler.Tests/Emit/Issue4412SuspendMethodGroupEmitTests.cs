@@ -174,6 +174,13 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             import System.Linq
             import Lib
 
+            class Holder {
+                let instanceCallback (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
+                shared {
+                    let sharedCallback (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
+                }
+            }
+
             suspend func run() {
                 let values = []int32{7}
                 for task in Enumerable.Select(values, Twice) {
@@ -187,6 +194,8 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
 
             let top (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
             Console.WriteLine(top(5).AsTask().GetAwaiter().GetResult())
+            Console.WriteLine(Holder.sharedCallback(8).AsTask().GetAwaiter().GetResult())
+            Console.WriteLine(Holder().instanceCallback(9).AsTask().GetAwaiter().GetResult())
             run()
             """;
 
@@ -199,7 +208,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 appPath,
                 new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
             Assert.Equal(
-                $"10{Environment.NewLine}14{Environment.NewLine}6{Environment.NewLine}14{Environment.NewLine}",
+                $"10{Environment.NewLine}16{Environment.NewLine}18{Environment.NewLine}14{Environment.NewLine}6{Environment.NewLine}14{Environment.NewLine}",
                 Run(appPath));
         }
         finally
@@ -261,12 +270,19 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 return value + 1
             }
 
+            class Holder {
+                let take (chan[int32]) -> int32 = Take
+            }
+
             let ch = chan[int32](1)
             ch <- 42
             let addOne = AddOne
             let take = Take
             Console.WriteLine(addOne(1))
             Console.WriteLine(take(ch))
+            let second = chan[int32](1)
+            second <- 43
+            Console.WriteLine(Holder().take(second))
             """;
 
         var directory = PrepareDirectory(nameof(InferredSuspendMethodGroup_VerifiesAndRuns));
@@ -274,7 +290,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         {
             var outputPath = Compile(directory, "App", source, "/target:exe");
             IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
-            Assert.Equal($"2{Environment.NewLine}42{Environment.NewLine}", Run(outputPath));
+            Assert.Equal($"2{Environment.NewLine}42{Environment.NewLine}43{Environment.NewLine}", Run(outputPath));
         }
         finally
         {

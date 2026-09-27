@@ -2732,7 +2732,9 @@ public sealed class Binder
                 }
 
                 return inferenceBinder.Lambdas.CreateUserMethodGroupAdapter(group);
-            });
+            },
+            allStructs,
+            globalScope.Interfaces);
 
         // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
         // pointless. Reported here, over the bound bodies, because the question

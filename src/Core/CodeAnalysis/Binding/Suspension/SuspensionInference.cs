@@ -49,13 +49,17 @@ internal static class SuspensionInference
     /// <param name="references">The compilation's reference resolver; when the channel runtime does not resolve nothing can suspend and the pass is a no-op.</param>
     /// <param name="diagnostics">Receives GS0558 and the re-run async analyses' diagnostics.</param>
     /// <param name="createMethodGroupAdapter">Creates a verifier-safe adapter after inferred suspension has finalized a method's emitted shape.</param>
+    /// <param name="structs">User and synthesized structs whose field initializers also require the rewrite.</param>
+    /// <param name="interfaces">User interfaces whose static field initializers also require the rewrite.</param>
     /// <returns>The set of functions the pass marked <see cref="SuspendingKind.Inferred"/>.</returns>
     public static ImmutableHashSet<FunctionSymbol> Run(
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder bodies,
         FunctionSymbol? entryPoint,
         ReferenceResolver? references,
         ImmutableArray<Diagnostic>.Builder diagnostics,
-        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter,
+        ImmutableArray<StructSymbol> structs,
+        ImmutableArray<InterfaceSymbol> interfaces)
     {
         if (references == null)
         {
@@ -145,8 +149,74 @@ internal static class SuspensionInference
             }
         }
 
+        foreach (var type in structs)
+        {
+            type.SetStaticFieldInitializers(RewriteInitializers(
+                type.StaticFieldInitializers,
+                type,
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter));
+            type.SetInstanceFieldInitializers(RewriteInitializers(
+                type.InstanceFieldInitializers,
+                type,
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter));
+        }
+
+        foreach (var type in interfaces)
+        {
+            type.SetStaticFieldInitializers(RewriteInitializers(
+                type.StaticFieldInitializers,
+                type,
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter));
+        }
+
         diagnostics.AddRange(bag);
         return newlySuspending;
+    }
+
+    internal static ImmutableDictionary<FieldSymbol, BoundExpression> RewriteInitializers(
+        ImmutableDictionary<FieldSymbol, BoundExpression> initializers,
+        TypeSymbol owner,
+        ImmutableHashSet<FunctionSymbol> newlySuspending,
+        ChannelRuntimeBinder runtime,
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
+    {
+        if (initializers.IsEmpty)
+        {
+            return initializers;
+        }
+
+        var container = new FunctionSymbol(
+            "<field_initializer>",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void)
+        {
+            IsStatic = true,
+            StaticOwnerType = owner,
+            LexicalEnclosingType = owner,
+        };
+        var builder = initializers.ToBuilder();
+        foreach (var (field, initializer) in initializers)
+        {
+            builder[field] = SuspendingCallRewriter.RewriteInitializer(
+                initializer,
+                container,
+                newlySuspending,
+                runtime,
+                diagnostics,
+                createMethodGroupAdapter);
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>ADR-0174 D4 "where inference stops": functions whose signature inference may not change.</summary>
