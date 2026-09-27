@@ -13,7 +13,8 @@ SPEC = importlib.util.spec_from_file_location(
     "run_go2gs_prerequisite_spike",
     REPO / "build" / "run-go2gs-prerequisite-spike.py",
 )
-assert SPEC and SPEC.loader
+if SPEC is None or SPEC.loader is None:
+    raise ImportError("cannot load build/run-go2gs-prerequisite-spike.py")
 spike = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(spike)
 
@@ -94,15 +95,19 @@ class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
     def test_benchmark_launch_semantic_drift_fails_parity(self) -> None:
         expected = spike.semantic_lines(semantic_output(), "go")
         retained = []
+        output = semantic_output(mutation="launch-drift") + "\nperf malformed"
 
-        with self.assertRaisesRegex(SystemExit, "benchmark launch 1"):
+        with self.assertRaises(SystemExit) as raised:
             spike.retain_benchmark_launch(
                 retained,
-                semantic_output(mutation="launch-drift") + "\nperf malformed",
+                output,
                 "gsharp-jit",
                 expected,
                 1,
             )
+        message = str(raised.exception)
+        self.assertIn("gsharp-jit benchmark launch 1", message)
+        self.assertIn(output, message)
         self.assertEqual(retained, [])
 
     def test_benchmark_launch_row_error_includes_launch_context(self) -> None:
@@ -125,6 +130,16 @@ class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
             spike.validate_cross_runtime_checksums(
                 performance_samples(corrupt_runtime="gsharp-aot")
             )
+
+    def test_summarize_rejects_unstable_checksums_independently(self) -> None:
+        samples = performance_samples(launches=2)["go"]
+        samples[1]["slice-view"]["checksum"] = 2
+
+        with self.assertRaisesRegex(
+            SystemExit,
+            "slice-view checksum changed across samples",
+        ):
+            spike.summarize(samples)
 
     def test_duplicate_performance_row_fails_exact_row_gate(self) -> None:
         with self.assertRaisesRegex(SystemExit, "duplicate perf row: slice-view"):

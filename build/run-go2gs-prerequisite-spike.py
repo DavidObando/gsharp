@@ -377,7 +377,7 @@ def retain_benchmark_launch(
     if actual != expected:
         raise SystemExit(
             f"semantic parity failed for {runtime} benchmark launch {launch} "
-            "versus initial go"
+            f"versus initial go\n{output}"
         )
     samples.append(parse_perf(output))
 
@@ -451,6 +451,10 @@ def summarize(samples: list[dict[str, dict[str, float | int]]]) -> dict[str, dic
     result = {}
     for name in samples[0]:
         checksums = {int(sample[name]["checksum"]) for sample in samples}
+        if len(checksums) != 1:
+            raise SystemExit(
+                f"{name} checksum changed across samples: {sorted(checksums)}"
+            )
         allocation_counts = [
             int(sample[name]["allocation_count"])
             for sample in samples
@@ -472,7 +476,7 @@ def summarize(samples: list[dict[str, dict[str, float | int]]]) -> dict[str, dic
             "operations_per_launch": sorted(
                 {int(sample[name]["operations"]) for sample in samples}
             ),
-            "checksum": checksums.pop(),
+            "checksum": next(iter(checksums)),
         }
     return result
 
