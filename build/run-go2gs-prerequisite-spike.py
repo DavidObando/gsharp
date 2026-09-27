@@ -113,6 +113,8 @@ RICH_SHARED_ROOT_ALLOCATION_PAIRS = (
     ("rich-create-retained", "manual-rich-create-retained"),
     ("rich-create-multi", "manual-rich-create-multi"),
 )
+FIXED_MEASUREMENT_OVERHEAD_BYTES = 128
+MIN_OPERATIONS_FOR_FIXED_OVERHEAD = 1_000_000
 UNSUPPORTED_BOUNDARIES = (
     "typed-nil/interface-nil distinction",
     "interface-to-interface dynamic identity",
@@ -457,9 +459,11 @@ def summarize(samples: list[dict[str, dict[str, float | int]]]) -> dict[str, dic
 def performance_gate_status(
     samples: dict[str, list[dict[str, dict[str, float | int]]]],
 ) -> dict[str, object]:
-    def bytes_per_operation(sample: dict[str, float | int]) -> int:
-        return round(
-            int(sample["allocated_bytes"]) / int(sample["operations"])
+    def fixed_overhead_allowance(sample: dict[str, float | int]) -> int:
+        return (
+            FIXED_MEASUREMENT_OVERHEAD_BYTES
+            if int(sample["operations"]) >= MIN_OPERATIONS_FOR_FIXED_OVERHEAD
+            else 0
         )
 
     runtime_status = {}
@@ -496,17 +500,25 @@ def performance_gate_status(
                 for sample in runtime_samples
             ),
             "managed_handle_allocation_at_most_40_bytes_per_operation_each_launch": all(
-                bytes_per_operation(sample[name]) <= 40
+                int(sample[name]["allocated_bytes"])
+                <= 40 * int(sample[name]["operations"])
+                + fixed_overhead_allowance(sample[name])
                 for sample in runtime_samples
                 for name in MANAGED_HANDLE_ALLOCATION_ROWS
             ),
             "managed_warmed_identity_allocated_bytes_zero": all(
-                bytes_per_operation(sample["managed-warmed-identity"]) == 0
+                int(sample["managed-warmed-identity"]["allocated_bytes"])
+                <= fixed_overhead_allowance(sample["managed-warmed-identity"])
                 for sample in runtime_samples
             ),
             "rich_shared_root_allocation_matches_named_controls_each_launch": all(
-                bytes_per_operation(sample[measured])
-                == bytes_per_operation(sample[control])
+                int(sample[measured]["operations"])
+                == int(sample[control]["operations"])
+                and abs(
+                    int(sample[measured]["allocated_bytes"])
+                    - int(sample[control]["allocated_bytes"])
+                )
+                <= fixed_overhead_allowance(sample[measured])
                 for sample in runtime_samples
                 for measured, control in RICH_SHARED_ROOT_ALLOCATION_PAIRS
             ),

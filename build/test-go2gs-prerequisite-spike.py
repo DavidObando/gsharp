@@ -240,6 +240,50 @@ class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
 
         self.assertTrue(status["native_control_gate_passed"])
 
+    def test_fractional_managed_allocation_over_budget_fails(self) -> None:
+        samples = performance_samples()
+        sample = samples["gsharp-jit"][0]["managed-retained"]
+        sample["operations"] = 2
+        sample["allocated_bytes"] = 81
+
+        status = spike.performance_gate_status(samples)
+
+        self.assertFalse(
+            status["runtimes"]["gsharp-jit"]["checks"][
+                "managed_handle_allocation_at_most_40_bytes_per_operation_each_launch"
+            ]
+        )
+
+    def test_fractional_warmed_identity_allocation_fails(self) -> None:
+        samples = performance_samples()
+        sample = samples["gsharp-aot"][0]["managed-warmed-identity"]
+        sample["operations"] = 3
+        sample["allocated_bytes"] = 1
+
+        status = spike.performance_gate_status(samples)
+
+        self.assertFalse(
+            status["runtimes"]["gsharp-aot"]["checks"][
+                "managed_warmed_identity_allocated_bytes_zero"
+            ]
+        )
+
+    def test_fractional_rich_control_allocation_difference_fails(self) -> None:
+        samples = performance_samples()
+        sample = samples["gsharp-jit"][0]
+        sample["rich-create"]["operations"] = 2
+        sample["manual-rich-create"]["operations"] = 2
+        sample["rich-create"]["allocated_bytes"] = 81
+        sample["manual-rich-create"]["allocated_bytes"] = 80
+
+        status = spike.performance_gate_status(samples)
+
+        self.assertFalse(
+            status["runtimes"]["gsharp-jit"]["checks"][
+                "rich_shared_root_allocation_matches_named_controls_each_launch"
+            ]
+        )
+
 
 if __name__ == "__main__":
     unittest.main()
