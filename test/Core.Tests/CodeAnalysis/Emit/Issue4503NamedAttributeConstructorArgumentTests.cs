@@ -222,6 +222,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     [InlineData("@ImportedNamedConstructor(\"a\", second: 2, second: 3)", "GS0245")]
     [InlineData("@ImportedNamedConstructor(\"a\", Missing: 1)", "GS0613")]
     [InlineData("@ImportedNamedConstructor(\"a\", Missing = 1)", "GS0613")]
+    [InlineData("@ImportedNamedConstructor(Missing = 1)", "GS0613")]
     [InlineData("@ImportedNamedConstructor(\"a\", Label = 1)", "GS0614")]
     [InlineData("@ImportedNamedConstructor(\"a\", Item = 1)", "GS0613")]
     [InlineData("@ImportedNamedConstructor(\"a\", Unsupported = nil)", "GS0615")]
