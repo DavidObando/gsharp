@@ -76,6 +76,9 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual(6, combined["samples"])
         self.assertEqual(2, combined["runs"])
 
+        with self.assertRaisesRegex(SystemExit, "missing from source runs \\[2\\]"):
+            bench.aggregate([first, {}])
+
     def test_checksums_are_stable_and_match_across_paired_runtimes(self) -> None:
         jit = bench.summarize({"chunk": [1.0, 2.0]}, {"chunk": [42, 42]})
         aot = bench.summarize({"chunk": [1.5, 2.5]}, {"chunk": [42, 42]})
@@ -254,6 +257,14 @@ class ConcurrencyBenchTests(unittest.TestCase):
         gsharp, _, _, hardware, _ = bench.load_runs([str(first), str(second)])
         self.assertEqual("test-host", hardware)
         self.assertEqual(2, len(gsharp))
+        second_without_mode = json.loads(json.dumps(second_run))
+        second_without_mode["gsharp"] = {}
+        second.write_text(json.dumps({**second_without_mode, "aggregationKey": "same"}))
+        gsharp, _, _, _, _ = bench.load_runs([str(first), str(second)])
+        with self.assertRaisesRegex(SystemExit, "missing from source runs \\[2\\]"):
+            bench.combine_loaded_runs(gsharp)
+
+        second.write_text(json.dumps({**second_run, "aggregationKey": "same"}))
         with self.assertRaisesRegex(SystemExit, "duplicate --from-json path"):
             bench.load_runs([str(first), str(first)])
         second.write_text(first.read_text())

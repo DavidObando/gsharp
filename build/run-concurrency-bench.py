@@ -716,8 +716,9 @@ def aggregate(results: list[dict]) -> dict[str, dict]:
     combined: dict[str, dict] = {}
     for name in names:
         medians = [r[name]["median_ns"] for r in results if name in r]
-        if not medians:
-            continue
+        if len(medians) != len(results):
+            missing_runs = [index + 1 for index, result in enumerate(results) if name not in result]
+            raise SystemExit(f"{name} is missing from source runs {missing_runs}")
 
         combined[name] = {
             "median_ns": round(statistics.median(medians), 2),
@@ -844,12 +845,12 @@ def load_runs(
             metadata["launchOrders"].extend(source_launch_orders)
         elif payload.get("launchOrder") is not None:
             metadata["launchOrders"].append(payload["launchOrder"])
-        if payload.get("gsharp"):
-            gsharp.append(payload["gsharp"])
-        if payload.get("gsharp_aot"):
-            gsharp_aot.append(payload["gsharp_aot"])
-        if payload.get("go"):
-            go.append(payload["go"])
+        # Preserve one slot per source payload so aggregate() can reject a
+        # missing mode or row instead of silently treating fewer files as a
+        # complete multi-run result.
+        gsharp.append(payload.get("gsharp", {}))
+        gsharp_aot.append(payload.get("gsharp_aot", {}))
+        go.append(payload.get("go", {}))
 
     metadata["aggregationKey"] = aggregation_key
     return gsharp, gsharp_aot, go, recorded_class, metadata
