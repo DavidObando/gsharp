@@ -2992,7 +2992,7 @@ public sealed partial class CSharpToGSharpTranslator
             return new ArrayAllocationExpression(elementType, length);
         }
 
-        // Issues #4482, #4500 and #4507: the one decision "this local's
+        // Issues #4482, #4500, #4507 and #4525: the one decision "this local's
         // `new T[n]` allocation has a `T?` element". The allocation, its
         // inferred local aliases, and every element read/write ask it, so they
         // cannot disagree.
@@ -3005,8 +3005,21 @@ public sealed partial class CSharpToGSharpTranslator
                 local,
                 new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default));
             return owner != null
-                && (this.ElementPassedToNullableByRefParameter(owner)
+                && (this.DefaultInitializedManagedReferenceElementNeedsNullableStorage(owner)
+                    || this.ElementPassedToNullableByRefParameter(owner)
                     || this.ElementWrittenMaybeNil(owner));
+        }
+
+        private bool DefaultInitializedManagedReferenceElementNeedsNullableStorage(ILocalSymbol owner)
+        {
+            if (owner.Type is not IArrayTypeSymbol array)
+            {
+                return false;
+            }
+
+            Location location = owner.Locations.FirstOrDefault(candidate => candidate.IsInSource) ?? Location.None;
+            return this.typeMapper.Map(array.ElementType, this.context, location)
+                is ManagedReferenceTypeReference { IsNullable: false };
         }
 
         private ILocalSymbol GetArrayAllocationOwner(

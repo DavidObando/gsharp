@@ -16,6 +16,44 @@ namespace Cs2Gs.Tests;
 
 public sealed class ManagedReferenceTranslationTests
 {
+    [Fact]
+    public void DefaultInitializedManagedReferenceArraysUseNullableElements()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayTranslation;
+            public class Probe {
+                public static int Run() {
+                    int[] values = { 3, 4 };
+                    var retained = new ManagedRef<int>[2];
+                    retained[0] = ManagedRef<int>.FromArray(values, 0);
+                    var retainedAlias = retained;
+                    var readOnly = new ReadOnlyManagedRef<int>[2];
+                    readOnly[1] = ReadOnlyManagedRef<int>.FromArray(values, 1);
+                    return retainedAlias[0].Borrow() + readOnly[1].Borrow();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("ManagedArrays.cs", source) }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("let retained = [2]managed[int32]?", text);
+        Assert.Contains("let readOnly = [2]readonly managed[int32]?", text);
+        Assert.Contains("retainedAlias[0]!!.Borrow()", text);
+        Assert.Contains("readOnly[1]!!.Borrow()", text);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()", new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(7, result.Value);
+    }
+
     [Theory]
     [InlineData("int managed = 1;", "managed", 4)]
     [InlineData("int managed() => 2;", "managed()", 5)]
