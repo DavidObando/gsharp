@@ -3591,21 +3591,23 @@ internal sealed class ConversionClassifier
 
         if (source is not FunctionTypeSymbol sourceFunction
             || !MemberLookup.TryCanonicalizeStructuralFunctionType(sourceFunction, target, out _)
-            || sourceFunction.ClrType == null
-            || target.ClrType == null)
+            || target.ClrType == null
+            || sourceFunction.Arity > 16)
         {
             return false;
         }
 
-        var sourceDefinition = sourceFunction.ClrType.IsGenericType
-            ? sourceFunction.ClrType.GetGenericTypeDefinition()
-            : sourceFunction.ClrType;
+        var naturalFullName = FunctionTypeSymbol.IsVoidReturn(sourceFunction.ReturnType)
+            ? sourceFunction.Arity == 0
+                ? "System.Action"
+                : "System.Action`" + sourceFunction.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "System.Func`" + (sourceFunction.Arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
         var targetDefinition = target.ClrType.IsGenericType
             ? target.ClrType.GetGenericTypeDefinition()
             : target.ClrType;
-        return string.Equals(sourceDefinition.FullName, targetDefinition.FullName, StringComparison.Ordinal)
+        return string.Equals(naturalFullName, targetDefinition.FullName, StringComparison.Ordinal)
             && string.Equals(
-                sourceDefinition.Assembly.GetName().Name,
+                typeof(Action).Assembly.GetName().Name,
                 targetDefinition.Assembly.GetName().Name,
                 StringComparison.Ordinal);
     }

@@ -1010,6 +1010,53 @@ public class Issue2918InlineLambdaErasedReceiverTests
                 contractsAssemblyName: "Issue4358CollisionContracts"));
     }
 
+    /// <summary>
+    /// Issue #4381 review guard: a natural Action target stays an identity
+    /// conversion even when its argument type is defined by the G# compilation
+    /// and the structural function therefore has no reflection <c>ClrType</c>.
+    /// </summary>
+    [Fact]
+    public void NaturalDelegateOverSameCompilationType_PreservesReferenceIdentity()
+    {
+        const string contracts = """
+            using System;
+
+            namespace Issue4381Identity
+            {
+                public static class Sink
+                {
+                    public static Action<T> Echo<T>(Action<T> value) => value;
+                }
+            }
+            """;
+
+        const string source = """
+            package Issue4381Identity.Src
+            import System
+            import Issue4381Identity
+
+            class Item {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let f (Item) -> void = (item Item) -> Console.WriteLine(item.N)
+                let echoed = Sink.Echo[Item](f)
+                Console.WriteLine(object.ReferenceEquals(f, echoed))
+                echoed(Item(42))
+            }
+            """;
+
+        Assert.Equal(
+            $"True{Environment.NewLine}42{Environment.NewLine}",
+            CompileVerifyLoadAndRun(
+                source,
+                "Issue4381Identity.Src.Item",
+                contractsSource: contracts,
+                contractsAssemblyName: "Issue4381IdentityContracts"));
+    }
+
     [Fact]
     public void HoistedImportedPredicateThroughGenericConstructor_RetainsDelegateIdentity()
     {
