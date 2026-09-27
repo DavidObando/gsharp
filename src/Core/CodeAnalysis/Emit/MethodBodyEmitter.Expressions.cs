@@ -374,7 +374,8 @@ internal sealed partial class MethodBodyEmitter
                     // Issue #537: string indexing via get_Chars(int32).
                     this.EmitExpression(idx.Target);
                     this.EmitExpression(idx.Index);
-                    this.il.Call(this.outer.wellKnown.GetStringCharsReference());
+                    this.il.OpCode(ILOpCode.Callvirt);
+                    this.il.Token(this.outer.wellKnown.GetStringCharsReference());
                 }
                 else
                 {
@@ -982,7 +983,8 @@ internal sealed partial class MethodBodyEmitter
         this.EmitExpression(len.Operand);
         if (len.Operand.Type == TypeSymbol.String)
         {
-            this.il.Call(this.outer.wellKnown.GetStringLengthReference());
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.wellKnown.GetStringLengthReference());
         }
         else if (len.Operand.Type is MapTypeSymbol mapType)
         {
@@ -1002,7 +1004,8 @@ internal sealed partial class MethodBodyEmitter
         else if (len.Operand.Type is RectangularArrayTypeSymbol
             || (len.Operand.Type.ClrType is { IsArray: true } clrArray && clrArray.GetArrayRank() > 1))
         {
-            this.il.Call(this.outer.wellKnown.GetArrayLengthReference());
+            this.il.OpCode(ILOpCode.Callvirt);
+            this.il.Token(this.outer.wellKnown.GetArrayLengthReference());
         }
         else
         {
