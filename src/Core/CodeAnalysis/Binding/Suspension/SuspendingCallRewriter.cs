@@ -189,10 +189,25 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
     {
         var inner = new SuspendingCallRewriter(node.Function, containerIsRoot: false, newlySuspending, runtime, diagnostics);
+
+        // ADR-0174 D7: a suspending delegate carries the context active when
+        // the delegate is created, not the context active when it is invoked.
+        var capturedContext = Ambient;
+        inner.lexicalContext = capturedContext;
         var body = (BoundBlockStatement)inner.RewriteStatement(node.Body);
-        return ReferenceEquals(body, node.Body)
-            ? node
-            : new BoundFunctionLiteralExpression(node.Syntax, node.Function, node.FunctionType, body, node.CapturedVariables);
+        if (ReferenceEquals(body, node.Body))
+        {
+            return node;
+        }
+
+        var capturedVariables = node.CapturedVariables;
+        if (capturedContext is BoundVariableExpression contextVariable
+            && !capturedVariables.Contains(contextVariable.Variable))
+        {
+            capturedVariables = capturedVariables.Add(contextVariable.Variable);
+        }
+
+        return new BoundFunctionLiteralExpression(node.Syntax, node.Function, node.FunctionType, body, capturedVariables);
     }
 
     /// <inheritdoc/>

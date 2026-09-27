@@ -1109,19 +1109,12 @@ internal sealed class ChannelRuntimeBinder
         out ImmutableArray<BoundExpression> arguments)
     {
         arguments = callArguments;
-        if (!ImportedFunctionSymbol.IsSuspendingMethod(method))
+        if (!ImportedFunctionSymbol.HasHiddenContextParameter(method))
         {
             return false;
         }
 
         var parameters = method.GetParameters();
-        if (parameters.Length == 0
-            || parameters[^1].ParameterType.FullName != "Gsharp.Concurrency.Context"
-            || parameters[^1].Name != FunctionSymbol.HiddenContextParameterName)
-        {
-            return false;
-        }
-
         if (callArguments.Length == parameters.Length - 1)
         {
             arguments = callArguments.Add(context);

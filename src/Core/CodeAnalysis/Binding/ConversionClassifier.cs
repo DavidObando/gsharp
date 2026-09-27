@@ -73,7 +73,7 @@ internal sealed class ConversionClassifier
     private readonly Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable;
     private readonly Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, bool, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter;
     private readonly Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter;
-    private readonly Func<BoundMethodGroupExpression, BoundExpression> createUserExtensionMethodGroupAdapter;
+    private readonly Func<BoundMethodGroupExpression, BoundExpression> createUserMethodGroupAdapter;
     private readonly Func<FunctionSymbol, TypeSymbol, TypeSymbol> getMethodGroupObservableReturnType;
     private readonly Func<BoundExpression, bool> isLvalue;
     private readonly Func<SyntaxToken?, RefKind> getRefKindFromModifier;
@@ -109,8 +109,8 @@ internal sealed class ConversionClassifier
     /// <param name="createClrMethodGroupAdapter">Callback that wraps a
     /// resolved CLR method group when its exact signature differs from the
     /// structural function target.</param>
-    /// <param name="createUserExtensionMethodGroupAdapter">Callback that wraps
-    /// value-type extension method groups in a capturing lambda.</param>
+    /// <param name="createUserMethodGroupAdapter">Callback that wraps method
+    /// groups requiring an ABI adapter in a capturing lambda.</param>
     /// <param name="getMethodGroupObservableReturnType">Callback that widens
     /// an async method's declared result to its emitted Task/ValueTask shape.</param>
     /// <param name="isLvalue">Callback that classifies a bound expression
@@ -131,7 +131,7 @@ internal sealed class ConversionClassifier
         Func<InterpolatedStringExpressionSyntax, TypeSymbol, BoundExpression> bindInterpolatedStringAsFormattable,
         Func<BoundFunctionLiteralExpression, FunctionTypeSymbol, bool, BoundFunctionLiteralExpression> createErasedFunctionLiteralAdapter,
         Func<BoundClrMethodGroupExpression, FunctionTypeSymbol, BoundExpression> createClrMethodGroupAdapter,
-        Func<BoundMethodGroupExpression, BoundExpression> createUserExtensionMethodGroupAdapter,
+        Func<BoundMethodGroupExpression, BoundExpression> createUserMethodGroupAdapter,
         Func<FunctionSymbol, TypeSymbol, TypeSymbol> getMethodGroupObservableReturnType,
         Func<BoundExpression, bool> isLvalue,
         Func<SyntaxToken?, RefKind> getRefKindFromModifier,
@@ -145,7 +145,7 @@ internal sealed class ConversionClassifier
         this.bindInterpolatedStringAsFormattable = bindInterpolatedStringAsFormattable ?? throw new ArgumentNullException(nameof(bindInterpolatedStringAsFormattable));
         this.createErasedFunctionLiteralAdapter = createErasedFunctionLiteralAdapter ?? throw new ArgumentNullException(nameof(createErasedFunctionLiteralAdapter));
         this.createClrMethodGroupAdapter = createClrMethodGroupAdapter ?? throw new ArgumentNullException(nameof(createClrMethodGroupAdapter));
-        this.createUserExtensionMethodGroupAdapter = createUserExtensionMethodGroupAdapter ?? throw new ArgumentNullException(nameof(createUserExtensionMethodGroupAdapter));
+        this.createUserMethodGroupAdapter = createUserMethodGroupAdapter ?? throw new ArgumentNullException(nameof(createUserMethodGroupAdapter));
         this.getMethodGroupObservableReturnType = getMethodGroupObservableReturnType ?? throw new ArgumentNullException(nameof(getMethodGroupObservableReturnType));
         this.isLvalue = isLvalue ?? throw new ArgumentNullException(nameof(isLvalue));
         this.getRefKindFromModifier = getRefKindFromModifier ?? throw new ArgumentNullException(nameof(getRefKindFromModifier));
@@ -593,7 +593,7 @@ internal sealed class ConversionClassifier
                 ForceNonVirtualDispatch = resolvedUserMethodGroup.ForceNonVirtualDispatch,
                 HasTargetDelegateType = true,
             };
-            expression = this.createUserExtensionMethodGroupAdapter(resolvedUserMethodGroup);
+            expression = this.createUserMethodGroupAdapter(resolvedUserMethodGroup);
         }
 
         if (expression is BoundFunctionLiteralExpression literal
@@ -2446,7 +2446,9 @@ internal sealed class ConversionClassifier
         var applicable = new List<MethodInfo>();
         foreach (var candidate in group.Candidates)
         {
-            if (candidate.GetParameters().Length != argTypes.Length)
+            var candidateParameters = candidate.GetParameters();
+            var hasHiddenContext = ImportedFunctionSymbol.HasHiddenContextParameter(candidate);
+            if (candidateParameters.Length - (hasHiddenContext ? 1 : 0) != argTypes.Length)
             {
                 continue;
             }
@@ -2458,10 +2460,15 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
-            if (!DelegateRefKindUtilities.GetParameterRefKinds(
-                    candidate,
-                    skipFirstParameter: closesExtensionReceiver)
-                .SequenceEqual(targetParameterRefKinds))
+            var candidateRefKinds = DelegateRefKindUtilities.GetParameterRefKinds(
+                candidate,
+                skipFirstParameter: closesExtensionReceiver);
+            if (hasHiddenContext)
+            {
+                candidateRefKinds = candidateRefKinds.RemoveAt(candidateRefKinds.Length - 1);
+            }
+
+            if (!candidateRefKinds.SequenceEqual(targetParameterRefKinds))
             {
                 continue;
             }
@@ -2488,9 +2495,23 @@ internal sealed class ConversionClassifier
                     group.Receiver,
                     Invariant.Required(resolution.Best, "a resolved overload has a best method"),
                     Invariant.Required(targetType, "method-group conversion has a target type"));
-                return targetType is FunctionTypeSymbol functionTarget
-                    ? this.createClrMethodGroupAdapter(resolved, functionTarget)
-                    : resolved;
+                var requiredTargetType = Invariant.Required(
+                    targetType,
+                    "method-group conversion has a target type");
+                if (MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                    requiredTargetType,
+                    out var functionTarget))
+                {
+                    var adapted = this.createClrMethodGroupAdapter(resolved, functionTarget);
+                    if (!ReferenceEquals(adapted, resolved))
+                    {
+                        return targetType is FunctionTypeSymbol
+                            ? adapted
+                            : new BoundConversionExpression(null, requiredTargetType, adapted);
+                    }
+                }
+
+                return resolved;
             }
         }
 
@@ -2687,7 +2708,7 @@ internal sealed class ConversionClassifier
         BoundExpression resolvedValue =
             MemberLookup.TryGetExpressionTreeDelegateTypeFromSymbol(targetType, out _)
                 ? resolvedGroup
-                : this.createUserExtensionMethodGroupAdapter(resolvedGroup);
+                : this.createUserMethodGroupAdapter(resolvedGroup);
 
         // If the target is the native function type matching the pick exactly,
         // identity-convert; otherwise let the regular conversion machinery turn

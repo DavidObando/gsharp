@@ -8,6 +8,7 @@ using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
+using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
 using GSharp.Core.CodeAnalysis.Lowering;
 using GSharp.Core.CodeAnalysis.Symbols;
@@ -1797,27 +1798,38 @@ internal sealed class LambdaBinder
             group.ResolvedMethod,
             "a CLR method-group adapter has a resolved method");
         var methodParameters = method.GetParameters();
+        var hasHiddenContext = ImportedFunctionSymbol.HasHiddenContextParameter(method);
+        var logicalParameterCount = methodParameters.Length - (hasHiddenContext ? 1 : 0);
         var closesStaticReceiver = method.IsStatic && group.Receiver != null;
         var parameterOffset = closesStaticReceiver ? 1 : 0;
         var invoke = targetFunctionType.ClrType?.GetMethodSafe("Invoke");
         var hasByRefParameter = false;
-        foreach (var parameter in methodParameters)
+        for (var i = 0; i < logicalParameterCount; i++)
         {
-            hasByRefParameter |= parameter.ParameterType.IsByRef;
+            hasByRefParameter |= methodParameters[i].ParameterType.IsByRef;
         }
 
-        if (invoke == null
-            || methodParameters.Length != targetFunctionType.ParameterTypes.Length + parameterOffset
+        if (logicalParameterCount != targetFunctionType.ParameterTypes.Length + parameterOffset
             || hasByRefParameter)
         {
             return group;
         }
 
-        var invokeParameters = invoke.GetParameters();
-        var exactSignature = invoke.ReturnType.IsSameAs(method.ReturnType);
-        for (var i = 0; exactSignature && i < invokeParameters.Length; i++)
+        ParameterInfo[] invokeParameters;
+        var exactSignature = false;
+        if (!hasHiddenContext)
         {
-            exactSignature = invokeParameters[i].ParameterType.IsSameAs(methodParameters[i + parameterOffset].ParameterType);
+            if (invoke == null)
+            {
+                return group;
+            }
+
+            invokeParameters = invoke.GetParameters();
+            exactSignature = invoke.ReturnType.IsSameAs(method.ReturnType);
+            for (var i = 0; exactSignature && i < invokeParameters.Length; i++)
+            {
+                exactSignature = invokeParameters[i].ParameterType.IsSameAs(methodParameters[i + parameterOffset].ParameterType);
+            }
         }
 
         if (exactSignature)
@@ -1826,7 +1838,7 @@ internal sealed class LambdaBinder
         }
 
         var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(targetFunctionType.ParameterTypes.Length);
-        var arguments = ImmutableArray.CreateBuilder<BoundExpression>(methodParameters.Length);
+        var arguments = ImmutableArray.CreateBuilder<BoundExpression>(logicalParameterCount);
         LocalVariableSymbol? receiverTemp = null;
         BoundExpression? adapterReceiver = group.Receiver;
         if (group.Receiver != null)
@@ -1910,13 +1922,15 @@ internal sealed class LambdaBinder
     }
 
     /// <summary>
-    /// Wraps a value-type extension method group in a capturing lambda. CLR
-    /// closed-static delegates cannot bind a boxed value to a value-type first
-    /// parameter, so direct delegate creation fails for enum/struct receivers.
+    /// Wraps a method group in a capturing lambda when its emitted method
+    /// signature cannot be used directly as the delegate target. Suspend
+    /// methods carry ADR-0174's hidden context parameter, while value-type
+    /// extension receivers cannot be closed over by the CLR delegate
+    /// constructor.
     /// </summary>
-    /// <param name="group">Resolved extension method group.</param>
-    /// <returns>Original group for reference receivers; capturing adapter for value receivers.</returns>
-    public BoundExpression CreateUserExtensionMethodGroupAdapter(
+    /// <param name="group">Resolved user method group.</param>
+    /// <returns>The original group when direct delegate construction is valid; otherwise a capturing adapter.</returns>
+    public BoundExpression CreateUserMethodGroupAdapter(
         BoundMethodGroupExpression group)
     {
         FunctionSymbol function = Invariant.Required(
@@ -1925,42 +1939,81 @@ internal sealed class LambdaBinder
         FunctionTypeSymbol functionType = Invariant.Required(
             group.FunctionType,
             "a resolved user method group has a function type");
-        if (!function.IsExtension ||
-            group.Receiver == null ||
-            !GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type))
+        var needsValueTypeExtensionAdapter = function.IsExtension
+            && group.Receiver != null
+            && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type);
+        if (!function.IsSuspending && !needsValueTypeExtensionAdapter)
         {
             return group;
         }
 
-        var receiverTemp = new LocalVariableSymbol(
-            $"<method_group_receiver{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
-            isReadOnly: true,
-            group.Receiver.Type);
+        LocalVariableSymbol? receiverTemp = null;
+        BoundExpression? adapterReceiver = group.Receiver;
+        if (group.Receiver != null)
+        {
+            receiverTemp = new LocalVariableSymbol(
+                $"<method_group_receiver{System.Threading.Interlocked.Increment(ref binderCtx.SyntheticLocalCounter)}>",
+                isReadOnly: true,
+                group.Receiver.Type);
+            adapterReceiver = new BoundVariableExpression(null, receiverTemp);
+        }
+
         var adapterParameters = ImmutableArray.CreateBuilder<ParameterSymbol>(
             functionType.ParameterTypes.Length);
         var arguments = ImmutableArray.CreateBuilder<BoundExpression>(
-            functionType.ParameterTypes.Length + 1);
-        arguments.Add(new BoundVariableExpression(null, receiverTemp));
+            functionType.ParameterTypes.Length + (function.IsExtension && adapterReceiver != null ? 1 : 0));
+        if (function.IsExtension && adapterReceiver != null)
+        {
+            arguments.Add(adapterReceiver);
+        }
 
         for (var i = 0; i < functionType.ParameterTypes.Length; i++)
         {
+            var sourceParameterIndex = i + (function.IsExtension && adapterReceiver != null ? 1 : 0);
             var parameter = new ParameterSymbol(
                 $"arg{i}",
                 functionType.ParameterTypes[i],
                 declaringSyntax: group.Syntax,
-                refKind: function.Parameters[i + 1].RefKind);
+                refKind: function.Parameters[sourceParameterIndex].RefKind);
             adapterParameters.Add(parameter);
             arguments.Add(new BoundVariableExpression(null, parameter));
         }
 
-        var call = new BoundCallExpression(
-            null,
-            function,
-            arguments.MoveToImmutable(),
-            functionType.ReturnType)
+        var callArguments = arguments.MoveToImmutable();
+        BoundExpression call;
+        if (function.IsExtension || adapterReceiver == null)
         {
-            MethodTypeArguments = group.MethodTypeArguments,
-        };
+            call = new BoundCallExpression(null, function, callArguments, functionType.ReturnType)
+            {
+                MethodTypeArguments = group.MethodTypeArguments,
+            };
+        }
+        else if (group.ForceNonVirtualDispatch && function.ReceiverType is StructSymbol baseClass)
+        {
+            call = new BoundBaseClassCallExpression(
+                null,
+                adapterReceiver,
+                baseClass,
+                function,
+                callArguments,
+                functionType.ReturnType)
+            {
+                MethodTypeArguments = group.MethodTypeArguments,
+            };
+        }
+        else
+        {
+            call = new BoundUserInstanceCallExpression(
+                null,
+                adapterReceiver,
+                function,
+                callArguments,
+                functionType.ReturnType)
+            {
+                MethodTypeArguments = group.MethodTypeArguments,
+            };
+        }
+
         BoundStatement statement = functionType.ReturnType == TypeSymbol.Void
             ? new BoundBlockStatement(
                 null,
@@ -1976,7 +2029,8 @@ internal sealed class LambdaBinder
             functionType.ReturnType,
             package: getCurrentFunction()?.Package)
         {
-            LexicalEnclosingType = getCurrentFunction()?.LexicalEnclosingType,
+            LexicalEnclosingType = getCurrentFunction()?.LexicalEnclosingType
+                ?? getCurrentFunction()?.ReceiverType,
         };
         var captured = CollectCapturedVariables(body, adapterFunction);
         var adapter = new BoundFunctionLiteralExpression(
@@ -1985,11 +2039,16 @@ internal sealed class LambdaBinder
             functionType,
             body,
             captured);
-        return new BoundBlockExpression(
-            group.Syntax,
-            ImmutableArray.Create<BoundStatement>(
-                new BoundVariableDeclaration(group.Syntax, receiverTemp, group.Receiver)),
-            adapter);
+        return receiverTemp == null
+            ? adapter
+            : new BoundBlockExpression(
+                group.Syntax,
+                ImmutableArray.Create<BoundStatement>(
+                    new BoundVariableDeclaration(
+                        group.Syntax,
+                        receiverTemp,
+                        Invariant.Required(group.Receiver, "a method-group receiver temp has an initializer"))),
+                adapter);
     }
 
     /// <summary>

@@ -98,6 +98,22 @@ public sealed class ImportedFunctionSymbol : Symbol
         return false;
     }
 
+    /// <summary>Reports whether a suspending method carries ADR-0174's hidden trailing context parameter.</summary>
+    /// <param name="method">A CLR method.</param>
+    /// <returns><see langword="true"/> when the final parameter is the hidden context slot.</returns>
+    public static bool HasHiddenContextParameter(MethodInfo method)
+    {
+        if (!IsSuspendingMethod(method))
+        {
+            return false;
+        }
+
+        var parameters = method.GetParameters();
+        return parameters.Length > 0
+            && parameters[^1].ParameterType.FullName == "Gsharp.Concurrency.Context"
+            && parameters[^1].Name == FunctionSymbol.HiddenContextParameterName;
+    }
+
     /// <inheritdoc/>
     public override DocumentationComment? GetDocumentation()
     {

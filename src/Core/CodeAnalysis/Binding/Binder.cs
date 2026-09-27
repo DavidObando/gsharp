@@ -220,7 +220,7 @@ public sealed class Binder
                     targetFunctionType,
                     exactTargetReturnType: exactTargetReturnType),
             createClrMethodGroupAdapter: (group, targetFunctionType) => Lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
-            createUserExtensionMethodGroupAdapter: group => Lambdas.CreateUserExtensionMethodGroupAdapter(group),
+            createUserMethodGroupAdapter: group => Lambdas.CreateUserMethodGroupAdapter(group),
             getMethodGroupObservableReturnType: (method, returnType) =>
                 method.IsAsyncOrSuspending && !method.IsAsyncVoid && !IsAsyncIteratorReturnType(returnType)
                     ? Lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)
