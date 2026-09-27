@@ -184,6 +184,21 @@ class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
             ]
         )
 
+    def test_adapter_construction_allocation_requires_matching_operation_counts(self) -> None:
+        samples = performance_samples()
+        sample = samples["gsharp-jit"][0]
+        sample["adapt-create"]["allocated_bytes"] = 24
+        sample["nominal-create"]["allocated_bytes"] = 24
+        sample["nominal-create"]["operations"] = 2
+
+        status = spike.performance_gate_status(samples)
+
+        self.assertFalse(
+            status["runtimes"]["gsharp-jit"]["checks"][
+                "adapter_construction_allocation_matches_named_control_each_launch"
+            ]
+        )
+
     def test_managed_handle_allocation_must_stay_within_40_bytes_per_operation(self) -> None:
         samples = performance_samples()
         samples["gsharp-jit"][0]["managed-retained"]["allocated_bytes"] = 41

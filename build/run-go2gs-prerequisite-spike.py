@@ -466,6 +466,20 @@ def performance_gate_status(
             else 0
         )
 
+    def allocation_totals_match(
+        measured: dict[str, float | int],
+        control: dict[str, float | int],
+        allowance: int = 0,
+    ) -> bool:
+        return (
+            int(measured["operations"]) == int(control["operations"])
+            and abs(
+                int(measured["allocated_bytes"])
+                - int(control["allocated_bytes"])
+            )
+            <= allowance
+        )
+
     runtime_status = {}
     for runtime in ("gsharp-jit", "gsharp-aot"):
         if runtime not in samples:
@@ -495,8 +509,10 @@ def performance_gate_status(
                 statistics.median(construction_ratios) <= 1.10
             ),
             "adapter_construction_allocation_matches_named_control_each_launch": all(
-                int(sample["adapt-create"]["allocated_bytes"])
-                == int(sample["nominal-create"]["allocated_bytes"])
+                allocation_totals_match(
+                    sample["adapt-create"],
+                    sample["nominal-create"],
+                )
                 for sample in runtime_samples
             ),
             "managed_handle_allocation_at_most_40_bytes_per_operation_each_launch": all(
@@ -512,13 +528,11 @@ def performance_gate_status(
                 for sample in runtime_samples
             ),
             "rich_shared_root_allocation_matches_named_controls_each_launch": all(
-                int(sample[measured]["operations"])
-                == int(sample[control]["operations"])
-                and abs(
-                    int(sample[measured]["allocated_bytes"])
-                    - int(sample[control]["allocated_bytes"])
+                allocation_totals_match(
+                    sample[measured],
+                    sample[control],
+                    fixed_overhead_allowance(sample[measured]),
                 )
-                <= fixed_overhead_allowance(sample[measured])
                 for sample in runtime_samples
                 for measured, control in RICH_SHARED_ROOT_ALLOCATION_PAIRS
             ),
