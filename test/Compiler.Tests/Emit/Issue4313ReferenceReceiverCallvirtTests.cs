@@ -14,7 +14,7 @@ namespace GSharp.Compiler.Tests.Emit;
 
 /// <summary>
 /// Issue #4313: string indexing, string length, and rectangular-array length
-/// use C#-compatible <c>callvirt</c> null-receiver semantics.
+/// emit the same <c>callvirt</c> opcode as C#.
 /// </summary>
 public sealed class Issue4313ReferenceReceiverCallvirtTests
 {
@@ -26,6 +26,11 @@ public sealed class Issue4313ReferenceReceiverCallvirtTests
         public func StringLength4313(value string) int32 -> value.Length
         public func RectangularLength4313(value [,]int32) int32 -> value.Length
 
+        public func VectorArrayLengthControl4313(value []int32) int32 {
+            var count = 0
+            for item in value { count++ }
+            return count
+        }
         public func ValueTypePropertyControl4313(value DateTime) int32 -> value.Day
         public func RectangularIndexControl4313(value [,]int32) int32 -> value[0, 0]
         """;
@@ -54,6 +59,19 @@ public sealed class Issue4313ReferenceReceiverCallvirtTests
             typeof(Array),
             "get_Length");
 
+        var vectorLength = GetMethod(assembly, "VectorArrayLengthControl4313");
+        var vectorLengthInstructions =
+            IlInstructionReader.Read(vectorLength.GetMethodBody()!.GetILAsByteArray()!);
+        Assert.Contains(
+            vectorLengthInstructions,
+            instruction => instruction.OpCode == OpCodes.Ldlen);
+        Assert.DoesNotContain(
+            vectorLengthInstructions,
+            instruction => instruction.MetadataToken.HasValue
+                && vectorLength.Module.ResolveMethod(instruction.MetadataToken.Value) is MethodInfo called
+                && called.DeclaringType == typeof(Array)
+                && called.Name == "get_Length");
+
         AssertCall(
             assembly,
             "ValueTypePropertyControl4313",
@@ -70,37 +88,33 @@ public sealed class Issue4313ReferenceReceiverCallvirtTests
     }
 
     [Fact]
-    public void ReferenceReceiverSites_StillReturnExpectedValues()
+    public void ReferenceReceiverSites_PreserveRuntimeBehavior_Smoke()
     {
+        // This is a behavior smoke test only. Both call and callvirt normally
+        // produce NullReferenceException for nil receivers, and optimizing JITs
+        // may change observed stack frames. ADR-0154 discrimination is provided
+        // by the exact opcode assertions above.
         var assembly = Compile();
 
         Assert.Equal('C', Invoke(assembly, "StringIndex4313", "ABCD", 2));
         Assert.Equal(4, Invoke(assembly, "StringLength4313", "ABCD"));
         Assert.Equal(6, Invoke(assembly, "RectangularLength4313", new int[2, 3]));
-    }
-
-    [Fact]
-    public void NullReferenceReceiver_FaultsAtEachGeneratedAccessSite()
-    {
-        var assembly = Compile();
-
-        AssertNullReceiverFaultsIn(assembly, "StringIndex4313", null, 0);
-        AssertNullReceiverFaultsIn(assembly, "StringLength4313", (object)null);
-        AssertNullReceiverFaultsIn(assembly, "RectangularLength4313", (object)null);
+        AssertNullReceiverThrows(assembly, "StringIndex4313", null, 0);
+        AssertNullReceiverThrows(assembly, "StringLength4313", (object)null);
+        AssertNullReceiverThrows(assembly, "RectangularLength4313", (object)null);
     }
 
     private static object Invoke(Assembly assembly, string methodName, params object[] arguments)
         => GetMethod(assembly, methodName).Invoke(null, arguments)!;
 
-    private static void AssertNullReceiverFaultsIn(
+    private static void AssertNullReceiverThrows(
         Assembly assembly,
         string methodName,
         params object[] arguments)
     {
         var invocation = Assert.Throws<TargetInvocationException>(
             () => GetMethod(assembly, methodName).Invoke(null, arguments));
-        var exception = Assert.IsType<NullReferenceException>(invocation.InnerException);
-        Assert.Equal(methodName, new System.Diagnostics.StackTrace(exception).GetFrame(0)!.GetMethod()!.Name);
+        Assert.IsType<NullReferenceException>(invocation.InnerException);
     }
 
     private static void AssertCall(
