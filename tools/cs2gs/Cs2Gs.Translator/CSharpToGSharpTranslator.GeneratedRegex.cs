@@ -104,14 +104,24 @@ public sealed partial class CSharpToGSharpTranslator
 
     private sealed partial class DeclarationVisitor
     {
-        private bool HasRetainedRegexGeneratorImplementation(SyntaxTree tree) =>
-            tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Any(node =>
-                this.context.GetDeclaredSymbol(node) is IMethodSymbol implementation
-                && IsRegexGeneratorDeclaration(implementation)
-                && implementation.PartialDefinitionPart is IMethodSymbol definition
-                && IsGeneratedRegexDefinition(definition)
-                && definition.DeclaringSyntaxReferences.All(reference =>
-                    !this.IsTranslatedByThisRun(reference.SyntaxTree)));
+        private bool HasRetainedRegexGeneratorImplementation(SyntaxTree tree)
+        {
+            SyntaxNode root = tree.GetRoot();
+            return root.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(node =>
+                    this.context.GetDeclaredSymbol(node) is IMethodSymbol implementation
+                    && IsRegexGeneratorDeclaration(implementation)
+                    && implementation.PartialDefinitionPart is IMethodSymbol definition
+                    && IsGeneratedRegexDefinition(definition)
+                    && definition.DeclaringSyntaxReferences.All(reference =>
+                        !this.IsTranslatedByThisRun(reference.SyntaxTree)))
+                || root.DescendantNodes().OfType<PropertyDeclarationSyntax>().Any(node =>
+                    this.context.GetDeclaredSymbol(node) is IPropertySymbol implementation
+                    && IsRegexGeneratorDeclaration(implementation)
+                    && implementation.PartialDefinitionPart is IPropertySymbol definition
+                    && HasAttribute(definition, GeneratedRegexAttributeName)
+                    && definition.DeclaringSyntaxReferences.All(reference =>
+                        !this.IsTranslatedByThisRun(reference.SyntaxTree)));
+        }
 
         /// <summary>
         /// Translates a C# <c>[GeneratedRegex]</c> partial definition to a G#

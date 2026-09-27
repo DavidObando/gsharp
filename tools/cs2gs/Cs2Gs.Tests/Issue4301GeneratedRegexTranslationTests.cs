@@ -252,7 +252,14 @@ partial class P
                 [System.CodeDom.Compiler.GeneratedCode(
                     "System.Text.RegularExpressions.Generator", "test")]
                 private static partial System.Text.RegularExpressions.Regex Digits
-                    { get => new(@"\d+"); }
+                    { get => Digits_0.Instance; }
+            }
+
+            [System.CodeDom.Compiler.GeneratedCode(
+                "System.Text.RegularExpressions.Generator", "test")]
+            file static class Digits_0
+            {
+                internal static readonly System.Text.RegularExpressions.Regex Instance = new(@"\d+");
             }
             """;
 
@@ -267,6 +274,8 @@ partial class P
             translator.TranslateDocument(new LoadedDocument(generatedTree.FilePath, generatedTree, model), context));
 
         Assert.Contains("prop Digits Regex", printed, StringComparison.Ordinal);
+        Assert.Contains("class Digits_0", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
     }
 
     [Fact]
