@@ -2943,6 +2943,21 @@ internal sealed partial class DeclarationBinder
     internal static bool TypeSignaturesEquivalent(TypeSymbol? a, TypeSymbol? b)
         => TypeSignaturesEquivalent(a, b, typeParamMap: null);
 
+    internal static bool IsCovariantPropertyOverride(
+        PropertySymbol baseProperty,
+        TypeSymbol derivedType,
+        bool derivedHasGetter,
+        bool derivedHasSetter,
+        RefKind derivedReturnRefKind)
+        => baseProperty.HasGetter
+            && derivedHasGetter
+            && !baseProperty.HasSetter
+            && !derivedHasSetter
+            && baseProperty.ReturnRefKind == RefKind.None
+            && derivedReturnRefKind == RefKind.None
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(baseProperty.Type, derivedType)
+            && Conversion.IsImplicitReferenceVariantSlot(derivedType, baseProperty.Type);
+
     /// <summary>
     /// ADR-0187 / issue #4350: finds the base-class property an
     /// <c>override</c> targets. A named property is found by name; an indexer
