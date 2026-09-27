@@ -151,6 +151,28 @@ class Holder {
     }
 
     [Fact]
+    public void SameCompilationTypeArrayNestedInObjectArray_RetainsItsStaticType()
+    {
+        var stub = Project(@"
+package App
+import System
+
+class ValuesAttribute(Values []object) : Attribute {
+}
+
+@Values([]object{[]Type{typeof(Local)}, []object{""control""}})
+class Local {
+}
+");
+
+        AssertParses(stub);
+        Assert.Contains(
+            "new global::System.Type[] { typeof(global::App.Local) }",
+            stub);
+        Assert.Contains("new global::System.Object[] { \"control\" }", stub);
+    }
+
+    [Fact]
     public void EnumParameterDefault_RendersAsCastToEnumType()
     {
         // Parameter defaults share the constant renderer, and `= 1` is not an
