@@ -11,6 +11,209 @@ namespace GSharp.Compiler.Tests;
 public sealed class InterfaceAdaptationLanguageTests
 {
     [Fact]
+    public void RichMutableCapturesShareOneCellPerDynamicBinding()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            """
+            package RichCaptureLocations
+            import System
+
+            interface Counter {
+                func Increment();
+                func Read() int32;
+            }
+            interface Reader[T] { func Read() T; }
+
+            func Escaped(start int32) Counter {
+                var value = start
+                return object : Counter {
+                    func Increment() { value += 1 }
+                    func Read() int32 -> value
+                }
+            }
+
+            func Generic[T](initial T) Reader[T] {
+                var value = initial
+                return object : Reader[T] {
+                    func Read() T -> value
+                }
+            }
+
+            func Shadowed(start int32) {
+                var value = start
+                let outer = object : Counter {
+                    func Increment() { value += 1 }
+                    func Read() int32 -> value
+                }
+                let nested = () -> {
+                    var value = 100
+                    let inner = object : Counter {
+                        func Increment() { value += 1 }
+                        func Read() int32 -> value
+                    }
+                    inner.Increment()
+                    Console.WriteLine(inner.Read())
+                }
+                nested()
+                outer.Increment()
+                Console.WriteLine(outer.Read())
+            }
+
+            func Main() {
+                var value = 1
+                let alias = managed(value)
+                let sibling = () -> { value += 10 }
+                let first = object : Counter {
+                    let Snapshot = value
+                    func Increment() { value += 1 }
+                    func Read() int32 -> value
+                }
+                let second = object : Counter {
+                    let Snapshot = value
+                    func Increment() { value += 100 }
+                    func Read() int32 -> value
+                }
+                *alias = 5
+                sibling()
+                first.Increment()
+                second.Increment()
+                Console.WriteLine(first.Snapshot)
+                Console.WriteLine(second.Snapshot)
+                Console.WriteLine(value)
+                Console.WriteLine(first.Read())
+                Console.WriteLine(Object.ReferenceEquals(first, second))
+
+                var readers = slice[Counter].Create(0, 2)
+                for i in 0 ... 2 {
+                    var iteration = i
+                    let reader = object : Counter {
+                        func Increment() { iteration += 1 }
+                        func Read() int32 -> iteration
+                    }
+                    readers = readers.Append(reader)
+                }
+                readers[0].Increment()
+                Console.WriteLine(readers[0].Read())
+                Console.WriteLine(readers[1].Read())
+
+                let escaped = Escaped(30)
+                GC.Collect()
+                escaped.Increment()
+                Console.WriteLine(escaped.Read())
+                let separate = Escaped(40)
+                escaped.Increment()
+                Console.WriteLine(separate.Read())
+
+                Shadowed(2)
+
+                let text = Generic[string?](nil)
+                Console.WriteLine(text.Read() == nil)
+                Console.WriteLine(Generic[string]("generic").Read())
+            }
+            """,
+            "rich-capture-locations",
+            executable: true);
+
+        IlVerifier.Verify(dll);
+        Assert.Equal("1\n1\n116\n116\nFalse\n1\n1\n31\n40\n101\n3\nTrue\ngeneric\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void NestedRichObjectCanCaptureEnclosingRichCaptureAndMethodLocal()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            """
+            package NestedRichCaptureLocations
+            import System
+
+            interface Counter {
+                func Increment();
+                func Read() int32;
+            }
+
+            interface Factory {
+                func Create(start int32) Counter;
+            }
+
+            func Main() {
+                var outer = 10
+                let factory = object : Factory {
+                    func Create(start int32) Counter {
+                        var inner = start
+                        return object : Counter {
+                            func Increment() {
+                                outer += 1
+                                inner += 2
+                            }
+                            func Read() int32 -> outer + inner
+                        }
+                    }
+                }
+                let counter = factory.Create(5)
+                counter.Increment()
+                Console.WriteLine(counter.Read())
+                counter.Increment()
+                Console.WriteLine(counter.Read())
+            }
+            """,
+            "nested-rich-capture-locations",
+            executable: true);
+
+        IlVerifier.Verify(dll);
+        Assert.Equal("18\n21\n", fixture.Run(dll));
+    }
+
+    [Fact]
+    public void RichConstructionReusesCaptureLocationOutsideMeasuredLoop()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            """
+            package RichCaptureAllocation
+            import System
+
+            interface Reader { func Read() int32; }
+
+            func Main() {
+                var value = 1
+                var checksum int64
+                for warmup in 0 ... 20000 {
+                    let reader = object : Reader {
+                        func Read() int32 -> value
+                    }
+                    checksum += reader.Read()
+                }
+                checksum = 0
+                let before = GC.GetAllocatedBytesForCurrentThread()
+                for i in 0 ... 100000 {
+                    let reader = object : Reader {
+                        func Read() int32 -> value
+                    }
+                    checksum += reader.Read()
+                }
+                let allocated = GC.GetAllocatedBytesForCurrentThread() - before
+                Console.WriteLine(allocated / 100000)
+                Console.WriteLine(checksum)
+            }
+            """,
+            "rich-capture-allocation",
+            executable: true);
+
+        IlVerifier.Verify(dll);
+        Assert.Equal("24\n100000\n", fixture.Run(dll));
+
+        var il = LanguageConformance.NormalizedIlDump.Create(dll);
+        var main = il.Split("method ")
+            .Single(body => body.StartsWith("RichCaptureAllocation.<Program>::Main", System.StringComparison.Ordinal));
+        var measuredLoop = main[(main.IndexOf("GetAllocatedBytesForCurrentThread", System.StringComparison.Ordinal) + 1)..];
+        Assert.DoesNotContain("ManagedLocationKey::Object", measuredLoop);
+        Assert.DoesNotContain("ManagedLocationKey::Field", measuredLoop);
+        Assert.DoesNotContain("<>__ManagedLocation", measuredLoop);
+    }
+
+    [Fact]
     public void RichCaptureAndPersistentHandleAdaptersVerifyAndExecute()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

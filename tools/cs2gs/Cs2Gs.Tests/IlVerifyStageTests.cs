@@ -387,6 +387,32 @@ public class IlVerifyStageTests
     }
 
     /// <summary>
+    /// #4489 review: exit 2 with every PARSED finding filtered passes only when
+    /// the parsed lines account for ilverify's own "N Error(s)" summary. An
+    /// unrecognized error line (here a metadata error) must keep the run red.
+    /// </summary>
+    [Fact]
+    public void Verify_FilteredFindingPlusUnparseableError_IsNotPassed()
+    {
+        string filtered =
+            "[IL]: Error [DelegateCtor]: [/abs/App.dll : Demo.View::!XamlIlPopulate(System.IServiceProvider, View)]" +
+            "[offset 0x00000010] Delegate ctor.";
+        string assembly = FakeAssembly("unparseable-error");
+
+        var complete = new ScriptedIlVerifyRunner((_, _) => (2, filtered + "\n1 Error(s) Verifying /abs/App.dll"));
+        Assert.Equal(IlVerifyStatus.Passed, complete.Verify(assembly).Status);
+
+        var withUnparsed = new ScriptedIlVerifyRunner((_, _) =>
+            (2, filtered + "\n[MD]: Error: Unrecognized metadata problem.\n2 Error(s) Verifying /abs/App.dll"));
+        IlVerifyResult result = withUnparsed.Verify(assembly);
+        Assert.False(result.Succeeded);
+
+        var noSummary = new ScriptedIlVerifyRunner((_, _) => (2, filtered));
+        Assert.False(noSummary.Verify(assembly).Succeeded);
+        File.Delete(assembly);
+    }
+
+    /// <summary>
     /// The stage emits recovered findings and a separate incompleteness
     /// artifact, so neither signal can hide the other.
     /// </summary>

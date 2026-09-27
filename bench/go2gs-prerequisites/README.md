@@ -32,11 +32,15 @@ adapter wrapper identity.
 The benchmark rows additionally compare:
 
 - slice view creation and amortized append growth;
-- managed-location access and creation;
+- managed-location access, immediate creation, retained creation, first and
+  warmed identity observation, and direct readonly creation;
 - adapted reference and managed-location calls;
 - rich-capture calls and construction;
 - generated adapters against hand-written ordinary wrappers;
-- rich objects against hand-written named objects over one capture box.
+- rich objects against hand-written named objects over one capture box;
+- shared-root construction with deliberately retained objects;
+- fresh-root construction that includes capture-box/location setup; and
+- two-capture/two-snapshot construction against a shape-matched named object.
 
 ## Run
 
@@ -82,9 +86,10 @@ python3 build/test-go2gs-prerequisite-spike.py
 ```
 
 The ADR-0154 mutants remove all semantic rows, drift only NativeAOT semantics,
-and corrupt one paired checksum. Each must fail its intended gate.
+corrupt one paired checksum, duplicate or malform a performance row, and fail
+each timing/allocation policy check. Each must fail its intended gate.
 
-## September 26, 2026 result
+## September 27, 2026 integrated baseline
 
 Host: Apple Silicon, 10 logical CPUs, .NET SDK 10.0.400/runtime 10.0.11,
 Go 1.27.1. All rows used two million operations and five rotated process
@@ -92,26 +97,45 @@ launches.
 
 | Scenario | Go ns/op | G# JIT ns/op | G# AOT ns/op | JIT B/op | AOT B/op |
 | --- | ---: | ---: | ---: | ---: | ---: |
-| Slice view | 2.08 | 11.95 | 3.26 | 0 | 0 |
-| Slice append | 3.98 | 9.08 | 6.48 | 8.39 | 8.39 |
-| Managed access | 2.07 | 26.32 | 2.13 | 0 | 0 |
-| Managed creation | 0.32 | 29.24 | 26.77 | 80 | 80 |
-| Adapted reference call | 2.07 | 27.33 | 0.62 | 0 | 0 |
-| Adapted location call | 2.07 | 28.12 | 2.12 | 0 | 0 |
-| Adapter construction | 1.18 | 19.34 | 8.54 | 24 | 24 |
-| Rich capture call | 2.04 | 7.87 | 3.14 | 0 | 0 |
-| Rich-object construction | 1.15 | 67.47 | 58.19 | 248 | 176 |
+| Slice view | 2.08 | 11.90 | 3.22 | 0 | 0 |
+| Slice append | 3.91 | 9.06 | 6.44 | 8.39 | 8.39 |
+| Managed access | 2.06 | 26.14 | 2.09 | 0 | 0 |
+| Managed immediate creation | 0.32 | 20.93 | 11.82 | 40 | 40 |
+| Managed retained creation | 0.79 | 57.06 | 49.44 | 40 | 40 |
+| Managed first identity | 0.42 | 105.46 | 98.21 | 40 | 40 |
+| Managed warmed identity | 0.54 | 11.96 | 4.67 | 0 | 0 |
+| Managed direct readonly creation | 0.33 | 36.36 | 26.83 | 40 | 40 |
+| Adapted reference call | 2.10 | 27.16 | 0.62 | 0 | 0 |
+| Nominal reference call | 2.17 | 27.28 | 0.62 | 0 | 0 |
+| Adapted location call | 2.07 | 28.24 | 2.13 | 0 | 0 |
+| Adapter construction | 0.68 | 19.56 | 8.53 | 24 | 24 |
+| Nominal construction | 0.31 | 19.70 | 8.58 | 24 | 24 |
+| Rich capture call | 2.17 | 7.91 | 3.11 | 0 | 0 |
+| Manual rich capture call | 2.17 | 27.25 | 0.63 | 0 | 0 |
+| Shared-root rich construction | 1.19 | 15.67 | 11.53 | 24 | 24 |
+| Manual shared-root construction | 1.18 | 19.43 | 8.52 | 24 | 24 |
+| Retained rich construction | 7.22 | 42.41 | 36.08 | 24 | 24 |
+| Manual retained construction | 6.97 | 51.80 | 48.84 | 24 | 24 |
+| Fresh-root rich construction | 0.75 | 82.03 | 72.22 | 232 | 200 |
+| Manual fresh-root construction | 0.33 | 20.52 | 10.02 | 48 | 48 |
+| Multi-capture rich construction | 0.74 | 17.49 | 13.20 | 40 | 40 |
+| Manual multi-capture construction | 1.20 | 20.11 | 6.29 | 40 | 40 |
 
 ### Controls
 
-- Generated adapter calls and construction were within 3.1% of hand-written G#
-  forwarding wrappers in both JIT and AOT. Adapter generation adds no measured
-  overhead beyond the ordinary wrapper required by ADR-0189.
-- The hand-written capture object allocated 24 B/instance. The rich-object
-  form allocated 248 B under JIT and 176 B under AOT, and took 3.45x/6.73x as
-  long to construct.
-- Every steady-state G# row allocated exactly zero bytes across two million
-  measured operations after moving timer setup outside the allocation window.
+- Median same-launch adapter/control ratios were 1.001/1.001 for reference
+  calls and 0.979/0.996 for construction in JIT/AOT. Adapter generation stays
+  within the 1.10 timing gate and matches the 24 B construction control.
+- Shared-root, retained and multi-capture rich construction matched their
+  shape-equivalent controls at 24, 24 and 40 B/op respectively in both JIT
+  and AOT. Fresh-root construction intentionally records the full setup graph.
+- Every steady-state G# row allocated zero bytes per operation.
+- Before #4511, immediate managed creation measured 29.30 ns/op and 80 B/op
+  under JIT, and 27.13 ns/op and 80 B/op under NativeAOT. Lazy key creation
+  halves construction allocation to 40 B/op. Retained handles use the same
+  budget; their destination array is allocated before measurement and consumed
+  afterward. First identity observation pays the deferred 40 B key cost, while
+  warmed identity allocates zero.
 
 ## Viability conclusion
 
@@ -120,16 +144,45 @@ constructs. Native slices are also performance-viable in this spike.
 Structural adapters meet their own hand-written-wrapper baseline, and AOT
 removes the apparent steady-state adapter/location throughput gap.
 
-The prerequisite set is **not yet performance-complete for mechanical Go
-translation**:
-
-- #4511 tracks the 80 B cost of creating a managed location.
-- #4512 tracks excess rich-object capture/environment construction.
-- #4513 tracks translator rules and JIT/AOT performance gates, including
-  hoisting address/interface conversions out of hot loops when semantics allow.
+The prerequisite mechanisms now pass the spike's JIT and NativeAOT control
+gates. #4511 reduced managed-location creation to one 40 B handle and deferred
+the identity key; #4512 made shared-root rich construction match its
+shape-equivalent named controls. Fresh-root construction intentionally includes
+the once-per-dynamic-binding capture setup graph and remains visible in the
+evidence rather than being compared with a shared-root control.
 
 These findings do not invalidate ADRs 0188-0190. They constrain how ADR-0191
-may claim application-scale readiness.
+may claim application-scale readiness: passing this synthetic prerequisite
+gate does not establish package or application workload budgets.
+
+## September 26, 2026 rich-capture correction
+
+Issue #4512 retains the compiler-generated managed location once per dynamic
+mutable binding instead of rebuilding it for every rich object. Five rotated
+launches on the same host measured:
+
+| Scenario | G# JIT ns/op | G# AOT ns/op | JIT B/op | AOT B/op | Named control JIT/AOT B/op |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Shared-root rich construction | 15.65 | 11.49 | 24 | 24 | 24 / 24 |
+| Shared-root, retained objects | 45.54 | 41.10 | 24 | 24 | 24 / 24 |
+| Fresh capture root per object | 88.98 | 78.95 | 232.08 | 200 | 48 / 48 |
+| Two captures plus two snapshots | 17.46 | 13.27 | 40 | 40 | 40 / 40 |
+
+The original `rich-create` emitted, inside each measured iteration, a fresh
+rich object plus a generated managed-location helper, a root
+`ManagedLocationKey`, an extended field key, and a one-element field-path
+array. Its IL called `ManagedLocationKey.Object` and `.Field` immediately
+before each rich constructor call. This accounted for 176 B/op under
+NativeAOT. The JIT-only additional 72 B/op was traced under
+`ManagedLocationKey.Field` through `RuntimeFieldInfoStub.FromPtr`; it is a
+CoreCLR runtime-field materialization cost, not an unobserved closure
+environment.
+
+After the correction, the helper/key/path graph is constructed once beside
+the capture box. The measured loop loads that retained handle and executes
+only the rich-object `newobj`, matching the 24 B named control in both JIT and
+NativeAOT. The fresh-root row intentionally still exposes the complete
+per-binding setup graph; it is not subject to the shared-root 24 B budget.
 
 ## Acceptance policy
 
@@ -138,18 +191,18 @@ Semantic completion and performance readiness are reported separately:
 - M0 records reproducible profiles and unsupported cases; measurements do not
   block inventory.
 - M1 requires independent Go/JIT/AOT semantic and discrimination witnesses.
-  Performance readiness additionally requires zero-allocation steady-state
-  paths, adapter construction matching a shape-equivalent named wrapper, and
-  approved allocation gates from open issues #4511 and #4512.
+  Prerequisite performance readiness additionally requires zero-allocation
+  steady-state paths, adapter construction matching its named wrapper, the
+  #4511 40 B managed-handle ceilings, zero warmed-identity allocation, and
+  #4512 shared-root rich construction matching shape-equivalent controls.
 - M2 requires package-specific same-runtime controls and approved budgets.
 - M3 adds workload latency/allocation limits and forbids avoidable per-sample
   conversions, locations, boxing, inner arrays and hidden slice copies.
 - M4-M5 require representative throughput, tail-latency, allocation-rate, GC
   and memory budgets for each application/platform profile.
 
-Pinned-tier JIT and NativeAOT are both mandatory. The initial investigation
-threshold for adapter call/construction time is at most 1.10x its same-run,
-same-runtime named control, with allocation matching the control. It requires
-at least five rotated launches and retained raw samples; maintainers must
-approve profile budgets before a performance-ready claim. Go ratios remain
-informational.
+Pinned-tier JIT and NativeAOT are both mandatory. The adapter call/construction
+threshold is the median of same-launch measured/control ratios and must be at
+most 1.10 in each runtime, with adapter allocation matching the control on
+every launch. It requires at least five rotated launches and retained raw
+samples. Go ratios remain informational.

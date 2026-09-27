@@ -103,6 +103,23 @@ internal sealed class InterfaceImplEmitter
                     property.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Setter.Value, declaration);
             }
+
+            if (property.OverriddenProperty is { } overriddenProperty
+                && DeclarationBinder.IsCovariantPropertyOverride(
+                    overriddenProperty,
+                    property.Type,
+                    property.HasGetter,
+                    property.HasSetter,
+                    property.ReturnRefKind)
+                && accessors.Getter.HasValue)
+            {
+                var declaration = this.ResolveSourcePropertyGetterToken(structSymbol, overriddenProperty);
+                this.emitCtx.Metadata.AddMethodImplementation(
+                    implTypeDef,
+                    accessors.Getter.Value,
+                    declaration);
+                this.AddPreserveBaseOverridesAttribute(accessors.Getter.Value);
+            }
         }
 
         foreach (var eventSymbol in structSymbol.Events)
@@ -136,6 +153,55 @@ internal sealed class InterfaceImplEmitter
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Raise.Value, declaration);
             }
         }
+    }
+
+    private void AddPreserveBaseOverridesAttribute(MethodDefinitionHandle method)
+    {
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+        this.emitCtx.Metadata.AddCustomAttribute(
+            method,
+            this.outer.wellKnown.GetPreserveBaseOverridesAttributeCtorRef(),
+            this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    private EntityHandle ResolveSourcePropertyGetterToken(StructSymbol structSymbol, PropertySymbol property)
+    {
+        var containingType = structSymbol.FindConstructedGenericBase(
+            definition => DeclaresProperty(definition, property));
+        if (containingType == null)
+        {
+            foreach (var candidate in structSymbol.GetHierarchy())
+            {
+                if (DeclaresProperty(candidate.Definition ?? candidate, property))
+                {
+                    containingType = candidate;
+                    break;
+                }
+            }
+        }
+
+        return this.outer.userTokens.ResolveUserPropertyAccessorToken(
+            containingType ?? throw new InvalidOperationException(
+                $"The declaring type for overridden property '{property.Name}' was not found."),
+            property,
+            wantSetter: false);
+    }
+
+    private static bool DeclaresProperty(StructSymbol definition, PropertySymbol property)
+    {
+        foreach (var candidate in definition.Properties)
+        {
+            if (ReferenceEquals(candidate, property)
+                || (property.Declaration != null
+                    && ReferenceEquals(candidate.Declaration, property.Declaration)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

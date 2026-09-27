@@ -17,7 +17,8 @@
 - **Dependency status**: ADRs 0190, 0188, and 0189 are Accepted and
   implemented. The paired
   [prerequisite viability spike](../../bench/go2gs-prerequisites/README.md)
-  confirms the covered semantics; performance follow-ups #4511-#4513 remain
+  confirms the covered semantics. Performance fixes #4511 and #4512 are
+  implemented; #4513 defines the remaining translator and workload policy
   before application-scale performance readiness is claimed.
   Approval of their design direction is not implementation availability.
   This ADR neither accepts nor changes them.
@@ -782,10 +783,13 @@ construction, the initial investigation threshold is a median of each launch's
 measured/control time ratio no greater than 1.10 in each execution mode. Those
 two measured rows are paired with their same-launch, same-runtime named
 controls across at least five rotated launches with retained samples; this is
-not a universal cross-machine promise. No prerequisite performance-ready claim
-is allowed until the approved allocation gates tracked by #4511 and #4512
-pass. Those issues are open dependencies, not capabilities assumed by this
-ADR. No NativeAOT result hides an unreported JIT regression.
+not a universal cross-machine promise. The #4511 gate caps immediate, retained,
+first-identity and direct-readonly managed handles at 40 B/op per launch and
+requires warmed identity to allocate zero. The #4512 gate requires shared-root,
+retained and multi-capture rich construction to match their shape-equivalent
+named controls on every launch; fresh-root construction retains its measured
+once-per-dynamic-binding setup cost. No NativeAOT result hides an unreported
+JIT regression.
 
 M2 additionally needs package-specific controls and approved latency/allocation
 budgets for its exact closure. M3 needs measured workload budgets and no
@@ -805,7 +809,7 @@ ADR or the approval of its design.
 | Milestone | Semantic completion | Performance readiness |
 | --- | --- | --- |
 | M0: typed inventory and correctness spikes | Active versus ignored/test/native/embed inputs and all relevant module/package edges have reproducible hashes, typed facts and classified gaps. Loader failures reproduce as incomplete inventory. Small witnesses cover byte strings, simultaneous assignment, value receivers, typed nil and nil/empty slices. No bulk `main.go` emission is the first deliverable. | Record reproducible translator and prerequisite profiles with honest unsupported cases. Performance is evidence, not a condition for completing inventory. |
-| M1: semantic corpus | Each admitted family has independent Go, JIT and AOT witnesses, an ADR-0154 discrimination witness, stable generated text/maps and all four verification stages green. Every unsupported neighbor yields an attributed diagnostic; fixed-array and interface-identity gates cannot be waved through by parsing. | The prerequisite spike passes its evidence gates; steady-state paths and adapter controls meet the rules above; approved #4511/#4512 allocation budgets pass. |
+| M1: semantic corpus | Each admitted family has independent Go, JIT and AOT witnesses, an ADR-0154 discrimination witness, stable generated text/maps and all four verification stages green. Every unsupported neighbor yields an attributed diagnostic; fixed-array and interface-identity gates cannot be waved through by parsing. | The prerequisite spike passes its evidence gates; steady-state paths, adapter controls and the integrated #4511/#4512 allocation budgets meet the rules above. |
 | M2: real leaf packages | `internal/fuzzy`, then `internal/tomlutil`, then `internal/deeplink` are banked separately only when each complete selected test variant/closure and paired behavior pass. Required iterator, shared-capture, wrapping, byte-limit and rejection semantics remain blockers until admitted. | Each selected package closure passes approved JIT and AOT latency/allocation budgets against package-specific same-runtime controls. |
 | M3: offline audio fixtures | Source-attributed EQ/gapless and alias-sensitive ring-buffer fixtures preserve mutation, frame-copy independence, numerical/state/chunk behavior and avoid devices/network. Extracted fixtures do not mark the full `player` or Beep closure green. | The measured workload meets approved JIT/AOT latency and allocation budgets with no per-frame boxing/inner arrays, hidden slice copies, or avoidable per-sample conversion/location creation. |
 | M4: headless application, IPC and providers | The actual selected application/test closures pass protocol, error/typed-nil, security rejection, cancellation, permission and shutdown/resource oracles. Omitted production dependencies and unknown optional capabilities remain visible blockers. | Each representative headless profile passes approved throughput, tail-latency, allocation-rate, GC and memory budgets in JIT and AOT. |
@@ -828,7 +832,7 @@ concrete evidence before their milestone is enabled:
 | M1 runtime contracts | Finalize Go byte-string/map/interface/panic support APIs and the legal G# lowering for eager defer, direct recovery and iterator nonlocal control flow. A candidate that changes user-visible behavior stays blocked. |
 | Native integration | Detect and pin actual compiler/runtime versions providing ADR-0190, ADR-0188 and the necessary ADR-0189 stages. Never fall back to copying arrays, unknown byrefs or reflection proxies when one is missing. |
 | Interface bridge and interop boundary | Define the explicit typed-nil/dynamic-type representation and the boundary at which CLR wrapper identity becomes observable before enabling reuse beyond explicit retained values. Native `adapt` cannot supply this contract. |
-| Performance budgets | Approve the initial control-relative threshold, #4511/#4512 allocation ceilings and representative M2-M5 profile budgets. The current spike records evidence but does not approve universal limits. |
+| Performance budgets | Carry the approved prerequisite control-relative threshold and integrated #4511/#4512 allocation ceilings forward, then approve representative M2-M5 profile budgets. The current spike does not approve universal application limits. |
 | Value-array expansion | Prove representation, copies, equality, dynamic addressability and slice sharing for additional shapes before admitting them. A future native value-array proposal is possible but not silently included in ADR-0190. |
 | Concurrency closure | Establish channel/select/memory-model witnesses and suspension propagation across functions, delegates, interfaces and foreign callbacks. Blocking I/O/locks cannot simply occupy arbitrary pooled workers forever and be called Go scheduling equivalence. |
 | Separate library distribution | Specify public CLR ABI, package-private access, cross-unit dynamic type identity/adaptation and versioning before splitting the default closed-world assembly into reusable package assemblies. |

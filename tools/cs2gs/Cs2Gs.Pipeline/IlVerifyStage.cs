@@ -15,7 +15,9 @@ namespace Cs2Gs.Pipeline;
 /// Stage 3 (ADR-0115 §C): IL-verify the assembly emitted by a green stage-2
 /// compile with the repo-pinned <c>dotnet-ilverify</c> (<see cref="IlVerifyRunner"/>).
 /// Pass gate: <c>ilverify</c> reports no errors after the two documented
-/// false-positive bundles are ignored (<see cref="IlVerifyRunner.KnownIlVerifyFalsePositives"/>).
+/// false-positive bundles are ignored (<see cref="IlVerifyRunner.KnownIlVerifyFalsePositives"/>)
+/// and the offset-exact filter-in-finally rule (#4489) is applied
+/// (<see cref="IlVerifyRunner.FilterKnownFalsePositives"/>).
 /// Apps with <see cref="CorpusApp.AllowUnsafeIl"/> set (issue #1933) get one
 /// more allowance: unsafe C# (pointer writes, <c>fixed</c>, <c>stackalloc</c>)
 /// lowers to IL that is unverifiable BY DESIGN — not a gsc defect, the

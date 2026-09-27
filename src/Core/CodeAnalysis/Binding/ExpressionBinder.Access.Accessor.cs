@@ -474,8 +474,9 @@ internal sealed partial class ExpressionBinder
                         makeNarrowedVariable);
                 }
 
-                // Issue #4287: a bare member name rebinds as `this.member` (or
-                // `Type.member`) above, and so does the nil test that guards it:
+                // Issues #4287 and #4310: a bare member name rebinds as
+                // `this.member` (or `Type.member`) above, and so does the nil
+                // test that guards it:
                 // `memo != nil` binds `memo` as a field access, and ADR-0069
                 // records that narrowing under the member's AccessPath, not under
                 // the implicit VariableSymbol the branches above look up. So

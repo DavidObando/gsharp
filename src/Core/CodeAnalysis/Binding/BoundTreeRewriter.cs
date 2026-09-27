@@ -999,7 +999,9 @@ public abstract class BoundTreeRewriter
     protected virtual BoundExpression RewriteManagedReferenceExpression(BoundManagedReferenceExpression node)
     {
         var location = RewriteExpression(node.Location);
-        return location == node.Location ? node : new BoundManagedReferenceExpression(node.Syntax, location, node.Type, node.IsReadOnly);
+        return location == node.Location
+            ? node
+            : new BoundManagedReferenceExpression(node.Syntax, location, node.Type, node.IsReadOnly, node.RetainForCapture);
     }
 
     /// <summary>Rewrites a borrowed address without changing its permissions.</summary>

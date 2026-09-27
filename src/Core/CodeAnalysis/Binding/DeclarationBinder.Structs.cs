@@ -1990,6 +1990,16 @@ internal sealed partial class DeclarationBinder
                             // wrong and both report the same signature mismatch.
                             Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
                         }
+                        else if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(baseProp.Type, propType)
+                            && !IsCovariantPropertyOverride(
+                                baseProp,
+                                propType,
+                                hasGetter,
+                                hasSetter,
+                                propReturnRefKind))
+                        {
+                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
+                        }
                         else
                         {
                             overriddenProperty = baseProp;

@@ -772,6 +772,13 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyIfJoinNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
+        // Issues #4285 and #4290: arbitrary user jumps invalidate the
+        // dominance assumptions behind branch-exit narrowing.
+        if (binderCtx.FunctionContainsUserGotoOrLabel)
+        {
+            return;
+        }
+
         if (statement is not BoundIfStatement ifStmt)
         {
             return;

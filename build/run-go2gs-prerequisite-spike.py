@@ -60,6 +60,10 @@ EXPECTED_ROWS = {
     "slice-append",
     "managed-location",
     "managed-create",
+    "managed-retained",
+    "managed-first-identity",
+    "managed-warmed-identity",
+    "managed-readonly-create",
     "adapt-reference",
     "nominal-reference",
     "adapt-location",
@@ -69,6 +73,12 @@ EXPECTED_ROWS = {
     "nominal-create",
     "rich-create",
     "manual-rich-create",
+    "rich-create-retained",
+    "manual-rich-create-retained",
+    "rich-create-fresh-root",
+    "manual-rich-create-fresh-root",
+    "rich-create-multi",
+    "manual-rich-create-multi",
 }
 EXPECTED_SEMANTIC_ROWS = (
     "slice-shared",
@@ -91,6 +101,17 @@ STEADY_STATE_ROWS = (
     "adapt-location",
     "rich-capture",
     "manual-rich-capture",
+)
+MANAGED_HANDLE_ALLOCATION_ROWS = (
+    "managed-create",
+    "managed-retained",
+    "managed-first-identity",
+    "managed-readonly-create",
+)
+RICH_SHARED_ROOT_ALLOCATION_PAIRS = (
+    ("rich-create", "manual-rich-create"),
+    ("rich-create-retained", "manual-rich-create-retained"),
+    ("rich-create-multi", "manual-rich-create-multi"),
 )
 UNSUPPORTED_BOUNDARIES = (
     "typed-nil/interface-nil distinction",
@@ -436,6 +457,11 @@ def summarize(samples: list[dict[str, dict[str, float | int]]]) -> dict[str, dic
 def performance_gate_status(
     samples: dict[str, list[dict[str, dict[str, float | int]]]],
 ) -> dict[str, object]:
+    def bytes_per_operation(sample: dict[str, float | int]) -> int:
+        return round(
+            int(sample["allocated_bytes"]) / int(sample["operations"])
+        )
+
     runtime_status = {}
     for runtime in ("gsharp-jit", "gsharp-aot"):
         if runtime not in samples:
@@ -469,6 +495,21 @@ def performance_gate_status(
                 == int(sample["nominal-create"]["allocated_bytes"])
                 for sample in runtime_samples
             ),
+            "managed_handle_allocation_at_most_40_bytes_per_operation_each_launch": all(
+                bytes_per_operation(sample[name]) <= 40
+                for sample in runtime_samples
+                for name in MANAGED_HANDLE_ALLOCATION_ROWS
+            ),
+            "managed_warmed_identity_allocated_bytes_zero": all(
+                bytes_per_operation(sample["managed-warmed-identity"]) == 0
+                for sample in runtime_samples
+            ),
+            "rich_shared_root_allocation_matches_named_controls_each_launch": all(
+                bytes_per_operation(sample[measured])
+                == bytes_per_operation(sample[control])
+                for sample in runtime_samples
+                for measured, control in RICH_SHARED_ROOT_ALLOCATION_PAIRS
+            ),
         }
         runtime_status[runtime] = {
             "available": True,
@@ -485,11 +526,12 @@ def performance_gate_status(
     return {
         "native_control_gate_passed": native_controls_passed,
         "runtimes": runtime_status,
-        "prerequisite_performance_ready": False,
-        "open_allocation_gates": ["#4511", "#4512"],
+        "prerequisite_performance_ready": native_controls_passed,
+        "open_allocation_gates": [],
+        "resolved_allocation_gates": ["#4511", "#4512"],
         "note": (
-            "Native controls are necessary but not sufficient; maintainers must approve "
-            "the #4511/#4512 allocation budgets before performance readiness."
+            "The synthetic prerequisite gate does not replace package- and "
+            "application-specific budgets for later milestones."
         ),
     }
 
@@ -573,6 +615,12 @@ def main() -> int:
             float(summary[runtime]["rich-create"]["median_ns_per_op"])
             / float(summary[runtime]["manual-rich-create"]["median_ns_per_op"])
         )
+        for suffix in ("retained", "fresh-root", "multi"):
+            summary[runtime][f"rich-create-{suffix}"]["ratio_vs_manual"] = (
+                float(summary[runtime][f"rich-create-{suffix}"]["median_ns_per_op"])
+                / float(summary[runtime][f"manual-rich-create-{suffix}"]["median_ns_per_op"])
+            )
+
     artifacts = {
         "gsc": REPO / "out" / "bin" / "Release" / "Compiler" / "gsc",
         "gsc_dll": REPO / "out" / "bin" / "Release" / "Compiler" / "gsc.dll",

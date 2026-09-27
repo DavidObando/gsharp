@@ -230,6 +230,7 @@ public class DiagnosticIdUniquenessTests
             ["GS9206"] = "Reserved",
             ["GS9207"] = "Info",
             ["GS9208"] = "Error",
+            ["GS9209"] = "Error",
 
             // Emitted directly for unexpected emit failures.
             ["GS9998"] = "Error",

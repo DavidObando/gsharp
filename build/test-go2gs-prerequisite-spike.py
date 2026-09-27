@@ -184,6 +184,62 @@ class Go2GsPrerequisiteSpikeTests(unittest.TestCase):
             ]
         )
 
+    def test_managed_handle_allocation_must_stay_within_40_bytes_per_operation(self) -> None:
+        samples = performance_samples()
+        samples["gsharp-jit"][0]["managed-retained"]["allocated_bytes"] = 41
+
+        status = spike.performance_gate_status(samples)
+
+        self.assertFalse(
+            status["runtimes"]["gsharp-jit"]["checks"][
+                "managed_handle_allocation_at_most_40_bytes_per_operation_each_launch"
+            ]
+        )
+
+    def test_warmed_managed_identity_must_allocate_zero(self) -> None:
+        samples = performance_samples()
+        samples["gsharp-aot"][0]["managed-warmed-identity"]["allocated_bytes"] = 1
+
+        status = spike.performance_gate_status(samples)
+
+        self.assertFalse(
+            status["runtimes"]["gsharp-aot"]["checks"][
+                "managed_warmed_identity_allocated_bytes_zero"
+            ]
+        )
+
+    def test_shared_root_rich_allocation_must_match_named_control(self) -> None:
+        samples = performance_samples()
+        samples["gsharp-aot"][0]["rich-create-multi"]["allocated_bytes"] = 40
+        samples["gsharp-aot"][0]["manual-rich-create-multi"]["allocated_bytes"] = 39
+
+        status = spike.performance_gate_status(samples)
+
+        self.assertFalse(
+            status["runtimes"]["gsharp-aot"]["checks"][
+                "rich_shared_root_allocation_matches_named_controls_each_launch"
+            ]
+        )
+
+    def test_allocation_gates_ignore_sub_byte_per_operation_measurement_overhead(self) -> None:
+        samples = performance_samples()
+        for runtime in ("gsharp-jit", "gsharp-aot"):
+            sample = samples[runtime][0]
+            for name in spike.MANAGED_HANDLE_ALLOCATION_ROWS:
+                sample[name]["operations"] = 2_000_000
+                sample[name]["allocated_bytes"] = 80_000_080
+            sample["managed-warmed-identity"]["operations"] = 2_000_000
+            sample["managed-warmed-identity"]["allocated_bytes"] = 40
+            for measured, control in spike.RICH_SHARED_ROOT_ALLOCATION_PAIRS:
+                sample[measured]["operations"] = 2_000_000
+                sample[control]["operations"] = 2_000_000
+                sample[measured]["allocated_bytes"] = 48_000_048
+                sample[control]["allocated_bytes"] = 48_000_040
+
+        status = spike.performance_gate_status(samples)
+
+        self.assertTrue(status["native_control_gate_passed"])
+
 
 if __name__ == "__main__":
     unittest.main()
