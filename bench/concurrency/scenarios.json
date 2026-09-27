@@ -13,8 +13,9 @@
     "hand-off where Go's pingpong counts two, `select-ready` performs four",
     "channel operations where Go's select row performs one, and `chunks()`",
     "copies elements where Go passes a slice header. Those rows are now G#-only,",
-    "and `pingpong`, `select-stream`, `chunk64-arrays` and `chunk1k-arrays` are",
-    "the rows shaped to match Go's `[]int32` controls. Checksummed rows additionally require exact",
+    "and `pingpong`, `select-stream`, `chunk64-slices` and `chunk1k-slices` are",
+    "the rows shaped to match Go's `[]int32` controls. The array rows remain G#-only",
+    "controls. Checksummed rows additionally require exact",
     "counted-work parity across every measured runtime and launch."
   ],
   "schemaVersion": 2,
@@ -82,16 +83,28 @@
     {
       "name": "chunk64-arrays",
       "gsharp": "chunk64-arrays",
-      "go": "go-chunk64",
-      "checksum": true,
-      "what": "Fresh int32 arrays over capacity-64 channels at 64 elements, including exact counted-work checksum parity."
+      "go": null,
+      "what": "G#-only control: fresh CLR int32 arrays over capacity-64 channels at 64 elements."
     },
     {
       "name": "chunk1k-arrays",
       "gsharp": "chunk1k-arrays",
+      "go": null,
+      "what": "G#-only control: fresh CLR int32 arrays over capacity-64 channels at 1024 elements with an exact-length tail."
+    },
+    {
+      "name": "chunk64-slices",
+      "gsharp": "chunk64-slices",
+      "go": "go-chunk64",
+      "checksum": true,
+      "what": "Fresh native G# slices versus fresh Go []int32 slices over capacity-64 channels at 64 elements."
+    },
+    {
+      "name": "chunk1k-slices",
+      "gsharp": "chunk1k-slices",
       "go": "go-chunk1k",
       "checksum": true,
-      "what": "Fresh int32 arrays over capacity-64 channels at 1024 elements, including an exact-length tail and counted-work checksum parity."
+      "what": "Fresh native G# slices versus fresh Go []int32 slices over capacity-64 channels at 1024 elements with an exact-length tail."
     }
   ]
 }

@@ -311,10 +311,10 @@ func produceBatched(ch chan[int32], count int32, size int32) {
     ch.Close()
 }
 
-// Go's chunk rows send whole `[]int` slices over a `chan []int`; the `chunks()`
+// Go's chunk rows send whole `[]int32` slices over a `chan []int32`; the `chunks()`
 // rows above are a G# construct that copies elements into a fresh array per
-// chunk. Comparing the two measured different transports (issue #3902 S1d), so
-// this is the row that pairs with Go, and `chunk64`/`chunk1k` are now G#-only.
+// chunk. The CLR-array rows below remain controls; the native-slice rows carry
+// the Go pairing because both sides transport a descriptor plus backing array.
 func chunkedArrays(size int32, count int32)(TimeSpan, int64) {
     let ch = chan[[]int32](64)
     let sw = Stopwatch.StartNew()
@@ -356,6 +356,47 @@ func produceArrays(ch out chan[[]int32], count int32, size int32) {
     ch.Close()
 }
 
+func chunkedSlices(size int32, count int32)(TimeSpan, int64) {
+    let ch = chan[slice[int32]](64)
+    let sw = Stopwatch.StartNew()
+    var checksum int64
+    scope {
+        go produceSlices(ch, count, size)
+        for batch in ch {
+            var i = 0
+            while i < batch.Length {
+                checksum = checksum + int64(batch[i])
+                i = i + 1
+            }
+        }
+    }
+
+    sw.Stop()
+    return (sw.Elapsed, checksum)
+}
+
+func produceSlices(ch out chan[slice[int32]], count int32, size int32) {
+    var sent = 0
+    while sent < count {
+        var length = size
+        if count - sent < length {
+            length = count - sent
+        }
+
+        var chunk = slice[int32].Create(length, length)
+        var i = 0
+        while i < length {
+            chunk[i] = sent + i
+            i = i + 1
+        }
+
+        ch <- chunk
+        sent = sent + length
+    }
+
+    ch.Close()
+}
+
 func run(name string) {
     if name == "buf64" {
         report("buf64", buf64(ops), ops, 0)
@@ -383,6 +424,12 @@ func run(name string) {
     } else if name == "chunk1k-arrays" {
         let (elapsed, checksum) = chunkedArrays(1024, chunk1kOps)
         report("chunk1k-arrays", elapsed, chunk1kOps, checksum)
+    } else if name == "chunk64-slices" {
+        let (elapsed, checksum) = chunkedSlices(64, chunk64Ops)
+        report("chunk64-slices", elapsed, chunk64Ops, checksum)
+    } else if name == "chunk1k-slices" {
+        let (elapsed, checksum) = chunkedSlices(1024, chunk1kOps)
+        report("chunk1k-slices", elapsed, chunk1kOps, checksum)
     }
 }
 
@@ -413,6 +460,10 @@ func runWarmup(name string) {
         let ignored = chunkedArrays(64, warmupOps)
     } else if name == "chunk1k-arrays" {
         let ignored = chunkedArrays(1024, warmupOps)
+    } else if name == "chunk64-slices" {
+        let ignored = chunkedSlices(64, warmupOps)
+    } else if name == "chunk1k-slices" {
+        let ignored = chunkedSlices(1024, warmupOps)
     }
 }
 
@@ -428,7 +479,9 @@ let all = []string{
     "chunk64",
     "chunk1k",
     "chunk64-arrays",
-    "chunk1k-arrays"
+    "chunk1k-arrays",
+    "chunk64-slices",
+    "chunk1k-slices"
 }
 let requested = Environment.GetEnvironmentVariable("GSHARP_BENCH_SCENARIO")
 

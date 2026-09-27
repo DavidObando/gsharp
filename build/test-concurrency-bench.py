@@ -150,6 +150,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
             "Bench.dll": "bench-hash",
             "Gsharp.Extensions.dll": "extensions-hash",
             "Gsharp.Runtime.Channels.dll": "runtime-hash",
+            "Gsharp.Runtime.Values.dll": "values-hash",
             "Bench": "aot-hash",
             "BenchAot.csproj": "aot-project-hash",
             "baseline": "go-hash",
@@ -201,6 +202,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual(3, fingerprint["comparison"]["goWarmupRounds"])
         self.assertEqual("0.4.test", fingerprint["build"]["gscInformationalVersion"])
         self.assertEqual("bench-hash", fingerprint["build"]["artifacts"]["Bench.dll"])
+        self.assertEqual("values-hash", fingerprint["build"]["artifacts"]["Gsharp.Runtime.Values.dll"])
         self.assertEqual("aot-hash", fingerprint["build"]["artifacts"]["NativeAOT"])
         self.assertEqual("aot-project-hash", fingerprint["comparison"]["aotProjectSha256"])
         self.assertFalse(fingerprint["build"]["gitDirty"])
@@ -356,13 +358,13 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 "comparison": {
                     "methodologyVersion": bench.METHODOLOGY_VERSION,
                     "wholeRuns": 1,
-                    "scenario": "chunk64-arrays",
+                    "scenario": "chunk64-slices",
                     "modes": ["gsharp", "go"],
                 },
                 "comparable": True,
             },
             "gsharp": {
-                "chunk64-arrays": {
+                "chunk64-slices": {
                     "median_ns": 1.0,
                     "checksum": 42,
                 }

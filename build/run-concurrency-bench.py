@@ -407,6 +407,7 @@ def make_fingerprint(
             "Bench.dll": sha256(assembly),
             "Gsharp.Extensions.dll": sha256(extensions),
             "Gsharp.Runtime.Channels.dll": sha256(assembly.parent / "Gsharp.Runtime.Channels.dll"),
+            "Gsharp.Runtime.Values.dll": sha256(assembly.parent / "Gsharp.Runtime.Values.dll"),
             "NativeAOT": sha256(aot_binary) if aot_binary else None,
             "go": sha256(go_binary) if go_binary else None,
         },

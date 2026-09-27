@@ -60,10 +60,19 @@ def smoke() -> int:
             failures.append(f"main.go does not report the row '{row}'")
         if scenario.get("checksum") and not row:
             failures.append(f"checksummed scenario '{scenario['name']}' has no Go counterpart")
+    by_name = {scenario["name"]: scenario for scenario in scenarios}
+    for size in ("64", "1k"):
+        if by_name[f"chunk{size}-arrays"].get("go") is not None:
+            failures.append(f"chunk{size}-arrays must remain a G#-only CLR-array control")
+        slice_row = by_name[f"chunk{size}-slices"]
+        if slice_row.get("go") != f"go-chunk{size}" or not slice_row.get("checksum"):
+            failures.append(f"chunk{size}-slices must be the checksummed Go-paired native-slice row")
     if "make(chan []int32, 64)" not in go_program:
         failures.append("Go chunk controls must transport int32 arrays through capacity-64 channels")
     if "chan[[]int32](64)" not in program or "[length]int32{}" not in program:
         failures.append("G# chunk controls must transport exact-length int32 arrays through capacity-64 channels")
+    if "chan[slice[int32]](64)" not in program or "slice[int32].Create(length, length)" not in program:
+        failures.append("G# paired chunk rows must transport exact-length native slices through capacity-64 channels")
 
     baseline = json.loads((BENCH / "baseline.json").read_text())
     for scenario in scenarios:
@@ -84,6 +93,8 @@ def smoke() -> int:
         # would measure the placeholder Main and report nothing at all.
         if "SubstituteGsharpBench" not in shim or "IntermediateAssembly" not in shim:
             failures.append("BenchAot.csproj no longer substitutes the gsc-emitted assembly")
+        if "Gsharp.Runtime.Values.dll" not in shim:
+            failures.append("BenchAot.csproj does not reference the native-slice runtime")
 
     runner = (REPO / "build" / "run-concurrency-bench.py").read_text()
     compile(runner, "run-concurrency-bench.py", "exec")

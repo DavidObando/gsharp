@@ -4,7 +4,7 @@ Evidence harness for **ADR-0174** (goroutines and channels, wave 2). It exists
 to make the ADR's performance claims refutable, and to stop new ones from
 being asserted without measurement.
 
-> **Status:** the harness has twelve G# scenarios, seven Go-paired rows, and a
+> **Status:** the harness has fourteen G# scenarios, seven Go-paired rows, and a
 > historical named-workstation baseline. The baseline predates the current
 > comparison fingerprint and remains report-only until that same machine
 > records three complete runs with the current methodology. Hosted-runner
@@ -161,10 +161,11 @@ spike:
    baseline-comparable, and baseline update/check logic remains report-only.
 9. **Validate counted work where a checksum is declared.** Every measured
    launch must emit a stable checksum. Paired JIT, NativeAOT, and Go rows must
-   agree exactly before a ratio is reported. The array-chunk pairs use fresh
-   `int32` arrays, capacity-64 channels, identical indexed filling, exact tail
-   lengths, and the same element-sum checksum. Fresh and recycled ownership
-   policies require separate rows rather than an unlabelled mixed comparison.
+   agree exactly before a ratio is reported. The native-slice chunk pairs use
+   fresh backing arrays, capacity-64 channels, identical indexed filling,
+   exact tail lengths, and the same element-sum checksum. CLR-array chunk rows
+   remain G#-only controls. Fresh and recycled ownership policies require
+   separate rows rather than an unlabelled mixed comparison.
 
 ## Known limits of the current numbers
 
@@ -186,9 +187,10 @@ Carried here so they are not lost when the numbers are quoted:
   state-machine box *per suspended frame* against Go's one growable stack per
   goroutine, so this advantage narrows with depth. Measure depths 1/4/16.
 - **Chunk rows are fresh/fresh controls, not pooling evidence.** The paired
-  array rows align payload width, channel capacity, indexed construction,
-  exact tail handling, and checksums. A recycled/recycled comparison still
-  needs an explicit ownership protocol and its own scenario.
+  native-slice rows align descriptor transport, payload width, channel
+  capacity, indexed construction, exact tail handling, and checksums. The
+  G#-only CLR-array rows isolate descriptor overhead. A recycled/recycled
+  comparison still needs an explicit ownership protocol and its own scenario.
 
 ## Notable negative results
 
