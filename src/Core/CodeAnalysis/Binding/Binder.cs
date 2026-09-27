@@ -7818,7 +7818,7 @@ public sealed class Binder
 
     private static bool HasAdapterUnscopedRef(ParameterInfo parameter)
         => parameter.GetCustomAttributesData().Any(attribute =>
-            attribute.AttributeType.FullName == "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute");
+            KnownAttributes.IsUnscopedRef(attribute.AttributeType));
 
     private static bool HasAdapterUnmanagedConstraint(Type parameter)
         => parameter.GetCustomAttributesData().Any(attribute =>

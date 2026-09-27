@@ -499,5 +499,5 @@ internal static class RefCapabilities
 
     private static bool HasUnscopedRefAttribute(IEnumerable<CustomAttributeData>? attributes)
         => attributes?.Any(
-            attribute => attribute.AttributeType.FullName == "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute") == true;
+            attribute => KnownAttributes.IsUnscopedRef(attribute.AttributeType)) == true;
 }
