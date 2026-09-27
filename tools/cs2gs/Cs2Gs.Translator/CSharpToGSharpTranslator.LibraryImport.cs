@@ -636,14 +636,13 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             string generatedFile = implementation.DeclaringSyntaxReferences[0].SyntaxTree.FilePath;
-            string remedy = isGeneratedRegex
-                ? "G# has no partial properties (ADR-0192 §F); declare it as a [GeneratedRegex] partial METHOD, " +
-                    "which cs2gs translates to a G# declaring part that gsgen implements."
-                : HasAttribute(definition, "CommunityToolkit.Mvvm.ComponentModel.ObservablePropertyAttribute")
-                    ? "use the field form of [ObservableProperty], which gsgen regenerates for G#, or implement " +
-                        "the property by hand in G#."
-                    : "cs2gs translates only [GeneratedRegex] and [LibraryImport] partial methods; implement this " +
-                        "member by hand in G#.";
+            string remedy = HasAttribute(
+                definition,
+                "CommunityToolkit.Mvvm.ComponentModel.ObservablePropertyAttribute")
+                ? "use the field form of [ObservableProperty], which gsgen regenerates for G#, or implement " +
+                    "the property by hand in G#."
+                : "cs2gs translates only [GeneratedRegex] and [LibraryImport] partial methods; implement this " +
+                    "member by hand in G#.";
             string message =
                 $"partial member '{definition.ContainingType?.Name}.{definition.Name}' is implemented by " +
                 $"generated code ('{generatedFile}') that cs2gs does not translate; the member is omitted from " +
