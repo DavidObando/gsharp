@@ -374,7 +374,7 @@ class Box {
         _name = ""default""
     }
 
-    @MemberNotNull(""_name"")
+    @MemberNotNull(members: []string{""_name""})
     func EnsureInitAnnotated() {
         _name = ""default""
     }

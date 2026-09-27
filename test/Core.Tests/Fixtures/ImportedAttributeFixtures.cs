@@ -137,6 +137,9 @@ public sealed class ImportedNamedConstructorAttribute : Attribute
         get => index;
         set { }
     }
+
+    /// <summary>A writable member whose type is not legal in an attribute blob.</summary>
+    public System.IO.Stream Unsupported { get; set; }
 }
 
 /// <summary>Issue #4503 fixture for direct and expanded params constructor arguments.</summary>

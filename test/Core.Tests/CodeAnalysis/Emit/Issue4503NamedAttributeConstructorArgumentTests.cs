@@ -50,7 +50,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             """
             import GSharp.Core.Tests.Fixtures
 
-            @ImportedNamedConstructor(first: "first", 20, third: 30, Label = "ok", Code = 40)
+            @ImportedNamedConstructor("first", third: 30, Label = "ok", Code = 40)
             class Tagged {
             }
             """);
@@ -61,7 +61,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
 
         var data = tagged.GetCustomAttributesData()
             .Single(attribute => attribute.AttributeType == typeof(ImportedNamedConstructorAttribute));
-        Assert.Equal(new object[] { "first", 20, 30 }, data.ConstructorArguments.Select(argument => argument.Value));
+        Assert.Equal(new object[] { "first", 2, 30 }, data.ConstructorArguments.Select(argument => argument.Value));
         Assert.Equal(
             new[] { "Code", "Label" },
             data.NamedArguments.Select(argument => argument.MemberName).OrderBy(name => name));
@@ -71,7 +71,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
         var instance = Assert.IsType<ImportedNamedConstructorAttribute>(
             tagged.GetCustomAttributes(typeof(ImportedNamedConstructorAttribute), inherit: false).Single());
         Assert.Equal("first", instance.First);
-        Assert.Equal(20, instance.Second);
+        Assert.Equal(2, instance.Second);
         Assert.Equal(30, instance.Third);
         Assert.Equal("ok", instance.Label);
         Assert.Equal(40, instance.Code);
@@ -87,7 +87,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             class LocalAttribute(First string, Second int32 = 2, Third int32 = 3) : Attribute {
             }
 
-            @Local(First: "first", 20, Third: 30)
+            @Local("first", Third: 30)
             class Tagged {
             }
             """);
@@ -97,7 +97,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
         var tagged = assembly.GetTypes().Single(type => type.Name == "Tagged");
         var data = tagged.GetCustomAttributesData()
             .Single(attribute => attribute.AttributeType.Name == "LocalAttribute");
-        Assert.Equal(new object[] { "first", 20, 30 }, data.ConstructorArguments.Select(argument => argument.Value));
+        Assert.Equal(new object[] { "first", 2, 30 }, data.ConstructorArguments.Select(argument => argument.Value));
     }
 
     [Fact]
@@ -131,6 +131,67 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
         Assert.Equal(new[] { 3, 4 }, direct.Values);
     }
 
+    [Fact]
+    public void InPositionNamedArguments_CanPrecedePositionalArguments()
+    {
+        var result = Emit(
+            """
+            import System
+            import GSharp.Core.Tests.Fixtures
+
+            @ImportedNamedConstructor(first: "imported", 20, third: 30)
+            class ImportedMixed {
+            }
+
+            class LocalAttribute(First string, Second int32, Third int32) : Attribute {
+            }
+
+            @Local(First: "local", 20, Third: 30)
+            class LocalMixed {
+            }
+            """);
+
+        Assert.True(result.Success, FormatDiagnostics(result));
+        var assembly = Assembly.Load(result.Image);
+        var importedData = assembly.GetTypes().Single(type => type.Name == "ImportedMixed")
+            .GetCustomAttributesData()
+            .Single(attribute => attribute.AttributeType == typeof(ImportedNamedConstructorAttribute));
+        var localData = assembly.GetTypes().Single(type => type.Name == "LocalMixed")
+            .GetCustomAttributesData()
+            .Single(attribute => attribute.AttributeType.Name == "LocalAttribute");
+
+        Assert.Equal(new object[] { "imported", 20, 30 }, importedData.ConstructorArguments.Select(argument => argument.Value));
+        Assert.Equal(new object[] { "local", 20, 30 }, localData.ConstructorArguments.Select(argument => argument.Value));
+    }
+
+    [Fact]
+    public void SameCompilationOverloads_WithDifferentParameterNames_SelectMatchingCandidate()
+    {
+        var result = Emit(
+            """
+            import System
+
+            class LocalAttribute : Attribute {
+                init(Value int32) {
+                }
+
+                init(Text string) {
+                }
+            }
+
+            @Local(Text: "ok")
+            class Tagged {
+            }
+            """);
+
+        Assert.True(result.Success, FormatDiagnostics(result));
+        var assembly = Assembly.Load(result.Image);
+        var data = assembly.GetTypes().Single(type => type.Name == "Tagged")
+            .GetCustomAttributesData()
+            .Single(attribute => attribute.AttributeType.Name == "LocalAttribute");
+        Assert.Equal("ok", Assert.Single(data.ConstructorArguments).Value);
+    }
+
     [Theory]
     [InlineData("@ImportedNamedConstructor(\"a\", first: \"b\")", "GS0247")]
     [InlineData("@ImportedNamedConstructor(\"a\", second: 2, second: 3)", "GS0245")]
@@ -138,6 +199,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     [InlineData("@ImportedNamedConstructor(\"a\", Missing = 1)", "GS0613")]
     [InlineData("@ImportedNamedConstructor(\"a\", Label = 1)", "GS0614")]
     [InlineData("@ImportedNamedConstructor(\"a\", Item = 1)", "GS0613")]
+    [InlineData("@ImportedNamedConstructor(\"a\", Unsupported = nil)", "GS0615")]
     [InlineData("@ImportedNamedConstructor(third: 3, 2)", "GS0583")]
     public void InvalidNamedAttributeArguments_ReportClearDiagnostics(string annotation, string expectedId)
     {

@@ -965,6 +965,11 @@ internal sealed class CustomAttributeEncoder
                 return false;
             }
 
+            if (index < 0)
+            {
+                return false;
+            }
+
             if (filled[index])
             {
                 positionalConflict = argument;
@@ -1168,6 +1173,15 @@ internal sealed class CustomAttributeEncoder
                     var memberType = member is PropertyInfo property
                         ? property.PropertyType
                         : ((FieldInfo)member).FieldType;
+                    if (!IsValidAttributeMemberType(memberType))
+                    {
+                        EmitDiagnosticException.ThrowDiagnostic(
+                            memberArgument.Syntax ?? attribute.Syntax,
+                            DiagnosticDescriptors.AttributeNamedMemberInvalidType,
+                            memberArgument.Name,
+                            memberType.Name);
+                    }
+
                     if (!ArgAssignable(memberArgument.Value, memberType, memberArgument.Type))
                     {
                         EmitDiagnosticException.ThrowDiagnostic(
@@ -2409,6 +2423,27 @@ internal sealed class CustomAttributeEncoder
         metadataName = member?.Name;
         return member != null;
     }
+
+    private static bool IsValidAttributeMemberType(Type type)
+    {
+        if (type.IsArray)
+        {
+            return type.GetArrayRank() == 1
+                && type.GetElementType() is { } elementType
+                && IsValidAttributeMemberScalarType(elementType);
+        }
+
+        return IsValidAttributeMemberScalarType(type);
+    }
+
+    private static bool IsValidAttributeMemberScalarType(Type type)
+        => type.IsEnum
+            || (!type.IsSameAs(typeof(nint))
+                && !type.IsSameAs(typeof(nuint))
+                && (type.IsPrimitive
+                    || type.IsSameAs(typeof(string))
+                    || type.IsSameAs(typeof(Type))
+                    || type.IsSameAs(typeof(object))));
 
     private static void WriteCustomAttributeFieldOrPropertyType(BlobBuilder bb, Type t)
     {

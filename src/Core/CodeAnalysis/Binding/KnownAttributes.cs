@@ -245,6 +245,16 @@ internal static class KnownAttributes
                 {
                     (builder ??= ImmutableArray.CreateBuilder<string>()).Add(s);
                 }
+                else if (arg.Value is Array values)
+                {
+                    foreach (var value in values)
+                    {
+                        if (value is string member && !string.IsNullOrEmpty(member))
+                        {
+                            (builder ??= ImmutableArray.CreateBuilder<string>()).Add(member);
+                        }
+                    }
+                }
             }
         }
 
