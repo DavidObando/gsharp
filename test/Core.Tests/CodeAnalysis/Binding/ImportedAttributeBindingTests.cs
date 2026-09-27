@@ -38,6 +38,18 @@ public class ImportedAttributeBindingTests
         return Binder.BindGlobalScope(previous: null, ImmutableArray.Create(tree), FixtureResolver());
     }
 
+    private static BoundGlobalScope BindWithIssue4503Contracts(string source)
+    {
+        using var contracts = new Issue4503ImportedAttributeContracts();
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        using var resolver = ReferenceResolver.WithReferences(
+            new[] { contracts.Path });
+        return Binder.BindGlobalScope(
+            previous: null,
+            ImmutableArray.Create(tree),
+            resolver);
+    }
+
     [Fact]
     public void Imported_Attribute_With_Usage_Binds_Without_Crash()
     {
@@ -101,5 +113,59 @@ public class ImportedAttributeBindingTests
         var hello = globalScope.Structs.Single(s => s.Name == "Hello");
         Assert.Single(hello.Attributes);
         Assert.DoesNotContain(globalScope.Diagnostics, d => d.Id == "GS0201");
+    }
+
+    [Fact]
+    public void NamedConstructorArguments_UseTheCompleteAllocatedParameterScope()
+    {
+        var globalScope = BindWithIssue4503Contracts(
+            """
+            package Demo
+            import Issue4503.Contracts
+
+            @ImportedReservedNamed(params__: "a", params_: "b")
+            class Hello {
+            }
+            """);
+
+        var attribute = Assert.Single(globalScope.Structs.Single(s => s.Name == "Hello").Attributes);
+        Assert.Equal("a", attribute.GetConstructorArgument(0, "params")?.Value);
+        Assert.Equal("b", attribute.GetConstructorArgument(1, "params_")?.Value);
+    }
+
+    [Fact]
+    public void NamedConstructorMetadataName_ComesFromTheSelectedOverload()
+    {
+        var globalScope = BindWithIssue4503Contracts(
+            """
+            package Demo
+            import Issue4503.Contracts
+
+            @ImportedOverloadedReserved(params_: 1)
+            class Hello {
+            }
+            """);
+
+        var attribute = Assert.Single(globalScope.Structs.Single(s => s.Name == "Hello").Attributes);
+        var argument = Assert.Single(attribute.PositionalArguments);
+        Assert.Equal("params", attribute.GetConstructorParameterMetadataName(argument));
+    }
+
+    [Fact]
+    public void EscapedRawClrConstructorParameterName_IsRecognized()
+    {
+        var globalScope = BindWithIssue4503Contracts(
+            """
+            package Demo
+            import Issue4503.Contracts
+
+            @ImportedReservedNamed($params: "a", params_: "b")
+            class Hello {
+            }
+            """);
+
+        var attribute = Assert.Single(globalScope.Structs.Single(s => s.Name == "Hello").Attributes);
+        Assert.Equal("a", attribute.GetConstructorArgument(0, "params")?.Value);
+        Assert.Equal("b", attribute.GetConstructorArgument(1, "params_")?.Value);
     }
 }

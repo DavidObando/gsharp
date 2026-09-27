@@ -427,7 +427,9 @@ public static class GSharpPrinter
     private static string RenderAttributeArgument(AttributeArgument argument)
     {
         var value = RenderExpression(argument.Value, 0);
-        return string.IsNullOrEmpty(argument.Name) ? value : $"{argument.Name}: {value}";
+        return string.IsNullOrEmpty(argument.Name)
+            ? value
+            : $"{argument.Name}{(argument.IsMemberAssignment ? " =" : ":")} {value}";
     }
 
     // Shared escaper for double-quoted string/interpolation bodies and

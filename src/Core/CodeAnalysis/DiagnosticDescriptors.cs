@@ -609,6 +609,11 @@ internal static class DiagnosticDescriptors
     // in the direction a nil can flow through it.
     internal static readonly DiagnosticDescriptor ByRefArgumentNullabilityMismatch = new("GS0612", DiagnosticSeverity.Warning, "The storage passed to {0} parameter '{1}' has type '{2}', which differs from the parameter type '{3}' in nullability: {4}.");
 
+    internal static readonly DiagnosticDescriptor AttributeNamedArgumentNotFound = new("GS0613", DiagnosticSeverity.Error, "Named attribute argument '{0}' does not select a constructor parameter or writable public property or field of attribute '{1}'.");
+    internal static readonly DiagnosticDescriptor AttributeNamedArgumentTypeMismatch = new("GS0614", DiagnosticSeverity.Error, "Named attribute argument '{0}' of type '{1}' is not assignable to member type '{2}'.");
+    internal static readonly DiagnosticDescriptor AttributeNamedMemberInvalidType = new("GS0615", DiagnosticSeverity.Error, "Named attribute member '{0}' has type '{1}', which cannot be encoded in a custom-attribute blob.");
+    internal static readonly DiagnosticDescriptor AttributeConstructorArgumentAfterMemberAssignment = new("GS0616", DiagnosticSeverity.Error, "Attribute constructor arguments must precede property and field assignments.");
+
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");
     internal static readonly DiagnosticDescriptor VariableNotDefinitelyAssignedForRef = new("GS9003", DiagnosticSeverity.Error, "Variable '{0}' must be definitely assigned before being passed by `ref`.");

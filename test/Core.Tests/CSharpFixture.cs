@@ -47,6 +47,9 @@ internal sealed class CSharpFixture : IDisposable
 
     internal Assembly Load() => EmittedFixture.Load(File.ReadAllBytes(AssemblyPath), DirectoryPath);
 
+    internal Assembly[] LoadTogether(params byte[][] images)
+        => EmittedFixture.LoadTogether(DirectoryPath, images);
+
     internal ReferenceResolver RuntimeReferences() => ReferenceResolver.WithRuntimeReferences(new[] { AssemblyPath });
 
     public void Dispose() => Directory.Delete(DirectoryPath, recursive: true);

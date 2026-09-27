@@ -481,6 +481,7 @@ internal sealed partial class DeclarationBinder
         // NamedArgumentExpressionSyntax wrappers.
         var positional = ImmutableArray.CreateBuilder<BoundAttributeArgument>();
         var named = ImmutableArray.CreateBuilder<BoundAttributeArgument>();
+        var sawMemberAssignment = false;
         if (annotation.Arguments != null)
         {
             foreach (var argSyntax in annotation.Arguments)
@@ -493,7 +494,13 @@ internal sealed partial class DeclarationBinder
                     // same-compilation user attribute has no ClrType yet, so
                     // reject named args on it here instead of silently
                     // dropping them at emit time.
-                    if (attrType is StructSymbol { ClrType: null })
+                    var isMemberAssignment = namedArg.EqualsToken.Kind == SyntaxKind.EqualsToken;
+                    var isConstructorArgument = !isMemberAssignment
+                        && IsAttributeConstructorParameterName(
+                            attrType,
+                            namedArg.NameToken.ValueText);
+                    if (attrType is StructSymbol { ClrType: null } userAttribute
+                        && !isConstructorArgument)
                     {
                         Diagnostics.ReportNamedArgumentsNotSupportedOnUserAttribute(
                             namedArg.NameToken.Location,
@@ -508,22 +515,87 @@ internal sealed partial class DeclarationBinder
                         continue;
                     }
 
-                    named.Add(new BoundAttributeArgument(namedArg.NameToken.ValueText, value, valueType));
+                    var argument = new BoundAttributeArgument(
+                        namedArg.NameToken.ValueText,
+                        value,
+                        valueType,
+                        namedArg,
+                        isMemberAssignment);
+                    if (isConstructorArgument)
+                    {
+                        if (sawMemberAssignment)
+                        {
+                            Diagnostics.ReportAttributeConstructorArgumentAfterMemberAssignment(
+                                namedArg.NameToken.Location);
+                            continue;
+                        }
+
+                        positional.Add(argument);
+                    }
+                    else
+                    {
+                        sawMemberAssignment = true;
+                        named.Add(argument);
+                    }
                 }
                 else
                 {
+                    if (sawMemberAssignment)
+                    {
+                        Diagnostics.ReportAttributeConstructorArgumentAfterMemberAssignment(
+                            argSyntax.Location);
+                        continue;
+                    }
+
                     if (!TryBindAttributeArgument(argSyntax, out var value, out var valueType))
                     {
                         Diagnostics.ReportAttributeArgumentNotConstant(argSyntax.Location);
                         continue;
                     }
 
-                    positional.Add(new BoundAttributeArgument(name: null, value, valueType));
+                    positional.Add(new BoundAttributeArgument(name: null, value, valueType, argSyntax));
                 }
             }
         }
 
         return new BoundAttribute(annotation, attrType, targetKind, positional.ToImmutable(), named.ToImmutable());
+    }
+
+    private static bool IsAttributeConstructorParameterName(TypeSymbol attributeType, string name)
+    {
+        if (attributeType is StructSymbol { ClrType: null } userAttribute)
+        {
+            if (userAttribute.HasPrimaryConstructor
+                && userAttribute.PrimaryConstructorParameters.Any(parameter => parameter.Name == name))
+            {
+                return true;
+            }
+
+            return userAttribute.EffectiveExplicitConstructors.Any(
+                constructor => constructor.Parameters.Any(parameter => parameter.Name == name));
+        }
+
+        if (attributeType.ClrType is not { } clrType)
+        {
+            return false;
+        }
+
+        foreach (var constructor in clrType.GetConstructors(BindingFlags.Public | BindingFlags.Instance))
+        {
+            var parameters = constructor.GetParameters();
+            var parameterNames = parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray();
+            if (parameters.Any(parameter =>
+                parameter.Name == name
+                || SyntaxFacts.GetEmittedIdentifier(
+                        parameter.Name ?? string.Empty,
+                        IdentifierNameContext.Parameter,
+                        parameterNames) == name))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     // Issue #1913: resolves a C# 11-style generic attribute application

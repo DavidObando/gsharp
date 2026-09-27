@@ -127,6 +127,29 @@ public static class EmittedFixture
         return loaded;
     }
 
+    /// <summary>
+    /// Loads several emitted assembly images into one collectible context.
+    /// </summary>
+    /// <param name="probeDirectory">Directory to probe for dependencies the host cannot supply; may be <see langword="null"/>.</param>
+    /// <param name="rawAssemblies">The emitted PE images, in load order.</param>
+    /// <returns>The loaded assemblies, in the same order.</returns>
+    public static Assembly[] LoadTogether(string probeDirectory, params byte[][] rawAssemblies)
+    {
+        if (rawAssemblies is null)
+        {
+            throw new ArgumentNullException(nameof(rawAssemblies));
+        }
+
+        var context = CreateContext(probeDirectory);
+        var loaded = new Assembly[rawAssemblies.Length];
+        for (var i = 0; i < rawAssemblies.Length; i++)
+        {
+            loaded[i] = context.LoadFromStream(new MemoryStream(rawAssemblies[i]));
+        }
+
+        return loaded;
+    }
+
     private static AssemblyLoadContext CreateContext(string probeDirectory)
         => CreateContext(probeDirectory is null ? new List<string>() : new List<string> { probeDirectory });
 

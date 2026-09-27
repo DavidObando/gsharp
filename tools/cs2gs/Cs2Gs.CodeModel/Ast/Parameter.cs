@@ -134,14 +134,19 @@ public sealed class AttributeArgument : GNode
     /// </summary>
     /// <param name="value">The argument value.</param>
     /// <param name="name">The optional argument name (named-argument form).</param>
-    public AttributeArgument(GExpression value, string name = null)
+    /// <param name="isMemberAssignment">Whether the name targets a property or field.</param>
+    public AttributeArgument(GExpression value, string name = null, bool isMemberAssignment = false)
     {
         Value = value;
         Name = name;
+        IsMemberAssignment = isMemberAssignment;
     }
 
     /// <summary>Gets the optional argument name.</summary>
     public string Name { get; }
+
+    /// <summary>Gets a value indicating whether the name targets a property or field rather than a constructor parameter.</summary>
+    public bool IsMemberAssignment { get; }
 
     /// <summary>Gets the argument value.</summary>
     public GExpression Value { get; }

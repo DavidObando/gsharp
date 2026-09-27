@@ -87,6 +87,26 @@ public class Issue835MlcAttributeRecognitionTests
     }
 
     [Fact]
+    public void Obsolete_NamedConstructorArguments_AreReadByParameterName()
+    {
+        var source = """
+            package P
+            import System
+
+            @Obsolete(message: "use Bar instead", true)
+            func Helper() {
+            }
+            """;
+
+        var globalScope = BindWithMlc(source);
+        var helper = globalScope.Functions.Single(f => f.Name == "Helper");
+
+        Assert.True(KnownAttributes.TryGetObsolete(helper.Attributes, out var message, out var isError));
+        Assert.Equal("use Bar instead", message);
+        Assert.True(isError);
+    }
+
+    [Fact]
     public void DllImport_From_Mlc_Is_Recognised()
     {
         var source = """

@@ -29,7 +29,7 @@ public sealed class Issue3461IdentifierAttributeEmitTests
                 """
                 import GSharp.Core.Tests.Fixtures
 
-                @ImportedReservedNamed("a", "b", type: "c", type_: "d")
+                @ImportedReservedNamed("a", "b", $type = "c", type_ = "d")
                 class Tagged {
                 }
                 """)));

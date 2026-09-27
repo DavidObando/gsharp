@@ -190,6 +190,26 @@ class Holder {
         Assert.Equal("a\u2028b\u2029c\u0085d\re\nf", argument.Value);
     }
 
+    [Fact]
+    public void NamedConstructorArgument_PreservesItsParameterSlot()
+    {
+        var stub = Project(@"
+package App
+import System.Text.RegularExpressions
+
+partial class P {
+    shared {
+        @GeneratedRegex(""x"", RegexOptions.None, matchTimeoutMilliseconds: 123)
+        private partial func Rx() Regex;
+    }
+}
+");
+
+        Assert.Contains("matchTimeoutMilliseconds: 123", stub);
+        var attribute = SingleAttribute(stub, "Rx");
+        Assert.Equal(123, attribute.ConstructorArguments[2].Value);
+    }
+
     private static AttributeData SingleAttribute(string stub, string methodName)
     {
         var compilation = BindStub(stub);

@@ -345,11 +345,11 @@ public sealed partial class CSharpToGSharpTranslator
                 bool hasStringMarshalling = false;
                 foreach (AttributeArgument argument in attribute.Arguments)
                 {
-                    // C# `[LibraryImport(libraryName: Lib)]` names a CONSTRUCTOR
-                    // parameter; G# binds every `name:` argument as a property,
-                    // so a constructor-bound argument is emitted positionally.
+                    // LibraryImport constructor arguments are normalized to
+                    // positional form after Roslyn has selected the overload.
                     int constructorIndex = ConstructorParameterIndex(data, argument.Name);
                     string emittedName = constructorIndex >= 0 ? null : argument.Name;
+                    bool isMemberAssignment = constructorIndex < 0 && argument.IsMemberAssignment;
                     GExpression constant = constructorIndex >= 0
                         ? MapConstructorArgumentConstant(data, constructorIndex)
                         : argument.Name == "StringMarshalling" && foldedStringMarshalling != null
@@ -357,13 +357,16 @@ public sealed partial class CSharpToGSharpTranslator
                             : this.MapLibraryImportArgumentConstant(data, argument.Name, node);
                     hasStringMarshalling |= argument.Name == "StringMarshalling";
                     arguments.Add(constant == null
-                        ? new AttributeArgument(argument.Value, emittedName)
-                        : new AttributeArgument(constant, emittedName));
+                        ? new AttributeArgument(argument.Value, emittedName, isMemberAssignment)
+                        : new AttributeArgument(constant, emittedName, isMemberAssignment));
                 }
 
                 if (!hasStringMarshalling && foldedStringMarshalling != null)
                 {
-                    arguments.Add(new AttributeArgument(foldedStringMarshalling, "StringMarshalling"));
+                    arguments.Add(new AttributeArgument(
+                        foldedStringMarshalling,
+                        "StringMarshalling",
+                        isMemberAssignment: true));
                 }
 
                 result.Add(new AttributeUse(attribute.Name, arguments, null));

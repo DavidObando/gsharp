@@ -1175,7 +1175,7 @@ public sealed class Issue3461IdentifierSanitizationTests
             references);
 
         Assert.Contains(
-            "@ReservedNamed(\"a\", \"b\", $defer: \"c\", defer_: \"d\")",
+            "@ReservedNamed(\"a\", \"b\", $defer = \"c\", defer_ = \"d\")",
             rendered,
             StringComparison.Ordinal);
         using var resolver = ReferenceResolver.WithReferences(new[] { fixtureAssembly });

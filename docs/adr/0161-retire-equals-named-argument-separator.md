@@ -46,6 +46,11 @@ only thing keeping it that way is a spelling already scheduled for removal.
 1. **`ParseArgumentsCore` no longer treats `IDENT =` as a named argument.** The lookahead accepts
    only `IDENT :`. `GS0315` and its parser branch are deleted.
 
+   Attribute argument lists are the deliberate exception: C# and ECMA-335
+   distinguish constructor-parameter arguments (`name: value`) from named
+   property/field assignments (`Name = value`). Issue #4503 restored that
+   attribute-specific `=` form; ordinary call argument lists remain unchanged.
+
 2. **`=` in argument position is an ordinary assignment expression.** `f(x = v)` assigns `v` to `x`
    and passes the assigned value as a positional argument, consistent with every other expression
    position in the language and with C#.

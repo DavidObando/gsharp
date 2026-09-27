@@ -245,6 +245,16 @@ internal static class KnownAttributes
                 {
                     (builder ??= ImmutableArray.CreateBuilder<string>()).Add(s);
                 }
+                else if (arg.Value is Array values)
+                {
+                    foreach (var value in values)
+                    {
+                        if (value is string member && !string.IsNullOrEmpty(member))
+                        {
+                            (builder ??= ImmutableArray.CreateBuilder<string>()).Add(member);
+                        }
+                    }
+                }
             }
         }
 
@@ -273,20 +283,34 @@ internal static class KnownAttributes
         returnValue = false;
         members = ImmutableArray<string>.Empty;
 
+        var returnArgument = attribute.GetConstructorArgument(0, "returnValue");
         if (!IsMemberNotNullWhen(attribute)
-            || attribute.PositionalArguments.IsDefaultOrEmpty
-            || attribute.PositionalArguments.Length < 2
-            || attribute.PositionalArguments[0].Value is not bool rv)
+            || returnArgument?.Value is not bool rv)
         {
             return false;
         }
 
         var builder = ImmutableArray.CreateBuilder<string>();
-        for (var i = 1; i < attribute.PositionalArguments.Length; i++)
+        foreach (var argument in attribute.PositionalArguments)
         {
-            if (attribute.PositionalArguments[i].Value is string s && !string.IsNullOrEmpty(s))
+            if (ReferenceEquals(argument, returnArgument))
+            {
+                continue;
+            }
+
+            if (argument.Value is string s && !string.IsNullOrEmpty(s))
             {
                 builder.Add(s);
+            }
+            else if (argument.Value is Array values)
+            {
+                foreach (var value in values)
+                {
+                    if (value is string member && !string.IsNullOrEmpty(member))
+                    {
+                        builder.Add(member);
+                    }
+                }
             }
         }
 
@@ -526,12 +550,7 @@ internal static class KnownAttributes
             }
 
             sawConditional = true;
-            if (attr.PositionalArguments.IsDefaultOrEmpty || attr.PositionalArguments.Length < 1)
-            {
-                continue;
-            }
-
-            if (attr.PositionalArguments[0].Value is string symbol
+            if (attr.GetConstructorArgument(0, "conditionString")?.Value is string symbol
                 && preprocessorSymbols != null
                 && preprocessorSymbols.Contains(symbol))
             {
@@ -566,17 +585,14 @@ internal static class KnownAttributes
                 continue;
             }
 
-            if (!attr.PositionalArguments.IsDefaultOrEmpty)
+            if (attr.GetConstructorArgument(0, "message")?.Value is string s)
             {
-                if (attr.PositionalArguments.Length >= 1 && attr.PositionalArguments[0].Value is string s)
-                {
-                    message = s;
-                }
+                message = s;
+            }
 
-                if (attr.PositionalArguments.Length >= 2 && attr.PositionalArguments[1].Value is bool b)
-                {
-                    isError = b;
-                }
+            if (attr.GetConstructorArgument(1, "error")?.Value is bool b)
+            {
+                isError = b;
             }
 
             return true;
@@ -733,9 +749,8 @@ internal static class KnownAttributes
                 continue;
             }
 
-            if (!attr.PositionalArguments.IsDefaultOrEmpty
-                && attr.PositionalArguments.Length >= 1
-                && TryConvertToInt32(attr.PositionalArguments[0].Value, out var raw))
+            if (attr.GetConstructorArgument(0, "validOn") is { } validOnArgument
+                && TryConvertToInt32(validOnArgument.Value, out var raw))
             {
                 validOn = (AttributeTargets)raw;
             }
@@ -777,18 +792,13 @@ internal static class KnownAttributes
     private static bool TryGetSingleBoolArgument(BoundAttribute attribute, out bool value)
     {
         value = false;
-        if (attribute == null || attribute.PositionalArguments.IsDefaultOrEmpty || attribute.PositionalArguments.Length < 1)
+        if (attribute?.GetConstructorArgument(0, "returnValue")?.Value is not bool b)
         {
             return false;
         }
 
-        if (attribute.PositionalArguments[0].Value is bool b)
-        {
-            value = b;
-            return true;
-        }
-
-        return false;
+        value = b;
+        return true;
     }
 
     /// <summary>
@@ -1172,17 +1182,19 @@ internal static class KnownAttributes
     /// <returns>The options bits (zero when absent or unrecognised).</returns>
     public static System.Runtime.CompilerServices.MethodImplOptions GetMethodImplOptions(BoundAttribute? attribute)
     {
-        if (attribute == null || attribute.PositionalArguments.IsDefaultOrEmpty || attribute.PositionalArguments.Length < 1)
+        var argument = attribute?.GetConstructorArgument(0, "methodImplOptions")
+            ?? attribute?.GetConstructorArgument(0, "value");
+        if (argument == null)
         {
             return default;
         }
 
-        if (TryConvertToInt32(attribute.PositionalArguments[0].Value, out var raw))
+        if (TryConvertToInt32(argument.Value, out var raw))
         {
             return (System.Runtime.CompilerServices.MethodImplOptions)raw;
         }
 
-        if (attribute.PositionalArguments[0].Value is System.Runtime.CompilerServices.MethodImplOptions options)
+        if (argument.Value is System.Runtime.CompilerServices.MethodImplOptions options)
         {
             return options;
         }

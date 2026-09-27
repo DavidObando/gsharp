@@ -89,7 +89,16 @@ When the binder sees `@Foo(args)`:
 
 If both `Foo` and `FooAttribute` exist and both derive from `System.Attribute`, that is an `ERR_AmbiguousAttributeName` — the user must qualify (`@FooAttribute(…)` to force the suffixed spelling, or use a fully-qualified path to force the bare one). This matches C#'s rule.
 
-Constructor and named-argument resolution reuses the existing overload resolution machinery. Compile-time constants only — the value space is the CLR attribute-argument set: primitives, `string`, `Type`, enum, and one-dimensional arrays of those (per ECMA-335 II.23.3). Non-constant arguments report `ERR_AttributeArgumentNotConstant`.
+Constructor and named-argument resolution follows C# attribute syntax: `name: value`
+binds a constructor parameter and is reordered into that parameter's fixed-argument
+slot, while `Name = value` names a writable public property or field. For
+compatibility with existing G# source, a colon name that matches no constructor
+parameter continues to bind a property or field. Named property and field
+assignments currently require an imported attribute type; same-compilation
+attribute members remain unsupported. Compile-time constants only —
+the value space is the CLR attribute-argument set: primitives, `string`, `Type`,
+enum, and one-dimensional arrays of those (per ECMA-335 II.23.3). Non-constant
+arguments report `ERR_AttributeArgumentNotConstant`.
 
 The `Type` form is written `typeof(T)` (per issue #143 / ADR pending) — `@MyAttr(typeof(int))` lowers to the `Type`-token blob entry.
 

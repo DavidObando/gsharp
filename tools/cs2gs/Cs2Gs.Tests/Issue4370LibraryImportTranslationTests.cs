@@ -61,7 +61,7 @@ public static partial class Native
             ("Native.g.cs", IssueReproGenerated));
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("@LibraryImport(\"libc\", EntryPoint: \"getpid\")", printed, StringComparison.Ordinal);
+        Assert.Contains("@LibraryImport(\"libc\", EntryPoint = \"getpid\")", printed, StringComparison.Ordinal);
         Assert.Contains("func GetPid() int32;", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("partial func", printed, StringComparison.Ordinal);
         Assert.Contains("func Call() int32 -> GetPid()", printed, StringComparison.Ordinal);
@@ -103,7 +103,7 @@ public static partial class Native
             ("Native.g.cs", generated));
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("@LibraryImport(\"libc\", EntryPoint: \"getpid\")", printed, StringComparison.Ordinal);
+        Assert.Contains("@LibraryImport(\"libc\", EntryPoint = \"getpid\")", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
 
@@ -162,7 +162,7 @@ namespace Demo
         // The const library name reaches gsc as the string literal its
         // P/Invoke binder requires; the enum argument keeps its member name.
         Assert.Contains(
-            "@LibraryImport(\"libc\", EntryPoint: \"strlen\", StringMarshalling: StringMarshalling.Utf8, SetLastError: true)",
+            "@LibraryImport(\"libc\", EntryPoint = \"strlen\", StringMarshalling = StringMarshalling.Utf8, SetLastError = true)",
             printed,
             StringComparison.Ordinal);
         Assert.Contains("internal func StrLen(text string) nint;", printed, StringComparison.Ordinal);
@@ -315,7 +315,7 @@ public static partial class Native
         Assert.DoesNotContain(diagnostics, diagnostic =>
             diagnostic.Severity == TranslationSeverity.Unsupported
             || diagnostic.Severity == TranslationSeverity.Warning);
-        Assert.Contains("@LibraryImport(\"libc\", EntryPoint: \"getpid\")", printed, StringComparison.Ordinal);
+        Assert.Contains("@LibraryImport(\"libc\", EntryPoint = \"getpid\")", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
 
@@ -357,7 +357,7 @@ public static unsafe partial class Raylib
             diagnostics.Count(diagnostic =>
                 diagnostic.Severity == TranslationSeverity.Warning
                 && diagnostic.Message.Contains("CallConvCdecl", StringComparison.Ordinal)));
-        Assert.Contains("@LibraryImport(\"libc\", EntryPoint: \"strlen\")", printed, StringComparison.Ordinal);
+        Assert.Contains("@LibraryImport(\"libc\", EntryPoint = \"strlen\")", printed, StringComparison.Ordinal);
         Assert.Contains("func StrLen(text *int8) nint;", printed, StringComparison.Ordinal);
 
         TranslationTestValidation.AssertBinds(printed);
@@ -602,11 +602,11 @@ public static partial class Env
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
         Assert.Contains(
-            "@LibraryImport(\"libc\", EntryPoint: \"getenv\", StringMarshalling: StringMarshalling.Utf8)",
+            "@LibraryImport(\"libc\", EntryPoint = \"getenv\", StringMarshalling = StringMarshalling.Utf8)",
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "@LibraryImport(\"libc\", EntryPoint: \"strlen\", StringMarshalling: StringMarshalling.Utf8)",
+            "@LibraryImport(\"libc\", EntryPoint = \"strlen\", StringMarshalling = StringMarshalling.Utf8)",
             printed,
             StringComparison.Ordinal);
         Assert.DoesNotContain("MarshalAs", printed, StringComparison.Ordinal);
@@ -682,7 +682,7 @@ public static partial class Env
             ("Env.g.cs", generated));
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("StringMarshalling: StringMarshalling.Utf8", printed, StringComparison.Ordinal);
+        Assert.Contains("StringMarshalling = StringMarshalling.Utf8", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("@MA", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
         CompileInProcess(printed);
@@ -747,7 +747,7 @@ public static partial class Native
             ("Native.g.cs", generated));
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("(\"libc\", EntryPoint: \"getpid\")", printed, StringComparison.Ordinal);
+        Assert.Contains("(\"libc\", EntryPoint = \"getpid\")", printed, StringComparison.Ordinal);
         Assert.Contains("func GetPid() int32;", printed, StringComparison.Ordinal);
     }
 
@@ -778,7 +778,7 @@ public static partial class Native
             ("Native.g.cs", generated));
 
         Assert.DoesNotContain(diagnostics, diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
-        Assert.Contains("@LibraryImport(\"libc\", EntryPoint: \"getpid\")", printed, StringComparison.Ordinal);
+        Assert.Contains("@LibraryImport(\"libc\", EntryPoint = \"getpid\")", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("libraryName", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
         Assembly assembly = CompileInProcess(printed);

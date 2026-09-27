@@ -521,7 +521,7 @@ public partial class Parser
         return false;
     }
 
-    private SeparatedSyntaxList<ExpressionSyntax> ParseArguments()
+    private SeparatedSyntaxList<ExpressionSyntax> ParseArguments(bool attributeArguments = false)
     {
         // Issue #522: arguments are fresh expression contexts — even when the
         // surrounding statement is a body-header (`if`/`for`/`switch`), a
@@ -542,7 +542,7 @@ public partial class Parser
         suppressRangeOperator = 0;
         try
         {
-            return ParseArgumentsCore();
+            return ParseArgumentsCore(attributeArguments);
         }
         finally
         {
@@ -552,7 +552,7 @@ public partial class Parser
         }
     }
 
-    private SeparatedSyntaxList<ExpressionSyntax> ParseArgumentsCore()
+    private SeparatedSyntaxList<ExpressionSyntax> ParseArgumentsCore(bool attributeArguments)
     {
         var nodesAndSeparators = ImmutableArray.CreateBuilder<SyntaxNode>();
 
@@ -564,7 +564,10 @@ public partial class Parser
             ExpressionSyntax expression;
 
             // Issue #343: a call-site named argument is `name: value`.
-            // ADR-0161: the legacy `name = value` spelling — deprecated by
+            // Issue #4503: attribute lists also preserve C#'s `Name = value`
+            // spelling for property/field assignments; ordinary calls still
+            // parse `=` as assignment per ADR-0161.
+            // ADR-0161: outside attribute lists, the legacy `name = value` spelling — deprecated by
             // ADR-0080 with the one-release GS0315 warning — is retired here, so
             // `=` after an identifier in argument position is no longer a
             // separator. It falls through to ordinary expression parsing and is
@@ -573,10 +576,11 @@ public partial class Parser
             // (the target also naming a parameter of the callee) is diagnosed at
             // bind time rather than silently reinterpreted.
             if (Current.Kind == SyntaxKind.IdentifierToken
-                && Peek(1).Kind == SyntaxKind.ColonToken)
+                && (Peek(1).Kind == SyntaxKind.ColonToken
+                    || (attributeArguments && Peek(1).Kind == SyntaxKind.EqualsToken)))
             {
                 var name = MatchToken(SyntaxKind.IdentifierToken);
-                SyntaxToken separator = MatchToken(SyntaxKind.ColonToken);
+                var separator = NextToken();
 
                 // ADR-0060: a named argument may carry a ref-kind modifier in
                 // its value position (e.g. `name = ref x`). V1 rejects this
