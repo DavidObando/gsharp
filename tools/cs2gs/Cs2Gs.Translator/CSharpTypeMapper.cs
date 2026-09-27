@@ -195,6 +195,7 @@ public sealed class CSharpTypeMapper
     /// qualifying framework types that share a name across BCL namespaces.
     /// </summary>
     private bool qualifyMetadataImportCollisions;
+    private IMethodSymbol topLevelStatementsEntryPoint;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="CSharpTypeMapper"/> class
@@ -654,6 +655,14 @@ public sealed class CSharpTypeMapper
     /// <returns>A reference to the synthesized (or already-cached) data class.</returns>
     public NamedTypeReference GetOrCreateAnonymousDataClass(INamedTypeSymbol anonymousType, TranslationContext context, Location location) =>
         this.GetOrCreateAnonymousDataClassShape(anonymousType, context, location).Type;
+
+    /// <summary>
+    /// Records the retained top-level-statements entry point whose source body
+    /// is emitted outside its containing <c>Program</c> type.
+    /// </summary>
+    /// <param name="entryPoint">The retained program's synthesized entry point.</param>
+    internal void SetTopLevelStatementsEntryPoint(IMethodSymbol entryPoint) =>
+        this.topLevelStatementsEntryPoint = entryPoint;
 
     /// <summary>
     /// Reserves aliases and bare type names already present in the final
@@ -2014,7 +2023,7 @@ public sealed class CSharpTypeMapper
             || namespaceName?.StartsWith("System.", System.StringComparison.Ordinal) == true;
     }
 
-    private static bool IsWithinContainingType(
+    private bool IsWithinContainingType(
         INamedTypeSymbol nestedType,
         TranslationContext context,
         Location location)
@@ -2026,6 +2035,14 @@ public sealed class CSharpTypeMapper
         }
 
         ISymbol enclosing = context.SemanticModel.GetEnclosingSymbol(location.SourceSpan.Start);
+        for (ISymbol current = enclosing; current != null; current = current.ContainingSymbol)
+        {
+            if (SymbolEqualityComparer.Default.Equals(current, this.topLevelStatementsEntryPoint))
+            {
+                return false;
+            }
+        }
+
         INamedTypeSymbol currentType = enclosing as INamedTypeSymbol ?? enclosing?.ContainingType;
         for (INamedTypeSymbol current = currentType; current != null; current = current.ContainingType)
         {
