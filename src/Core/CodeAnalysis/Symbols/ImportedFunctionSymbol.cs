@@ -103,15 +103,8 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// <returns><see langword="true"/> when the final parameter is the hidden context slot.</returns>
     public static bool HasHiddenContextParameter(MethodInfo method)
     {
-        if (!IsSuspendingMethod(method))
-        {
-            return false;
-        }
-
         var parameters = method.GetParameters();
-        return parameters.Length > 0
-            && parameters[^1].ParameterType.FullName == "Gsharp.Concurrency.Context"
-            && parameters[^1].Name == FunctionSymbol.HiddenContextParameterName;
+        return HasHiddenContextParameter(method, parameters);
     }
 
     /// <summary>
@@ -121,9 +114,20 @@ public sealed class ImportedFunctionSymbol : Symbol
     /// <param name="method">The imported CLR method.</param>
     /// <returns>The parameters visible to G# overload and delegate matching.</returns>
     public static ParameterInfo[] GetLogicalParameters(MethodInfo method)
+        => GetLogicalParameters(method, out _);
+
+    /// <summary>
+    /// Gets the source-visible parameters of an imported method and reports
+    /// whether its full signature carries the hidden suspension context slot.
+    /// </summary>
+    /// <param name="method">The imported CLR method.</param>
+    /// <param name="hasHiddenContext">Whether the method has a validated hidden context slot.</param>
+    /// <returns>The parameters visible to G# overload and delegate matching.</returns>
+    public static ParameterInfo[] GetLogicalParameters(MethodInfo method, out bool hasHiddenContext)
     {
         var parameters = method.GetParameters();
-        return HasHiddenContextParameter(method) ? parameters[..^1] : parameters;
+        hasHiddenContext = HasHiddenContextParameter(method, parameters);
+        return hasHiddenContext ? parameters[..^1] : parameters;
     }
 
     /// <inheritdoc/>
@@ -144,6 +148,18 @@ public sealed class ImportedFunctionSymbol : Symbol
         => Method.DeclaringType is { } declaringType
             ? ImportedTypeSymbol.GetWithoutNullability(declaringType, NullabilityFreeReason.TypeStructure)
             : null;
+
+    private static bool HasHiddenContextParameter(MethodInfo method, ParameterInfo[] parameters)
+    {
+        if (!IsSuspendingMethod(method))
+        {
+            return false;
+        }
+
+        return parameters.Length > 0
+            && parameters[^1].ParameterType.FullName == "Gsharp.Concurrency.Context"
+            && parameters[^1].Name == FunctionSymbol.HiddenContextParameterName;
+    }
 
     private TypeSymbol GetMethodType(MethodInfo method)
     {

@@ -2446,8 +2446,7 @@ internal sealed class ConversionClassifier
         var applicable = new List<MethodInfo>();
         foreach (var candidate in group.Candidates)
         {
-            var candidateParameters = ImportedFunctionSymbol.GetLogicalParameters(candidate);
-            var hasHiddenContext = ImportedFunctionSymbol.HasHiddenContextParameter(candidate);
+            var candidateParameters = ImportedFunctionSymbol.GetLogicalParameters(candidate, out var hasHiddenContext);
             if (candidateParameters.Length != argTypes.Length)
             {
                 continue;

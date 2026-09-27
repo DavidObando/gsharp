@@ -1606,7 +1606,7 @@ public abstract class BoundTreeRewriter
             }
         }
 
-        return builder == null ? node : new BoundClrStaticCallExpression(node.Syntax, node.Method, node.Type, builder.ToImmutable(), node.ArgumentRefKinds);
+        return builder == null ? node : node.WithArguments(builder.ToImmutable());
     }
 
     /// <summary>Rewrites a CLR property/field access on a CLR receiver.</summary>

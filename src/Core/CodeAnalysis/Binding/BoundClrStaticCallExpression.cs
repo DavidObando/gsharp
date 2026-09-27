@@ -55,4 +55,10 @@ public sealed class BoundClrStaticCallExpression : BoundCallOperationExpression
     /// Gets the per-argument ref-kind annotations. May be default (all-None).
     /// </summary>
     public ImmutableArray<RefKind> ArgumentRefKinds { get; }
+
+    /// <summary>Creates an equivalent call with replacement arguments.</summary>
+    /// <param name="arguments">The replacement arguments.</param>
+    /// <returns>An equivalent call containing <paramref name="arguments"/>.</returns>
+    public BoundClrStaticCallExpression WithArguments(ImmutableArray<BoundExpression> arguments)
+        => new(Syntax, Method, Type, arguments, ArgumentRefKinds);
 }

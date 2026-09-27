@@ -830,12 +830,7 @@ internal sealed class ChannelRuntimeBinder
             return call;
         }
 
-        return new BoundClrStaticCallExpression(
-            call.Syntax,
-            call.Method,
-            call.Type,
-            arguments,
-            call.ArgumentRefKinds);
+        return call.WithArguments(arguments);
     }
 
     /// <summary>Recovers the direction a facade call was bound with from its carrier parameter.</summary>
