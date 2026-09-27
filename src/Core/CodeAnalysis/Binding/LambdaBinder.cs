@@ -1985,6 +1985,7 @@ internal sealed class LambdaBinder
         {
             call = new BoundCallExpression(null, function, callArguments, functionType.ReturnType)
             {
+                StaticGenericOwnerType = group.StaticOwnerType,
                 MethodTypeArguments = group.MethodTypeArguments,
             };
         }
@@ -2030,7 +2031,8 @@ internal sealed class LambdaBinder
             package: getCurrentFunction()?.Package)
         {
             LexicalEnclosingType = getCurrentFunction()?.LexicalEnclosingType
-                ?? getCurrentFunction()?.ReceiverType,
+                ?? getCurrentFunction()?.ReceiverType
+                ?? getCurrentFunction()?.StaticOwnerType,
         };
         var captured = CollectCapturedVariables(body, adapterFunction);
         var adapter = new BoundFunctionLiteralExpression(

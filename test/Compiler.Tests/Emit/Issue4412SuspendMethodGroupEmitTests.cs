@@ -276,6 +276,42 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         }
     }
 
+    [Fact]
+    public void GenericStaticSuspendMethodGroup_PreservesConstructedOwner()
+    {
+        const string source = """
+            package Issue4412
+            import System
+
+            class Box[T] {
+                shared {
+                    suspend func Identity(value T) T {
+                        return value
+                    }
+                }
+            }
+
+            suspend func run() {
+                let identity (int32) -> System.Threading.Tasks.ValueTask[int32] = Box[int32].Identity
+                Console.WriteLine(await identity(9))
+            }
+
+            run()
+            """;
+
+        var directory = PrepareDirectory(nameof(GenericStaticSuspendMethodGroup_PreservesConstructedOwner));
+        try
+        {
+            var outputPath = Compile(directory, "App", source, "/target:exe");
+            IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"9{Environment.NewLine}", Run(outputPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
     private static string PrepareDirectory(string name)
     {
         var path = Path.Combine(AppContext.BaseDirectory, name);
