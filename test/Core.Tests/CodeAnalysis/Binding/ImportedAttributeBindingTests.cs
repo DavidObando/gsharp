@@ -40,9 +40,10 @@ public class ImportedAttributeBindingTests
 
     private static BoundGlobalScope BindWithIssue4503Contracts(string source)
     {
+        using var contracts = new Issue4503ImportedAttributeContracts();
         var tree = SyntaxTree.Parse(SourceText.From(source));
         using var resolver = ReferenceResolver.WithReferences(
-            new[] { Issue4503ImportedAttributeContracts.Path });
+            new[] { contracts.Path });
         return Binder.BindGlobalScope(
             previous: null,
             ImmutableArray.Create(tree),

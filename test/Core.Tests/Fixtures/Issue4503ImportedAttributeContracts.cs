@@ -5,46 +5,27 @@
 using System;
 using System.IO;
 using System.Reflection;
-using Microsoft.CodeAnalysis;
-using Microsoft.CodeAnalysis.CSharp;
 
 namespace GSharp.Core.Tests.Fixtures;
 
 /// <summary>Builds issue #4503's imported C# contracts outside the ambient test assembly.</summary>
-internal static class Issue4503ImportedAttributeContracts
+internal sealed class Issue4503ImportedAttributeContracts : IDisposable
 {
-    private static readonly Lazy<(string Path, Assembly Assembly)> Contract = new(Build);
+    private readonly CSharpFixture fixture = new(Source);
 
     /// <summary>Gets the compiled contract assembly path.</summary>
-    public static string Path => Contract.Value.Path;
+    public string Path => fixture.AssemblyPath;
 
-    /// <summary>Gets the loaded contract assembly.</summary>
-    public static Assembly Assembly => Contract.Value.Assembly;
-
-    private static (string Path, Assembly Assembly) Build()
+    /// <summary>Loads the contract and emitted assembly together outside the default load context.</summary>
+    public (Assembly Contract, Assembly Emitted) LoadWith(byte[] emittedImage)
     {
-        var directory = System.IO.Path.Combine(
-            AppContext.BaseDirectory,
-            "issue4503-contracts",
-            Guid.NewGuid().ToString("N"));
-        Directory.CreateDirectory(directory);
-        var path = System.IO.Path.Combine(directory, "Issue4503.Contracts.dll");
-        var compilation = CSharpCompilation.Create(
-            "Issue4503.Contracts",
-            new[] { CSharpSyntaxTree.ParseText(Source) },
-            new[] { MetadataReference.CreateFromFile(typeof(object).Assembly.Location) },
-            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
-        using (var stream = File.Create(path))
-        {
-            var result = compilation.Emit(stream);
-            if (!result.Success)
-            {
-                throw new InvalidOperationException(string.Join(Environment.NewLine, result.Diagnostics));
-            }
-        }
-
-        return (path, Assembly.LoadFrom(path));
+        var assemblies = fixture.LoadTogether(
+            File.ReadAllBytes(fixture.AssemblyPath),
+            emittedImage);
+        return (assemblies[0], assemblies[1]);
     }
+
+    public void Dispose() => fixture.Dispose();
 
     private const string Source = """
         using System;

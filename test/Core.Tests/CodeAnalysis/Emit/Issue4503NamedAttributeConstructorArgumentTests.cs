@@ -12,6 +12,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Core.Tests.Fixtures;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Emit;
@@ -32,7 +33,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             """);
 
         Assert.True(result.Success, FormatDiagnostics(result));
-        var assembly = Assembly.Load(result.Image);
+        var assembly = EmittedFixture.Load(result.Image);
         var method = assembly.GetTypes().Single(type => type.Name == "<Program>").GetMethod("Pattern");
         var data = Assert.Single(
             method.GetCustomAttributesData(),
@@ -46,6 +47,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     [Fact]
     public void NamedConstructorArguments_AreReordered_Defaulted_AndReadable()
     {
+        using var contracts = new Issue4503ImportedAttributeContracts();
         var result = Emit(
             """
             import Issue4503.Contracts
@@ -53,13 +55,14 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             @ImportedNamedConstructor("first", third: 30, Label = "ok", Code = 40)
             class Tagged {
             }
-            """);
+            """,
+            contracts.Path);
 
         Assert.True(result.Success, FormatDiagnostics(result));
-        var assembly = Assembly.Load(result.Image);
+        var (contractAssembly, assembly) = contracts.LoadWith(result.Image);
         var tagged = assembly.GetTypes().Single(type => type.Name == "Tagged");
 
-        var namedAttributeType = Issue4503ImportedAttributeContracts.Assembly.GetTypes()
+        var namedAttributeType = contractAssembly.GetTypes()
             .Single(type => type.Name == "ImportedNamedConstructorAttribute");
         var data = tagged.GetCustomAttributesData()
             .Single(attribute => attribute.AttributeType == namedAttributeType);
@@ -94,7 +97,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             """);
 
         Assert.True(result.Success, FormatDiagnostics(result));
-        var assembly = Assembly.Load(result.Image);
+        var assembly = EmittedFixture.Load(result.Image);
         var tagged = assembly.GetTypes().Single(type => type.Name == "Tagged");
         var data = tagged.GetCustomAttributesData()
             .Single(attribute => attribute.AttributeType.Name == "LocalAttribute");
@@ -104,6 +107,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     [Fact]
     public void ParamsConstructorArguments_PreserveDirectAndExpandedForms()
     {
+        using var contracts = new Issue4503ImportedAttributeContracts();
         var result = Emit(
             """
             import Issue4503.Contracts
@@ -115,11 +119,12 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             @ImportedParamsConstructor(values: []int32{3, 4}, name: "direct")
             class Direct {
             }
-            """);
+            """,
+            contracts.Path);
 
         Assert.True(result.Success, FormatDiagnostics(result));
-        var assembly = Assembly.Load(result.Image);
-        var paramsAttributeType = Issue4503ImportedAttributeContracts.Assembly.GetTypes()
+        var (contractAssembly, assembly) = contracts.LoadWith(result.Image);
+        var paramsAttributeType = contractAssembly.GetTypes()
             .Single(type => type.Name == "ImportedParamsConstructorAttribute");
         var expanded = assembly.GetTypes().Single(type => type.Name == "Expanded")
             .GetCustomAttributes(paramsAttributeType, inherit: false).Single();
@@ -135,6 +140,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     [Fact]
     public void InPositionNamedArguments_CanPrecedePositionalArguments()
     {
+        using var contracts = new Issue4503ImportedAttributeContracts();
         var result = Emit(
             """
             import System
@@ -150,11 +156,12 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             @Local(First: "local", 20, Third: 30)
             class LocalMixed {
             }
-            """);
+            """,
+            contracts.Path);
 
         Assert.True(result.Success, FormatDiagnostics(result));
-        var assembly = Assembly.Load(result.Image);
-        var namedAttributeType = Issue4503ImportedAttributeContracts.Assembly.GetTypes()
+        var (contractAssembly, assembly) = contracts.LoadWith(result.Image);
+        var namedAttributeType = contractAssembly.GetTypes()
             .Single(type => type.Name == "ImportedNamedConstructorAttribute");
         var importedData = assembly.GetTypes().Single(type => type.Name == "ImportedMixed")
             .GetCustomAttributesData()
@@ -188,7 +195,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             """);
 
         Assert.True(result.Success, FormatDiagnostics(result));
-        var assembly = Assembly.Load(result.Image);
+        var assembly = EmittedFixture.Load(result.Image);
         var data = assembly.GetTypes().Single(type => type.Name == "Tagged")
             .GetCustomAttributesData()
             .Single(attribute => attribute.AttributeType.Name == "LocalAttribute");
@@ -213,7 +220,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             """);
 
         Assert.True(result.Success, FormatDiagnostics(result));
-        var assembly = Assembly.Load(result.Image);
+        var assembly = EmittedFixture.Load(result.Image);
         var data = assembly.GetTypes().Single(type => type.Name == "Tagged")
             .GetCustomAttributesData()
             .Single(attribute => attribute.AttributeType.Name == "LocalAttribute");
@@ -233,6 +240,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     [InlineData("@ImportedNamedConstructor(Label = \"ok\", \"a\")", "GS0616")]
     public void InvalidNamedAttributeArguments_ReportClearDiagnostics(string annotation, string expectedId)
     {
+        using var contracts = new Issue4503ImportedAttributeContracts();
         var result = Emit(
             $$"""
             import Issue4503.Contracts
@@ -240,7 +248,8 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             {{annotation}}
             class Tagged {
             }
-            """);
+            """,
+            contracts.Path);
 
         var diagnostic = Assert.Single(result.Diagnostics, item => item.Id == expectedId);
         Assert.Equal(2, diagnostic.Location.StartLine);
@@ -270,6 +279,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     [Fact]
     public void ConstructorParameterAliases_ReportDuplicateNamedDiagnostic()
     {
+        using var contracts = new Issue4503ImportedAttributeContracts();
         var result = Emit(
             """
             import Issue4503.Contracts
@@ -277,17 +287,18 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
             @ImportedReservedNamed($params: "a", params__: "b")
             class Tagged {
             }
-            """);
+            """,
+            contracts.Path);
 
         var diagnostic = Assert.Single(result.Diagnostics, item => item.Id == "GS0245");
         Assert.Equal(2, diagnostic.Location.StartLine);
         Assert.False(result.Success);
     }
 
-    private static EmitResult Emit(string source)
+    private static EmitResult Emit(string source, string referencePath = null)
     {
         using var resolver = ReferenceResolver.WithReferences(
-            new[] { Issue4503ImportedAttributeContracts.Path });
+            referencePath is null ? Array.Empty<string>() : new[] { referencePath });
         var compilation = new Compilation(
             resolver,
             SyntaxTree.Parse(SourceText.From(source)));
