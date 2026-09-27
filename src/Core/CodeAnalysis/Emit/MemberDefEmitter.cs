@@ -415,6 +415,16 @@ internal sealed class MemberDefEmitter
         if (prop.IsOverride)
         {
             methodAttrs |= MethodAttributes.Virtual;
+            if (prop.OverriddenProperty is { } baseProperty
+                && DeclarationBinder.IsCovariantPropertyOverride(
+                    baseProperty,
+                    prop.Type,
+                    prop.HasGetter,
+                    prop.HasSetter,
+                    prop.ReturnRefKind))
+            {
+                methodAttrs |= MethodAttributes.NewSlot;
+            }
         }
         else if (prop.IsVirtual)
         {
