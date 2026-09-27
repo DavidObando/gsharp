@@ -123,6 +123,13 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case PropertyDeclarationSyntax property:
                     var propertySymbol = this.context.GetDeclaredSymbol(property) as IPropertySymbol;
+                    if (!this.emitGeneratedImplementingParts
+                        && propertySymbol?.PartialDefinitionPart is IPropertySymbol regexPropertyDefinition
+                        && HasAttribute(regexPropertyDefinition, GeneratedRegexAttributeName))
+                    {
+                        break;
+                    }
+
                     List<AttributeUse> propertyAttributes = this.MapPropertyAttributes(property);
                     if (ownerKind is TypeDeclarationKind.DataClass or TypeDeclarationKind.DataStruct
                         && primaryCtorParamNames?.Contains(

@@ -41,6 +41,7 @@ namespace Cs2Gs.Translator;
 public sealed partial class CSharpToGSharpTranslator
 {
     private const string GeneratedRegexAttributeName = "System.Text.RegularExpressions.GeneratedRegexAttribute";
+    private const string RegexGeneratorName = "System.Text.RegularExpressions.Generator";
 
     /// <summary>
     /// Whether <paramref name="method"/> is the definition part of a C#
@@ -57,6 +58,13 @@ public sealed partial class CSharpToGSharpTranslator
     private static AttributeData FindGeneratedRegexAttribute(IMethodSymbol method) =>
         method.GetAttributes().FirstOrDefault(attribute =>
             IsAttributeOfType(attribute, GeneratedRegexAttributeName));
+
+    private static bool IsRegexGeneratorDeclaration(ISymbol symbol) =>
+        symbol?.GetAttributes().Any(attribute =>
+            attribute.AttributeClass?.ToDisplayString() == "System.CodeDom.Compiler.GeneratedCodeAttribute" &&
+            attribute.ConstructorArguments.Length > 0 &&
+            attribute.ConstructorArguments[0].Value is string generator &&
+            generator == RegexGeneratorName) == true;
 
     /// <summary>
     /// Whether <paramref name="type"/> declares a <c>[GeneratedRegex]</c>
@@ -125,7 +133,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 problem = "its type is nested, and gsgen generates implementing parts only for top-level types " +
                     "(the declaring part would have no implementation, GS0609); move the method to a " +
-                    "top-level partial class";
+                    "top-level partial type";
             }
 
             if (problem != null)

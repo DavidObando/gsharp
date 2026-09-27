@@ -616,7 +616,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return;
             }
 
-            if (implementation == null && isGeneratedRegex)
+            if (isGeneratedRegex)
             {
                 string missingImplementationMessage =
                     $"partial member '{definition.ContainingType?.Name}.{definition.Name}' uses " +

@@ -35,7 +35,7 @@ VER="${NUPKG##*Gsharp.NET.Sdk.}"
 VER="${VER%.nupkg}"
 
 # Force NuGet to re-extract the (same-versioned) SDK so target edits take effect.
-rm -rf "$HOME/.nuget/packages/gsharp.net.sdk/$VER" || true
+rm -rf "${HOME:-$PWD}/.nuget/packages/gsharp.net.sdk/$VER" || true
 
 echo "==> Building cs2gs and gsc (Release)"
 dotnet build tools/cs2gs/Cs2Gs.Cli/Cs2Gs.Cli.csproj -c Release --nologo -v:q

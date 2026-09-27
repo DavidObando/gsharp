@@ -1317,6 +1317,10 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
+            if (!this.emitGeneratedImplementingParts && IsRegexGeneratorDeclaration(symbol))
+            {
+                return null;
+            }
 
             // Issue #1910: a `partial` type is declared once per file/part but
             // has a single symbol. Only the "primary" part (parts[0], see

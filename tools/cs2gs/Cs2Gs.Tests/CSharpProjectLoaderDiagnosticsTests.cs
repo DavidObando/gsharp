@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
@@ -406,10 +407,10 @@ namespace Sample
         string retainedSource = document.SyntaxTree.GetText().ToString();
         Assert.Contains("Maybe", retainedSource, StringComparison.Ordinal);
         Assert.Contains("RootKeep", retainedSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("Digits_0", retainedSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("Utilities", retainedSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("Digits() =>", retainedSource, StringComparison.Ordinal);
-        Assert.DoesNotContain("Letters { get =>", retainedSource, StringComparison.Ordinal);
+        Assert.Contains("Digits_0", retainedSource, StringComparison.Ordinal);
+        Assert.Contains("Utilities", retainedSource, StringComparison.Ordinal);
+        Assert.Contains("Digits() =>", retainedSource, StringComparison.Ordinal);
+        Assert.Contains("Letters { get =>", retainedSource, StringComparison.Ordinal);
         PropertyDeclarationSyntax property = document.SyntaxTree.GetRoot()
             .DescendantNodes()
             .OfType<PropertyDeclarationSyntax>()
@@ -418,16 +419,20 @@ namespace Sample
             document.SemanticModel.GetDeclaredSymbol(property));
         Assert.Equal(NullableAnnotation.Annotated, propertySymbol.Type.NullableAnnotation);
 
-        LoadedDocument sourceDocument = Assert.Single(
-            project.Documents,
-            candidate => string.Equals(candidate.FilePath, sourcePath, StringComparison.OrdinalIgnoreCase));
-        var context = new TranslationContext(
-            project.Compilation,
-            sourceDocument.SemanticModel,
-            sourceDocument.FilePath);
-        _ = new CSharpToGSharpTranslator().TranslateDocument(sourceDocument, context);
+        var translator = new CSharpToGSharpTranslator();
+        var contexts = project.Documents.Select(candidate =>
+            new TranslationContext(project.Compilation, candidate.SemanticModel, candidate.FilePath)).ToArray();
+        string translated = string.Join(
+            Environment.NewLine,
+            project.Documents.Select((candidate, index) =>
+                GSharpPrinter.Print(translator.TranslateDocument(candidate, contexts[index]))));
+        Assert.Contains("RootKeep", translated, StringComparison.Ordinal);
+        Assert.Contains("Maybe", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("Digits_0", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("Utilities", translated, StringComparison.Ordinal);
+        Assert.DoesNotContain("func Letters", translated, StringComparison.Ordinal);
         Assert.Contains(
-            context.Diagnostics,
+            contexts.SelectMany(context => context.Diagnostics),
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported &&
                 diagnostic.Message.Contains("partial METHOD", StringComparison.Ordinal));
     }
