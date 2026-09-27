@@ -424,9 +424,15 @@ public sealed partial class Adr0186PlatformTypeBindingTests
 
         Assert.Equal("Entry", baseline.Name);
 
+        // #4451 (ADR-0193 amendment): the explicit `[Entry]` at the oblivious
+        // `Wrap<T>` slot binds `T = Entry!`, so the element read is `Entry!`.
+        // §5b is about the UNDERLYING type, which must still be the symbolic
+        // `Entry`, not an erasure.
+        var platformElement = Assert.IsType<PlatformTypeSymbol>(platform);
+
         // The load-bearing assertion. With §5b broken this reads "object".
-        Assert.Equal(baseline.Name, platform.Name);
-        Assert.DoesNotContain("object", platform.Name, StringComparison.Ordinal);
+        Assert.Equal(baseline.Name, platformElement.UnderlyingType.Name);
+        Assert.DoesNotContain("object", platformElement.UnderlyingType.Name, StringComparison.Ordinal);
     }
 
     /// <summary>
@@ -703,6 +709,7 @@ public sealed partial class Adr0186PlatformTypeBindingTests
     [InlineData("    let a = Ob.ArrWithNil()\n    let b []string = a\n    Console.WriteLine(b[0].Length)", "through an inferred local")]
     [InlineData("    let b []string = Ob.ArrWithNil()\n    Console.WriteLine(b[0].Length)", "directly at the declared slot")]
     [InlineData("    let b []string = Ob.NilArr()\n    Console.WriteLine(b.Length)", "with a nil container too - rule 3 does not care")]
+    [InlineData("    let s sequence[string] = Ob.ArrWithNil()\n    Console.WriteLine(s)", "through a supertype view (#4420)")]
     public void Section3_AMagicCollection_Is_Not_Exempt_From_The_Container_Rule(string body, string site)
     {
         using var world = new World();
@@ -723,14 +730,14 @@ public sealed partial class Adr0186PlatformTypeBindingTests
     /// The negative control for the fixture above, and the constraint that
     /// makes it safe: a pair the container rule cannot compare is
     /// <b>declined</b>, never rejected. Widening a platform slice to
-    /// <c>object</c> or to a covariant sequence is an ordinary upcast and has
-    /// nothing to do with rule 3 — an implementation that answered "illegal"
-    /// for every uncomparable pair would break both.
+    /// <c>object</c> is an ordinary upcast and has nothing to do with rule 3.
+    /// A sequence view with a non-null element is a supertype view of the
+    /// same container, so rule 3 does apply to it (#4420); that row moved to
+    /// the fixture above.
     /// </summary>
     /// <param name="body">The probe body.</param>
     [Theory]
     [InlineData("    let o object = Ob.ArrWithNil()\n    Console.WriteLine(o)")]
-    [InlineData("    let s sequence[string] = Ob.ArrWithNil()\n    Console.WriteLine(s)")]
     public void Section3_AnUncomparablePair_Is_Declined_Not_Rejected(string body)
     {
         using var world = new World();

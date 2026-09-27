@@ -241,7 +241,9 @@ internal sealed partial class ExpressionBinder
             && position >= 0
             && position < typeArgSymbols.Length)
         {
-            return typeArgSymbols[position];
+            // #4451: the same explicit-argument rule the symbolic vector
+            // applies, so an oblivious `T Echo<T>(T)` returns `string!`.
+            return MemberLookup.ApplyExplicitMethodTypeArgument(closed, position, typeArgSymbols[position]);
         }
 
         return null;

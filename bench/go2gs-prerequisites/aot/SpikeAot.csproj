@@ -1,0 +1,29 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+    <PublishAot>true</PublishAot>
+    <AssemblyName>Go2GsPrerequisites</AssemblyName>
+    <Nullable>annotations</Nullable>
+    <RunAnalyzers>false</RunAnalyzers>
+    <EnableNETAnalyzers>false</EnableNETAnalyzers>
+    <EnforceCodeStyleInBuild>false</EnforceCodeStyleInBuild>
+    <RestorePackagesWithLockFile>false</RestorePackagesWithLockFile>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <Reference Include="$(GsharpRuntimeDir)/Gsharp.Runtime.Values.dll" />
+  </ItemGroup>
+
+  <Target Name="SubstituteGsharpSpike" AfterTargets="CoreCompile"
+          Condition="'$(SpikeAssembly)' != ''">
+    <Copy SourceFiles="$(SpikeAssembly)" DestinationFiles="@(IntermediateAssembly)" />
+  </Target>
+
+  <Target Name="RequireSpikeAssembly" BeforeTargets="CoreCompile"
+          Condition="'$(SpikeAssembly)' == ''">
+    <Error Text="Set -p:SpikeAssembly=&lt;path to the gsc-emitted assembly&gt;." />
+  </Target>
+
+</Project>

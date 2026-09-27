@@ -523,7 +523,9 @@ public sealed class ImportedClassSymbol : Symbol
                     && position >= 0
                     && position < typeArgSymbols.Length)
                 {
-                    returnOverride = typeArgSymbols[position];
+                    // #4451: the explicit-argument rule, as in
+                    // BuildSymbolicMethodTypeArgs (an oblivious slot gives T!).
+                    returnOverride = MemberLookup.ApplyExplicitMethodTypeArgument(bestMethod, position, typeArgSymbols[position]);
                 }
 
                 // Issue #833: when the open return type *contains* (but is not

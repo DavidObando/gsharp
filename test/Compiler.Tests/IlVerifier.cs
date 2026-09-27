@@ -198,6 +198,11 @@ internal static class IlVerifier
         var (exitCode, stdout, stderr) =
             RunProcess(psi, assemblyPath, VerifyTimeoutMilliseconds);
 
+        if (exitCode == 2 && OnlyFilterInFinallyFalsePositives(assemblyPath, stdout))
+        {
+            return;
+        }
+
         if (exitCode != 0)
         {
             // ilverify writes one line per IL error. Surface its full output so
@@ -221,6 +226,49 @@ internal static class IlVerifier
                 $"ilverify exited successfully without confirming verification of '{assemblyPath}'.{Environment.NewLine}" +
                 stdout.TrimEnd() + Environment.NewLine + stderr.TrimEnd());
         }
+    }
+
+    // #4489 (upstream dotnet/runtime#134711): ilverify 10.0.8 reports
+    // StackUnderflow at a filter block's first instruction when the filter
+    // start lies inside a finally/fault handler; see IlVerifyFilterInFinallyRule
+    // for the exact scope. Passes only when every reported error is that false
+    // positive and the error lines account for ilverify's own error count, so
+    // an unparsed line or a format change still fails the test.
+    private static bool OnlyFilterInFinallyFalsePositives(string assemblyPath, string stdout)
+    {
+        var errorLines = new List<string>();
+        int? reportedCount = null;
+        foreach (var rawLine in stdout.Replace("\r\n", "\n").Split('\n'))
+        {
+            var line = rawLine.Trim();
+            if (line.StartsWith("[IL]: Error", StringComparison.Ordinal))
+            {
+                errorLines.Add(line);
+                continue;
+            }
+
+            var summary = System.Text.RegularExpressions.Regex.Match(line, @"^(\d+) Error\(s\) Verifying ");
+            if (summary.Success)
+            {
+                reportedCount = int.Parse(summary.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture);
+            }
+        }
+
+        if (errorLines.Count == 0 || reportedCount != errorLines.Count)
+        {
+            return false;
+        }
+
+        var rule = GSharp.Tests.IlVerifyFilterInFinallyRule.Load(assemblyPath);
+        foreach (var line in errorLines)
+        {
+            if (!rule.Matches(errorCode: null, line))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     internal static (int ExitCode, string Stdout, string Stderr) RunProcess(
