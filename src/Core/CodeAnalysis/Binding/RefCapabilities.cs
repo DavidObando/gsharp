@@ -253,7 +253,7 @@ internal static class RefCapabilities
     /// <returns><see langword="true"/> when the parameter is explicitly scoped.</returns>
     internal static bool IsScoped(ParameterInfo parameter)
         => parameter.GetCustomAttributesData().Any(attribute =>
-            attribute.AttributeType.FullName == "System.Runtime.CompilerServices.ScopedRefAttribute");
+            KnownAttributes.IsScopedRef(attribute.AttributeType));
 
     /// <summary>
     /// Issue #4265 soundness guard: true when <paramref name="indexer"/> (or

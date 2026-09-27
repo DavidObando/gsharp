@@ -221,8 +221,12 @@ explicit implementation exists. The contract therefore follows actual
 interface dispatch even when a same-signature plain member appears first in
 source. A default interface body makes the implementation optional, but if a
 source member replaces that default its contract is validated identically to
-an abstract slot. Imported CLR slots are read from their real
-`UnscopedRefAttribute` metadata. This closes the original declaration-time gap:
+an abstract slot. That traversal includes inherited default properties and
+their getter/setter slots, not only ordinary interface methods. Imported CLR
+slots are read from their real `UnscopedRefAttribute` metadata. `ScopedRef`
+relevance likewise recognizes only the runtime attribute identity, so a
+same-named attribute from another assembly cannot alter the safety decision.
+This closes the original declaration-time gap:
 an implicit implementation is diagnosed after interface satisfaction resolves
 it, rather than guessed from its name before the interface contract is known.
 
@@ -255,6 +259,9 @@ no attribute list of their own. This matches C#, which accepts `[UnscopedRef]`
 on the property, getter, or setter and treats them as the corresponding accessor
 contract. Imported contract lookup therefore reads the property row and either
 accessor row, including setter-only properties.
+Auto-properties participate by their declared getter/setter/init flags even
+though their accessor symbols do not exist yet; setter/init relevance includes
+the synthesized `value` parameter.
 
 ### 9. cs2gs accessor-attribute hoist
 

@@ -437,8 +437,27 @@ internal static class KnownAttributes
     /// <returns><c>true</c> when the attribute is <c>[UnscopedRef]</c>.</returns>
     public static bool IsUnscopedRef(Type? clrType)
     {
-        return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.UnscopedRefAttribute));
+        return IsKnownRuntimeAttribute(
+            clrType,
+            typeof(System.Diagnostics.CodeAnalysis.UnscopedRefAttribute));
     }
+
+    /// <summary>Returns whether <paramref name="clrType"/> is the runtime <c>ScopedRefAttribute</c>.</summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute has the runtime type identity.</returns>
+    public static bool IsScopedRef(Type? clrType)
+    {
+        return IsKnownRuntimeAttribute(
+            clrType,
+            typeof(System.Runtime.CompilerServices.ScopedRefAttribute));
+    }
+
+    private static bool IsKnownRuntimeAttribute(Type? candidate, Type expected)
+        => candidate != null
+            && string.Equals(
+                candidate.AssemblyQualifiedName,
+                expected.AssemblyQualifiedName,
+                StringComparison.Ordinal);
 
     /// <summary>
     /// ADR-0184 / issue #376: returns <c>true</c> when <paramref name="attribute"/>

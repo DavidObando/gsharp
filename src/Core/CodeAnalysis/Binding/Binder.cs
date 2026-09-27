@@ -7756,7 +7756,7 @@ public sealed class Binder
 
     private static bool IsAdapterScoped(ParameterInfo parameter)
         => parameter.GetCustomAttributesData().Any(attribute =>
-            attribute.AttributeType.FullName == "System.Runtime.CompilerServices.ScopedRefAttribute");
+            KnownAttributes.IsScopedRef(attribute.AttributeType));
 
     private static bool AdapterMethodMetadataMatches(MethodInfo target, MethodInfo source)
     {

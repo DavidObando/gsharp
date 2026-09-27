@@ -193,6 +193,28 @@ ref struct Buffer : IRefSlot {
     }
 
     [Theory]
+    [InlineData("set")]
+    [InlineData("init")]
+    public void UnannotatedInterfaceProperty_RejectsAnnotatedAutoProperty(string accessor)
+    {
+        var source = """
+            package P
+            import System
+            import System.Diagnostics.CodeAnalysis
+            interface IRefSlot {
+                prop Slot Span[int32] { ACCESSOR; }
+            }
+            ref struct Buffer : IRefSlot {
+                @UnscopedRef
+                public prop Slot Span[int32] { ACCESSOR; }
+            }
+            """.Replace("ACCESSOR", accessor, StringComparison.Ordinal);
+
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0590");
+        Assert.Contains("implemented property 'IRefSlot.Slot'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
     [InlineData("", "", false)]
     [InlineData("ref other int32", "", true)]
     [InlineData("in other int32", "", true)]
@@ -325,6 +347,66 @@ struct Buffer : IAnnotatedMethod {
 }
 ", contracts);
         Assert.Empty(accepted);
+    }
+
+    [Fact]
+    public void ImportedScopedRef_RequiresRuntimeAttributeIdentity()
+    {
+        using var contracts = new Issue4292ScopedRefIdentityContracts();
+        using (var resolver = ReferenceResolver.WithReferences(contracts.Paths))
+        {
+            Assert.True(resolver.TryResolveType(
+                "Issue4292.ScopedIdentity.IRuntimeScoped",
+                out var runtimeScoped));
+            var attributeType = Assert.Single(runtimeScoped
+                .GetMethod("Store")!
+                .GetParameters()[0]
+                .GetCustomAttributesData()).AttributeType;
+            Assert.True(
+                GSharp.Core.CodeAnalysis.Binding.KnownAttributes.IsScopedRef(attributeType),
+                attributeType.AssemblyQualifiedName);
+
+            Assert.True(resolver.TryResolveType(
+                "Issue4292.ScopedIdentity.ILookalikeScoped",
+                out var lookalikeScoped));
+            var lookalikeAttributeType = Assert.Single(lookalikeScoped
+                .GetMethod("Store")!
+                .GetParameters()[0]
+                .GetCustomAttributesData()).AttributeType;
+            Assert.Equal(
+                "System.Runtime.CompilerServices.ScopedRefAttribute",
+                lookalikeAttributeType.FullName);
+            Assert.False(
+                GSharp.Core.CodeAnalysis.Binding.KnownAttributes.IsScopedRef(lookalikeAttributeType),
+                lookalikeAttributeType.AssemblyQualifiedName);
+        }
+
+        const string implementation = """
+            struct Buffer : INTERFACE {
+                @UnscopedRef
+                public func Store(ref view RefValue) { }
+            }
+            """;
+        const string prefix = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.ScopedIdentity
+            """;
+
+        Assert.Single(
+            BindWithReferences(
+                prefix + Environment.NewLine + implementation.Replace(
+                    "INTERFACE",
+                    "ILookalikeScoped",
+                    StringComparison.Ordinal),
+                contracts.Paths),
+            d => d.Id == "GS0590");
+        Assert.Empty(BindWithReferences(
+            prefix + Environment.NewLine + implementation.Replace(
+                "INTERFACE",
+                "IRuntimeScoped",
+                StringComparison.Ordinal),
+            contracts.Paths));
     }
 
     [Fact]
@@ -713,7 +795,9 @@ ref struct Buffer : IDefaultProperty {
                 IDefaultMethod,
                 IDefaultProperty,
                 IGenericDefaultMethod[Token],
-                IGenericDefaultProperty[Token] {
+                IGenericDefaultProperty[Token],
+                IDerivedDefaultProperty,
+                IDerivedGenericDefaultProperty[Token] {
             }
             """, contracts));
     }
@@ -780,6 +864,54 @@ ref struct Buffer : IDefaultProperty {
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void ImportedInheritedDefaultProperty_ValidatesLinkedReplacement(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = "public prop Slot RefValue { set { } }";
+        const string explicitMember = """
+            @UnscopedRef
+            private prop (IBaseDefaultProperty) Slot RefValue { set { } }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            ref struct Buffer : IDerivedDefaultProperty {
+
+            """ + members + """
+
+            }
+            """;
+
+        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
+    [Fact]
+    public void ImportedInheritedSymbolicDefaultProperty_ValidatesLinkedReplacement()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class Token { }
+            ref struct Buffer : IDerivedGenericDefaultProperty[Token] {
+                public prop Slot RefValue { set { } }
+
+                @UnscopedRef
+                private prop (IBaseGenericDefaultProperty[Token]) Slot RefValue { set { } }
+            }
+            """;
+
+        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void ImportedInheritedSymbolicMethodContract_PrefersLinkedSlotOverPlainMember(bool explicitFirst)
     {
         using var contracts = new Issue4292UnscopedRefContracts();
@@ -823,8 +955,13 @@ ref struct Buffer : IDefaultProperty {
     private static ImmutableArray<Diagnostic> BindWithFixtures(
         string source,
         Issue4292UnscopedRefContracts contracts)
+        => BindWithReferences(source, new[] { contracts.Path });
+
+    private static ImmutableArray<Diagnostic> BindWithReferences(
+        string source,
+        string[] references)
     {
-        using var resolver = ReferenceResolver.WithReferences(new[] { contracts.Path });
+        using var resolver = ReferenceResolver.WithReferences(references);
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var globalScope = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(
             previous: null,

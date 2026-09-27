@@ -136,6 +136,7 @@ internal sealed partial class DeclarationBinder
             ValidateUnscopedRefPropertyContract(
                 property,
                 overriddenProperty,
+                owner,
                 $"overridden property '{overriddenProperty.Name}'");
         }
         else if (property.ExternalOverriddenGetter is not null || property.ExternalOverriddenSetter is not null)
@@ -144,6 +145,7 @@ internal sealed partial class DeclarationBinder
                 property,
                 property.ExternalOverriddenGetter,
                 property.ExternalOverriddenSetter,
+                owner,
                 $"overridden property '{property.ExternalOverrideContainingType?.Name}.{property.Name}'");
         }
 
@@ -193,18 +195,23 @@ internal sealed partial class DeclarationBinder
     private void ValidateUnscopedRefPropertyContract(
         PropertySymbol implementation,
         PropertySymbol slot,
+        TypeSymbol? implementationReceiver,
         string slotDescription)
     {
         var annotation = FindUnscopedRefAttribute(implementation.Attributes);
         ValidateUnscopedRefAccessorContract(
             annotation,
-            slot.GetterSymbol,
-            implementation.GetterSymbol,
+            slot,
+            implementation,
+            implementationReceiver,
+            isSetter: false,
             slotDescription + " getter");
         ValidateUnscopedRefAccessorContract(
             annotation,
-            slot.SetterSymbol,
-            implementation.SetterSymbol,
+            slot,
+            implementation,
+            implementationReceiver,
+            isSetter: true,
             slotDescription + " setter");
     }
 
@@ -212,67 +219,108 @@ internal sealed partial class DeclarationBinder
         PropertySymbol implementation,
         MethodInfo? slotGetter,
         MethodInfo? slotSetter,
+        TypeSymbol? implementationReceiver,
         string slotDescription)
     {
         var annotation = FindUnscopedRefAttribute(implementation.Attributes);
         ValidateUnscopedRefAccessorContract(
             annotation,
             slotGetter,
-            implementation.GetterSymbol,
+            implementation,
+            implementationReceiver,
+            isSetter: false,
             slotDescription + " getter");
         ValidateUnscopedRefAccessorContract(
             annotation,
             slotSetter,
-            implementation.SetterSymbol,
+            implementation,
+            implementationReceiver,
+            isSetter: true,
             slotDescription + " setter");
     }
 
     private void ValidateUnscopedRefAccessorContract(
         BoundAttribute? implementationAttribute,
-        FunctionSymbol? slot,
-        FunctionSymbol? implementation,
+        PropertySymbol slot,
+        PropertySymbol implementation,
+        TypeSymbol? implementationReceiver,
+        bool isSetter,
         string slotDescription)
     {
-        if (slot == null || implementation == null)
+        var slotHasAccessor = isSetter ? slot.HasSetter : slot.HasGetter;
+        var implementationHasAccessor = isSetter ? implementation.HasSetter : implementation.HasGetter;
+        if (!slotHasAccessor || !implementationHasAccessor)
         {
             return;
         }
 
+        var slotAccessor = isSetter ? slot.SetterSymbol : slot.GetterSymbol;
+        var implementationAccessor = isSetter ? implementation.SetterSymbol : implementation.GetterSymbol;
+        implementationReceiver = implementationAccessor?.ReceiverType ?? implementationReceiver;
+        var contractIsRelevant = slotAccessor == null
+            ? RequiresUnscopedRefContract(
+                isSetter ? TypeSymbol.Void : slot.Type,
+                isSetter ? RefKind.None : slot.ReturnRefKind,
+                GetPropertyAccessorParameters(slot, isSetter),
+                implementation.IsStatic ? null : implementationReceiver)
+            : RequiresUnscopedRefContract(
+                slotAccessor,
+                implementation.IsStatic ? null : implementationReceiver);
         ValidateUnscopedRefContract(
             implementationAttribute,
-            RequiresUnscopedRefContract(slot, implementation),
-            slot.HasUnscopedRef,
+            contractIsRelevant,
+            slotAccessor?.HasUnscopedRef == true || KnownAttributes.HasUnscopedRef(slot.Attributes),
             slotDescription);
     }
 
     private void ValidateUnscopedRefAccessorContract(
         BoundAttribute? implementationAttribute,
         MethodInfo? slot,
-        FunctionSymbol? implementation,
+        PropertySymbol implementation,
+        TypeSymbol? implementationReceiver,
+        bool isSetter,
         string slotDescription)
     {
-        if (slot == null || implementation == null)
+        if (slot == null || !(isSetter ? implementation.HasSetter : implementation.HasGetter))
         {
             return;
         }
 
+        var implementationAccessor = isSetter ? implementation.SetterSymbol : implementation.GetterSymbol;
         ValidateUnscopedRefContract(
             implementationAttribute,
-            RequiresUnscopedRefContract(slot, implementation),
+            RequiresUnscopedRefContract(
+                slot,
+                isSetter ? TypeSymbol.Void : implementation.Type,
+                GetPropertyAccessorParameters(implementation, isSetter),
+                implementation.IsStatic ? null : implementationAccessor?.ReceiverType ?? implementationReceiver),
             RefCapabilities.HasUnscopedRef(slot),
             slotDescription);
     }
 
     private static bool RequiresUnscopedRefContract(FunctionSymbol slot, FunctionSymbol implementation)
+        => RequiresUnscopedRefContract(slot, implementation.ReceiverType);
+
+    private static bool RequiresUnscopedRefContract(FunctionSymbol slot, TypeSymbol? implementationReceiver)
         => RequiresUnscopedRefContract(
             slot.Type,
             slot.ReturnRefKind,
             GetCallableParameters(slot),
-            implementation.ReceiverType);
+            implementationReceiver);
 
     private static bool RequiresUnscopedRefContract(MethodInfo slot, FunctionSymbol implementation)
+        => RequiresUnscopedRefContract(
+            slot,
+            implementation.Type,
+            GetCallableParameters(implementation),
+            implementation.ReceiverType);
+
+    private static bool RequiresUnscopedRefContract(
+        MethodInfo slot,
+        TypeSymbol implementationReturnType,
+        ImmutableArray<ParameterSymbol> implementationParameters,
+        TypeSymbol? implementationReceiver)
     {
-        var implementationParameters = GetCallableParameters(implementation);
         var slotParameters = slot.GetParameters();
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(slotParameters.Length);
         for (var i = 0; i < slotParameters.Length && i < implementationParameters.Length; i++)
@@ -285,11 +333,18 @@ internal sealed partial class DeclarationBinder
         }
 
         return RequiresUnscopedRefContract(
-            implementation.Type,
+            implementationReturnType,
             RefCapabilities.GetReturnRefKind(slot),
             parameters.ToImmutable(),
-            implementation.ReceiverType);
+            implementationReceiver);
     }
+
+    private static ImmutableArray<ParameterSymbol> GetPropertyAccessorParameters(
+        PropertySymbol property,
+        bool isSetter)
+        => isSetter
+            ? property.Parameters.Add(new ParameterSymbol(property.SetterParameterName, property.Type))
+            : property.Parameters;
 
     private static bool RequiresUnscopedRefContract(
         TypeSymbol returnType,

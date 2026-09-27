@@ -588,6 +588,7 @@ internal sealed partial class DeclarationBinder
                 ValidateUnscopedRefPropertyContract(
                     explicitImplementation,
                     iprop,
+                    structSymbol,
                     $"implemented property '{iface.Name}.{iprop.Name}'");
 
                 if (explicitSetterKindMismatch)
@@ -626,6 +627,7 @@ internal sealed partial class DeclarationBinder
                 ValidateUnscopedRefPropertyContract(
                     implProp,
                     iprop,
+                    structSymbol,
                     $"implemented property '{iface.Name}.{iprop.Name}'");
 
                 if (iprop.HasGetter && !implProp.HasGetter)
@@ -1817,6 +1819,7 @@ internal sealed partial class DeclarationBinder
                             implProp,
                             clrProp.GetMethod,
                             clrProp.SetMethod,
+                            structSymbol,
                             $"implemented property '{interfaceName}.{clrProp.Name}'");
 
                         if (requiresGetter && !implProp.HasGetter)
@@ -1923,6 +1926,77 @@ internal sealed partial class DeclarationBinder
                         }
                     });
             }
+
+            foreach (var slot in MemberLookup.EnumerateClrInterfacePropertySlots(ifaceSym))
+            {
+                if (!slot.IsInherited)
+                {
+                    continue;
+                }
+
+                var property = slot.Property;
+                var declaringType = property.DeclaringType;
+                var interfaceName = declaringType == null
+                    ? "interface"
+                    : SymbolDisplay.ToTypeDisplayString(declaringType);
+                var slotKey = (declaringType?.FullName ?? declaringType?.Name ?? string.Empty)
+                    + "::" + property.Name
+                    + "::" + (property.GetMethod == null ? string.Empty : MemberLookup.FormatClrSlotSignature(property.GetMethod))
+                    + "::" + (property.SetMethod == null ? string.Empty : MemberLookup.FormatClrSlotSignature(property.SetMethod));
+                bool requiresGetter = property.GetMethod?.IsAbstract == true;
+                bool requiresSetter = property.SetMethod?.IsAbstract == true;
+                VerifyClrInterfaceMember(
+                    isRequired: requiresGetter || requiresSetter,
+                    findImplementation: () => FindClrInterfacePropertyImplementation(structSymbol, slot),
+                    validateImplementation: implementation =>
+                    {
+                        ValidateUnscopedRefPropertyContract(
+                            implementation,
+                            property.GetMethod,
+                            property.SetMethod,
+                            structSymbol,
+                            $"implemented property '{interfaceName}.{property.Name}'");
+
+                        if (requiresGetter && !implementation.HasGetter)
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol,
+                                interfaceName,
+                                property.Name + " (getter)");
+                        }
+
+                        if (requiresSetter && !implementation.HasSetter)
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol,
+                                interfaceName,
+                                property.Name + " (setter)");
+                        }
+                        else if (requiresSetter)
+                        {
+                            ReportClrInterfacePropertySetterKindMismatchIfNeeded(
+                                syntax,
+                                structSymbol,
+                                interfaceName,
+                                property.Name,
+                                Invariant.Required(property.SetMethod, "an interface property requiring a setter has a setter"),
+                                implementation);
+                        }
+                    },
+                    reportMissing: () =>
+                    {
+                        if (reported.Add(slotKey))
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol,
+                                interfaceName,
+                                property.Name);
+                        }
+                    });
+            }
         }
     }
 
@@ -1963,6 +2037,20 @@ internal sealed partial class DeclarationBinder
 
         return null;
     }
+
+    private static PropertySymbol? FindClrInterfacePropertyImplementation(
+        StructSymbol structSymbol,
+        MemberLookup.ClrInterfacePropertySlot slot)
+        => FindClrInterfaceImplementation(
+            structSymbol.Properties,
+            property => SameClrSlot(property.ExplicitInterfaceGetterSlot, slot.Property.GetMethod)
+                || SameClrSlot(property.ExplicitInterfaceSetterSlot, slot.Property.SetMethod),
+            () => slot.SymbolicArgs.IsDefaultOrEmpty
+                ? MemberLookup.FindMatchingProperty(structSymbol, slot.Property)
+                : MemberLookup.FindMatchingPropertyForSymbolicClrInterface(
+                    structSymbol,
+                    slot.Property,
+                    slot.SymbolicArgs));
 
     /// <summary>
     /// Issue #949: verifies a class against a CLR generic interface that is
@@ -2038,6 +2126,7 @@ internal sealed partial class DeclarationBinder
                         implProp,
                         openProp.GetMethod,
                         openProp.SetMethod,
+                        structSymbol,
                         $"implemented property '{interfaceName}.{openProp.Name}'");
 
                     if (requiresGetter && !implProp.HasGetter)

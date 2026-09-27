@@ -3,6 +3,10 @@
 // </copyright>
 
 using System;
+using System.Collections.Immutable;
+using System.IO;
+using System.Text;
+using Microsoft.CodeAnalysis;
 
 namespace GSharp.Core.Tests.Fixtures;
 
@@ -135,12 +139,30 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
         {
         }
 
+        public interface IBaseDefaultProperty
+        {
+            RefValue Slot { set { } }
+        }
+
+        public interface IDerivedDefaultProperty : IBaseDefaultProperty
+        {
+        }
+
         public interface IBaseGenericMethod<T>
         {
             ref int Slot(ref int fallback, T value);
         }
 
         public interface IDerivedGenericMethod<T> : IBaseGenericMethod<T>
+        {
+        }
+
+        public interface IBaseGenericDefaultProperty<T>
+        {
+            RefValue Slot { set { } }
+        }
+
+        public interface IDerivedGenericDefaultProperty<T> : IBaseGenericDefaultProperty<T>
         {
         }
 
@@ -151,4 +173,83 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
             public virtual ref int Slot(ref int fallback) => ref value;
         }
         """;
+}
+
+/// <summary>Builds real and cross-assembly lookalike scoped-ref metadata.</summary>
+internal sealed class Issue4292ScopedRefIdentityContracts : IDisposable
+{
+    private readonly CSharpFixture lookalike = new("""
+        namespace System.Runtime.CompilerServices;
+
+        [System.AttributeUsage(System.AttributeTargets.Parameter)]
+        public sealed class ScopfdRefAttribute : System.Attribute
+        {
+        }
+        """);
+
+    private readonly CSharpFixture contracts;
+
+    public Issue4292ScopedRefIdentityContracts()
+    {
+        var reference = MetadataReference.CreateFromFile(
+            lookalike.AssemblyPath,
+            new MetadataReferenceProperties(aliases: ImmutableArray.Create("lookalike")));
+        contracts = new CSharpFixture("""
+            extern alias lookalike;
+
+            namespace Issue4292.ScopedIdentity;
+
+            public ref struct RefValue
+            {
+            }
+
+            public interface ILookalikeScoped
+            {
+                void Store(
+                    [lookalike::System.Runtime.CompilerServices.ScopfdRef]
+                    ref RefValue view);
+            }
+
+            public interface IRuntimeScoped
+            {
+                void Store(scoped ref RefValue view);
+            }
+            """, new[] { reference });
+
+        // C# rejects spelling ScopedRefAttribute directly (CS9065), so compile
+        // a same-length lookalike and patch only its metadata name afterward.
+        RenameScopedRefLookalike(lookalike.AssemblyPath);
+        RenameScopedRefLookalike(contracts.AssemblyPath);
+    }
+
+    public string[] Paths => new[] { lookalike.AssemblyPath, contracts.AssemblyPath };
+
+    public void Dispose()
+    {
+        contracts.Dispose();
+        lookalike.Dispose();
+    }
+
+    private static void RenameScopedRefLookalike(string path)
+    {
+        var bytes = File.ReadAllBytes(path);
+        var source = Encoding.ASCII.GetBytes("ScopfdRefAttribute");
+        var target = Encoding.ASCII.GetBytes("ScopedRefAttribute");
+        var replacements = 0;
+        for (var i = 0; i <= bytes.Length - source.Length; i++)
+        {
+            if (bytes.AsSpan(i, source.Length).SequenceEqual(source))
+            {
+                target.CopyTo(bytes, i);
+                replacements++;
+            }
+        }
+
+        if (replacements == 0)
+        {
+            throw new InvalidOperationException("ScopedRef lookalike metadata name was not found.");
+        }
+
+        File.WriteAllBytes(path, bytes);
+    }
 }

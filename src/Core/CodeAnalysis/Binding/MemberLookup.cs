@@ -4174,6 +4174,49 @@ internal sealed class MemberLookup
         }
     }
 
+    /// <summary>Enumerates direct and inherited CLR interface property slots.</summary>
+    /// <param name="ifaceSym">A CLR interface type symbol from the base clause.</param>
+    /// <returns>Property slots with the symbolic arguments needed for matching.</returns>
+    public static IEnumerable<ClrInterfacePropertySlot> EnumerateClrInterfacePropertySlots(TypeSymbol ifaceSym)
+    {
+        Type? declared = null;
+        var symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
+        if (TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var args)
+            && openDefinition != null)
+        {
+            declared = openDefinition;
+            symbolicArgs = args;
+        }
+
+        if (declared == null)
+        {
+            var clr = ifaceSym?.ClrType;
+            if (clr == null || !clr.IsInterface)
+            {
+                yield break;
+            }
+
+            declared = clr;
+        }
+
+        foreach (var property in PropertiesOf(declared))
+        {
+            yield return new ClrInterfacePropertySlot(property, symbolicArgs, isInherited: false);
+        }
+
+        foreach (var baseIface in declared.GetInterfaces())
+        {
+            foreach (var property in PropertiesOf(baseIface))
+            {
+                yield return new ClrInterfacePropertySlot(property, symbolicArgs, isInherited: true);
+            }
+        }
+
+        static IEnumerable<PropertyInfo> PropertiesOf(Type iface)
+            => iface.GetProperties(
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
+    }
+
     /// <summary>
     /// Issue #985: tests whether a single G# method satisfies a CLR interface
     /// slot — same parameter count, matching ref-kinds, and return/parameter
@@ -9438,6 +9481,26 @@ internal sealed class MemberLookup
         }
 
         public MethodInfo Method { get; }
+
+        public ImmutableArray<TypeSymbol> SymbolicArgs { get; }
+
+        public bool IsInherited { get; }
+    }
+
+    /// <summary>A CLR interface property slot and its symbolic substitutions.</summary>
+    public readonly struct ClrInterfacePropertySlot
+    {
+        public ClrInterfacePropertySlot(
+            PropertyInfo property,
+            ImmutableArray<TypeSymbol> symbolicArgs,
+            bool isInherited)
+        {
+            this.Property = property;
+            this.SymbolicArgs = symbolicArgs;
+            this.IsInherited = isInherited;
+        }
+
+        public PropertyInfo Property { get; }
 
         public ImmutableArray<TypeSymbol> SymbolicArgs { get; }
 
