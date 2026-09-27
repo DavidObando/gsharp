@@ -93,7 +93,9 @@ Constructor and named-argument resolution follows C# attribute syntax: `name: va
 binds a constructor parameter and is reordered into that parameter's fixed-argument
 slot, while `Name = value` names a writable public property or field. For
 compatibility with existing G# source, a colon name that matches no constructor
-parameter continues to bind a property or field. Compile-time constants only —
+parameter continues to bind a property or field. Named property and field
+assignments currently require an imported attribute type; same-compilation
+attribute members remain unsupported. Compile-time constants only —
 the value space is the CLR attribute-argument set: primitives, `string`, `Type`,
 enum, and one-dimensional arrays of those (per ECMA-335 II.23.3). Non-constant
 arguments report `ERR_AttributeArgumentNotConstant`.

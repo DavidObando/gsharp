@@ -792,25 +792,29 @@ internal sealed class CustomAttributeEncoder
         if (attributeType.HasPrimaryConstructor
             && this.resolvePrimaryCtorToken != null)
         {
-            if (!TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes, out var offending))
+            if (!TryMapUserAttributeConstructorArgumentSlots(
+                    attributeType.PrimaryConstructorParameters,
+                    attr,
+                    out var slots,
+                    out var conflict))
+            {
+                positionalConflict ??= conflict;
+            }
+            else if (!TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes, out var offending))
             {
                 unsupportedParameter = offending;
             }
             else
             {
                 SawProjectable(ref sawProjectableCandidate);
-                if (TryMapUserAttributeConstructorArguments(
-                        attributeType.PrimaryConstructorParameters,
+                if (TryBuildUserAttributeConstructorArguments(
+                        slots,
                         paramTypes,
-                        attr,
-                        out effectiveArguments,
-                        out var conflict))
+                        out effectiveArguments))
                 {
                     ctorToken = this.resolvePrimaryCtorToken(attributeType);
                     return true;
                 }
-
-                positionalConflict ??= conflict;
 
                 // Issue #4097: this arm used to be missing entirely. A primary
                 // constructor was accepted on ARITY alone, so `@Note(1)` at
@@ -832,30 +836,34 @@ internal sealed class CustomAttributeEncoder
 
             foreach (var ctor in attributeType.EffectiveExplicitConstructors)
             {
+                if (!TryMapUserAttributeConstructorArgumentSlots(
+                        ctor.Parameters,
+                        attr,
+                        out var slots,
+                        out var conflict))
+                {
+                    positionalConflict ??= conflict;
+                    continue;
+                }
+
                 if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes, out var offending))
                 {
                     // Recorded, but only provisionally — see the
                     // `sawProjectableCandidate` reset below.
                     // First unencodable parameter wins, and an already-recorded
-                    // one from the primary constructor is kept. Where BOTH a
-                    // primary constructor of this arity rejected the arguments
-                    // and an explicit one of the same arity has an unencodable
-                    // parameter, GS0584 is reported rather than GS0583 — it
-                    // names a real obstacle to emitting this attribute at all,
-                    // so fixing the arguments alone would not help.
+                    // one from the primary constructor is kept. Layout is
+                    // checked before projection, so unrelated overloads cannot
+                    // affect whether GS0584 outranks GS0583.
                     unsupportedParameter ??= offending;
                     continue;
                 }
 
                 sawProjectableCandidate = true;
-                if (!TryMapUserAttributeConstructorArguments(
-                        ctor.Parameters,
+                if (!TryBuildUserAttributeConstructorArguments(
+                        slots,
                         candidateParamTypes,
-                        attr,
-                        out var candidateArguments,
-                        out var conflict))
+                        out var candidateArguments))
                 {
-                    positionalConflict ??= conflict;
                     continue;
                 }
 
@@ -889,13 +897,13 @@ internal sealed class CustomAttributeEncoder
         if (sawProjectableCandidate)
         {
             // Review feedback on PR #4137: an unprojectable parameter was
-            // recorded on ARITY alone, before applicability was settled. If
-            // some other constructor of the same arity projected fine and the
-            // arguments simply did not match it, the author's problem is the
+            // recorded before applicability was settled. If some other
+            // layout-applicable constructor projected fine and the argument
+            // types simply did not match it, the author's problem is the
             // arguments (GS0583), not a parameter type on a constructor that
             // was never going to be chosen (GS0584). Clearing the record here
-            // keeps GS0584 for the case where EVERY arity-matching candidate
-            // failed to project.
+            // keeps GS0584 when every layout-applicable candidate failed to
+            // project.
             unsupportedParameter = null;
         }
 
@@ -932,21 +940,20 @@ internal sealed class CustomAttributeEncoder
         return false;
     }
 
-    private static bool TryMapUserAttributeConstructorArguments(
+    private static bool TryMapUserAttributeConstructorArgumentSlots(
         ImmutableArray<ParameterSymbol> parameters,
-        Type[] parameterTypes,
         BoundAttribute attribute,
-        [NotNullWhen(true)] out object?[]? effectiveArguments,
+        [NotNullWhen(true)] out object?[]? slots,
         out BoundAttributeArgument? positionalConflict)
     {
-        effectiveArguments = null;
+        slots = null;
         positionalConflict = null;
         if (attribute.PositionalArguments.Length > parameters.Length)
         {
             return false;
         }
 
-        var slots = new object?[parameters.Length];
+        var mappedSlots = new object?[parameters.Length];
         var filled = new bool[parameters.Length];
         var sawOutOfPositionName = false;
         for (var sourceIndex = 0; sourceIndex < attribute.PositionalArguments.Length; sourceIndex++)
@@ -983,7 +990,7 @@ internal sealed class CustomAttributeEncoder
                 return false;
             }
 
-            slots[index] = argument;
+            mappedSlots[index] = argument;
             filled[index] = true;
         }
 
@@ -996,13 +1003,26 @@ internal sealed class CustomAttributeEncoder
                     return false;
                 }
 
-                slots[i] = parameters[i].ExplicitDefaultValue;
+                mappedSlots[i] = parameters[i].ExplicitDefaultValue;
                 continue;
             }
+        }
 
+        slots = mappedSlots;
+        return true;
+    }
+
+    private static bool TryBuildUserAttributeConstructorArguments(
+        object?[] slots,
+        Type[] parameterTypes,
+        [NotNullWhen(true)] out object?[]? effectiveArguments)
+    {
+        effectiveArguments = null;
+        for (var i = 0; i < slots.Length; i++)
+        {
             if (slots[i] is not BoundAttributeArgument supplied)
             {
-                return false;
+                continue;
             }
 
             if (!ArgAssignable(supplied.Value, parameterTypes[i], supplied.Type))
@@ -1425,7 +1445,7 @@ internal sealed class CustomAttributeEncoder
         return true;
     }
 
-    /// <summary>Marks that an arity-matching constructor projected, and returns true.</summary>
+    /// <summary>Marks that a layout-applicable constructor projected, and returns true.</summary>
     /// <param name="seen">The flag to set.</param>
     /// <returns>Always <see langword="true"/>, so it can chain into a condition.</returns>
     private static bool SawProjectable(ref bool seen)
