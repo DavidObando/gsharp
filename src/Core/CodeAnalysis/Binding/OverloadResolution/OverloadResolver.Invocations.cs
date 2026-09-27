@@ -1938,12 +1938,14 @@ internal sealed partial class OverloadResolver
                     continue;
                 }
 
-                if ((paramType.ClrType ?? expectedType.ClrType) is { } targetClrType
-                    && MemberLookup.TryGetLambdaTargetFunctionType(targetClrType, out var targetDelegateFunctionType)
+                if (MemberLookup.TryGetLambdaTargetFunctionTypeFromSymbol(
+                        expectedType,
+                        out var targetDelegateFunctionType)
                     && functionLiteralArgument.FunctionType != targetDelegateFunctionType)
                 {
-                    convertedArgs.Add(createErasedFunctionLiteralAdapter(functionLiteralArgument, targetDelegateFunctionType));
-                    continue;
+                    permutedArguments = permutedArguments.SetItem(
+                        i,
+                        createErasedFunctionLiteralAdapter(functionLiteralArgument, targetDelegateFunctionType));
                 }
             }
 

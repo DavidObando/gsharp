@@ -3589,17 +3589,25 @@ internal sealed class ConversionClassifier
         target = target is NullableTypeSymbol targetNullable ? targetNullable.UnderlyingType : target;
         target = target is NullabilityAnnotatedTypeSymbol annotated ? annotated.BaseType : target;
 
-        if (!MemberLookup.TryCanonicalizeStructuralFunctionType(source, target, out _))
+        if (source is not FunctionTypeSymbol sourceFunction
+            || !MemberLookup.TryCanonicalizeStructuralFunctionType(sourceFunction, target, out _)
+            || sourceFunction.ClrType == null
+            || target.ClrType == null)
         {
             return false;
         }
 
-        var fullName = target.ClrType?.IsGenericType == true
-            ? target.ClrType.GetGenericTypeDefinition().FullName
-            : target.ClrType?.FullName;
-        return fullName == "System.Action"
-            || fullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true
-            || fullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true;
+        var sourceDefinition = sourceFunction.ClrType.IsGenericType
+            ? sourceFunction.ClrType.GetGenericTypeDefinition()
+            : sourceFunction.ClrType;
+        var targetDefinition = target.ClrType.IsGenericType
+            ? target.ClrType.GetGenericTypeDefinition()
+            : target.ClrType;
+        return string.Equals(sourceDefinition.FullName, targetDefinition.FullName, StringComparison.Ordinal)
+            && string.Equals(
+                sourceDefinition.Assembly.GetName().Name,
+                targetDefinition.Assembly.GetName().Name,
+                StringComparison.Ordinal);
     }
 
     /// <summary>
