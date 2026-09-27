@@ -81,10 +81,18 @@ public sealed partial class CSharpToGSharpTranslator
     /// </summary>
     /// <param name="symbol">A member (or nested type) with private accessibility.</param>
     /// <returns><see langword="true"/> when the member is widened to internal.</returns>
-    private static bool IsMemberOfKeptTopLevelProgram(ISymbol symbol) =>
-        symbol.ContainingType is INamedTypeSymbol owner
-        && !owner.GetMembers(WellKnownMemberNames.TopLevelStatementsEntryPointMethodName).IsEmpty
-        && DeclaresGeneratedRegexDefinition(owner);
+    private static bool IsMemberOfKeptTopLevelProgram(ISymbol symbol)
+    {
+        INamedTypeSymbol owner = symbol.ContainingType;
+        while (owner?.ContainingType is INamedTypeSymbol containingType)
+        {
+            owner = containingType;
+        }
+
+        return owner != null
+            && !owner.GetMembers(WellKnownMemberNames.TopLevelStatementsEntryPointMethodName).IsEmpty
+            && DeclaresGeneratedRegexDefinition(owner);
+    }
 
     private sealed partial class DeclarationVisitor
     {
