@@ -23,9 +23,9 @@
 G# currently has two sequence categories:
 
 - `[]T` and unshadowed `array[T]` are exact CLR `T[]` arrays. Array ranges copy.
-- `slice[T]` and `readonly slice[T]` are the heap-storable shared descriptors
-  implemented by ADR-0190. They carry length and capacity, share subranges,
-  and have explicit array conversion.
+- Unshadowed `slice[T]` and `readonly slice[T]` select the heap-storable shared
+  descriptors implemented by ADR-0190. They carry length and capacity, share
+  subranges, and have explicit array conversion.
 
 That distinction is complete enough for Go translation, but the short spelling
 is backwards: Go source `[]T` must be rendered as the longer `slice[T]`, while
@@ -53,9 +53,10 @@ performance optimization and does not alter ADR-0190's runtime types.
 ## Decision
 
 Adopt a separately versioned source epoch in which **`[]T` means the existing
-native `slice[T]` type**. Retain `slice[T]` as an equivalent long spelling.
-Make unescaped `array[T]` an intrinsic exact-CLR-array spelling. Preserve the
-existing rectangular forms `[,]T`, `[,,]T`, and so on.
+native slice type**. Retain an unshadowed `slice[T]` as its long alias under
+ADR-0190's existing ordinary-name precedence. Make unescaped `array[T]` an
+intrinsic exact-CLR-array spelling. Preserve the existing rectangular forms
+`[,]T`, `[,,]T`, and so on.
 
 The new meaning does not become active merely because a newer compiler is
 installed. Projects and direct compiler/REPL invocations must select the source
@@ -65,8 +66,8 @@ epoch during the transition described below.
 
 | Spelling in the new epoch | Meaning |
 | --- | --- |
-| `[]T` | `Gsharp.Values.Slice<T>`; exactly equivalent to `slice[T]` |
-| `readonly []T` | `Gsharp.Values.ReadOnlySlice<T>`; exactly equivalent to `readonly slice[T]` |
+| `[]T` | `Gsharp.Values.Slice<T>`; the same type selected by an unshadowed `slice[T]` alias |
+| `readonly []T` | `Gsharp.Values.ReadOnlySlice<T>`; the same type selected by an unshadowed `readonly slice[T]` alias |
 | `[]T{...}` | Native mutable slice literal backed by a fresh exact-element-type array |
 | `readonly []T{...}` | Native read-only slice literal backed by a fresh exact-element-type array |
 | `array[T]` | Exact CLR SZARRAY `T[]` |
@@ -75,10 +76,12 @@ epoch during the transition described below.
 | `[,]T`, `[,,]T`, ... | Existing CLR rectangular array types |
 | `[d0, d1]T`, ... | Existing CLR rectangular array allocation expressions |
 
-`[]T` and `slice[T]` are two source spellings for one nominal native type.
-There is no implicit array-to-slice or slice-to-array conversion. Existing
-ADR-0190 operations such as `FromArray`, `ToArray`, and `TryGetArray` remain
-the explicit boundary.
+`[]T` always selects the native type in this epoch. The long `slice[T]` alias
+keeps ADR-0190's ordinary-name lookup: a visible user type named `slice` wins,
+and generated code uses the qualified `Gsharp.Values.Slice[T]` spelling when
+needed. There is no implicit array-to-slice or slice-to-array conversion.
+Existing ADR-0190 operations such as `FromArray`, `ToArray`, and `TryGetArray`
+remain the explicit boundary.
 
 Fixed-length `[N]T` source types retain their current representation in this
 change. Go value-array semantics remain an ADR-0191 translator/runtime gate.
@@ -162,8 +165,8 @@ Rollout is staged:
    The legacy profile continues emitting `[]T`; only a profile that also writes
    `GsharpSourceEpoch=native-slice-syntax` may emit intrinsic `array[T]`.
    Ambiguous legacy `[]T` uses receive a deprecation diagnostic directing the
-   user to the binding-aware project migration. Explicit `slice[T]` remains
-   available.
+   user to the binding-aware project migration. The native long alias remains
+   available where ordinary lookup does not shadow it.
 2. **Transition release.** New SDK templates select
    `native-slice-syntax`. A compilation containing either unsized `[]T` or an
    unescaped, unqualified `array[...]` with no selected epoch fails with an
@@ -215,17 +218,19 @@ cs2gs preserves C# storage semantics:
   writes `GsharpSourceEpoch=native-slice-syntax` into the generated project;
 - rectangular arrays retain ADR-0164 syntax;
 - C# `Gsharp.Values.Slice<T>` and `ReadOnlySlice<T>` remain native slice
-  categories and may print as `slice[T]` / `readonly slice[T]`;
+  categories and may print as `slice[T]` / `readonly slice[T]` when unshadowed,
+  or as their qualified runtime names when ordinary names collide;
 - the printer never chooses a category from spelling context or an expected
   target type.
 
 `ArrayTypeReference` and `NativeSliceTypeReference` remain distinct code-model
 nodes. The source epoch changes printer policy, not semantic ownership.
 
-go2gs may continue emitting `slice[T]` before the epoch switch. Once its output
-profile selects `native-slice-syntax`, ordinary Go slices may print as `[]T`.
-Go nil, comparison legality, byte-string behavior, and fixed value arrays
-remain translator concerns; this spelling does not claim full Go semantics.
+go2gs may continue emitting the unshadowed alias or qualified native runtime
+type before the epoch switch. Once its output profile selects
+`native-slice-syntax`, ordinary Go slices may print as `[]T`. Go nil,
+comparison legality, byte-string behavior, and fixed value arrays remain
+translator concerns; this spelling does not claim full Go semantics.
 
 ## Acceptance gates
 
@@ -253,7 +258,8 @@ The syntax switch cannot ship until all of the following pass:
 
 The transition is no-go if exact CLR-array spelling, ordinary-name migration,
 or old-source detection cannot be guaranteed. That does not block ADR-0191 M0;
-go2gs can emit the stable `slice[T]` spelling until these gates pass.
+go2gs can emit the long native alias or qualified runtime type until these gates
+pass.
 
 ## Consequences
 
@@ -279,7 +285,8 @@ Negative:
 
 Neutral:
 
-- `slice[T]` remains supported indefinitely as the explicit long spelling.
+- Unshadowed `slice[T]` remains supported indefinitely as the explicit long
+  alias; qualified runtime names remain available when it is shadowed.
 - Native runtime layout, ownership, append, range, equality, and interop
   semantics remain those accepted in ADR-0190.
 - Performance work remains independent and evidence-driven.
