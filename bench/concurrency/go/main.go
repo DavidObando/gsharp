@@ -69,7 +69,7 @@ func chunked1k() {
 	chunkedArrays("go-chunk1k", NChunk1k, 1024)
 }
 
-// Shape-matched counterpart to G# chunkedArrays: fresh int32 arrays, capacity
+// Shape-matched counterpart to G# chunkedSlices: fresh int32 backing arrays, capacity
 // 64, exact tail length, indexed filling, and the same counted checksum.
 func chunkedArrays(name string, count int, size int) {
 	ch := make(chan []int32, 64)
