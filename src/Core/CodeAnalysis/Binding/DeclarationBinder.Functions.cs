@@ -2943,6 +2943,21 @@ internal sealed partial class DeclarationBinder
     internal static bool TypeSignaturesEquivalent(TypeSymbol? a, TypeSymbol? b)
         => TypeSignaturesEquivalent(a, b, typeParamMap: null);
 
+    internal static bool IsCovariantPropertyOverride(
+        PropertySymbol baseProperty,
+        TypeSymbol derivedType,
+        bool derivedHasGetter,
+        bool derivedHasSetter,
+        RefKind derivedReturnRefKind)
+        => baseProperty.HasGetter
+            && derivedHasGetter
+            && !baseProperty.HasSetter
+            && !derivedHasSetter
+            && baseProperty.ReturnRefKind == RefKind.None
+            && derivedReturnRefKind == RefKind.None
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(baseProperty.Type, derivedType)
+            && Conversion.IsImplicitReferenceVariantSlot(derivedType, baseProperty.Type);
+
     /// <summary>
     /// ADR-0187 / issue #4350: finds the base-class property an
     /// <c>override</c> targets. A named property is found by name; an indexer
@@ -3025,54 +3040,6 @@ internal sealed partial class DeclarationBinder
         => substitution == null || substitution.Count == 0
             ? baseType
             : Binder.SubstituteType(baseType, new Dictionary<TypeParameterSymbol, TypeSymbol>(substitution));
-
-    /// <summary>
-    /// Issue #4481: whether <paramref name="overrideType"/> is a covariant
-    /// narrowing of <paramref name="baseType"/> — an implicit reference
-    /// conversion between reference types, the only change of return type a
-    /// CLR covariant-return override (a MethodImpl to the base slot) permits.
-    /// </summary>
-    /// <param name="derived">The overriding type.</param>
-    /// <param name="baseType">The overridden property's type.</param>
-    /// <param name="overrideType">The override's declared type.</param>
-    /// <returns><see langword="true"/> for a covariant narrowing.</returns>
-    internal static bool IsCovariantPropertyType(StructSymbol derived, TypeSymbol baseType, TypeSymbol overrideType)
-    {
-        baseType = SubstituteBaseType(baseType, BuildBaseTypeArgumentSubstitution(derived));
-        var from = StripPlatformOrReferenceNullable(overrideType);
-        var to = StripPlatformOrReferenceNullable(baseType);
-        return from != null && to != null && Conversion.IsImplicitReferenceVariantSlot(from, to);
-    }
-
-    /// <summary>
-    /// Issue #4481: finds the class in <paramref name="baseClass"/>'s
-    /// hierarchy that declares <paramref name="property"/>, as seen from the
-    /// derived type (a constructed generic base stays constructed), so the
-    /// emitter can reference the overridden getter.
-    /// </summary>
-    /// <param name="baseClass">The overriding type's base class.</param>
-    /// <param name="property">The overridden property.</param>
-    /// <returns>The declaring class, or <see langword="null"/> when not found.</returns>
-    internal static StructSymbol? FindPropertyOwner(StructSymbol? baseClass, PropertySymbol property)
-    {
-        if (baseClass == null)
-        {
-            return null;
-        }
-
-        foreach (var level in baseClass.GetHierarchy())
-        {
-            foreach (var candidate in level.Properties)
-            {
-                if (ReferenceEquals(candidate, property))
-                {
-                    return level;
-                }
-            }
-        }
-
-        return null;
-    }
 
     /// <summary>
     /// ADR-0187 / issue #4350: whether two indexers declare the same

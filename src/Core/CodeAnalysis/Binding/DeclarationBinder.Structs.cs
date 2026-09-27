@@ -1971,7 +1971,7 @@ internal sealed partial class DeclarationBinder
                 PropertyInfo? externalOverriddenProperty = null;
                 TypeSymbol? externalPropertyContainingType = null;
                 PropertySymbol? overriddenProperty = null;
-                StructSymbol? covariantOverrideOwner = null;
+                var pendingCovariantCheck = false;
                 if (isOverride)
                 {
                     if (structSymbol.BaseClass != null && TryGetOverriddenPropertyCandidate(structSymbol.BaseClass, propName, isIndexer, indexerParameters, out var baseProp))
@@ -1998,8 +1998,7 @@ internal sealed partial class DeclarationBinder
                         else if (!hasSetter
                             && baseProp.HasGetter
                             && !baseProp.HasSetter
-                            && propReturnRefKind == RefKind.None
-                            && FindPropertyOwner(structSymbol.BaseClass, baseProp) is { } covariantOwner)
+                            && propReturnRefKind == RefKind.None)
                         {
                             // Issue #4481: a get-only override may narrow the
                             // type to one with an implicit reference conversion
@@ -2007,7 +2006,7 @@ internal sealed partial class DeclarationBinder
                             // getter has a different CLR signature, so it cannot
                             // reuse the base slot by name: the emitter gives it a
                             // new slot and binds the base getter to it with a
-                            // MethodImpl. Before this check the type was never
+                            // MethodImpl (#4508). Before this check the type was never
                             // compared, so the getter silently left the base slot
                             // unimplemented (a TypeLoadException at run time).
                             // Whether it IS a narrowing is decided once every
@@ -2020,7 +2019,7 @@ internal sealed partial class DeclarationBinder
                             // CLR covariant-return form covers by-value returns
                             // only, so a by-ref narrowing has no override form.
                             overriddenProperty = baseProp;
-                            covariantOverrideOwner = covariantOwner;
+                            pendingCovariantCheck = true;
                         }
                         else
                         {
@@ -2080,12 +2079,10 @@ internal sealed partial class DeclarationBinder
                     ReturnRefKind = propReturnRefKind,
                 };
                 propertySymbol.OverriddenProperty = overriddenProperty;
-                if (covariantOverrideOwner != null)
+                if (pendingCovariantCheck)
                 {
                     RegisterCovariantPropertyOverrideCheck(
-                        structSymbol,
                         propertySymbol,
-                        covariantOverrideOwner,
                         propSyntax.Identifier.Location);
                 }
 
@@ -3705,9 +3702,10 @@ internal sealed partial class DeclarationBinder
     /// <summary>
     /// Issue #4481: decides, once every type body is bound, whether each
     /// get-only property override whose type differs from its base property's
-    /// is a covariant narrowing. A narrowing is marked for the emitter (a new
-    /// getter slot bound to the base getter by a MethodImpl); anything else
-    /// has no CLR override form and reports GS0185.
+    /// is a covariant narrowing. A narrowing keeps its overridden-property
+    /// link, from which the emitter gives the getter a new slot bound to the
+    /// base getter by a MethodImpl (#4508); anything else has no CLR override
+    /// form, loses the link, and reports GS0185.
     /// </summary>
     internal void CheckPendingCovariantPropertyOverrides()
     {
@@ -3720,22 +3718,21 @@ internal sealed partial class DeclarationBinder
     }
 
     private void RegisterCovariantPropertyOverrideCheck(
-        StructSymbol structSymbol,
         PropertySymbol propertySymbol,
-        StructSymbol overriddenOwner,
         TextLocation location)
     {
         pendingCovariantPropertyOverrideChecks.Add(() =>
         {
+            // The emitter classifies with this same predicate, so an override
+            // accepted here is always given its MethodImpl.
             if (propertySymbol.OverriddenProperty is { } baseProperty
-                && IsCovariantPropertyType(structSymbol, baseProperty.Type, propertySymbol.Type))
+                && IsCovariantPropertyOverride(
+                    baseProperty,
+                    propertySymbol.Type,
+                    propertySymbol.HasGetter,
+                    propertySymbol.HasSetter,
+                    propertySymbol.ReturnRefKind))
             {
-                propertySymbol.CovariantOverrideContainingType = overriddenOwner;
-                if (propertySymbol.GetterSymbol is { } getter)
-                {
-                    getter.IsCovariantReturnOverride = true;
-                }
-
                 return;
             }
 

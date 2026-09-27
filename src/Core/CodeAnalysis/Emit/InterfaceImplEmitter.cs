@@ -88,31 +88,6 @@ internal sealed class InterfaceImplEmitter
                 continue;
             }
 
-            if (property.CovariantOverrideContainingType is { } covariantOwner
-                && property.OverriddenProperty is { } overriddenProperty
-                && accessors.Getter.HasValue)
-            {
-                // Issue #4481: a covariant property override's getter has its
-                // own slot (a narrower return type), so bind the overridden
-                // source getter to it explicitly, exactly as Roslyn does for
-                // a C# 9 covariant override: a MethodImpl row plus
-                // PreserveBaseOverridesAttribute, so a call through the base
-                // slot still reaches a further override of this one.
-                var declaration = this.outer.userTokens.ResolveUserPropertyAccessorToken(
-                    covariantOwner,
-                    overriddenProperty,
-                    wantSetter: false);
-                this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Getter.Value, declaration);
-
-                var valueBlob = new BlobBuilder();
-                valueBlob.WriteUInt16(0x0001);
-                valueBlob.WriteUInt16(0);
-                this.emitCtx.Metadata.AddCustomAttribute(
-                    accessors.Getter.Value,
-                    this.outer.wellKnown.GetPreserveBaseOverridesAttributeCtorRef(),
-                    this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
-            }
-
             if (property.ExternalOverriddenGetter != null && accessors.Getter.HasValue)
             {
                 var declaration = this.outer.memberRefs.GetMethodEntityHandle(
@@ -127,6 +102,23 @@ internal sealed class InterfaceImplEmitter
                     property.ExternalOverriddenSetter,
                     property.ExternalOverrideContainingType);
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Setter.Value, declaration);
+            }
+
+            if (property.OverriddenProperty is { } overriddenProperty
+                && DeclarationBinder.IsCovariantPropertyOverride(
+                    overriddenProperty,
+                    property.Type,
+                    property.HasGetter,
+                    property.HasSetter,
+                    property.ReturnRefKind)
+                && accessors.Getter.HasValue)
+            {
+                var declaration = this.ResolveSourcePropertyGetterToken(structSymbol, overriddenProperty);
+                this.emitCtx.Metadata.AddMethodImplementation(
+                    implTypeDef,
+                    accessors.Getter.Value,
+                    declaration);
+                this.AddPreserveBaseOverridesAttribute(accessors.Getter.Value);
             }
         }
 
@@ -161,6 +153,55 @@ internal sealed class InterfaceImplEmitter
                 this.emitCtx.Metadata.AddMethodImplementation(implTypeDef, accessors.Raise.Value, declaration);
             }
         }
+    }
+
+    private void AddPreserveBaseOverridesAttribute(MethodDefinitionHandle method)
+    {
+        var valueBlob = new BlobBuilder();
+        valueBlob.WriteUInt16(0x0001);
+        valueBlob.WriteUInt16(0);
+        this.emitCtx.Metadata.AddCustomAttribute(
+            method,
+            this.outer.wellKnown.GetPreserveBaseOverridesAttributeCtorRef(),
+            this.emitCtx.Metadata.GetOrAddBlob(valueBlob));
+    }
+
+    private EntityHandle ResolveSourcePropertyGetterToken(StructSymbol structSymbol, PropertySymbol property)
+    {
+        var containingType = structSymbol.FindConstructedGenericBase(
+            definition => DeclaresProperty(definition, property));
+        if (containingType == null)
+        {
+            foreach (var candidate in structSymbol.GetHierarchy())
+            {
+                if (DeclaresProperty(candidate.Definition ?? candidate, property))
+                {
+                    containingType = candidate;
+                    break;
+                }
+            }
+        }
+
+        return this.outer.userTokens.ResolveUserPropertyAccessorToken(
+            containingType ?? throw new InvalidOperationException(
+                $"The declaring type for overridden property '{property.Name}' was not found."),
+            property,
+            wantSetter: false);
+    }
+
+    private static bool DeclaresProperty(StructSymbol definition, PropertySymbol property)
+    {
+        foreach (var candidate in definition.Properties)
+        {
+            if (ReferenceEquals(candidate, property)
+                || (property.Declaration != null
+                    && ReferenceEquals(candidate.Declaration, property.Declaration)))
+            {
+                return true;
+            }
+        }
+
+        return false;
     }
 
     /// <summary>

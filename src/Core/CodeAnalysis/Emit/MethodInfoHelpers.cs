@@ -31,6 +31,17 @@ namespace GSharp.Core.CodeAnalysis.Emit;
 /// </summary>
 internal static class MethodInfoHelpers
 {
+    public static bool IsCovariantSourcePropertyGetter(FunctionSymbol function)
+        => function.AssociatedSymbol is PropertySymbol property
+            && ReferenceEquals(property.GetterSymbol, function)
+            && property.OverriddenProperty is { } baseProperty
+            && DeclarationBinder.IsCovariantPropertyOverride(
+                baseProperty,
+                property.Type,
+                property.HasGetter,
+                property.HasSetter,
+                property.ReturnRefKind);
+
     /// <summary>
     /// Issue #409: determines whether a value-type instance method must keep
     /// virtual method attributes because it participates in CLR vtable dispatch.

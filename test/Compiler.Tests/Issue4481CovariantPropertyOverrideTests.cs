@@ -563,8 +563,10 @@ Console.WriteLine(n.Property!!.Name)
                 Assert.True(
                     (shape.Attributes & System.Reflection.MethodAttributes.NewSlot) != 0,
                     $"Access::get_Property in {assembly} must take a new slot, but is {shape.Attributes}.");
-                Assert.True(shape.HasMethodImpl, $"Access::get_Property in {assembly} has no MethodImpl row.");
-                Assert.True(shape.HasPreserveBaseOverrides, $"Access::get_Property in {assembly} lacks PreserveBaseOverridesAttribute.");
+                // Exactly one of each: #4481 and #4508 fixed this independently,
+                // and a second emitter of the same rows must not creep back in.
+                Assert.Equal(1, shape.MethodImplCount);
+                Assert.Equal(1, shape.PreserveBaseOverridesCount);
             }
 
             var consumerSrc = Path.Combine(tempDir, "consumer.gs");
@@ -599,7 +601,7 @@ Console.WriteLine(n.Property!!.Name)
         }
     }
 
-    private static (System.Reflection.MethodAttributes Attributes, bool HasMethodImpl, bool HasPreserveBaseOverrides) ReadCovariantGetterShape(
+    private static (System.Reflection.MethodAttributes Attributes, int MethodImplCount, int PreserveBaseOverridesCount) ReadCovariantGetterShape(
         string assemblyPath,
         string typeName,
         string methodName)
@@ -623,13 +625,13 @@ Console.WriteLine(n.Property!!.Name)
                     continue;
                 }
 
-                var hasMethodImpl = type.GetMethodImplementations()
+                var methodImplCount = type.GetMethodImplementations()
                     .Select(reader.GetMethodImplementation)
-                    .Any(impl => impl.MethodBody == (System.Reflection.Metadata.EntityHandle)methodHandle);
-                var hasPreserve = method.GetCustomAttributes()
+                    .Count(impl => impl.MethodBody == (System.Reflection.Metadata.EntityHandle)methodHandle);
+                var preserveCount = method.GetCustomAttributes()
                     .Select(reader.GetCustomAttribute)
-                    .Any(attribute => AttributeTypeName(reader, attribute) == "PreserveBaseOverridesAttribute");
-                return (method.Attributes, hasMethodImpl, hasPreserve);
+                    .Count(attribute => AttributeTypeName(reader, attribute) == "PreserveBaseOverridesAttribute");
+                return (method.Attributes, methodImplCount, preserveCount);
             }
         }
 
