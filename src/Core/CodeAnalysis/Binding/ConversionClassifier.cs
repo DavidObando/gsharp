@@ -3605,10 +3605,13 @@ internal sealed class ConversionClassifier
         var targetDefinition = target.ClrType.IsGenericType
             ? target.ClrType.GetGenericTypeDefinition()
             : target.ClrType;
-        return string.Equals(naturalFullName, targetDefinition.FullName, StringComparison.Ordinal)
+        var baseType = targetDefinition.BaseType;
+        return string.Equals(targetDefinition.FullName, naturalFullName, StringComparison.Ordinal)
+            && baseType != null
+            && string.Equals(baseType.FullName, "System.MulticastDelegate", StringComparison.Ordinal)
             && string.Equals(
-                typeof(Action).Assembly.GetName().Name,
-                targetDefinition.Assembly.GetName().Name,
+                targetDefinition.Assembly.FullName,
+                baseType.Assembly.FullName,
                 StringComparison.Ordinal);
     }
 

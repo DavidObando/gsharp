@@ -1025,7 +1025,8 @@ public class Issue2918InlineLambdaErasedReceiverTests
             {
                 public static class Sink
                 {
-                    public static Action<T> Echo<T>(Action<T> value) => value;
+                    public static bool Same<T>(object expected, Action<T> actual) =>
+                        ReferenceEquals(expected, actual);
                 }
             }
             """;
@@ -1042,9 +1043,8 @@ public class Issue2918InlineLambdaErasedReceiverTests
 
             func Main() {
                 let f (Item) -> void = (item Item) -> Console.WriteLine(item.N)
-                let echoed = Sink.Echo[Item](f)
-                Console.WriteLine(object.ReferenceEquals(f, echoed))
-                echoed(Item(42))
+                Console.WriteLine(Sink.Same[Item](f, f))
+                f(Item(42))
             }
             """;
 
@@ -1054,7 +1054,8 @@ public class Issue2918InlineLambdaErasedReceiverTests
                 source,
                 "Issue4381Identity.Src.Item",
                 contractsSource: contracts,
-                contractsAssemblyName: "Issue4381IdentityContracts"));
+                contractsAssemblyName: "Issue4381IdentityContracts",
+                useRefPackReferences: true));
     }
 
     [Fact]
