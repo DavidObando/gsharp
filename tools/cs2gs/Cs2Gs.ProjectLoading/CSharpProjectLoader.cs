@@ -12,7 +12,6 @@ using System.Threading.Tasks;
 using Microsoft.Build.Locator;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
-using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.MSBuild;
 using Microsoft.CodeAnalysis.Text;
 
@@ -62,10 +61,6 @@ public static class CSharpProjectLoader
     /// <see cref="LoadedCSharpProject.WorkspaceLoadFailed"/>.
     /// </summary>
     public const string NuGetAuditAdvisoryDiagnosticId = "CS2GS0003";
-
-    private const string GeneratedCodeAttributeName = "System.CodeDom.Compiler.GeneratedCodeAttribute";
-    private const string GeneratedRegexAttributeName = "System.Text.RegularExpressions.GeneratedRegexAttribute";
-    private const string RegexGeneratorName = "System.Text.RegularExpressions.Generator";
 
     private static readonly object MSBuildRegistrationLock = new object();
 
@@ -669,149 +664,8 @@ public static class CSharpProjectLoader
             return true;
         }
 
-        // Issue #4301: repository-layout migration normally retains inventoried
-        // checked-in generated files. RegexGenerator output is different: cs2gs
-        // translates the attributed declaring part and gsgen regenerates the
-        // implementation and helper types. A document is skipped only when all
-        // declarations belong to RegexGenerator; mixed documents are retained
-        // and their generated declarations are omitted by the translator.
-        SemanticModel semanticModel = compilation.GetSemanticModel(tree);
-        CompilationUnitSyntax root = (CompilationUnitSyntax)tree.GetRoot();
-        bool foundImplementation = false;
-        bool allMembersGenerated = root.Members.Count > 0;
-        foreach (MemberDeclarationSyntax member in root.Members)
-        {
-            bool memberGenerated = IsRegexGeneratorMember(
-                member,
-                semanticModel,
-                ref foundImplementation,
-                new List<SyntaxNode>());
-            allMembersGenerated &= memberGenerated;
-        }
-
-        return root.AttributeLists.Count == 0 && foundImplementation && allMembersGenerated;
-    }
-
-    private static bool IsRegexGeneratorMember(
-        MemberDeclarationSyntax member,
-        SemanticModel semanticModel,
-        ref bool foundImplementation,
-        ICollection<SyntaxNode> nestedDeclarations)
-    {
-        if (member is BaseNamespaceDeclarationSyntax namespaceDeclaration)
-        {
-            var declarations = new List<SyntaxNode>();
-            bool allMembersGenerated = namespaceDeclaration.Members.Count > 0;
-            foreach (MemberDeclarationSyntax nested in namespaceDeclaration.Members)
-            {
-                var descendants = new List<SyntaxNode>();
-                bool memberGenerated = IsRegexGeneratorMember(
-                    nested,
-                    semanticModel,
-                    ref foundImplementation,
-                    descendants);
-                allMembersGenerated &= memberGenerated;
-                if (memberGenerated)
-                {
-                    declarations.Add(nested);
-                }
-                else
-                {
-                    declarations.AddRange(descendants);
-                }
-            }
-
-            if (allMembersGenerated)
-            {
-                return true;
-            }
-
-            foreach (SyntaxNode declaration in declarations)
-            {
-                nestedDeclarations.Add(declaration);
-            }
-
-            return false;
-        }
-
-        if (member is MethodDeclarationSyntax method)
-        {
-            IMethodSymbol symbol = semanticModel.GetDeclaredSymbol(method);
-            bool isImplementation =
-                symbol?.PartialDefinitionPart?.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.ToDisplayString() == GeneratedRegexAttributeName) == true &&
-                IsRegexGeneratorDeclaration(symbol);
-            foundImplementation |= isImplementation;
-            return isImplementation;
-        }
-
-        if (member is PropertyDeclarationSyntax property)
-        {
-            IPropertySymbol symbol = semanticModel.GetDeclaredSymbol(property);
-            bool isImplementation =
-                symbol?.PartialDefinitionPart?.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.ToDisplayString() == GeneratedRegexAttributeName) == true &&
-                IsRegexGeneratorDeclaration(symbol);
-            foundImplementation |= isImplementation;
-            return isImplementation;
-        }
-
-        if (member is TypeDeclarationSyntax type)
-        {
-            INamedTypeSymbol symbol = semanticModel.GetDeclaredSymbol(type);
-            if (IsRegexGeneratorDeclaration(symbol))
-            {
-                return true;
-            }
-
-            if (!type.Modifiers.Any(SyntaxKind.PartialKeyword) || type.Members.Count == 0)
-            {
-                return false;
-            }
-
-            var declarations = new List<SyntaxNode>();
-            bool allMembersGenerated = true;
-            foreach (MemberDeclarationSyntax nested in type.Members)
-            {
-                var descendants = new List<SyntaxNode>();
-                bool memberGenerated = IsRegexGeneratorMember(
-                    nested,
-                    semanticModel,
-                    ref foundImplementation,
-                    descendants);
-                allMembersGenerated &= memberGenerated;
-                if (memberGenerated)
-                {
-                    declarations.Add(nested);
-                }
-                else
-                {
-                    declarations.AddRange(descendants);
-                }
-            }
-
-            if (allMembersGenerated)
-            {
-                return true;
-            }
-
-            foreach (SyntaxNode declaration in declarations)
-            {
-                nestedDeclarations.Add(declaration);
-            }
-
-            return false;
-        }
-
         return false;
     }
-
-    private static bool IsRegexGeneratorDeclaration(ISymbol symbol) =>
-        symbol?.GetAttributes().Any(attribute =>
-            attribute.AttributeClass?.ToDisplayString() == GeneratedCodeAttributeName &&
-            attribute.ConstructorArguments.Length > 0 &&
-            attribute.ConstructorArguments[0].Value is string generator &&
-            generator == RegexGeneratorName) == true;
 
     private static IReadOnlyList<Diagnostic> SignificantDiagnostics(CSharpCompilation compilation) =>
         compilation.GetDiagnostics()
