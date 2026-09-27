@@ -92,20 +92,13 @@ public sealed class BoundAttribute : BoundNode
             }
         }
 
-        var positionalIndex = 0;
-        foreach (var argument in PositionalArguments)
+        for (var sourceIndex = 0; sourceIndex < PositionalArguments.Length; sourceIndex++)
         {
-            if (argument.Name != null)
-            {
-                continue;
-            }
-
-            if (positionalIndex == position)
+            var argument = PositionalArguments[sourceIndex];
+            if (argument.Name == null && sourceIndex == position)
             {
                 return argument;
             }
-
-            positionalIndex++;
         }
 
         return null;

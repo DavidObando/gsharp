@@ -130,6 +130,13 @@ public sealed class ImportedNamedConstructorAttribute : Attribute
 
     /// <summary>A named field value.</summary>
     public int Code;
+
+    /// <summary>An indexer must not be accepted as a named attribute property.</summary>
+    public int this[int index]
+    {
+        get => index;
+        set { }
+    }
 }
 
 /// <summary>Issue #4503 fixture for direct and expanded params constructor arguments.</summary>

@@ -934,35 +934,33 @@ internal sealed class CustomAttributeEncoder
     {
         effectiveArguments = null;
         positionalConflict = null;
-        var positional = attribute.PositionalArguments.Where(argument => argument.Name == null).ToImmutableArray();
-        var named = attribute.PositionalArguments.Where(argument => argument.Name != null).ToImmutableArray();
-        if (positional.Length > parameters.Length)
+        if (attribute.PositionalArguments.Length > parameters.Length)
         {
             return false;
         }
 
         var slots = new object?[parameters.Length];
         var filled = new bool[parameters.Length];
-        for (var i = 0; i < positional.Length; i++)
+        var sawOutOfPositionName = false;
+        for (var sourceIndex = 0; sourceIndex < attribute.PositionalArguments.Length; sourceIndex++)
         {
-            slots[i] = positional[i];
-            filled[i] = true;
-        }
-
-        foreach (var argument in named)
-        {
-            var name = Invariant.Required(argument.Name, "a named attribute argument has a name");
-            var index = -1;
-            for (var i = 0; i < parameters.Length; i++)
+            var argument = attribute.PositionalArguments[sourceIndex];
+            var index = sourceIndex;
+            if (argument.Name is { } name)
             {
-                if (parameters[i].Name == name)
+                index = -1;
+                for (var i = 0; i < parameters.Length; i++)
                 {
-                    index = i;
-                    break;
+                    if (parameters[i].Name == name)
+                    {
+                        index = i;
+                        break;
+                    }
                 }
-            }
 
-            if (index < 0)
+                sawOutOfPositionName |= index != sourceIndex;
+            }
+            else if (sawOutOfPositionName)
             {
                 return false;
             }
@@ -1124,8 +1122,6 @@ internal sealed class CustomAttributeEncoder
         memberArguments = ImmutableArray<BoundAttributeArgument>.Empty;
         var constructors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
         BoundAttributeArgument? positionalConflict = null;
-        var positional = attribute.PositionalArguments.Where(argument => argument.Name == null).ToImmutableArray();
-        var namedConstructorArguments = attribute.PositionalArguments.Where(argument => argument.Name != null).ToImmutableArray();
         ValidateUniqueNamedConstructorArguments(attribute);
 
         // Keep the existing precedence: normal form, omitted optionals, then
@@ -1137,8 +1133,7 @@ internal sealed class CustomAttributeEncoder
             {
                 if (!TryMapAttributeConstructorArguments(
                         constructor.GetParameters(),
-                        positional,
-                        namedConstructorArguments,
+                        attribute.PositionalArguments,
                         desiredForm,
                         out var candidateArguments,
                         out var conflict))
@@ -1224,8 +1219,7 @@ internal sealed class CustomAttributeEncoder
 
     private static bool TryMapAttributeConstructorArguments(
         ParameterInfo[] parameters,
-        ImmutableArray<BoundAttributeArgument> positional,
-        ImmutableArray<BoundAttributeArgument> named,
+        ImmutableArray<BoundAttributeArgument> arguments,
         int desiredForm,
         out object?[] effective,
         out BoundAttributeArgument? positionalConflict)
@@ -1235,41 +1229,51 @@ internal sealed class CustomAttributeEncoder
         var expanded = desiredForm == 2;
         var hasParams = parameters.Length > 0 && IsParamsArray(parameters[parameters.Length - 1]);
         var fixedCount = expanded && hasParams ? parameters.Length - 1 : parameters.Length;
-        if ((expanded && !hasParams) || (!expanded && positional.Length > parameters.Length))
+        if ((expanded && !hasParams) || (!expanded && arguments.Length > parameters.Length))
         {
             return false;
         }
 
         var slots = new object?[parameters.Length];
         var filled = new bool[parameters.Length];
-        var positionalToMap = Math.Min(positional.Length, fixedCount);
-        for (var i = 0; i < positionalToMap; i++)
-        {
-            slots[i] = positional[i];
-            filled[i] = true;
-        }
-
+        var expandedTail = new List<BoundAttributeArgument>();
         var parameterNames = parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray();
-        foreach (var argument in named)
+        var sawOutOfPositionName = false;
+        for (var sourceIndex = 0; sourceIndex < arguments.Length; sourceIndex++)
         {
-            var sourceName = Invariant.Required(argument.Name, "a named attribute argument has a name");
-            var parameterIndex = Array.FindIndex(
-                parameters,
-                parameter => SyntaxFacts.GetEmittedIdentifier(
-                    parameter.Name ?? string.Empty,
-                    IdentifierNameContext.Parameter,
-                    parameterNames) == sourceName);
-            if (parameterIndex < 0)
+            var argument = arguments[sourceIndex];
+            var parameterIndex = sourceIndex;
+            if (argument.Name is { } sourceName)
+            {
+                parameterIndex = Array.FindIndex(
+                    parameters,
+                    parameter => SyntaxFacts.GetEmittedIdentifier(
+                        parameter.Name ?? string.Empty,
+                        IdentifierNameContext.Parameter,
+                        parameterNames) == sourceName);
+                sawOutOfPositionName |= parameterIndex != sourceIndex;
+            }
+            else
+            {
+                if (sawOutOfPositionName)
+                {
+                    return false;
+                }
+
+                if (expanded && sourceIndex >= fixedCount)
+                {
+                    expandedTail.Add(argument);
+                    continue;
+                }
+            }
+
+            if (parameterIndex < 0
+                || (expanded && parameterIndex == parameters.Length - 1))
             {
                 return false;
             }
 
-            if (expanded && parameterIndex == parameters.Length - 1)
-            {
-                return false;
-            }
-
-            if (filled[parameterIndex])
+            if (parameterIndex >= parameters.Length || filled[parameterIndex])
             {
                 positionalConflict = argument;
                 return false;
@@ -1331,11 +1335,10 @@ internal sealed class CustomAttributeEncoder
             return false;
         }
 
-        var tailCount = Math.Max(0, positional.Length - fixedCount);
-        var tail = new object?[tailCount];
-        for (var i = 0; i < tailCount; i++)
+        var tail = new object?[expandedTail.Count];
+        for (var i = 0; i < expandedTail.Count; i++)
         {
-            var argument = positional[fixedCount + i];
+            var argument = expandedTail[i];
             if (!ArgAssignable(argument.Value, elementType, argument.Type))
             {
                 return false;
@@ -2389,7 +2392,9 @@ internal sealed class CustomAttributeEncoder
         var members = attributeType
             .GetMembers(BindingFlags.Public | BindingFlags.Instance)
             .Where(candidate =>
-                candidate is PropertyInfo { SetMethod.IsPublic: true }
+                (candidate is PropertyInfo property
+                    && property.SetMethod?.IsPublic == true
+                    && property.GetIndexParameters().Length == 0)
                 || candidate is FieldInfo { IsInitOnly: false, IsLiteral: false })
             .ToArray();
         var memberNames = members

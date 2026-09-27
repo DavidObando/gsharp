@@ -93,7 +93,7 @@ public class Issue835MlcAttributeRecognitionTests
             package P
             import System
 
-            @Obsolete(error: true, message: "use Bar instead")
+            @Obsolete(message: "use Bar instead", true)
             func Helper() {
             }
             """;
