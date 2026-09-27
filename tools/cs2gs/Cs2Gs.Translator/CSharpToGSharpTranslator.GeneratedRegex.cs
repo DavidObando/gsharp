@@ -104,6 +104,15 @@ public sealed partial class CSharpToGSharpTranslator
 
     private sealed partial class DeclarationVisitor
     {
+        private bool HasRetainedRegexGeneratorImplementation(SyntaxTree tree) =>
+            tree.GetRoot().DescendantNodes().OfType<MethodDeclarationSyntax>().Any(node =>
+                this.context.GetDeclaredSymbol(node) is IMethodSymbol implementation
+                && IsRegexGeneratorDeclaration(implementation)
+                && implementation.PartialDefinitionPart is IMethodSymbol definition
+                && IsGeneratedRegexDefinition(definition)
+                && definition.DeclaringSyntaxReferences.All(reference =>
+                    !this.IsTranslatedByThisRun(reference.SyntaxTree)));
+
         /// <summary>
         /// Translates a C# <c>[GeneratedRegex]</c> partial definition to a G#
         /// declaring part (<c>@GeneratedRegex(...) partial func F() Regex;</c>),

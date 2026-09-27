@@ -1026,6 +1026,18 @@ public sealed partial class CSharpToGSharpTranslator
                 && regexDefinition.DeclaringSyntaxReferences.Any(reference =>
                     this.IsTranslatedByThisRun(reference.SyntaxTree)))
             {
+                if (!GeneratedSourceDetection.IsGeneratedSource(node.SyntaxTree, this.projectDirectory)
+                    || !IsRegexGeneratorDeclaration(symbol))
+                {
+                    string message =
+                        $"[GeneratedRegex] method '{regexDefinition.ContainingType?.Name}.{regexDefinition.Name}' " +
+                        "has a user-written partial implementation; cs2gs cannot replace that implementation " +
+                        "with gsgen output without changing runtime behavior.";
+                    this.context.ReportUnsupported(
+                        node,
+                        message);
+                }
+
                 return (null, false);
             }
 
