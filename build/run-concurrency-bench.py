@@ -111,6 +111,21 @@ def load_scenarios() -> list[dict]:
     return json.loads((BENCH / "scenarios.json").read_text())["scenarios"]
 
 
+def select_scenarios(
+    registry: list[dict],
+    requested: str | None = None,
+    fingerprint: dict | None = None,
+) -> list[dict]:
+    scenario_name = requested or (
+        fingerprint.get("comparison", {}).get("scenario")
+        if fingerprint
+        else None
+    )
+    return registry if not scenario_name or scenario_name == "all" else [
+        scenario for scenario in registry if scenario["name"] == scenario_name
+    ]
+
+
 def command_output(command: list[str]) -> str | None:
     try:
         result = subprocess.run(command, capture_output=True, text=True, check=False)
@@ -762,10 +777,7 @@ def validate_loaded_payload(path: str, payload: dict, fingerprint: dict | None) 
         return
 
     scenario_name = comparison.get("scenario", "all")
-    scenarios = load_scenarios()
-    selected = scenarios if scenario_name == "all" else [
-        scenario for scenario in scenarios if scenario["name"] == scenario_name
-    ]
+    selected = select_scenarios(load_scenarios(), fingerprint=fingerprint)
     if not selected:
         raise SystemExit(f"'{path}' declares unknown scenario '{scenario_name}'")
 
@@ -1117,9 +1129,8 @@ def main() -> int:
         parser.error("--launches must be at least 1")
 
     registry = load_scenarios()
-    scenarios = registry
+    scenarios = select_scenarios(registry, requested=args.scenario)
     if args.scenario:
-        scenarios = [s for s in scenarios if s["name"] == args.scenario]
         if not scenarios:
             print(f"unknown scenario '{args.scenario}'", file=sys.stderr)
             return 2
@@ -1146,6 +1157,7 @@ def main() -> int:
             if len(args.from_json) > 1
             else metadata["effectiveFingerprints"][0] if metadata["effectiveFingerprints"] else None
         )
+        scenarios = select_scenarios(registry, requested=args.scenario, fingerprint=fingerprint)
         environment = metadata["environments"]
         launch_order = metadata["launchOrders"]
         represented_runs = fingerprint.get("comparison", {}).get("wholeRuns") if fingerprint else None

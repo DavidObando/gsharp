@@ -382,6 +382,20 @@ class ConcurrencyBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "mode 'go' is missing checksums"):
             bench.load_runs([str(run)])
 
+    def test_json_replay_uses_captured_scenario_scope(self) -> None:
+        fingerprint = {"comparison": {"scenario": "select-ready"}}
+
+        selected = bench.select_scenarios(bench.load_scenarios(), fingerprint=fingerprint)
+
+        self.assertEqual(["select-ready"], [scenario["name"] for scenario in selected])
+        bench.validate_paired_checksums(
+            selected,
+            {"select-ready": {"median_ns": 1.0}},
+            {},
+            {},
+            required=True,
+        )
+
     def test_baseline_without_comparison_key_is_report_only(self) -> None:
         result = {"median_ns": 200.0, "ci95_ns": [190.0, 210.0], "samples": 3}
         baseline = {
