@@ -357,6 +357,37 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
     }
 
     [Fact]
+    public void SourceSuspendMethodWithByRefParameter_IsRejectedBeforeAdapterEmission()
+    {
+        const string source = """
+            package Issue4412
+            import System.Threading.Tasks
+
+            delegate RefRunner(ref value int32) ValueTask[int32];
+
+            suspend func Increment(ref value int32) int32 {
+                value++
+                return value
+            }
+
+            let callback RefRunner = Increment
+            """;
+
+        var directory = PrepareDirectory(nameof(SourceSuspendMethodWithByRefParameter_IsRejectedBeforeAdapterEmission));
+        try
+        {
+            var diagnostics = CompileExpectingError(directory, "App", source, "/target:library");
+            Assert.Contains("GS0422", diagnostics, StringComparison.Ordinal);
+            Assert.Contains("suspend function", diagnostics, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SuspendMethodGroupInsideAsyncLet_CapturesCellContext()
     {
         const string source = """

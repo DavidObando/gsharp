@@ -845,7 +845,7 @@ internal sealed partial class DeclarationBinder
                     parameterName,
                     parameterType,
                     isVariadic,
-                    syntax.IsAsync ? "async" : null);
+                    syntax.IsAsync ? "async" : syntax.IsSuspend ? "suspend" : null);
 
                 var parameter = new ParameterSymbol(parameterName, parameterType, isVariadic, declaringSyntax: parameterSyntax.Identifier, isScoped: parameterSyntax.IsScoped, refKind: parameterRefKind);
                 conversions.BindAndAttachParameterDefaultValue(parameterSyntax, parameter);
