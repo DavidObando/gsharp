@@ -40,8 +40,9 @@ public readonly struct BoundNodeAnalysisContext
     public BoundNode BoundNode { get; }
 
     /// <summary>
-    /// Gets the function whose body contains the node, or null for top-level
-    /// statements.
+    /// Gets the function whose body contains the node. Top-level statements
+    /// use their synthesized entry-point function when the compilation has one;
+    /// otherwise this is null.
     /// </summary>
     public FunctionSymbol? ContainingFunction { get; }
 
