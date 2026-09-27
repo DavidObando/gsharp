@@ -15,6 +15,7 @@
 
   <ItemGroup>
     <Compile Include="..\..\..\test\Shared\GoldenFile.cs" Link="GoldenFile.cs" />
+    <Compile Include="..\..\..\test\Shared\IlVerifyFilterInFinallyRule.cs" Link="IlVerifyFilterInFinallyRule.cs" />
   </ItemGroup>
 
   <ItemGroup>
