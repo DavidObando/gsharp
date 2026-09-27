@@ -610,9 +610,25 @@ public sealed partial class CSharpToGSharpTranslator
             ISymbol definition,
             ISymbol implementation)
         {
+            bool isGeneratedRegex = HasAttribute(definition, GeneratedRegexAttributeName);
+            if (!this.IsTranslatedByThisRun(node.SyntaxTree))
+            {
+                return;
+            }
+
+            if (implementation == null && isGeneratedRegex)
+            {
+                string missingImplementationMessage =
+                    $"partial member '{definition.ContainingType?.Name}.{definition.Name}' uses " +
+                    "[GeneratedRegex], but G# has no partial properties (ADR-0192 §F); declare it as a " +
+                    "[GeneratedRegex] partial METHOD, which cs2gs translates to a G# declaring part that " +
+                    "gsgen implements.";
+                this.context.ReportUnsupported(node, missingImplementationMessage);
+                return;
+            }
+
             if (implementation == null
                 || implementation.DeclaringSyntaxReferences.Length == 0
-                || !this.IsTranslatedByThisRun(node.SyntaxTree)
                 || implementation.DeclaringSyntaxReferences.Any(reference =>
                     this.IsTranslatedByThisRun(reference.SyntaxTree)))
             {
@@ -620,7 +636,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             string generatedFile = implementation.DeclaringSyntaxReferences[0].SyntaxTree.FilePath;
-            string remedy = HasAttribute(definition, GeneratedRegexAttributeName)
+            string remedy = isGeneratedRegex
                 ? "G# has no partial properties (ADR-0192 §F); declare it as a [GeneratedRegex] partial METHOD, " +
                     "which cs2gs translates to a G# declaring part that gsgen implements."
                 : HasAttribute(definition, "CommunityToolkit.Mvvm.ComponentModel.ObservablePropertyAttribute")

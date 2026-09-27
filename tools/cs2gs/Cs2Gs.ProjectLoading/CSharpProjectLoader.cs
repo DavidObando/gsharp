@@ -738,14 +738,17 @@ public static class CSharpProjectLoader
         if (member is BaseNamespaceDeclarationSyntax namespaceDeclaration)
         {
             var declarations = new List<SyntaxNode>();
+            bool allMembersGenerated = namespaceDeclaration.Members.Count > 0;
             foreach (MemberDeclarationSyntax nested in namespaceDeclaration.Members)
             {
                 var descendants = new List<SyntaxNode>();
-                if (IsRegexGeneratorMember(
+                bool memberGenerated = IsRegexGeneratorMember(
                     nested,
                     semanticModel,
                     ref foundImplementation,
-                    descendants))
+                    descendants);
+                allMembersGenerated &= memberGenerated;
+                if (memberGenerated)
                 {
                     declarations.Add(nested);
                 }
@@ -755,8 +758,7 @@ public static class CSharpProjectLoader
                 }
             }
 
-            if (namespaceDeclaration.Members.Count > 0 &&
-                declarations.Count == namespaceDeclaration.Members.Count)
+            if (allMembersGenerated)
             {
                 return true;
             }
@@ -780,6 +782,17 @@ public static class CSharpProjectLoader
             return isImplementation;
         }
 
+        if (member is PropertyDeclarationSyntax property)
+        {
+            IPropertySymbol symbol = semanticModel.GetDeclaredSymbol(property);
+            bool isImplementation =
+                symbol?.PartialDefinitionPart?.GetAttributes().Any(attribute =>
+                    attribute.AttributeClass?.ToDisplayString() == GeneratedRegexAttributeName) == true &&
+                IsRegexGeneratorDeclaration(symbol);
+            foundImplementation |= isImplementation;
+            return isImplementation;
+        }
+
         if (member is TypeDeclarationSyntax type)
         {
             INamedTypeSymbol symbol = semanticModel.GetDeclaredSymbol(type);
@@ -794,14 +807,17 @@ public static class CSharpProjectLoader
             }
 
             var declarations = new List<SyntaxNode>();
+            bool allMembersGenerated = true;
             foreach (MemberDeclarationSyntax nested in type.Members)
             {
                 var descendants = new List<SyntaxNode>();
-                if (IsRegexGeneratorMember(
+                bool memberGenerated = IsRegexGeneratorMember(
                     nested,
                     semanticModel,
                     ref foundImplementation,
-                    descendants))
+                    descendants);
+                allMembersGenerated &= memberGenerated;
+                if (memberGenerated)
                 {
                     declarations.Add(nested);
                 }
@@ -811,7 +827,7 @@ public static class CSharpProjectLoader
                 }
             }
 
-            if (declarations.Count == type.Members.Count)
+            if (allMembersGenerated)
             {
                 return true;
             }

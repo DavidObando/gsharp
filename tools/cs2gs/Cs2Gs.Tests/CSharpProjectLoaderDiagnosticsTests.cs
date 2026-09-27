@@ -7,6 +7,7 @@ using System.Diagnostics;
 using System.IO;
 using System.Linq;
 using System.Threading.Tasks;
+using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
@@ -358,6 +359,9 @@ namespace Sample
             {
                 [GeneratedRegex(@"\d+")]
                 private static partial Regex Digits();
+
+                [GeneratedRegex("[a-z]+")]
+                private static partial Regex Letters { get; }
             }
             """);
         string generatedPath = Path.Combine(projectDir, "Digits.RegexGenerator.g.cs");
@@ -367,11 +371,21 @@ namespace Sample
                 "Fixtures",
                 "Adr0192GeneratedRegex",
                 "Digits.RegexGenerator.g.cs.txt"));
-        File.WriteAllText(
-            generatedPath,
-            generated +
-                "\nnamespace App { internal static class OtherGeneratedOutput" +
-                " { internal static string? Maybe => null; } }\n");
+        const string implementationEnd =
+            "global::System.Text.RegularExpressions.Generated.Digits_0.Instance;";
+        int implementationEndIndex = generated.IndexOf(implementationEnd, StringComparison.Ordinal);
+        Assert.True(implementationEndIndex >= 0, "Expected the fixture's generated method implementation.");
+        generated = generated.Insert(
+            implementationEndIndex + implementationEnd.Length,
+            """
+
+            [global::System.CodeDom.Compiler.GeneratedCodeAttribute(
+                "System.Text.RegularExpressions.Generator", "10.0.14.42308")]
+            private static partial global::System.Text.RegularExpressions.Regex Letters { get => null!; }
+
+            internal static string? Maybe => null;
+            """);
+        File.WriteAllText(generatedPath, generated);
         string projectPath = Path.Combine(projectDir, "GeneratedRegex.csproj");
         File.WriteAllText(
             projectPath,
@@ -389,10 +403,11 @@ namespace Sample
             project.Documents,
             candidate => string.Equals(candidate.FilePath, generatedPath, StringComparison.OrdinalIgnoreCase));
         string retainedSource = document.SyntaxTree.GetText().ToString();
-        Assert.Contains("OtherGeneratedOutput", retainedSource, StringComparison.Ordinal);
+        Assert.Contains("Maybe", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Digits_0", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Utilities", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Digits() =>", retainedSource, StringComparison.Ordinal);
+        Assert.DoesNotContain("Letters { get =>", retainedSource, StringComparison.Ordinal);
         PropertyDeclarationSyntax property = document.SyntaxTree.GetRoot()
             .DescendantNodes()
             .OfType<PropertyDeclarationSyntax>()
@@ -400,6 +415,19 @@ namespace Sample
         IPropertySymbol propertySymbol = Assert.IsAssignableFrom<IPropertySymbol>(
             document.SemanticModel.GetDeclaredSymbol(property));
         Assert.Equal(NullableAnnotation.Annotated, propertySymbol.Type.NullableAnnotation);
+
+        LoadedDocument sourceDocument = Assert.Single(
+            project.Documents,
+            candidate => string.Equals(candidate.FilePath, sourcePath, StringComparison.OrdinalIgnoreCase));
+        var context = new TranslationContext(
+            project.Compilation,
+            sourceDocument.SemanticModel,
+            sourceDocument.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(sourceDocument, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported &&
+                diagnostic.Message.Contains("partial METHOD", StringComparison.Ordinal));
     }
 
     /// <summary>
