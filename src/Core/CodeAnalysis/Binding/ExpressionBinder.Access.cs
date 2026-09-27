@@ -542,7 +542,7 @@ internal sealed partial class ExpressionBinder
         var previousHint = scope.SetQualifiedConstructionPackageHint(peeledPackageName);
         try
         {
-            if (!RemainderHeadIsSourceType(current, peeledPackageName))
+            if (!RemainderHeadIsSourceType(current))
             {
                 return false;
             }
@@ -569,16 +569,16 @@ internal sealed partial class ExpressionBinder
     /// or a static-member access rooted at a type name <c>Type.Member</c> /
     /// generic type reference <c>Type[Args].Member</c>.
     /// </summary>
-    private bool RemainderHeadIsSourceType(ExpressionSyntax remainder, string packageName)
+    private bool RemainderHeadIsSourceType(ExpressionSyntax remainder)
     {
         string simpleName;
         int arity;
         switch (remainder)
         {
             case CollectionInitializerExpressionSyntax { Target: { } target }:
-                return RemainderHeadIsSourceType(target, packageName);
+                return RemainderHeadIsSourceType(target);
             case AccessorExpressionSyntax { LeftPart: CollectionInitializerExpressionSyntax collection }:
-                return RemainderHeadIsSourceType(collection, packageName);
+                return RemainderHeadIsSourceType(collection);
             case CallExpressionSyntax call when !call.Identifier.IsMissing:
                 simpleName = call.Identifier.ValueText;
                 arity = call.TypeArgumentList?.Arguments.Count ?? 0;
@@ -606,17 +606,17 @@ internal sealed partial class ExpressionBinder
                 }
 
                 simpleName = indexNameHead.IdentifierToken.ValueText;
-                arity = 0;
+                arity = index.Indices.Count;
                 break;
             default:
                 return false;
         }
 
-        return scope.TryLookupQualifiedSourceType(
-                packageName + "." + simpleName,
+        return scope.TryLookupTypeAlias(
+                simpleName,
                 arity > 0 ? arity : -1,
-                out var qualifiedType)
-            && IsUserAggregateType(qualifiedType);
+                out var terminalType)
+            && IsUserAggregateType(terminalType);
     }
 
     /// <summary>

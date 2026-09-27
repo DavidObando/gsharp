@@ -83,6 +83,40 @@ public class Issue4396And4397And4423QualifiedNameBindingTests
     }
 
     [Fact]
+    public void NestedTypeQualification_WinsOverSameNamedPackageType()
+    {
+        var result = Evaluate(
+            """
+            package Holder
+            import System
+
+            @Attribute
+            class Tag {
+            }
+            """,
+            """
+            package App
+            import System
+
+            class Holder {
+                @Attribute
+                class Tag {
+                }
+            }
+
+            class C {
+                func M(@Holder.Tag x int32) int32 { return x }
+            }
+
+            C().M(42)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
+        AssertParameterAttribute(result, "App.Holder+Tag");
+    }
+
+    [Fact]
     public void QualifiedEnumTypeAndDefault_SelectQualifiedPackage()
     {
         var result = Evaluate(
