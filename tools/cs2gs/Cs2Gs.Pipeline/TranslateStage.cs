@@ -627,8 +627,8 @@ public sealed class TranslateStage : IMigrationStage
                         .Where(d => d.Severity == TranslationSeverity.Warning
                             && IsForwardedTranslationWarning(d.DiagnosticId)))
                     {
-                        string line = $"{diagnostic.DiagnosticId}: {diagnostic}";
-                        Note(context, "warning (non-fatal): " + line);
+                        string line = FormatForwardedTranslationWarning(diagnostic, document.FilePath);
+                        Note(context, line);
                         Console.Error.WriteLine($"cs2gs: warning: {context.App.Id}: {line}");
                     }
 
@@ -726,6 +726,26 @@ public sealed class TranslateStage : IMigrationStage
         EmitNerdbankGitVersioningBumps(context);
 
         return artifacts.Count == 0 ? StageOutcome.Passed() : StageOutcome.Failed(artifacts);
+    }
+
+    internal static string FormatForwardedTranslationWarning(
+        TranslationDiagnostic diagnostic,
+        string documentPath)
+    {
+        string rendered = diagnostic.ToString();
+        string severity = diagnostic.Severity.ToString().ToLowerInvariant() + ": ";
+        int severityIndex = rendered.IndexOf(severity, StringComparison.Ordinal);
+        if (severityIndex >= 0)
+        {
+            rendered = rendered.Remove(severityIndex, severity.Length);
+        }
+
+        if (diagnostic.Location is not { IsInSource: true })
+        {
+            rendered += $" [{documentPath}]";
+        }
+
+        return $"{diagnostic.DiagnosticId} (non-fatal): {rendered}";
     }
 
     internal static bool ShouldForwardAnalyzer(string analyzerPath) =>
@@ -888,17 +908,17 @@ public sealed class TranslateStage : IMigrationStage
         Console.Error.WriteLine(warning);
     }
 
+    private static bool IsForwardedTranslationWarning(string diagnosticId) =>
+        diagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId
+        || diagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
+        || diagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId;
+
     /// <summary>
     /// True for an ordinary C# compiler error (<c>CS####</c>). cs2gs's own
     /// loader diagnostics share the <c>CS</c> prefix (<c>CS2GS0001</c>
     /// workspace-load failure, <c>CS2GS0003</c> NuGet audit advisory) and are
     /// already handled by their own gates, so they are excluded here.
     /// </summary>
-    private static bool IsForwardedTranslationWarning(string diagnosticId) =>
-        diagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId
-        || diagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
-        || diagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId;
-
     private static bool IsCSharpCompilerError(Diagnostic diagnostic) =>
         diagnostic.Severity == DiagnosticSeverity.Error
         && diagnostic.Id.StartsWith("CS", StringComparison.Ordinal)

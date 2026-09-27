@@ -241,14 +241,17 @@ attribute C# itself treats as equivalent in both placements. Any other
 accessor-level attribute would mean something different on the property, so
 those continue to be dropped.
 
-Issue #4294 closes the silent-drop gap without inventing broader mappings.
-Every other accessor-level attribute now produces the non-fatal
+Issue #4294 closes the silent-drop gap for property and indexer `get`, `set`,
+and `init` accessors without inventing broader mappings. Every other attribute
+on those accessors now produces the non-fatal
 `CS2GS-ACCESSOR-ATTRIBUTE-DROPPED` translation warning at the attribute's C#
 location. The Translate stage writes the warning to stderr and the per-app
 `translate.log`, while leaving the app green and the unsupported-gap ledger
 unchanged. A `get`-level `[UnscopedRef]` remains the sole hoist because it is the
 only established accessor-to-member equivalence; the equivalent member-level
 plus getter-level spelling is not warned, while `set`/`init` placement is.
+Event `add`/`remove` accessor attributes use a separate translation path and
+remain outside this fix.
 
 ### D1 (additional): GS0219 conformance fix
 

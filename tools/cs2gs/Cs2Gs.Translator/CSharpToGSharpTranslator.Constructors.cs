@@ -1555,9 +1555,12 @@ public sealed partial class CSharpToGSharpTranslator
                         string member = node is PropertyDeclarationSyntax property
                             ? $"property '{property.Identifier.ValueText}'"
                             : "indexer";
+                        string reason = isUnscopedRef && hasUnscopedRef
+                            ? $"the {member} already has @UnscopedRef, so another member annotation cannot preserve this '{accessor.Keyword.ValueText}'-specific placement"
+                            : "it was not hoisted because moving it to the member would change its meaning";
                         this.context.Report(new TranslationDiagnostic(
                             accessor.Kind().ToString(),
-                            $"accessor-level attribute '{attributeName}' on the '{accessor.Keyword.ValueText}' accessor of {member} has no G# accessor-level representation and was dropped; it was not hoisted because moving it to the member would change its meaning.",
+                            $"accessor-level attribute '{attributeName}' on the '{accessor.Keyword.ValueText}' accessor of {member} has no G# accessor-level representation and was dropped; {reason}.",
                             attribute.GetLocation(),
                             TranslationSeverity.Warning)
                         {

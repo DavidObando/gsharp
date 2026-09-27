@@ -228,6 +228,36 @@ namespace Demo
     }
 
     [Fact]
+    public void SetUnscopedRefWithMemberUnscopedRef_ExplainsWhyTheAccessorPlacementIsDropped()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
+using System.Diagnostics.CodeAnalysis;
+
+namespace Demo
+{
+    public struct Acc
+    {
+        private int total;
+
+        [UnscopedRef]
+        public int Slot
+        {
+            get { return this.total; }
+            [UnscopedRef]
+            set { this.total = value; }
+        }
+    }
+}");
+
+        Assert.Contains("@UnscopedRef", printed);
+        TranslationDiagnostic diagnostic = Assert.Single(
+            diagnostics,
+            d => d.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
+        Assert.Contains("already has @UnscopedRef", diagnostic.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("moving it to the member", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public async Task AccessorAttributeWarning_ReachesTranslateLogWithoutFailingTheApp()
     {
         string compiler = FindCompiler();
@@ -270,8 +300,32 @@ public sealed class Warned
         string translateLog = File.ReadAllText(
             Assert.Single(Directory.GetFiles(outRoot, "translate.log", SearchOption.AllDirectories)));
         Assert.Contains(CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId, translateLog);
+        Assert.Contains("(non-fatal)", translateLog);
         Assert.Contains("MethodImplAttribute", translateLog);
-        Assert.Contains("Warned.cs(8,10): warning: GetAccessorDeclaration", translateLog);
+        Assert.Contains("Warned.cs(8,10): GetAccessorDeclaration", translateLog);
+        Assert.DoesNotContain(": warning:", translateLog, StringComparison.Ordinal);
+        Assert.Equal(1, translateLog.Split("Warned.cs", StringSplitOptions.None).Length - 1);
+    }
+
+    [Fact]
+    public void ForwardedWarningWithoutSourceLocation_UsesDocumentPathOnce()
+    {
+        var diagnostic = new TranslationDiagnostic(
+            "GetAccessorDeclaration",
+            "attribute 'Demo.A' was dropped",
+            severity: TranslationSeverity.Warning)
+        {
+            DiagnosticId = CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId,
+        };
+
+        string rendered = TranslateStage.FormatForwardedTranslationWarning(
+            diagnostic,
+            @"C:\src\Warned.cs");
+
+        Assert.Equal(
+            @"CS2GS-ACCESSOR-ATTRIBUTE-DROPPED (non-fatal): GetAccessorDeclaration: attribute 'Demo.A' was dropped [C:\src\Warned.cs]",
+            rendered);
+        Assert.DoesNotContain("warning", rendered, StringComparison.Ordinal);
     }
 
     private static string TranslateUnit(string source)
