@@ -9,6 +9,7 @@ using System.Linq;
 using System.Threading.Tasks;
 using Cs2Gs.Translator.Loading;
 using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -368,7 +369,9 @@ namespace Sample
                 "Digits.RegexGenerator.g.cs.txt"));
         File.WriteAllText(
             generatedPath,
-            generated + "\nnamespace App { internal static class OtherGeneratedOutput { } }\n");
+            generated +
+                "\nnamespace App { internal static class OtherGeneratedOutput" +
+                " { internal static string? Maybe => null; } }\n");
         string projectPath = Path.Combine(projectDir, "GeneratedRegex.csproj");
         File.WriteAllText(
             projectPath,
@@ -390,6 +393,13 @@ namespace Sample
         Assert.DoesNotContain("Digits_0", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Utilities", retainedSource, StringComparison.Ordinal);
         Assert.DoesNotContain("Digits() =>", retainedSource, StringComparison.Ordinal);
+        PropertyDeclarationSyntax property = document.SyntaxTree.GetRoot()
+            .DescendantNodes()
+            .OfType<PropertyDeclarationSyntax>()
+            .Single(candidate => candidate.Identifier.ValueText == "Maybe");
+        IPropertySymbol propertySymbol = Assert.IsAssignableFrom<IPropertySymbol>(
+            document.SemanticModel.GetDeclaredSymbol(property));
+        Assert.Equal(NullableAnnotation.Annotated, propertySymbol.Type.NullableAnnotation);
     }
 
     /// <summary>

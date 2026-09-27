@@ -694,64 +694,79 @@ public static class CSharpProjectLoader
         SemanticModel semanticModel = compilation.GetSemanticModel(tree);
         CompilationUnitSyntax root = (CompilationUnitSyntax)tree.GetRoot();
         bool foundImplementation = false;
-        bool removedDeclaration = false;
-        var retainedMembers = new List<MemberDeclarationSyntax>();
+        var declarationsToRemove = new List<SyntaxNode>();
         foreach (MemberDeclarationSyntax member in root.Members)
         {
-            MemberDeclarationSyntax retained = RemoveRegexGeneratorDeclarations(
+            var nestedDeclarations = new List<SyntaxNode>();
+            if (IsRegexGeneratorMember(
                 member,
                 semanticModel,
                 ref foundImplementation,
-                ref removedDeclaration);
-            if (retained != null)
+                nestedDeclarations))
             {
-                retainedMembers.Add(retained);
+                declarationsToRemove.Add(member);
+            }
+            else
+            {
+                declarationsToRemove.AddRange(nestedDeclarations);
             }
         }
 
-        if (!foundImplementation || !removedDeclaration)
+        if (!foundImplementation || declarationsToRemove.Count == 0)
         {
             return false;
         }
 
-        if (root.AttributeLists.Count == 0 && retainedMembers.Count == 0)
+        if (root.AttributeLists.Count == 0 && declarationsToRemove.Count == root.Members.Count)
         {
             return true;
         }
 
-        CompilationUnitSyntax retainedRoot = root.WithMembers(SyntaxFactory.List(retainedMembers));
+        CompilationUnitSyntax retainedRoot = root.RemoveNodes(
+            declarationsToRemove,
+            SyntaxRemoveOptions.KeepExteriorTrivia);
         retainedTree = tree.WithRootAndOptions(retainedRoot, tree.Options);
         return false;
     }
 
-    private static MemberDeclarationSyntax RemoveRegexGeneratorDeclarations(
+    private static bool IsRegexGeneratorMember(
         MemberDeclarationSyntax member,
         SemanticModel semanticModel,
         ref bool foundImplementation,
-        ref bool removedDeclaration)
+        ICollection<SyntaxNode> nestedDeclarations)
     {
         if (member is BaseNamespaceDeclarationSyntax namespaceDeclaration)
         {
-            var retainedMembers = new List<MemberDeclarationSyntax>();
+            var declarations = new List<SyntaxNode>();
             foreach (MemberDeclarationSyntax nested in namespaceDeclaration.Members)
             {
-                MemberDeclarationSyntax retained = RemoveRegexGeneratorDeclarations(
+                var descendants = new List<SyntaxNode>();
+                if (IsRegexGeneratorMember(
                     nested,
                     semanticModel,
                     ref foundImplementation,
-                    ref removedDeclaration);
-                if (retained != null)
+                    descendants))
                 {
-                    retainedMembers.Add(retained);
+                    declarations.Add(nested);
+                }
+                else
+                {
+                    declarations.AddRange(descendants);
                 }
             }
 
-            if (retainedMembers.Count == 0)
+            if (namespaceDeclaration.Members.Count > 0 &&
+                declarations.Count == namespaceDeclaration.Members.Count)
             {
-                return null;
+                return true;
             }
 
-            return namespaceDeclaration.WithMembers(SyntaxFactory.List(retainedMembers));
+            foreach (SyntaxNode declaration in declarations)
+            {
+                nestedDeclarations.Add(declaration);
+            }
+
+            return false;
         }
 
         if (member is MethodDeclarationSyntax method)
@@ -762,8 +777,7 @@ public static class CSharpProjectLoader
                     attribute.AttributeClass?.ToDisplayString() == GeneratedRegexAttributeName) == true &&
                 IsRegexGeneratorDeclaration(symbol);
             foundImplementation |= isImplementation;
-            removedDeclaration |= isImplementation;
-            return isImplementation ? null : member;
+            return isImplementation;
         }
 
         if (member is TypeDeclarationSyntax type)
@@ -771,39 +785,46 @@ public static class CSharpProjectLoader
             INamedTypeSymbol symbol = semanticModel.GetDeclaredSymbol(type);
             if (IsRegexGeneratorDeclaration(symbol))
             {
-                removedDeclaration = true;
-                return null;
+                return true;
             }
 
             if (!type.Modifiers.Any(SyntaxKind.PartialKeyword) || type.Members.Count == 0)
             {
-                return member;
+                return false;
             }
 
-            bool removedBefore = removedDeclaration;
-            var retainedMembers = new List<MemberDeclarationSyntax>();
+            var declarations = new List<SyntaxNode>();
             foreach (MemberDeclarationSyntax nested in type.Members)
             {
-                MemberDeclarationSyntax retained = RemoveRegexGeneratorDeclarations(
+                var descendants = new List<SyntaxNode>();
+                if (IsRegexGeneratorMember(
                     nested,
                     semanticModel,
                     ref foundImplementation,
-                    ref removedDeclaration);
-                if (retained != null)
+                    descendants))
                 {
-                    retainedMembers.Add(retained);
+                    declarations.Add(nested);
+                }
+                else
+                {
+                    declarations.AddRange(descendants);
                 }
             }
 
-            if (retainedMembers.Count == 0 && removedDeclaration != removedBefore)
+            if (declarations.Count == type.Members.Count)
             {
-                return null;
+                return true;
             }
 
-            return type.WithMembers(SyntaxFactory.List(retainedMembers));
+            foreach (SyntaxNode declaration in declarations)
+            {
+                nestedDeclarations.Add(declaration);
+            }
+
+            return false;
         }
 
-        return member;
+        return false;
     }
 
     private static bool IsRegexGeneratorDeclaration(ISymbol symbol) =>
