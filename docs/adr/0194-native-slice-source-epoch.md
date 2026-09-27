@@ -118,9 +118,13 @@ not become Go slice equality.
 
 ### 3. Exact-array name precedence and rank
 
-Unescaped `array[...]` becomes compiler-reserved intrinsic syntax in the new
-epoch. It cannot bind to a source or imported generic type named `array`.
-ADR-0170's escape remains the opt-out:
+Unescaped `array[...]` becomes compiler-reserved intrinsic syntax only in type
+clauses and as the type head of an array literal in the new epoch. In those
+positions it cannot bind to a source or imported generic type named `array`.
+Generic function calls, method groups, and other value expressions such as
+`array[T](value)` continue through ordinary value/member lookup; the intrinsic
+does not reserve the identifier in expression namespaces. ADR-0170's escape
+remains the opt-out for an ordinary type or literal:
 
 ```gs
 let clrValues array[int32] = array[int32]{1, 2}
@@ -130,8 +134,9 @@ let qualifiedValue models.array[int32] = models.array[int32]{}
 
 `$array[...]` and qualified ordinary names always use normal name lookup.
 Migration must add the escape or qualification when old source intended an
-ordinary type named `array`; it must not silently redirect that source to the
-intrinsic.
+ordinary type or type-headed literal named `array`; it must not silently
+redirect that source to the intrinsic. Migration leaves generic function and
+value expressions named `array` unchanged.
 
 `array[T]` denotes rank-one SZARRAY only. This ADR adds no rank argument or new
 array representation. ADR-0164's already-implemented `[,]T`, `[,,]T`, and
@@ -169,10 +174,12 @@ Rollout is staged:
    available where ordinary lookup does not shadow it.
 2. **Transition release.** New SDK templates select
    `native-slice-syntax`. A compilation containing either unsized `[]T` or an
-   unescaped, unqualified `array[...]` with no selected epoch fails with an
-   actionable diagnostic. Its meaning is never guessed from compiler version,
-   imports, expected types, or surrounding operations. `legacy-array-syntax`
-   remains accepted for one release and warns.
+   unescaped, unqualified `array[...]` in a type clause or as a literal type
+   head with no selected epoch fails with an actionable diagnostic. Ordinary
+   function/value expressions named `array` do not participate in epoch
+   detection. Type meaning is never guessed from compiler version, imports,
+   expected types, or surrounding operations. `legacy-array-syntax` remains
+   accepted for one release and warns.
 3. **Completed transition.** `legacy-array-syntax` is rejected. Missing epoch
    remains an error for source containing either epoch-sensitive spelling;
    source without those spellings remains unaffected. `native-slice-syntax`
@@ -199,7 +206,9 @@ Provide a migration command that binds source using
 - nullable container/element combinations without changing their meaning;
 - nested and generic array positions recursively;
 - ordinary unqualified `array[...]` references to `$array[...]` or a stable
-  qualification when they refer to user types.
+  qualification when they refer to user types or type-headed literals;
+- generic function, method-group, and value expressions named `array` remain
+  ordinary expressions and are not rewritten.
 
 Project migration is transactional: it writes
 `GsharpSourceEpoch=native-slice-syntax` together with the source edits and
@@ -263,7 +272,8 @@ The syntax switch cannot ship until all of the following pass:
    commits source and `GsharpSourceEpoch` together; loose-file migration reports
    the required target compiler argument and the output fails without it.
 3. Parser, formatter, completion, diagnostics, symbol display, REPL, direct
-   compiler, SDK, and generated-source paths all honor the same epoch.
+   compiler, SDK, and generated-source paths all honor the same epoch and keep
+   `array[T](...)` and other value-expression uses on ordinary lookup.
 4. Conformance tests distinguish array copies from shared slice views,
    nullable containers from nullable elements, mutable from readonly access,
    and rank-one from rectangular arrays.
@@ -272,8 +282,9 @@ The syntax switch cannot ship until all of the following pass:
 6. A mutant that binds an array node as a native slice, or a slice node as an
    array, fails semantic or metadata tests. Text snapshots alone are
    insufficient.
-7. Old source with ambiguous `[]T` or unescaped, unqualified `array[...]` and
-   no epoch fails rather than silently changing meaning.
+7. Old source with ambiguous `[]T` or unescaped, unqualified `array[...]` in a
+   type/literal position and no epoch fails rather than silently changing
+   meaning; equivalent generic function/value expressions remain valid.
 
 The transition is no-go if exact CLR-array spelling, ordinary-name migration,
 or old-source detection cannot be guaranteed. That does not block ADR-0191 M0;
