@@ -173,6 +173,9 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             import System
             import Lib
 
+            let top (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
+            Console.WriteLine(top(5).GetAwaiter().GetResult())
+
             suspend func run() {
                 let twice (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
                 let add (int32) -> System.Threading.Tasks.ValueTask[int32] = Number(10).Add
@@ -191,7 +194,45 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             IlVerifier.Verify(
                 appPath,
                 new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
-            Assert.Equal($"6{Environment.NewLine}14{Environment.NewLine}", Run(appPath));
+            Assert.Equal($"10{Environment.NewLine}6{Environment.NewLine}14{Environment.NewLine}", Run(appPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SuspendMethodGroupInsideAsyncLet_CapturesCellContext()
+    {
+        const string source = """
+            package Issue4412
+            import System
+
+            suspend func Value() int32 {
+                return 7
+            }
+
+            suspend func Invoke(callback () -> System.Threading.Tasks.ValueTask[int32]) int32 {
+                return await callback()
+            }
+
+            func run() {
+                scope {
+                    async let result = Invoke(Value)
+                    Console.WriteLine(await result)
+                }
+            }
+
+            run()
+            """;
+
+        var directory = PrepareDirectory(nameof(SuspendMethodGroupInsideAsyncLet_CapturesCellContext));
+        try
+        {
+            var outputPath = Compile(directory, "App", source, "/target:exe");
+            IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"7{Environment.NewLine}", Run(outputPath));
         }
         finally
         {

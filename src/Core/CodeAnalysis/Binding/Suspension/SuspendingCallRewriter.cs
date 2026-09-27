@@ -215,7 +215,7 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
 
         // ADR-0174 D7: a suspending delegate carries the context active when
         // the delegate is created, not the context active when it is invoked.
-        var capturedContext = Ambient;
+        var capturedContext = Ambient ?? runtime.BindContextNone();
         inner.lexicalContext = capturedContext;
         var body = (BoundBlockStatement)inner.RewriteStatement(node.Body);
         if (ReferenceEquals(body, node.Body))
@@ -224,10 +224,12 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
         }
 
         var capturedVariables = node.CapturedVariables;
-        if (capturedContext is BoundVariableExpression contextVariable
-            && !capturedVariables.Contains(contextVariable.Variable))
+        foreach (var variable in GoCapturedVariableCollector.CollectCapturedVariables(capturedContext))
         {
-            capturedVariables = capturedVariables.Add(contextVariable.Variable);
+            if (!capturedVariables.Contains(variable))
+            {
+                capturedVariables = capturedVariables.Add(variable);
+            }
         }
 
         return new BoundFunctionLiteralExpression(node.Syntax, node.Function, node.FunctionType, body, capturedVariables);
