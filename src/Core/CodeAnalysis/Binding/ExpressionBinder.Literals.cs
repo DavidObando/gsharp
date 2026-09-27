@@ -2465,10 +2465,16 @@ internal sealed partial class ExpressionBinder
             // This is independent of the get-only/init "is it writable at all"
             // check below; an inaccessible member is rejected here even when it
             // otherwise has a setter.
+            var usesGetter = initSyntax.Value is CollectionInitializerExpressionSyntax { Target: null };
             var memberAccessibility = hasField
                 ? Invariant.Required(field, "a resolved field has a symbol").Accessibility
-                : Invariant.Required(property, "a resolved property has a symbol").Accessibility;
+                : usesGetter
+                    ? Invariant.Required(property, "a resolved property has a symbol").GetterAccessibility
+                    : Invariant.Required(property, "a resolved property has a symbol").SetterAccessibility;
             var memberDeclaringType = hasField ? fieldDeclaringType : propertyDeclaringType;
+            var memberType = hasField
+                ? Invariant.Required(field, "a resolved field has a type").Type
+                : Invariant.Required(property, "a resolved property has a type").Type;
             if (!AccessibilityChecker.IsAccessible(
                 memberAccessibility,
                 Invariant.Required(memberDeclaringType, "a resolved member has a declaring type"),
@@ -2479,11 +2485,17 @@ internal sealed partial class ExpressionBinder
                     fieldName,
                     Invariant.Required(memberDeclaringType, "a resolved member has a declaring type").Name,
                     memberAccessibility);
-            }
+                if (initSyntax.Value is CollectionInitializerExpressionSyntax { Target: null } inaccessibleCollection)
+                {
+                    BindCollectionElementsForDiagnostics(inaccessibleCollection);
+                }
+                else
+                {
+                    _ = BindExpression(initSyntax.Value, memberType);
+                }
 
-            var memberType = hasField
-                ? Invariant.Required(field, "a resolved field has a type").Type
-                : Invariant.Required(property, "a resolved property has a type").Type;
+                continue;
+            }
 
             // Issue #1567: a braced member value `Member: { a, b }` populates the
             // collection member by lowering to `.Add(...)` calls on the

@@ -2014,6 +2014,11 @@ internal sealed partial class ExpressionBinder
             var indexRead = BindIndexAgainstTarget(tempRef, indexSyntax, diagnosticLocation, sharedIndex);
             if (indexRead is BoundErrorExpression)
             {
+                if (compoundRhsSyntax != null)
+                {
+                    _ = BindExpression(compoundRhsSyntax);
+                }
+
                 return indexRead;
             }
 
@@ -2804,6 +2809,15 @@ internal sealed partial class ExpressionBinder
                         var refElementType = SubstituteIndexerType(refIndexerGetter.Type, writeSubstitution);
                         var refIndexArg = ConvertWriteIndex();
                         var refValue = BindValue(refElementType);
+                        if (!CheckUserIndexerAccessibility(
+                            selectedIndexer,
+                            requireGetter: true,
+                            requireSetter: false,
+                            diagnosticLocation))
+                        {
+                            return new BoundErrorExpression(null);
+                        }
+
                         var refGetCall = new BoundUserInstanceCallExpression(
                             null,
                             target,
@@ -2820,6 +2834,15 @@ internal sealed partial class ExpressionBinder
                 var elementType = SubstituteIndexerType(selectedIndexer.SetterSymbol.Parameters[^1].Type, writeSubstitution);
                 var indexArg = ConvertWriteIndex();
                 var value = BindValue(elementType);
+                if (!CheckUserIndexerAccessibility(
+                    selectedIndexer,
+                    requireGetter: false,
+                    requireSetter: true,
+                    diagnosticLocation))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 return MakeUserIndexAssignment(
                     selectedIndexer.SetterSymbol,
                     indexArg,
@@ -3397,13 +3420,24 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var valueType = SubstituteIndexerType(userIndexer.Type, substitution);
+                var convertedIndex = conversions.BindConversion(diagnosticLocation, indexValue, parameterType);
+                var value = bindValue(valueType);
+                if (!CheckUserIndexerAccessibility(
+                    userIndexer,
+                    requireGetter: false,
+                    requireSetter: true,
+                    diagnosticLocation))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 return new BoundUserInstanceCallExpression(
                     null,
                     target,
                     userIndexer.SetterSymbol,
                     ImmutableArray.Create(
-                        conversions.BindConversion(diagnosticLocation, indexValue, parameterType),
-                        bindValue(valueType)));
+                        convertedIndex,
+                        value));
             }
 
             if (targetType is StructSymbol
@@ -3416,16 +3450,27 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var refElementType = SubstituteIndexerType(refGetter.Type, substitution);
+                var convertedIndex = conversions.BindConversion(diagnosticLocation, indexValue, parameterType);
+                var value = bindValue(refElementType);
+                if (!CheckUserIndexerAccessibility(
+                    userIndexer,
+                    requireGetter: true,
+                    requireSetter: false,
+                    diagnosticLocation))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 var refGetCall = new BoundUserInstanceCallExpression(
                     null,
                     target,
                     refGetter,
-                    ImmutableArray.Create(conversions.BindConversion(diagnosticLocation, indexValue, parameterType)),
+                    ImmutableArray.Create(convertedIndex),
                     refElementType);
                 return new BoundIndirectAssignmentExpression(
                     null,
                     new BoundAddressOfExpression(null, refGetCall, unmanaged: false),
-                    bindValue(refElementType));
+                    value);
             }
         }
 
