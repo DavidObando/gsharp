@@ -337,6 +337,7 @@ The fourth pre-1.0 line focuses on **sound defaults, expressive control flow, an
 
 - Generic delegate, enclosing-generic, function-pointer, method-group, map, imported override, XML documentation, channel capture, boxing, and tuple-return emission now preserve the source type and storage semantics across compilation boundaries.
 - Null-conditional delegate invocation, nullable-flow analysis, rejected-call diagnostics, interpolation spans, and source-migration output are aligned with the emitted behavior.
+- `cs2gs` now carries widened nullable array-element types through inferred local alias chains, so maybe-nil writes through an alias widen the owning allocation and reads through any alias receive the required `!!` assertion (issue #4507).
 
 ### Known limitations
 

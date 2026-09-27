@@ -33,6 +33,10 @@ namespace Cs2Gs.Tests;
 /// (<c>Runtime.Channels.Tests</c>). The receiver is now asserted, as C# throws on
 /// a null there too.
 /// </para>
+/// <para>
+/// 3. Issue #4507: inferred local aliases share widened array-element status
+/// with the local that owns the allocation.
+/// </para>
 /// </summary>
 public class Issue4500ElementWriteAndAnnotationsNarrowingTests
 {
@@ -118,6 +122,79 @@ public class Holder
 
         Assert.Contains("[2]string?", printed);
         Assert.Equal("Nb", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
+    }
+
+    [Fact]
+    public void WidenedArrayAliasRead_IsAsserted_CompilesAndRuns()
+    {
+        string printed = Translate(@"
+public class Holder
+{
+    public string Name;
+
+    public static string Run()
+    {
+        var a = new Holder[2];
+        a[0] = null;
+        a[1] = new Holder { Name = ""ok"" };
+        var b = a!;
+        return (b[0] == null ? ""N"" : ""Y"") + b[1].Name;
+    }
+}", NullableContextOptions.Disable);
+
+        Assert.Contains("let a = [2]Holder?", printed);
+        Assert.Contains("let b = a", printed);
+        Assert.Contains("b[1]!!.Name", printed);
+        Assert.Equal("Nok", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
+    }
+
+    [Fact]
+    public void MaybeNilWriteThroughAliasChain_WidensOwnerAndAllReads()
+    {
+        string printed = Translate(@"
+public class Holder
+{
+    public string Name;
+
+    public static string Run()
+    {
+        var a = new Holder[2];
+        var (b, _) = (a, 0);
+        var c = b;
+        c[0] = null;
+        c[1] = new Holder { Name = ""ok"" };
+        return (a[0] == null ? ""N"" : ""Y"") + a[1].Name + b[1].Name;
+    }
+}", NullableContextOptions.Disable);
+
+        Assert.Contains("let a = [2]Holder?", printed);
+        Assert.Contains("a[1]!!.Name", printed);
+        Assert.Contains("b[1]!!.Name", printed);
+        Assert.DoesNotContain("c[0] = nil!!", printed);
+        Assert.Equal("Nokok", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
+    }
+
+    [Fact]
+    public void ArrayAliasWithoutMaybeNilWrite_DoesNotWiden()
+    {
+        string printed = Translate(@"
+public class Holder
+{
+    public string Name;
+
+    public static string Run()
+    {
+        var a = new Holder[1];
+        a[0] = new Holder { Name = ""ok"" };
+        var b = a;
+        return b[0].Name;
+    }
+}", NullableContextOptions.Disable);
+
+        Assert.Contains("let a = [1]Holder", printed);
+        Assert.DoesNotContain("[1]Holder?", printed);
+        Assert.DoesNotContain("b[0]!!.Name", printed);
+        Assert.Equal("ok", CompileAndRun(printed, "Holder.Run()").RunOutput.Trim());
     }
 
     [Fact]
