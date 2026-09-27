@@ -19,7 +19,7 @@
   type-identity-over-string-matching rule `KnownAttributes` cites for every
   recogniser in it; issue #835),
   [ADR-0182](0182-receiver-clause-is-always-extension.md) (every receiver clause
-  is an extension); issues/PRs #376, #4265, #4288
+  is an extension); issues/PRs #376, #4265, #4288, #4294
 
 ## Context
 
@@ -241,11 +241,17 @@ attribute C# itself treats as equivalent in both placements. Any other
 accessor-level attribute would mean something different on the property, so
 those continue to be dropped.
 
-A translation diagnostic for the general accessor-attribute drop was considered
-and not added: `TranslationSeverity.Info` is consumed nowhere in the pipeline or
-report, `Warning` is surfaced only for one hard-coded diagnostic id, and
-`Unsupported` fails the gate. Reporting it usefully needs pipeline work that is
-out of scope here; it is called out as a known silent drop instead.
+Issue #4294 closes the silent-drop gap for property and indexer `get`, `set`,
+and `init` accessors without inventing broader mappings. Every other attribute
+on those accessors now produces the non-fatal
+`CS2GS-ACCESSOR-ATTRIBUTE-DROPPED` translation warning at the attribute's C#
+location. The Translate stage writes the warning to stderr and the per-app
+`translate.log`, while leaving the app green and the unsupported-gap ledger
+unchanged. A `get`-level `[UnscopedRef]` remains the sole hoist because it is the
+only established accessor-to-member equivalence; the equivalent member-level
+plus getter-level spelling is not warned, while `set`/`init` placement is.
+Event `add`/`remove` accessor attributes use a separate translation path and
+remain outside this fix.
 
 ### D1 (additional): GS0219 conformance fix
 

@@ -619,18 +619,16 @@ public sealed class TranslateStage : IMigrationStage
                             + $"[{document.FilePath}]");
                     }
 
-                    // Issue #4370: a [LibraryImport] translated with a caveat
-                    // (a string return's buffer ownership, a cdecl calling
-                    // convention that differs on 32-bit Windows) still PASSES,
-                    // but the caveat reaches the run: stderr and the per-app
-                    // translate.log. No triage artifact, so the app's result,
-                    // fingerprint and gap ledger are unchanged.
+                    // Issues #4294/#4370: non-fatal translation loss or a
+                    // translation caveat still reaches the run through stderr
+                    // and the per-app translate.log. No triage artifact is
+                    // produced, so the app result and gap ledger are unchanged.
                     foreach (TranslationDiagnostic diagnostic in translationContext.Diagnostics
                         .Where(d => d.Severity == TranslationSeverity.Warning
-                            && IsForwardedLibraryImportWarning(d.DiagnosticId)))
+                            && IsForwardedTranslationWarning(d.DiagnosticId)))
                     {
-                        string line = $"{diagnostic.DiagnosticId}: {diagnostic.Message} [{document.FilePath}]";
-                        Note(context, "warning (non-fatal): " + line);
+                        string line = FormatForwardedTranslationWarning(diagnostic, document.FilePath);
+                        Note(context, line);
                         Console.Error.WriteLine($"cs2gs: warning: {context.App.Id}: {line}");
                     }
 
@@ -728,6 +726,31 @@ public sealed class TranslateStage : IMigrationStage
         EmitNerdbankGitVersioningBumps(context);
 
         return artifacts.Count == 0 ? StageOutcome.Passed() : StageOutcome.Failed(artifacts);
+    }
+
+    internal static string FormatForwardedTranslationWarning(
+        TranslationDiagnostic diagnostic,
+        string documentPath)
+    {
+        string documentIdentifier = string.IsNullOrEmpty(documentPath)
+            ? "<unknown document>"
+            : documentPath;
+        string rendered = $"{diagnostic.ConstructKind}: {diagnostic.Message}";
+        if (diagnostic.Location is { IsInSource: true } location)
+        {
+            FileLinePositionSpan span = location.GetLineSpan();
+            string sourcePath = string.IsNullOrEmpty(span.Path)
+                ? documentIdentifier
+                : span.Path;
+            rendered =
+                $"{sourcePath}({span.StartLinePosition.Line + 1},{span.StartLinePosition.Character + 1}): {rendered}";
+        }
+        else
+        {
+            rendered += $" [{documentIdentifier}]";
+        }
+
+        return $"{diagnostic.DiagnosticId} (non-fatal): {rendered}";
     }
 
     internal static bool ShouldForwardAnalyzer(string analyzerPath) =>
@@ -890,16 +913,17 @@ public sealed class TranslateStage : IMigrationStage
         Console.Error.WriteLine(warning);
     }
 
+    private static bool IsForwardedTranslationWarning(string diagnosticId) =>
+        diagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId
+        || diagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
+        || diagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId;
+
     /// <summary>
     /// True for an ordinary C# compiler error (<c>CS####</c>). cs2gs's own
     /// loader diagnostics share the <c>CS</c> prefix (<c>CS2GS0001</c>
     /// workspace-load failure, <c>CS2GS0003</c> NuGet audit advisory) and are
     /// already handled by their own gates, so they are excluded here.
     /// </summary>
-    private static bool IsForwardedLibraryImportWarning(string diagnosticId) =>
-        diagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
-        || diagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId;
-
     private static bool IsCSharpCompilerError(Diagnostic diagnostic) =>
         diagnostic.Severity == DiagnosticSeverity.Error
         && diagnostic.Id.StartsWith("CS", StringComparison.Ordinal)

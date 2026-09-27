@@ -1639,6 +1639,7 @@ public sealed partial class CSharpToGSharpTranslator
         private readonly TranslationContext context;
         private readonly CSharpTypeMapper typeMapper;
         private readonly HashSet<INamedTypeSymbol> subclassedBases;
+        private readonly INamedTypeSymbol unscopedRefAttributeType;
 
         // Issue #1910: every `partial` type symbol with more than one
         // declaration part, mapped to its parts in canonical (deterministic)
@@ -1759,6 +1760,8 @@ public sealed partial class CSharpToGSharpTranslator
             this.context = context;
             this.typeMapper = typeMapper;
             this.subclassedBases = subclassedBases;
+            this.unscopedRefAttributeType =
+                context.Compilation.GetTypeByMetadataName(UnscopedRefAttributeFullName);
             this.staticUsingTargets = staticUsingTargets ?? new HashSet<INamedTypeSymbol>(SymbolEqualityComparer.Default);
             this.partialTypeParts = partialTypeParts ?? new Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>>(SymbolEqualityComparer.Default);
             this.ownedExtensions = ownedExtensions ?? new OwnedExtensionRegistry(context.Compilation.Assembly);
