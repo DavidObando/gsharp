@@ -507,10 +507,16 @@ internal sealed partial class ExpressionBinder
         var peeledSegments = new List<string>();
         while (current is AccessorExpressionSyntax accessor
                && !accessor.IsNullConditional
-               && accessor.LeftPart is NameExpressionSyntax leftName
-               && IsNamespacePrefixSegment(leftName.IdentifierToken.ValueText, isLeadingSegment: !peeledAny))
+               && accessor.LeftPart is NameExpressionSyntax leftName)
         {
-            peeledSegments.Add(leftName.IdentifierToken.ValueText);
+            var segment = leftName.IdentifierToken.ValueText;
+            if (IsQualifiedSourceTypeBoundary(peeledSegments, segment)
+                || !IsNamespacePrefixSegment(segment, isLeadingSegment: !peeledAny))
+            {
+                break;
+            }
+
+            peeledSegments.Add(segment);
             current = accessor.RightPart;
             peeledAny = true;
         }
@@ -600,13 +606,16 @@ internal sealed partial class ExpressionBinder
                 }
 
                 simpleName = indexNameHead.IdentifierToken.ValueText;
-                arity = 0;
+                arity = index.Indices.Count;
                 break;
             default:
                 return false;
         }
 
-        return scope.TryLookupTypeAlias(simpleName, arity > 0 ? arity : -1, out var terminalType)
+        return scope.TryLookupTypeAlias(
+                simpleName,
+                arity > 0 ? arity : -1,
+                out var terminalType)
             && IsUserAggregateType(terminalType);
     }
 

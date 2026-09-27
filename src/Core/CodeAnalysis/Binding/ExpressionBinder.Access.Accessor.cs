@@ -3513,6 +3513,13 @@ internal sealed partial class ExpressionBinder
         && !(scope.TryLookupImport(segment, out var import) && import.IsAlias)
         && !scope.TryLookupImportedClass(segment, declaration: null, out _);
 
+    private bool IsQualifiedSourceTypeBoundary(List<string> peeledSegments, string segment)
+        => peeledSegments.Count > 0
+            && scope.TryLookupQualifiedSourceType(
+                string.Join(".", peeledSegments) + "." + segment,
+                preferredArity: -1,
+                out _);
+
     /// <summary>
     /// Peels a leading run of pure namespace/package segments off a dotted
     /// accessor chain, returning the first non-namespace remainder (unchanged
@@ -3525,11 +3532,19 @@ internal sealed partial class ExpressionBinder
     {
         var current = expr;
         var peeledAny = false;
+        var peeledSegments = new List<string>();
         while (current is AccessorExpressionSyntax accessor
                && !accessor.IsNullConditional
-               && accessor.LeftPart is NameExpressionSyntax leftName
-               && IsNamespacePrefixSegment(leftName.IdentifierToken.ValueText, isLeadingSegment: !peeledAny))
+               && accessor.LeftPart is NameExpressionSyntax leftName)
         {
+            var segment = leftName.IdentifierToken.ValueText;
+            if (IsQualifiedSourceTypeBoundary(peeledSegments, segment)
+                || !IsNamespacePrefixSegment(segment, isLeadingSegment: !peeledAny))
+            {
+                break;
+            }
+
+            peeledSegments.Add(segment);
             current = accessor.RightPart;
             peeledAny = true;
         }

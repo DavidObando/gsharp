@@ -14240,6 +14240,12 @@ public sealed class Binder
             return aliased;
         }
 
+        if (name.IndexOf('.') >= 0
+            && scope.TryLookupQualifiedSourceType(name, preferredArity, out var qualifiedSourceType))
+        {
+            return qualifiedSourceType;
+        }
+
         if (ambiguousAcrossImportedPackages)
         {
             // Issue #2455: a genuine cross-package collision where two or more
