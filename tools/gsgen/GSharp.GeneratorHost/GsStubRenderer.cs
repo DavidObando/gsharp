@@ -863,7 +863,16 @@ public sealed class GsStubRenderer
                     continue;
                 }
 
-                args.Add(rendered);
+                if (positional.Name is { })
+                {
+                    var parameterName = attribute.GetConstructorParameterMetadataName(positional)
+                        ?? positional.Name;
+                    args.Add($"{EscapeCSharpIdentifier(parameterName)}: {rendered}");
+                }
+                else
+                {
+                    args.Add(rendered);
+                }
             }
 
             foreach (var named in attribute.NamedArguments)
@@ -887,6 +896,14 @@ public sealed class GsStubRenderer
             sb.AppendLine("]");
         }
     }
+
+    private static string EscapeCSharpIdentifier(string name)
+        => (Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetKeywordKind(name)
+                    != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None
+                || Microsoft.CodeAnalysis.CSharp.SyntaxFacts.GetContextualKeywordKind(name)
+                    != Microsoft.CodeAnalysis.CSharp.SyntaxKind.None)
+            ? $"@{name}"
+            : name;
 
     /// <summary>
     /// Renders a bound compile-time constant attribute/parameter value to a

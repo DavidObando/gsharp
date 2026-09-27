@@ -102,4 +102,22 @@ public class ImportedAttributeBindingTests
         Assert.Single(hello.Attributes);
         Assert.DoesNotContain(globalScope.Diagnostics, d => d.Id == "GS0201");
     }
+
+    [Fact]
+    public void NamedConstructorArguments_UseTheCompleteAllocatedParameterScope()
+    {
+        var globalScope = BindWithFixtures(
+            """
+            package Demo
+            import GSharp.Core.Tests.Fixtures
+
+            @ImportedReservedNamed(params__: "a", params_: "b")
+            class Hello {
+            }
+            """);
+
+        var attribute = Assert.Single(globalScope.Structs.Single(s => s.Name == "Hello").Attributes);
+        Assert.Equal("a", attribute.GetConstructorArgument(0, "params")?.Value);
+        Assert.Equal("b", attribute.GetConstructorArgument(1, "params_")?.Value);
+    }
 }

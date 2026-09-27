@@ -2449,11 +2449,12 @@ internal sealed class CustomAttributeEncoder
             .Select(candidate => candidate.Name)
             .Distinct(StringComparer.Ordinal)
             .ToArray();
-        member = members.FirstOrDefault(candidate =>
-            SyntaxFacts.GetEmittedIdentifier(
-                candidate.Name,
-                IdentifierNameContext.General,
-                memberNames) == emittedName);
+        member = members.FirstOrDefault(candidate => candidate.Name == emittedName)
+            ?? members.FirstOrDefault(candidate =>
+                SyntaxFacts.GetEmittedIdentifier(
+                    candidate.Name,
+                    IdentifierNameContext.General,
+                    memberNames) == emittedName);
         metadataName = member?.Name;
         return member != null;
     }

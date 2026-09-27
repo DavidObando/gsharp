@@ -84,14 +84,13 @@ public sealed class BoundAttribute : BoundNode
     /// <returns>The supplied argument, or <see langword="null"/> when omitted.</returns>
     public BoundAttributeArgument? GetConstructorArgument(int position, string parameterName)
     {
-        var emittedParameterName = SyntaxFacts.GetEmittedIdentifier(
-            parameterName,
-            IdentifierNameContext.Parameter,
-            new[] { parameterName });
         foreach (var argument in PositionalArguments)
         {
             if (string.Equals(argument.Name, parameterName, System.StringComparison.Ordinal)
-                || string.Equals(argument.Name, emittedParameterName, System.StringComparison.Ordinal))
+                || string.Equals(
+                    GetConstructorParameterMetadataName(argument),
+                    parameterName,
+                    System.StringComparison.Ordinal))
             {
                 return argument;
             }
@@ -107,5 +106,55 @@ public sealed class BoundAttribute : BoundNode
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Gets the CLR metadata name of the constructor parameter selected by a
+    /// colon-named argument.
+    /// </summary>
+    /// <param name="argument">A constructor argument.</param>
+    /// <returns>The CLR parameter name, or the bound name when no imported constructor matches.</returns>
+    public string? GetConstructorParameterMetadataName(BoundAttributeArgument argument)
+    {
+        if (argument.Name is not { } argumentName || AttributeType.ClrType is not { } clrType)
+        {
+            return argument.Name;
+        }
+
+        var constructors = clrType.GetConstructors();
+        foreach (var constructor in constructors)
+        {
+            foreach (var parameter in constructor.GetParameters())
+            {
+                if (string.Equals(argumentName, parameter.Name, System.StringComparison.Ordinal))
+                {
+                    return parameter.Name;
+                }
+            }
+        }
+
+        foreach (var constructor in constructors)
+        {
+            var parameters = constructor.GetParameters();
+            var parameterNames = parameters
+                .Select(parameter => parameter.Name ?? string.Empty)
+                .ToArray();
+            foreach (var parameter in parameters)
+            {
+                var metadataName = parameter.Name ?? string.Empty;
+                if (string.Equals(
+                        argumentName,
+                        SyntaxFacts.GetEmittedIdentifier(
+                            metadataName,
+                            IdentifierNameContext.Parameter,
+                            parameterNames),
+                        System.StringComparison.Ordinal))
+                {
+                    return metadataName;
+                }
+            }
+        }
+
+        return argumentName;
     }
 }
