@@ -610,6 +610,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor ByRefArgumentNullabilityMismatch = new("GS0612", DiagnosticSeverity.Warning, "The storage passed to {0} parameter '{1}' has type '{2}', which differs from the parameter type '{3}' in nullability: {4}.");
 
     internal static readonly DiagnosticDescriptor AttributeNamedArgumentNotFound = new("GS0613", DiagnosticSeverity.Error, "Named attribute argument '{0}' does not match a constructor parameter or a writable public property or field of attribute '{1}'.");
+    internal static readonly DiagnosticDescriptor AttributeNamedArgumentTypeMismatch = new("GS0614", DiagnosticSeverity.Error, "Named attribute argument '{0}' of type '{1}' is not assignable to member type '{2}'.");
 
     internal static readonly DiagnosticDescriptor CannotTakeAddressOfNonLvalue = new("GS9001", DiagnosticSeverity.Error, "Cannot take address of '{0}': expression is not an lvalue.");
     internal static readonly DiagnosticDescriptor ArgumentMustBePassedByRef = new("GS9002", DiagnosticSeverity.Error, "Argument {0} to '{1}' must be passed by reference (`&`).");

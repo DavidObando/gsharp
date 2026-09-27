@@ -136,6 +136,7 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
     [InlineData("@ImportedNamedConstructor(\"a\", second: 2, second: 3)", "GS0245")]
     [InlineData("@ImportedNamedConstructor(\"a\", Missing: 1)", "GS0613")]
     [InlineData("@ImportedNamedConstructor(\"a\", Missing = 1)", "GS0613")]
+    [InlineData("@ImportedNamedConstructor(\"a\", Label = 1)", "GS0614")]
     public void InvalidNamedAttributeArguments_ReportClearDiagnostics(string annotation, string expectedId)
     {
         var result = Emit(
@@ -149,6 +150,26 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
 
         var diagnostic = Assert.Single(result.Diagnostics, item => item.Id == expectedId);
         Assert.Equal(2, diagnostic.Location.StartLine);
+        Assert.False(result.Success);
+    }
+
+    [Fact]
+    public void SameCompilationDuplicateNamedConstructorArgument_ReportsDuplicateDiagnostic()
+    {
+        var result = Emit(
+            """
+            import System
+
+            class LocalAttribute(Value int32 = 0) : Attribute {
+            }
+
+            @Local(Value: 1, Value: 2)
+            class Tagged {
+            }
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, item => item.Id == "GS0245");
+        Assert.Equal(5, diagnostic.Location.StartLine);
         Assert.False(result.Success);
     }
 

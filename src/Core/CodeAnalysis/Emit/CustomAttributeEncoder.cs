@@ -780,6 +780,7 @@ internal sealed class CustomAttributeEncoder
         unsupportedParameter = null;
         var sawProjectableCandidate = false;
         BoundAttributeArgument? positionalConflict = null;
+        ValidateUniqueNamedConstructorArguments(attr);
 
         if (attributeType.HasPrimaryConstructor
             && this.resolvePrimaryCtorToken != null)
@@ -1125,19 +1126,7 @@ internal sealed class CustomAttributeEncoder
         BoundAttributeArgument? positionalConflict = null;
         var positional = attribute.PositionalArguments.Where(argument => argument.Name == null).ToImmutableArray();
         var namedConstructorArguments = attribute.PositionalArguments.Where(argument => argument.Name != null).ToImmutableArray();
-
-        var seenNames = new HashSet<string>(StringComparer.Ordinal);
-        foreach (var argument in namedConstructorArguments)
-        {
-            var name = Invariant.Required(argument.Name, "a named attribute argument has a name");
-            if (!seenNames.Add(name))
-            {
-                EmitDiagnosticException.ThrowDiagnostic(
-                    argument.Syntax ?? attribute.Syntax,
-                    DiagnosticDescriptors.DuplicateNamedArgument,
-                    name);
-            }
-        }
+        ValidateUniqueNamedConstructorArguments(attribute);
 
         // Keep the existing precedence: normal form, omitted optionals, then
         // params expansion. Named constructor arguments only change which
@@ -1172,13 +1161,26 @@ internal sealed class CustomAttributeEncoder
                             memberName);
                     }
 
-                    if (!TryResolveNamedMember(attributeType, memberArgument, out _, out _))
+                    if (!TryResolveNamedMember(attributeType, memberArgument, out var member, out _))
                     {
                         EmitDiagnosticException.ThrowDiagnostic(
                             memberArgument.Syntax ?? attribute.Syntax,
                             DiagnosticDescriptors.AttributeNamedArgumentNotFound,
                             memberArgument.Name,
                             attributeType.Name);
+                    }
+
+                    var memberType = member is PropertyInfo property
+                        ? property.PropertyType
+                        : ((FieldInfo)member).FieldType;
+                    if (!ArgAssignable(memberArgument.Value, memberType, memberArgument.Type))
+                    {
+                        EmitDiagnosticException.ThrowDiagnostic(
+                            memberArgument.Syntax ?? attribute.Syntax,
+                            DiagnosticDescriptors.AttributeNamedArgumentTypeMismatch,
+                            memberArgument.Name,
+                            memberArgument.Type.Name,
+                            memberType.Name);
                     }
                 }
 
@@ -1198,6 +1200,26 @@ internal sealed class CustomAttributeEncoder
         }
 
         return null;
+    }
+
+    private static void ValidateUniqueNamedConstructorArguments(BoundAttribute attribute)
+    {
+        var seenNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var argument in attribute.PositionalArguments)
+        {
+            if (argument.Name is not { } name)
+            {
+                continue;
+            }
+
+            if (!seenNames.Add(name))
+            {
+                EmitDiagnosticException.ThrowDiagnostic(
+                    argument.Syntax ?? attribute.Syntax,
+                    DiagnosticDescriptors.DuplicateNamedArgument,
+                    name);
+            }
+        }
     }
 
     private static bool TryMapAttributeConstructorArguments(
