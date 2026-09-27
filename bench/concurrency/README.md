@@ -70,7 +70,8 @@ cd clr && dotnet run -c Release -- --quick
 cd go && go build -o baseline . && ./baseline
 ```
 
-Both print `name`, `ns/op`, and counted-work checksum rows on stdout.
+The G# and Go witnesses print `name`, `ns/op`, and checksum fields on stdout.
+The older CLR spike retains its legacy `name` and `ns/op` output.
 
 ## Methodology requirements
 

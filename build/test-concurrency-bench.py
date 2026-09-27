@@ -348,6 +348,38 @@ class ConcurrencyBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "duplicate source run evidence"):
             bench.load_runs([str(first), str(second)])
 
+    def test_current_json_rejects_missing_declared_mode_rows(self) -> None:
+        payload = {
+            "aggregationKey": "same",
+            "fingerprint": {
+                "runId": "run-1",
+                "comparison": {
+                    "methodologyVersion": bench.METHODOLOGY_VERSION,
+                    "wholeRuns": 1,
+                    "scenario": "chunk64-arrays",
+                    "modes": ["gsharp", "go"],
+                },
+                "comparable": True,
+            },
+            "gsharp": {
+                "chunk64-arrays": {
+                    "median_ns": 1.0,
+                    "checksum": 42,
+                }
+            },
+            "go": {},
+        }
+        run = SCRATCH / "missing-go.json"
+        run.write_text(json.dumps(payload))
+
+        with self.assertRaisesRegex(SystemExit, "mode 'go' is missing rows"):
+            bench.load_runs([str(run)])
+
+        payload["go"] = {"go-chunk64": {"median_ns": 1.0}}
+        run.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(SystemExit, "mode 'go' is missing checksums"):
+            bench.load_runs([str(run)])
+
     def test_baseline_without_comparison_key_is_report_only(self) -> None:
         result = {"median_ns": 200.0, "ci95_ns": [190.0, 210.0], "samples": 3}
         baseline = {

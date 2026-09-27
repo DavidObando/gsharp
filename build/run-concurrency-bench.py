@@ -755,6 +755,41 @@ def combine_loaded_runs(results: list[dict]) -> dict:
     return results[0] if len(results) == 1 else aggregate(results)
 
 
+def validate_loaded_payload(path: str, payload: dict, fingerprint: dict | None) -> None:
+    comparison = fingerprint.get("comparison", {}) if fingerprint else {}
+    if comparison.get("methodologyVersion", 0) < METHODOLOGY_VERSION:
+        return
+
+    scenario_name = comparison.get("scenario", "all")
+    scenarios = load_scenarios()
+    selected = scenarios if scenario_name == "all" else [
+        scenario for scenario in scenarios if scenario["name"] == scenario_name
+    ]
+    if not selected:
+        raise SystemExit(f"'{path}' declares unknown scenario '{scenario_name}'")
+
+    expected_rows = {
+        "gsharp": {scenario["gsharp"] for scenario in selected},
+        "gsharp_aot": {scenario["gsharp"] for scenario in selected},
+        "go": {scenario["go"] for scenario in selected if scenario.get("go")},
+    }
+    for mode in comparison.get("modes", []):
+        rows = payload.get(mode)
+        if not isinstance(rows, dict):
+            raise SystemExit(f"'{path}' is missing declared mode '{mode}'")
+        missing = expected_rows.get(mode, set()) - rows.keys()
+        if missing:
+            raise SystemExit(f"'{path}' mode '{mode}' is missing rows {sorted(missing)}")
+        missing_checksums = [
+            name for name in expected_rows.get(mode, set())
+            if "checksum" not in rows[name]
+        ]
+        if missing_checksums:
+            raise SystemExit(
+                f"'{path}' mode '{mode}' is missing checksums for {sorted(missing_checksums)}"
+            )
+
+
 def load_runs(
     paths: list[str],
     allow_incomparable: bool = False,
@@ -784,6 +819,7 @@ def load_runs(
         seen_payloads.add(payload_key)
         recorded_class = payload.get("hardwareClass") or recorded_class
         fingerprint = payload.get("fingerprint")
+        validate_loaded_payload(path, payload, fingerprint)
         if (
             len(paths) > 1
             and fingerprint

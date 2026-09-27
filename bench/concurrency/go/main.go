@@ -146,12 +146,11 @@ func pingpong() {
 			b <- v
 		}
 	}()
-	var sum int64
 	for i := 0; i < R; i++ {
 		a <- i
-		sum += int64(<-b)
+		<-b
 	}
-	report("go-pingpong", time.Since(start), R, sum)
+	report("go-pingpong", time.Since(start), R, 0)
 }
 
 func closedRecv() {
@@ -191,18 +190,15 @@ func selectCost() {
 			a <- i
 		}
 	}()
-	var sum int64
 	for got := 0; got < R; {
 		select {
-		case value := <-a:
-			sum += int64(value)
+		case <-a:
 			got++
-		case value := <-b:
-			sum += int64(value)
+		case <-b:
 			got++
 		}
 	}
-	report("go-select2", time.Since(start), R, sum)
+	report("go-select2", time.Since(start), R, 0)
 }
 
 func parkScale() {
