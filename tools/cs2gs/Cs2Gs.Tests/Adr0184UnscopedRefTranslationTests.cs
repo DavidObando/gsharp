@@ -248,6 +248,61 @@ namespace Demo
             diagnostic.Location.SourceTree.GetText().ToString(diagnostic.Location.SourceSpan));
     }
 
+    [Fact]
+    public void InitializedStaticAutoPropertyAccessorAttribute_IsDroppedWithWarning()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
+using System.Runtime.CompilerServices;
+
+namespace Demo
+{
+    public sealed class C
+    {
+        public static int Slot
+        {
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            get;
+        } = 1;
+    }
+}");
+
+        Assert.DoesNotContain("@MethodImpl", printed);
+        TranslationDiagnostic diagnostic = Assert.Single(
+            diagnostics,
+            d => d.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
+        Assert.Equal("GetAccessorDeclaration", diagnostic.ConstructKind);
+        Assert.Contains("property 'Slot'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExtensionPropertyAccessorAttribute_IsDroppedWithWarning()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
+using System.Runtime.CompilerServices;
+
+namespace Demo
+{
+    public static class Extensions
+    {
+        extension(string value)
+        {
+            public int Size
+            {
+                [MethodImpl(MethodImplOptions.NoInlining)]
+                get { return value.Length; }
+            }
+        }
+    }
+}");
+
+        Assert.DoesNotContain("@MethodImpl", printed);
+        TranslationDiagnostic diagnostic = Assert.Single(
+            diagnostics,
+            d => d.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
+        Assert.Equal("GetAccessorDeclaration", diagnostic.ConstructKind);
+        Assert.Contains("property 'Size'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
     /// <summary>
     /// Found in adversarial review of PR #4291: the hoist must read the
     /// <c>get</c> accessor only. The member-level G# annotation is emitted on
@@ -326,16 +381,19 @@ namespace Demo
         }
 
         string projectDir = NewScratchDir("accessor-attribute-warning");
-        File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>");
-        string projectPath = Path.Combine(projectDir, "Warned.csproj");
-        File.WriteAllText(projectPath, @"<Project Sdk=""Microsoft.NET.Sdk"">
+        string outRoot = NewOutputRoot("accessor-attribute-warning");
+        try
+        {
+            File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>");
+            string projectPath = Path.Combine(projectDir, "Warned.csproj");
+            File.WriteAllText(projectPath, @"<Project Sdk=""Microsoft.NET.Sdk"">
   <PropertyGroup>
     <OutputType>Library</OutputType>
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
 </Project>
 ");
-        File.WriteAllText(Path.Combine(projectDir, "Warned.cs"), @"
+            File.WriteAllText(Path.Combine(projectDir, "Warned.cs"), @"
 using System.Runtime.CompilerServices;
 
 public sealed class Warned
@@ -347,23 +405,28 @@ public sealed class Warned
     }
 }");
 
-        string outRoot = NewOutputRoot("accessor-attribute-warning");
-        var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
-        var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
-        var app = new CorpusApp("test/AccessorAttributeWarning", projectPath, TargetKind.Library);
+            var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
+            var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
+            var app = new CorpusApp("test/AccessorAttributeWarning", projectPath, TargetKind.Library);
 
-        RunResult result = await pipeline.RunAsync(new[] { app });
-        AppResult appResult = Assert.Single(result.Apps);
-        Assert.True(appResult.Succeeded, "An accessor-attribute warning must not fail the app.");
+            RunResult result = await pipeline.RunAsync(new[] { app });
+            AppResult appResult = Assert.Single(result.Apps);
+            Assert.True(appResult.Succeeded, "An accessor-attribute warning must not fail the app.");
 
-        string translateLog = File.ReadAllText(
-            Assert.Single(Directory.GetFiles(outRoot, "translate.log", SearchOption.AllDirectories)));
-        Assert.Contains(CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId, translateLog);
-        Assert.Contains("(non-fatal)", translateLog);
-        Assert.Contains("MethodImplAttribute", translateLog);
-        Assert.Contains("Warned.cs(8,10): GetAccessorDeclaration", translateLog);
-        Assert.DoesNotContain(": warning:", translateLog, StringComparison.Ordinal);
-        Assert.Equal(1, translateLog.Split("Warned.cs", StringSplitOptions.None).Length - 1);
+            string translateLog = File.ReadAllText(
+                Assert.Single(Directory.GetFiles(outRoot, "translate.log", SearchOption.AllDirectories)));
+            Assert.Contains(CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId, translateLog);
+            Assert.Contains("(non-fatal)", translateLog);
+            Assert.Contains("MethodImplAttribute", translateLog);
+            Assert.Contains("Warned.cs(8,10): GetAccessorDeclaration", translateLog);
+            Assert.DoesNotContain(": warning:", translateLog, StringComparison.Ordinal);
+            Assert.Equal(1, translateLog.Split("Warned.cs", StringSplitOptions.None).Length - 1);
+        }
+        finally
+        {
+            DeleteDirectory(projectDir);
+            DeleteDirectory(outRoot);
+        }
     }
 
     [Fact]
@@ -454,6 +517,20 @@ public sealed class Warned
         string root = Path.Combine(AppContext.BaseDirectory, "loader-tests", label, Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         return root;
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+        }
+        catch (UnauthorizedAccessException)
+        {
+        }
     }
 
     private static string FindCompiler()

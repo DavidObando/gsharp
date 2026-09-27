@@ -138,6 +138,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case PropertyDeclarationSyntax property:
                     var propertySymbol = this.context.GetDeclaredSymbol(property) as IPropertySymbol;
+                    List<AttributeUse> propertyAttributes = this.MapPropertyAttributes(property);
                     if (ownerKind is TypeDeclarationKind.DataClass or TypeDeclarationKind.DataStruct
                         && primaryCtorParamNames?.Contains(
                             property.Identifier.Text,
@@ -197,6 +198,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                     if (this.TryTranslateStaticInitializedAutoProperty(
                         property,
+                        propertyAttributes,
                         out FieldDeclaration staticBackingField,
                         out PropertyDeclaration staticProperty))
                     {
@@ -206,7 +208,7 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     (GMember propMember, bool propIsStatic, GMember fieldKeywordBackingField) =
-                        this.TranslateProperty(property, primaryCtorParamNames);
+                        this.TranslateProperty(property, propertyAttributes, primaryCtorParamNames);
                     if (fieldKeywordBackingField != null)
                     {
                         // Issue #1907: the synthesized backing field for a `field`-
@@ -714,11 +716,12 @@ public sealed partial class CSharpToGSharpTranslator
                     case PropertyDeclarationSyntax property:
                         {
                             var propertySymbol = this.context.GetDeclaredSymbol(property) as IPropertySymbol;
+                            List<AttributeUse> propertyAttributes = this.MapPropertyAttributes(property);
                             bool isStatic = propertySymbol != null && propertySymbol.IsStatic;
                             if (isStatic)
                             {
                                 (GMember staticPropMember, bool staticPropIsStatic, GMember staticFieldKeywordBacking) =
-                                    this.TranslateProperty(property);
+                                    this.TranslateProperty(property, propertyAttributes);
                                 if (staticFieldKeywordBacking != null)
                                 {
                                     yield return (staticFieldKeywordBacking, staticPropIsStatic);
@@ -744,7 +747,7 @@ public sealed partial class CSharpToGSharpTranslator
                                 break;
                             }
 
-                            yield return this.TranslateExtensionProperty(property, receiver);
+                            yield return this.TranslateExtensionProperty(property, receiver, propertyAttributes);
                         }
 
                         break;
@@ -769,7 +772,9 @@ public sealed partial class CSharpToGSharpTranslator
         /// a get-only property (a setter is reported as an explicit gap first).
         /// </summary>
         private (GMember Member, bool IsStatic) TranslateExtensionProperty(
-            PropertyDeclarationSyntax node, Receiver receiver)
+            PropertyDeclarationSyntax node,
+            Receiver receiver,
+            List<AttributeUse> attributes)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
 
@@ -2820,6 +2825,7 @@ public sealed partial class CSharpToGSharpTranslator
         /// </summary>
         private bool TryTranslateStaticInitializedAutoProperty(
             PropertyDeclarationSyntax node,
+            List<AttributeUse> attributes,
             out FieldDeclaration field,
             out PropertyDeclaration property)
         {
@@ -2911,7 +2917,7 @@ public sealed partial class CSharpToGSharpTranslator
                 type,
                 propertyAccessors,
                 visibility: MapVisibility(symbol, this.context, node),
-                attributes: this.MapAttributes(node.AttributeLists));
+                attributes: attributes);
 
             return true;
 
@@ -2931,7 +2937,9 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private (GMember Member, bool IsStatic, GMember BackingField) TranslateProperty(
-            PropertyDeclarationSyntax node, IReadOnlyCollection<string> primaryCtorParamNames = null)
+            PropertyDeclarationSyntax node,
+            List<AttributeUse> attributes,
+            IReadOnlyCollection<string> primaryCtorParamNames = null)
         {
             var symbol = this.context.GetDeclaredSymbol(node) as IPropertySymbol;
 
@@ -3170,7 +3178,7 @@ public sealed partial class CSharpToGSharpTranslator
                 visibility: explicitInterfacePropertyVisibility,
                 isOpen: isOpen,
                 isOverride: isOverride,
-                attributes: this.MapPropertyAttributes(node),
+                attributes: attributes,
                 expressionBody: arrowBody,
                 explicitInterfaceType: explicitInterfacePropertyType,
                 isRefReturn: isRefReturnProperty,
