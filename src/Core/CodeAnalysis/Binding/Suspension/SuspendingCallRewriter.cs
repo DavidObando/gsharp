@@ -264,14 +264,16 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     /// <inheritdoc/>
     protected override BoundExpression RewriteMethodGroupExpression(BoundMethodGroupExpression node)
     {
-        var rewritten = (BoundMethodGroupExpression)base.RewriteMethodGroupExpression(node);
-        if (rewritten.Function?.IsSuspending != true || rewritten.FunctionType == null)
+        if (node.Function?.IsSuspending == true && node.FunctionType != null)
         {
-            return rewritten;
+            var adapter = createMethodGroupAdapter(container, node);
+            if (!ReferenceEquals(adapter, node))
+            {
+                return RewriteExpression(adapter);
+            }
         }
 
-        var adapter = createMethodGroupAdapter(container, rewritten);
-        return ReferenceEquals(adapter, rewritten) ? rewritten : RewriteExpression(adapter);
+        return base.RewriteMethodGroupExpression(node);
     }
 
     /// <inheritdoc/>

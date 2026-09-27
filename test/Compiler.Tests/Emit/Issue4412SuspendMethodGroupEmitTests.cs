@@ -400,6 +400,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         const string source = """
             package Issue4412
             import System
+            import System.Threading.Tasks
 
             func Take(ch chan[int32]) int32 {
                 return <-ch
@@ -411,6 +412,14 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
 
             class Holder {
                 let take (chan[int32]) -> int32 = Take
+
+                suspend func AddOne(value int32) int32 {
+                    return value + 1
+                }
+            }
+
+            func Make() Holder {
+                return await Task.FromResult(Holder())
             }
 
             let ch = chan[int32](1)
@@ -422,6 +431,8 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             let second = chan[int32](1)
             second <- 43
             Console.WriteLine(Holder().take(second))
+            let receiverMethod = Make().AddOne
+            Console.WriteLine(receiverMethod(4))
             """;
 
         var directory = PrepareDirectory(nameof(InferredSuspendMethodGroup_VerifiesAndRuns));
@@ -429,7 +440,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         {
             var outputPath = Compile(directory, "App", source, "/target:exe");
             IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
-            Assert.Equal($"2{Environment.NewLine}42{Environment.NewLine}43{Environment.NewLine}", Run(outputPath));
+            Assert.Equal($"2{Environment.NewLine}42{Environment.NewLine}43{Environment.NewLine}5{Environment.NewLine}", Run(outputPath));
         }
         finally
         {
