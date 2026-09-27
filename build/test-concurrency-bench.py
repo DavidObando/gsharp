@@ -76,6 +76,67 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual(6, combined["samples"])
         self.assertEqual(2, combined["runs"])
 
+    def test_checksums_are_stable_and_match_across_paired_runtimes(self) -> None:
+        jit = bench.summarize({"chunk": [1.0, 2.0]}, {"chunk": [42, 42]})
+        aot = bench.summarize({"chunk": [1.5, 2.5]}, {"chunk": [42, 42]})
+        go = bench.summarize({"go-chunk": [0.5, 0.6]}, {"go-chunk": [42, 42]})
+        scenarios = [{"name": "chunk", "gsharp": "chunk", "go": "go-chunk", "checksum": True}]
+
+        bench.validate_paired_checksums(scenarios, jit, aot, go)
+        self.assertEqual(42, jit["chunk"]["checksum"])
+
+        with self.assertRaisesRegex(SystemExit, "checksum changed or was missing across launches"):
+            bench.summarize({"chunk": [1.0, 2.0]}, {"chunk": [41, 42]})
+
+        go["go-chunk"]["checksum"] = 43
+        with self.assertRaisesRegex(SystemExit, "checksum differs across runtimes"):
+            bench.validate_paired_checksums(scenarios, jit, aot, go)
+
+        bench.validate_paired_checksums(
+            scenarios,
+            {"chunk": {"median_ns": 1.0}},
+            {"chunk": {"median_ns": 1.0}},
+            {"go-chunk": {"median_ns": 1.0}},
+            required=False,
+        )
+        with self.assertRaisesRegex(SystemExit, "produced no checksummed runtime rows"):
+            bench.validate_paired_checksums(scenarios, {}, {}, {})
+
+    def test_run_rejects_duplicate_rows_and_missing_checksums(self) -> None:
+        spec = {
+            "name": "test",
+            "command": ["test"],
+            "cwd": REPO,
+            "env": {},
+            "pattern": bench.ROW,
+            "expectedRows": {"row"},
+            "expectedChecksumRows": {"row"},
+        }
+        duplicate = mock.Mock(
+            returncode=0,
+            stdout=(
+                "row ns_per_op 1.0 ms 1.0 checksum 1\n"
+                "row ns_per_op 2.0 ms 2.0 checksum 1\n"
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.object(bench.subprocess, "run", return_value=duplicate),
+            self.assertRaisesRegex(SystemExit, "duplicate row"),
+        ):
+            bench.run_once(spec)
+
+        missing = mock.Mock(
+            returncode=0,
+            stdout="row ns_per_op 1.0 ms 1.0\n",
+            stderr="",
+        )
+        with (
+            mock.patch.object(bench.subprocess, "run", return_value=missing),
+            self.assertRaisesRegex(SystemExit, "omitted checksums"),
+        ):
+            bench.run_once(spec)
+
     def test_fingerprint_separates_comparison_methodology_from_build_identity(self) -> None:
         environment = {
             "cpuAffinity": [0, 1],
@@ -332,7 +393,17 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 {"go-paired": {}},
             ))
         self.assertEqual("jit=unknown (legacy evidence)", bench.methodology_label(None))
-        self.assertEqual("jit=tiered-pgo delay=0", bench.methodology_label({"comparison": {}}))
+        self.assertEqual(
+            "jit=tiered-pgo delay=0 threshold=30",
+            bench.methodology_label({
+                "comparison": {
+                    "jitEnvironment": {
+                        "DOTNET_TC_CallCountingDelayMs": "0",
+                        "DOTNET_TC_CallCountThreshold": "30",
+                    }
+                }
+            }),
+        )
 
     def test_missing_power_or_changing_processor_count_marks_run_incomparable(self) -> None:
         start = {

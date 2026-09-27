@@ -66,8 +66,13 @@ BENCH = REPO / "bench" / "concurrency"
 # and the current Bench.gs output (issue #3902).
 ROW = re.compile(
     r"^(?P<name>[A-Za-z0-9_.-]+) ns_per_op (?P<value>[0-9]+(?:\.[0-9]+)?)"
-    r"(?: ms (?P<elapsed_ms>[0-9]+(?:\.[0-9]+)?))?$")
-GO_ROW = re.compile(r"^\[(?P<name>[^\]]+?)\s*\]\s+[0-9.]+ ms\s+(?P<value>[0-9.]+) ns/op$")
+    r"(?: ms (?P<elapsed_ms>[0-9]+(?:\.[0-9]+)?))?"
+    r"(?: checksum (?P<checksum>-?[0-9]+))?$"
+)
+GO_ROW = re.compile(
+    r"^\[(?P<name>[^\]]+?)\s*\]\s+[0-9.]+ ms\s+(?P<value>[0-9.]+) ns/op"
+    r"(?: checksum (?P<checksum>-?[0-9]+))?$"
+)
 RUNTIME_ROW = re.compile(r"^runtime (?P<version>\S+) cores (?P<cores>[0-9]+)$")
 GO_RUNTIME_ROW = re.compile(
     r"^go=(?P<version>.+?) numcpu=(?P<numcpu>[0-9]+) gomaxprocs=(?P<cores>[0-9]+)$"
@@ -80,6 +85,7 @@ PINNED_TIER_ENV = {
     "DOTNET_TieredCompilation": "1",
     "DOTNET_TieredPGO": "1",
     "DOTNET_TC_CallCountingDelayMs": "0",
+    "DOTNET_TC_CallCountThreshold": "30",
 }
 RUNTIME_SETTING_PREFIXES = (
     "DOTNET_TIERED",
@@ -96,7 +102,7 @@ RUNTIME_SETTING_PREFIXES = (
     "COMPLUS_ALTJIT",
 )
 JSON_SCHEMA_VERSION = 2
-METHODOLOGY_VERSION = 2
+METHODOLOGY_VERSION = 3
 BASELINE_RUNS = 3
 GO_WARMUP_ROUNDS = 3
 
@@ -530,7 +536,7 @@ def validate_rows(spec: dict, rows: dict[str, float]) -> None:
         )
 
 
-def run_once(spec: dict) -> tuple[dict[str, float], dict | None]:
+def run_once(spec: dict) -> tuple[dict[str, float], dict | None, dict[str, int]]:
     result = subprocess.run(
         spec["command"],
         capture_output=True,
@@ -545,12 +551,18 @@ def run_once(spec: dict) -> tuple[dict[str, float], dict | None]:
         )
 
     rows = {}
+    checksums = {}
     runtime = None
     for line in result.stdout.splitlines():
         line = line.strip()
         match = spec["pattern"].match(line)
         if match:
-            rows[match["name"]] = float(match["value"])
+            name = match["name"]
+            if name in rows:
+                raise SystemExit(f"{spec['name']} benchmark emitted duplicate row '{name}':\n{result.stdout}")
+            rows[name] = float(match["value"])
+            if match["checksum"] is not None:
+                checksums[name] = int(match["checksum"])
         header = RUNTIME_ROW.match(line)
         if header:
             runtime = {"version": header["version"], "cores": int(header["cores"])}
@@ -560,13 +572,25 @@ def run_once(spec: dict) -> tuple[dict[str, float], dict | None]:
     if not rows:
         raise SystemExit(f"{spec['name']} benchmark produced no result rows:\n{result.stdout}")
     validate_rows(spec, rows)
-    return rows, runtime
+    missing_checksums = spec.get("expectedChecksumRows", set()) - checksums.keys()
+    if missing_checksums:
+        raise SystemExit(
+            f"{spec['name']} benchmark omitted checksums for {sorted(missing_checksums)}:\n"
+            f"{result.stdout}"
+        )
+    return rows, runtime, checksums
 
 
 def measure_modes(
     specs: list[dict],
     launches: int,
-) -> tuple[dict[str, dict[str, list[float]]], dict[str, list[str]], dict[str, list[int]], list[list[str]]]:
+) -> tuple[
+    dict[str, dict[str, list[float]]],
+    dict[str, dict[str, list[int]]],
+    dict[str, list[str]],
+    dict[str, list[int]],
+    list[list[str]],
+]:
     """Rotate launch order so a drifting host does not consistently favor one runtime."""
     if launches % len(specs) != 0:
         raise SystemExit(
@@ -574,6 +598,7 @@ def measure_modes(
             "so each mode occupies every launch position equally"
         )
     samples = {spec["name"]: {} for spec in specs}
+    checksums = {spec["name"]: {} for spec in specs}
     runtime_versions = {spec["name"]: [] for spec in specs}
     processor_counts = {spec["name"]: [] for spec in specs}
     orders = []
@@ -581,15 +606,17 @@ def measure_modes(
         ordered = specs[launch % len(specs):] + specs[:launch % len(specs)]
         orders.append([spec["name"] for spec in ordered])
         for spec in ordered:
-            rows, runtime = run_once(spec)
+            rows, runtime, row_checksums = run_once(spec)
             for name, value in rows.items():
                 samples[spec["name"]].setdefault(name, []).append(value)
+            for name, value in row_checksums.items():
+                checksums[spec["name"]].setdefault(name, []).append(value)
             if runtime:
                 if runtime["version"] not in runtime_versions[spec["name"]]:
                     runtime_versions[spec["name"]].append(runtime["version"])
                 if runtime["cores"] not in processor_counts[spec["name"]]:
                     processor_counts[spec["name"]].append(runtime["cores"])
-    return samples, runtime_versions, processor_counts, orders
+    return samples, checksums, runtime_versions, processor_counts, orders
 
 
 def bootstrap_ci95(values: list[float], iterations: int = 2000) -> list[float] | None:
@@ -607,16 +634,68 @@ def bootstrap_ci95(values: list[float], iterations: int = 2000) -> list[float] |
     return [round(lo, 2), round(hi, 2)]
 
 
-def summarize(samples: dict[str, list[float]]) -> dict[str, dict]:
-    return {
-        name: {
+def summarize(
+    samples: dict[str, list[float]],
+    checksums: dict[str, list[int]] | None = None,
+) -> dict[str, dict]:
+    result = {}
+    checksums = checksums or {}
+    for name, values in samples.items():
+        row = {
             "median_ns": round(statistics.median(values), 2),
             "ci95_ns": bootstrap_ci95(values),
             "samples": len(values),
             "launch_samples_ns": values,
         }
-        for name, values in samples.items()
-    }
+        checksum_values = set(checksums.get(name, []))
+        if checksum_values:
+            if len(checksum_values) != 1 or len(checksums[name]) != len(values):
+                raise SystemExit(
+                    f"{name} checksum changed or was missing across launches: "
+                    f"{sorted(checksum_values)}"
+                )
+            row["checksum"] = next(iter(checksum_values))
+        result[name] = row
+    return result
+
+
+def validate_paired_checksums(
+    scenarios: list[dict],
+    measured: dict[str, dict],
+    measured_aot: dict[str, dict],
+    go_measured: dict[str, dict],
+    *,
+    required: bool = True,
+) -> None:
+    for scenario in scenarios:
+        if not scenario.get("checksum"):
+            continue
+        rows = {
+            "gsharp": measured.get(scenario["gsharp"]),
+            "gsharp_aot": measured_aot.get(scenario["gsharp"]),
+            "go": go_measured.get(scenario["go"]),
+        }
+        missing = [
+            runtime
+            for runtime, row in rows.items()
+            if row is not None and "checksum" not in row
+        ]
+        if missing:
+            if not required and len(missing) == sum(row is not None for row in rows.values()):
+                continue
+            raise SystemExit(f"{scenario['name']} omitted checksums for {missing}")
+        present = {
+            runtime: int(row["checksum"])
+            for runtime, row in rows.items()
+            if row is not None
+        }
+        if required and not present:
+            raise SystemExit(f"{scenario['name']} produced no checksummed runtime rows")
+        if len(set(present.values())) > 1:
+            raise SystemExit(
+                f"{scenario['name']} checksum differs across runtimes: "
+                + ", ".join(f"{runtime}={value}" for runtime, value in present.items())
+            )
 
 
 def aggregate(results: list[dict]) -> dict[str, dict]:
@@ -653,6 +732,20 @@ def aggregate(results: list[dict]) -> dict[str, dict]:
             ],
             "run_medians_ns": medians,
         }
+        checksums = {
+            result[name]["checksum"]
+            for result in results
+            if name in result and "checksum" in result[name]
+        }
+        checksum_rows = sum(
+            1 for result in results if name in result and "checksum" in result[name]
+        )
+        if checksums:
+            if len(checksums) != 1 or checksum_rows != len(medians):
+                raise SystemExit(
+                    f"{name} checksum changed or was missing across runs: {sorted(checksums)}"
+                )
+            combined[name]["checksum"] = next(iter(checksums))
 
     return combined
 
@@ -943,7 +1036,12 @@ def complete_baseline_results(
 
 
 def methodology_label(fingerprint: dict | None) -> str:
-    return "jit=tiered-pgo delay=0" if fingerprint else "jit=unknown (legacy evidence)"
+    if not fingerprint:
+        return "jit=unknown (legacy evidence)"
+    environment = fingerprint.get("comparison", {}).get("jitEnvironment", {})
+    delay = environment.get("DOTNET_TC_CallCountingDelayMs", "unknown")
+    threshold = environment.get("DOTNET_TC_CallCountThreshold", "unknown")
+    return f"jit=tiered-pgo delay={delay} threshold={threshold}"
 
 
 def main() -> int:
@@ -1030,6 +1128,7 @@ def main() -> int:
                 "env": jit_env,
                 "pattern": ROW,
                 "expectedRows": {requested} if requested else {scenario["gsharp"] for scenario in registry},
+                "expectedChecksumRows": {requested} if requested else {scenario["gsharp"] for scenario in registry},
             }
         ]
 
@@ -1047,6 +1146,7 @@ def main() -> int:
                     "env": aot_env,
                     "pattern": ROW,
                     "expectedRows": {requested} if requested else {scenario["gsharp"] for scenario in registry},
+                    "expectedChecksumRows": {requested} if requested else {scenario["gsharp"] for scenario in registry},
                 }
             )
         else:
@@ -1077,14 +1177,30 @@ def main() -> int:
                         "go-select2",
                     },
                     "allowExtraRows": not bool(go_row),
+                    "expectedChecksumRows": {go_row} if go_row else {
+                        "go-buf64",
+                        "go-chunk64",
+                        "go-chunk1k",
+                        "go-compute",
+                        "go-pingpong",
+                        "go-closed",
+                        "go-spawn",
+                        "go-select2",
+                    },
                 }
             )
 
         start_environment = environment_sample()
-        raw_samples, runtime_versions, processor_counts, launch_order = measure_modes(specs, args.launches)
-        measured = summarize(raw_samples["gsharp"])
-        measured_aot = summarize(raw_samples.get("gsharp_aot", {}))
-        go_measured = summarize(raw_samples.get("go", {}))
+        raw_samples, raw_checksums, runtime_versions, processor_counts, launch_order = measure_modes(
+            specs,
+            args.launches,
+        )
+        measured = summarize(raw_samples["gsharp"], raw_checksums["gsharp"])
+        measured_aot = summarize(
+            raw_samples.get("gsharp_aot", {}),
+            raw_checksums.get("gsharp_aot", {}),
+        )
+        go_measured = summarize(raw_samples.get("go", {}), raw_checksums.get("go", {}))
         end_environment = environment_sample()
         environment = {"start": start_environment, "end": end_environment}
         fingerprint = make_fingerprint(
@@ -1105,6 +1221,19 @@ def main() -> int:
         )
         recorded_class = fingerprint["comparison"]["host"]["hardwareClass"]
         provenance = f"launches: {args.launches}"
+
+    methodology_version = (
+        fingerprint.get("comparison", {}).get("methodologyVersion", 0)
+        if fingerprint
+        else 0
+    )
+    validate_paired_checksums(
+        scenarios,
+        measured,
+        measured_aot,
+        go_measured,
+        required=methodology_version >= METHODOLOGY_VERSION,
+    )
 
     comparison_key = fingerprint.get("comparisonKey") if fingerprint else None
     aggregation_key = fingerprint.get("aggregationKey") if fingerprint else None

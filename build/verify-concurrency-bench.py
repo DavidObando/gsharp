@@ -31,12 +31,17 @@ def smoke() -> int:
     failures: list[str] = []
 
     registry = json.loads((BENCH / "scenarios.json").read_text())
+    if registry.get("schemaVersion") != 2:
+        failures.append("scenarios.json must use schemaVersion 2")
     scenarios = registry["scenarios"]
     if not scenarios:
         failures.append("scenarios.json names no scenarios")
 
     program = (BENCH / "gsharp" / "Bench.gs").read_text()
     known = set(re.findall(r'"([A-Za-z0-9_.-]+)"', program))
+    warmup_rounds = re.search(r"^let warmupRounds = ([0-9]+)$", program, re.MULTILINE)
+    if not warmup_rounds or int(warmup_rounds.group(1)) <= 120:
+        failures.append("Bench.gs must use more than 120 warmup entries for final optimized Tier1")
     for scenario in scenarios:
         if scenario["gsharp"] not in known:
             failures.append(f"Bench.gs does not know the scenario '{scenario['gsharp']}'")
@@ -53,6 +58,12 @@ def smoke() -> int:
         row = scenario.get("go")
         if row and f'"{row}"' not in go_program:
             failures.append(f"main.go does not report the row '{row}'")
+        if scenario.get("checksum") and not row:
+            failures.append(f"checksummed scenario '{scenario['name']}' has no Go counterpart")
+    if "make(chan []int32, 64)" not in go_program:
+        failures.append("Go chunk controls must transport int32 arrays through capacity-64 channels")
+    if "chan[[]int32](64)" not in program or "[length]int32{}" not in program:
+        failures.append("G# chunk controls must transport exact-length int32 arrays through capacity-64 channels")
 
     baseline = json.loads((BENCH / "baseline.json").read_text())
     for scenario in scenarios:
@@ -76,6 +87,8 @@ def smoke() -> int:
 
     runner = (REPO / "build" / "run-concurrency-bench.py").read_text()
     compile(runner, "run-concurrency-bench.py", "exec")
+    if '"DOTNET_TC_CallCountThreshold": "30"' not in runner:
+        failures.append("runner does not pin the documented 30-call tier threshold")
     tests = REPO / "build" / "test-concurrency-bench.py"
     if not tests.exists():
         failures.append("build/test-concurrency-bench.py is missing")
