@@ -505,6 +505,13 @@ internal sealed partial class ExpressionBinder
 
         var capturedArguments = arguments.MoveToImmutable();
         var elementType = SubstituteIndexerType(storedType, substitution);
+        if (requiresRead && indexer.GetterSymbol == null)
+        {
+            bindValueForRecovery(elementType);
+            Diagnostics.ReportTypeNotIndexable(location, target.Type);
+            return new BoundErrorExpression(null);
+        }
+
         if (!CheckUserIndexerAccessibility(
             indexer,
             requireGetter: setter == null || requiresRead,

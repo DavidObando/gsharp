@@ -2014,6 +2014,11 @@ internal sealed partial class ExpressionBinder
             var indexRead = BindIndexAgainstTarget(tempRef, indexSyntax, diagnosticLocation, sharedIndex);
             if (indexRead is BoundErrorExpression)
             {
+                if (compoundRhsSyntax != null)
+                {
+                    _ = BindExpression(compoundRhsSyntax);
+                }
+
                 return indexRead;
             }
 

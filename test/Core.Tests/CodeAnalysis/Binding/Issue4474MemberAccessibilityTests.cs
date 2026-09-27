@@ -215,6 +215,45 @@ public sealed class Issue4474MemberAccessibilityTests
     }
 
     [Fact]
+    public void InaccessibleCompoundIndexer_StillBindsRightHandSide()
+    {
+        const string source = """
+            class Source {
+                private prop this[i int32] int32 {
+                    get -> i
+                    set { }
+                }
+            }
+            class Other {
+                func Use(source Source) {
+                    source[0] += missingValue
+                }
+            }
+            """;
+
+        var errors = EmittedOracle.Evaluate(source).Diagnostics.Where(d => d.IsError).ToArray();
+        Assert.Single(errors, d => d.Id == "GS0472");
+        Assert.Single(errors, d => d.Id == "GS0125" && d.Message.Contains("missingValue", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void SetterOnlyMultiIndexer_CompoundAssignment_ReportsInsteadOfCrashing()
+    {
+        const string source = """
+            class Source {
+                prop this[row int32, column int32] int32 {
+                    set { }
+                }
+            }
+            Source()[0, 1] += 2
+            """;
+
+        var errors = EmittedOracle.Evaluate(source).Diagnostics.Where(d => d.IsError).ToArray();
+        Assert.Single(errors);
+        Assert.DoesNotContain(errors, d => d.Id == "GS9998");
+    }
+
+    [Fact]
     public void DeclaringAndDerivedContexts_CanUseAccessibleSettersAndIndexers()
     {
         const string source = """
