@@ -120,6 +120,52 @@ public sealed class InterfaceAdaptationLanguageTests
     }
 
     [Fact]
+    public void NestedRichObjectCanCaptureEnclosingRichCaptureAndMethodLocal()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            """
+            package NestedRichCaptureLocations
+            import System
+
+            interface Counter {
+                func Increment();
+                func Read() int32;
+            }
+
+            interface Factory {
+                func Create(start int32) Counter;
+            }
+
+            func Main() {
+                var outer = 10
+                let factory = object : Factory {
+                    func Create(start int32) Counter {
+                        var inner = start
+                        return object : Counter {
+                            func Increment() {
+                                outer += 1
+                                inner += 2
+                            }
+                            func Read() int32 -> outer + inner
+                        }
+                    }
+                }
+                let counter = factory.Create(5)
+                counter.Increment()
+                Console.WriteLine(counter.Read())
+                counter.Increment()
+                Console.WriteLine(counter.Read())
+            }
+            """,
+            "nested-rich-capture-locations",
+            executable: true);
+
+        IlVerifier.Verify(dll);
+        Assert.Equal("18\n21\n", fixture.Run(dll));
+    }
+
+    [Fact]
     public void RichConstructionReusesCaptureLocationOutsideMeasuredLoop()
     {
         using var fixture = new NativeSliceLanguageTests.Fixture();

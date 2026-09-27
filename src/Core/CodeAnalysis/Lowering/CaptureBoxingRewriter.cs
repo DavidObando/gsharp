@@ -784,6 +784,11 @@ internal static class CaptureBoxingRewriter
 
             var roots = new HashSet<VariableSymbol>();
             ManagedReferenceOrigins.CollectRoots(node.Location, roots);
+            if (roots.Count == 0)
+            {
+                return node;
+            }
+
             var root = roots.Count == 1
                 ? roots.Single()
                 : throw new InvalidOperationException("A retained rich capture must have exactly one lexical root.");
