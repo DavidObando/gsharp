@@ -163,14 +163,20 @@ public sealed class GSharpAnalyzerDriver
             return;
         }
 
+        var dispatchedStatement = false;
         foreach (var (function, body) in program.Functions)
         {
             cancellationToken.ThrowIfCancellationRequested();
             var isGenerated = ProvenanceTree(function, body) is { } tree && IsGeneratedTree(tree);
             new DispatchingBoundTreeWalker(this, function, isGenerated).Visit(body);
+            dispatchedStatement |= ReferenceEquals(body, program.Statement);
         }
 
-        new DispatchingBoundTreeWalker(this, containingFunction: null, isGenerated: false).Visit(program.Statement);
+        if (!dispatchedStatement)
+        {
+            var isGenerated = program.Statement.FirstAnchoredSyntax()?.SyntaxTree is { } tree && IsGeneratedTree(tree);
+            new DispatchingBoundTreeWalker(this, containingFunction: null, isGenerated).Visit(program.Statement);
+        }
     }
 
     private void DispatchBoundBodies(BoundProgram program)
@@ -460,7 +466,7 @@ public sealed class GSharpAnalyzerDriver
     /// Walks a bound body dispatching bound-node actions from the registry's
     /// kind buckets.
     /// </summary>
-    private sealed class DispatchingBoundTreeWalker : BoundTreeWalker
+    private sealed class DispatchingBoundTreeWalker
     {
         private readonly GSharpAnalyzerDriver driver;
         private readonly FunctionSymbol? containingFunction;
@@ -473,42 +479,18 @@ public sealed class GSharpAnalyzerDriver
             this.isGenerated = isGenerated;
         }
 
-        // Dispatch happens in the three typed dispatchers only; overriding
-        // Visit as well would double-dispatch the root of each walk (Visit
-        // forwards to VisitStatement/VisitExpression/VisitPattern).
-        public override void VisitStatement(BoundStatement? node)
+        public void Visit(BoundNode? node)
         {
-            Dispatch(node);
-            base.VisitStatement(node);
-        }
-
-        public override void VisitExpression(BoundExpression? node)
-        {
-            Dispatch(node);
-            base.VisitExpression(node);
-        }
-
-        public override void VisitPattern(BoundPattern? node)
-        {
-            Dispatch(node);
-            base.VisitPattern(node);
-        }
-
-        // Issue #4436: a plain `x is T` is ONE Roslyn is-type operation, with
-        // no pattern operation under it. G# binds it as an is-expression over
-        // a type pattern, so dispatching that pattern would report the same
-        // test twice to a rule registered for both kinds. The pattern of a
-        // declaration or recursive test is a real pattern in Roslyn too, and
-        // is dispatched.
-        protected override void VisitIsExpression(BoundIsExpression node)
-        {
-            if (node.IsSimpleTypeTest)
+            if (node is null)
             {
-                VisitExpression(node.Expression);
                 return;
             }
 
-            base.VisitIsExpression(node);
+            Dispatch(node);
+            foreach (var child in node.ChildNodes)
+            {
+                Visit(child);
+            }
         }
 
         private void Dispatch(BoundNode? node)
@@ -520,7 +502,10 @@ public sealed class GSharpAnalyzerDriver
 
             foreach (var entry in entries)
             {
-                if (driver.SkipsGenerated(entry.Owner, isGenerated))
+                var nodeIsGenerated = node.Syntax?.SyntaxTree is { } tree
+                    ? IsGeneratedTree(tree)
+                    : isGenerated;
+                if (driver.SkipsGenerated(entry.Owner, nodeIsGenerated))
                 {
                     continue;
                 }
