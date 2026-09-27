@@ -3634,7 +3634,8 @@ internal sealed partial class ExpressionBinder
                 target,
                 indexSyntaxes,
                 (elementType, _) => conversions.BindConversion(valueSyntax, elementType),
-                diagnosticLocation) is { } userIndexAssignment)
+                diagnosticLocation,
+                requiresRead: false) is { } userIndexAssignment)
         {
             return userIndexAssignment;
         }
@@ -3701,7 +3702,8 @@ internal sealed partial class ExpressionBinder
                     target,
                     syntax.Target.Indices,
                     (elementType, _) => conversions.BindConversion(syntax.Value, elementType),
-                    syntax.Target.Target.Location) is { } userIndexAssignment)
+                    syntax.Target.Target.Location,
+                    requiresRead: false) is { } userIndexAssignment)
             {
                 return userIndexAssignment;
             }
@@ -4250,6 +4252,7 @@ internal sealed partial class ExpressionBinder
                     return combined;
                 },
                 syntax.Target.Target.Location,
+                requiresRead: true,
                 syntax.ReturnsPreviousValue);
             if (userAssignment != null)
             {

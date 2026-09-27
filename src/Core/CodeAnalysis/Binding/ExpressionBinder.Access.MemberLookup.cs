@@ -2784,6 +2784,18 @@ internal sealed partial class ExpressionBinder
                     ? ConvertIndexValue(paramType)
                     : conversions.BindConversion(indexSyntax.Location, writeArguments[0], paramType);
 
+                var writesThroughGetter = selectedIndexer.SetterSymbol == null
+                    && targetType is StructSymbol
+                    && selectedIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref };
+                if (!CheckUserIndexerAccessibility(
+                    selectedIndexer,
+                    requireGetter: writesThroughGetter,
+                    requireSetter: selectedIndexer.SetterSymbol != null,
+                    diagnosticLocation))
+                {
+                    return new BoundErrorExpression(null);
+                }
+
                 if (selectedIndexer.SetterSymbol == null)
                 {
                     // Issue #4224: a writable-ref-returning indexer getter (no
@@ -3388,6 +3400,18 @@ internal sealed partial class ExpressionBinder
         {
             target = ViewIndexerReceiver(target, indexView, diagnosticLocation);
             var parameterType = SubstituteIndexerType(userIndexer.Parameters[0].Type, substitution);
+            var writesThroughGetter = userIndexer.SetterSymbol == null
+                && targetType is StructSymbol
+                && userIndexer.GetterSymbol is { ReturnRefKind: RefKind.Ref };
+            if (!CheckUserIndexerAccessibility(
+                userIndexer,
+                requireGetter: writesThroughGetter,
+                requireSetter: userIndexer.SetterSymbol != null,
+                diagnosticLocation))
+            {
+                return new BoundErrorExpression(null);
+            }
+
             if (userIndexer.SetterSymbol != null)
             {
                 if (isReadOnlyReceiver)

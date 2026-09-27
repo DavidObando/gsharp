@@ -376,6 +376,11 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        if (!CheckUserIndexerAccessibility(indexer, requireGetter: true, requireSetter: false, targetLocation))
+        {
+            return new BoundErrorExpression(null);
+        }
+
         var arguments = ImmutableArray.CreateBuilder<BoundExpression>(indexer.Parameters.Length);
         for (var i = 0; i < indexer.Parameters.Length; i++)
         {
@@ -404,6 +409,7 @@ internal sealed partial class ExpressionBinder
     /// <param name="bindValue">Binds the stored value given the element type
     /// and a read of the current element (for compound assignment).</param>
     /// <param name="location">The location for diagnostics.</param>
+    /// <param name="requiresRead">Whether the assignment also invokes the getter.</param>
     /// <param name="returnsPreviousValue">Whether the result is the element's previous value (postfix increment/decrement).</param>
     /// <returns>The bound assignment, or <see langword="null"/> when the target
     /// declares no user indexer (the caller keeps its rectangular-array path).</returns>
@@ -412,6 +418,7 @@ internal sealed partial class ExpressionBinder
         SeparatedSyntaxList<ExpressionSyntax> indexSyntaxes,
         Func<TypeSymbol, Func<BoundExpression>, BoundExpression> bindValue,
         TextLocation location,
+        bool requiresRead,
         bool returnsPreviousValue = false)
     {
         if (target.Type is ImportedTypeSymbol or NullabilityAnnotatedTypeSymbol
@@ -465,6 +472,15 @@ internal sealed partial class ExpressionBinder
             && indexer.GetterSymbol is { ReturnRefKind: RefKind.Ref } getter
                 ? getter
                 : null;
+        if (!CheckUserIndexerAccessibility(
+            indexer,
+            requireGetter: setter == null || requiresRead,
+            requireSetter: setter != null,
+            location))
+        {
+            return new BoundErrorExpression(null);
+        }
+
         var storedType = refGetter?.Type ?? setter?.Parameters[^1].Type;
         if (storedType == null)
         {
@@ -551,6 +567,41 @@ internal sealed partial class ExpressionBinder
                 Invariant.Required(setter, "without a hoisted reference the indexer has a setter"),
                 capturedArguments.Add(valueRead))));
         return new BoundBlockExpression(null, statements.ToImmutable(), previous ?? valueRead);
+    }
+
+    private bool CheckUserIndexerAccessibility(
+        PropertySymbol indexer,
+        bool requireGetter,
+        bool requireSetter,
+        TextLocation location)
+    {
+        if (requireSetter
+            && !Check(
+                Invariant.Required(indexer.SetterSymbol, "a required source indexer setter exists"),
+                indexer.SetterAccessibility))
+        {
+            return false;
+        }
+
+        return !requireGetter
+            || Check(
+                Invariant.Required(indexer.GetterSymbol, "a required source indexer getter exists"),
+                indexer.GetterAccessibility);
+
+        bool Check(FunctionSymbol accessor, Accessibility accessibility)
+        {
+            if (AccessibilityChecker.IsAccessible(accessibility, accessor.ReceiverType, function))
+            {
+                return true;
+            }
+
+            Diagnostics.ReportMemberInaccessible(
+                location,
+                indexer.Name,
+                Invariant.Required(accessor.ReceiverType, "a source indexer accessor has a receiver type").Name,
+                accessibility);
+            return false;
+        }
     }
 
     // Issue #4350 (review): a postfix `t[a, b]++` reads the element once into
