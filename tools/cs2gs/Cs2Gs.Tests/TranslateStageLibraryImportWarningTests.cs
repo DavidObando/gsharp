@@ -12,16 +12,59 @@ using Xunit;
 namespace Cs2Gs.Tests;
 
 /// <summary>
-/// Issue #4370: a <c>[LibraryImport]</c> translated with a caveat — a
-/// <c>string</c> return (C# frees the buffer; gsc treats it as non-owning) or
-/// a cdecl-only <c>[UnmanagedCallConv]</c> (differs from gsc's default on
-/// 32-bit Windows) — raises a translator WARNING. The Translate stage must
-/// forward it to the run (the per-app <c>translate.log</c> and stderr) while
-/// the app still passes; before, only Unsupported diagnostics and
-/// analyzer-snippet warnings left the translator.
+/// Pipeline coverage for <c>[LibraryImport]</c>: issue #4370 warnings reach
+/// the run without failing it, and issue #4410's forwarded native-transition
+/// attributes translate and compile instead of producing Unsupported gaps.
 /// </summary>
 public class TranslateStageLibraryImportWarningTests
 {
+    [Fact]
+    public async Task TranslateAndCompile_LibraryImportForwardedAttributes_Passes()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        string projectDir = NewScratchDir("translate-libraryimport-forwarded-attributes");
+        File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>");
+        string projectPath = Path.Combine(projectDir, "Forwarded.csproj");
+        File.WriteAllText(projectPath, @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+");
+        File.WriteAllText(Path.Combine(projectDir, "Native.cs"), @"
+using System.Runtime.InteropServices;
+
+public static partial class Native
+{
+    [LibraryImport(""libc"", EntryPoint = ""getpid"")]
+    [SuppressGCTransition]
+    [DefaultDllImportSearchPaths(DllImportSearchPath.System32 | DllImportSearchPath.SafeDirectories)]
+    public static partial int GetPid();
+}");
+
+        string outRoot = NewOutputRoot("translate-libraryimport-forwarded-attributes");
+        var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
+        var pipeline = new MigrationPipeline(
+            options,
+            new IMigrationStage[] { new TranslateStage(), new CompileStage() });
+        var app = new CorpusApp("test/LibraryImportForwardedAttributes", projectPath, TargetKind.Library);
+
+        RunResult result = await pipeline.RunAsync(new[] { app });
+        AppResult appResult = Assert.Single(result.Apps);
+        Assert.True(appResult.Succeeded, appResult.FailureCategory);
+
+        string translated = File.ReadAllText(
+            Assert.Single(Directory.GetFiles(outRoot, "*.gs", SearchOption.AllDirectories)));
+        Assert.Contains("@SuppressGCTransition", translated, StringComparison.Ordinal);
+        Assert.Contains("@DefaultDllImportSearchPaths", translated, StringComparison.Ordinal);
+    }
+
     [Fact]
     public async Task TranslateStage_LibraryImportWarnings_AreForwardedAndTheAppPasses()
     {

@@ -125,6 +125,11 @@ For each well-formed `@LibraryImport` function `F`, the emitter produces **two**
 
 The `@LibraryImport` attribute itself is **not** written out as a `CustomAttribute` on the outer wrapper (it is the user's *source* directive, fully consumed by the binder + emitter). The hidden inner does not carry a `@DllImport` CustomAttribute either — it is fully described by its `ImplMap` row.
 
+Method-level `@SuppressGCTransition` and `@DefaultDllImportSearchPaths(...)`
+apply to the native transition, so they are moved to the hidden inner
+P/Invoke and omitted from the managed outer wrapper. Other user attributes
+remain on the outer method.
+
 This is the same two-layer shape C#'s source generator produces. Decompiling a G# `@LibraryImport` assembly with ILSpy yields output essentially identical to a C# `LibraryImport` partial method declaration.
 
 ### 4. Why not ship a full source-generator infrastructure?
@@ -172,7 +177,7 @@ The inner P/Invoke is emitted before the outer body to keep the row order in syn
 - **Tests.**
   - Parser: `Issue758LibraryImportParserTests` covers `;`-bodied `@LibraryImport` declarations with each attribute knob.
   - Binder: `Issue758LibraryImportBinderTests` covers GS0342 – GS0344 plus successful acceptance, including a `string` return that binds with an explicit `StringMarshalling` and still reports GS0344 without one (issue #1504).
-  - Emit (CompileAndRun + ilverify): `Issue758LibraryImportEmitTests` covers `strlen` (Utf8 round-trip), `getpid` (no string), empty-string null-safe behaviour, and metadata-shape verification of the outer + hidden inner pair. `Issue1504LibraryImportStringReturnEmitTests` covers `string` returns: a `setenv`+`getenv` Utf8 round-trip, the null-pointer→`nil` path, and metadata/IL-shape checks (outer returns `string`, inner returns `IntPtr`, the `PtrToString*` materialization is emitted, and the return pointer is never freed) for Utf8/Utf16 and return-only/return-plus-param shapes.
+  - Emit (CompileAndRun + ilverify): `Issue758LibraryImportEmitTests` covers `strlen` (Utf8 round-trip), `getpid` (including `@SuppressGCTransition`), empty-string null-safe behaviour, metadata-shape verification of the outer + hidden inner pair, and placement/value checks for forwarded native-transition attributes. `Issue1504LibraryImportStringReturnEmitTests` covers `string` returns: a `setenv`+`getenv` Utf8 round-trip, the null-pointer→`nil` path, and metadata/IL-shape checks (outer returns `string`, inner returns `IntPtr`, the `PtrToString*` materialization is emitted, and the return pointer is never freed) for Utf8/Utf16 and return-only/return-plus-param shapes.
   - Interpreter: `Issue758LibraryImportInterpreterTests` confirms valid declarations report GS0514 and that GS0344 fires for an under-specified declaration before evaluation.
 - **Follow-ups (filed under parent #706, peers of #758):**
   - `out` / `ref` primitive parameter marshalling for `@LibraryImport` (issue #759).

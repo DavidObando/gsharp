@@ -888,6 +888,20 @@ internal static class KnownAttributes
     }
 
     /// <summary>
+    /// Returns <c>true</c> for a method attribute whose semantics belong on
+    /// the hidden native entry point synthesized for <c>@LibraryImport</c>.
+    /// The managed outer stub must not retain these attributes.
+    /// </summary>
+    /// <param name="attribute">A bound method attribute.</param>
+    /// <returns><c>true</c> for an attribute forwarded to the inner P/Invoke.</returns>
+    public static bool IsLibraryImportInnerMethodAttribute(BoundAttribute? attribute)
+    {
+        Type? clrType = attribute?.AttributeType?.ClrType;
+        return clrType.IsSameAs(typeof(System.Runtime.InteropServices.SuppressGCTransitionAttribute))
+            || clrType.IsSameAs(typeof(System.Runtime.InteropServices.DefaultDllImportSearchPathsAttribute));
+    }
+
+    /// <summary>
     /// Finds the first <c>@LibraryImport(...)</c> attribute on
     /// <paramref name="attributes"/>, or <c>null</c> when none is present.
     /// Recognition is type-identity based (ADR-0092 / issue #758).
