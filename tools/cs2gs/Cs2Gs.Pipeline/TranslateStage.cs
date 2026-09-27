@@ -619,17 +619,15 @@ public sealed class TranslateStage : IMigrationStage
                             + $"[{document.FilePath}]");
                     }
 
-                    // Issue #4370: a [LibraryImport] translated with a caveat
-                    // (a string return's buffer ownership, a cdecl calling
-                    // convention that differs on 32-bit Windows) still PASSES,
-                    // but the caveat reaches the run: stderr and the per-app
-                    // translate.log. No triage artifact, so the app's result,
-                    // fingerprint and gap ledger are unchanged.
+                    // Issues #4294/#4370: non-fatal translation loss or a
+                    // translation caveat still reaches the run through stderr
+                    // and the per-app translate.log. No triage artifact is
+                    // produced, so the app result and gap ledger are unchanged.
                     foreach (TranslationDiagnostic diagnostic in translationContext.Diagnostics
                         .Where(d => d.Severity == TranslationSeverity.Warning
-                            && IsForwardedLibraryImportWarning(d.DiagnosticId)))
+                            && IsForwardedTranslationWarning(d.DiagnosticId)))
                     {
-                        string line = $"{diagnostic.DiagnosticId}: {diagnostic.Message} [{document.FilePath}]";
+                        string line = $"{diagnostic.DiagnosticId}: {diagnostic}";
                         Note(context, "warning (non-fatal): " + line);
                         Console.Error.WriteLine($"cs2gs: warning: {context.App.Id}: {line}");
                     }
@@ -896,8 +894,9 @@ public sealed class TranslateStage : IMigrationStage
     /// workspace-load failure, <c>CS2GS0003</c> NuGet audit advisory) and are
     /// already handled by their own gates, so they are excluded here.
     /// </summary>
-    private static bool IsForwardedLibraryImportWarning(string diagnosticId) =>
-        diagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
+    private static bool IsForwardedTranslationWarning(string diagnosticId) =>
+        diagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId
+        || diagnosticId == CSharpToGSharpTranslator.LibraryImportStringReturnDiagnosticId
         || diagnosticId == CSharpToGSharpTranslator.LibraryImportCallConvDiagnosticId;
 
     private static bool IsCSharpCompilerError(Diagnostic diagnostic) =>

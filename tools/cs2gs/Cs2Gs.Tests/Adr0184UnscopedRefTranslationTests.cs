@@ -3,9 +3,13 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -28,7 +32,7 @@ public class Adr0184UnscopedRefTranslationTests
     [Fact]
     public void UnscopedRefOnIndexerAccessor_IsHoistedToTheMember()
     {
-        string printed = TranslateUnit(@"
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
 using System.Diagnostics.CodeAnalysis;
 
 namespace Demo
@@ -46,12 +50,15 @@ namespace Demo
 }");
 
         Assert.Contains("@UnscopedRef", printed);
+        Assert.DoesNotContain(
+            diagnostics,
+            diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
     }
 
     [Fact]
     public void UnscopedRefOnPropertyAccessor_IsHoistedToTheMember()
     {
-        string printed = TranslateUnit(@"
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
 using System.Diagnostics.CodeAnalysis;
 
 namespace Demo
@@ -69,6 +76,9 @@ namespace Demo
 }");
 
         Assert.Contains("@UnscopedRef", printed);
+        Assert.DoesNotContain(
+            diagnostics,
+            diagnostic => diagnostic.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
     }
 
     [Fact]
@@ -118,9 +128,9 @@ namespace Demo
     /// as equivalent in both placements — is lifted.
     /// </summary>
     [Fact]
-    public void OtherAccessorAttributes_AreNotHoisted()
+    public void PropertyAccessorAttribute_IsDroppedWithWarningInsteadOfHoisted()
     {
-        string printed = TranslateUnit(@"
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
 using System.Runtime.CompilerServices;
 
 namespace Demo
@@ -136,6 +146,47 @@ namespace Demo
 }");
 
         Assert.DoesNotContain("@MethodImpl", printed);
+        TranslationDiagnostic diagnostic = Assert.Single(
+            diagnostics,
+            d => d.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
+        Assert.Equal(TranslationSeverity.Warning, diagnostic.Severity);
+        Assert.Equal("GetAccessorDeclaration", diagnostic.ConstructKind);
+        Assert.Contains("MethodImplAttribute", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("property 'Slot'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "MethodImpl(MethodImplOptions.NoInlining)",
+            diagnostic.Location.SourceTree.GetText().ToString(diagnostic.Location.SourceSpan));
+    }
+
+    [Fact]
+    public void IndexerAccessorAttribute_IsDroppedWithWarningInsteadOfHoisted()
+    {
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
+using System.Runtime.CompilerServices;
+
+namespace Demo
+{
+    public sealed class C
+    {
+        public int this[int index]
+        {
+            [MethodImpl(MethodImplOptions.NoInlining)]
+            get { return index; }
+        }
+    }
+}");
+
+        Assert.DoesNotContain("@MethodImpl", printed);
+        TranslationDiagnostic diagnostic = Assert.Single(
+            diagnostics,
+            d => d.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
+        Assert.Equal(TranslationSeverity.Warning, diagnostic.Severity);
+        Assert.Equal("GetAccessorDeclaration", diagnostic.ConstructKind);
+        Assert.Contains("MethodImplAttribute", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("of indexer", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "MethodImpl(MethodImplOptions.NoInlining)",
+            diagnostic.Location.SourceTree.GetText().ToString(diagnostic.Location.SourceSpan));
     }
 
     /// <summary>
@@ -150,7 +201,7 @@ namespace Demo
     [Fact]
     public void UnscopedRefOnTheSetAccessorOnly_IsNotHoisted()
     {
-        string printed = TranslateUnit(@"
+        (string printed, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
 using System.Diagnostics.CodeAnalysis;
 
 namespace Demo
@@ -169,9 +220,65 @@ namespace Demo
 }");
 
         Assert.DoesNotContain("@UnscopedRef", printed);
+        TranslationDiagnostic diagnostic = Assert.Single(
+            diagnostics,
+            d => d.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
+        Assert.Equal("SetAccessorDeclaration", diagnostic.ConstructKind);
+        Assert.Contains("UnscopedRefAttribute", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public async Task AccessorAttributeWarning_ReachesTranslateLogWithoutFailingTheApp()
+    {
+        string compiler = FindCompiler();
+        if (compiler is null)
+        {
+            return;
+        }
+
+        string projectDir = NewScratchDir("accessor-attribute-warning");
+        File.WriteAllText(Path.Combine(projectDir, "Directory.Build.props"), "<Project></Project>");
+        string projectPath = Path.Combine(projectDir, "Warned.csproj");
+        File.WriteAllText(projectPath, @"<Project Sdk=""Microsoft.NET.Sdk"">
+  <PropertyGroup>
+    <OutputType>Library</OutputType>
+    <TargetFramework>net10.0</TargetFramework>
+  </PropertyGroup>
+</Project>
+");
+        File.WriteAllText(Path.Combine(projectDir, "Warned.cs"), @"
+using System.Runtime.CompilerServices;
+
+public sealed class Warned
+{
+    public int Slot
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        get { return 1; }
+    }
+}");
+
+        string outRoot = NewOutputRoot("accessor-attribute-warning");
+        var options = new PipelineOptions { GscPath = compiler, OutputRoot = outRoot };
+        var pipeline = new MigrationPipeline(options, new IMigrationStage[] { new TranslateStage() });
+        var app = new CorpusApp("test/AccessorAttributeWarning", projectPath, TargetKind.Library);
+
+        RunResult result = await pipeline.RunAsync(new[] { app });
+        AppResult appResult = Assert.Single(result.Apps);
+        Assert.True(appResult.Succeeded, "An accessor-attribute warning must not fail the app.");
+
+        string translateLog = File.ReadAllText(
+            Assert.Single(Directory.GetFiles(outRoot, "translate.log", SearchOption.AllDirectories)));
+        Assert.Contains(CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId, translateLog);
+        Assert.Contains("MethodImplAttribute", translateLog);
+        Assert.Contains("Warned.cs(8,10): warning: GetAccessorDeclaration", translateLog);
     }
 
     private static string TranslateUnit(string source)
+        => TranslateUnitWithDiagnostics(source).Printed;
+
+    private static (string Printed, IReadOnlyList<TranslationDiagnostic> Diagnostics)
+        TranslateUnitWithDiagnostics(string source)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
         Assert.True(
@@ -189,6 +296,40 @@ namespace Demo
             result.Success,
             "Translated G# must round-trip. Errors:\n" +
                 string.Join("\n", result.Errors) + "\n\nPrinted:\n" + printed);
-        return printed;
+        return (printed, context.Diagnostics);
+    }
+
+    private static string NewOutputRoot(string label)
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "pipeline-tests", label, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static string NewScratchDir(string label)
+    {
+        string root = Path.Combine(AppContext.BaseDirectory, "loader-tests", label, Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        return root;
+    }
+
+    private static string FindCompiler()
+    {
+        var dir = new DirectoryInfo(AppContext.BaseDirectory);
+        while (dir is not null)
+        {
+            foreach (string config in new[] { "Release", "Debug" })
+            {
+                string candidate = Path.Combine(dir.FullName, "out", "bin", config, "Compiler", "gsc.dll");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            dir = dir.Parent;
+        }
+
+        return null;
     }
 }

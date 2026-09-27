@@ -22,6 +22,12 @@ namespace Cs2Gs.Translator;
 
 public sealed partial class CSharpToGSharpTranslator
 {
+    /// <summary>
+    /// Identifies a non-fatal warning that an accessor-level attribute could
+    /// not be represented in G# and was dropped.
+    /// </summary>
+    public const string AccessorAttributeDroppedDiagnosticId = "CS2GS-ACCESSOR-ATTRIBUTE-DROPPED";
+
     private sealed partial class DeclarationVisitor
     {
         // ADR-0184: the CLR identity of `[UnscopedRef]`, matched by full name
@@ -1481,8 +1487,9 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// ADR-0184: maps a property/indexer's own attribute lists, then hoists
-        /// an accessor-level <c>[UnscopedRef]</c> up to the member level.
+        /// ADR-0184/#4294: maps a property/indexer's own attribute lists,
+        /// hoists an accessor-level <c>[UnscopedRef]</c> when equivalent, and
+        /// reports every other accessor attribute that cannot be represented.
         /// </summary>
         /// <remarks>
         /// <para>C# accepts <c>[UnscopedRef]</c> on either the property/indexer
@@ -1497,33 +1504,21 @@ public sealed partial class CSharpToGSharpTranslator
         /// and the migrated member is rejected by GS0589. Only
         /// <c>[UnscopedRef]</c> is hoisted: for any other accessor attribute
         /// (say <c>[MethodImpl]</c>) moving it to the property would change what
-        /// it means, so those stay dropped.</para>
+        /// it means, so it is dropped with a visible warning.</para>
         /// </remarks>
         /// <param name="node">The property or indexer declaration.</param>
         /// <returns>The member's attribute list, including any hoisted <c>@UnscopedRef</c>.</returns>
         private List<AttributeUse> MapPropertyAttributes(BasePropertyDeclarationSyntax node)
         {
             List<AttributeUse> attributes = this.MapAttributes(node.AttributeLists);
-            if (node.AccessorList == null
-                || attributes.Any(attribute => IsUnscopedRefAttributeName(attribute.Name)))
+            if (node.AccessorList == null)
             {
                 return attributes;
             }
 
+            bool hasUnscopedRef = attributes.Any(attribute => IsUnscopedRefAttributeName(attribute.Name));
             foreach (AccessorDeclarationSyntax accessor in node.AccessorList.Accessors)
             {
-                // Only a GET-level `[UnscopedRef]` is equivalent to the
-                // member-level placement: the member-level G# annotation is
-                // emitted on the PropertyDef, which a C# consumer (and gsc's
-                // own IsUnscopedRefIndexerGetter) reads as the GETTER's
-                // contract. Hoisting a `set`/`init`-level one would move a
-                // setter's contract onto the getter and say something the C#
-                // source never said.
-                if (!accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
-                {
-                    continue;
-                }
-
                 foreach (AttributeListSyntax list in accessor.AttributeLists)
                 {
                     foreach (AttributeSyntax attribute in list.Attributes)
@@ -1533,15 +1528,41 @@ public sealed partial class CSharpToGSharpTranslator
                             attribute,
                             out INamedTypeSymbol attributeType,
                             out IAliasSymbol sourceAlias);
-                        if (attributeType?.ToDisplayString() != UnscopedRefAttributeFullName)
+                        bool isUnscopedRef =
+                            attributeType?.ToDisplayString() == UnscopedRefAttributeFullName;
+
+                        // Only a GET-level `[UnscopedRef]` is equivalent to the
+                        // member-level placement: the member-level G# annotation
+                        // is emitted on the PropertyDef, which a C# consumer
+                        // (and gsc's own IsUnscopedRefIndexerGetter) reads as the
+                        // GETTER's contract.
+                        if (isUnscopedRef
+                            && accessor.IsKind(SyntaxKind.GetAccessorDeclaration))
                         {
+                            if (!hasUnscopedRef)
+                            {
+                                this.typeMapper.TrackAttributeType(attributeType, sourceAlias);
+                                attributes.Add(new AttributeUse(
+                                    this.TranslateAttributeName(attribute, attributeType, sourceAlias)));
+                                hasUnscopedRef = true;
+                            }
+
                             continue;
                         }
 
-                        this.typeMapper.TrackAttributeType(attributeType, sourceAlias);
-                        attributes.Add(new AttributeUse(
-                            this.TranslateAttributeName(attribute, attributeType, sourceAlias)));
-                        return attributes;
+                        string attributeName = attributeType?.ToDisplayString()
+                            ?? attribute.Name.ToString();
+                        string member = node is PropertyDeclarationSyntax property
+                            ? $"property '{property.Identifier.ValueText}'"
+                            : "indexer";
+                        this.context.Report(new TranslationDiagnostic(
+                            accessor.Kind().ToString(),
+                            $"accessor-level attribute '{attributeName}' on the '{accessor.Keyword.ValueText}' accessor of {member} has no G# accessor-level representation and was dropped; it was not hoisted because moving it to the member would change its meaning.",
+                            attribute.GetLocation(),
+                            TranslationSeverity.Warning)
+                        {
+                            DiagnosticId = AccessorAttributeDroppedDiagnosticId,
+                        });
                     }
                 }
             }
