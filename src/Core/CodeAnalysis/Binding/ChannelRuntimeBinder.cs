@@ -830,7 +830,10 @@ internal sealed class ChannelRuntimeBinder
             return call;
         }
 
-        return call.WithArguments(arguments);
+        var refKinds = call.ArgumentRefKinds.IsDefault
+            ? default
+            : call.ArgumentRefKinds.Add(RefKind.None);
+        return call.WithArguments(arguments, refKinds);
     }
 
     /// <summary>Recovers the direction a facade call was bound with from its carrier parameter.</summary>

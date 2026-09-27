@@ -61,4 +61,13 @@ public sealed class BoundClrStaticCallExpression : BoundCallOperationExpression
     /// <returns>An equivalent call containing <paramref name="arguments"/>.</returns>
     public BoundClrStaticCallExpression WithArguments(ImmutableArray<BoundExpression> arguments)
         => new(Syntax, Method, Type, arguments, ArgumentRefKinds);
+
+    /// <summary>Creates an equivalent call with replacement arguments and ref kinds.</summary>
+    /// <param name="arguments">The replacement arguments.</param>
+    /// <param name="argumentRefKinds">The replacement per-argument ref kinds.</param>
+    /// <returns>An equivalent call containing the replacements.</returns>
+    public BoundClrStaticCallExpression WithArguments(
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<RefKind> argumentRefKinds)
+        => new(Syntax, Method, Type, arguments, argumentRefKinds);
 }

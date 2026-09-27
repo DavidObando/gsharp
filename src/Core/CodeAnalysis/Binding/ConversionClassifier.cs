@@ -2506,7 +2506,7 @@ internal sealed class ConversionClassifier
                     {
                         return targetType is FunctionTypeSymbol
                             ? adapted
-                            : new BoundConversionExpression(null, requiredTargetType, adapted);
+                            : new BoundConversionExpression(group.Syntax, requiredTargetType, adapted);
                     }
                 }
 
