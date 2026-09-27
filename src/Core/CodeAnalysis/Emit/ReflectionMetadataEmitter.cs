@@ -4962,8 +4962,11 @@ internal sealed class ReflectionMetadataEmitter
             return false;
         }
 
+        // Keep lvalue storage in place even when generic construction
+        // substituted the FieldSymbol. MethodBodyEmitter resolves the token
+        // against the open definition; StructFieldDefs identity is not an
+        // addressability test.
         if (receiver is BoundFieldAccessExpression fa
-            && this.cache.StructFieldDefs.ContainsKey(fa.Field)
             && this.IsAddressableFieldAccessForReceiverSpill(fa, function, locals))
         {
             return false;
@@ -5045,8 +5048,7 @@ internal sealed class ReflectionMetadataEmitter
             return true;
         }
 
-        if (fa.Receiver is BoundFieldAccessExpression nested
-            && this.cache.StructFieldDefs.ContainsKey(nested.Field))
+        if (fa.Receiver is BoundFieldAccessExpression nested)
         {
             return this.IsAddressableFieldAccessForReceiverSpill(nested, function, locals);
         }

@@ -1622,9 +1622,11 @@ internal sealed partial class MethodBodyEmitter
             // field chain is itself addressable*. Otherwise `ldflda` on a
             // value on the evaluation stack produces invalid IL
             // (InvalidProgramException at JIT time).
+            // Addressability is a property of the storage chain, not of the
+            // FieldSymbol instance. Constructed generic members carry
+            // substituted symbols that are absent from StructFieldDefs; the
+            // generic-aware token resolver below maps them to the open field.
             if (receiver is BoundFieldAccessExpression fa
-                && (this.outer.cache.StructFieldDefs.ContainsKey(fa.Field)
-                    || IsSubmissionRootedFieldChain(fa))
                 && this.IsAddressableFieldAccess(fa))
             {
                 this.EmitFieldAddress(fa);
@@ -1809,7 +1811,6 @@ internal sealed partial class MethodBodyEmitter
         // Slot planning deliberately skips receivers whose field address can be
         // loaded directly; mirror that decision instead of demanding a spill.
         if (receiver is BoundFieldAccessExpression fieldAccess
-            && this.outer.cache.StructFieldDefs.ContainsKey(fieldAccess.Field)
             && this.IsAddressableFieldAccess(fieldAccess))
         {
             this.EmitFieldAddress(fieldAccess);
@@ -1867,9 +1868,7 @@ internal sealed partial class MethodBodyEmitter
             return true;
         }
 
-        if (fa.Receiver is BoundFieldAccessExpression nested
-            && (this.outer.cache.StructFieldDefs.ContainsKey(nested.Field)
-                || IsSubmissionRootedFieldChain(nested)))
+        if (fa.Receiver is BoundFieldAccessExpression nested)
         {
             return this.IsAddressableFieldAccess(nested);
         }
@@ -2212,8 +2211,6 @@ internal sealed partial class MethodBodyEmitter
         }
         else if (!receiverIsClass
             && fa.Receiver is BoundFieldAccessExpression nested
-            && (this.outer.cache.StructFieldDefs.ContainsKey(nested.Field)
-                || IsSubmissionRootedFieldChain(nested))
             && this.IsAddressableFieldAccess(nested))
         {
             this.EmitFieldAddress(nested);
