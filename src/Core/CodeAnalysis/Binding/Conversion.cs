@@ -2072,15 +2072,13 @@ public sealed class Conversion
                     // `Classify` at all — a value-type argument on either
                     // side means the two constructed interfaces are genuinely
                     // different CLR types, not variance-compatible ones.
-                    if (!IsReferenceTypeArgument(fromArg) || !IsReferenceTypeArgument(toArg))
-                    {
-                        return false;
-                    }
-
                     // Covariant: the source argument must implicitly
                     // convert to the target argument (string -> object).
-                    var covariant = Classify(fromArg, toArg);
-                    if (!covariant.Exists || !covariant.IsImplicit)
+                    // #4420: an element conversion that needs ADR-0186 §4's
+                    // nil check (`string!` -> `object`) is not variance: a
+                    // variance conversion reads every element through the
+                    // target view with no per-element check point.
+                    if (!IsVarianceArgumentCompatible(fromArg, toArg, allowPlatformNilCheck: false))
                     {
                         return false;
                     }
@@ -2090,16 +2088,13 @@ public sealed class Conversion
                 case TypeParameterVariance.In:
                     // Same reference-type-only restriction as the `Out` case
                     // above, applied symmetrically to the contravariant slot.
-                    if (!IsReferenceTypeArgument(fromArg) || !IsReferenceTypeArgument(toArg))
-                    {
-                        return false;
-                    }
-
                     // Contravariant: the TARGET argument must implicitly
                     // convert to the SOURCE argument (object -> string),
                     // so the narrower interface accepts the wider one.
-                    var contravariant = Classify(toArg, fromArg);
-                    if (!contravariant.Exists || !contravariant.IsImplicit)
+                    // #4420: symmetric to the covariant arm. A view that
+                    // writes `string!` (possibly nil) into a sink declared
+                    // non-null `object` has no per-element check point.
+                    if (!IsVarianceArgumentCompatible(toArg, fromArg, allowPlatformNilCheck: false))
                     {
                         return false;
                     }
@@ -3147,6 +3142,7 @@ public sealed class Conversion
             return false;
         }
 
+        var isDelegateConformanceBoundary = ClrTypeUtilities.IsDelegateType(targetOpen);
         for (var i = 0; i < sourceArguments.Length; i++)
         {
             var sourceArgument = sourceArguments[i];
@@ -3186,13 +3182,9 @@ public sealed class Conversion
             var compatible = variance switch
             {
                 System.Reflection.GenericParameterAttributes.Covariant =>
-                    IsReferenceTypeArgument(sourceArgument)
-                    && IsReferenceTypeArgument(targetArgument)
-                    && Classify(sourceArgument, targetArgument) is { Exists: true, IsImplicit: true },
+                    IsVarianceArgumentCompatible(sourceArgument, targetArgument, isDelegateConformanceBoundary),
                 System.Reflection.GenericParameterAttributes.Contravariant =>
-                    IsReferenceTypeArgument(sourceArgument)
-                    && IsReferenceTypeArgument(targetArgument)
-                    && Classify(targetArgument, sourceArgument) is { Exists: true, IsImplicit: true },
+                    IsVarianceArgumentCompatible(targetArgument, sourceArgument, isDelegateConformanceBoundary),
                 _ => false,
             };
             if (!compatible)
@@ -3302,6 +3294,34 @@ public sealed class Conversion
     /// </summary>
     private static bool DerivesFromConstructed(StructSymbol fromClass, StructSymbol toClass)
     {
+        if (!TryProjectConstructedBaseArguments(fromClass, toClass, out var projected)
+            || projected.Length != toClass.TypeArguments.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < projected.Length; i++)
+        {
+            if (!AreTypeArgumentsEquivalent(projected[i], toClass.TypeArguments[i]))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>
+    /// Projects a constructed G# class onto a same-compilation generic base,
+    /// preserving symbolic type arguments through every inheritance hop.
+    /// </summary>
+    private static bool TryProjectConstructedBaseArguments(
+        StructSymbol fromClass,
+        StructSymbol toClass,
+        out ImmutableArray<TypeSymbol> projected)
+    {
+        projected = ImmutableArray<TypeSymbol>.Empty;
+
         // Maps each visited class's declaration type parameters onto concrete
         // type arguments resolved in fromClass's context, composed across hops.
         Dictionary<TypeParameterSymbol, TypeSymbol>? running = null;
@@ -3310,8 +3330,21 @@ public sealed class Conversion
         {
             // The most-derived class itself is the identity case (handled by the
             // caller); only its base chain is an upcast target.
-            if (!ReferenceEquals(c, fromClass) && MatchesConstructedTarget(c, toClass, running))
+            if (!ReferenceEquals(c, fromClass)
+                && ReferenceEquals(c.Definition, toClass.Definition))
             {
+                if (c.TypeArguments.IsDefaultOrEmpty)
+                {
+                    return toClass.TypeArguments.IsDefaultOrEmpty;
+                }
+
+                var builder = ImmutableArray.CreateBuilder<TypeSymbol>(c.TypeArguments.Length);
+                foreach (var argument in c.TypeArguments)
+                {
+                    builder.Add(running == null ? argument : Binder.SubstituteType(argument, running));
+                }
+
+                projected = builder.MoveToImmutable();
                 return true;
             }
 
@@ -3326,12 +3359,9 @@ public sealed class Conversion
                 var count = Math.Min(defParams.Length, c.TypeArguments.Length);
                 for (var i = 0; i < count; i++)
                 {
-                    var arg = c.TypeArguments[i];
-                    if (arg is TypeParameterSymbol tpArg && running != null
-                        && running.TryGetValue(tpArg, out var resolved))
-                    {
-                        arg = resolved;
-                    }
+                    var arg = running == null
+                        ? c.TypeArguments[i]
+                        : Binder.SubstituteType(c.TypeArguments[i], running);
 
                     running ??= new Dictionary<TypeParameterSymbol, TypeSymbol>();
                     running[defParams[i]] = arg;
@@ -3340,52 +3370,6 @@ public sealed class Conversion
         }
 
         return false;
-    }
-
-    /// <summary>
-    /// Issue #1248: tests whether a base-chain class <paramref name="c"/>, after
-    /// substituting its type arguments through <paramref name="running"/>, denotes
-    /// the same constructed type as <paramref name="toClass"/>.
-    /// </summary>
-    private static bool MatchesConstructedTarget(
-        StructSymbol c,
-        StructSymbol toClass,
-        Dictionary<TypeParameterSymbol, TypeSymbol>? running)
-    {
-        if (!ReferenceEquals(c.Definition, toClass.Definition))
-        {
-            return false;
-        }
-
-        // Non-generic class along the chain: definition identity is sufficient.
-        if (c.TypeArguments.IsDefaultOrEmpty && toClass.TypeArguments.IsDefaultOrEmpty)
-        {
-            return true;
-        }
-
-        if (c.TypeArguments.IsDefaultOrEmpty
-            || toClass.TypeArguments.IsDefaultOrEmpty
-            || c.TypeArguments.Length != toClass.TypeArguments.Length)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < c.TypeArguments.Length; i++)
-        {
-            var arg = c.TypeArguments[i];
-            if (arg is TypeParameterSymbol tp && running != null
-                && running.TryGetValue(tp, out var resolved))
-            {
-                arg = resolved;
-            }
-
-            if (!AreTypeArgumentsEquivalent(arg, toClass.TypeArguments[i]))
-            {
-                return false;
-            }
-        }
-
-        return true;
     }
 
     /// <summary>
@@ -3478,7 +3462,10 @@ public sealed class Conversion
         // A pair this cannot compare — `[]string! -> object`,
         // `[]string! -> IEnumerable[string]`, anything that is not the same
         // container shape — is DECLINED here, not rejected, and falls
-        // through to the ordinary rows below.
+        // through to the ordinary rows below. A supertype view that promises
+        // non-null elements (`IEnumerable[string]`) is then rejected by
+        // `TryClassifyPlatformTypeArgumentMismatch` when the underlying pair
+        // is classified (#4420); `object` and a nilable element view are not.
         if (TryGetPlatformArgumentPairs(underlying, to, out var elementSource, out var elementTarget))
         {
             for (var i = 0; i < elementSource.Length; i++)
@@ -3602,8 +3589,50 @@ public sealed class Conversion
         out Conversion conversion)
     {
         conversion = Conversion.None;
-        if (from is null || to is null
-            || (!ContainsPlatformType(from) && !ContainsPlatformType(to)))
+        if (from is null || to is null)
+        {
+            return false;
+        }
+
+        // ADR-0186 open question 13: function and delegate conversions are
+        // conformance boundaries, not container value conversions. They have
+        // no expression-level point at which rule 3's nested nil check could
+        // be inserted, so this arm must consistently decline them whether the
+        // delegate is represented as a FunctionTypeSymbol, DelegateTypeSymbol,
+        // or imported CLR type.
+        if (IsDelegateConformanceBoundary(from) || IsDelegateConformanceBoundary(to))
+        {
+            return false;
+        }
+
+        // #4420: an UPCAST (`List[string!]` to `IEnumerable[string]`,
+        // `[]string!` to `IReadOnlyList[string]`) is the same aliasing hazard
+        // through a supertype view: the callee reads non-null elements from a
+        // container that may hold nil, and no check point exists. The pair
+        // has two different generic definitions, so the same-shape comparison
+        // below declines it, and the ordinary upcast rules strip the nested
+        // annotation and admit it. Project the source's own positions onto
+        // the destination's definition through its bases and interfaces and
+        // apply rule 3 there. It runs before the platform-presence gate
+        // because that gate does not look inside a flags-annotated array
+        // (`[]!string!`); the projection reads positions itself. Only the
+        // illegal direction is decided here; a legal pair falls through to
+        // the rules below, unchanged. Function shapes and value-type
+        // containers are excluded for the reasons given below.
+        if (!IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from))
+            && TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments))
+        {
+            for (var i = 0; i < projected.Length; i++)
+            {
+                if (IsProjectedPlatformArgumentIllegal(projected[i], supertypeArguments[i])
+                    || IsCovariantPlatformEscape(projected[i], supertypeArguments[i]))
+                {
+                    return true;
+                }
+            }
+        }
+
+        if (!ContainsPlatformType(from) && !ContainsPlatformType(to))
         {
             return false;
         }
@@ -3654,11 +3683,6 @@ public sealed class Conversion
         //
         // Declining hands the pair back to the rules that already answer it,
         // which is what this arm does for every pair it cannot speak to.
-        if (from is FunctionTypeSymbol || to is FunctionTypeSymbol)
-        {
-            return false;
-        }
-
         // A VALUE-TYPE container is copied, not aliased, so rule 3's argument
         // does not reach it either.
         //
@@ -3698,6 +3722,18 @@ public sealed class Conversion
         var widens = false;
         for (var i = 0; i < fromArguments.Length; i++)
         {
+            // #4420: a same-definition variant view is decided here too. A
+            // metadata-backed `IEnumerable[string!]!` reaches the ordinary
+            // variance check only after its argument flags are stripped, so
+            // the guard there never sees the `!`. A pair of DIFFERENT types
+            // at an invariant position is rejected by the ordinary rules
+            // anyway, so rejecting the escape here costs nothing.
+            if (IsCovariantPlatformEscape(fromArguments[i], toArguments[i]))
+            {
+                conversion = Conversion.None;
+                return true;
+            }
+
             switch (RelatePlatformArguments(fromArguments[i], toArguments[i]))
             {
                 case PlatformArgumentRelation.Same:
@@ -3888,6 +3924,348 @@ public sealed class Conversion
         return relation;
     }
 
+    private static bool IsArrayElementInterface(Type definition)
+        => definition.FullName is "System.Collections.Generic.IEnumerable`1"
+            or "System.Collections.Generic.ICollection`1"
+            or "System.Collections.Generic.IList`1"
+            or "System.Collections.Generic.IReadOnlyCollection`1"
+            or "System.Collections.Generic.IReadOnlyList`1";
+
+    /// <summary>
+    /// #4420: whether a supertype view reads a platform element as a
+    /// DIFFERENT non-null reference type through CLR variance
+    /// (<c>List[string!]</c> to <c>IEnumerable[object]</c>).
+    /// <see cref="RelatePlatformArguments"/> only compares the same underlying
+    /// type, so it calls this pair unrelated and hands it to the ordinary
+    /// covariance rule, which admits it. The view is then a non-null read of
+    /// an element that may be nil, which is rule 3's hazard. A nilable
+    /// (<c>object?</c>) or platform target argument is not an escape.
+    /// </summary>
+    /// <param name="projected">The source element, projected onto the target's definition.</param>
+    /// <param name="target">The target's argument at the same position.</param>
+    /// <returns><see langword="true"/> when the view must be rejected.</returns>
+    private static bool IsCovariantPlatformEscape(TypeSymbol? projected, TypeSymbol? target)
+        => IsVariantPlatformEscape(projected, target) || IsVariantPlatformEscape(target, projected);
+
+    // One direction of the escape: a platform element on one side, a
+    // different non-null reference type on the other, related by an implicit
+    // conversion from the platform's underlying type. Read as covariance
+    // (`List[string!]` -> `IEnumerable[object]`) or, reversed, as
+    // contravariance (`IIn[object]` -> `IIn[string!]`, which writes a
+    // possibly-nil `string!` into a sink declared non-null `object`).
+    private static bool IsVariantPlatformEscape(TypeSymbol? platformSide, TypeSymbol? otherSide)
+        => platformSide is PlatformTypeSymbol platform
+            && otherSide is not null
+            && otherSide is not NullableTypeSymbol
+            && otherSide is not PlatformTypeSymbol
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(platform.UnderlyingType, otherSide)
+            && IsNonNullReferenceDestination(otherSide)
+            && ClassifyCore(platform.UnderlyingType, otherSide, allowStructuralProjection: false).IsImplicit;
+
+    private static bool AnyContainsPlatformType(ImmutableArray<TypeSymbol> types)
+    {
+        foreach (var type in types)
+        {
+            if (ContainsPlatformType(type))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static IEnumerable<Type> SupertypesOf(Type definition)
+    {
+        // The repository's cached reader completes interfaces inherited
+        // through a base class, which `GetInterfaces` does not under every
+        // MetadataLoadContext.
+        foreach (var candidate in ClrTypeUtilities.SafeGetInterfaces(definition))
+        {
+            yield return candidate;
+        }
+
+        for (var current = definition.BaseType; current != null && current.FullName != "System.Object"; current = current.BaseType)
+        {
+            yield return current;
+        }
+    }
+
+    /// <summary>
+    /// #4420: projects a same-compilation type's substituted imported
+    /// supertype (an implemented CLR interface or an imported base class)
+    /// onto <paramref name="to"/>. The supertype either IS the target's
+    /// definition, or reaches it through its own CLR hierarchy, which the
+    /// imported arm of <see cref="TryProjectPlatformArgumentsToSupertype"/>
+    /// walks; an imported symbol is never a same-compilation one, so that
+    /// recursion is one level.
+    /// </summary>
+    /// <param name="implemented">The substituted imported supertype.</param>
+    /// <param name="to">The conversion target.</param>
+    /// <param name="targetDefinition">The target's generic definition.</param>
+    /// <param name="targetArguments">The target's arguments.</param>
+    /// <param name="projected">The supertype's arguments at the target's definition.</param>
+    /// <param name="projectedTargetArguments">The target arguments to compare against.</param>
+    /// <returns><see langword="true"/> when a projection was found.</returns>
+    private static bool TryProjectOntoImportedSupertype(
+        TypeSymbol implemented,
+        TypeSymbol to,
+        Type targetDefinition,
+        ImmutableArray<TypeSymbol> targetArguments,
+        out ImmutableArray<TypeSymbol> projected,
+        out ImmutableArray<TypeSymbol> projectedTargetArguments)
+    {
+        projectedTargetArguments = targetArguments;
+        if (TryGetConstructedGenericArguments(implemented, out var implementedArguments, out var implementedClr)
+            && implementedClr is { IsGenericType: true }
+            && ClrTypeUtilities.AreSame(
+                implementedClr.IsGenericTypeDefinition ? implementedClr : implementedClr.GetGenericTypeDefinition(),
+                targetDefinition)
+            && implementedArguments.Length == targetArguments.Length)
+        {
+            projected = implementedArguments;
+            return true;
+        }
+
+        projected = ImmutableArray<TypeSymbol>.Empty;
+        return implemented is not StructSymbol
+            && implemented is not InterfaceSymbol
+            && TryProjectPlatformArgumentsToSupertype(implemented, to, out projected, out projectedTargetArguments);
+    }
+
+    /// <summary>
+    /// #4420: projects <paramref name="from"/>'s element positions onto the
+    /// generic definition of <paramref name="to"/>, when that definition is a
+    /// base type or interface of the source's (or an array-compatible
+    /// interface of an array or slice source). The positions are the source's
+    /// own, read through <see cref="TypeSymbol.GetElementPositions"/>, so a
+    /// nested <c>T!</c> survives the projection; a CLR-shape projection would
+    /// erase it.
+    /// </summary>
+    /// <param name="from">The conversion source.</param>
+    /// <param name="to">The conversion target.</param>
+    /// <param name="projected">The source's arguments at the target's definition.</param>
+    /// <param name="targetArguments">The target's arguments.</param>
+    /// <returns><see langword="true"/> when a projection was found.</returns>
+    private static bool TryProjectPlatformArgumentsToSupertype(
+        TypeSymbol? from,
+        TypeSymbol? to,
+        out ImmutableArray<TypeSymbol> projected,
+        out ImmutableArray<TypeSymbol> targetArguments)
+    {
+        projected = ImmutableArray<TypeSymbol>.Empty;
+        targetArguments = ImmutableArray<TypeSymbol>.Empty;
+        from = UnwrapPlatformAndNullable(from);
+        to = UnwrapPlatformAndNullable(to);
+        if (from is null
+            || to is null)
+        {
+            return false;
+        }
+
+        // A same-compilation G# base class has no CLR type while binding.
+        // Reuse the same symbolic hierarchy projection as the ordinary class
+        // upcast so rule 3 sees `Parent[string!]`, not the erased match that
+        // DerivesFromConstructed intentionally uses for runtime identity.
+        if (from is StructSymbol sourceClass
+            && to is StructSymbol targetClass
+            && !targetClass.TypeArguments.IsDefaultOrEmpty
+            && TryProjectConstructedBaseArguments(sourceClass, targetClass, out projected)
+            && projected.Length == targetClass.TypeArguments.Length
+            && (AnyContainsPlatformType(projected) || AnyContainsPlatformType(targetClass.TypeArguments)))
+        {
+            targetArguments = targetClass.TypeArguments;
+            return true;
+        }
+
+        if (!TryGetConstructedGenericArguments(to, out targetArguments, out var targetClr)
+            || targetArguments.IsDefaultOrEmpty
+            || targetClr is not { IsGenericType: true })
+        {
+            return false;
+        }
+
+        var targetDefinition = targetClr.IsGenericTypeDefinition ? targetClr : targetClr.GetGenericTypeDefinition();
+        var positions = from.GetElementPositions();
+        if (positions.IsDefaultOrEmpty)
+        {
+            return false;
+        }
+
+        // Hot path: ordinary generic upcasts carry no platform position, so
+        // decline before any hierarchy walk. The vectors are checked rather
+        // than the outer types, because a flags-annotated array hides its
+        // element from the outer-type test.
+        if (!AnyContainsPlatformType(positions) && !AnyContainsPlatformType(targetArguments))
+        {
+            return false;
+        }
+
+        // A same-compilation G# interface has no ClrType either; its
+        // substituted `BaseClrInterfaces` (across its base interfaces) are
+        // what admit the ordinary upcast.
+        if (from is InterfaceSymbol sourceInterface)
+        {
+            foreach (var level in sourceInterface.SelfAndAllBaseInterfaces())
+            {
+                foreach (var implemented in level.BaseClrInterfaces)
+                {
+                    if (implemented is not null
+                        && TryProjectOntoImportedSupertype(implemented, to, targetDefinition, targetArguments, out projected, out var interfaceTargetArguments))
+                    {
+                        targetArguments = interfaceTargetArguments;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        // A same-compilation G# class has no ClrType while binding. Its
+        // substituted `ImplementedClrInterfaces` are what admit the ordinary
+        // upcast, and they carry the symbolic arguments (a `Repo[string!]`'s
+        // `IEnumerable[string!]`), so project through them.
+        if (from is StructSymbol sourceStruct)
+        {
+            foreach (var level in GetStructHierarchy(sourceStruct))
+            {
+                // The level's substituted imported supertypes: each directly
+                // implemented CLR interface, and the imported base class.
+                // Each either IS the target's definition or reaches it
+                // through its own CLR hierarchy (`IChild<T> : IEnumerable<T>`,
+                // `Base<T> : List<T>`), which the imported arm below walks;
+                // they are imported symbols, so this recursion is one level.
+                var importedSupertypes = level.ImportedBaseType is { } importedBase
+                    ? level.ImplementedClrInterfaces.Add(importedBase)
+                    : level.ImplementedClrInterfaces;
+                foreach (var implemented in importedSupertypes)
+                {
+                    if (implemented is not null
+                        && TryProjectOntoImportedSupertype(implemented, to, targetDefinition, targetArguments, out projected, out var classTargetArguments))
+                    {
+                        targetArguments = classTargetArguments;
+                        return true;
+                    }
+                }
+            }
+
+            return false;
+        }
+
+        var sourceIsArray = from is SliceTypeSymbol or ArrayTypeSymbol
+            || (from is NullabilityAnnotatedTypeSymbol { ClrType.IsArray: true } && from.ClrType?.GetArrayRank() == 1);
+        if (sourceIsArray)
+        {
+            if (targetArguments.Length == 1
+                && positions.Length == 1
+                && IsArrayElementInterface(targetDefinition))
+            {
+                projected = positions;
+                return true;
+            }
+
+            return false;
+        }
+
+        var sourceClr = from is ImportedTypeSymbol { OpenDefinition: { } importedOpen }
+            ? importedOpen
+            : from.ClrType;
+        if (sourceClr is not { IsGenericType: true })
+        {
+            return false;
+        }
+
+        var sourceDefinition = sourceClr.IsGenericTypeDefinition ? sourceClr : sourceClr.GetGenericTypeDefinition();
+        if (sourceDefinition.GetGenericArguments().Length != positions.Length)
+        {
+            return false;
+        }
+
+        // The source's own definition is a valid projection too: a
+        // metadata-backed `IEnumerable[string!]!` against `IEnumerable[object]`
+        // compares closed CLR types that differ (`<string>` vs `<object>`),
+        // so the same-shape comparison declines it, and the variance check
+        // below only ever sees the flag-stripped `string`.
+        if (ClrTypeUtilities.AreSame(sourceDefinition, targetDefinition))
+        {
+            // Compare against the target's own positions: a magic collection
+            // (`map[K, V?]`) reports nullability-erased constructed arguments,
+            // which would turn rule 2's legal `string! -> string?` into an
+            // apparent `string! -> string`.
+            projected = positions;
+            targetArguments = to.GetElementPositions();
+            return positions.Length == targetArguments.Length;
+        }
+
+        foreach (var candidate in SupertypesOf(sourceDefinition))
+        {
+            Type candidateDefinition;
+            Type[] candidateArguments;
+            try
+            {
+                if (!candidate.IsGenericType)
+                {
+                    continue;
+                }
+
+                candidateDefinition = candidate.IsGenericTypeDefinition ? candidate : candidate.GetGenericTypeDefinition();
+                candidateArguments = candidate.GetGenericArguments();
+            }
+            catch (NotSupportedException)
+            {
+                continue;
+            }
+
+            if (!ClrTypeUtilities.AreSame(candidateDefinition, targetDefinition)
+                || candidateArguments.Length != targetArguments.Length)
+            {
+                continue;
+            }
+
+            // Project every supertype argument through the source's symbolic
+            // positions. The nullability-free funnel is appropriate here:
+            // these are hierarchy shapes, not signature positions with
+            // declaration nullability to merge. It also recursively preserves
+            // platform holes inside composite arguments such as `List<T>`.
+            var builder = ImmutableArray.CreateBuilder<TypeSymbol>(candidateArguments.Length);
+            foreach (var argument in candidateArguments)
+            {
+                builder.Add(MemberLookup.MapOpenClrTypeToSymbolicWithoutNullability(
+                    argument,
+                    sourceDefinition,
+                    positions,
+                    NullabilityFreeReason.TypeStructure));
+            }
+
+            projected = builder.MoveToImmutable();
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsProjectedPlatformArgumentIllegal(TypeSymbol projected, TypeSymbol target)
+    {
+        if (RelatePlatformArguments(projected, target) != PlatformArgumentRelation.Illegal)
+        {
+            return false;
+        }
+
+        // Same-shape arguments are rule 3's direct aliasing case. Different
+        // shapes need their own supertype projection: `List<string!>` to
+        // `IReadOnlyList<string>` exposes the platform element and is unsafe,
+        // while `List<string!>` to `object` hides it and is an ordinary safe
+        // covariance step.
+        if (TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(projected, target))
+        {
+            return true;
+        }
+
+        return TryClassifyPlatformTypeArgumentMismatch(projected, target, out var nested)
+            && !nested.IsImplicit;
+    }
+
     /// <summary>
     /// The corresponding <b>argument positions</b> of two types, when the two
     /// are the same constructed shape, with their reference nullability
@@ -4004,6 +4382,29 @@ public sealed class Conversion
         }
 
         return type;
+    }
+
+    private static bool IsDelegateConformanceBoundary(TypeSymbol? type)
+    {
+        type = UnwrapPlatformAndNullable(type);
+        return type is FunctionTypeSymbol or DelegateTypeSymbol
+            || ClrTypeUtilities.IsDelegateType(type?.ClrType);
+    }
+
+    private static bool IsVarianceArgumentCompatible(
+        TypeSymbol source,
+        TypeSymbol target,
+        bool allowPlatformNilCheck)
+    {
+        if (!IsReferenceTypeArgument(source) || !IsReferenceTypeArgument(target))
+        {
+            return false;
+        }
+
+        var conversion = Classify(source, target);
+        return conversion.Exists
+            && conversion.IsImplicit
+            && (allowPlatformNilCheck || !conversion.RequiresPlatformNilCheck);
     }
 
     /// <summary>

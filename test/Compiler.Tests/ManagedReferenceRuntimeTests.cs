@@ -5,6 +5,7 @@
 using System;
 using System.Diagnostics;
 using System.Runtime.CompilerServices;
+using System.Threading.Tasks;
 using Gsharp.Values;
 using Xunit;
 using Xunit.Abstractions;
@@ -25,10 +26,14 @@ public sealed class ManagedReferenceRuntimeTests
         var slice = Slice<int>.FromArray(array).Subslice(1, 2, 2);
         var fromSlice = slice.GetManagedReference(0);
         var readOnly = slice.AsReadOnly().GetReadOnlyManagedReference(0);
+        var directReadOnly = ReadOnlyManagedRef<int>.FromArray(array, 1);
         Assert.NotSame(direct, fromSlice);
         Assert.True(direct == fromSlice);
         Assert.True(direct.SameLocation(readOnly));
+        Assert.True(direct.SameLocation(directReadOnly));
+        Assert.True(readOnly.Equals(directReadOnly));
         Assert.Equal(direct.GetHashCode(), readOnly.GetHashCode());
+        Assert.Equal(direct.GetHashCode(), directReadOnly.GetHashCode());
         var hash = direct.GetHashCode();
         ref readonly var observed = ref readOnly.Borrow();
         var grown = slice.Append(4);
@@ -39,6 +44,69 @@ public sealed class ManagedReferenceRuntimeTests
         Assert.Equal(hash, direct.GetHashCode());
         Assert.False(direct.SameLocation(ManagedRef<int>.FromArray(array, 0)));
         Assert.False(direct.SameLocation(ManagedRef<int>.FromArray(new[] { 1, 17, 3 }, 1)));
+    }
+
+    [Fact]
+    public void ArrayLocationIdentityIsLazyCachedAndSafelyPublished()
+    {
+        const int Iterations = 20_000;
+        var owner = new[] { 7 };
+        WarmLocationFactories(owner);
+
+        var checksum = 0;
+        var before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < Iterations; i++)
+        {
+            checksum += ManagedRef<int>.FromArray(owner, 0).Borrow();
+        }
+
+        var immediateBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var retained = new ManagedRef<int>[Iterations];
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < retained.Length; i++)
+        {
+            retained[i] = ManagedRef<int>.FromArray(owner, 0);
+        }
+
+        var retainedBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var readOnly = new ReadOnlyManagedRef<int>[Iterations];
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < readOnly.Length; i++)
+        {
+            readOnly[i] = ReadOnlyManagedRef<int>.FromArray(owner, 0);
+        }
+
+        var readOnlyBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var keys = new ManagedLocationKey[Iterations];
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < retained.Length; i++)
+        {
+            keys[i] = retained[i].GetLocation();
+        }
+
+        var firstIdentityBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        before = GC.GetAllocatedBytesForCurrentThread();
+        for (var i = 0; i < retained.Length; i++)
+        {
+            Assert.Same(keys[i], retained[i].GetLocation());
+        }
+
+        var warmedIdentityBytes = GC.GetAllocatedBytesForCurrentThread() - before;
+        var concurrentlyObserved = new ManagedLocationKey[Environment.ProcessorCount * 4];
+        Parallel.For(0, concurrentlyObserved.Length, i => concurrentlyObserved[i] = readOnly[0].GetLocation());
+
+        Assert.Equal(Iterations * 7, checksum);
+        Assert.InRange(immediateBytes, 1, Iterations * 40L);
+        Assert.InRange(retainedBytes, 1, Iterations * 40L);
+        Assert.InRange(readOnlyBytes, 1, Iterations * 40L);
+        Assert.InRange(firstIdentityBytes, 1, Iterations * 40L);
+        Assert.Equal(0, warmedIdentityBytes);
+        Assert.All(concurrentlyObserved, key => Assert.Same(concurrentlyObserved[0], key));
+        this.output.WriteLine(
+            $"iterations={Iterations}; immediate={immediateBytes}; retained={retainedBytes}; " +
+            $"readonly={readOnlyBytes}; first-identity={firstIdentityBytes}; warmed-identity={warmedIdentityBytes}");
+        GC.KeepAlive(retained);
+        GC.KeepAlive(readOnly);
     }
 
     [Fact]
@@ -58,14 +126,17 @@ public sealed class ManagedReferenceRuntimeTests
     [Fact]
     public void OwnerSurvivesMovingCollectionsWithoutPinning()
     {
-        var (handle, owner) = Retain();
+        var (handle, readOnlyHandle, owner, readOnlyOwner) = Retain();
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         GC.WaitForPendingFinalizers();
         GC.Collect(2, GCCollectionMode.Forced, blocking: true, compacting: true);
         Assert.True(owner.IsAlive);
+        Assert.True(readOnlyOwner.IsAlive);
         handle.Borrow() = 23;
         Assert.Equal(23, handle.Borrow());
+        Assert.Equal(29, readOnlyHandle.Borrow());
         GC.KeepAlive(handle);
+        GC.KeepAlive(readOnlyHandle);
     }
 
     [Fact]
@@ -114,9 +185,22 @@ public sealed class ManagedReferenceRuntimeTests
     }
 
     [MethodImpl(MethodImplOptions.NoInlining)]
-    private static (ManagedRef<int> Handle, WeakReference Owner) Retain()
+    private static void WarmLocationFactories(int[] owner)
+    {
+        _ = ManagedRef<int>.FromArray(owner, 0).Borrow();
+        _ = ReadOnlyManagedRef<int>.FromArray(owner, 0).Borrow();
+        _ = ManagedRef<int>.FromArray(owner, 0).GetLocation();
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static (ManagedRef<int> Handle, ReadOnlyManagedRef<int> ReadOnlyHandle, WeakReference Owner, WeakReference ReadOnlyOwner) Retain()
     {
         var owner = new[] { 7 };
-        return (ManagedRef<int>.FromArray(owner, 0), new WeakReference(owner));
+        var readOnlyOwner = new[] { 29 };
+        return (
+            ManagedRef<int>.FromArray(owner, 0),
+            ReadOnlyManagedRef<int>.FromArray(readOnlyOwner, 0),
+            new WeakReference(owner),
+            new WeakReference(readOnlyOwner));
     }
 }

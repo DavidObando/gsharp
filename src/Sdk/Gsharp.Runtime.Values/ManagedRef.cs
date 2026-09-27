@@ -4,6 +4,8 @@
 
 namespace Gsharp.Values;
 
+using System.Threading;
+
 #pragma warning disable CS1591, SA1600
 
 /// <summary>A writable heap-storable location; copying it does not copy T.</summary>
@@ -48,11 +50,21 @@ public abstract class ManagedRef<T> : ManagedLocation<T>
 
     private sealed class ArrayLocation(T[] owner, int index) : ManagedRef<T>
     {
-        private readonly ManagedLocationKey location = ManagedLocationKey.Element(owner, index);
+        private ManagedLocationKey? location;
 
         public override ref T Borrow() => ref owner[index];
 
-        public override ManagedLocationKey GetLocation() => location;
+        public override ManagedLocationKey GetLocation()
+        {
+            var cached = Volatile.Read(ref location);
+            if (cached is not null)
+            {
+                return cached;
+            }
+
+            var created = ManagedLocationKey.Element(owner, index);
+            return Interlocked.CompareExchange(ref location, created, null) ?? created;
+        }
     }
 
     private sealed class ReadOnlyView(ManagedRef<T> source) : ReadOnlyManagedRef<T>

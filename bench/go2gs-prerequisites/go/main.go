@@ -229,6 +229,86 @@ func benchManagedConstruction(count int32) {
 	report("managed-create", elapsed, count, allocated, checksum)
 }
 
+func benchManagedRetained(count int32) {
+	values := []int32{1}
+	retained := make([]*int32, count)
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for i := range count {
+			retained[i] = &values[0]
+		}
+		elapsed = time.Since(start)
+	})
+	var checksum int64
+	for _, location := range retained {
+		checksum += int64(*location)
+	}
+	report("managed-retained", elapsed, count, allocated, checksum)
+}
+
+func benchManagedFirstIdentity(count int32) {
+	values := []int32{1}
+	locations := make([]*int32, count)
+	for i := range count {
+		locations[i] = &values[0]
+	}
+	expected := &values[0]
+	var checksum int64
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for _, location := range locations {
+			if location == expected {
+				checksum++
+			}
+		}
+		elapsed = time.Since(start)
+	})
+	report("managed-first-identity", elapsed, count, allocated, checksum)
+}
+
+func benchManagedWarmedIdentity(count int32) {
+	values := []int32{1}
+	left, right := &values[0], &values[0]
+	warm := left == right
+	var checksum int64
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for range count {
+			if left == right {
+				checksum++
+			}
+		}
+		elapsed = time.Since(start)
+	})
+	if warm {
+		checksum++
+	}
+	report("managed-warmed-identity", elapsed, count, allocated, checksum)
+}
+
+func benchManagedDirectReadOnly(count int32) {
+	values := []int32{1}
+	var checksum int64
+	for range 20_000 {
+		location := &values[0]
+		checksum += int64(*location)
+	}
+	checksum = 0
+	var elapsed time.Duration
+	allocated := allocatedBytes(func() {
+		start := time.Now()
+		for range count {
+			location := &values[0]
+			checksum += int64(*location)
+		}
+		elapsed = time.Since(start)
+	})
+	report("managed-readonly-create", elapsed, count, allocated, checksum)
+}
+
 func benchAdaptReference(count int32) {
 	source := &referenceCounter{}
 	var counter Counter = source
@@ -532,6 +612,10 @@ func main() {
 		benchSliceAppend(count)
 		benchManaged(count)
 		benchManagedConstruction(count)
+		benchManagedRetained(count)
+		benchManagedFirstIdentity(count)
+		benchManagedWarmedIdentity(count)
+		benchManagedDirectReadOnly(count)
 		benchAdaptReference(count)
 		benchNominalReference(count)
 		benchAdaptLocation(count)

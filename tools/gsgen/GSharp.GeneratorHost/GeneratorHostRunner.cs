@@ -77,9 +77,10 @@ public static class GeneratorHostRunner
         GsStubRenderer renderer)
     {
         // ADR-0192 follow-on 2: the lone declaring parts the stub offered to
-        // generators, whose headers the generated implementing parts copy.
+        // generators, whose headers the generated implementing parts copy; and
+        // the data types, whose generated parts are `data` parts.
         IReadOnlyList<TranslatedGsDocument> translated =
-            GeneratedDocTranslator.Translate(stub, runResult.Documents, references, renderer.PartialDefinitions);
+            GeneratedDocTranslator.Translate(stub, runResult.Documents, references, renderer.PartialDefinitions, renderer.DataTypes);
 
         // Deterministic ordering: sort back-translated parts by hint name.
         var gsFiles = translated
