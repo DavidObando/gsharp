@@ -1319,10 +1319,24 @@ public sealed partial class CSharpToGSharpTranslator
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
             if (!this.emitGeneratedImplementingParts
                 && GeneratedSourceDetection.IsGeneratedSource(node.SyntaxTree, this.projectDirectory)
-                && IsRegexGeneratorDeclaration(symbol)
-                && !this.HasRetainedRegexGeneratorImplementation(node.SyntaxTree))
+                && IsRegexGeneratorDeclaration(symbol))
             {
-                return null;
+                bool hasRetainedImplementation =
+                    this.HasRegexGeneratorImplementation(node.SyntaxTree, definitionIsTranslated: false);
+                if (!hasRetainedImplementation)
+                {
+                    return null;
+                }
+
+                if (this.HasRegexGeneratorImplementation(node.SyntaxTree, definitionIsTranslated: true)
+                    && this.reportedMixedRegexGeneratorTrees.Add(node.SyntaxTree))
+                {
+                    const string message =
+                        "this RegexGenerator document contains implementations whose [GeneratedRegex] " +
+                        "definitions are only partly included in this translation; translate all or none of " +
+                        "those definition files so generated helper types are not duplicated.";
+                    this.context.ReportUnsupported(node, message);
+                }
             }
 
             // Issue #1910: a `partial` type is declared once per file/part but

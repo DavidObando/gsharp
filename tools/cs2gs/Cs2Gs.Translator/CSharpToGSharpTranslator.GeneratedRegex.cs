@@ -104,23 +104,36 @@ public sealed partial class CSharpToGSharpTranslator
 
     private sealed partial class DeclarationVisitor
     {
-        private bool HasRetainedRegexGeneratorImplementation(SyntaxTree tree)
+        private readonly HashSet<SyntaxTree> reportedMixedRegexGeneratorTrees = new();
+
+        private bool HasRegexGeneratorImplementation(SyntaxTree tree, bool definitionIsTranslated)
         {
-            SyntaxNode root = tree.GetRoot();
-            return root.DescendantNodes().OfType<MethodDeclarationSyntax>().Any(node =>
-                    this.context.GetDeclaredSymbol(node) is IMethodSymbol implementation
-                    && IsRegexGeneratorDeclaration(implementation)
-                    && implementation.PartialDefinitionPart is IMethodSymbol definition
-                    && IsGeneratedRegexDefinition(definition)
-                    && definition.DeclaringSyntaxReferences.All(reference =>
-                        !this.IsTranslatedByThisRun(reference.SyntaxTree)))
-                || root.DescendantNodes().OfType<PropertyDeclarationSyntax>().Any(node =>
-                    this.context.GetDeclaredSymbol(node) is IPropertySymbol implementation
-                    && IsRegexGeneratorDeclaration(implementation)
-                    && implementation.PartialDefinitionPart is IPropertySymbol definition
-                    && HasAttribute(definition, GeneratedRegexAttributeName)
-                    && definition.DeclaringSyntaxReferences.All(reference =>
-                        !this.IsTranslatedByThisRun(reference.SyntaxTree)));
+            foreach (MemberDeclarationSyntax node in tree.GetRoot().DescendantNodes()
+                .OfType<MemberDeclarationSyntax>())
+            {
+                ISymbol implementation = this.context.GetDeclaredSymbol(node);
+                if (!IsRegexGeneratorDeclaration(implementation))
+                {
+                    continue;
+                }
+
+                ISymbol definition = implementation switch
+                {
+                    IMethodSymbol { PartialDefinitionPart: IMethodSymbol method }
+                        when IsGeneratedRegexDefinition(method) => method,
+                    IPropertySymbol { PartialDefinitionPart: IPropertySymbol property }
+                        when HasAttribute(property, GeneratedRegexAttributeName) => property,
+                    _ => null,
+                };
+                if (definition != null
+                    && definition.DeclaringSyntaxReferences.Any(reference =>
+                        this.IsTranslatedByThisRun(reference.SyntaxTree)) == definitionIsTranslated)
+                {
+                    return true;
+                }
+            }
+
+            return false;
         }
 
         /// <summary>
