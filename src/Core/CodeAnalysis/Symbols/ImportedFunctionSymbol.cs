@@ -114,6 +114,18 @@ public sealed class ImportedFunctionSymbol : Symbol
             && parameters[^1].Name == FunctionSymbol.HiddenContextParameterName;
     }
 
+    /// <summary>
+    /// Gets the source-visible parameters of an imported method, excluding a
+    /// validated trailing suspension context slot.
+    /// </summary>
+    /// <param name="method">The imported CLR method.</param>
+    /// <returns>The parameters visible to G# overload and delegate matching.</returns>
+    public static ParameterInfo[] GetLogicalParameters(MethodInfo method)
+    {
+        var parameters = method.GetParameters();
+        return HasHiddenContextParameter(method) ? parameters[..^1] : parameters;
+    }
+
     /// <inheritdoc/>
     public override DocumentationComment? GetDocumentation()
     {

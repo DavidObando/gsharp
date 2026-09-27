@@ -171,18 +171,22 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         const string app = """
             package App
             import System
+            import System.Linq
             import Lib
 
-            let top (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
-            Console.WriteLine(top(5).GetAwaiter().GetResult())
-
             suspend func run() {
+                let values = []int32{7}
+                for task in Enumerable.Select(values, Twice) {
+                    Console.WriteLine(await task)
+                }
                 let twice (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
                 let add (int32) -> System.Threading.Tasks.ValueTask[int32] = Number(10).Add
                 Console.WriteLine(await twice(3))
                 Console.WriteLine(await add(4))
             }
 
+            let top (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
+            Console.WriteLine(top(5).AsTask().GetAwaiter().GetResult())
             run()
             """;
 
@@ -194,7 +198,9 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             IlVerifier.Verify(
                 appPath,
                 new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
-            Assert.Equal($"10{Environment.NewLine}6{Environment.NewLine}14{Environment.NewLine}", Run(appPath));
+            Assert.Equal(
+                $"10{Environment.NewLine}14{Environment.NewLine}6{Environment.NewLine}14{Environment.NewLine}",
+                Run(appPath));
         }
         finally
         {
@@ -369,8 +375,23 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             UseShellExecute = false,
             WorkingDirectory = Path.GetDirectoryName(assemblyPath),
         }) ?? throw new InvalidOperationException("could not start dotnet");
-        var output = process.StandardOutput.ReadToEnd() + process.StandardError.ReadToEnd();
-        process.WaitForExit();
+        var stdout = process.StandardOutput.ReadToEndAsync();
+        var stderr = process.StandardError.ReadToEndAsync();
+        if (!process.WaitForExit(milliseconds: 30_000))
+        {
+            try
+            {
+                process.Kill(entireProcessTree: true);
+            }
+            catch (InvalidOperationException)
+            {
+                // The process exited between the timeout and the kill.
+            }
+
+            Assert.Fail("timed out after 30s");
+        }
+
+        var output = stdout.GetAwaiter().GetResult() + stderr.GetAwaiter().GetResult();
         Assert.Equal(0, process.ExitCode);
         return output.ReplaceLineEndings(Environment.NewLine);
     }

@@ -1008,7 +1008,7 @@ internal sealed partial class ExpressionBinder
                 continue;
             }
 
-            var parameters = candidate.GetParameters();
+            var parameters = ImportedFunctionSymbol.GetLogicalParameters(candidate);
             var hasByRefParameter = false;
             foreach (var parameter in parameters)
             {
@@ -1046,7 +1046,7 @@ internal sealed partial class ExpressionBinder
         }
 
         var method = bestMethod;
-        var methodParameters = method.GetParameters();
+        var methodParameters = ImportedFunctionSymbol.GetLogicalParameters(method);
         var offset = closesReceiver ? 1 : 0;
         var parameterTypes = new TypeSymbol[methodParameters.Length - offset];
         for (var i = offset; i < methodParameters.Length; i++)

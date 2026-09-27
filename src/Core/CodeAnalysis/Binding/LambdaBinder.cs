@@ -1797,9 +1797,9 @@ internal sealed class LambdaBinder
         var method = Invariant.Required(
             group.ResolvedMethod,
             "a CLR method-group adapter has a resolved method");
-        var methodParameters = method.GetParameters();
+        var methodParameters = ImportedFunctionSymbol.GetLogicalParameters(method);
         var hasHiddenContext = ImportedFunctionSymbol.HasHiddenContextParameter(method);
-        var logicalParameterCount = methodParameters.Length - (hasHiddenContext ? 1 : 0);
+        var logicalParameterCount = methodParameters.Length;
         var closesStaticReceiver = method.IsStatic && group.Receiver != null;
         var parameterOffset = closesStaticReceiver ? 1 : 0;
         var invoke = targetFunctionType.ClrType?.GetMethodSafe("Invoke");

@@ -2662,7 +2662,7 @@ internal sealed partial class ExpressionBinder
                 return null;
             }
 
-            var parameters = method.GetParameters();
+            var parameters = ImportedFunctionSymbol.GetLogicalParameters(method);
             var parameterOffset = closesExtensionReceiver ? 1 : 0;
             var signatureParameters = new Type[parameters.Length - parameterOffset];
             for (var i = parameterOffset; i < parameters.Length; i++)
@@ -2761,7 +2761,7 @@ internal sealed partial class ExpressionBinder
             foreach (var possibleMethod in clrGroup.Candidates)
             {
                 var candidateOffset = clrGroup.Receiver != null && possibleMethod.IsStatic ? 1 : 0;
-                if (possibleMethod.GetParameters().Length - candidateOffset != delegateArity)
+                if (ImportedFunctionSymbol.GetLogicalParameters(possibleMethod).Length - candidateOffset != delegateArity)
                 {
                     continue;
                 }
@@ -2780,7 +2780,7 @@ internal sealed partial class ExpressionBinder
                 return null;
             }
 
-            var parameters = method.GetParameters();
+            var parameters = ImportedFunctionSymbol.GetLogicalParameters(method);
             var signatureParameters = new Type[delegateArity];
             for (var i = 0; i < signatureParameters.Length; i++)
             {
