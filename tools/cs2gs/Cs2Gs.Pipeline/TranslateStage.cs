@@ -732,16 +732,22 @@ public sealed class TranslateStage : IMigrationStage
         TranslationDiagnostic diagnostic,
         string documentPath)
     {
+        string documentIdentifier = string.IsNullOrEmpty(documentPath)
+            ? "<unknown document>"
+            : documentPath;
         string rendered = $"{diagnostic.ConstructKind}: {diagnostic.Message}";
         if (diagnostic.Location is { IsInSource: true } location)
         {
             FileLinePositionSpan span = location.GetLineSpan();
+            string sourcePath = string.IsNullOrEmpty(span.Path)
+                ? documentIdentifier
+                : span.Path;
             rendered =
-                $"{span.Path}({span.StartLinePosition.Line + 1},{span.StartLinePosition.Character + 1}): {rendered}";
+                $"{sourcePath}({span.StartLinePosition.Line + 1},{span.StartLinePosition.Character + 1}): {rendered}";
         }
         else
         {
-            rendered += $" [{documentPath}]";
+            rendered += $" [{documentIdentifier}]";
         }
 
         return $"{diagnostic.DiagnosticId} (non-fatal): {rendered}";

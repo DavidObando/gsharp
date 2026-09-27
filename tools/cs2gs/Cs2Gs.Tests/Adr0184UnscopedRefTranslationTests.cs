@@ -12,6 +12,8 @@ using Cs2Gs.CodeModel.RoundTrip;
 using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
+using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -451,6 +453,33 @@ public sealed class Warned
     }
 
     [Fact]
+    public void ForwardedWarningWithEmptySourcePath_UsesDocumentPath()
+    {
+        SyntaxTree tree = CSharpSyntaxTree.ParseText("class C { }");
+        var diagnostic = new TranslationDiagnostic(
+            "GetAccessorDeclaration",
+            "attribute 'Demo.A' was dropped",
+            tree.GetRoot().GetLocation(),
+            TranslationSeverity.Warning)
+        {
+            DiagnosticId = CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId,
+        };
+
+        string rendered = TranslateStage.FormatForwardedTranslationWarning(
+            diagnostic,
+            "GeneratedDocument.cs");
+
+        Assert.Equal(
+            "CS2GS-ACCESSOR-ATTRIBUTE-DROPPED (non-fatal): GeneratedDocument.cs(1,1): GetAccessorDeclaration: attribute 'Demo.A' was dropped",
+            rendered);
+
+        Assert.StartsWith(
+            "CS2GS-ACCESSOR-ATTRIBUTE-DROPPED (non-fatal): <unknown document>(1,1):",
+            TranslateStage.FormatForwardedTranslationWarning(diagnostic, string.Empty),
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ForwardedWarning_PreservesWarningTextInsideSourcePath()
     {
         const string sourcePath = "/repo/warning: checkout/Warned.cs";
@@ -527,9 +556,11 @@ public sealed class Warned
         }
         catch (IOException)
         {
+            // Best effort: test-host file handles can remain open briefly on Windows.
         }
         catch (UnauthorizedAccessException)
         {
+            // Best effort, as above.
         }
     }
 

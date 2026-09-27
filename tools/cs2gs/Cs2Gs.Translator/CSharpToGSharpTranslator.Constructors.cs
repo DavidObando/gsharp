@@ -1575,11 +1575,7 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private bool IsUnscopedRefAttribute(INamedTypeSymbol attributeType)
-        {
-            INamedTypeSymbol unscopedRefType =
-                this.context.Compilation.GetTypeByMetadataName(UnscopedRefAttributeFullName);
-            return SymbolEqualityComparer.Default.Equals(attributeType, unscopedRefType);
-        }
+            => SymbolEqualityComparer.Default.Equals(attributeType, this.unscopedRefAttributeType);
 
         // Issue #3445: resolve attributes semantically so their containing
         // namespaces and aliases participate in synthesized imports, while
