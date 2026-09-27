@@ -503,6 +503,11 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyAssignmentNarrowing(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
+        if (binderCtx.FunctionContainsUserGotoOrLabel)
+        {
+            return;
+        }
+
         if (statement is BoundExpressionStatement { Expression: BoundAssignmentExpression assign }
             && TryClassifyNonNullAssignment(assign, out var variable, out var underlying))
         {
@@ -772,6 +777,13 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyIfJoinNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
+        // Issues #4285 and #4290: arbitrary user jumps invalidate the
+        // dominance assumptions behind branch-exit narrowing.
+        if (binderCtx.FunctionContainsUserGotoOrLabel)
+        {
+            return;
+        }
+
         if (statement is not BoundIfStatement ifStmt)
         {
             return;

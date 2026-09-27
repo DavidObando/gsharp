@@ -123,6 +123,25 @@ Run(Box{Pet: Dog{Name: ""Rex""}})
         Assert.Empty(result.Diagnostics);
     }
 
+    [Theory]
+    [InlineData("let Stable System.Collections.Generic.List[int32]?", "Stable.Capacity > 0")]
+    [InlineData("let Stable System.Collections.Generic.List[int32]?", "Stable.Contains(1)")]
+    [InlineData("prop Stable System.Collections.Generic.List[int32]? { get; init; }", "Stable.Capacity > 0")]
+    [InlineData("prop Stable System.Collections.Generic.List[int32]? { get; init; }", "Stable.Contains(1)")]
+    public void NilGuard_NarrowsBareImplicitThisMember(string member, string use)
+    {
+        // Issue #4310: the bare spelling must consult the same stable
+        // AccessPath as this.Stable, for reads and calls alike.
+        var result = Evaluate($@"
+class Box {{
+    {member}
+    func Run() bool {{ return Stable != nil && {use} }}
+}}
+");
+
+        Assert.Empty(result.Diagnostics);
+    }
+
     [Fact]
     public void Switch_NarrowsStableFieldPathDiscriminantInArm()
     {
