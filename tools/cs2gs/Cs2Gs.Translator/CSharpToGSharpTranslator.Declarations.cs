@@ -632,6 +632,16 @@ public sealed partial class CSharpToGSharpTranslator
                     // positions, so it is omitted (ADR-0115 §B.10).
                     return Visibility.Default;
                 case Accessibility.Private:
+                    // Issue #4301: see IsMemberOfKeptTopLevelProgram. This must
+                    // precede the extension-owner rule below: a kept top-level
+                    // Program can also declare extension methods, but its
+                    // remaining members still need `internal` so hoisted
+                    // top-level statements can reach them.
+                    if (IsMemberOfKeptTopLevelProgram(symbol))
+                    {
+                        return Visibility.Internal;
+                    }
+
                     // A `private` static member of a `static class` that ALSO
                     // declares extension methods becomes unreachable once those
                     // methods are lifted to top-level `func`s (ADR-0115 §B.5): the
@@ -649,12 +659,6 @@ public sealed partial class CSharpToGSharpTranslator
                         !HasPrivateNestedAggregate(symbol.ContainingType))
                     {
                         return Visibility.Default;
-                    }
-
-                    // Issue #4301: see IsMemberOfKeptTopLevelProgram.
-                    if (IsMemberOfKeptTopLevelProgram(symbol))
-                    {
-                        return Visibility.Internal;
                     }
 
                     return Visibility.Private;

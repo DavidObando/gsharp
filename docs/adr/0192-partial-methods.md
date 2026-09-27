@@ -700,7 +700,8 @@ step, not this amendment's.
    sensitive IgnoreCase, which the rewrite reported as unsupported, now
    migrates. A top-level-statements `Program` class that declares one is kept
    as a class, with its private members widened to `internal`. A method of a
-   record or of a nested type, and the partial-property form, are reported as
+   record or record struct is emitted in the corresponding partial data type.
+   A method of a nested type, and the partial-property form, are reported as
    unsupported. ADR-0143 has the details, and
    `e2etests/cs2gs-migrate-generated-regex-e2e.sh` migrates a C# project and
    runs it through the packed SDK.
