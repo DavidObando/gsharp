@@ -448,7 +448,7 @@ public class Issue2380NullableInterfaceEmitTests
         // over a SAME-COMPILATION G# enum (`IRepo[Color]`) routes through the
         // #949 symbolic-substitution branch
         // (MemberLookup.TryGetSymbolicClrGenericInterface /
-        // HasMatchingMethodForSymbolicClrInterface). Before this issue's
+        // FindMatchingMethodForSymbolicClrInterface). Before this issue's
         // follow-up fix to `ParameterTypeMatchesSubstituted` (which now
         // unwraps a `Nullable<T>` contract position against a G#
         // `NullableTypeSymbol` candidate), `IRepo<T>.Find()`'s `T?` contract

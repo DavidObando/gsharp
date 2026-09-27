@@ -398,6 +398,7 @@ internal sealed partial class DeclarationBinder
             {
                 ValidateUnscopedRefContract(
                     explicitImplementation,
+                    RequiresUnscopedRefContract(imethod, explicitImplementation),
                     imethod.HasUnscopedRef,
                     $"implemented member '{iface.Name}.{imethod.Name}'");
                 continue;
@@ -431,6 +432,7 @@ internal sealed partial class DeclarationBinder
             {
                 ValidateUnscopedRefContract(
                     signatureMatch,
+                    RequiresUnscopedRefContract(imethod, signatureMatch),
                     imethod.HasUnscopedRef,
                     $"implemented member '{iface.Name}.{imethod.Name}'");
 
@@ -583,9 +585,9 @@ internal sealed partial class DeclarationBinder
                 out var explicitSetterKindMismatch);
             if (explicitImplementation != null)
             {
-                ValidateUnscopedRefContract(
-                    FindUnscopedRefAttribute(explicitImplementation.Attributes),
-                    iprop.GetterSymbol?.HasUnscopedRef == true,
+                ValidateUnscopedRefPropertyContract(
+                    explicitImplementation,
+                    iprop,
                     $"implemented property '{iface.Name}.{iprop.Name}'");
 
                 if (explicitSetterKindMismatch)
@@ -621,9 +623,9 @@ internal sealed partial class DeclarationBinder
 
             if (found && implProp != null)
             {
-                ValidateUnscopedRefContract(
-                    FindUnscopedRefAttribute(implProp.Attributes),
-                    iprop.GetterSymbol?.HasUnscopedRef == true,
+                ValidateUnscopedRefPropertyContract(
+                    implProp,
+                    iprop,
                     $"implemented property '{iface.Name}.{iprop.Name}'");
 
                 if (iprop.HasGetter && !implProp.HasGetter)
@@ -1789,6 +1791,7 @@ internal sealed partial class DeclarationBinder
                 {
                     ValidateUnscopedRefContract(
                         implementation,
+                        RequiresUnscopedRefContract(clrMethod, implementation),
                         RefCapabilities.HasUnscopedRef(clrMethod),
                         $"implemented member '{interfaceName}.{clrMethod.Name}'");
                     continue;
@@ -1847,9 +1850,10 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                ValidateUnscopedRefContract(
-                    FindUnscopedRefAttribute(implProp.Attributes),
-                    clrProp.GetMethod != null && RefCapabilities.IsUnscopedRefIndexerGetter(clrProp),
+                ValidateUnscopedRefPropertyContract(
+                    implProp,
+                    clrProp.GetMethod,
+                    clrProp.SetMethod,
                     $"implemented property '{interfaceName}.{clrProp.Name}'");
 
                 if (requiresGetter && !implProp.HasGetter)
@@ -1937,6 +1941,7 @@ internal sealed partial class DeclarationBinder
                 {
                     ValidateUnscopedRefContract(
                         implementation,
+                        RequiresUnscopedRefContract(slot.Method, implementation),
                         RefCapabilities.HasUnscopedRef(slot.Method),
                         $"implemented member '{slotKey}'");
                     continue;
@@ -2013,6 +2018,7 @@ internal sealed partial class DeclarationBinder
             {
                 ValidateUnscopedRefContract(
                     implementation,
+                    RequiresUnscopedRefContract(openMethod, implementation),
                     RefCapabilities.HasUnscopedRef(openMethod),
                     $"implemented member '{interfaceName}.{openMethod.Name}'");
                 continue;
@@ -2038,9 +2044,10 @@ internal sealed partial class DeclarationBinder
                 continue;
             }
 
-            ValidateUnscopedRefContract(
-                FindUnscopedRefAttribute(implProp.Attributes),
-                RefCapabilities.IsUnscopedRefIndexerGetter(openProp),
+            ValidateUnscopedRefPropertyContract(
+                implProp,
+                openProp.GetMethod,
+                openProp.SetMethod,
                 $"implemented property '{interfaceName}.{openProp.Name}'");
 
             if (openProp.GetMethod != null && !implProp.HasGetter)

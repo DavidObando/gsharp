@@ -3874,19 +3874,6 @@ internal sealed class MemberLookup
     // ----- User-symbol member walks -----
 
     /// <summary>
-    /// Walks <paramref name="structSymbol"/> and its base-class chain looking
-    /// for an instance method overload whose CLR-projected signature matches
-    /// <paramref name="clrMethod"/>. Used by the interface-implementation
-    /// check to decide whether the user struct supplies a given CLR contract
-    /// member.
-    /// </summary>
-    /// <param name="structSymbol">The user struct symbol to inspect.</param>
-    /// <param name="clrMethod">The CLR method whose signature to match.</param>
-    /// <returns><see langword="true"/> when a matching overload exists.</returns>
-    public static bool HasMatchingMethodForClrSignature(StructSymbol structSymbol, MethodInfo clrMethod)
-        => FindMatchingMethodForClrSignature(structSymbol, clrMethod) != null;
-
-    /// <summary>
     /// Finds the user method whose CLR-projected signature satisfies an
     /// imported interface slot.
     /// </summary>
@@ -4042,17 +4029,6 @@ internal sealed class MemberLookup
     /// <param name="structSymbol">The user struct symbol to inspect.</param>
     /// <param name="openMethod">The interface method from the open definition.</param>
     /// <param name="symbolicArgs">The symbolic type arguments closing the interface.</param>
-    /// <returns><see langword="true"/> when a matching overload exists.</returns>
-    public static bool HasMatchingMethodForSymbolicClrInterface(
-        StructSymbol structSymbol,
-        MethodInfo openMethod,
-        ImmutableArray<TypeSymbol> symbolicArgs)
-        => FindMatchingMethodForSymbolicClrInterface(structSymbol, openMethod, symbolicArgs) != null;
-
-    /// <summary>Finds the method satisfying a symbolically closed CLR interface slot.</summary>
-    /// <param name="structSymbol">The user struct symbol to inspect.</param>
-    /// <param name="openMethod">The interface method from the open definition.</param>
-    /// <param name="symbolicArgs">The symbolic type arguments closing the interface.</param>
     /// <returns>The matching method, or <see langword="null"/>.</returns>
     public static FunctionSymbol? FindMatchingMethodForSymbolicClrInterface(
         StructSymbol structSymbol,
@@ -4075,7 +4051,7 @@ internal sealed class MemberLookup
     /// — a method of a CLR generic interface's OPEN definition — once the
     /// interface's <paramref name="symbolicArgs"/> are substituted in. The
     /// per-candidate core of
-    /// <see cref="HasMatchingMethodForSymbolicClrInterface"/>, factored out so
+    /// <see cref="FindMatchingMethodForSymbolicClrInterface"/>, factored out so
     /// the explicit-interface-clause resolver can ask the same question about
     /// one specific method (its name may not even be the slot's, and it must
     /// pick a slot rather than answer "some method matched").
@@ -9179,7 +9155,7 @@ internal sealed class MemberLookup
     /// generic, etc.), at any nesting depth (e.g.
     /// <c>IEnumerable&lt;IEnumerable&lt;TState&gt;&gt;</c>).
     /// Falls back to the existing erased-<c>ClrType</c> comparison
-    /// (<see cref="HasMatchingMethodForClrSignature"/>'s prior behavior) for
+    /// (<see cref="FindMatchingMethodForClrSignature"/>'s comparison) for
     /// every other position, so ordinary non-generic contract members are
     /// unaffected.
     /// </summary>

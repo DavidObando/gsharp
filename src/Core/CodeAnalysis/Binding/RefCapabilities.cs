@@ -134,10 +134,12 @@ internal static class RefCapabilities
     /// type is a concrete struct — the call then names the implementation it
     /// dispatches to — a member WITHOUT <c>@UnscopedRef</c> cannot be the
     /// source of a reference into the receiver's storage, and C# excludes the
-    /// receiver from the result's ref-safe-context entirely. Any other shape
-    /// (a type-parameter or interface receiver, whose implementation may carry
-    /// <c>@UnscopedRef</c> the called slot does not advertise; a base call; an
-    /// unrecognized node) keeps the conservative answer.
+    /// receiver from the result's ref-safe-context entirely. Interface
+    /// implementations are now held to the same one-way slot contract, so
+    /// they cannot add <c>@UnscopedRef</c> behind an unannotated interface
+    /// member. This helper still recognizes only direct native struct-member
+    /// nodes; type-parameter dispatch, imported calls, base calls, and
+    /// unrecognized nodes keep the conservative answer.
     /// </remarks>
     /// <param name="expression">The ref-returning call or property read.</param>
     /// <param name="receiver">Its instance receiver.</param>
@@ -233,9 +235,25 @@ internal static class RefCapabilities
         return method.DeclaringType
             .GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
             .Any(property =>
-                property.GetMethod == method
+                (property.GetMethod == method || property.SetMethod == method)
                 && HasUnscopedRefAttribute(property.GetCustomAttributesData()));
     }
+
+    /// <summary>Returns the by-reference kind encoded by an imported parameter.</summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <returns>The corresponding G# ref kind.</returns>
+    internal static RefKind GetParameterRefKind(ParameterInfo parameter)
+        => !parameter.ParameterType.IsByRef ? RefKind.None
+            : parameter.IsOut && !parameter.IsIn ? RefKind.Out
+            : parameter.IsIn && !parameter.IsOut ? RefKind.In
+            : RefKind.Ref;
+
+    /// <summary>Returns whether an imported parameter carries <c>[ScopedRef]</c>.</summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <returns><see langword="true"/> when the parameter is explicitly scoped.</returns>
+    internal static bool IsScoped(ParameterInfo parameter)
+        => parameter.GetCustomAttributesData().Any(attribute =>
+            attribute.AttributeType.FullName == "System.Runtime.CompilerServices.ScopedRefAttribute");
 
     /// <summary>
     /// Issue #4265 soundness guard: true when <paramref name="indexer"/> (or

@@ -201,11 +201,17 @@ implementation may carry it only when the matched slot does too; otherwise
 GS0590 reports the mismatch at the implementation's annotation, matching C#'s
 CS9102 direction. The reverse is legal: an implementation may omit
 `@UnscopedRef` from an annotated slot and keep its own receiver scoped. The
-interface contract is checked for every matched slot, as C# does. Override
-matching follows C#'s ref-safety relevance rule: a mismatch matters when the
-member returns by reference or a byref-like value, or accepts a by-reference
-byref-like parameter; an ordinary value-returning struct override such as
-`ToString` may carry the otherwise inert attribute.
+interface contract is checked for every matched slot, as C# does, and uses the
+same ref-safety relevance gate as overrides. A mismatch is immediately relevant
+for an unscoped `ref` byref-like parameter or an explicitly scoped `out`
+byref-like parameter. Otherwise it is relevant only when the signature has both
+a potential ref-safety source and enough additional parameters: one
+`ref`/`in`/`out` parameter (or one by-value byref-like parameter) when the
+receiver or return is byref-like or the return is by reference; two such
+by-reference parameters when the trigger is a `ref`/`out` byref-like parameter.
+Thus an ordinary value-returning struct override such as `ToString`, and a
+ref-returning member with no additional parameter, may carry the otherwise
+inert attribute.
 
 Override checks reuse the base slot already selected by override resolution.
 Explicit and implicit interface checks reuse the implementation selected by the
@@ -241,9 +247,9 @@ G# spells the annotation once, on the property or indexer. The binder pushes it
 down onto `GetterSymbol`/`SetterSymbol` after the property's attributes are
 bound (which runs after the accessors are constructed), because accessors have
 no attribute list of their own. This matches C#, which accepts `[UnscopedRef]`
-on either the property or its `get` accessor and treats them equivalently — the
-same two placements `RefCapabilities.IsUnscopedRefIndexerGetter` already reads
-back out of imported metadata.
+on the property, getter, or setter and treats them as the corresponding accessor
+contract. Imported contract lookup therefore reads the property row and either
+accessor row, including setter-only properties.
 
 ### 9. cs2gs accessor-attribute hoist
 
@@ -423,6 +429,13 @@ It reports GS0254 rather than GS0591, which is accurate: by the time the
   soundness argument to make and is deliberately untouched here — widening
   scoping rules and adding an escape hatch in the same change would make neither
   reviewable.
+- **Parameter-level scoped-contract mismatches remain unchecked.** This
+  amendment governs the member-level `UnscopedRefAttribute` contract only; it
+  does not yet compare `scoped`/unscoped parameter contracts across override or
+  interface slots.
+- **Interface-to-interface redeclaration remains unchecked.** The contract is
+  enforced when a concrete member implements an interface slot, not when one
+  interface redeclares a member inherited from another interface.
 - No `unsafe` gate (D3), by decision, not by omission.
 - ~~**A call's receiver contributes to the result's ref-safe-context
   unconditionally**~~ — **resolved by ADR-0187 / issue #4350.** C# is more
@@ -436,10 +449,11 @@ It reports GS0254 rather than GS0591, which is accurate: by the time the
   `RefCapabilities.ReceiverContributesRefScope` now encodes that rule and is
   consulted by `HasFunctionLocalRefScope`, `IsDefensivelyCopiedReceiverForwarding`,
   the #4224 read-only-storage classifier, and the ref-getter write-through
-  check. Type-parameter and interface receivers keep the conservative answer,
-  because the implementation they dispatch to may be `@UnscopedRef` where the
-  called slot is not. A ref struct receiver's VALUE scope still contributes,
-  exactly like a by-value byref-like argument.
+  check. Interface implementations can no longer add `@UnscopedRef` behind an
+  unannotated slot; the helper nevertheless remains conservative for interface,
+  type-parameter, imported, and other indirect receiver shapes until those
+  bound-node paths expose the same member fact directly. A ref struct receiver's
+  VALUE scope still contributes, exactly like a by-value byref-like argument.
 - **G# has no `readonly` MEMBER concept.** C# exempts a `readonly` struct member
   from the defensive copy on a read-only receiver; G# has no `readonly func`, so
   every native instance member forces the copy. Since ADR-0187 that copy only
