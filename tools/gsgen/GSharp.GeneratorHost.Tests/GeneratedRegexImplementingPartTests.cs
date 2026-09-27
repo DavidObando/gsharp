@@ -595,6 +595,160 @@ namespace Lib.B { internal static class Second { public static int V => 2; } }
         Assert.Contains("package Lib.B", result.GeneratedGsFiles.Single(file => file.HintName == "Mixed.Lib_B.split.g.cs").GSharpSource, StringComparison.Ordinal);
     }
 
+    // ADR-0192 amendment (partial data types): the declaring part lives in a
+    // `partial data class` / `partial data struct` — the G# spelling of the C#
+    // `partial record` / `partial record struct` that code-exploder's
+    // `GitHubUrl` is. The stub must offer the owner to the generator as a C#
+    // record, and the back-translated implementing part must be a `data` part,
+    // or gsc rejects the pair (GS0479: `data` must appear on every part).
+    [Theory]
+    [InlineData("public sealed partial data class")]
+    [InlineData("public partial data struct")]
+    public void DeclaringPartInAPartialDataType_IsImplementedByTheRealGenerator(string header)
+    {
+        string userSource = @"package App
+
+import System
+import System.Text.RegularExpressions
+
+HEADER GitHubUrl(Owner string, Name string, PrNumber int32?) {
+    shared {
+        @GeneratedRegex(""^https://github\\.com/(?<owner>[^/]+)/(?<name>[^/]+)(/pull/(?<pr>\\d+))?$"", RegexOptions.ExplicitCapture, 1000)
+        private partial func Pattern() Regex;
+
+        public func OwnerOf(url string) string {
+            let m = Pattern().Match(url.Trim())
+            return m.Success ? m.Groups[""owner""].Value : """"
+        }
+
+        public func Captures(url string) int32 {
+            return Pattern().Match(url).Groups.Count
+        }
+
+        public func Options() string {
+            return Pattern().Options.ToString()
+        }
+
+        public func TimeoutMs() float64 {
+            return Pattern().MatchTimeout.TotalMilliseconds
+        }
+
+        public func Show() string {
+            let a = GitHubUrl(""o"", ""n"", 7)
+            let b = a with { Name = ""m"" }
+            return a.ToString() + ""|"" + (a == GitHubUrl(""o"", ""n"", 7)).ToString() + ""|"" + b.Name
+        }
+    }
+}
+".Replace("HEADER", header, StringComparison.Ordinal);
+        Run run = this.GenerateAndCompile(new[] { userSource }, RegexGenerator());
+
+        string userPart = run.File("RegexGenerator.g.cs");
+        Assert.Contains(header.Replace("public ", string.Empty, StringComparison.Ordinal).Replace("sealed ", string.Empty, StringComparison.Ordinal) + " GitHubUrl", userPart, StringComparison.Ordinal);
+        Assert.Contains("private partial func Pattern() Regex -> Pattern_0.Instance", userPart, StringComparison.Ordinal);
+
+        Type type = run.Type("GitHubUrl");
+        Assert.Equal("DavidObando", Invoke(type, "OwnerOf", "  https://github.com/DavidObando/gsharp/pull/12 "));
+        Assert.Equal(string.Empty, Invoke(type, "OwnerOf", "https://example.com/a/b"));
+
+        // ExplicitCapture: only group 0 and the three named groups exist.
+        Assert.Equal(4, Invoke(type, "Captures", "https://github.com/a/b"));
+        Assert.Equal("ExplicitCapture", Invoke(type, "Options"));
+        Assert.Equal(1000.0, Invoke(type, "TimeoutMs"));
+        Assert.Equal("GitHubUrl(Owner=o, Name=n, PrNumber=7)|True|m", Invoke(type, "Show"));
+    }
+
+    // A data class with a base class cannot be a C# record in the stub (a
+    // record derives only from a record, CS8864), so the generator re-declares
+    // it as a `partial class`; the back-translated part must still be a `data`
+    // part (GS0479 otherwise).
+    [Fact]
+    public void DeclaringPartInADataClassWithABaseClass_IsImplementedAsADataPart()
+    {
+        const string UserSource = @"package App
+
+import System.Text.RegularExpressions
+
+open class Entity {
+}
+
+partial data class Tag(Name string) : Entity {
+    shared {
+        @GeneratedRegex(""^[a-z]+$"")
+        private partial func Word() Regex;
+
+        public func Test(s string) bool {
+            return Word().IsMatch(s)
+        }
+    }
+}
+";
+        Run run = this.GenerateAndCompile(new[] { UserSource }, RegexGenerator());
+
+        string userPart = run.File("RegexGenerator.g.cs");
+        Assert.Contains("partial data class Tag : Entity {", userPart, StringComparison.Ordinal);
+        Assert.Equal(true, Invoke(run.Type("Tag"), "Test", "abc"));
+        Assert.Equal(false, Invoke(run.Type("Tag"), "Test", "ab1"));
+    }
+
+    // A positional parameter list a generator supplies on a user data type
+    // with none is kept, not dropped, so the generated part still supplies
+    // the primary constructor and its properties.
+    [Fact]
+    public void GeneratorSuppliedPositionalList_IsKept_WhenTheUserDataTypeHasNone()
+    {
+        const string UserSource = @"package App
+
+partial data class Point {
+    shared {
+        public func Sum() int32 {
+            let p = Point(3, 4)
+            return p.X + p.Y
+        }
+    }
+}
+";
+        const string Generated = @"namespace App
+{
+    partial record Point(int X, int Y);
+}
+";
+        Run run = this.GenerateAndCompile(
+            new[] { UserSource },
+            new FixedSourceGenerator(("Point.g.cs", Generated)));
+
+        Assert.Contains("partial data class Point(X int32, Y int32)", run.File("Point.g.cs"), StringComparison.Ordinal);
+        Assert.Equal(7, Invoke(run.Type("Point"), "Sum"));
+    }
+
+    // Only one part may state the positional list (GS0482). When the user's
+    // data type already has one, a generated one is reported as GS9209 at the
+    // user's list rather than silently dropped.
+    [Fact]
+    public void GeneratorSuppliedPositionalList_OnAUserDataTypeWithOne_ReportsGS9209()
+    {
+        const string UserSource = @"package App
+
+partial data class Point(X int32) {
+}
+";
+        const string Generated = @"namespace App
+{
+    partial record Point(int X);
+}
+";
+        GeneratorHostResult result = GeneratorHostRunner.Run(
+            new Compilation(ParseUser(new[] { UserSource }).ToArray()),
+            CSharpProjectLoader.RuntimeReferences(),
+            new IIncrementalGenerator[] { new FixedSourceGenerator(("Point.g.cs", Generated)) });
+
+        GeneratorHostDiagnostic diagnostic = Assert.Single(result.HostDiagnostics);
+        Assert.Equal("GS9209", diagnostic.Id);
+        Assert.Equal("User0.gs", diagnostic.Location.FileName);
+        Assert.Equal(2, diagnostic.Location.StartLine);
+        Assert.Contains("partial data class Point(X int32)", result.GeneratedGsFiles.Single().GSharpSource, StringComparison.Ordinal);
+    }
+
     private static string RegexGenerator() => RegexGeneratorPath();
 
     private static object Invoke(Type type, string method, params object[] arguments) =>

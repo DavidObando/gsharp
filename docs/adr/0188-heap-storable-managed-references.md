@@ -98,6 +98,12 @@ Implementation:
   type handles. Equality is independent of helper site/assembly and referent
   contents. `SameLocation` compares permission views; CLR wrapper identity
   remains a separate observation.
+- Array-element handles retain their owner and absolute index immediately, but
+  materialize their immutable canonical key only when identity, equality or
+  hashing is first observed. Writable and directly-created readonly handles
+  publish that per-handle cache with compare-exchange, so all later observers
+  reuse one key. Concurrent first observers may allocate losing candidates;
+  no global owner/index interning or representation/ABI change is introduced.
 - Writable and readonly borrowed contracts use the existing metadata path.
   Implementation and `/refout` are tested with a C# producer/consumer.
   Async, iterator and channel state retain ordinary handles/cells only;
@@ -197,6 +203,16 @@ and reports direct borrowed and explicit `StrongBox` baselines. This is not a
 zero-cost or portable throughput claim. Generated `Borrow` bodies are also
 checked for allocation/boxing/delegate construction and generated heap fields
 for forbidden byref/ref-like types. No verifier suppression is added.
+
+Issue #4511 adds a 64-bit allocation budget for array-element handles:
+immediate-use, retained, and directly-created readonly handles allocate at
+most **40 B/op** before identity is observed. The first sequential identity
+observation may allocate one existing `ManagedLocationKey` (**40 B** on the
+recorded profile); warmed identity and dereference allocate zero. Exact object
+sizes remain runtime/profile-specific. The handle retains its owner before
+identity observation, and append reallocation, writable/readonly equivalence,
+owner/index/path equality, and mutable-content-independent hashing remain
+semantic requirements.
 
 ADR-0154 discrimination: replacing promoted roots with independent value
 snapshots compiled and verified but made **eight of ten** execution programs

@@ -2421,7 +2421,8 @@ public sealed partial class CSharpToGSharpTranslator
                         return valueElement.OriginalDefinition?.SpecialType != SpecialType.System_Nullable_T;
                     }
 
-                    return arrayType.ElementNullableAnnotation == NullableAnnotation.NotAnnotated;
+                    return arrayType.ElementNullableAnnotation == NullableAnnotation.NotAnnotated
+                        && !this.IsWidenedArrayElementRead(arrayElement);
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
@@ -3146,6 +3147,21 @@ public sealed partial class CSharpToGSharpTranslator
                     || declaredType?.NullableAnnotation == NullableAnnotation.Annotated);
         }
 
+        // Issue #4500: whether `value` reads an element of a local whose
+        // `new T[n]` allocation cs2gs widened to `T?` (IsWidenedArrayElementLocal).
+        private bool IsWidenedArrayElementRead(ExpressionSyntax value)
+        {
+            while (value is ParenthesizedExpressionSyntax parenthesized)
+            {
+                value = parenthesized.Expression;
+            }
+
+            return value is ElementAccessExpressionSyntax elementAccess
+                && this.context.GetSymbolInfo(elementAccess).Symbol is null
+                && this.context.GetSymbolInfo(elementAccess.Expression).Symbol is ILocalSymbol arrayLocal
+                && this.IsWidenedArrayElementLocal(arrayLocal);
+        }
+
         private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
         {
             if (this.GSharpExpressionIsStaticallyNonNull(value)
@@ -3155,6 +3171,12 @@ public sealed partial class CSharpToGSharpTranslator
                 || this.IsCallableValueExpression(value))
             {
                 return false;
+            }
+
+            // Issue #4500: an element read of an array cs2gs widened to `[n]T?`.
+            if (this.IsWidenedArrayElementRead(value))
+            {
+                return true;
             }
 
             TypeInfo typeInfo = this.context.GetTypeInfo(value);
@@ -4109,7 +4131,20 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // Flow analysis must have proven the receiver non-null at this site.
-            if (this.context.GetTypeInfo(recv).Nullability.FlowState != NullableFlowState.NotNull)
+            // Issue #4500: in a `<Nullable>annotations</Nullable>` context the
+            // declarations are annotated but Roslyn runs no flow analysis, so a
+            // `T?` receiver's flow state is None rather than NotNull, even after
+            // an `Assert.NotNull(x)` or an earlier `x!` that C# relies on. G#
+            // narrows neither, and the receiver keeps its `T?` type, so the
+            // dereference is asserted exactly as a flow-proven one is: C#
+            // throws on a null here too.
+            NullableFlowState flowState = this.context.GetTypeInfo(recv).Nullability.FlowState;
+            bool annotationsWithoutFlowAnalysis = isDereferenceReceiver
+                && flowState == NullableFlowState.None
+                && !this.IsObliviousCompilation()
+                && this.context.SemanticModel.GetNullableContext(recv.SpanStart).HasFlag(NullableContext.AnnotationsEnabled)
+                && !this.context.SemanticModel.GetNullableContext(recv.SpanStart).HasFlag(NullableContext.WarningsEnabled);
+            if (flowState != NullableFlowState.NotNull && !annotationsWithoutFlowAnalysis)
             {
                 return false;
             }
@@ -4152,6 +4187,19 @@ public sealed partial class CSharpToGSharpTranslator
             if (declared.NullableAnnotation == NullableAnnotation.Annotated)
             {
                 return NullForgivenessTelemetry.Record("flow-proven-declared-nullable");
+            }
+
+            // Issue #4500: without flow analysis an implicitly typed local's
+            // own annotation is None, but G# infers it from its initializer,
+            // so it is `T?` exactly when that initializer is.
+            if (annotationsWithoutFlowAnalysis
+                && symbol is ILocalSymbol implicitLocal
+                && IsImplicitlyTypedLocal(implicitLocal)
+                && implicitLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } implicitInitializer }
+                && this.IsNullableInitializer(implicitInitializer))
+            {
+                return NullForgivenessTelemetry.Record("4500-annotations-context-nullable-local");
             }
 
             if (this.ShouldPromoteToNullableReference(symbol))

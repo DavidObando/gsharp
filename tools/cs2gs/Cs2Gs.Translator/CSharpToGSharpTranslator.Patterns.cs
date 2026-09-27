@@ -2983,15 +2983,27 @@ public sealed partial class CSharpToGSharpTranslator
             // into, and gsc requires by-ref storage to match the parameter's
             // nullability exactly (GS0612). Widen the ELEMENT (`[n]T?`).
             if (elementType is { IsNullable: false }
-                && elementTypeSymbol is { IsReferenceType: true }
                 && this.ResolveValueSink(creation) is ILocalSymbol arrayLocal
-                && this.ElementPassedToNullableByRefParameter(arrayLocal))
+                && this.IsWidenedArrayElementLocal(arrayLocal))
             {
                 elementType = MakeNullable(elementType);
             }
 
             return new ArrayAllocationExpression(elementType, length);
         }
+
+        // Issues #4482 and #4500: the one decision "this local's `new T[n]`
+        // allocation has a `T?` element". Both the allocation and every
+        // element write ask it, so they cannot disagree.
+        // Only a rank-1 allocation takes the widening branch in
+        // TranslateArrayCreation (a rectangular one returns earlier), and the
+        // initializer may be parenthesized.
+        private bool IsWidenedArrayElementLocal(ILocalSymbol local) =>
+            local.Type is IArrayTypeSymbol { Rank: 1, ElementType: { IsReferenceType: true } }
+            && local.DeclaringSyntaxReferences.Any(reference =>
+                reference.GetSyntax() is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
+                && StripParentheses(initializer) is ArrayCreationExpressionSyntax { Initializer: null })
+            && (this.ElementPassedToNullableByRefParameter(local) || this.ElementWrittenMaybeNil(local));
 
         // Issue #4482: whether some `local[i]` in the local's scope is passed
         // by `out`/`ref` to a parameter whose emitted type is `T?`.
@@ -3017,6 +3029,43 @@ public sealed partial class CSharpToGSharpTranslator
                     && parameter.Type.IsReferenceType
                     && (parameter.Type.NullableAnnotation == NullableAnnotation.Annotated
                         || this.ShouldPromoteToNullableReference(parameter)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        // Issue #4500: the same rule for a plain element WRITE. `names[i] =
+        // member?.Name` stores a value that may be nil in G# (its emitted
+        // type is `T?`: IsNullableInitializer, or a symbol cs2gs promotes), so
+        // the element must be `T?` too. Otherwise the write is bridged with
+        // `!!`, which throws on the nil that C# simply stores.
+        private bool ElementWrittenMaybeNil(ILocalSymbol local)
+        {
+            SyntaxNode scope = this.GetNullabilityScope(local);
+            if (scope == null)
+            {
+                return false;
+            }
+
+            foreach (AssignmentExpressionSyntax assignment in scope.DescendantNodes().OfType<AssignmentExpressionSyntax>())
+            {
+                if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                    && assignment.Left is ElementAccessExpressionSyntax elementAccess
+                    && this.BindsTo(elementAccess.Expression, local)
+
+                    // A literal or suppressed null always writes nil: Roslyn
+                    // reports `null!` as NotNull, but cs2gs erases it to `nil`.
+                    && (IsNullOrSuppressedNull(assignment.Right)
+
+                        // A value C# flow proves non-null (`if (x == null) return;
+                        // values[0] = x;`) is not a nil write; it keeps the
+                        // established `!!` bridge instead.
+                        || (this.context.GetTypeInfo(assignment.Right).Nullability.FlowState != NullableFlowState.NotNull
+                            && (this.IsNullableInitializer(assignment.Right)
+                                || this.ShouldPromoteToNullableReference(this.context.GetSymbolInfo(assignment.Right).Symbol)))))
                 {
                     return true;
                 }
