@@ -177,7 +177,9 @@ Rollout is staged:
    remains an error for source containing either epoch-sensitive spelling;
    source without those spellings remains unaffected. `native-slice-syntax`
    may become the generated project default, but an old ambiguous file is
-   never silently reinterpreted.
+   never silently reinterpreted. The legacy cs2gs/generator output profile is
+   removed before this release; retained manifests requesting it fail with an
+   actionable regeneration diagnostic.
 
 The exact release numbers and diagnostic IDs are assigned by the implementation
 plan. The semantic staging above is required. Published packages, source
@@ -220,7 +222,8 @@ containers/elements, and rectangular rank must remain unchanged.
 
 ### 6. Translator policy
 
-cs2gs preserves C# storage semantics:
+During the preparation and transition releases, cs2gs preserves C# storage
+semantics through epoch-specific output profiles:
 
 - the legacy output profile renders C# SZARRAY types/literals as `[]T` /
   `[]T{...}` and selects `legacy-array-syntax`;
@@ -235,6 +238,9 @@ cs2gs preserves C# storage semantics:
 
 `ArrayTypeReference` and `NativeSliceTypeReference` remain distinct code-model
 nodes. The source epoch changes printer policy, not semantic ownership.
+The legacy output profile is transitional and is removed before the compiler
+rejects `legacy-array-syntax`; the native profile is then the only supported
+output.
 
 go2gs may continue emitting the unshadowed alias or qualified native runtime
 type before the epoch switch. Once its output profile selects
@@ -250,7 +256,8 @@ The syntax switch cannot ship until all of the following pass:
    explicit arrays for rank-one types/literals, nested and nullable forms,
    generated source, `params`, and interop signatures. Its legacy profile
    retains legacy array syntax; neither profile depends on ordinary-name
-   shadowing.
+   shadowing. The legacy profile and manifests selecting it are retired before
+   `legacy-array-syntax` becomes unsupported.
 2. A binding-aware migration preserves CLR metadata and behavior for old G#
    array source, including ordinary `array` name collisions. Project migration
    commits source and `GsharpSourceEpoch` together; loose-file migration reports
