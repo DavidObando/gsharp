@@ -48,12 +48,14 @@ internal static class SuspensionInference
     /// <param name="entryPoint">The program's entry point — synthesized or a user <c>Main</c> — which is the root that blocks and never suspends.</param>
     /// <param name="references">The compilation's reference resolver; when the channel runtime does not resolve nothing can suspend and the pass is a no-op.</param>
     /// <param name="diagnostics">Receives GS0558 and the re-run async analyses' diagnostics.</param>
+    /// <param name="createMethodGroupAdapter">Creates a verifier-safe adapter after inferred suspension has finalized a method's emitted shape.</param>
     /// <returns>The set of functions the pass marked <see cref="SuspendingKind.Inferred"/>.</returns>
     public static ImmutableHashSet<FunctionSymbol> Run(
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder bodies,
         FunctionSymbol? entryPoint,
         ReferenceResolver? references,
-        ImmutableArray<Diagnostic>.Builder diagnostics)
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
     {
         if (references == null)
         {
@@ -122,7 +124,14 @@ internal static class SuspensionInference
         foreach (var function in ordered)
         {
             var body = bodies[function];
-            var rewritten = SuspendingCallRewriter.Rewrite(body, function, ReferenceEquals(function, entryPoint), newlySuspending, runtime, bag);
+            var rewritten = SuspendingCallRewriter.Rewrite(
+                body,
+                function,
+                ReferenceEquals(function, entryPoint),
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter);
             if (!ReferenceEquals(rewritten, body))
             {
                 SyntaxAnchoringWalker.Anchor(rewritten, function.Declaration);

@@ -816,6 +816,28 @@ internal sealed class ChannelRuntimeBinder
             call.IsNonVirtualBaseCall);
     }
 
+    /// <summary>
+    /// Supplies the ambient context to a synthesized CLR static call used by
+    /// an imported suspending method-group adapter.
+    /// </summary>
+    /// <param name="call">A CLR static call.</param>
+    /// <param name="context">The ambient context.</param>
+    /// <returns>The call with the context supplied, or <paramref name="call"/> when it takes none.</returns>
+    public static BoundExpression SupplyImportedContext(BoundClrStaticCallExpression call, BoundExpression context)
+    {
+        if (!TryAppendImportedContext(call.Method, call.Arguments, context, out var arguments))
+        {
+            return call;
+        }
+
+        return new BoundClrStaticCallExpression(
+            call.Syntax,
+            call.Method,
+            call.Type,
+            arguments,
+            call.ArgumentRefKinds);
+    }
+
     /// <summary>Recovers the direction a facade call was bound with from its carrier parameter.</summary>
     /// <param name="call">A facade call.</param>
     /// <returns>The direction.</returns>

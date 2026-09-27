@@ -76,11 +76,18 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             """;
 
         var directory = PrepareDirectory(nameof(DirectInstanceAndBaseSuspendMethodGroups_VerifyAndRun));
-        var outputPath = Compile(directory, "App", source, "/target:exe");
-        IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
-        Assert.Equal(
-            $"11{Environment.NewLine}12{Environment.NewLine}2{Environment.NewLine}cancelled{Environment.NewLine}",
-            Run(outputPath));
+        try
+        {
+            var outputPath = Compile(directory, "App", source, "/target:exe");
+            IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal(
+                $"11{Environment.NewLine}12{Environment.NewLine}2{Environment.NewLine}cancelled{Environment.NewLine}",
+                Run(outputPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     [Fact]
@@ -125,12 +132,107 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             """;
 
         var directory = PrepareDirectory(nameof(ImportedInstanceSuspendMethodGroup_VerifiesAndRuns));
-        var libraryPath = Compile(directory, "Lib", library, "/target:library");
-        var appPath = Compile(directory, "App", app, "/target:exe", "/reference:" + libraryPath);
-        IlVerifier.Verify(
-            appPath,
-            new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
-        Assert.Equal($"2{Environment.NewLine}cancelled{Environment.NewLine}", Run(appPath));
+        try
+        {
+            var libraryPath = Compile(directory, "Lib", library, "/target:library");
+            var appPath = Compile(directory, "App", app, "/target:exe", "/reference:" + libraryPath);
+            IlVerifier.Verify(
+                appPath,
+                new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"2{Environment.NewLine}cancelled{Environment.NewLine}", Run(appPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ImportedStaticAndExtensionSuspendMethodGroups_VerifyAndRun()
+    {
+        const string library = """
+            package Lib
+
+            public class Number {
+                public let value int32
+                public init(value int32) {
+                    this.value = value
+                }
+            }
+
+            public suspend func Twice(value int32) int32 {
+                return value * 2
+            }
+
+            public suspend func (number Number) Add(value int32) int32 {
+                return number.value + value
+            }
+            """;
+        const string app = """
+            package App
+            import System
+            import Lib
+
+            suspend func run() {
+                let twice (int32) -> System.Threading.Tasks.ValueTask[int32] = Twice
+                let add (int32) -> System.Threading.Tasks.ValueTask[int32] = Number(10).Add
+                Console.WriteLine(await twice(3))
+                Console.WriteLine(await add(4))
+            }
+
+            run()
+            """;
+
+        var directory = PrepareDirectory(nameof(ImportedStaticAndExtensionSuspendMethodGroups_VerifyAndRun));
+        try
+        {
+            var libraryPath = Compile(directory, "Lib", library, "/target:library");
+            var appPath = Compile(directory, "App", app, "/target:exe", "/reference:" + libraryPath);
+            IlVerifier.Verify(
+                appPath,
+                new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"6{Environment.NewLine}14{Environment.NewLine}", Run(appPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void InferredSuspendMethodGroup_VerifiesAndRuns()
+    {
+        const string source = """
+            package Issue4412
+            import System
+
+            func Take(ch chan[int32]) int32 {
+                return <-ch
+            }
+
+            suspend func AddOne(value int32) int32 {
+                return value + 1
+            }
+
+            let ch = chan[int32](1)
+            ch <- 42
+            let addOne = AddOne
+            let take = Take
+            Console.WriteLine(addOne(1))
+            Console.WriteLine(take(ch))
+            """;
+
+        var directory = PrepareDirectory(nameof(InferredSuspendMethodGroup_VerifiesAndRuns));
+        try
+        {
+            var outputPath = Compile(directory, "App", source, "/target:exe");
+            IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"2{Environment.NewLine}42{Environment.NewLine}", Run(outputPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
     }
 
     private static string PrepareDirectory(string name)
