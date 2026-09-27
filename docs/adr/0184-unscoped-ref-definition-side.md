@@ -214,9 +214,12 @@ ref-returning member with no additional parameter, may carry the otherwise
 inert attribute.
 
 Override checks reuse the base slot already selected by override resolution.
-Explicit and implicit interface checks reuse the implementation selected by the
-existing interface-verification pass, so the rule covers both forms without a
-second signature matcher. Imported CLR slots are read from their real
+Imported interface checks prefer the source member explicitly linked to the
+current CLR slot, including the erased accessor slot of a symbolic generic
+interface, and only fall back to the existing signature matcher when no
+explicit implementation exists. The contract therefore follows actual
+interface dispatch even when a same-signature plain member appears first in
+source. Imported CLR slots are read from their real
 `UnscopedRefAttribute` metadata. This closes the original declaration-time gap:
 an implicit implementation is diagnosed after interface satisfaction resolves
 it, rather than guessed from its name before the interface contract is known.

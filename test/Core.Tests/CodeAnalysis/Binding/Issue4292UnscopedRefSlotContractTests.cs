@@ -11,6 +11,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Core.Tests.Fixtures;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -298,42 +299,44 @@ struct Buffer : IRefSlots {
     [Fact]
     public void ImportedInterfaceContracts_AreReadFromMethodMetadata()
     {
+        using var contracts = new Issue4292UnscopedRefContracts();
         var rejected = BindWithFixtures(@"
 package P
 import System.Diagnostics.CodeAnalysis
-import GSharp.Core.Tests.Fixtures
-struct Buffer : Issue4292ImportedInterface {
+import Issue4292.Contracts
+struct Buffer : IMethod {
     var Value int32
 
     @UnscopedRef
     public func Slot(ref fallback int32) ref int32 { return ref this.Value }
 }
-");
+", contracts);
         Assert.Single(rejected, d => d.Id == "GS0590");
 
         var accepted = BindWithFixtures(@"
 package P
 import System.Diagnostics.CodeAnalysis
-import GSharp.Core.Tests.Fixtures
-struct Buffer : Issue4292ImportedAnnotatedInterface {
+import Issue4292.Contracts
+struct Buffer : IAnnotatedMethod {
     var Value int32
 
     @UnscopedRef
     public func Slot(ref fallback int32) ref int32 { return ref this.Value }
 }
-");
+", contracts);
         Assert.Empty(accepted);
     }
 
     [Fact]
     public void ImportedSymbolicGenericInterface_EnforcesContract()
     {
+        using var contracts = new Issue4292UnscopedRefContracts();
         var source = @"
 package P
 import System.Diagnostics.CodeAnalysis
-import GSharp.Core.Tests.Fixtures
+import Issue4292.Contracts
 class Token { }
-struct Buffer : Issue4292ImportedGenericInterface[Token] {
+struct Buffer : IGenericMethod[Token] {
     var Value int32
 
     @UnscopedRef
@@ -341,18 +344,19 @@ struct Buffer : Issue4292ImportedGenericInterface[Token] {
 }
 ";
 
-        var diagnostic = Assert.Single(BindWithFixtures(source), d => d.Id == "GS0590");
-        Assert.Contains("Issue4292ImportedGenericInterface", diagnostic.Message, StringComparison.Ordinal);
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Contains("IGenericMethod", diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]
     public void ImportedRefProperty_WithoutAdditionalParameter_IsIrrelevant()
     {
+        using var contracts = new Issue4292UnscopedRefContracts();
         var source = @"
 package P
 import System.Diagnostics.CodeAnalysis
-import GSharp.Core.Tests.Fixtures
-struct Buffer : Issue4292ImportedRefProperty {
+import Issue4292.Contracts
+struct Buffer : IRefProperty {
     var Value int32
 
     @UnscopedRef
@@ -360,18 +364,19 @@ struct Buffer : Issue4292ImportedRefProperty {
 }
 ";
 
-        Assert.Empty(BindWithFixtures(source));
+        Assert.Empty(BindWithFixtures(source, contracts));
     }
 
     [Fact]
     public void ImportedIndexerGetterContract_IsEnforced()
     {
+        using var contracts = new Issue4292UnscopedRefContracts();
         const string implementation = """
             ref struct Buffer : $INTERFACE$ {
                 var Value int32
 
                 @UnscopedRef
-                public prop this[view Issue4292RefValue] ref int32 {
+                public prop this[view RefValue] ref int32 {
                     get { return ref this.Value }
                 }
             }
@@ -380,72 +385,238 @@ struct Buffer : Issue4292ImportedRefProperty {
             package P
             import System
             import System.Diagnostics.CodeAnalysis
-            import GSharp.Core.Tests.Fixtures
+            import Issue4292.Contracts
             """;
 
         Assert.Empty(BindWithFixtures(
             prefix + Environment.NewLine + implementation.Replace(
                 "$INTERFACE$",
-                "Issue4292ImportedGetterIndexer",
-                StringComparison.Ordinal)));
+                "IGetterIndexer",
+                StringComparison.Ordinal),
+            contracts));
         Assert.Single(
             BindWithFixtures(
                 prefix + Environment.NewLine + implementation.Replace(
                     "$INTERFACE$",
-                    "Issue4292ImportedUnannotatedIndexer",
-                    StringComparison.Ordinal)),
+                    "IUnannotatedIndexer",
+                    StringComparison.Ordinal),
+                contracts),
             d => d.Id == "GS0590");
     }
 
     [Fact]
     public void ImportedSetterOnlyContract_IsReadFromSetterMetadata()
     {
+        using var contracts = new Issue4292UnscopedRefContracts();
         var source = @"
 package P
 import System.Diagnostics.CodeAnalysis
-import GSharp.Core.Tests.Fixtures
-ref struct Buffer : Issue4292ImportedSetterProperty {
+import Issue4292.Contracts
+ref struct Buffer : ISetterProperty {
     @UnscopedRef
-    public prop Slot Issue4292RefValue { set { } }
+    public prop Slot RefValue { set { } }
 }
 ";
 
-        Assert.Empty(BindWithFixtures(source));
+        Assert.Empty(BindWithFixtures(source, contracts));
     }
 
     [Fact]
     public void ImportedSetterOnlyContract_IsReadFromPropertyMetadata()
     {
+        using var contracts = new Issue4292UnscopedRefContracts();
         var source = @"
 package P
 import System.Diagnostics.CodeAnalysis
-import GSharp.Core.Tests.Fixtures
-ref struct Buffer : Issue4292ImportedPropertyAnnotatedSetter {
+import Issue4292.Contracts
+ref struct Buffer : IPropertyAnnotatedSetter {
     @UnscopedRef
-    public prop Slot Issue4292RefValue { set { } }
+    public prop Slot RefValue { set { } }
 }
 ";
 
-        Assert.Empty(BindWithFixtures(source));
+        Assert.Empty(BindWithFixtures(source, contracts));
     }
 
     [Fact]
     public void InvalidClassPlacement_SuppressesImportedOverrideContractDiagnostic()
     {
+        using var contracts = new Issue4292UnscopedRefContracts();
         var source = @"
 package P
 import System.Diagnostics.CodeAnalysis
-import GSharp.Core.Tests.Fixtures
-class Derived : Issue4292ImportedBase, Issue4292ImportedInterface {
+import Issue4292.Contracts
+class Derived : Base, IMethod {
     @UnscopedRef
     override func Slot(ref fallback int32) ref int32 { return ref fallback }
 }
 ";
 
-        var diagnostic = Assert.Single(BindWithFixtures(source), d => d.Id == "GS0590");
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
         Assert.Contains("requires a struct instance member", diagnostic.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("overridden member", diagnostic.Message, StringComparison.Ordinal);
         Assert.DoesNotContain("implemented member", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedExplicitMethodContract_PrefersLinkedSlotOverPlainMember(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = "public func Slot(ref fallback int32) ref int32 { return ref this.Value }";
+        const string explicitMember = """
+            @UnscopedRef
+            private func (IMethod) Slot(ref fallback int32) ref int32 { return ref this.Value }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            struct Buffer : IMethod {
+                var Value int32
+
+            """ + members + """
+
+            }
+            """;
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedExplicitPropertyContract_PrefersLinkedAccessorsOverPlainProperty(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = """
+            public prop this[view RefValue] ref int32 {
+                get { return ref this.Value }
+            }
+            """;
+        const string explicitMember = """
+            @UnscopedRef
+            private prop (IUnannotatedIndexer) this[view RefValue] ref int32 {
+                get { return ref this.Value }
+            }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            ref struct Buffer : IUnannotatedIndexer {
+                var Value int32
+
+            """ + members + """
+
+            }
+            """;
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedSymbolicExplicitMethodContract_PrefersLinkedSlotOverPlainMember(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = "public func Slot(ref fallback int32, value Token) ref int32 { return ref this.Value }";
+        const string explicitMember = """
+            @UnscopedRef
+            private func (IGenericMethod[Token]) Slot(ref fallback int32, value Token) ref int32 {
+                return ref this.Value
+            }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class Token { }
+            struct Buffer : IGenericMethod[Token] {
+                var Value int32
+
+            """ + members + """
+
+            }
+            """;
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedSymbolicExplicitPropertyContract_PrefersLinkedAccessorsOverPlainProperty(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = "public prop Slot RefValue { set { } }";
+        const string explicitMember = """
+            @UnscopedRef
+            private prop (IGenericProperty[Token]) Slot RefValue { set { } }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class Token { }
+            ref struct Buffer : IGenericProperty[Token] {
+
+            """ + members + """
+
+            }
+            """;
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Fact]
+    public void InheritedSymbolicSlots_CheckEachConstructedInterface()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            class A { }
+            class B { }
+            struct Buffer : IChild[A], IChild[B] {
+                public func Put(value A) { }
+            }
+            """, contracts);
+
+        Assert.Single(diagnostics, d => d.Id == "GS0187");
+    }
+
+    [Fact]
+    public void DuplicateInheritedSymbolicSlots_ReportMissingMemberOnce()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            class A { }
+            struct Buffer : ILeft[A], IRight[A] {
+            }
+            """, contracts);
+
+        Assert.Single(diagnostics, d => d.Id == "GS0187");
     }
 
     private static ImmutableArray<Diagnostic> Bind(string source)
@@ -459,10 +630,11 @@ class Derived : Issue4292ImportedBase, Issue4292ImportedInterface {
             .ToImmutableArray();
     }
 
-    private static ImmutableArray<Diagnostic> BindWithFixtures(string source)
+    private static ImmutableArray<Diagnostic> BindWithFixtures(
+        string source,
+        Issue4292UnscopedRefContracts contracts)
     {
-        var fixturePath = typeof(GSharp.Core.Tests.Fixtures.Issue4292ImportedInterface).Assembly.Location;
-        using var resolver = ReferenceResolver.WithReferences(new[] { fixturePath });
+        using var resolver = ReferenceResolver.WithReferences(new[] { contracts.Path });
         var tree = SyntaxTree.Parse(SourceText.From(source));
         var globalScope = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(
             previous: null,

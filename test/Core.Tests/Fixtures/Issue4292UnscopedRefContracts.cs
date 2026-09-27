@@ -3,87 +3,105 @@
 // </copyright>
 
 using System;
-using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.Core.Tests.Fixtures;
 
-/// <summary>A byref-like fixture type used in imported contract signatures.</summary>
-public ref struct Issue4292RefValue
+/// <summary>Builds issue #4292's imported C# contracts outside the ambient test assembly.</summary>
+internal sealed class Issue4292UnscopedRefContracts : IDisposable
 {
-}
+    private readonly CSharpFixture fixture = new(Source);
 
-/// <summary>An imported interface without an unscoped receiver contract.</summary>
-public interface Issue4292ImportedInterface
-{
-    /// <summary>Returns a managed reference.</summary>
-    ref int Slot(ref int fallback);
-}
+    /// <summary>Gets the compiled contract assembly path.</summary>
+    public string Path => fixture.AssemblyPath;
 
-/// <summary>An imported interface with an unscoped receiver contract.</summary>
-public interface Issue4292ImportedAnnotatedInterface
-{
-    /// <summary>Returns a managed reference.</summary>
-    [UnscopedRef]
-    ref int Slot(ref int fallback);
-}
+    public void Dispose() => fixture.Dispose();
 
-/// <summary>An imported generic interface used through symbolic type substitution.</summary>
-/// <typeparam name="T">The symbolic argument.</typeparam>
-public interface Issue4292ImportedGenericInterface<T>
-{
-    /// <summary>Returns a managed reference.</summary>
-    ref int Slot(ref int fallback, T value);
-}
+    private const string Source = """
+        using System.Diagnostics.CodeAnalysis;
 
-/// <summary>An imported ref-returning property whose contract is irrelevant without another parameter.</summary>
-public interface Issue4292ImportedRefProperty
-{
-    /// <summary>Gets a managed reference.</summary>
-    ref int Slot { get; }
-}
+        namespace Issue4292.Contracts;
 
-/// <summary>An imported indexer whose getter carries the contract.</summary>
-public interface Issue4292ImportedGetterIndexer
-{
-    /// <summary>Gets a managed reference.</summary>
-    ref int this[Issue4292RefValue view]
-    {
-        [UnscopedRef]
-        get;
-    }
-}
+        public ref struct RefValue
+        {
+        }
 
-/// <summary>An imported indexer without the contract.</summary>
-public interface Issue4292ImportedUnannotatedIndexer
-{
-    /// <summary>Gets a managed reference.</summary>
-    ref int this[Issue4292RefValue view] { get; }
-}
+        public interface IMethod
+        {
+            ref int Slot(ref int fallback);
+        }
 
-/// <summary>An imported setter-only property whose setter carries the contract.</summary>
-public interface Issue4292ImportedSetterProperty
-{
-    /// <summary>Sets a byref-like value.</summary>
-    Issue4292RefValue Slot
-    {
-        [UnscopedRef]
-        set;
-    }
-}
+        public interface IAnnotatedMethod
+        {
+            [UnscopedRef]
+            ref int Slot(ref int fallback);
+        }
 
-/// <summary>An imported setter-only property whose property row carries the contract.</summary>
-public interface Issue4292ImportedPropertyAnnotatedSetter
-{
-    /// <summary>Sets a byref-like value.</summary>
-    [UnscopedRef]
-    Issue4292RefValue Slot { set; }
-}
+        public interface IGenericMethod<T>
+        {
+            ref int Slot(ref int fallback, T value);
+        }
 
-/// <summary>An imported base used to verify placement-diagnostic suppression.</summary>
-public class Issue4292ImportedBase
-{
-    private static int value;
+        public interface IRefProperty
+        {
+            ref int Slot { get; }
+        }
 
-    /// <summary>Returns a managed reference.</summary>
-    public virtual ref int Slot(ref int fallback) => ref value;
+        public interface IGetterIndexer
+        {
+            ref int this[RefValue view]
+            {
+                [UnscopedRef]
+                get;
+            }
+        }
+
+        public interface IUnannotatedIndexer
+        {
+            ref int this[RefValue view] { get; }
+        }
+
+        public interface IGenericProperty<T>
+        {
+            RefValue Slot { set; }
+        }
+
+        public interface ISetterProperty
+        {
+            RefValue Slot
+            {
+                [UnscopedRef]
+                set;
+            }
+        }
+
+        public interface IPropertyAnnotatedSetter
+        {
+            [UnscopedRef]
+            RefValue Slot { set; }
+        }
+
+        public interface IBaseSlot<T>
+        {
+            void Put(T value);
+        }
+
+        public interface IChild<T> : IBaseSlot<T>
+        {
+        }
+
+        public interface ILeft<T> : IBaseSlot<T>
+        {
+        }
+
+        public interface IRight<T> : IBaseSlot<T>
+        {
+        }
+
+        public class Base
+        {
+            private static int value;
+
+            public virtual ref int Slot(ref int fallback) => ref value;
+        }
+        """;
 }
