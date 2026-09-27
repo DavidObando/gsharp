@@ -138,6 +138,14 @@ directly when doing so is observationally equivalent. If ADR-0188 also takes a
 persistent address of a captured variable, both features must use one storage
 plan and one cell.
 
+The implementation retains one compiler-synthesized managed location alongside
+each promoted mutable capture box and passes that location to every rich object
+capturing the same dynamic binding. Rich-object construction remains fresh;
+only the location helper and its identity graph are amortized at binding
+creation. A new loop iteration or factory invocation creates a new box and a
+new retained location. Explicit source `managed(...)` expressions remain
+ordinary independent handle constructions over the same cell.
+
 The capture environment is hidden implementation state. It is not a public
 anonymous member, primary-constructor data field, equality/hash component, or
 `ToString`/deconstruction component. Capturing `secret` must not accidentally
@@ -755,8 +763,11 @@ Discriminating fixtures under ADR-0154 must include:
 For allocations, require one ordinary wrapper per successful `adapt` in the
 baseline, plus only documented capture/handle state, and no per-forwarded-call
 boxing/delegate allocation introduced by the adapter. Compare against a
-hand-written ordinary wrapper before claiming performance. Budget decisions
-belong in the implementation PR before measurements, not fabricated here.
+hand-written ordinary wrapper before claiming performance. For a rich object
+over an already-promoted shared root, construction allocates only the fresh
+rich object; the capture box and retained managed-location graph belong to the
+dynamic binding's setup cost. Fresh-root measurements must report that setup
+separately rather than hiding it in an amortized row.
 
 ## Closed rollout decisions and remaining boundaries
 

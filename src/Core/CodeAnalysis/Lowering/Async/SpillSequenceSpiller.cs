@@ -1018,7 +1018,11 @@ public static class SpillSequenceSpiller
                         managedReference,
                         managedReference.Location,
                         location => new BoundManagedReferenceExpression(
-                            managedReference.Syntax, location, managedReference.Type, managedReference.IsReadOnly));
+                            managedReference.Syntax,
+                            location,
+                            managedReference.Type,
+                            managedReference.IsReadOnly,
+                            managedReference.RetainForCapture));
                 case BoundDereferenceExpression dereference:
                     return SpillOneOperand(
                         dereference,

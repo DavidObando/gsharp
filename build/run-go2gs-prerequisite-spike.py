@@ -41,6 +41,12 @@ EXPECTED_ROWS = {
     "nominal-create",
     "rich-create",
     "manual-rich-create",
+    "rich-create-retained",
+    "manual-rich-create-retained",
+    "rich-create-fresh-root",
+    "manual-rich-create-fresh-root",
+    "rich-create-multi",
+    "manual-rich-create-multi",
 }
 
 
@@ -228,6 +234,11 @@ def main() -> int:
             float(summary[runtime]["rich-create"]["median_ns_per_op"])
             / float(summary[runtime]["manual-rich-create"]["median_ns_per_op"])
         )
+        for suffix in ("retained", "fresh-root", "multi"):
+            summary[runtime][f"rich-create-{suffix}"]["ratio_vs_manual"] = (
+                float(summary[runtime][f"rich-create-{suffix}"]["median_ns_per_op"])
+                / float(summary[runtime][f"manual-rich-create-{suffix}"]["median_ns_per_op"])
+            )
 
     result = {
         "semantic_lines": gsharp_semantics,

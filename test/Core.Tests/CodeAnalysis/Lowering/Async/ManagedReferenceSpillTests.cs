@@ -14,9 +14,11 @@ namespace GSharp.Core.Tests.CodeAnalysis.Lowering.Async;
 public sealed class ManagedReferenceSpillTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void ControlFlowLocationPreservesOriginalSlotAndPermission(bool readOnly)
+    [InlineData(false, false)]
+    [InlineData(false, true)]
+    [InlineData(true, false)]
+    [InlineData(true, true)]
+    public void ControlFlowLocationPreservesOriginalSlotAndPermission(bool readOnly, bool retainForCapture)
     {
         var root = new LocalVariableSymbol("root", false, TypeSymbol.Int32);
         var result = new LocalVariableSymbol("result", false, TypeSymbol.Object);
@@ -28,7 +30,8 @@ public sealed class ManagedReferenceSpillTests
                 new BoundExpressionStatement(null, effect),
                 new BoundConditionalGotoStatement(null, exit, new BoundLiteralExpression(null, false))),
             new BoundVariableExpression(null, root));
-        var reference = new BoundManagedReferenceExpression(null, location, result.Type, readOnly);
+        var reference = new BoundManagedReferenceExpression(
+            null, location, result.Type, readOnly, retainForCapture);
         var body = new BoundBlockStatement(
             null,
             ImmutableArray.Create<BoundStatement>(
@@ -43,6 +46,7 @@ public sealed class ManagedReferenceSpillTests
         Assert.Same(root, Assert.IsType<BoundVariableExpression>(retained.Location).Variable);
         Assert.Same(reference.Type, retained.Type);
         Assert.Equal(readOnly, retained.IsReadOnly);
+        Assert.Equal(retainForCapture, retained.RetainForCapture);
         Assert.Same(effect, Assert.Single(rewritten.Statements.OfType<BoundExpressionStatement>()).Expression);
         Assert.Same(exit, Assert.Single(rewritten.Statements.OfType<BoundConditionalGotoStatement>()).Label);
     }

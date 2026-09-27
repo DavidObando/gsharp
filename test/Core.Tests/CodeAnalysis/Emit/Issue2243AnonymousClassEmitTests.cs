@@ -178,6 +178,70 @@ public class Issue2243AnonymousClassEmitTests
     }
 
     [Fact]
+    public void RichObject_CaptureRetentionPreservesConstructionOrderAndExceptions()
+    {
+        const string source = """
+            package Corpus.Issue4512
+
+            import System
+
+            var Trace = ""
+
+            func Mark(name string, value int32, fail string) int32 {
+                Trace += name
+                if name == fail { throw InvalidOperationException(name) }
+                return value
+            }
+
+            open class Base {
+                var Value int32
+                var Observed int32
+                init(value int32, fail string) {
+                    Value = value
+                    Mark("B", 0, fail)
+                    Observed = Read()
+                }
+                open func Read() int32 -> Value
+            }
+
+            func Make(fail string) Base {
+                var captured = 40
+                return object : Base(Mark("A", 1, fail), fail) {
+                    let Snapshot = Mark("S", 2, fail)
+                    override func Read() int32 {
+                        Trace += "V"
+                        return captured + Snapshot
+                    }
+                }
+            }
+
+            let value = Make("")
+            Console.WriteLine(Trace + ":" + value.Observed.ToString())
+            Trace = ""
+            try {
+                Make("A")
+            } catch (InvalidOperationException) {
+                Console.WriteLine(Trace)
+            }
+            Trace = ""
+            try {
+                Make("S")
+            } catch (InvalidOperationException) {
+                Console.WriteLine(Trace)
+            }
+            Trace = ""
+            try {
+                Make("B")
+            } catch (InvalidOperationException) {
+                Console.WriteLine(Trace)
+            }
+            """;
+
+        var output = CompileAndRun("Issue4512Order", source);
+        Assert.Equal("ASBV:42\nA\nAS\nASB\n".Replace("\n", Environment.NewLine), output);
+    }
+
+    [Fact]
     public void StructuralAdaptation_ForwardsAndAllocatesFreshWrapper()
     {
         const string source = """
