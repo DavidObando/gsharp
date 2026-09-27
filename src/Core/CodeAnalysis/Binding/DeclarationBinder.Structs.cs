@@ -1971,6 +1971,7 @@ internal sealed partial class DeclarationBinder
                 PropertyInfo? externalOverriddenProperty = null;
                 TypeSymbol? externalPropertyContainingType = null;
                 PropertySymbol? overriddenProperty = null;
+                var pendingCovariantCheck = false;
                 if (isOverride)
                 {
                     if (structSymbol.BaseClass != null && TryGetOverriddenPropertyCandidate(structSymbol.BaseClass, propName, isIndexer, indexerParameters, out var baseProp))
@@ -1990,19 +1991,39 @@ internal sealed partial class DeclarationBinder
                             // wrong and both report the same signature mismatch.
                             Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
                         }
-                        else if (!TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(baseProp.Type, propType)
-                            && !IsCovariantPropertyOverride(
-                                baseProp,
-                                propType,
-                                hasGetter,
-                                hasSetter,
-                                propReturnRefKind))
+                        else if (PropertyOverrideTypeConforms(structSymbol, baseProp, propType))
                         {
-                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
+                            overriddenProperty = baseProp;
+                        }
+                        else if (!hasSetter
+                            && baseProp.HasGetter
+                            && !baseProp.HasSetter
+                            && propReturnRefKind == RefKind.None)
+                        {
+                            // Issue #4481: a get-only override may narrow the
+                            // type to one with an implicit reference conversion
+                            // to the base type (C# 9 covariant returns). Its
+                            // getter has a different CLR signature, so it cannot
+                            // reuse the base slot by name: the emitter gives it a
+                            // new slot and binds the base getter to it with a
+                            // MethodImpl (#4508). Before this check the type was never
+                            // compared, so the getter silently left the base slot
+                            // unimplemented (a TypeLoadException at run time).
+                            // Whether it IS a narrowing is decided once every
+                            // type is bound (see RegisterCovariantPropertyOverrideCheck).
+                            // As in C#, the overridden property must be
+                            // read-only: only the getter gets a MethodImpl, so a
+                            // base setter would stay unimplemented (for an
+                            // abstract base, a TypeLoadException).
+                            // The base must have a getter to bind to, and the
+                            // CLR covariant-return form covers by-value returns
+                            // only, so a by-ref narrowing has no override form.
+                            overriddenProperty = baseProp;
+                            pendingCovariantCheck = true;
                         }
                         else
                         {
-                            overriddenProperty = baseProp;
+                            Diagnostics.ReportOverrideSignatureMismatch(propSyntax.Identifier.Location, propName);
                         }
                     }
                     else
@@ -2058,6 +2079,13 @@ internal sealed partial class DeclarationBinder
                     ReturnRefKind = propReturnRefKind,
                 };
                 propertySymbol.OverriddenProperty = overriddenProperty;
+                if (pendingCovariantCheck)
+                {
+                    RegisterCovariantPropertyOverrideCheck(
+                        propertySymbol,
+                        propSyntax.Identifier.Location);
+                }
+
                 Binder.AttachDocumentation(propertySymbol, propSyntax);
                 if (externalOverriddenProperty != null)
                 {
@@ -3669,6 +3697,48 @@ internal sealed partial class DeclarationBinder
         }
 
         pendingParameterDefaultValueBindings.Clear();
+    }
+
+    /// <summary>
+    /// Issue #4481: decides, once every type body is bound, whether each
+    /// get-only property override whose type differs from its base property's
+    /// is a covariant narrowing. A narrowing keeps its overridden-property
+    /// link, from which the emitter gives the getter a new slot bound to the
+    /// base getter by a MethodImpl (#4508); anything else has no CLR override
+    /// form, loses the link, and reports GS0185.
+    /// </summary>
+    internal void CheckPendingCovariantPropertyOverrides()
+    {
+        foreach (var check in pendingCovariantPropertyOverrideChecks)
+        {
+            check();
+        }
+
+        pendingCovariantPropertyOverrideChecks.Clear();
+    }
+
+    private void RegisterCovariantPropertyOverrideCheck(
+        PropertySymbol propertySymbol,
+        TextLocation location)
+    {
+        pendingCovariantPropertyOverrideChecks.Add(() =>
+        {
+            // The emitter classifies with this same predicate, so an override
+            // accepted here is always given its MethodImpl.
+            if (propertySymbol.OverriddenProperty is { } baseProperty
+                && IsCovariantPropertyOverride(
+                    baseProperty,
+                    propertySymbol.Type,
+                    propertySymbol.HasGetter,
+                    propertySymbol.HasSetter,
+                    propertySymbol.ReturnRefKind))
+            {
+                return;
+            }
+
+            propertySymbol.OverriddenProperty = null;
+            Diagnostics.ReportOverrideSignatureMismatch(location, propertySymbol.Name);
+        });
     }
 
     private void RegisterStructInterfaceChecks(

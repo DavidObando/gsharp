@@ -1446,6 +1446,13 @@ public sealed class Binder
 
         binder.declarations.ExpandStructInterfaceClosures();
 
+        // Issue #4481: every class's base class, every source interface's base
+        // clause and every class's implemented-interface closure are populated
+        // now, so a property override's narrowed type (a class, or a source
+        // interface reached transitively) can be tested against its base
+        // type. Only the emitter reads the result.
+        binder.declarations.CheckPendingCovariantPropertyOverrides();
+
         // Issues #4089/#4090: every same-compilation declaration's
         // type-parameter constraints are now resolved (class bodies, then
         // interface members) and every class's implemented-interface closure is

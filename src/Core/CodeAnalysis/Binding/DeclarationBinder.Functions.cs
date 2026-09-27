@@ -3000,6 +3000,48 @@ internal sealed partial class DeclarationBinder
     }
 
     /// <summary>
+    /// Issue #4481: whether an override property's type conforms to the base
+    /// property's, so the override can reuse the base accessor slot. The base
+    /// type is read through the derived type's base-class type arguments, and
+    /// reference-type nullability is ignored: <c>Sym</c> and <c>Sym?</c> have
+    /// the same CLR signature, as C# nullability variance allows.
+    /// </summary>
+    /// <param name="derived">The overriding type.</param>
+    /// <param name="baseProperty">The base property being overridden.</param>
+    /// <param name="overrideType">The override's declared type.</param>
+    /// <returns><see langword="true"/> when the two types are the same slot type.</returns>
+    internal static bool PropertyOverrideTypeConforms(StructSymbol derived, PropertySymbol baseProperty, TypeSymbol overrideType)
+    {
+        var baseType = baseProperty.Type;
+        if (ReferenceEquals(baseType, TypeSymbol.Error) || ReferenceEquals(overrideType, TypeSymbol.Error))
+        {
+            // The type already failed to bind and has its own diagnostic.
+            return true;
+        }
+
+        var substitution = BuildBaseTypeArgumentSubstitution(derived);
+        if (ConformanceSignaturesEquivalent(baseType, overrideType, substitution))
+        {
+            return true;
+        }
+
+        // Reference nullability is metadata only at EVERY nesting level:
+        // `List[Sym?]` and `List[Sym]` are one CLR slot type.
+        return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            SubstituteBaseType(baseType, substitution),
+            overrideType);
+    }
+
+    // Issue #4481: reads a base member's type through the derived type's
+    // base-class type arguments (`Node[T]`'s `T` is `Sym` in `: Node[Sym]`).
+    private static TypeSymbol SubstituteBaseType(
+        TypeSymbol baseType,
+        IReadOnlyDictionary<TypeParameterSymbol, TypeSymbol>? substitution)
+        => substitution == null || substitution.Count == 0
+            ? baseType
+            : Binder.SubstituteType(baseType, new Dictionary<TypeParameterSymbol, TypeSymbol>(substitution));
+
+    /// <summary>
     /// ADR-0187 / issue #4350: whether two indexers declare the same
     /// index-parameter signature (count, types, and ref-kinds). Indexers
     /// overload by this signature, exactly as in C#.

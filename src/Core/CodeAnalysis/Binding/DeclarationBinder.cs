@@ -142,6 +142,13 @@ internal sealed partial class DeclarationBinder
     // == false for a parameter whose default hasn't been bound yet.
     private readonly List<Action> pendingParameterDefaultValueBindings = new List<Action>();
 
+    // Issue #4481: property overrides whose type differs from the base
+    // property's. Whether the difference is a covariant narrowing depends on
+    // the override type's base class, and that type may be bound after the
+    // overriding class (types are ordered base-first, not by the types their
+    // members mention), so the decision waits until every type body is bound.
+    private readonly List<Action> pendingCovariantPropertyOverrideChecks = new List<Action>();
+
     // Issue #3896: const initializers a type's own #1193 fixpoint could not
     // fold, because the const they reference belongs to a type bound later.
     // BindPendingFieldInitializers retries these across the whole compilation
