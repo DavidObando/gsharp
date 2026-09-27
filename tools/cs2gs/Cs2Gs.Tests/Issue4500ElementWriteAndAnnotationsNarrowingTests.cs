@@ -137,7 +137,7 @@ public class Holder
         var a = new Holder[2];
         a[0] = null;
         a[1] = new Holder { Name = ""ok"" };
-        var b = a;
+        var b = a!;
         return (b[0] == null ? ""N"" : ""Y"") + b[1].Name;
     }
 }", NullableContextOptions.Disable);
