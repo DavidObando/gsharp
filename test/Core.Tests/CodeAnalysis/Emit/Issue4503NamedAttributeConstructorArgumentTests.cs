@@ -192,6 +192,31 @@ public sealed class Issue4503NamedAttributeConstructorArgumentTests
         Assert.Equal("ok", Assert.Single(data.ConstructorArguments).Value);
     }
 
+    [Fact]
+    public void SameCompilationExactConstructor_OutranksOptionalPrimaryConstructor()
+    {
+        var result = Emit(
+            """
+            import System
+
+            class LocalAttribute(Value int32 = 1) : Attribute {
+                init() {
+                }
+            }
+
+            @Local
+            class Tagged {
+            }
+            """);
+
+        Assert.True(result.Success, FormatDiagnostics(result));
+        var assembly = Assembly.Load(result.Image);
+        var data = assembly.GetTypes().Single(type => type.Name == "Tagged")
+            .GetCustomAttributesData()
+            .Single(attribute => attribute.AttributeType.Name == "LocalAttribute");
+        Assert.Empty(data.ConstructorArguments);
+    }
+
     [Theory]
     [InlineData("@ImportedNamedConstructor(\"a\", first: \"b\")", "GS0247")]
     [InlineData("@ImportedNamedConstructor(\"a\", second: 2, second: 3)", "GS0245")]

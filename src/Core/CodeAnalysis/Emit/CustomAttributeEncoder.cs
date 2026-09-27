@@ -789,108 +789,111 @@ internal sealed class CustomAttributeEncoder
         BoundAttributeArgument? positionalConflict = null;
         ValidateUniqueNamedConstructorArguments(attr);
 
-        if (attributeType.HasPrimaryConstructor
-            && this.resolvePrimaryCtorToken != null)
+        foreach (var useDefaults in new[] { false, true })
         {
-            if (!TryMapUserAttributeConstructorArgumentSlots(
-                    attributeType.PrimaryConstructorParameters,
-                    attr,
-                    out var slots,
-                    out var conflict))
-            {
-                positionalConflict ??= conflict;
-            }
-            else if (!TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes, out var offending))
-            {
-                unsupportedParameter = offending;
-            }
-            else
-            {
-                SawProjectable(ref sawProjectableCandidate);
-                if (TryBuildUserAttributeConstructorArguments(
-                        slots,
-                        paramTypes,
-                        out effectiveArguments))
-                {
-                    ctorToken = this.resolvePrimaryCtorToken(attributeType);
-                    return true;
-                }
-
-                // Issue #4097: this arm used to be missing entirely. A primary
-                // constructor was accepted on ARITY alone, so `@Note(1)` at
-                // `NoteAttribute(Text string)` reached the blob writer with an
-                // int for a string slot and came out as GS9998 — an internal
-                // compiler error for a plain argument-type mistake. The
-                // CLR-imported path has always applied this rule via
-                // `ParametersMatch`.
-                paramTypes = null;
-            }
-        }
-
-        if (this.resolveExplicitCtorToken != null)
-        {
-            ConstructorSymbol? matchedCtor = null;
-            Type[]? matchedParamTypes = null;
-            object?[]? matchedArguments = null;
-            ConstructorSymbol? ambiguousCtor = null;
-
-            foreach (var ctor in attributeType.EffectiveExplicitConstructors)
+            if (attributeType.HasPrimaryConstructor
+                && this.resolvePrimaryCtorToken != null)
             {
                 if (!TryMapUserAttributeConstructorArgumentSlots(
-                        ctor.Parameters,
+                        attributeType.PrimaryConstructorParameters,
                         attr,
                         out var slots,
+                        out var usedDefault,
                         out var conflict))
                 {
                     positionalConflict ??= conflict;
-                    continue;
                 }
-
-                if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes, out var offending))
+                else if (usedDefault == useDefaults)
                 {
-                    // Recorded, but only provisionally — see the
-                    // `sawProjectableCandidate` reset below.
-                    // First unencodable parameter wins, and an already-recorded
-                    // one from the primary constructor is kept. Layout is
-                    // checked before projection, so unrelated overloads cannot
-                    // affect whether GS0584 outranks GS0583.
-                    unsupportedParameter ??= offending;
-                    continue;
-                }
+                    if (!TryGetClrParameterTypes(attributeType.PrimaryConstructorParameters, out paramTypes, out var offending))
+                    {
+                        unsupportedParameter = offending;
+                    }
+                    else
+                    {
+                        SawProjectable(ref sawProjectableCandidate);
+                        if (TryBuildUserAttributeConstructorArguments(
+                                slots,
+                                paramTypes,
+                                out effectiveArguments))
+                        {
+                            ctorToken = this.resolvePrimaryCtorToken(attributeType);
+                            return true;
+                        }
 
-                sawProjectableCandidate = true;
-                if (!TryBuildUserAttributeConstructorArguments(
-                        slots,
-                        candidateParamTypes,
-                        out var candidateArguments))
-                {
-                    continue;
+                        // Issue #4097: a primary constructor was previously
+                        // accepted on arity alone, allowing an argument type
+                        // mismatch to reach the blob writer as GS9998.
+                        paramTypes = null;
+                    }
                 }
-
-                if (matchedCtor != null)
-                {
-                    ambiguousCtor = ctor;
-                    break;
-                }
-
-                matchedCtor = ctor;
-                matchedParamTypes = candidateParamTypes;
-                matchedArguments = candidateArguments;
             }
 
-            if (ambiguousCtor != null)
+            if (this.resolveExplicitCtorToken != null)
             {
-                EmitDiagnosticException.Throw(
-                    attr.Syntax,
-                    $"Ambiguous constructor for attribute '{attributeType.Name}': more than one 'init(...)' overload accepts the given arguments. Add an explicit conversion or change the argument types to disambiguate.");
-            }
+                ConstructorSymbol? matchedCtor = null;
+                Type[]? matchedParamTypes = null;
+                object?[]? matchedArguments = null;
+                ConstructorSymbol? ambiguousCtor = null;
 
-            if (matchedCtor != null && matchedParamTypes != null && matchedArguments != null)
-            {
-                ctorToken = this.resolveExplicitCtorToken(attributeType, matchedCtor);
-                paramTypes = matchedParamTypes;
-                effectiveArguments = matchedArguments;
-                return true;
+                foreach (var ctor in attributeType.EffectiveExplicitConstructors)
+                {
+                    if (!TryMapUserAttributeConstructorArgumentSlots(
+                            ctor.Parameters,
+                            attr,
+                            out var slots,
+                            out var usedDefault,
+                            out var conflict))
+                    {
+                        positionalConflict ??= conflict;
+                        continue;
+                    }
+
+                    if (usedDefault != useDefaults)
+                    {
+                        continue;
+                    }
+
+                    if (!TryGetClrParameterTypes(ctor.Parameters, out var candidateParamTypes, out var offending))
+                    {
+                        unsupportedParameter ??= offending;
+                        continue;
+                    }
+
+                    sawProjectableCandidate = true;
+                    if (!TryBuildUserAttributeConstructorArguments(
+                            slots,
+                            candidateParamTypes,
+                            out var candidateArguments))
+                    {
+                        continue;
+                    }
+
+                    if (matchedCtor != null)
+                    {
+                        ambiguousCtor = ctor;
+                        break;
+                    }
+
+                    matchedCtor = ctor;
+                    matchedParamTypes = candidateParamTypes;
+                    matchedArguments = candidateArguments;
+                }
+
+                if (ambiguousCtor != null)
+                {
+                    EmitDiagnosticException.Throw(
+                        attr.Syntax,
+                        $"Ambiguous constructor for attribute '{attributeType.Name}': more than one 'init(...)' overload accepts the given arguments. Add an explicit conversion or change the argument types to disambiguate.");
+                }
+
+                if (matchedCtor != null && matchedParamTypes != null && matchedArguments != null)
+                {
+                    ctorToken = this.resolveExplicitCtorToken(attributeType, matchedCtor);
+                    paramTypes = matchedParamTypes;
+                    effectiveArguments = matchedArguments;
+                    return true;
+                }
             }
         }
 
@@ -944,9 +947,11 @@ internal sealed class CustomAttributeEncoder
         ImmutableArray<ParameterSymbol> parameters,
         BoundAttribute attribute,
         [NotNullWhen(true)] out object?[]? slots,
+        out bool usedDefault,
         out BoundAttributeArgument? positionalConflict)
     {
         slots = null;
+        usedDefault = false;
         positionalConflict = null;
         if (attribute.PositionalArguments.Length > parameters.Length)
         {
@@ -1003,6 +1008,7 @@ internal sealed class CustomAttributeEncoder
                     return false;
                 }
 
+                usedDefault = true;
                 mappedSlots[i] = parameters[i].ExplicitDefaultValue;
                 continue;
             }
