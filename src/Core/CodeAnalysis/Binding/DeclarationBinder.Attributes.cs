@@ -1612,9 +1612,7 @@ internal sealed partial class DeclarationBinder
             }
 
             elementValues[i] = containerElementType.IsSameAs(typeof(object))
-                && (IsEnumLikeType(valueType)
-                    || (GetOneDimensionalArrayElementType(valueType) is { } nestedElementType
-                        && IsEnumLikeType(nestedElementType)))
+                && ShouldPreserveBoxedAttributeElementType(elementValue, valueType)
                 ? new BoundAttributeArgument(null, elementValue, valueType)
                 : elementValue;
             if (elementValue is TypeSymbol)
@@ -1639,6 +1637,30 @@ internal sealed partial class DeclarationBinder
         value = result;
         type = Invariant.Required(bound.Type, "a bound attribute array has a resolved array type");
         return true;
+    }
+
+    private static bool ShouldPreserveBoxedAttributeElementType(object? value, TypeSymbol type)
+    {
+        if (IsEnumLikeType(type))
+        {
+            return true;
+        }
+
+        var arrayElementType = GetOneDimensionalArrayElementType(type);
+        if (arrayElementType == null)
+        {
+            return false;
+        }
+
+        if (IsEnumLikeType(arrayElementType))
+        {
+            return true;
+        }
+
+        return value is Array array
+            && array.GetType().GetElementType() is { } runtimeElementType
+            && arrayElementType.ClrType is { } declaredElementType
+            && !runtimeElementType.IsSameAs(ResolveRuntimeContainerElementType(declaredElementType));
     }
 
     /// <summary>

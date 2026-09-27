@@ -1837,6 +1837,20 @@ internal sealed class CustomAttributeEncoder
                 return;
             }
 
+            if (paramType.IsSameAs(typeof(object))
+                && arrayElement != null
+                && TryGetAttributeParameterWriteType(argument.Type, out var arrayWriteType)
+                && arrayWriteType.IsArray
+                && arrayWriteType.GetArrayRank() == 1)
+            {
+                // A widened runtime container still carries the source array
+                // type in the wrapper (for example Type[] stored as object[]
+                // because it contains a same-compilation TypeSymbol).
+                WriteCustomAttributeFieldOrPropertyType(bb, arrayWriteType);
+                this.WriteCustomAttributeFixedArg(bb, arrayWriteType, argument.Value);
+                return;
+            }
+
             value = argument.Value;
         }
 
