@@ -2,8 +2,11 @@ using System.Text.RegularExpressions;
 
 namespace Issue3086;
 
-public sealed record GitHubUrl(string Owner, string Name, int? PrNumber)
+public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
 {
+    private const string PatternText =
+        @"^https://(www\.)?github\.com/(?<owner>[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/(?<name>[A-Za-z0-9._-]+?)(\.git)?(/(pull/(?<pr>\d+))?)?/?$";
+
     public static bool TryParse(string? url, out GitHubUrl parsed)
     {
         parsed = new GitHubUrl(string.Empty, string.Empty, null);
@@ -12,7 +15,7 @@ public sealed record GitHubUrl(string Owner, string Name, int? PrNumber)
             return false;
         }
 
-        var match = GitHubUrlPatterns.Pattern().Match(url.Trim());
+        var match = Pattern().Match(url.Trim());
         if (!match.Success)
         {
             return false;
@@ -22,15 +25,6 @@ public sealed record GitHubUrl(string Owner, string Name, int? PrNumber)
         parsed = new GitHubUrl(match.Groups["owner"].Value, match.Groups["name"].Value, prNumber);
         return true;
     }
-}
-
-// Issue #4301: a G# record cannot hold a partial func (GS0607), so the
-// [GeneratedRegex] methods live in a partial class, which migrates to G#
-// declaring parts that gsgen implements with the real Regex generator.
-internal static partial class GitHubUrlPatterns
-{
-    private const string PatternText =
-        @"^https://(www\.)?github\.com/(?<owner>[A-Za-z0-9](?:[A-Za-z0-9-]*[A-Za-z0-9])?)/(?<name>[A-Za-z0-9._-]+?)(\.git)?(/(pull/(?<pr>\d+))?)?/?$";
 
     public static bool HasExpectedRegexSemantics()
     {
@@ -65,7 +59,7 @@ internal static partial class GitHubUrlPatterns
         PatternText,
         RegexOptions.ExplicitCapture,
         matchTimeoutMilliseconds: 1000)]
-    internal static partial Regex Pattern();
+    private static partial Regex Pattern();
 
     [GeneratedRegex("^default$")]
     private static partial Regex DefaultPattern();
@@ -103,14 +97,14 @@ public static class Program
         AssertUrl("https://github.com/DavidObando/gsharp", null);
         AssertUrl("https://github.com/DavidObando/gsharp/pull/3086", 3086);
 
-        if (!GitHubUrlPatterns.HasExpectedRegexSemantics())
+        if (!GitHubUrl.HasExpectedRegexSemantics())
         {
             throw new InvalidOperationException("GeneratedRegex semantics changed.");
         }
 
-        if (!GitHubUrlPatterns.HasDefaultRegexSemantics() ||
-            !GitHubUrlPatterns.HasInvariantInlineIgnoreCaseSemantics() ||
-            !GitHubUrlPatterns.HasCultureSemantics())
+        if (!GitHubUrl.HasDefaultRegexSemantics() ||
+            !GitHubUrl.HasInvariantInlineIgnoreCaseSemantics() ||
+            !GitHubUrl.HasCultureSemantics())
         {
             throw new InvalidOperationException("GeneratedRegex default semantics changed.");
         }

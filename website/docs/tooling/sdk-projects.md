@@ -156,7 +156,7 @@ partial class Patterns {
 }
 ```
 
-`cs2gs migrate` translates a C# `[GeneratedRegex]` partial method to exactly this declaring part, with the pattern, options, match timeout and culture name re-spelled as literals, and drops the generated C# implementation. It reports the shapes G# cannot pair with a generated implementing part: a `[GeneratedRegex]` method declared in a record or in a nested type, and the `[GeneratedRegex]` partial-property form (use the method form instead).
+`cs2gs migrate` translates a C# `[GeneratedRegex]` partial method to exactly this declaring part, with the pattern, options, match timeout and culture name re-spelled as literals, and drops the generated C# implementation. A C# `partial record` or `partial record struct` becomes a G# `partial data class` or `partial data struct` and keeps the declaring part. It reports the shapes G# cannot pair with a generated implementing part: a method declared in a nested type, and the `[GeneratedRegex]` partial-property form (use the method form instead).
 
 `gsgen` writes the generated body as an implementing part (`partial func` with a body) spelled with your declaring part's header, so a signature spelled differently from the generated C# still pairs: `System.Text.RegularExpressions.Regex` or `Regex`, `int` or `int32`. Two limits apply:
 - overloads with the same name and parameter count in one type keep the generated spelling, so spell those the way the generated code does;

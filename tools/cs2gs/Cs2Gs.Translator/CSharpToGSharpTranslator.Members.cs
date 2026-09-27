@@ -1424,12 +1424,11 @@ public sealed partial class CSharpToGSharpTranslator
             implementationNode = null;
 
             // Legacy issue #1910 merge mode produces ONE non-partial G# type,
-            // where a `partial func` is GS0608. G# partial methods live only in
-            // a `partial class` / `partial struct` (ADR-0192 §A): records map to
-            // `data class`/`data struct` and interfaces reject them (GS0607).
+            // where a `partial func` is GS0608. Interfaces and inline structs
+            // reject partial funcs (GS0607).
             if (!this.emitPartialMethodPairs
                 || !this.preservePartialParts
-                || ownerKind is not (TypeDeclarationKind.Class or TypeDeclarationKind.Struct)
+                || !CanDeclarePartialFunction(ownerKind)
                 || !definition.IsPartialDefinition
                 || definition.PartialImplementationPart is not IMethodSymbol implementation)
             {
@@ -1551,13 +1550,9 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns><see langword="true"/> to emit the method as an implementing part.</returns>
         private bool IsGeneratedImplementingPart(IMethodSymbol implementation, TypeDeclarationKind ownerKind)
         {
-            // A record owner is a G# `data class` / `data struct`, which may
-            // hold partial funcs like any class or struct (ADR-0192 amendment,
-            // partial data types): gsgen renders a G# data type as a record.
             if (!this.emitGeneratedImplementingParts
                 || !this.preservePartialParts
-                || ownerKind is not (TypeDeclarationKind.Class or TypeDeclarationKind.Struct
-                    or TypeDeclarationKind.DataClass or TypeDeclarationKind.DataStruct)
+                || !CanDeclarePartialFunction(ownerKind)
                 || implementation?.PartialDefinitionPart is not IMethodSymbol definition)
             {
                 return false;
@@ -1835,6 +1830,12 @@ public sealed partial class CSharpToGSharpTranslator
 
             return false;
         }
+
+        private static bool CanDeclarePartialFunction(TypeDeclarationKind ownerKind) =>
+            ownerKind is TypeDeclarationKind.Class
+                or TypeDeclarationKind.Struct
+                or TypeDeclarationKind.DataClass
+                or TypeDeclarationKind.DataStruct;
 
         private IEnumerable<IMethodSymbol> EnumerateKnownExtensionMethods(
             IMethodSymbol method)

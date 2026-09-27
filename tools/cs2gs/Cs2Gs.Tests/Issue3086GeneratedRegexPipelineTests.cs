@@ -83,7 +83,8 @@ public sealed class Issue3086GeneratedRegexPipelineTests
         Assert.Contains("\"^https://(www\\\\.)?github\\\\.com/", translated, StringComparison.Ordinal);
         Assert.Contains("RegexOptions.ExplicitCapture,", translated, StringComparison.Ordinal);
         Assert.DoesNotContain("matchTimeoutMilliseconds", translated, StringComparison.Ordinal);
-        Assert.Contains("internal partial func Pattern() Regex;", translated, StringComparison.Ordinal);
+        Assert.Contains("partial data class GitHubUrl", translated, StringComparison.Ordinal);
+        Assert.Contains("private partial func Pattern() Regex;", translated, StringComparison.Ordinal);
         Assert.Contains("@GeneratedRegex(\"^infinite$$\", RegexOptions.None, -1)", translated, StringComparison.Ordinal);
         Assert.Contains("@GeneratedRegex(\"^i$$\", RegexOptions.IgnoreCase, \"tr-TR\")", translated, StringComparison.Ordinal);
         Assert.Contains("private partial func TurkishI() Regex;", translated, StringComparison.Ordinal);

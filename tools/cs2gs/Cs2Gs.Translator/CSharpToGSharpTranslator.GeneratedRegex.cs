@@ -29,10 +29,10 @@ namespace Cs2Gs.Translator;
 /// <c>matchTimeoutMilliseconds:</c> argument reaches gsgen as the literal the
 /// generator needs, and the same constructor overload binds.</para>
 /// <para>Shapes G# cannot pair with a generated implementing part are
-/// reported, never rewritten: a record or other non-class/struct owner
-/// (GS0607), the legacy merge mode's non-partial type (GS0608), and a nested
-/// owner (gsgen's stub renders only top-level types, so no implementing part
-/// is generated, GS0609).</para>
+/// reported, never rewritten: an interface or inline-struct owner (GS0607),
+/// the legacy merge mode's non-partial type (GS0608), and a nested owner
+/// (gsgen's stub renders only top-level types, so no implementing part is
+/// generated, GS0609).</para>
 /// <para>An entry class declaring one is kept as a class rather than hoisted
 /// to top-level funcs, which cannot be partial (see
 /// <see cref="IsMemberOfKeptTopLevelProgram"/> for the top-level-statements
@@ -108,10 +108,10 @@ public sealed partial class CSharpToGSharpTranslator
                 problem = "its type is merged into one non-partial G# type in this mode, which cannot hold a " +
                     "partial func (GS0608)";
             }
-            else if (ownerKind is not (TypeDeclarationKind.Class or TypeDeclarationKind.Struct))
+            else if (!CanDeclarePartialFunction(ownerKind))
             {
                 problem = "its type translates to a G# " + DescribeOwnerKind(ownerKind) + ", which cannot " +
-                    "declare a partial func (GS0607); only a class or struct can";
+                    "declare a partial func (GS0607); only a class, struct, data class or data struct can";
             }
             else if (symbol.ContainingType?.ContainingType != null)
             {

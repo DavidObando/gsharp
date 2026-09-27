@@ -117,11 +117,14 @@ migrated project runs the generator's specialized matcher, not a cached
   members are emitted `internal`: C# top-level statements are the body of
   `Program`'s entry point, but G# top-level statements belong to the
   compiler's own `<Program>` type, and hoisting was no stricter.
-- **Unsupported shapes** are reported rather than rewritten: a method of a
-  record, record struct or other type that is not a G# class or struct
-  (`GS0607`); of a nested type, because gsgen's stub renders only top-level
-  types, so no implementing part would be generated (`GS0609`); and in the
-  legacy merge mode, whose single merged type is not partial (`GS0608`).
+- **Records.** A C# `partial record` / `partial record struct` becomes a G#
+  `partial data class` / `partial data struct`, and may hold the declaring part
+  like an ordinary class or struct (ADR-0192's 2026-09-26 amendment).
+- **Unsupported shapes** are reported rather than rewritten: a method of an
+  interface or inline struct (`GS0607`); of a nested type, because gsgen's stub
+  renders only top-level types, so no implementing part would be generated
+  (`GS0609`); and in the legacy merge mode, whose single merged type is not
+  partial (`GS0608`).
   The partial-property form of `[GeneratedRegex]` is reported too: G# has no
   partial properties (ADR-0192 §F).
 
