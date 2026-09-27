@@ -19,6 +19,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// conversion reports GS0218 because its hidden context parameter is counted
 /// as a source parameter.
 /// </remarks>
+[Collection("Issue4412Console")]
 public sealed class Issue4412SuspendMethodGroupEmitTests
 {
     [Fact]
@@ -491,4 +492,9 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             ? Enumerable.Empty<string>()
             : value.Split(Path.PathSeparator).Where(File.Exists);
     }
+}
+
+[CollectionDefinition("Issue4412Console", DisableParallelization = true)]
+public sealed class Issue4412ConsoleCollection
+{
 }

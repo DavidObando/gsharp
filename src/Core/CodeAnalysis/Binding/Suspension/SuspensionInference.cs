@@ -193,6 +193,7 @@ internal static class SuspensionInference
             type.SetStaticFieldInitializers(RewriteInitializers(
                 type.StaticFieldInitializers,
                 type,
+                isStatic: true,
                 newlySuspending,
                 runtime,
                 bag,
@@ -200,6 +201,7 @@ internal static class SuspensionInference
             type.SetInstanceFieldInitializers(RewriteInitializers(
                 type.InstanceFieldInitializers,
                 type,
+                isStatic: false,
                 newlySuspending,
                 runtime,
                 bag,
@@ -211,6 +213,7 @@ internal static class SuspensionInference
             type.SetStaticFieldInitializers(RewriteInitializers(
                 type.StaticFieldInitializers,
                 type,
+                isStatic: true,
                 newlySuspending,
                 runtime,
                 bag,
@@ -224,6 +227,7 @@ internal static class SuspensionInference
     internal static ImmutableDictionary<FieldSymbol, BoundExpression> RewriteInitializers(
         ImmutableDictionary<FieldSymbol, BoundExpression> initializers,
         TypeSymbol owner,
+        bool isStatic,
         ImmutableHashSet<FunctionSymbol> newlySuspending,
         ChannelRuntimeBinder runtime,
         DiagnosticBag diagnostics,
@@ -237,10 +241,15 @@ internal static class SuspensionInference
         var container = new FunctionSymbol(
             "<field_initializer>",
             ImmutableArray<ParameterSymbol>.Empty,
-            TypeSymbol.Void)
+            TypeSymbol.Void,
+            declaration: null,
+            package: null,
+            Accessibility.Private,
+            receiverType: isStatic ? null : owner)
         {
-            IsStatic = true,
-            StaticOwnerType = owner,
+            IsStatic = isStatic,
+            IsExpressionInitializer = true,
+            StaticOwnerType = isStatic ? owner : null,
             LexicalEnclosingType = owner,
         };
         var builder = initializers.ToBuilder();
