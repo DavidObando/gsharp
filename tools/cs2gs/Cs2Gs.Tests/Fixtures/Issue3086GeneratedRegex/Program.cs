@@ -69,6 +69,17 @@ public sealed partial record GitHubUrl(string Owner, string Name, int? PrNumber)
 
     [GeneratedRegex("(?i)^invariant$", RegexOptions.CultureInvariant)]
     private static partial Regex InvariantPattern();
+
+    // Culture-sensitive IgnoreCase, which the pre-#4301 cached-Regex rewrite
+    // could not migrate: under tr-TR, `i` matches dotted `\u0130` but not `I`.
+    public static bool HasCultureSemantics() =>
+        TurkishI().IsMatch("\u0130") && !TurkishI().IsMatch("I") && InlineIgnoreCase().IsMatch("ABC");
+
+    [GeneratedRegex("^i$", RegexOptions.IgnoreCase, "tr-TR")]
+    private static partial Regex TurkishI();
+
+    [GeneratedRegex("(?i)^abc$")]
+    private static partial Regex InlineIgnoreCase();
 }
 
 public sealed partial class InstanceRegexOwner
@@ -92,7 +103,8 @@ public static class Program
         }
 
         if (!GitHubUrl.HasDefaultRegexSemantics() ||
-            !GitHubUrl.HasInvariantInlineIgnoreCaseSemantics())
+            !GitHubUrl.HasInvariantInlineIgnoreCaseSemantics() ||
+            !GitHubUrl.HasCultureSemantics())
         {
             throw new InvalidOperationException("GeneratedRegex default semantics changed.");
         }

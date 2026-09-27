@@ -1402,9 +1402,8 @@ public sealed partial class CSharpToGSharpTranslator
             // value (`yield Canonical(called)` where `Canonical` returns
             // `ISymbol?`) flowing into a non-null element needs the same `!!`
             // bridge the argument path inserts. Tuple literals bridge
-            // per-element (`yield (generatedRegexField, true)` where the
-            // Try-out-var is `FieldDeclaration?` but the element is
-            // `(GMember, bool)`).
+            // per-element (`yield (field, true)` where a Try-out-var is
+            // `FieldDeclaration?` but the element is `(GMember, bool)`).
             IMethodSymbol enclosingIterator =
                 this.context.SemanticModel.GetEnclosingSymbol(node.SpanStart) as IMethodSymbol;
             if (node.Expression is TupleExpressionSyntax tupleValue

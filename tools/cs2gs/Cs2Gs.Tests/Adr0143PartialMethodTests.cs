@@ -277,6 +277,34 @@ namespace Demo
         Assert.Equal(1, CountOccurrences(implementing, "func OnConfigured("));
     }
 
+    [Theory]
+    [InlineData("record", "data class")]
+    [InlineData("record struct", "data struct")]
+    public void ImplementedPair_PreserveMode_RecordOwner_EmitsBothPartialParts(
+        string csharpKind,
+        string gsharpKind)
+    {
+        string printed = TranslateSingle(
+            preservePartialParts: true,
+            ("Value.cs", @"
+namespace Demo
+{
+    public partial " + csharpKind + @" Value(int Number)
+    {
+        partial void OnReady();
+
+        partial void OnReady()
+        {
+        }
+    }
+}"));
+
+        Assert.Contains("partial " + gsharpKind + " Value", printed);
+        Assert.Contains("private partial func OnReady();", printed);
+        Assert.Contains("private partial func OnReady() {", printed);
+        Assert.Equal(2, CountOccurrences(printed, "partial func OnReady("));
+    }
+
     [Fact]
     public void ImplementedPair_PreserveMode_SameFile_EmitsBothPartsInOnePartialType()
     {

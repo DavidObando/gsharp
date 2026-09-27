@@ -56,8 +56,6 @@ public sealed partial class CSharpToGSharpTranslator
 
     private const string LibraryImportAttributeName = "System.Runtime.InteropServices.LibraryImportAttribute";
 
-    private const string GeneratedRegexAttributeName = "System.Text.RegularExpressions.GeneratedRegexAttribute";
-
     private const string MarshalAsAttributeName = "System.Runtime.InteropServices.MarshalAsAttribute";
 
     private static bool HasAttribute(ISymbol symbol, string attributeName) =>
@@ -596,8 +594,9 @@ public sealed partial class CSharpToGSharpTranslator
         /// Issue #4370 safety net: reports a partial member whose definition
         /// this run translates but whose implementation is generated code
         /// that cs2gs does not translate (a source generator other than the
-        /// ones cs2gs rewrites itself — <c>[GeneratedRegex]</c> and
-        /// <c>[LibraryImport]</c>). The definition has no G# form without
+        /// ones whose definitions cs2gs translates itself —
+        /// <c>[GeneratedRegex]</c> and <c>[LibraryImport]</c> partial
+        /// methods, which never reach this report). The definition has no G# form without
         /// its implementation (a lone declaring part is GS0609), so the
         /// member is omitted; without this report the translation would
         /// PASS with the member silently missing and its callers failing in
@@ -611,25 +610,39 @@ public sealed partial class CSharpToGSharpTranslator
             ISymbol definition,
             ISymbol implementation)
         {
+            bool isGeneratedRegex = HasAttribute(definition, GeneratedRegexAttributeName);
+            if (!this.IsTranslatedByThisRun(node.SyntaxTree))
+            {
+                return;
+            }
+
+            if (isGeneratedRegex)
+            {
+                string missingImplementationMessage =
+                    $"partial member '{definition.ContainingType?.Name}.{definition.Name}' uses " +
+                    "[GeneratedRegex], but G# has no partial properties (ADR-0192 §F); declare it as a " +
+                    "[GeneratedRegex] partial METHOD, which cs2gs translates to a G# declaring part that " +
+                    "gsgen implements.";
+                this.context.ReportUnsupported(node, missingImplementationMessage);
+                return;
+            }
+
             if (implementation == null
                 || implementation.DeclaringSyntaxReferences.Length == 0
-                || !this.IsTranslatedByThisRun(node.SyntaxTree)
                 || implementation.DeclaringSyntaxReferences.Any(reference =>
-                    this.IsTranslatedByThisRun(reference.SyntaxTree))
-                || (definition is IMethodSymbol && HasAttribute(definition, GeneratedRegexAttributeName)))
+                    this.IsTranslatedByThisRun(reference.SyntaxTree)))
             {
                 return;
             }
 
             string generatedFile = implementation.DeclaringSyntaxReferences[0].SyntaxTree.FilePath;
-            string remedy = HasAttribute(definition, GeneratedRegexAttributeName)
-                ? "cs2gs rewrites [GeneratedRegex] only on partial METHODS; declare it as a partial method, or " +
-                    "write the cached Regex by hand in G#."
-                : HasAttribute(definition, "CommunityToolkit.Mvvm.ComponentModel.ObservablePropertyAttribute")
-                    ? "use the field form of [ObservableProperty], which gsgen regenerates for G#, or implement " +
-                        "the property by hand in G#."
-                    : "cs2gs rewrites only [GeneratedRegex] and [LibraryImport] partial methods; implement this " +
-                        "member by hand in G#.";
+            string remedy = HasAttribute(
+                definition,
+                "CommunityToolkit.Mvvm.ComponentModel.ObservablePropertyAttribute")
+                ? "use the field form of [ObservableProperty], which gsgen regenerates for G#, or implement " +
+                    "the property by hand in G#."
+                : "cs2gs translates only [GeneratedRegex] and [LibraryImport] partial methods; implement this " +
+                    "member by hand in G#.";
             string message =
                 $"partial member '{definition.ContainingType?.Name}.{definition.Name}' is implemented by " +
                 $"generated code ('{generatedFile}') that cs2gs does not translate; the member is omitted from " +

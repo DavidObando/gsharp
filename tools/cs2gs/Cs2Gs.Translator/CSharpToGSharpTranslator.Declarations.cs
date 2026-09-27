@@ -632,6 +632,16 @@ public sealed partial class CSharpToGSharpTranslator
                     // positions, so it is omitted (ADR-0115 §B.10).
                     return Visibility.Default;
                 case Accessibility.Private:
+                    // Issue #4301: see IsMemberOfKeptTopLevelProgram. This must
+                    // precede the extension-owner rule below: a kept top-level
+                    // Program can also declare extension methods, but its
+                    // remaining members still need `internal` so hoisted
+                    // top-level statements can reach them.
+                    if (IsMemberOfKeptTopLevelProgram(symbol))
+                    {
+                        return Visibility.Internal;
+                    }
+
                     // A `private` static member of a `static class` that ALSO
                     // declares extension methods becomes unreachable once those
                     // methods are lifted to top-level `func`s (ADR-0115 §B.5): the
@@ -1307,6 +1317,26 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             var symbol = this.context.GetDeclaredSymbol(node) as INamedTypeSymbol;
+            if (!this.emitGeneratedImplementingParts
+                && GeneratedSourceDetection.IsGeneratedSource(node.SyntaxTree, this.projectDirectory)
+                && IsRegexGeneratorDeclaration(symbol))
+            {
+                (bool retained, bool regenerated) =
+                    this.GetRegexGeneratorImplementationState(node.SyntaxTree);
+                if (!retained)
+                {
+                    return null;
+                }
+
+                if (regenerated && this.reportedMixedRegexGeneratorTrees.Add(node.SyntaxTree))
+                {
+                    const string message =
+                        "this RegexGenerator document contains implementations whose [GeneratedRegex] " +
+                        "definitions are only partly included in this translation; translate all or none of " +
+                        "those definition files so generated helper types are not duplicated.";
+                    this.context.ReportUnsupported(node, message);
+                }
+            }
 
             // Issue #1910: a `partial` type is declared once per file/part but
             // has a single symbol. Only the "primary" part (parts[0], see

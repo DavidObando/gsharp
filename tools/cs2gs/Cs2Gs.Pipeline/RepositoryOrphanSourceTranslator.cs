@@ -60,6 +60,13 @@ internal static class RepositoryOrphanSourceTranslator
             LoadedCSharpProject loaded = CSharpProjectLoader.LoadInMemory(
                 new[] { (sourcePath, File.ReadAllText(sourcePath)) },
                 assemblyName: "Cs2Gs.Orphan." + Guid.NewGuid().ToString("N"));
+            if (loaded.Documents.Count == 0)
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(destinationPath));
+                File.WriteAllText(destinationPath, string.Empty);
+                continue;
+            }
+
             LoadedDocument document = loaded.Documents.Single();
             var translationContext = new TranslationContext(
                 loaded.Compilation,

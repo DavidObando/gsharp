@@ -17,8 +17,7 @@ namespace Cs2Gs.Translator;
 /// (docs/cs2gs-analyzer-translation.md). Type rewrites live in
 /// <see cref="CSharpTypeMapper"/>; this partial holds the member-name, enum-
 /// member, invocation-idiom, attribute, and comparison-lowering hooks on the
-/// declaration visitor, each an early-out guard in the established
-/// TryTranslateGeneratedRegex style.
+/// declaration visitor, each an early-out Try* guard.
 /// </summary>
 public sealed partial class CSharpToGSharpTranslator
 {
