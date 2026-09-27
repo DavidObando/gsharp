@@ -167,16 +167,38 @@ public sealed class GSharpAnalyzerDriver
         foreach (var (function, body) in program.Functions)
         {
             cancellationToken.ThrowIfCancellationRequested();
-            var isGenerated = ProvenanceTree(function, body) is { } tree && IsGeneratedTree(tree);
+            var isGenerated = ReferenceEquals(body, program.Statement)
+                ? IsEntirelyGenerated(program.Statement)
+                : ProvenanceTree(function, body) is { } tree && IsGeneratedTree(tree);
             new DispatchingBoundTreeWalker(this, function, isGenerated).Visit(body);
             dispatchedStatement |= ReferenceEquals(body, program.Statement);
         }
 
         if (!dispatchedStatement)
         {
-            var isGenerated = program.Statement.FirstAnchoredSyntax()?.SyntaxTree is { } tree && IsGeneratedTree(tree);
+            var isGenerated = IsEntirelyGenerated(program.Statement);
             new DispatchingBoundTreeWalker(this, containingFunction: null, isGenerated).Visit(program.Statement);
         }
+    }
+
+    private static bool IsEntirelyGenerated(BoundBlockStatement body)
+    {
+        var sawTree = false;
+        foreach (var statement in body.Statements)
+        {
+            if (statement.Syntax?.SyntaxTree is not { } tree)
+            {
+                continue;
+            }
+
+            sawTree = true;
+            if (!IsGeneratedTree(tree))
+            {
+                return false;
+            }
+        }
+
+        return sawTree;
     }
 
     private void DispatchBoundBodies(BoundProgram program)
@@ -471,6 +493,7 @@ public sealed class GSharpAnalyzerDriver
         private readonly GSharpAnalyzerDriver driver;
         private readonly FunctionSymbol? containingFunction;
         private readonly bool isGenerated;
+        private BoundNode? root;
 
         public DispatchingBoundTreeWalker(GSharpAnalyzerDriver driver, FunctionSymbol? containingFunction, bool isGenerated)
         {
@@ -486,6 +509,7 @@ public sealed class GSharpAnalyzerDriver
                 return;
             }
 
+            root ??= node;
             Dispatch(node);
             foreach (var child in node.ChildNodes)
             {
@@ -502,7 +526,9 @@ public sealed class GSharpAnalyzerDriver
 
             foreach (var entry in entries)
             {
-                var nodeIsGenerated = node.Syntax?.SyntaxTree is { } tree
+                var nodeIsGenerated = ReferenceEquals(node, root)
+                    ? isGenerated
+                    : node.Syntax?.SyntaxTree is { } tree
                     ? IsGeneratedTree(tree)
                     : isGenerated;
                 if (driver.SkipsGenerated(entry.Owner, nodeIsGenerated))

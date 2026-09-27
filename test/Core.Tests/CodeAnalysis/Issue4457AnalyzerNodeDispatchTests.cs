@@ -93,6 +93,7 @@ let nested = func() int32 {
 
         Assert.Equal(new[] { "call:Mark", "call:Mark" }, probe.Events);
         Assert.Equal(new[] { "<Main>$", "<Main>$" }, probe.MarkContainingFunctions);
+        Assert.Equal(2, probe.TopLevelBlockCount);
     }
 
     [Fact]
@@ -116,12 +117,18 @@ let userNested = func() int32 {
     return Mark(4)
 }
 ";
-        var probe = Run(
-            SyntaxTree.Parse(SourceText.From(generated, "generated.g.gs")),
-            SyntaxTree.Parse(SourceText.From(user, "app.gs")));
+        var generatedTree = SyntaxTree.Parse(SourceText.From(generated, "generated.g.gs"));
+        var userTree = SyntaxTree.Parse(SourceText.From(user, "app.gs"));
 
-        Assert.Equal(new[] { "call:Mark", "call:Mark" }, probe.Events);
-        Assert.Equal(new[] { "<Main>$", "<Main>$" }, probe.MarkContainingFunctions);
+        AssertMixedTreeDispatch(Run(generatedTree, userTree));
+        AssertMixedTreeDispatch(Run(userTree, generatedTree));
+
+        static void AssertMixedTreeDispatch(ProbeAnalyzer probe)
+        {
+            Assert.Equal(new[] { "call:Mark", "call:Mark" }, probe.Events);
+            Assert.Equal(new[] { "<Main>$", "<Main>$" }, probe.MarkContainingFunctions);
+            Assert.Equal(2, probe.TopLevelBlockCount);
+        }
     }
 
     private static ProbeAnalyzer Run(string source)
@@ -143,6 +150,8 @@ let userNested = func() int32 {
 
         public List<string> MarkContainingFunctions { get; } = new();
 
+        public int TopLevelBlockCount { get; private set; }
+
         public override ImmutableArray<DiagnosticDescriptor> SupportedDiagnostics => ImmutableArray.Create(ProbeRule);
 
         public override void Initialize(AnalysisContext context)
@@ -153,7 +162,8 @@ let userNested = func() int32 {
                 BoundNodeKind.AssignmentExpression,
                 BoundNodeKind.VariableExpression,
                 BoundNodeKind.CallExpression,
-                BoundNodeKind.TypePattern);
+                BoundNodeKind.TypePattern,
+                BoundNodeKind.BlockStatement);
         }
 
         private void Analyze(BoundNodeAnalysisContext context)
@@ -178,6 +188,9 @@ let userNested = func() int32 {
                     break;
                 case BoundTypePattern:
                     Events.Add("type-pattern");
+                    break;
+                case BoundBlockStatement when context.ContainingFunction?.Name == "<Main>$":
+                    TopLevelBlockCount++;
                     break;
             }
         }
