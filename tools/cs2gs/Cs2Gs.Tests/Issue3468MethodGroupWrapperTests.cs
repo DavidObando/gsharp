@@ -130,10 +130,43 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
-        public void WrapperParameterCollision_UsesSourceDerivedSuffixes()
+        public void ReceiverRootCollision_UsesSourceDerivedSuffix()
+        {
+            string printed = Translate("""
+                using System;
+
+                public sealed class Renderer
+                {
+                    public string Render(object? value)
+                        => value?.ToString() ?? "";
+                }
+
+                public static class W
+                {
+                    public static void Bind(Renderer value)
+                        => Use((Func<string, string>)value.Render);
+
+                    private static void Use(Func<string, string> transform)
+                    {
+                    }
+                }
+                """);
+
+            Assert.Contains(
+                "(value_ string) -> Func[string, string](value.Render)(value_)",
+                printed,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("__arg", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
+        public void UnreachableDoubleSuffixCollision_PreservesFutureSourceName()
         {
             // Issue #4298: preserve the legal future source name `value_`
-            // while suffixing the colliding `value`.
+            // while suffixing the colliding `value`. No current translation
+            // path reaches this helper with both collisions, so exercise the
+            // defensive corner directly.
             LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
                 new[] { ("Snippet.cs", "class C { void M(object value, object value_) {} }") });
             INamedTypeSymbol type = Assert.IsAssignableFrom<INamedTypeSymbol>(
@@ -146,10 +179,10 @@ namespace Cs2Gs.Tests
 
             Assert.Equal(
                 "value__",
-                WrapperParameterName(method.Parameters, 0, usedNames));
+                WrapperParameterName(project.Compilation, method.Parameters, 0, usedNames));
             Assert.Equal(
                 "value_",
-                WrapperParameterName(method.Parameters, 1, usedNames));
+                WrapperParameterName(project.Compilation, method.Parameters, 1, usedNames));
         }
 
         [Fact]
@@ -183,12 +216,17 @@ namespace Cs2Gs.Tests
         [Fact]
         public void MissingWrapperParameterName_UsesUniqueSyntheticFallback()
         {
+            // Bound C# method-group conversions name every delegate slot; an
+            // absent symbol is a defensive error-recovery corner only.
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                new[] { ("Snippet.cs", "class C {}") });
             var usedNames = new HashSet<string>(StringComparer.Ordinal)
             {
                 "__arg0",
             };
 
             string name = WrapperParameterName(
+                project.Compilation,
                 ImmutableArray<IParameterSymbol>.Empty,
                 0,
                 usedNames);
@@ -198,6 +236,7 @@ namespace Cs2Gs.Tests
         }
 
         private static string WrapperParameterName(
+            Compilation compilation,
             ImmutableArray<IParameterSymbol> parameters,
             int index,
             HashSet<string> usedNames)
@@ -214,6 +253,7 @@ namespace Cs2Gs.Tests
                 null,
                 new object[]
                 {
+                    EmittedNameAllocator.For(compilation),
                     parameters,
                     index,
                     usedNames,

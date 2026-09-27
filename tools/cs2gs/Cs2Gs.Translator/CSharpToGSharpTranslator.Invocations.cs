@@ -1100,6 +1100,7 @@ public sealed partial class CSharpToGSharpTranslator
                     member,
                     promoteNullability: false);
                 string name = MethodGroupWrapperParameterName(
+                    this.nameAllocator,
                     helperNameParameters,
                     i,
                     wrapperParameterNames);
@@ -2425,6 +2426,12 @@ public sealed partial class CSharpToGSharpTranslator
             HashSet<string> usedNames)
         {
             GExpression current = receiver;
+            while (current is ConversionExpression conversion)
+            {
+                // A delegate construction can wrap the method-group member.
+                current = conversion.Operand;
+            }
+
             while (current is MemberAccessExpression memberAccess)
             {
                 current = memberAccess.Target;
@@ -2437,6 +2444,7 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private static string MethodGroupWrapperParameterName(
+            EmittedNameAllocator nameAllocator,
             ImmutableArray<IParameterSymbol> targetParameters,
             int index,
             HashSet<string> usedNames)
@@ -2455,11 +2463,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (string.IsNullOrEmpty(candidate) || candidate == "_")
             {
+                // Missing metadata has no source spelling to suffix, and `_`
+                // is a discard that cannot name the forwarded argument.
                 candidate = $"__arg{index}";
             }
             else
             {
-                candidate = GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.GetEmittedIdentifier(
+                candidate = nameAllocator.GetName(
                     candidate,
                     GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Parameter,
                     occupied);
@@ -2567,6 +2577,7 @@ public sealed partial class CSharpToGSharpTranslator
                     expression,
                     promoteNullability: false);
                 string name = MethodGroupWrapperParameterName(
+                    this.nameAllocator,
                     wrapperNameParameters,
                     index,
                     wrapperParameterNames);
