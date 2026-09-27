@@ -4103,7 +4103,7 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
-    /// Issue #985: enumerates every abstract instance method slot contributed by
+    /// Issue #985: enumerates instance method slots contributed by
     /// a CLR interface listed in a type's base-type clause, INCLUDING the
     /// methods of every interface it transitively inherits. The declared
     /// interface's slots are reported with <see cref="ClrInterfaceSlot.IsInherited"/>
@@ -4111,11 +4111,17 @@ internal sealed class MemberLookup
     /// <see langword="true"/>. Generic-parameter positions in each slot's
     /// signature resolve against the declared interface's symbolic type
     /// arguments (the base interfaces obtained from the open definition carry
-    /// those same generic parameters position-aligned).
+    /// those same generic parameters position-aligned). Abstract slots are
+    /// returned by default; <paramref name="includeDefaultMethods"/> also
+    /// returns default interface methods so an existing replacement can be
+    /// validated even though a missing replacement is optional.
     /// </summary>
     /// <param name="ifaceSym">A CLR interface type symbol from the base clause.</param>
+    /// <param name="includeDefaultMethods">Whether to include non-abstract default methods.</param>
     /// <returns>The slots, or an empty sequence when the symbol is not a CLR interface.</returns>
-    public static IEnumerable<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
+    public static IEnumerable<ClrInterfaceSlot> EnumerateClrInterfaceSlots(
+        TypeSymbol ifaceSym,
+        bool includeDefaultMethods = false)
     {
         Type? declared = null;
         var symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
@@ -4137,24 +4143,28 @@ internal sealed class MemberLookup
             declared = clr;
         }
 
-        foreach (var slot in MethodsOf(declared, symbolicArgs, isInherited: false))
+        foreach (var slot in MethodsOf(declared, symbolicArgs, isInherited: false, includeDefaultMethods))
         {
             yield return slot;
         }
 
         foreach (var baseIface in declared.GetInterfaces())
         {
-            foreach (var slot in MethodsOf(baseIface, symbolicArgs, isInherited: true))
+            foreach (var slot in MethodsOf(baseIface, symbolicArgs, isInherited: true, includeDefaultMethods))
             {
                 yield return slot;
             }
         }
 
-        static IEnumerable<ClrInterfaceSlot> MethodsOf(Type iface, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
+        static IEnumerable<ClrInterfaceSlot> MethodsOf(
+            Type iface,
+            ImmutableArray<TypeSymbol> symbolicArgs,
+            bool isInherited,
+            bool includeDefaultMethods)
         {
             foreach (var method in iface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
-                if (method.IsSpecialName || !method.IsAbstract)
+                if (method.IsSpecialName || (!method.IsAbstract && !includeDefaultMethods))
                 {
                     continue;
                 }

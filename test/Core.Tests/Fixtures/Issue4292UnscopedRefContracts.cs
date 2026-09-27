@@ -65,6 +65,26 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
             RefValue Slot { set; }
         }
 
+        public interface IDefaultMethod
+        {
+            ref int Slot(ref int fallback) => ref fallback;
+        }
+
+        public interface IDefaultProperty
+        {
+            RefValue Slot { set { } }
+        }
+
+        public interface IGenericDefaultMethod<T>
+        {
+            ref int Slot(ref int fallback, T value) => ref fallback;
+        }
+
+        public interface IGenericDefaultProperty<T>
+        {
+            RefValue Slot { set { } }
+        }
+
         public interface ISetterProperty
         {
             RefValue Slot
@@ -94,6 +114,33 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
         }
 
         public interface IRight<T> : IBaseSlot<T>
+        {
+        }
+
+        public interface IBaseMethod
+        {
+            ref int Slot(ref int fallback);
+        }
+
+        public interface IDerivedMethod : IBaseMethod
+        {
+        }
+
+        public interface IBaseDefaultMethod
+        {
+            ref int Slot(ref int fallback) => ref fallback;
+        }
+
+        public interface IDerivedDefaultMethod : IBaseDefaultMethod
+        {
+        }
+
+        public interface IBaseGenericMethod<T>
+        {
+            ref int Slot(ref int fallback, T value);
+        }
+
+        public interface IDerivedGenericMethod<T> : IBaseGenericMethod<T>
         {
         }
 

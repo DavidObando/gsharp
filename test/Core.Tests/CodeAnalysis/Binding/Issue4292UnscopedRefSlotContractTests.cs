@@ -619,6 +619,196 @@ class Derived : Base, IMethod {
         Assert.Single(diagnostics, d => d.Id == "GS0187");
     }
 
+    [Theory]
+    [InlineData("public func Slot(ref fallback int32) ref int32 { return ref this.Value }")]
+    [InlineData("private func (IDefaultMethod) Slot(ref fallback int32) ref int32 { return ref this.Value }")]
+    public void ImportedDefaultMethod_ValidatesExistingReplacement(string implementation)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var source = @"
+package P
+import System.Diagnostics.CodeAnalysis
+import Issue4292.Contracts
+struct Buffer : IDefaultMethod {
+    var Value int32
+
+    @UnscopedRef
+    " + implementation + @"
+}
+";
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Contains("implemented member", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("public prop Slot RefValue { set { } }")]
+    [InlineData("private prop (IDefaultProperty) Slot RefValue { set { } }")]
+    public void ImportedDefaultProperty_ValidatesExistingReplacement(string implementation)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var source = @"
+package P
+import System.Diagnostics.CodeAnalysis
+import Issue4292.Contracts
+ref struct Buffer : IDefaultProperty {
+    @UnscopedRef
+    " + implementation + @"
+}
+";
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Contains("implemented property", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedSymbolicDefaultMethod_ValidatesExistingExplicitReplacement()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class Token { }
+            struct Buffer : IGenericDefaultMethod[Token] {
+                var Value int32
+
+                @UnscopedRef
+                private func (IGenericDefaultMethod[Token]) Slot(ref fallback int32, value Token) ref int32 {
+                    return ref this.Value
+                }
+            }
+            """;
+
+        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
+    [Fact]
+    public void ImportedSymbolicDefaultProperty_ValidatesExistingExplicitReplacement()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class Token { }
+            ref struct Buffer : IGenericDefaultProperty[Token] {
+                @UnscopedRef
+                private prop (IGenericDefaultProperty[Token]) Slot RefValue { set { } }
+            }
+            """;
+
+        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
+    [Fact]
+    public void ImportedDefaultMembers_RemainOptionalWhenNotReplaced()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        Assert.Empty(BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            class Token { }
+            ref struct Buffer :
+                IDefaultMethod,
+                IDefaultProperty,
+                IGenericDefaultMethod[Token],
+                IGenericDefaultProperty[Token] {
+            }
+            """, contracts));
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedInheritedExplicitMethodContract_PrefersLinkedSlotOverPlainMember(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = "public func Slot(ref fallback int32) ref int32 { return ref fallback }";
+        const string explicitMember = """
+            @UnscopedRef
+            private func (IBaseMethod) Slot(ref fallback int32) ref int32 { return ref this.Value }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            struct Buffer : IDerivedMethod {
+                var Value int32
+
+            """ + members + """
+
+            }
+            """;
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedInheritedDefaultMethod_ValidatesLinkedReplacement(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = "public func Slot(ref fallback int32) ref int32 { return ref fallback }";
+        const string explicitMember = """
+            @UnscopedRef
+            private func (IBaseDefaultMethod) Slot(ref fallback int32) ref int32 { return ref this.Value }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            struct Buffer : IDerivedDefaultMethod {
+                var Value int32
+
+            """ + members + """
+
+            }
+            """;
+
+        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedInheritedSymbolicMethodContract_PrefersLinkedSlotOverPlainMember(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = "public func Slot(ref fallback int32, value Token) ref int32 { return ref fallback }";
+        const string explicitMember = """
+            @UnscopedRef
+            private func (IBaseGenericMethod[Token]) Slot(ref fallback int32, value Token) ref int32 {
+                return ref this.Value
+            }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class Token { }
+            struct Buffer : IDerivedGenericMethod[Token] {
+                var Value int32
+
+            """ + members + """
+
+            }
+            """;
+
+        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
     private static ImmutableArray<Diagnostic> Bind(string source)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));

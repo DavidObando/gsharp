@@ -219,7 +219,9 @@ current CLR slot, including the erased accessor slot of a symbolic generic
 interface, and only fall back to the existing signature matcher when no
 explicit implementation exists. The contract therefore follows actual
 interface dispatch even when a same-signature plain member appears first in
-source. Imported CLR slots are read from their real
+source. A default interface body makes the implementation optional, but if a
+source member replaces that default its contract is validated identically to
+an abstract slot. Imported CLR slots are read from their real
 `UnscopedRefAttribute` metadata. This closes the original declaration-time gap:
 an implicit implementation is diagnosed after interface satisfaction resolves
 it, rather than guessed from its name before the interface contract is known.
