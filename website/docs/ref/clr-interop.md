@@ -387,6 +387,11 @@ Console.WriteLine(NativeStrLen("Hello, world!"))     // prints 13
 
 Knobs that exist on `@DllImport` but **not** on `@LibraryImport` (matching the BCL surface): `CharSet` (superseded by per-call `StringMarshalling`), `CallingConvention` (overridden via the separate `[UnmanagedCallConv]` attribute in C#; not exposed in v1), `PreserveSig`, `BestFitMapping`, `ThrowOnUnmappableChar`.
 
+Method-level `@SuppressGCTransition` and
+`@DefaultDllImportSearchPaths(...)` are emitted on the hidden inner P/Invoke,
+where the runtime observes them, and not on the managed outer wrapper. Other
+method attributes remain on the outer method.
+
 The diagnostics unique to `@LibraryImport` are GS0342 (mixing with `@DllImport`), GS0343 (invalid `StringMarshalling`), and GS0344 (string surface — parameter or return — without `StringMarshalling`). A `string` return type is supported: the outer stub materializes the managed string via `Marshal.PtrToStringUTF8`/`PtrToStringUni` and treats the returned native buffer as non-owning. The existing GS0322–GS0329 codes continue to apply where relevant. See the [Diagnostics reference](./diagnostics) for the full table.
 
 ### Struct and class marshalling (`@StructLayout` / `@FieldOffset`)

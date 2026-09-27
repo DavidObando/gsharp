@@ -5,6 +5,7 @@
 using System;
 using System.Diagnostics;
 using System.IO;
+using System.Linq;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
 using System.Runtime.InteropServices;
@@ -64,6 +65,30 @@ public class Issue758LibraryImportEmitTests
 
             var p = getpid_native()
             Console.WriteLine(p > 0)
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"True{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void LibraryImport_LibcGetpid_SuppressGCTransition_RoundTrip_ReturnsPid()
+    {
+        if (!IsLibcCallable())
+        {
+            return;
+        }
+
+        const string source = """
+            package P
+            import System
+            import System.Runtime.InteropServices
+
+            @LibraryImport("libc", EntryPoint: "getpid")
+            @SuppressGCTransition
+            func getpid_native() int32;
+
+            Console.WriteLine(getpid_native() > 0)
             """;
 
         var output = CompileAndRun(source);
@@ -171,6 +196,114 @@ public class Issue758LibraryImportEmitTests
             {
             }
         }
+    }
+
+    [Fact]
+    public void LibraryImport_TransitionAttributes_AreEncodedOnlyOnHiddenInnerPInvoke()
+    {
+        const string source = """
+            package P
+            import System
+            import System.Runtime.InteropServices
+
+            @LibraryImport("libc", EntryPoint: "getpid")
+            @SuppressGCTransition
+            @DefaultDllImportSearchPaths(DllImportSearchPath.System32 | DllImportSearchPath.SafeDirectories)
+            @Obsolete("outer")
+            func MyGetPid() int32;
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_libimport_attrs_").FullName;
+        try
+        {
+            var srcPath = Path.Combine(tempDir, "test.gs");
+            var outPath = Path.Combine(tempDir, "test.dll");
+            File.WriteAllText(srcPath, source);
+            CompileOrThrow(srcPath, outPath, target: "library");
+            IlVerifier.Verify(outPath);
+
+            using var pe = new PEReader(File.OpenRead(outPath));
+            var md = pe.GetMetadataReader();
+            MethodDefinition outer = default;
+            MethodDefinition inner = default;
+            foreach (var handle in md.MethodDefinitions)
+            {
+                var method = md.GetMethodDefinition(handle);
+                string name = md.GetString(method.Name);
+                if (name == "MyGetPid")
+                {
+                    outer = method;
+                }
+                else if (name.Contains("MyGetPid", StringComparison.Ordinal)
+                    && name.Contains("PInvoke", StringComparison.Ordinal))
+                {
+                    inner = method;
+                }
+            }
+
+            Assert.False(outer.Name.IsNil, "expected the managed outer stub");
+            Assert.False(inner.Name.IsNil, "expected the hidden inner P/Invoke");
+            Assert.Equal(
+                new[] { "ObsoleteAttribute" },
+                AttributeNames(md, outer));
+            Assert.Equal(
+                new[] { "DefaultDllImportSearchPathsAttribute", "SuppressGCTransitionAttribute" },
+                AttributeNames(md, inner).OrderBy(name => name, StringComparer.Ordinal));
+
+            CustomAttribute suppressTransition = Assert.Single(
+                inner.GetCustomAttributes()
+                    .Select(md.GetCustomAttribute),
+                attribute => AttributeTypeName(md, attribute) == "SuppressGCTransitionAttribute");
+            BlobReader suppressValue = md.GetBlobReader(suppressTransition.Value);
+            Assert.Equal(0x0001, suppressValue.ReadUInt16());
+            Assert.Equal(0, suppressValue.ReadUInt16());
+
+            CustomAttribute searchPaths = Assert.Single(
+                inner.GetCustomAttributes()
+                    .Select(md.GetCustomAttribute),
+                attribute => AttributeTypeName(md, attribute) == "DefaultDllImportSearchPathsAttribute");
+            BlobReader value = md.GetBlobReader(searchPaths.Value);
+            Assert.Equal(0x0001, value.ReadUInt16());
+            Assert.Equal(
+                (int)(DllImportSearchPath.System32 | DllImportSearchPath.SafeDirectories),
+                value.ReadInt32());
+            Assert.Equal(0, value.ReadUInt16());
+        }
+        finally
+        {
+            try
+            {
+                Directory.Delete(tempDir, recursive: true);
+            }
+            catch
+            {
+            }
+        }
+    }
+
+    private static string[] AttributeNames(MetadataReader md, MethodDefinition method) =>
+        method.GetCustomAttributes()
+            .Select(md.GetCustomAttribute)
+            .Select(attribute => AttributeTypeName(md, attribute))
+            .ToArray();
+
+    private static string AttributeTypeName(MetadataReader md, CustomAttribute attribute)
+    {
+        if (attribute.Constructor.Kind == HandleKind.MemberReference)
+        {
+            var constructor = md.GetMemberReference((MemberReferenceHandle)attribute.Constructor);
+            if (constructor.Parent.Kind == HandleKind.TypeReference)
+            {
+                return md.GetString(md.GetTypeReference((TypeReferenceHandle)constructor.Parent).Name);
+            }
+        }
+        else if (attribute.Constructor.Kind == HandleKind.MethodDefinition)
+        {
+            var constructor = md.GetMethodDefinition((MethodDefinitionHandle)attribute.Constructor);
+            return md.GetString(md.GetTypeDefinition(constructor.GetDeclaringType()).Name);
+        }
+
+        return string.Empty;
     }
 
     private static bool IsLibcCallable()

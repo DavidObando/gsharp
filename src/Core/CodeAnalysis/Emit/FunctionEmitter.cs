@@ -1418,11 +1418,14 @@ internal sealed class FunctionEmitter
             bodyOffset: outerBodyOffset,
             parameterList: outerFirstParam);
 
-        // Surface user-written method-target attributes other than the
-        // @LibraryImport itself (which is fully consumed by the inner
-        // ImplMap row — duplicating it as a CustomAttribute would create
-        // a misleading reflection view).
-        this.outer.customAttrEncoder.EmitUserAttributesExcept(outerMethodHandle, function, AttributeTargetKind.Method, KnownAttributes.IsLibraryImport);
+        // Surface unrelated user-written method attributes on the managed
+        // wrapper. Attributes that control the native transition belong only
+        // on the hidden P/Invoke below.
+        this.outer.customAttrEncoder.EmitUserAttributesExcept(
+            outerMethodHandle,
+            function,
+            AttributeTargetKind.Method,
+            KnownAttributes.IsLibraryImportInnerMethodAttribute);
 
         foreach (var (paramSym, paramHandle) in outerParamHandles)
         {
@@ -1506,6 +1509,12 @@ internal sealed class FunctionEmitter
             throw new InvalidOperationException(
                 $"LibraryImport inner-method row mismatch for '{function.Name}': planned {MetadataTokens.GetRowNumber(innerMethodRef)}, emitted {MetadataTokens.GetRowNumber(innerMethodHandle)}.");
         }
+
+        this.outer.customAttrEncoder.EmitUserAttributesExcept(
+            innerMethodHandle,
+            function,
+            AttributeTargetKind.Method,
+            attribute => !KnownAttributes.IsLibraryImportInnerMethodAttribute(attribute));
 
         // ModuleRef (deduplicated by library name, same cache as @DllImport).
         if (!this.cache.PInvokeModuleRefs.TryGetValue(pInvoke.LibraryName, out var moduleRef))
