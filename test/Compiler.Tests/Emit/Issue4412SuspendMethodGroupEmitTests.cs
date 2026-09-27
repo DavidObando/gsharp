@@ -451,7 +451,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
 
         Assert.True(
             File.Exists(outputPath) && new FileInfo(outputPath).Length > 0,
-            stdout.ToString() + stderr);
+            stdout.ToString() + stderr.ToString());
         return outputPath;
     }
 

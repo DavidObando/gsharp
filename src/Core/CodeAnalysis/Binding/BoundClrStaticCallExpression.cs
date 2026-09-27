@@ -60,7 +60,14 @@ public sealed class BoundClrStaticCallExpression : BoundCallOperationExpression
     /// <param name="arguments">The replacement arguments.</param>
     /// <returns>An equivalent call containing <paramref name="arguments"/>.</returns>
     public BoundClrStaticCallExpression WithArguments(ImmutableArray<BoundExpression> arguments)
-        => new(Syntax, Method, Type, arguments, ArgumentRefKinds);
+    {
+        if (!ArgumentRefKinds.IsDefault && ArgumentRefKinds.Length != arguments.Length)
+        {
+            throw new ArgumentException("Replacement arguments must preserve the tracked ref-kind arity.", nameof(arguments));
+        }
+
+        return new(Syntax, Method, Type, arguments, ArgumentRefKinds);
+    }
 
     /// <summary>Creates an equivalent call with replacement arguments and ref kinds.</summary>
     /// <param name="arguments">The replacement arguments.</param>
