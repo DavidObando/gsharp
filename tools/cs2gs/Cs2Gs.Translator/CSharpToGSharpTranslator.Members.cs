@@ -125,7 +125,9 @@ public sealed partial class CSharpToGSharpTranslator
                     var propertySymbol = this.context.GetDeclaredSymbol(property) as IPropertySymbol;
                     if (!this.emitGeneratedImplementingParts
                         && propertySymbol?.PartialDefinitionPart is IPropertySymbol regexPropertyDefinition
-                        && HasAttribute(regexPropertyDefinition, GeneratedRegexAttributeName))
+                        && HasAttribute(regexPropertyDefinition, GeneratedRegexAttributeName)
+                        && regexPropertyDefinition.DeclaringSyntaxReferences.Any(reference =>
+                            this.IsTranslatedByThisRun(reference.SyntaxTree)))
                     {
                         break;
                     }
