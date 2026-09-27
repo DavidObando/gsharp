@@ -37,16 +37,56 @@ namespace GSharp.Compiler.Tests;
 public class EventAndBaseMethodGroupEmitTests
 {
     /// <summary>
+    /// Issue #4433: a function literal passed directly to a delegate parameter
+    /// on a constructed user-generic receiver must use the receiver-substituted
+    /// target, not the open declaration's erased delegate shape.
+    /// </summary>
+    [Fact]
+    public void ConstructedReceiver_DelegateParameterTargetsDirectFunctionLiteral()
+    {
+        const string source = """
+            package P
+            import System
+
+            class Box[T] {
+                func Take(h EventHandler[T]) { h.Invoke(this, default(T)) }
+            }
+
+            let b = Box[string]()
+            b.Take(func (s object?, e string?) { Console.WriteLine("took") })
+            """;
+
+        const string csSource = """
+            using System;
+
+            sealed class Box<T>
+            {
+                public void Take(EventHandler<T> h) => h(this, default!);
+            }
+
+            static class Program
+            {
+                static void Main()
+                {
+                    var b = new Box<string>();
+                    b.Take((s, e) => Console.WriteLine("took"));
+                }
+            }
+            """;
+
+        AssertMatchesCSharp(
+            "constructed-receiver-direct-literal",
+            source,
+            csSource,
+            new[] { "took" });
+    }
+
+    /// <summary>
     /// Issue #4391: subscribe, unsubscribe, raise and multiple handlers on a
     /// generic class's field-like event, through <c>this.</c>, <c>base.</c>,
     /// a bare name, an external constructed receiver, and a class deriving a
     /// constructed base, with a same-compilation type argument.
     /// </summary>
-    /// <remarks>
-    /// Function literals passed straight to a <c>EventHandler[T]</c>
-    /// parameter are bound to typed locals first: that argument conversion is
-    /// a separate gap (#4433) unrelated to the event accessors.
-    /// </remarks>
     [Fact]
     public void GenericSourceEvent_AccessorsVerifyAndRun_LikeCSharp()
     {

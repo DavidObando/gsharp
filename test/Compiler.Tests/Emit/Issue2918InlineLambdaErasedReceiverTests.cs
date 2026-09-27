@@ -937,7 +937,7 @@ public class Issue2918InlineLambdaErasedReceiverTests
     }
 
     /// <summary>
-    /// Issue #4358, Copilot review follow-up: a user assembly's own
+    /// Issues #4358 and #4381: a user assembly's own
     /// <c>System.Func&lt;T&gt;</c> (same full name as a BCL shape, different
     /// assembly and a fixed tuple-returning signature) is a NAMED delegate. A
     /// lambda whose tuple return has a reference-nullable element needs the
@@ -948,15 +948,13 @@ public class Issue2918InlineLambdaErasedReceiverTests
     /// check now requires the target to be the exact definition the emitter
     /// builds for this source (same arity, same assembly).
     ///
-    /// <para>
-    /// Lambdas only: a METHOD GROUP or function VALUE converted to this user
-    /// delegate builds the BCL <c>Func</c> even on <c>main</c> with a plain,
-    /// non-nullable tuple source — a separate, pre-existing collision bug
-    /// that does not go through the path this fix changes (issue #4381).
-    /// </para>
+    /// Method groups and function values exercise the separate target
+    /// projection path from issue #4381. Before the fix both constructed a BCL
+    /// natural delegate, so ILVerify reported StackUnexpected at the imported
+    /// call even though the lambda controls retained the contract assembly.
     /// </summary>
     [Fact]
-    public void SameFullNameTupleDelegateFromUserAssembly_WithSymbolicTupleLambda_RetainsAssemblyIdentity()
+    public void SameFullNameTupleDelegateFromUserAssembly_AllFunctionFormsRetainAssemblyIdentity()
     {
         const string contracts = """
             namespace System
@@ -982,23 +980,82 @@ public class Issue2918InlineLambdaErasedReceiverTests
             import System
             import Issue4358Collision
 
+            func split(s string) (string, int32) { return (s, s.Length) }
+
             func Main() {
+                let f (string) -> (string, int32) = split
+                Console.WriteLine(Sink.AssemblyOf(split))
+                Console.WriteLine(Sink.Invoke(split))
+
                 // The contract is compiled without a nullable context, so the
                 // lambda's return binds as the oblivious `(string!, int32)` —
                 // a platform-type element, which nulls the tuple's ClrType
                 // exactly as a `string?` element does (issue #4358).
                 Console.WriteLine(Sink.AssemblyOf((s string) -> (s, s.Length)))
                 Console.WriteLine(Sink.Invoke((s string) -> (s, s.Length + 1)))
+
+                Console.WriteLine(Sink.AssemblyOf(f))
+                Console.WriteLine(Sink.Invoke(f))
             }
             """;
 
         Assert.Equal(
-            $"Issue4358CollisionContracts{Environment.NewLine}6{Environment.NewLine}",
+            $"Issue4358CollisionContracts{Environment.NewLine}5{Environment.NewLine}"
+                + $"Issue4358CollisionContracts{Environment.NewLine}6{Environment.NewLine}"
+                + $"Issue4358CollisionContracts{Environment.NewLine}5{Environment.NewLine}",
             CompileVerifyLoadAndRun(
                 source,
                 "System.String",
                 contractsSource: contracts,
                 contractsAssemblyName: "Issue4358CollisionContracts"));
+    }
+
+    /// <summary>
+    /// Issue #4381 review guard: a natural Action target stays an identity
+    /// conversion even when its argument type is defined by the G# compilation
+    /// and the structural function therefore has no reflection <c>ClrType</c>.
+    /// </summary>
+    [Fact]
+    public void NaturalDelegateOverSameCompilationType_PreservesReferenceIdentity()
+    {
+        const string contracts = """
+            using System;
+
+            namespace Issue4381Identity
+            {
+                public static class Sink
+                {
+                    public static bool Same<T>(object expected, Action<T> actual) =>
+                        ReferenceEquals(expected, actual);
+                }
+            }
+            """;
+
+        const string source = """
+            package Issue4381Identity.Src
+            import System
+            import Issue4381Identity
+
+            class Item {
+                let N int32
+                init(n int32) { N = n }
+            }
+
+            func Main() {
+                let f (Item) -> void = (item Item) -> Console.WriteLine(item.N)
+                Console.WriteLine(Sink.Same[Item](f, f))
+                f(Item(42))
+            }
+            """;
+
+        Assert.Equal(
+            $"True{Environment.NewLine}42{Environment.NewLine}",
+            CompileVerifyLoadAndRun(
+                source,
+                "Issue4381Identity.Src.Item",
+                contractsSource: contracts,
+                contractsAssemblyName: "Issue4381IdentityContracts",
+                useRefPackReferences: true));
     }
 
     [Fact]

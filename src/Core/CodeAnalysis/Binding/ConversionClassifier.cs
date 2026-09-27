@@ -3589,17 +3589,30 @@ internal sealed class ConversionClassifier
         target = target is NullableTypeSymbol targetNullable ? targetNullable.UnderlyingType : target;
         target = target is NullabilityAnnotatedTypeSymbol annotated ? annotated.BaseType : target;
 
-        if (!MemberLookup.TryCanonicalizeStructuralFunctionType(source, target, out _))
+        if (source is not FunctionTypeSymbol sourceFunction
+            || !MemberLookup.TryCanonicalizeStructuralFunctionType(sourceFunction, target, out _)
+            || target.ClrType == null
+            || sourceFunction.Arity > 16)
         {
             return false;
         }
 
-        var fullName = target.ClrType?.IsGenericType == true
-            ? target.ClrType.GetGenericTypeDefinition().FullName
-            : target.ClrType?.FullName;
-        return fullName == "System.Action"
-            || fullName?.StartsWith("System.Action`", StringComparison.Ordinal) == true
-            || fullName?.StartsWith("System.Func`", StringComparison.Ordinal) == true;
+        var naturalFullName = FunctionTypeSymbol.IsVoidReturn(sourceFunction.ReturnType)
+            ? sourceFunction.Arity == 0
+                ? "System.Action"
+                : "System.Action`" + sourceFunction.Arity.ToString(System.Globalization.CultureInfo.InvariantCulture)
+            : "System.Func`" + (sourceFunction.Arity + 1).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var targetDefinition = target.ClrType.IsGenericType
+            ? target.ClrType.GetGenericTypeDefinition()
+            : target.ClrType;
+        var baseType = targetDefinition.BaseType;
+        return string.Equals(targetDefinition.FullName, naturalFullName, StringComparison.Ordinal)
+            && baseType != null
+            && string.Equals(baseType.FullName, "System.MulticastDelegate", StringComparison.Ordinal)
+            && string.Equals(
+                targetDefinition.Assembly.FullName,
+                baseType.Assembly.FullName,
+                StringComparison.Ordinal);
     }
 
     /// <summary>

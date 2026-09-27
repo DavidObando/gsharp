@@ -1031,9 +1031,22 @@ internal sealed class SignatureEncoder
     /// caller does: an unmappable delegate is still a delegate the emitter must
     /// reference, and both callers here feed the result straight into a
     /// MemberRef/TypeRef that a null would only turn into a null dereference.
+    /// Issue #4381: a delegate already loaded from a supplied reference keeps
+    /// that exact identity because another assembly may define the same full
+    /// name. Only host-fallback types need projection into the target context.
     /// </remarks>
     internal Type ResolveTargetDelegateClrType(Type hostDelegate)
-        => this.MapToReferenceClrType(hostDelegate) ?? hostDelegate;
+    {
+        var hostDefinition = hostDelegate.IsConstructedGenericType
+            ? hostDelegate.GetGenericTypeDefinition()
+            : hostDelegate;
+        if (!this.emitCtx.References.IsHostFallback(hostDefinition))
+        {
+            return hostDelegate;
+        }
+
+        return this.MapToReferenceClrType(hostDelegate) ?? hostDelegate;
+    }
 
     // Phase 4 emit parity (E1): resolve the BCL delegate type backing a
     // GSharp function type. The default ClrType on FunctionTypeSymbol uses
