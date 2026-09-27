@@ -63,6 +63,10 @@ public static class CSharpProjectLoader
     /// </summary>
     public const string NuGetAuditAdvisoryDiagnosticId = "CS2GS0003";
 
+    private const string GeneratedCodeAttributeName = "System.CodeDom.Compiler.GeneratedCodeAttribute";
+    private const string GeneratedRegexAttributeName = "System.Text.RegularExpressions.GeneratedRegexAttribute";
+    private const string RegexGeneratorName = "System.Text.RegularExpressions.Generator";
+
     private static readonly object MSBuildRegistrationLock = new object();
 
     /// <summary>
@@ -668,15 +672,86 @@ public static class CSharpProjectLoader
         // method, because the document also owns helper types such as Digits_0
         // and Utilities that gsgen will emit again.
         SemanticModel semanticModel = compilation.GetSemanticModel(tree);
-        return tree.GetRoot()
-            .DescendantNodes()
-            .OfType<MethodDeclarationSyntax>()
-            .Select(method => semanticModel.GetDeclaredSymbol(method))
-            .Any(method =>
-                method?.PartialDefinitionPart?.GetAttributes().Any(attribute =>
-                    attribute.AttributeClass?.ToDisplayString() ==
-                    "System.Text.RegularExpressions.GeneratedRegexAttribute") == true);
+        CompilationUnitSyntax root = (CompilationUnitSyntax)tree.GetRoot();
+        if (root.AttributeLists.Count > 0)
+        {
+            return false;
+        }
+
+        bool foundImplementation = false;
+        foreach (MemberDeclarationSyntax member in root.Members)
+        {
+            if (!IsRegexGeneratorMember(member, semanticModel, ref foundImplementation))
+            {
+                return false;
+            }
+        }
+
+        return foundImplementation;
     }
+
+    private static bool IsRegexGeneratorMember(
+        MemberDeclarationSyntax member,
+        SemanticModel semanticModel,
+        ref bool foundImplementation)
+    {
+        if (member is BaseNamespaceDeclarationSyntax namespaceDeclaration)
+        {
+            foreach (MemberDeclarationSyntax nested in namespaceDeclaration.Members)
+            {
+                if (!IsRegexGeneratorMember(nested, semanticModel, ref foundImplementation))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        if (member is MethodDeclarationSyntax method)
+        {
+            IMethodSymbol symbol = semanticModel.GetDeclaredSymbol(method);
+            bool isImplementation =
+                symbol?.PartialDefinitionPart?.GetAttributes().Any(attribute =>
+                    attribute.AttributeClass?.ToDisplayString() == GeneratedRegexAttributeName) == true &&
+                IsRegexGeneratorDeclaration(symbol);
+            foundImplementation |= isImplementation;
+            return isImplementation;
+        }
+
+        if (member is TypeDeclarationSyntax type)
+        {
+            INamedTypeSymbol symbol = semanticModel.GetDeclaredSymbol(type);
+            if (IsRegexGeneratorDeclaration(symbol))
+            {
+                return true;
+            }
+
+            if (!type.Modifiers.Any(SyntaxKind.PartialKeyword) || type.Members.Count == 0)
+            {
+                return false;
+            }
+
+            foreach (MemberDeclarationSyntax nested in type.Members)
+            {
+                if (!IsRegexGeneratorMember(nested, semanticModel, ref foundImplementation))
+                {
+                    return false;
+                }
+            }
+
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool IsRegexGeneratorDeclaration(ISymbol symbol) =>
+        symbol?.GetAttributes().Any(attribute =>
+            attribute.AttributeClass?.ToDisplayString() == GeneratedCodeAttributeName &&
+            attribute.ConstructorArguments.Length > 0 &&
+            attribute.ConstructorArguments[0].Value is string generator &&
+            generator == RegexGeneratorName) == true;
 
     private static IReadOnlyList<Diagnostic> SignificantDiagnostics(CSharpCompilation compilation) =>
         compilation.GetDiagnostics()
