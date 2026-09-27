@@ -328,13 +328,43 @@ public sealed class Warned
         Assert.DoesNotContain("warning", rendered, StringComparison.Ordinal);
     }
 
+    [Fact]
+    public void ForwardedWarning_PreservesWarningTextInsideSourcePath()
+    {
+        const string sourcePath = "/repo/warning: checkout/Warned.cs";
+        (_, IReadOnlyList<TranslationDiagnostic> diagnostics) = TranslateUnitWithDiagnostics(@"
+using System.Runtime.CompilerServices;
+
+public sealed class Warned
+{
+    public int Slot
+    {
+        [MethodImpl(MethodImplOptions.NoInlining)]
+        get { return 1; }
+    }
+}", sourcePath);
+        TranslationDiagnostic diagnostic = Assert.Single(
+            diagnostics,
+            d => d.DiagnosticId == CSharpToGSharpTranslator.AccessorAttributeDroppedDiagnosticId);
+
+        string rendered = TranslateStage.FormatForwardedTranslationWarning(diagnostic, sourcePath);
+
+        Assert.StartsWith(
+            "CS2GS-ACCESSOR-ATTRIBUTE-DROPPED (non-fatal): /repo/warning: checkout/Warned.cs(",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Equal(1, rendered.Split(sourcePath, StringSplitOptions.None).Length - 1);
+        Assert.Contains("GetAccessorDeclaration", rendered, StringComparison.Ordinal);
+        Assert.Contains("MethodImplAttribute", rendered, StringComparison.Ordinal);
+    }
+
     private static string TranslateUnit(string source)
         => TranslateUnitWithDiagnostics(source).Printed;
 
     private static (string Printed, IReadOnlyList<TranslationDiagnostic> Diagnostics)
-        TranslateUnitWithDiagnostics(string source)
+        TranslateUnitWithDiagnostics(string source, string filePath = "Snippet.cs")
     {
-        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { ("Snippet.cs", source) });
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(new[] { (filePath, source) });
         Assert.True(
             project.BoundWithoutErrors,
             "Snippet should bind with no C# errors: " +

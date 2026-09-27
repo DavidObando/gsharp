@@ -732,15 +732,14 @@ public sealed class TranslateStage : IMigrationStage
         TranslationDiagnostic diagnostic,
         string documentPath)
     {
-        string rendered = diagnostic.ToString();
-        string severity = diagnostic.Severity.ToString().ToLowerInvariant() + ": ";
-        int severityIndex = rendered.IndexOf(severity, StringComparison.Ordinal);
-        if (severityIndex >= 0)
+        string rendered = $"{diagnostic.ConstructKind}: {diagnostic.Message}";
+        if (diagnostic.Location is { IsInSource: true } location)
         {
-            rendered = rendered.Remove(severityIndex, severity.Length);
+            FileLinePositionSpan span = location.GetLineSpan();
+            rendered =
+                $"{span.Path}({span.StartLinePosition.Line + 1},{span.StartLinePosition.Character + 1}): {rendered}";
         }
-
-        if (diagnostic.Location is not { IsInSource: true })
+        else
         {
             rendered += $" [{documentPath}]";
         }
