@@ -146,7 +146,7 @@ internal static class DelegateRefKindUtilities
     {
         if (group.ResolvedMethod != null)
         {
-            refKinds = GetParameterRefKinds(
+            refKinds = GetLogicalParameterRefKinds(
                 group.ResolvedMethod,
                 skipFirstParameter: group.Receiver != null && group.ResolvedMethod.IsStatic);
             return true;
@@ -155,12 +155,22 @@ internal static class DelegateRefKindUtilities
         var candidateKinds = new List<ImmutableArray<RefKind>>(group.Candidates.Length);
         foreach (var candidate in group.Candidates)
         {
-            candidateKinds.Add(GetParameterRefKinds(
+            candidateKinds.Add(GetLogicalParameterRefKinds(
                 candidate,
                 skipFirstParameter: group.Receiver != null && candidate.IsStatic));
         }
 
         return TryGetCommonParameterRefKinds(candidateKinds, out refKinds);
+    }
+
+    private static ImmutableArray<RefKind> GetLogicalParameterRefKinds(
+        MethodInfo method,
+        bool skipFirstParameter)
+    {
+        var refKinds = GetParameterRefKinds(method, skipFirstParameter);
+        return ImportedFunctionSymbol.HasHiddenContextParameter(method)
+            ? refKinds.RemoveAt(refKinds.Length - 1)
+            : refKinds;
     }
 
     private static ImmutableArray<RefKind> GetParameterRefKinds(

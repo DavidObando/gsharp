@@ -2452,6 +2452,12 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
+            if (closesExtensionReceiver
+                && DelegateRefKindUtilities.GetParameterRefKinds(candidate)[0] != RefKind.None)
+            {
+                continue;
+            }
+
             DelegateRefKindUtilities.GetDelegateParameterRefKinds(delegateClr, invokeParameterTypes.Length, out var targetReturnRefKind);
             if (RefCapabilities.GetReturnRefKind(candidate) != targetReturnRefKind
                 || !IsMethodGroupReturnCompatible(candidate.ReturnType, invokeReturnType))
