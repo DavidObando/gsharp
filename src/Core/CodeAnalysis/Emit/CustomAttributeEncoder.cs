@@ -1152,9 +1152,85 @@ internal sealed class CustomAttributeEncoder
     {
         effectiveArguments = Array.Empty<object?>();
         memberArguments = ImmutableArray<BoundAttributeArgument>.Empty;
-        var constructors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
-        BoundAttributeArgument? positionalConflict = null;
         ValidateUniqueNamedConstructorArguments(attribute);
+        var constructor = TryResolveImportedAttributeConstructor(
+            attributeType,
+            attribute,
+            out effectiveArguments,
+            out var positionalConflict);
+        if (constructor != null)
+        {
+            var seenMemberNames = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var memberArgument in attribute.NamedArguments)
+            {
+                var memberName = Invariant.Required(
+                    memberArgument.Name,
+                    "a named attribute member argument has a name");
+                if (!TryResolveNamedMember(attributeType, memberArgument, out var member, out var metadataName))
+                {
+                    EmitDiagnosticException.ThrowDiagnostic(
+                        memberArgument.Syntax ?? attribute.Syntax,
+                        DiagnosticDescriptors.AttributeNamedArgumentNotFound,
+                        memberArgument.Name,
+                        attributeType.Name);
+                }
+
+                if (!seenMemberNames.Add(metadataName))
+                {
+                    EmitDiagnosticException.ThrowDiagnostic(
+                        memberArgument.Syntax ?? attribute.Syntax,
+                        DiagnosticDescriptors.DuplicateNamedArgument,
+                        memberName);
+                }
+
+                var memberType = member is PropertyInfo property
+                    ? property.PropertyType
+                    : ((FieldInfo)member).FieldType;
+                if (!IsValidAttributeMemberType(memberType))
+                {
+                    EmitDiagnosticException.ThrowDiagnostic(
+                        memberArgument.Syntax ?? attribute.Syntax,
+                        DiagnosticDescriptors.AttributeNamedMemberInvalidType,
+                        memberArgument.Name,
+                        memberType.Name);
+                }
+
+                if (!ArgAssignable(memberArgument.Value, memberType, memberArgument.Type))
+                {
+                    EmitDiagnosticException.ThrowDiagnostic(
+                        memberArgument.Syntax ?? attribute.Syntax,
+                        DiagnosticDescriptors.AttributeNamedArgumentTypeMismatch,
+                        memberArgument.Name,
+                        memberArgument.Type.Name,
+                        memberType.Name);
+                }
+            }
+
+            memberArguments = attribute.NamedArguments;
+            return constructor;
+        }
+
+        if (positionalConflict != null)
+        {
+            EmitDiagnosticException.ThrowDiagnostic(
+                positionalConflict.Syntax ?? attribute.Syntax,
+                DiagnosticDescriptors.NamedArgumentAlsoSpecifiedPositionally,
+                positionalConflict.Name,
+                positionalConflict.Name);
+        }
+
+        return null;
+    }
+
+    internal static ConstructorInfo? TryResolveImportedAttributeConstructor(
+        Type attributeType,
+        BoundAttribute attribute,
+        out object?[] effectiveArguments,
+        out BoundAttributeArgument? positionalConflict)
+    {
+        effectiveArguments = Array.Empty<object?>();
+        positionalConflict = null;
+        var constructors = attributeType.GetConstructors(BindingFlags.Public | BindingFlags.Instance);
 
         // Keep the existing precedence: normal form, omitted optionals, then
         // params expansion. Named constructor arguments only change which
@@ -1174,65 +1250,9 @@ internal sealed class CustomAttributeEncoder
                     continue;
                 }
 
-                var seenMemberNames = new HashSet<string>(StringComparer.Ordinal);
-                foreach (var memberArgument in attribute.NamedArguments)
-                {
-                    var memberName = Invariant.Required(
-                        memberArgument.Name,
-                        "a named attribute member argument has a name");
-                    if (!seenMemberNames.Add(memberName))
-                    {
-                        EmitDiagnosticException.ThrowDiagnostic(
-                            memberArgument.Syntax ?? attribute.Syntax,
-                            DiagnosticDescriptors.DuplicateNamedArgument,
-                            memberName);
-                    }
-
-                    if (!TryResolveNamedMember(attributeType, memberArgument, out var member, out _))
-                    {
-                        EmitDiagnosticException.ThrowDiagnostic(
-                            memberArgument.Syntax ?? attribute.Syntax,
-                            DiagnosticDescriptors.AttributeNamedArgumentNotFound,
-                            memberArgument.Name,
-                            attributeType.Name);
-                    }
-
-                    var memberType = member is PropertyInfo property
-                        ? property.PropertyType
-                        : ((FieldInfo)member).FieldType;
-                    if (!IsValidAttributeMemberType(memberType))
-                    {
-                        EmitDiagnosticException.ThrowDiagnostic(
-                            memberArgument.Syntax ?? attribute.Syntax,
-                            DiagnosticDescriptors.AttributeNamedMemberInvalidType,
-                            memberArgument.Name,
-                            memberType.Name);
-                    }
-
-                    if (!ArgAssignable(memberArgument.Value, memberType, memberArgument.Type))
-                    {
-                        EmitDiagnosticException.ThrowDiagnostic(
-                            memberArgument.Syntax ?? attribute.Syntax,
-                            DiagnosticDescriptors.AttributeNamedArgumentTypeMismatch,
-                            memberArgument.Name,
-                            memberArgument.Type.Name,
-                            memberType.Name);
-                    }
-                }
-
                 effectiveArguments = candidateArguments;
-                memberArguments = attribute.NamedArguments;
                 return constructor;
             }
-        }
-
-        if (positionalConflict != null)
-        {
-            EmitDiagnosticException.ThrowDiagnostic(
-                positionalConflict.Syntax ?? attribute.Syntax,
-                DiagnosticDescriptors.NamedArgumentAlsoSpecifiedPositionally,
-                positionalConflict.Name,
-                positionalConflict.Name);
         }
 
         return null;
@@ -1282,10 +1302,17 @@ internal sealed class CustomAttributeEncoder
         var parameterIndexes = new Dictionary<string, int>(StringComparer.Ordinal);
         for (var i = 0; i < parameters.Length; i++)
         {
-            parameterIndexes[SyntaxFacts.GetEmittedIdentifier(
-                parameters[i].Name ?? string.Empty,
-                IdentifierNameContext.Parameter,
-                parameterNames)] = i;
+            parameterIndexes[parameters[i].Name ?? string.Empty] = i;
+        }
+
+        for (var i = 0; i < parameters.Length; i++)
+        {
+            parameterIndexes.TryAdd(
+                SyntaxFacts.GetEmittedIdentifier(
+                    parameters[i].Name ?? string.Empty,
+                    IdentifierNameContext.Parameter,
+                    parameterNames),
+                i);
         }
 
         var sawOutOfPositionName = false;

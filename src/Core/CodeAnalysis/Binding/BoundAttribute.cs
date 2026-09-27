@@ -3,6 +3,7 @@
 // </copyright>
 
 using System.Collections.Immutable;
+using GSharp.Core.CodeAnalysis.Emit;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -121,37 +122,40 @@ public sealed class BoundAttribute : BoundNode
             return argument.Name;
         }
 
-        var constructors = clrType.GetConstructors();
-        foreach (var constructor in constructors)
+        var constructor = CustomAttributeEncoder.TryResolveImportedAttributeConstructor(
+            clrType,
+            this,
+            out _,
+            out _);
+        if (constructor == null)
         {
-            foreach (var parameter in constructor.GetParameters())
+            return argumentName;
+        }
+
+        var parameters = constructor.GetParameters();
+        foreach (var parameter in parameters)
+        {
+            if (string.Equals(argumentName, parameter.Name, System.StringComparison.Ordinal))
             {
-                if (string.Equals(argumentName, parameter.Name, System.StringComparison.Ordinal))
-                {
-                    return parameter.Name;
-                }
+                return parameter.Name;
             }
         }
 
-        foreach (var constructor in constructors)
+        var parameterNames = parameters
+            .Select(parameter => parameter.Name ?? string.Empty)
+            .ToArray();
+        foreach (var parameter in parameters)
         {
-            var parameters = constructor.GetParameters();
-            var parameterNames = parameters
-                .Select(parameter => parameter.Name ?? string.Empty)
-                .ToArray();
-            foreach (var parameter in parameters)
+            var metadataName = parameter.Name ?? string.Empty;
+            if (string.Equals(
+                    argumentName,
+                    SyntaxFacts.GetEmittedIdentifier(
+                        metadataName,
+                        IdentifierNameContext.Parameter,
+                        parameterNames),
+                    System.StringComparison.Ordinal))
             {
-                var metadataName = parameter.Name ?? string.Empty;
-                if (string.Equals(
-                        argumentName,
-                        SyntaxFacts.GetEmittedIdentifier(
-                            metadataName,
-                            IdentifierNameContext.Parameter,
-                            parameterNames),
-                        System.StringComparison.Ordinal))
-                {
-                    return metadataName;
-                }
+                return metadataName;
             }
         }
 

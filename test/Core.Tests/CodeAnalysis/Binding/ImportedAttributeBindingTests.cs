@@ -120,4 +120,40 @@ public class ImportedAttributeBindingTests
         Assert.Equal("a", attribute.GetConstructorArgument(0, "params")?.Value);
         Assert.Equal("b", attribute.GetConstructorArgument(1, "params_")?.Value);
     }
+
+    [Fact]
+    public void NamedConstructorMetadataName_ComesFromTheSelectedOverload()
+    {
+        var globalScope = BindWithFixtures(
+            """
+            package Demo
+            import GSharp.Core.Tests.Fixtures
+
+            @ImportedOverloadedReserved(params_: 1)
+            class Hello {
+            }
+            """);
+
+        var attribute = Assert.Single(globalScope.Structs.Single(s => s.Name == "Hello").Attributes);
+        var argument = Assert.Single(attribute.PositionalArguments);
+        Assert.Equal("params", attribute.GetConstructorParameterMetadataName(argument));
+    }
+
+    [Fact]
+    public void EscapedRawClrConstructorParameterName_IsRecognized()
+    {
+        var globalScope = BindWithFixtures(
+            """
+            package Demo
+            import GSharp.Core.Tests.Fixtures
+
+            @ImportedReservedNamed($params: "a", params_: "b")
+            class Hello {
+            }
+            """);
+
+        var attribute = Assert.Single(globalScope.Structs.Single(s => s.Name == "Hello").Attributes);
+        Assert.Equal("a", attribute.GetConstructorArgument(0, "params")?.Value);
+        Assert.Equal("b", attribute.GetConstructorArgument(1, "params_")?.Value);
+    }
 }

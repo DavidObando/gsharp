@@ -569,10 +569,11 @@ internal sealed partial class DeclarationBinder
             var parameters = constructor.GetParameters();
             var parameterNames = parameters.Select(parameter => parameter.Name ?? string.Empty).ToArray();
             if (parameters.Any(parameter =>
-                SyntaxFacts.GetEmittedIdentifier(
-                    parameter.Name ?? string.Empty,
-                    IdentifierNameContext.Parameter,
-                    parameterNames) == name))
+                parameter.Name == name
+                || SyntaxFacts.GetEmittedIdentifier(
+                        parameter.Name ?? string.Empty,
+                        IdentifierNameContext.Parameter,
+                        parameterNames) == name))
             {
                 return true;
             }

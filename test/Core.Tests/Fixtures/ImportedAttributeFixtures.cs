@@ -176,6 +176,21 @@ public sealed class ImportedReservedNamedAttribute : Attribute
     public string type_ { get; set; }
 }
 
+/// <summary>Attribute fixture whose overloads give the same G# spelling different meanings.</summary>
+[AttributeUsage(AttributeTargets.All)]
+public sealed class ImportedOverloadedReservedAttribute : Attribute
+{
+    /// <summary>Initializes an instance from the escaped CLR parameter.</summary>
+    public ImportedOverloadedReservedAttribute(int @params)
+    {
+    }
+
+    /// <summary>Initializes an instance from the literal suffixed parameter.</summary>
+    public ImportedOverloadedReservedAttribute(string params_)
+    {
+    }
+}
+
 /// <summary>
 /// A plain reference-assembly class used to verify that imports of non-System
 /// namespaces resolve inside function and method bodies — not just in top-level
