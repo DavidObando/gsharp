@@ -159,7 +159,7 @@ public class Holder
     public static string Run()
     {
         var a = new Holder[2];
-        var b = a;
+        var (b, _) = (a, 0);
         var c = b;
         c[0] = null;
         c[1] = new Holder { Name = ""ok"" };

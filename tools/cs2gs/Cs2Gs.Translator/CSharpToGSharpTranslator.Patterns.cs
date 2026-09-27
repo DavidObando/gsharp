@@ -3021,7 +3021,15 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (SyntaxReference reference in local.DeclaringSyntaxReferences)
             {
-                if (reference.GetSyntax() is not VariableDeclaratorSyntax
+                SyntaxNode declaration = reference.GetSyntax();
+                if (declaration is SingleVariableDesignationSyntax designation
+                    && this.GetDeconstructionAliasValue(designation) is { } deconstructedValue
+                    && this.context.GetSymbolInfo(deconstructedValue).Symbol is ILocalSymbol deconstructedSource)
+                {
+                    return this.GetArrayAllocationOwner(deconstructedSource, visited);
+                }
+
+                if (declaration is not VariableDeclaratorSyntax
                     { Initializer.Value: { } initializer } declarator)
                 {
                     continue;
@@ -3041,6 +3049,52 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return null;
+        }
+
+        private ExpressionSyntax GetDeconstructionAliasValue(
+            SingleVariableDesignationSyntax designation)
+        {
+            SyntaxNode target = designation;
+            var elementIndices = new Stack<int>();
+            while (true)
+            {
+                switch (target.Parent)
+                {
+                    case ParenthesizedVariableDesignationSyntax parenthesized:
+                        elementIndices.Push(parenthesized.Variables.IndexOf((VariableDesignationSyntax)target));
+                        target = parenthesized;
+                        continue;
+
+                    case DeclarationExpressionSyntax declaration when declaration.Type.IsVar:
+                        target = declaration;
+                        continue;
+
+                    case ArgumentSyntax argument when argument.Parent is TupleExpressionSyntax tuple:
+                        elementIndices.Push(tuple.Arguments.IndexOf(argument));
+                        target = tuple;
+                        continue;
+
+                    case AssignmentExpressionSyntax assignment when assignment.Left == target:
+                        ExpressionSyntax value = assignment.Right;
+                        foreach (int index in elementIndices)
+                        {
+                            value = StripParentheses(value);
+                            if (value is not TupleExpressionSyntax tupleValue
+                                || index < 0
+                                || index >= tupleValue.Arguments.Count)
+                            {
+                                return null;
+                            }
+
+                            value = tupleValue.Arguments[index].Expression;
+                        }
+
+                        return StripParentheses(value);
+
+                    default:
+                        return null;
+                }
+            }
         }
 
         private bool IsArrayAllocationAlias(ExpressionSyntax expression, ILocalSymbol owner) =>
