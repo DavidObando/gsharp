@@ -108,6 +108,38 @@ public sealed class Issue4472KeptTopLevelProgramAccessTests
     }
 
     [Fact]
+    public void NestedExplicitInterfaceImplementation_RemainsPrivate()
+    {
+        const string source = """
+            using System;
+
+            IRunner runner = new Runner();
+            Console.WriteLine(runner.Run());
+
+            internal static partial class Program
+            {
+                private interface IRunner
+                {
+                    int Run();
+                }
+
+                private sealed class Runner : IRunner
+                {
+                    int IRunner.Run() => 6;
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Contains("internal interface IRunner", printed, StringComparison.Ordinal);
+        Assert.Contains("internal class Runner", printed, StringComparison.Ordinal);
+        Assert.Contains("private func (IRunner) Run() int32", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("internal func (IRunner) Run()", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(printed, string.Empty, "6");
+    }
+
+    [Fact]
     public void PrivateOnlyProgram_StillUsesCanonicalHoistedOutput()
     {
         const string source = """

@@ -637,7 +637,8 @@ public sealed partial class CSharpToGSharpTranslator
                     // Program can also declare extension methods, but its
                     // remaining members still need `internal` so hoisted
                     // top-level statements can reach them.
-                    if (IsMemberOfKeptTopLevelProgram(symbol))
+                    if (!IsExplicitInterfaceImplementation(symbol) &&
+                        IsMemberOfKeptTopLevelProgram(symbol))
                     {
                         return Visibility.Internal;
                     }
@@ -704,6 +705,19 @@ public sealed partial class CSharpToGSharpTranslator
 
             return SymbolEqualityComparer.Default.Equals(owner, this.keptTopLevelProgram);
         }
+
+        /// <summary>
+        /// Whether <paramref name="symbol"/> is reachable only through an
+        /// explicit interface slot rather than through its containing type.
+        /// </summary>
+        private static bool IsExplicitInterfaceImplementation(ISymbol symbol)
+            => symbol switch
+            {
+                IMethodSymbol method => !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
+                IPropertySymbol property => !property.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
+                IEventSymbol @event => !@event.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
+                _ => false,
+            };
 
         /// <summary>
         /// Returns <see langword="true"/> when <paramref name="symbol"/> is a member
