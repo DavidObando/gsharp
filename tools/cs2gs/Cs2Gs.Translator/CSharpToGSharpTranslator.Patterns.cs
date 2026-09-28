@@ -3012,7 +3012,23 @@ public sealed partial class CSharpToGSharpTranslator
         private bool IsNullableArrayElementAccess(ExpressionSyntax expression)
         {
             return Unparenthesize(expression) is ElementAccessExpressionSyntax elementAccess
-                && this.ArrayExpressionHasNullableElement(elementAccess.Expression);
+                && this.ArrayExpressionHasNullableReferenceLikeElement(elementAccess.Expression);
+        }
+
+        private bool ArrayExpressionHasNullableReferenceLikeElement(ExpressionSyntax expression)
+        {
+            expression = Unparenthesize(expression);
+            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
+            if ((typeInfo.Type ?? typeInfo.ConvertedType) is not IArrayTypeSymbol array
+                || (!array.ElementType.IsReferenceType
+                    && !CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                        array.ElementType,
+                        this.context.Compilation)))
+            {
+                return false;
+            }
+
+            return this.ArrayExpressionHasNullableElement(expression);
         }
 
         private bool ArrayExpressionHasNullableElement(ExpressionSyntax expression)

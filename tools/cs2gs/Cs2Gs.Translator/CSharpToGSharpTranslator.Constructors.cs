@@ -3616,7 +3616,7 @@ public sealed partial class CSharpToGSharpTranslator
                     ITypeSymbol forEachElement = forEachInfo.ElementType;
                     bool inferredLoopVariable = forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity;
                     bool nullableElement = inferredLoopVariable
-                        && (this.ArrayExpressionHasNullableElement(forEach.Expression)
+                        && (this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression)
                             || (forEachElement?.IsReferenceType == true
                                 && forEachElement.NullableAnnotation == NullableAnnotation.Annotated));
                     if (nullableElement && loopSymbol != null)

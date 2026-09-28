@@ -1028,62 +1028,75 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        // Issue #4525: the mapped array argument is []managed[T]?, so G# binds
-        // the corresponding method type parameter as nullable even when Roslyn's
-        // constructed method retains the C# ManagedRef<T> argument.
-        private bool GenericResultInfersNilableThroughManagedReferenceArrayWidening(
+        private bool ManagedReferenceArrayWidenedExpressionMayBeNull(
             ExpressionSyntax expression)
         {
-            if (Unparenthesize(expression) is not InvocationExpressionSyntax invocation
-                || this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
-                || method.OriginalDefinition.ReturnType is not ITypeParameterSymbol returnParameter
-                || returnParameter.TypeParameterKind != TypeParameterKind.Method)
-            {
-                return false;
-            }
-
-            return this.MethodTypeParameterIsWidenedByManagedReferenceArrayArgument(
-                invocation,
-                method,
-                returnParameter.Ordinal);
+            ITypeSymbol effectiveType =
+                this.GetManagedReferenceArraySubstitutedExpressionType(expression);
+            return effectiveType != null
+                && effectiveType.NullableAnnotation == NullableAnnotation.Annotated
+                && (effectiveType.IsReferenceType
+                    || CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                        effectiveType,
+                        this.context.Compilation));
         }
 
-        private bool MethodTypeParameterIsWidenedByManagedReferenceArrayArgument(
-            InvocationExpressionSyntax invocation,
-            IMethodSymbol method,
-            int typeParameterOrdinal)
+        private ITypeSymbol GetManagedReferenceArraySubstitutedExpressionType(
+            ExpressionSyntax expression)
         {
-            if (!method.IsGenericMethod
-                || typeParameterOrdinal < 0
-                || typeParameterOrdinal >= method.TypeArguments.Length
-                || !CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
-                    method.TypeArguments[typeParameterOrdinal],
-                    this.context.Compilation))
+            expression = Unparenthesize(expression);
+            if (expression is InvocationExpressionSyntax invocation
+                && this.TryGetManagedReferenceArraySubstitutedMethod(
+                    invocation,
+                    out IMethodSymbol substitutedMethod))
             {
-                return false;
+                return substitutedMethod.ReturnType;
             }
 
-            IMethodSymbol definition = method.OriginalDefinition;
-            foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
+            if (expression is not MemberAccessExpressionSyntax member
+                || this.GetManagedReferenceArraySubstitutedExpressionType(member.Expression)
+                    is not INamedTypeSymbol receiverType
+                || this.context.GetSymbolInfo(member).Symbol is not { } memberSymbol)
             {
-                IParameterSymbol parameter = DetermineParameter(argument, this.context);
-                if (parameter == null
-                    || parameter.Ordinal >= definition.Parameters.Length
-                    || definition.Parameters[parameter.Ordinal].Type is not IArrayTypeSymbol
-                        { ElementType: ITypeParameterSymbol elementParameter }
-                    || elementParameter.TypeParameterKind != TypeParameterKind.Method
-                    || elementParameter.Ordinal != typeParameterOrdinal)
-                {
-                    continue;
-                }
+                return null;
+            }
 
-                if (this.ArrayExpressionHasNullableElement(argument.Expression))
+            foreach (INamedTypeSymbol candidateType in ReceiverTypeHierarchy(receiverType))
+            {
+                foreach (ISymbol candidate in candidateType.GetMembers(memberSymbol.Name))
                 {
-                    return true;
+                    if (!SymbolEqualityComparer.Default.Equals(
+                        candidate.OriginalDefinition,
+                        memberSymbol.OriginalDefinition))
+                    {
+                        continue;
+                    }
+
+                    return candidate switch
+                    {
+                        IFieldSymbol field => field.Type,
+                        IPropertySymbol property => property.Type,
+                        IMethodSymbol method => method.ReturnType,
+                        _ => null,
+                    };
                 }
             }
 
-            return false;
+            return null;
+        }
+
+        private static IEnumerable<INamedTypeSymbol> ReceiverTypeHierarchy(
+            INamedTypeSymbol receiver)
+        {
+            for (INamedTypeSymbol current = receiver; current != null; current = current.BaseType)
+            {
+                yield return current;
+            }
+
+            foreach (INamedTypeSymbol contract in receiver.AllInterfaces)
+            {
+                yield return contract;
+            }
         }
 
         private GExpression TranslateReceiverWithNullForgiveness(ExpressionSyntax recv)
@@ -1122,7 +1135,7 @@ public sealed partial class CSharpToGSharpTranslator
             bool byRefSuppressionDroppedRequiresAssertion =
                 this.GenericResultInfersNilableThroughDroppedByRefSuppression(recv);
             bool managedArrayGenericResultRequiresAssertion =
-                this.GenericResultInfersNilableThroughManagedReferenceArrayWidening(recv);
+                this.ManagedReferenceArrayWidenedExpressionMayBeNull(recv);
 
             if (!iteratorForeachReceiverRequiresAssertion
                 && !nullableForEachBindingRequiresAssertion
@@ -3243,7 +3256,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             bool nullableForEachBinding = this.IsNullableForEachBindingUse(value);
             bool managedArrayGenericResult =
-                this.GenericResultInfersNilableThroughManagedReferenceArrayWidening(value);
+                this.ManagedReferenceArrayWidenedExpressionMayBeNull(value);
             if ((!nullableForEachBinding
                     && !managedArrayGenericResult
                     && this.GSharpExpressionIsStaticallyNonNull(

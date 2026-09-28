@@ -530,32 +530,6 @@ public sealed partial class CSharpToGSharpTranslator
                     .ToList();
             }
 
-            // Issue #4525: an explicit type argument must agree with the widened
-            // G# array argument just as an inferred one does.
-            if (typeArguments is { Count: > 0 }
-                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol arrayWidenedGeneric)
-            {
-                List<GTypeReference> reconciledTypeArguments = null;
-                for (int i = 0; i < typeArguments.Count; i++)
-                {
-                    if (!this.MethodTypeParameterIsWidenedByManagedReferenceArrayArgument(
-                        invocation,
-                        arrayWidenedGeneric,
-                        i))
-                    {
-                        continue;
-                    }
-
-                    reconciledTypeArguments ??= typeArguments.ToList();
-                    reconciledTypeArguments[i] = MakeNullable(reconciledTypeArguments[i]);
-                }
-
-                if (reconciledTypeArguments != null)
-                {
-                    typeArguments = reconciledTypeArguments;
-                }
-            }
-
             return new InvocationExpression(target, arguments, typeArguments);
         }
 
@@ -4404,6 +4378,14 @@ public sealed partial class CSharpToGSharpTranslator
             // Prefer the constructed method/type symbol, whose TypeArguments
             // retain nullability recursively for every semantic type shape.
             ImmutableArray<ITypeSymbol> boundTypeArguments = this.GetBoundTypeArguments(generic);
+            if (GetContainingInvocation(generic) is { } invocation
+                && this.TryGetManagedReferenceArraySubstitutedMethod(
+                    invocation,
+                    out IMethodSymbol substitutedMethod))
+            {
+                boundTypeArguments = substitutedMethod.TypeArguments;
+            }
+
             var result = new List<GTypeReference>();
             for (int i = 0; i < generic.TypeArgumentList.Arguments.Count; i++)
             {
@@ -4426,6 +4408,115 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return result;
+        }
+
+        // Issue #4525: construct the method with the type arguments G# infers
+        // from widened managed-reference arrays. Every invocation form maps
+        // explicit arguments and result types through this one substitution.
+        private bool TryGetManagedReferenceArraySubstitutedMethod(
+            InvocationExpressionSyntax invocation,
+            out IMethodSymbol substituted)
+        {
+            substituted = null;
+            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
+                || !method.IsGenericMethod
+                || method.TypeArguments.IsDefaultOrEmpty)
+            {
+                return false;
+            }
+
+            var widened = new bool[method.TypeArguments.Length];
+            void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
+            {
+                if (!this.ArrayExpressionHasNullableElement(argument))
+                {
+                    return;
+                }
+
+                for (int i = 0; i < widened.Length; i++)
+                {
+                    widened[i] = widened[i]
+                        || (CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                                method.TypeArguments[i],
+                                this.context.Compilation)
+                            && TypeContainsMethodTypeParameter(parameterType, i));
+                }
+            }
+
+            if (this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation operation)
+            {
+                foreach (IArgumentOperation argument in operation.Arguments)
+                {
+                    if (argument.Syntax is ArgumentSyntax argumentSyntax
+                        && argument.Parameter?.OriginalDefinition.Type is { } parameterType)
+                    {
+                        RecordWidenedArguments(argumentSyntax.Expression, parameterType);
+                    }
+                }
+
+                if (method.MethodKind == MethodKind.ReducedExtension
+                    && invocation.Expression is MemberAccessExpressionSyntax reducedMember
+                    && method.ReducedFrom?.OriginalDefinition.Parameters.FirstOrDefault()?.Type
+                        is { } receiverParameterType)
+                {
+                    RecordWidenedArguments(
+                        reducedMember.Expression,
+                        receiverParameterType);
+                }
+            }
+
+            if (!widened.Any(value => value))
+            {
+                return false;
+            }
+
+            ITypeSymbol[] typeArguments = method.TypeArguments.ToArray();
+            for (int i = 0; i < typeArguments.Length; i++)
+            {
+                if (widened[i])
+                {
+                    typeArguments[i] =
+                        typeArguments[i].WithNullableAnnotation(NullableAnnotation.Annotated);
+                }
+            }
+
+            substituted = method.ConstructedFrom.Construct(typeArguments);
+            return true;
+        }
+
+        private static bool TypeContainsMethodTypeParameter(
+            ITypeSymbol type,
+            int ordinal)
+        {
+            return (type is ITypeParameterSymbol parameter
+                    && parameter.TypeParameterKind == TypeParameterKind.Method
+                    && parameter.Ordinal == ordinal)
+                || (type is IArrayTypeSymbol array
+                    && TypeContainsMethodTypeParameter(array.ElementType, ordinal))
+                || (type is IPointerTypeSymbol pointer
+                    && TypeContainsMethodTypeParameter(pointer.PointedAtType, ordinal))
+                || (type is INamedTypeSymbol named
+                    && (named.TypeArguments.Any(argument =>
+                            TypeContainsMethodTypeParameter(argument, ordinal))
+                        || (named.ContainingType is { } containing
+                            && TypeContainsMethodTypeParameter(containing, ordinal))));
+        }
+
+        private static InvocationExpressionSyntax GetContainingInvocation(GenericNameSyntax generic)
+        {
+            SyntaxNode expression = generic;
+            while ((expression.Parent is MemberAccessExpressionSyntax member
+                    && member.Name == expression)
+                || (expression.Parent is MemberBindingExpressionSyntax binding
+                    && binding.Name == expression))
+            {
+                expression = expression.Parent;
+            }
+
+            return expression.Parent is InvocationExpressionSyntax invocation
+                && invocation.Expression == expression
+                    ? invocation
+                    : null;
         }
 
         private ImmutableArray<ITypeSymbol> GetBoundTypeArguments(GenericNameSyntax generic)
