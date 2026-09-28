@@ -282,7 +282,9 @@ internal static class SuspensionInference
             LexicalEnclosingType = owner,
         };
         var builder = initializers.ToBuilder();
-        foreach (var (field, initializer) in initializers)
+        foreach (var (field, initializer) in initializers
+            .OrderBy(static pair => pair.Key.DeclaringSyntaxNodes.FirstOrDefault()?.Span.Start ?? int.MaxValue)
+            .ThenBy(static pair => pair.Key.Name, StringComparer.Ordinal))
         {
             builder[field] = SuspendingCallRewriter.RewriteInitializer(
                 initializer,

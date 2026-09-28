@@ -2508,13 +2508,11 @@ internal sealed class ConversionClassifier
             // interpolated-string literal in the first place.
             // The same applies to constant-narrowing: there are no bound call
             // arguments here, only the target delegate signature.
-            var resolvedMethod = targetParameterRefKinds.Any(kind => kind != RefKind.None) && applicable.Count == 1
-                ? applicable[0]
-                : ClrOverloadResolution.Resolve(
-                    applicable,
-                    argTypes,
-                    trailingParameterCountToIgnore: static candidate =>
-                        ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0).Best;
+            var resolvedMethod = ClrOverloadResolution.Resolve(
+                applicable,
+                argTypes,
+                trailingParameterCountToIgnore: static candidate =>
+                    ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0).Best;
             if (resolvedMethod != null)
             {
                 var resolved = new BoundClrMethodGroupExpression(

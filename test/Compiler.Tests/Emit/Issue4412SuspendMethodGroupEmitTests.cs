@@ -285,6 +285,45 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
     }
 
     [Fact]
+    public void ImportedByRefSuspendMethodGroup_StillChecksByValueSlots()
+    {
+        const string library = """
+            using System.Threading.Tasks;
+            using Gsharp.Concurrency;
+
+            namespace Interop;
+
+            public delegate ValueTask<int> RefObjectRunner(ref int value, object extra);
+
+            public static class Api
+            {
+                [Suspending]
+                public static ValueTask<int> IncrementText(ref int value, string extra, Context context) =>
+                    new(value + extra.Length);
+            }
+            """;
+        const string app = """
+            package App
+            import Interop
+
+            let callback RefObjectRunner = Api.IncrementText
+            """;
+
+        var directory = PrepareDirectory(nameof(ImportedByRefSuspendMethodGroup_StillChecksByValueSlots));
+        try
+        {
+            var libraryPath = CompileCSharpLibrary(directory, "Interop", library);
+            var diagnostics = CompileExpectingError(directory, "App", app, "/target:library", "/reference:" + libraryPath);
+            Assert.Contains("GS0218", diagnostics, StringComparison.Ordinal);
+            Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void StaticInitializerSuspendMethodGroups_VerifyAndRun()
     {
         const string source = """
