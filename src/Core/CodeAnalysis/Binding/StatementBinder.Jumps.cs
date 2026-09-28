@@ -305,6 +305,9 @@ internal sealed partial class StatementBinder
             entry => entry.Key,
             entry => entry.Value.Select(snapshot => snapshot.Clone()).ToList());
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
+        var boundFinallyBlocksSnapshot = boundFinallyBlocks.ToArray();
+        var finallyMutationSummariesSnapshot = finallyMutationSummaries.ToArray();
+        var activeFinallyClausesSnapshot = activeFinallyClauses.ToArray();
         var syntheticLocalCounter = binderCtx.SyntheticLocalCounter;
 
         static void RestoreDictionary<TKey, TValue>(
@@ -384,6 +387,14 @@ internal sealed partial class StatementBinder
         foreach (var region in userGotoHandlerSnapshot)
         {
             userGotoHandlerRegions.Add(region);
+        }
+
+        RestoreDictionary(boundFinallyBlocks, boundFinallyBlocksSnapshot);
+        RestoreDictionary(finallyMutationSummaries, finallyMutationSummariesSnapshot);
+        activeFinallyClauses.Clear();
+        for (var i = activeFinallyClausesSnapshot.Length - 1; i >= 0; i--)
+        {
+            activeFinallyClauses.Push(activeFinallyClausesSnapshot[i]);
         }
 
         binderCtx.SyntheticLocalCounter = syntheticLocalCounter;
