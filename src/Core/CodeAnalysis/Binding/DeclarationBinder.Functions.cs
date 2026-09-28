@@ -3163,6 +3163,30 @@ internal sealed partial class DeclarationBinder
             return false;
         }
 
+        // Issue #4446: reference `T?` is a signature annotation over the same
+        // CLR type as `T`, but value `T?` is the distinct Nullable<T> storage
+        // shape. Do this before recursive constructed-type comparison and the
+        // CLR leaf fallback so the distinction holds at every nesting depth.
+        if ((a is NullableTypeSymbol nullableA
+                && b is not NullableTypeSymbol
+                && NullableLifting.IsAnyValueTypeNullable(nullableA))
+            || (b is NullableTypeSymbol nullableB
+                && a is not NullableTypeSymbol
+                && NullableLifting.IsAnyValueTypeNullable(nullableB)))
+        {
+            return false;
+        }
+
+        if (a is NullableTypeSymbol referenceNullableA && b is not NullableTypeSymbol)
+        {
+            return TypeSignaturesEquivalent(referenceNullableA.UnderlyingType, b, typeParamMap);
+        }
+
+        if (b is NullableTypeSymbol referenceNullableB && a is not NullableTypeSymbol)
+        {
+            return TypeSignaturesEquivalent(a, referenceNullableB.UnderlyingType, typeParamMap);
+        }
+
         var aIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
             a,
             out var aSequenceDefinition,
@@ -3234,10 +3258,9 @@ internal sealed partial class DeclarationBinder
             // rather than by its erased `object` CLR projection.
             if (pa.OpenDefinition != null
                 && pb.OpenDefinition != null
-                && pa.OpenDefinition == pb.OpenDefinition
-                && TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap))
+                && pa.OpenDefinition == pb.OpenDefinition)
             {
-                return true;
+                return TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap);
             }
 
             // Otherwise (one or both sides expressed as a plain closed CLR

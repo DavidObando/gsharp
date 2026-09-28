@@ -21,14 +21,11 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </para>
 /// <para>
 /// This replaces <see cref="DeclarationBinder.TypeSignaturesEquivalent(TypeSymbol, TypeSymbol)"/>
-/// at the by-ref gates. That predicate is exact only by accident here: when
-/// exactly one side is a <see cref="NullableTypeSymbol"/> it falls through to
-/// comparing CLR types, and a nullable wrapper relays its underlying type's
-/// CLR type. So it accepted every same-compilation <c>T?</c> storage silently
-/// (including <c>int32?</c> at <c>ref int32</c>, which then wrote an
-/// <c>int32</c> over a <c>Nullable&lt;int32&gt;</c>), while it rejected an
-/// imported <c>int[]?</c> field, whose array symbol is not the slice symbol the
-/// parameter spells.
+/// at the by-ref gates. The shared comparer answers a boolean equivalence
+/// question for declarations, inference, overload identity, and related
+/// signature decisions. This matcher additionally records the direction and
+/// nesting of reference-nullability differences for <c>GS0612</c>, and
+/// normalizes equivalent imported-array and native-slice storage views.
 /// </para>
 /// </summary>
 internal static class ByRefStorageMatching
