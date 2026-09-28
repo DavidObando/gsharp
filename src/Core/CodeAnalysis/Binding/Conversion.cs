@@ -355,6 +355,34 @@ public sealed class Conversion
             return platformArgumentMismatch;
         }
 
+        // #4479: the inference fix can produce the faithful target
+        // `sequence[string!]` for a symbolic `List[string!]`, but the ordinary
+        // CLR upcast below cannot prove the cross-context constructed interface
+        // relation after nullability is erased. Reuse #4420's hierarchy
+        // projection and accept only an exact symbolic argument vector; illegal
+        // and variant projections were already decided by the mismatch arm.
+        if (from is not NullableTypeSymbol
+            && from is not PlatformTypeSymbol
+            && TryProjectPlatformArgumentsToSupertype(from, to, out var projectedArguments, out var targetArguments)
+            && projectedArguments.Length == targetArguments.Length)
+        {
+            var exactProjection = true;
+            for (var i = 0; i < projectedArguments.Length; i++)
+            {
+                if (RelatePlatformArguments(projectedArguments[i], targetArguments[i])
+                    != PlatformArgumentRelation.Same)
+                {
+                    exactProjection = false;
+                    break;
+                }
+            }
+
+            if (exactProjection)
+            {
+                return Conversion.Implicit;
+            }
+        }
+
         // ADR-0186 §3: the platform type `T!` owns its whole conversion table,
         // and it must own it here, ahead of every arm below.
         //
@@ -4511,6 +4539,13 @@ public sealed class Conversion
     {
         arguments = ImmutableArray<TypeSymbol>.Empty;
         definition = type.ClrType;
+
+        if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol
+            && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(type, out definition, out var elementType))
+        {
+            arguments = ImmutableArray.Create(elementType);
+            return true;
+        }
 
         if (type is NullabilityAnnotatedTypeSymbol annotated)
         {

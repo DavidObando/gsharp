@@ -5986,28 +5986,44 @@ internal sealed class MemberLookup
         => TryMapThroughImplemented(source, targetOpenDefinition, out mappedArguments);
 
     /// <summary>
-    /// Maps every occurrence of <paramref name="targetOpenDefinition"/> in an
-    /// imported type's base/interface closure and succeeds only when all
-    /// occurrences project the same symbolic type arguments. This is the
+    /// Maps every occurrence of <paramref name="targetOpenDefinition"/> in a
+    /// CLR-backed type's base/interface closure and succeeds only when all
+    /// occurrences project the same symbolic type arguments. The source's
+    /// positions come from <see cref="TypeSymbol.GetElementPositions"/>, so
+    /// metadata nullability survives the hierarchy walk. This is the
     /// inference-specific counterpart to
     /// <see cref="TryMapConstructedTypeArgumentsThroughHierarchy"/>: conversions
     /// may select a particular closed interface, while inference must not choose
     /// arbitrarily between conflicting projections.
     /// </summary>
-    /// <param name="source">Constructed imported source type.</param>
+    /// <param name="source">CLR-backed source type.</param>
     /// <param name="targetOpenDefinition">Open generic type being inferred against.</param>
     /// <param name="mappedArguments">Unique projected symbolic arguments on success.</param>
     /// <param name="foundProjection">Whether at least one matching projection was found, including conflicting matches.</param>
     /// <returns><see langword="true"/> when one or more matching projections agree.</returns>
     internal static bool TryMapUniqueConstructedTypeArgumentsThroughHierarchy(
-        ImportedTypeSymbol source,
+        TypeSymbol source,
         Type targetOpenDefinition,
         out ImmutableArray<TypeSymbol> mappedArguments,
         out bool foundProjection)
     {
         mappedArguments = default;
         foundProjection = false;
-        if (source.OpenDefinition == null)
+        Type? sourceOpenDefinition;
+        ImmutableArray<TypeSymbol> sourceArguments;
+        if (source is ImportedTypeSymbol { OpenDefinition: { } importedOpen } imported)
+        {
+            sourceOpenDefinition = importedOpen;
+            sourceArguments = imported.TypeArguments;
+        }
+        else if (source.ClrType is { } sourceClr)
+        {
+            sourceOpenDefinition = sourceClr.IsGenericType && !sourceClr.IsGenericTypeDefinition
+                ? sourceClr.GetGenericTypeDefinition()
+                : sourceClr;
+            sourceArguments = source.GetElementPositions();
+        }
+        else
         {
             return false;
         }
@@ -6032,7 +6048,7 @@ internal sealed class MemberLookup
             return true;
         }
 
-        foreach (var candidate in EnumerateOpenInterfacesAndBases(source.OpenDefinition))
+        foreach (var candidate in EnumerateOpenInterfacesAndBases(sourceOpenDefinition))
         {
             Type candidateDefinition;
             try
@@ -6071,8 +6087,8 @@ internal sealed class MemberLookup
             {
                 builder.Add(MapOpenClrTypeToSymbolicWithoutNullability(
                     argument,
-                    source.OpenDefinition,
-                    source.TypeArguments,
+                    sourceOpenDefinition,
+                    sourceArguments,
                     NullabilityFreeReason.TypeStructure));
             }
 
@@ -8128,6 +8144,8 @@ internal sealed class MemberLookup
             return;
         }
 
+        var annotatedActualForProjection = actual as NullabilityAnnotatedTypeSymbol;
+
         // A direct MVar match must observe the complete symbolic actual before
         // nullable-reference wrappers are removed for outer structural
         // matching. Multiple inference sources join compatible nullable
@@ -8266,6 +8284,32 @@ internal sealed class MemberLookup
         {
             var openDef = openClr.GetGenericTypeDefinition();
             var openArgs = openClr.GetGenericArguments();
+
+            var foundHierarchyProjection = false;
+            if ((annotatedActualForProjection != null || actual is ImportedTypeSymbol)
+                && TryMapUniqueConstructedTypeArgumentsThroughHierarchy(
+                    annotatedActualForProjection ?? actual,
+                    openDef,
+                    out var hierarchyProjection,
+                    out foundHierarchyProjection))
+            {
+                for (var i = 0; i < openArgs.Length && i < hierarchyProjection.Length; i++)
+                {
+                    UnifyForMethodTypeArgs(
+                        openArgs[i],
+                        hierarchyProjection[i],
+                        openMethod,
+                        bounds,
+                        GetNestedInferenceBoundKind(openDef, i, boundKind));
+                }
+
+                return;
+            }
+
+            if (foundHierarchyProjection)
+            {
+                return;
+            }
 
             if (actual is TupleTypeSymbol tuple
                 && openDef.FullName?.StartsWith("System.ValueTuple`", StringComparison.Ordinal) == true
