@@ -4454,13 +4454,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             bool canProjectContainingTypeFromArguments =
-                call is BaseObjectCreationExpressionSyntax
-                || projectedReceiver != null;
+                projectedReceiver != null
+                || (call is BaseObjectCreationExpressionSyntax objectCreation
+                    && this.ObjectCreationCanProjectContainingType(objectCreation));
             var widenedMethodArguments = new bool[method.TypeArguments.Length];
             var widenedContainingArguments =
                 new bool[method.ContainingType?.TypeArguments.Length ?? 0];
             ITypeParameterSymbol blockedParameter = null;
-            bool fixedReceiverStorageNeedsNullableArgument = false;
+            bool fixedStorageNeedsNullableArgument = false;
             void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
             {
                 ITypeSymbol argumentType =
@@ -4486,7 +4487,7 @@ public sealed partial class CSharpToGSharpTranslator
                         argumentType,
                         canProjectContainingTypeFromArguments,
                         nullableArrayArgument);
-                    fixedReceiverStorageNeedsNullableArgument |=
+                    fixedStorageNeedsNullableArgument |=
                         needsContainingProjection
                         && !canProjectContainingTypeFromArguments;
                 }
@@ -4590,6 +4591,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (call is BaseObjectCreationExpressionSyntax creationSyntax
+                && canProjectContainingTypeFromArguments
                 && method.ContainingType?.TypeArguments.Any(argument =>
                     CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
                         argument,
@@ -4647,10 +4649,13 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (fixedReceiverStorageNeedsNullableArgument)
+            if (fixedStorageNeedsNullableArgument)
             {
+                string storageKind = call is BaseObjectCreationExpressionSyntax
+                    ? "destination"
+                    : "receiver";
                 string message =
-                    $"managed-reference array widening cannot change fixed receiver storage " +
+                    $"managed-reference array widening cannot change fixed {storageKind} storage " +
                     $"'{method.ContainingType}'; a nil argument has no exact G# translation.";
                 this.context.ReportUnsupported(
                     call,
@@ -4715,6 +4720,15 @@ public sealed partial class CSharpToGSharpTranslator
 
             this.state.ManagedReferenceArrayProjectedMethodByCall[call] = projected;
             return projected != null;
+        }
+
+        private bool ObjectCreationCanProjectContainingType(
+            BaseObjectCreationExpressionSyntax creation)
+        {
+            ISymbol sink = this.ResolveValueSink(creation);
+            return sink == null
+                || (sink is ILocalSymbol local
+                    && IsImplicitlyTypedLocal(local));
         }
 
         private ITypeSymbol GetManagedReferenceArrayProjectedArgumentType(

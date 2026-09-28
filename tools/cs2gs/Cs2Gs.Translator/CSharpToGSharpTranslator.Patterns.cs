@@ -4033,17 +4033,14 @@ public sealed partial class CSharpToGSharpTranslator
                 case IArrayTypeSymbol array:
                     return array.ElementType;
                 case INamedTypeSymbol named:
-                    if (named.OriginalDefinition.SpecialType
-                            == SpecialType.System_Collections_Generic_IEnumerable_T
-                        && named.TypeArguments.Length == 1)
+                    if (IsEnumerableContract(named))
                     {
                         return named.TypeArguments[0];
                     }
 
                     foreach (INamedTypeSymbol iface in named.AllInterfaces)
                     {
-                        if (iface.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T &&
-                            iface.TypeArguments.Length == 1)
+                        if (IsEnumerableContract(iface))
                         {
                             return iface.TypeArguments[0];
                         }
@@ -4053,6 +4050,25 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return null;
             }
+        }
+
+        private static bool IsEnumerableContract(INamedTypeSymbol type)
+        {
+            INamedTypeSymbol definition = type.OriginalDefinition;
+            if (definition.SpecialType
+                == SpecialType.System_Collections_Generic_IEnumerable_T)
+            {
+                return true;
+            }
+
+            INamespaceSymbol genericNamespace = definition.ContainingNamespace;
+            INamespaceSymbol collectionsNamespace = genericNamespace?.ContainingNamespace;
+            INamespaceSymbol systemNamespace = collectionsNamespace?.ContainingNamespace;
+            return definition.MetadataName == "IAsyncEnumerable`1"
+                && genericNamespace?.Name == "Generic"
+                && collectionsNamespace?.Name == "Collections"
+                && systemNamespace?.Name == "System"
+                && systemNamespace.ContainingNamespace.IsGlobalNamespace;
         }
 
         // Issue #1896: gsc has its OWN native range-index syntax

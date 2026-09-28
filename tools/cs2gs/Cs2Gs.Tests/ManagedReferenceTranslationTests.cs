@@ -464,6 +464,59 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceObjectCreationDoesNotProjectFixedDestinationStorage()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayFixedObjectStorage;
+            public sealed class Holder<T> {
+                public readonly T Value;
+                public Holder(T value) { Value = value; }
+            }
+            public class Probe {
+                private static readonly ManagedRef<int>[] Source = new ManagedRef<int>[1];
+                private static readonly Holder<ManagedRef<int>> Field =
+                    new Holder<ManagedRef<int>>(Source[0]);
+                private static Holder<ManagedRef<int>> Property { get; } =
+                    new Holder<ManagedRef<int>>(Source[0]);
+
+                private static Holder<ManagedRef<int>> Create() =>
+                    new Holder<ManagedRef<int>>(Source[0]);
+
+                private static bool IsNil(Holder<ManagedRef<int>> value) =>
+                    value.Value == null;
+
+                public static bool Run() =>
+                    IsNil(new Holder<ManagedRef<int>>(Source[0]))
+                    && Field.Value == null
+                    && Property.Value == null
+                    && Create().Value == null;
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayFixedObjectStorage.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains("fixed destination storage", StringComparison.Ordinal));
+        Assert.DoesNotContain("Holder[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.Contains("Holder[managed[int32]](Source[0]!!)", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text,
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayForEachBindingsBridgeEveryNonNullUse()
     {
         const string source = """
@@ -1014,6 +1067,55 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectedAsyncSequenceTracksForEachBinding()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using System.Threading.Tasks;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedAsyncSequence;
+            public class Probe {
+                private static async IAsyncEnumerable<T> AsAsync<T>(T[] items) {
+                    await Task.Yield();
+                    foreach (var item in items) {
+                        yield return item;
+                    }
+                }
+
+                public static async Task<int> Run() {
+                    int[] values = { 3 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    await foreach (var item in AsAsync(source)) {
+                        return item.Borrow();
+                    }
+                    return 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedAsyncSequence.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("await for item in AsAsync(source)", text, StringComparison.Ordinal);
+        Assert.Contains("item!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run().GetAwaiter().GetResult()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(3, result.Value);
     }
 
     [Fact]
