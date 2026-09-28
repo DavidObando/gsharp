@@ -240,14 +240,14 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             public static class Api
             {
                 [Suspending]
-                public static ValueTask<int> Increment(ref int value, Context context)
+                public static ValueTask<int> Increment(ref int value, Context ctx4412)
                 {
                     value++;
                     return new ValueTask<int>(value);
                 }
 
                 [Suspending]
-                public static ValueTask<int> Echo(int value, Context context) =>
+                public static ValueTask<int> Echo(int value, Context ctx4412) =>
                     new(value);
             }
             """;
@@ -310,7 +310,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             public static class Api
             {
                 [Suspending]
-                public static ValueTask<int> IncrementText(ref int value, string extra, Context context) =>
+                public static ValueTask<int> IncrementText(ref int value, string extra, Context ctx4412) =>
                     new(value + extra.Length);
             }
             """;
@@ -350,7 +350,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             public static class Extensions
             {
                 [Suspending]
-                public static ValueTask<int> Identity<T>(this Box<T> box, int value, Context context) =>
+                public static ValueTask<int> Identity<T>(this Box<T> box, int value, Context ctx4412) =>
                     new(value);
             }
             """;
@@ -398,7 +398,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             public static class Extensions
             {
                 [Suspending]
-                public static ValueTask<bool> Accept<T>(this Box box, T value, Context context) =>
+                public static ValueTask<bool> Accept<T>(this Box box, T value, Context ctx4412) =>
                     new(true);
             }
             """;
@@ -448,7 +448,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                     new("normal");
 
                 [Suspending]
-                public static ValueTask<string> Pick(string value, Context context) =>
+                public static ValueTask<string> Pick(string value, Context ctx4412) =>
                     new("suspend");
             }
             """;
@@ -921,7 +921,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         Assert.True(
             result.Success,
             string.Join(Environment.NewLine, result.Diagnostics.Where(d => d.Severity == DiagnosticSeverity.Error)));
-        RewriteMetadataString(outputPath, "context", "<>ctx");
+        RewriteMetadataString(outputPath, "ctx4412", "<>ctx");
         return outputPath;
     }
 

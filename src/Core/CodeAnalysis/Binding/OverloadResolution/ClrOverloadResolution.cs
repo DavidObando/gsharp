@@ -3113,6 +3113,15 @@ internal static class ClrOverloadResolution
         return returnConversion != ImplicitConversionKind.None;
     }
 
+    private static int GetIgnoredTrailingParameterCount<T>(
+        T candidate,
+        Func<T, int>? trailingParameterCountToIgnore)
+        where T : MethodBase
+    {
+        var parameterCount = candidate.GetParameters().Length;
+        return Math.Clamp(trailingParameterCountToIgnore?.Invoke(candidate) ?? 0, 0, parameterCount);
+    }
+
     /// <summary>
     /// Evaluates a single candidate for applicability against the supplied
     /// argument types, appending it to <paramref name="applicable"/> when it
@@ -3132,7 +3141,9 @@ internal static class ClrOverloadResolution
             // violations drop the candidate silently (matches C# §7.5.2 "if
             // type inference fails, the method is not applicable").
             T candidate = rawCandidate;
-            var ignoredTrailingParameters = trailingParameterCountToIgnore?.Invoke(rawCandidate) ?? 0;
+            var ignoredTrailingParameters = GetIgnoredTrailingParameterCount(
+                rawCandidate,
+                trailingParameterCountToIgnore);
 
             // Issue #1325: when a candidate must be closed over a
             // same-compilation user value type — erased to a `System.Object`
@@ -4010,7 +4021,9 @@ internal static class ClrOverloadResolution
         }
 
         var parameters = candidate.GetParameters();
-        var ignoredTrailingParameters = trailingParameterCountToIgnore?.Invoke(candidate) ?? 0;
+        var ignoredTrailingParameters = GetIgnoredTrailingParameterCount(
+            candidate,
+            trailingParameterCountToIgnore);
         if (ignoredTrailingParameters > 0)
         {
             parameters = parameters[..^ignoredTrailingParameters];
@@ -4597,6 +4610,18 @@ internal static class ClrOverloadResolution
         Func<T, int>? trailingParameterCountToIgnore)
         where T : MethodBase
     {
+        var ignoredTrailingParameterCounts = new Dictionary<MethodBase, int>();
+        int IgnoredTrailingParameterCount(T method)
+        {
+            if (!ignoredTrailingParameterCounts.TryGetValue(method, out var count))
+            {
+                count = GetIgnoredTrailingParameterCount(method, trailingParameterCountToIgnore);
+                ignoredTrailingParameterCounts.Add(method, count);
+            }
+
+            return count;
+        }
+
         // Phase 1 — drop candidates that are strictly dominated by another.
         // C# §7.5.3.2: a candidate c is the best iff no other candidate is
         // strictly better than c. Equivalently, c survives iff for every other
@@ -4642,7 +4667,7 @@ internal static class ClrOverloadResolution
             foreach (var candidate in pool)
             {
                 var parameterCount = candidate.Method.GetParameters().Length
-                    - (trailingParameterCountToIgnore?.Invoke(candidate.Method) ?? 0);
+                    - IgnoredTrailingParameterCount(candidate.Method);
                 minParamCount = Math.Min(minParamCount, parameterCount);
             }
 
@@ -4650,7 +4675,7 @@ internal static class ClrOverloadResolution
             foreach (var candidate in pool)
             {
                 if (candidate.Method.GetParameters().Length
-                        - (trailingParameterCountToIgnore?.Invoke(candidate.Method) ?? 0)
+                        - IgnoredTrailingParameterCount(candidate.Method)
                     == minParamCount)
                 {
                     fewestParams.Add(candidate);
@@ -4683,8 +4708,8 @@ internal static class ClrOverloadResolution
                         && !IsAtLeastAsSpecific(
                             candidate.Method,
                             other.Method,
-                            trailingParameterCountToIgnore?.Invoke(candidate.Method) ?? 0,
-                            trailingParameterCountToIgnore?.Invoke(other.Method) ?? 0))
+                            IgnoredTrailingParameterCount(candidate.Method),
+                            IgnoredTrailingParameterCount(other.Method)))
                     {
                         atLeastAsSpecific = false;
                         break;
