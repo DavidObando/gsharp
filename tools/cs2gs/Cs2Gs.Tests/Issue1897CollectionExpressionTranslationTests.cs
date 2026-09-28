@@ -239,6 +239,54 @@ namespace Corpus.Issue1897
         AssertRoundTripParses(rendered);
     }
 
+    [Fact]
+    public void SpanTarget_UsesTargetElementType()
+    {
+        string rendered = Render("""
+            using System;
+
+            namespace Corpus.Issue4525
+            {
+                public class Holder
+                {
+                    public long Read()
+                    {
+                        Span<long> values = [1];
+                        return values[0];
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("[]int64{int64(1)}", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("[]int32{1}", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void EmptyReadOnlySpanTarget_RetainsTargetElementType()
+    {
+        string rendered = Render("""
+            using System;
+
+            namespace Corpus.Issue4525
+            {
+                public class Holder
+                {
+                    public int Count()
+                    {
+                        ReadOnlySpan<long> values = [];
+                        return values.Length;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("[]int64{}", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("[]object{}", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
     private static void AssertRoundTripParses(string rendered)
     {
         RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);

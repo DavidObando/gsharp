@@ -4109,6 +4109,18 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            if (isDereferenceReceiver
+                && this.context.GetSymbolInfo(recv).Symbol is IParameterSymbol callableParameter
+                && this.state.ProjectedCallableParameterType.TryGetValue(
+                    callableParameter,
+                    out ITypeSymbol projectedCallableType)
+                && projectedCallableType.IsReferenceType
+                && projectedCallableType.NullableAnnotation == NullableAnnotation.Annotated)
+            {
+                return NullForgivenessTelemetry.Record(
+                    "4525-projected-callable-parameter");
+            }
+
             // Issue #2506: the oblivious analysis promotes a same-project
             // method/property/indexer declaration when its VALUE can be null.
             // An ordinary C# dereference of that value still means

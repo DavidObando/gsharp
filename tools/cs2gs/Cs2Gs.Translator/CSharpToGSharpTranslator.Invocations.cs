@@ -2234,12 +2234,18 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateExactCallableArgument(ArgumentSyntax argument)
         {
             ExpressionSyntax expression = StripParentheses(argument.Expression);
+            this.TryGetEffectiveArgumentDelegateInvoke(
+                argument,
+                out IMethodSymbol effectiveInvoke);
             if (expression is AnonymousFunctionExpressionSyntax lambda
-                && this.TryGetConvertedDelegateInvoke(lambda, out IMethodSymbol lambdaInvoke))
+                && (effectiveInvoke != null
+                    || this.TryGetConvertedDelegateInvoke(
+                        lambda,
+                        out effectiveInvoke)))
             {
                 return this.typeMapper.WithMetadataImportCollisionQualification(
-                    () => this.LambdaResultNeedsExactTarget(lambda, lambdaInvoke)
-                        ? this.TranslateLambda(lambda, lambdaInvoke)
+                    () => this.LambdaNeedsExactTarget(lambda, effectiveInvoke)
+                        ? this.TranslateLambda(lambda, effectiveInvoke)
                         : this.TranslateLambda(lambda));
             }
 
@@ -2248,16 +2254,111 @@ public sealed partial class CSharpToGSharpTranslator
                     out IMethodSymbol method,
                     out IMethodSymbol methodGroupInvoke,
                     out bool isImplicitGroupConversion)
-                && MethodGroupNeedsExactTarget(method, methodGroupInvoke, isImplicitGroupConversion))
+                && (effectiveInvoke ??= methodGroupInvoke) != null)
             {
+                method = this.ProjectMethodGroupThroughInvoke(
+                    argument,
+                    method,
+                    effectiveInvoke,
+                    out bool projectedMethodGroup);
+                if (method == null
+                    || (!projectedMethodGroup
+                        && !MethodGroupNeedsExactTarget(
+                        method,
+                        effectiveInvoke,
+                        isImplicitGroupConversion)))
+                {
+                    return null;
+                }
+
                 return this.typeMapper.WithMetadataImportCollisionQualification(
                     () => this.TranslateExactMethodGroupArgument(
                         expression,
                         method,
-                        methodGroupInvoke));
+                        effectiveInvoke));
             }
 
             return null;
+        }
+
+        private bool TryGetEffectiveArgumentDelegateInvoke(
+            ArgumentSyntax argument,
+            out IMethodSymbol invoke)
+        {
+            invoke = null;
+            IParameterSymbol parameter = this.GetArgumentParameter(argument);
+            ITypeSymbol targetType = parameter?.Type;
+            if (parameter != null
+                && this.TryGetExpandedParamsElementTarget(
+                    argument,
+                    parameter,
+                    out ITypeSymbol paramsElementType,
+                    out _))
+            {
+                targetType = paramsElementType;
+            }
+
+            invoke = (targetType as INamedTypeSymbol)?.DelegateInvokeMethod;
+            return invoke != null;
+        }
+
+        private IMethodSymbol ProjectMethodGroupThroughInvoke(
+            ArgumentSyntax argument,
+            IMethodSymbol method,
+            IMethodSymbol invoke,
+            out bool changed)
+        {
+            changed = false;
+            if (!method.IsGenericMethod
+                || method.Parameters.Length != invoke.Parameters.Length)
+            {
+                return method;
+            }
+
+            ITypeSymbol[] typeArguments = method.TypeArguments.ToArray();
+            for (int typeIndex = 0;
+                typeIndex < method.TypeParameters.Length;
+                typeIndex++)
+            {
+                ITypeParameterSymbol typeParameter =
+                    method.ConstructedFrom.TypeParameters[typeIndex];
+                for (int parameterIndex = 0;
+                    parameterIndex < method.Parameters.Length;
+                    parameterIndex++)
+                {
+                    if (!TryGetProjectedTypeArgument(
+                            method.ConstructedFrom.Parameters[parameterIndex].Type,
+                            invoke.Parameters[parameterIndex].Type,
+                            typeParameter,
+                            this.context.Compilation,
+                            out ITypeSymbol projectedArgument)
+                        || SymbolEqualityComparer.IncludeNullability.Equals(
+                            typeArguments[typeIndex],
+                            projectedArgument))
+                    {
+                        continue;
+                    }
+
+                    if (projectedArgument.NullableAnnotation
+                            == NullableAnnotation.Annotated
+                        && NullableTypeArgumentViolatesTranslatedConstraints(
+                            typeParameter))
+                    {
+                        this.context.ReportUnsupported(
+                            argument,
+                            $"projected delegate adaptation requires nullable type parameter '{typeParameter.Name}', but its translated constraints do not admit nullable type arguments.");
+                        return null;
+                    }
+
+                    typeArguments[typeIndex] = projectedArgument;
+                    changed = true;
+                    break;
+                }
+            }
+
+            return changed
+                ? method.ConstructedFrom.Construct(typeArguments)
+                : method;
         }
 
         private bool TryGetMethodGroupArgument(
@@ -2344,6 +2445,42 @@ public sealed partial class CSharpToGSharpTranslator
                         resultType,
                         targetResult);
             });
+        }
+
+        private bool LambdaNeedsExactTarget(
+            AnonymousFunctionExpressionSyntax lambda,
+            IMethodSymbol invoke)
+        {
+            IReadOnlyList<ParameterSyntax> parameters = lambda switch
+            {
+                SimpleLambdaExpressionSyntax simple =>
+                    new[] { simple.Parameter },
+                ParenthesizedLambdaExpressionSyntax parenthesized =>
+                    parenthesized.ParameterList.Parameters,
+                AnonymousMethodExpressionSyntax anonymous
+                    when anonymous.ParameterList != null =>
+                    anonymous.ParameterList.Parameters,
+                _ => Array.Empty<ParameterSyntax>(),
+            };
+            if (parameters.Count != invoke.Parameters.Length)
+            {
+                return true;
+            }
+
+            for (int index = 0; index < parameters.Count; index++)
+            {
+                if (this.context.GetDeclaredSymbol(parameters[index])
+                        is not IParameterSymbol parameter
+                    || parameter.RefKind != invoke.Parameters[index].RefKind
+                    || !SymbolEqualityComparer.IncludeNullability.Equals(
+                        parameter.Type,
+                        invoke.Parameters[index].Type))
+                {
+                    return true;
+                }
+            }
+
+            return this.LambdaResultNeedsExactTarget(lambda, invoke);
         }
 
         private static bool MethodGroupNeedsExactTarget(
@@ -4873,12 +5010,10 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.context.GetDeclaredSymbol(declarator) is ILocalSymbol local
                 && this.state.CurrentBodyScope is { } body)
             {
-                foreach (InvocationExpressionSyntax laterCall in body.DescendantNodes()
-                    .OfType<InvocationExpressionSyntax>())
+                foreach (InvocationExpressionSyntax laterCall
+                    in this.GetReceiverInvocations(body, local))
                 {
                     if (laterCall.SpanStart <= creationSyntax.SpanStart
-                        || laterCall.Expression is not MemberAccessExpressionSyntax member
-                        || !this.BindsTo(Unparenthesize(member.Expression), local)
                         || this.context.SemanticModel.GetOperation(laterCall)
                             is not IInvocationOperation laterInvocation)
                     {
@@ -5246,6 +5381,11 @@ public sealed partial class CSharpToGSharpTranslator
         private bool ObjectCreationCanProjectContainingType(
             BaseObjectCreationExpressionSyntax creation)
         {
+            if (this.IsArgumentOfProjectedCallInProgress(creation))
+            {
+                return true;
+            }
+
             ISymbol sink = this.ResolveValueSink(creation);
             return !HasFixedElementContext(creation)
                 && (sink == null
@@ -5268,9 +5408,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (directParent.Parent is ArgumentSyntax
                 { Parent: BaseArgumentListSyntax } argument)
             {
-                if (argument.Parent?.Parent is ExpressionSyntax outerCall
-                    && this.state.ManagedReferenceArrayProjectedCallsInProgress.Contains(
-                        outerCall))
+                if (this.IsArgumentOfProjectedCallInProgress(value))
                 {
                     return true;
                 }
@@ -5314,6 +5452,117 @@ public sealed partial class CSharpToGSharpTranslator
                     _ => null,
                 };
             return ProjectionTypeFitsDestination(projectedType, destinationType);
+        }
+
+        private bool IsArgumentOfProjectedCallInProgress(ExpressionSyntax value)
+        {
+            SyntaxNode directParent = value;
+            while (directParent.Parent is ParenthesizedExpressionSyntax)
+            {
+                directParent = directParent.Parent;
+            }
+
+            if (directParent.Parent is not ArgumentSyntax
+                    { Parent: BaseArgumentListSyntax argumentList } argument
+                || argumentList.Parent is not ExpressionSyntax outerCall
+                || !this.state.ManagedReferenceArrayProjectedCallsInProgress.Contains(
+                    outerCall)
+                || this.context.GetSymbolInfo(outerCall).Symbol
+                    is not IMethodSymbol outerMethod
+                || this.GetArgumentParameter(argument, outerMethod)
+                    is not IParameterSymbol parameter)
+            {
+                return false;
+            }
+
+            ITypeSymbol parameterType = parameter.OriginalDefinition.Type;
+            for (int index = 0;
+                index < outerMethod.TypeParameters.Length
+                    && index < outerMethod.TypeArguments.Length;
+                index++)
+            {
+                if (TypeContainsTypeParameter(
+                        parameterType,
+                        outerMethod.TypeParameters[index])
+                    && TypeContainsRecognizedManagedReferenceConsumer(
+                        outerMethod.TypeArguments[index],
+                        this.context.Compilation))
+                {
+                    return true;
+                }
+            }
+
+            INamedTypeSymbol containingType = outerMethod.ContainingType;
+            if (containingType == null)
+            {
+                return false;
+            }
+
+            for (int index = 0;
+                index < containingType.TypeParameters.Length
+                    && index < containingType.TypeArguments.Length;
+                index++)
+            {
+                if (TypeContainsTypeParameter(
+                        parameterType,
+                        containingType.TypeParameters[index])
+                    && TypeContainsRecognizedManagedReferenceConsumer(
+                        containingType.TypeArguments[index],
+                        this.context.Compilation))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private IReadOnlyList<InvocationExpressionSyntax> GetReceiverInvocations(
+            SyntaxNode body,
+            ISymbol receiver)
+        {
+            if (!this.state.ReceiverInvocationsByBody.TryGetValue(
+                    body,
+                    out Dictionary<ISymbol, List<InvocationExpressionSyntax>> index))
+            {
+                index =
+                    new Dictionary<ISymbol, List<InvocationExpressionSyntax>>(
+                        SymbolEqualityComparer.Default);
+                foreach (InvocationExpressionSyntax invocation in body
+                    .DescendantNodes()
+                    .OfType<InvocationExpressionSyntax>())
+                {
+                    if (invocation.Expression is not MemberAccessExpressionSyntax member)
+                    {
+                        continue;
+                    }
+
+                    ISymbol symbol = this.context.GetSymbolInfo(
+                        Unparenthesize(member.Expression)).Symbol;
+                    if (symbol == null)
+                    {
+                        continue;
+                    }
+
+                    if (!index.TryGetValue(
+                            symbol,
+                            out List<InvocationExpressionSyntax> invocations))
+                    {
+                        invocations = new List<InvocationExpressionSyntax>();
+                        index.Add(symbol, invocations);
+                    }
+
+                    invocations.Add(invocation);
+                }
+
+                this.state.ReceiverInvocationsByBody.Add(body, index);
+            }
+
+            return index.TryGetValue(
+                    receiver,
+                    out List<InvocationExpressionSyntax> receiverInvocations)
+                ? receiverInvocations
+                : Array.Empty<InvocationExpressionSyntax>();
         }
 
         private static bool ProjectionTypeFitsDestination(

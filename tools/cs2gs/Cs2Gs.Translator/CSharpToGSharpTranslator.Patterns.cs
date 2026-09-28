@@ -3779,7 +3779,7 @@ public sealed partial class CSharpToGSharpTranslator
                     targetRef.TypeArguments.Count > 0 ? targetRef.TypeArguments : null);
             }
 
-            ITypeSymbol elementTypeSymbol = GetEnumerableElementType(target);
+            ITypeSymbol elementTypeSymbol = GetCollectionTargetElementType(target);
             GTypeReference elementType;
             if (target is IArrayTypeSymbol targetArray
                 && this.typeMapper.Map(
@@ -4003,7 +4003,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             ITypeSymbol target = this.context.GetTypeInfo(collection).ConvertedType
                 ?? this.context.GetTypeInfo(collection).Type;
-            ITypeSymbol elementType = GetEnumerableElementType(target);
+            ITypeSymbol elementType = GetCollectionTargetElementType(target);
             if (elementType != null)
             {
                 return this.typeMapper.Map(elementType, this.context, collection.GetLocation());
@@ -4023,6 +4023,11 @@ public sealed partial class CSharpToGSharpTranslator
 
             return new NamedTypeReference("object");
         }
+
+        private static ITypeSymbol GetCollectionTargetElementType(ITypeSymbol target) =>
+            IsSpanParamsCollectionType(target)
+                ? ((INamedTypeSymbol)target).TypeArguments[0]
+                : GetEnumerableElementType(target);
 
         private static ITypeSymbol GetEnumerableElementType(
             ITypeSymbol type,

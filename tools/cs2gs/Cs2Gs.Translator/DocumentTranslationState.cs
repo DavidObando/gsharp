@@ -89,6 +89,14 @@ internal sealed class DocumentTranslationState
     public HashSet<ExpressionSyntax> ManagedReferenceArrayProjectedCallsInProgress { get; } =
         new HashSet<ExpressionSyntax>(ReferenceEqualityComparer.Instance);
 
+    // Built once per translated body. Each entry maps a receiver symbol to
+    // member invocations that use it, avoiding one full body scan per eligible
+    // projected construction.
+    public Dictionary<SyntaxNode, Dictionary<ISymbol, List<InvocationExpressionSyntax>>>
+        ReceiverInvocationsByBody { get; } =
+            new Dictionary<SyntaxNode, Dictionary<ISymbol, List<InvocationExpressionSyntax>>>(
+                ReferenceEqualityComparer.Instance);
+
     // Effective emitted type of an implicitly typed local whose initializer
     // and every later assignment agree on managed-reference projection.
     public Dictionary<ILocalSymbol, ITypeSymbol> ManagedReferenceArrayProjectedLocalType { get; } =
@@ -96,6 +104,11 @@ internal sealed class DocumentTranslationState
 
     public HashSet<ILocalSymbol> ManagedReferenceArrayProjectedLocalTypeInProgress { get; } =
         new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+
+    // Active lambda parameters whose emitted type comes from a projected
+    // delegate Invoke signature rather than Roslyn's original target.
+    public Dictionary<IParameterSymbol, ITypeSymbol> ProjectedCallableParameterType { get; } =
+        new Dictionary<IParameterSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
 
     // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
     // surrounding statement seam has hoisted into trailing `i++` statements

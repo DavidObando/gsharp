@@ -2261,6 +2261,166 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Equal(6, result.Value);
     }
 
+    [Fact]
+    public void ManagedReferenceArrayProjectionUpdatesLambdaParameterType()
+    {
+        const string source = """
+            using System.Linq;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedLambda;
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return source.Select(item => item == null).First() ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedLambda.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "item Gsharp.Values.ManagedRef[int32]?",
+            text,
+            StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionUpdatesMethodGroupTarget()
+    {
+        const string source = """
+            #nullable enable
+            using System.Linq;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedMethodGroup;
+            public class Probe {
+                private static bool IsNil<T>(T item) => item == null;
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return source.Select(IsNil<ManagedRef<int>>).First() ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedMethodGroup.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("managed[int32]?", text, StringComparison.Ordinal);
+        Assert.Contains("IsNil[managed[int32]?]", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionFlowsThroughConstructionArgument()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedConstructionArgument;
+            public sealed class Holder<T> {
+                public readonly T Value;
+                public Holder(T value) { Value = value; }
+            }
+            public class Probe {
+                private static bool IsNil<T>(Holder<T> holder) => holder.Value is null;
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return IsNil(new Holder<ManagedRef<int>>(source[0])) ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedConstructionArgument.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "IsNil(Holder[managed[int32]?](source[0]))",
+            text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayConstructionArgumentDoesNotChangeFixedTarget()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayFixedConstructionArgument;
+            public sealed class Holder<T> {
+                public readonly T Value;
+                public Holder(T value) { Value = value; }
+            }
+            public class Probe {
+                private static bool IsNil(Holder<ManagedRef<int>> holder) =>
+                    holder.Value is null;
+
+                public static bool Run() {
+                    var source = new ManagedRef<int>[1];
+                    return IsNil(new Holder<ManagedRef<int>>(source[0]));
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayFixedConstructionArgument.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains("fixed destination storage", StringComparison.Ordinal));
+        Assert.DoesNotContain("Holder[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.Contains("Holder[managed[int32]](source[0]!!)", text, StringComparison.Ordinal);
+    }
+
     [Theory]
     [InlineData("int managed = 1;", "managed", 4)]
     [InlineData("int managed() => 2;", "managed()", 5)]

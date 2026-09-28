@@ -28,6 +28,7 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol exactTargetInvoke = null)
         {
             var parameters = new List<Parameter>();
+            var projectedParameters = new List<IParameterSymbol>();
             ParameterListSyntax parameterList = lambda switch
             {
                 ParenthesizedLambdaExpressionSyntax paren => paren.ParameterList,
@@ -37,13 +38,24 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (lambda is SimpleLambdaExpressionSyntax simple)
             {
-                parameters.Add(this.MapLambdaParameter(simple.Parameter));
+                parameters.Add(this.MapLambdaParameter(
+                    simple.Parameter,
+                    exactTargetInvoke?.Parameters.FirstOrDefault(),
+                    projectedParameters));
             }
             else if (parameterList != null)
             {
-                foreach (ParameterSyntax parameter in parameterList.Parameters)
+                for (int index = 0; index < parameterList.Parameters.Count; index++)
                 {
-                    parameters.Add(this.MapLambdaParameter(parameter));
+                    IParameterSymbol exactParameter =
+                        exactTargetInvoke != null
+                            && index < exactTargetInvoke.Parameters.Length
+                                ? exactTargetInvoke.Parameters[index]
+                                : null;
+                    parameters.Add(this.MapLambdaParameter(
+                        parameterList.Parameters[index],
+                        exactParameter,
+                        projectedParameters));
                 }
             }
             else if (lambda is AnonymousMethodExpressionSyntax implicitParamsAnonymousMethod)
@@ -304,6 +316,11 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
+                foreach (IParameterSymbol projectedParameter in projectedParameters)
+                {
+                    this.state.ProjectedCallableParameterType.Remove(projectedParameter);
+                }
+
                 this.state.PendingSpillPrologue = outerSpillPrologue;
                 this.state.FunctionArgumentOutDeclarations = outerOutDeclarations;
                 this.state.CurrentBodyScope = previousBodyScope;
@@ -360,13 +377,45 @@ public sealed partial class CSharpToGSharpTranslator
             return this.PromoteReturnIfTainted(mapped, symbol);
         }
 
-        private Parameter MapLambdaParameter(ParameterSyntax parameter)
+        private Parameter MapLambdaParameter(
+            ParameterSyntax parameter,
+            IParameterSymbol exactTargetParameter = null,
+            List<IParameterSymbol> projectedParameters = null)
         {
             // A lambda parameter's type is inferred by Roslyn from the delegate
             // target even when the C# spelling omits it (`n => …`); the canonical
             // G# arrow lambda always names the parameter type (ADR-0074).
             if (this.context.GetDeclaredSymbol(parameter) is IParameterSymbol symbol)
             {
+                if (exactTargetParameter != null
+                    && !SymbolEqualityComparer.IncludeNullability.Equals(
+                        symbol.Type,
+                        exactTargetParameter.Type))
+                {
+                    if (parameter.Type != null)
+                    {
+                        this.context.ReportUnsupported(
+                            parameter,
+                            "projected delegate parameter type differs from an explicitly typed lambda parameter; no exact G# adaptation exists.");
+                    }
+
+                    Parameter mappedTarget = this.MapParameter(
+                        exactTargetParameter,
+                        parameter,
+                        promoteNullability: false);
+                    this.state.ProjectedCallableParameterType[symbol] =
+                        exactTargetParameter.Type;
+                    projectedParameters?.Add(symbol);
+                    return new Parameter(
+                        this.EmittedName(
+                            parameter,
+                            parameter.Identifier,
+                            GSharpIdentifierNameContext.Parameter),
+                        mappedTarget.Type,
+                        mappedTarget.IsVariadic,
+                        mappedTarget.RefKind);
+                }
+
                 // Issue #3855: the #1072 promotion is safe for a lambda
                 // parameter whose type is FIXED by the target delegate —
                 // widening an input position is contravariance, and a
