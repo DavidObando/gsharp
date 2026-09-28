@@ -2172,11 +2172,35 @@ public sealed partial class CSharpToGSharpTranslator
                 ArgumentSyntax argument
                     when !argument.RefOrOutKeyword.IsKind(SyntaxKind.None)
                         && this.BindsTo(argument.Expression, symbol) => true,
+                InvocationExpressionSyntax
+                    { Expression: MemberAccessExpressionSyntax member } invocation
+                    when this.ExtensionReceiverWritesSymbol(
+                        invocation,
+                        member.Expression,
+                        symbol) => true,
                 RefExpressionSyntax refOf
                     when refOf.Expression is IdentifierNameSyntax
                         && this.BindsTo(refOf.Expression, symbol) => true,
                 _ => false,
             };
+
+        private bool ExtensionReceiverWritesSymbol(
+            InvocationExpressionSyntax invocation,
+            ExpressionSyntax receiver,
+            ISymbol symbol)
+        {
+            if (!this.BindsTo(receiver, symbol)
+                || this.context.SemanticModel.GetOperation(invocation)
+                    is not IInvocationOperation operation
+                || !operation.TargetMethod.IsExtensionMethod
+                || operation.TargetMethod.Parameters.IsEmpty)
+            {
+                return false;
+            }
+
+            RefKind refKind = operation.TargetMethod.Parameters[0].RefKind;
+            return refKind == RefKind.Ref || refKind == RefKind.Out;
+        }
 
         // Returns true when <paramref name="symbol"/> is assigned, incremented,
         // decremented, or passed by ref/out anywhere in <paramref name="scope"/>.

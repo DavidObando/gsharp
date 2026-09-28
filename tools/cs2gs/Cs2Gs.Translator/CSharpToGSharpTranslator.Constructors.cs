@@ -3614,11 +3614,7 @@ public sealed partial class CSharpToGSharpTranslator
                     ForEachStatementInfo forEachInfo =
                         this.context.SemanticModel.GetForEachStatementInfo(forEach);
                     ITypeSymbol forEachElement =
-                        GetEnumerableElementType(
-                            this.GetManagedReferenceArrayProjectedExpressionType(
-                                forEach.Expression),
-                            forEach.AwaitKeyword.RawKind != 0)
-                        ?? forEachInfo.ElementType;
+                        this.GetProjectedForEachElementType(forEach, forEachInfo);
                     bool bindingTypeMatchesElementType =
                         forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity;
                     bool nullableElement = bindingTypeMatchesElementType
@@ -3709,6 +3705,33 @@ public sealed partial class CSharpToGSharpTranslator
                         $"statement '{statement.Kind()}' has no canonical G# form yet; emitted a placeholder comment (ADR-0115 §B).");
                     return new[] { (GStatement)new RawStatement($"// unsupported: {statement.Kind()}") };
             }
+        }
+
+        private ITypeSymbol GetProjectedForEachElementType(
+            ForEachStatementSyntax forEach,
+            ForEachStatementInfo forEachInfo)
+        {
+            ITypeSymbol projectedCollection =
+                this.GetManagedReferenceArrayProjectedExpressionType(forEach.Expression);
+            ITypeSymbol selectedElement =
+                forEachInfo.CurrentProperty?.Type ?? forEachInfo.ElementType;
+            ITypeSymbol originalCollection =
+                this.context.GetTypeInfo(forEach.Expression).Type;
+            if (projectedCollection is INamedTypeSymbol projectedNamed
+                && originalCollection is INamedTypeSymbol originalNamed
+                && selectedElement != null)
+            {
+                return ProjectTypeThroughConstructedType(
+                    selectedElement,
+                    originalNamed,
+                    projectedNamed,
+                    this.context.Compilation);
+            }
+
+            return GetEnumerableElementType(
+                    projectedCollection,
+                    forEach.AwaitKeyword.RawKind != 0)
+                ?? forEachInfo.ElementType;
         }
     }
 }
