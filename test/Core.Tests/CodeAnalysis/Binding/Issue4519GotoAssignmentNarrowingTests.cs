@@ -78,7 +78,7 @@ public class Issue4519GotoAssignmentNarrowingTests
     [Fact]
     public void MultipleForwardBranches_BypassingDifferentAssignments_RejectBothReads()
     {
-        var result = Evaluate("""
+        const string source = """
             func Run(first bool, second bool) int32 {
                 var x string? = nil
                 var y string? = nil
@@ -92,11 +92,19 @@ public class Issue4519GotoAssignmentNarrowingTests
             }
 
             Run(true, true)
-            """);
+            """;
+        var result = Evaluate(source);
 
         var nullableReads = result.Diagnostics.Where(d => d.Id == "GS0158").ToArray();
         Assert.Equal(2, nullableReads.Length);
         Assert.All(nullableReads, d => Assert.Equal("Length", d.Location.Text.ToString(d.Location.Span)));
+        Assert.Equal(
+            new[]
+            {
+                source.IndexOf("x.Length", StringComparison.Ordinal) + "x.".Length,
+                source.IndexOf("y.Length", StringComparison.Ordinal) + "y.".Length,
+            },
+            nullableReads.Select(d => d.Location.Span.Start).OrderBy(position => position));
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
     }
 
