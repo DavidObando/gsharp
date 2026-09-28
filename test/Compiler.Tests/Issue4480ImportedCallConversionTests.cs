@@ -33,6 +33,11 @@ namespace GSharp.Compiler.Tests;
 /// The accepting rows compile on both sides. Reverting the product guard
 /// restores that exact red/green split.
 /// </para>
+/// <para>
+/// Restoring the former raw-CLR-type prerequisite independently makes the
+/// same-compilation <c>Repo[T]</c> imported-call row compile, proving that
+/// canonical supertype projection—not CLR backing—is required there.
+/// </para>
 /// </remarks>
 [Collection("Issue4480Console")]
 public class Issue4480ImportedCallConversionTests
