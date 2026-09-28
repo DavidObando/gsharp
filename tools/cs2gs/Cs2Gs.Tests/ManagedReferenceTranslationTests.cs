@@ -2401,6 +2401,40 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void NonManagedByRefArrayElementDoesNotTriggerProjectionValidation()
+    {
+        const string source = """
+            namespace NonManagedByRefArrayElement;
+            public class Probe {
+                private static bool Find(out string failure) {
+                    failure = null;
+                    return false;
+                }
+
+                public static int Run() {
+                    var failures = new string[1];
+                    Find(out failures[0]);
+                    return failures[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("NonManagedByRefArrayElement.cs", source) },
+            CSharpProjectLoader.RuntimeReferences());
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionIncludesNestedLaterMemberWrites()
     {
         const string source = """
@@ -2426,6 +2460,50 @@ public sealed class ManagedReferenceTranslationTests
         };
         var project = CSharpProjectLoader.LoadInMemory(
             new[] { ("ManagedArrayNestedLaterMemberWrite.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "Holder[List[managed[int32]?]]()",
+            text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionIncludesNestedCollectionLaterMemberWrite()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayNestedCollectionLaterMemberWrite;
+            public sealed class Holder<T> {
+                public T Value;
+            }
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    var holder = new Holder<List<ManagedRef<int>>>();
+                    holder.Value = new List<ManagedRef<int>> { source[0] };
+                    return holder.Value[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayNestedCollectionLaterMemberWrite.cs", source) },
             references);
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
         var document = Assert.Single(project.Documents);
@@ -2483,6 +2561,87 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionRejectsConflictingArgumentEvidence()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayConflictingEvidence;
+            public class Probe {
+                private static bool Same<T>(T first, T second) => true;
+
+                public static bool Run() {
+                    var source = new ManagedRef<int>[1];
+                    var nullableList = new List<ManagedRef<int>> { source[0] };
+                    var fixedList = new List<ManagedRef<int>>();
+                    return Same(nullableList, fixedList);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayConflictingEvidence.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "conflicting argument types",
+                    StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            "Same[List[managed[int32]?]](nullableList, fixedList)",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ProjectedMethodResultDoesNotChangeFixedExpressionLambdaReturn()
+    {
+        const string source = """
+            using System;
+            using Gsharp.Values;
+            namespace ManagedArrayFixedExpressionLambdaReturn;
+            public sealed class Holder<T> {
+                public Holder(T value) { }
+            }
+            public class Probe {
+                private static readonly ManagedRef<int>[] Source = new ManagedRef<int>[1];
+                private static Holder<T> Wrap<T>(T[] items) => new Holder<T>(items[0]);
+                private static readonly Func<Holder<ManagedRef<int>>> Factory =
+                    () => Wrap(Source);
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayFixedExpressionLambdaReturn.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "fixed destination storage",
+                    StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            "Wrap[managed[int32]?](Source)",
+            text,
+            StringComparison.Ordinal);
     }
 
     [Fact]

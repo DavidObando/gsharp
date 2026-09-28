@@ -4743,9 +4743,14 @@ public sealed partial class CSharpToGSharpTranslator
                     && this.ObjectCreationCanProjectContainingType(objectCreation));
             var projectedMethodArguments =
                 new ITypeSymbol[method.TypeArguments.Length];
+            var observedMethodArguments =
+                new ITypeSymbol[method.TypeArguments.Length];
             var projectedContainingArguments =
                 new ITypeSymbol[method.ContainingType?.TypeArguments.Length ?? 0];
+            var observedContainingArguments =
+                new ITypeSymbol[method.ContainingType?.TypeArguments.Length ?? 0];
             ITypeParameterSymbol blockedParameter = null;
+            ITypeParameterSymbol conflictingParameter = null;
             bool fixedStorageNeedsNullableArgument = false;
             void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
             {
@@ -4763,6 +4768,14 @@ public sealed partial class CSharpToGSharpTranslator
                     return;
                 }
 
+                if (argument is AnonymousFunctionExpressionSyntax
+                    || (this.context.SemanticModel.GetOperation(argument)
+                        is IDelegateCreationOperation delegateCreation
+                        && delegateCreation.Target is IMethodReferenceOperation))
+                {
+                    return;
+                }
+
                 ITypeSymbol argumentType =
                     this.GetManagedReferenceArrayProjectedArgumentType(argument);
                 bool nullableArrayArgument =
@@ -4773,6 +4786,7 @@ public sealed partial class CSharpToGSharpTranslator
                     method.TypeArguments,
                     method.TypeParameters,
                     projectedMethodArguments,
+                    observedMethodArguments,
                     parameterType,
                     argumentType,
                     apply: true,
@@ -4783,6 +4797,7 @@ public sealed partial class CSharpToGSharpTranslator
                         method.ContainingType.TypeArguments,
                         method.ContainingType.TypeParameters,
                         projectedContainingArguments,
+                        observedContainingArguments,
                         parameterType,
                         argumentType,
                         canProjectContainingTypeFromArguments,
@@ -4797,6 +4812,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ImmutableArray<ITypeSymbol> typeArguments,
                 ImmutableArray<ITypeParameterSymbol> typeParameters,
                 ITypeSymbol[] projectedArguments,
+                ITypeSymbol[] observedArguments,
                 ITypeSymbol parameterType,
                 ITypeSymbol argumentType,
                 bool apply,
@@ -4811,8 +4827,7 @@ public sealed partial class CSharpToGSharpTranslator
                         typeParameters[i],
                         this.context.Compilation,
                         out ITypeSymbol projectedArgument);
-                    if (projectedArguments[i] != null
-                        || !TypeContainsRecognizedManagedReferenceConsumer(
+                    if (!TypeContainsRecognizedManagedReferenceConsumer(
                             typeArguments[i],
                             this.context.Compilation)
                         || (!hasProjectedArgument
@@ -4835,6 +4850,16 @@ public sealed partial class CSharpToGSharpTranslator
                                 NullableAnnotation.Annotated);
                     }
 
+                    if (observedArguments[i] != null
+                        && !ProjectionTypeFitsDestination(
+                            projectedArgument,
+                            observedArguments[i]))
+                    {
+                        conflictingParameter ??= typeParameters[i];
+                        continue;
+                    }
+
+                    observedArguments[i] ??= projectedArgument;
                     if (SymbolEqualityComparer.IncludeNullability.Equals(
                             typeArguments[i],
                             projectedArgument))
@@ -4902,6 +4927,7 @@ public sealed partial class CSharpToGSharpTranslator
                     method.ContainingType.TypeArguments,
                     consumerContainingType.OriginalDefinition.TypeParameters,
                     projectedContainingArguments,
+                    observedContainingArguments,
                     consumerType,
                     this.GetManagedReferenceArrayProjectedArgumentType(argument),
                     apply: true,
@@ -5103,12 +5129,21 @@ public sealed partial class CSharpToGSharpTranslator
                     method.TypeArguments,
                     reducedDefinition.TypeParameters,
                     projectedMethodArguments,
+                    observedMethodArguments,
                     receiverParameterType,
                     this.GetManagedReferenceArrayProjectedArgumentType(
                         reducedMember.Expression),
                     apply: true,
                     this.ArrayExpressionHasNullableElement(
                         reducedMember.Expression));
+            }
+
+            if (conflictingParameter != null)
+            {
+                this.context.ReportUnsupported(
+                    call,
+                    $"managed-reference array widening found conflicting argument types for type parameter '{conflictingParameter.Name}'; no exact G# translation exists.");
+                return Complete(false);
             }
 
             if (blockedParameter != null)
@@ -5251,6 +5286,11 @@ public sealed partial class CSharpToGSharpTranslator
                     is not INamedTypeSymbol
                 && receiverParameter != null
                 && receiverParameter.RefKind != RefKind.None
+                && TypeContainsRecognizedManagedReferenceConsumer(
+                    projectedMethod.MethodKind == MethodKind.ReducedExtension
+                        ? projectedMethod.ReceiverType ?? receiverParameter.Type
+                        : projectedMethod.Parameters[0].Type,
+                    this.context.Compilation)
                 && this.SourceByRefParameterRequiresValidation(receiverParameter))
             {
                 ITypeSymbol projectedReceiverType =
@@ -5288,7 +5328,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 IParameterSymbol projectedParameter =
                     projectedMethod.Parameters[originalParameter.Ordinal];
-                if (!this.SourceByRefParameterRequiresValidation(originalParameter))
+                if (!TypeContainsRecognizedManagedReferenceConsumer(
+                        projectedParameter.Type,
+                        this.context.Compilation)
+                    || !this.SourceByRefParameterRequiresValidation(originalParameter))
                 {
                     continue;
                 }
@@ -5441,7 +5484,8 @@ public sealed partial class CSharpToGSharpTranslator
         private bool ObjectCreationCanProjectContainingType(
             BaseObjectCreationExpressionSyntax creation)
         {
-            if (this.IsArgumentOfProjectedCallInProgress(creation))
+            if (this.IsArgumentOfProjectedCallInProgress(creation)
+                || this.IsValueAssignedToProjectedReceiverInProgress(creation))
             {
                 return true;
             }
@@ -5453,12 +5497,46 @@ public sealed partial class CSharpToGSharpTranslator
                     && IsImplicitlyTypedLocal(local)));
         }
 
+        private bool IsValueAssignedToProjectedReceiverInProgress(
+            ExpressionSyntax value)
+        {
+            SyntaxNode current = value;
+            while (current.Parent is ParenthesizedExpressionSyntax)
+            {
+                current = current.Parent;
+            }
+
+            if (current.Parent is not AssignmentExpressionSyntax assignment
+                || assignment.Right != current)
+            {
+                return false;
+            }
+
+            ExpressionSyntax receiver = assignment.Left switch
+            {
+                MemberAccessExpressionSyntax member => member.Expression,
+                ElementAccessExpressionSyntax element => element.Expression,
+                _ => null,
+            };
+            return receiver != null
+                && this.context.GetSymbolInfo(receiver).Symbol is ILocalSymbol local
+                && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
+                && this.state.ManagedReferenceArrayProjectedCallsInProgress.Contains(
+                    initializer);
+        }
+
         private bool ProjectedResultMatchesDestination(
             ExpressionSyntax value,
             ITypeSymbol projectedType,
             out ITypeSymbol destinationType)
         {
             destinationType = null;
+            if (this.IsValueAssignedToProjectedReceiverInProgress(value))
+            {
+                return true;
+            }
+
             SyntaxNode directParent = value;
             while (directParent.Parent is ParenthesizedExpressionSyntax)
             {
