@@ -4024,7 +4024,9 @@ public sealed partial class CSharpToGSharpTranslator
             return new NamedTypeReference("object");
         }
 
-        private static ITypeSymbol GetEnumerableElementType(ITypeSymbol type)
+        private static ITypeSymbol GetEnumerableElementType(
+            ITypeSymbol type,
+            bool asynchronous = false)
         {
             switch (type)
             {
@@ -4033,14 +4035,14 @@ public sealed partial class CSharpToGSharpTranslator
                 case IArrayTypeSymbol array:
                     return array.ElementType;
                 case INamedTypeSymbol named:
-                    if (IsEnumerableContract(named))
+                    if (IsEnumerableContract(named, asynchronous))
                     {
                         return named.TypeArguments[0];
                     }
 
                     foreach (INamedTypeSymbol iface in named.AllInterfaces)
                     {
-                        if (IsEnumerableContract(iface))
+                        if (IsEnumerableContract(iface, asynchronous))
                         {
                             return iface.TypeArguments[0];
                         }
@@ -4052,13 +4054,15 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        private static bool IsEnumerableContract(INamedTypeSymbol type)
+        private static bool IsEnumerableContract(
+            INamedTypeSymbol type,
+            bool asynchronous)
         {
             INamedTypeSymbol definition = type.OriginalDefinition;
-            if (definition.SpecialType
-                == SpecialType.System_Collections_Generic_IEnumerable_T)
+            if (!asynchronous)
             {
-                return true;
+                return definition.SpecialType
+                    == SpecialType.System_Collections_Generic_IEnumerable_T;
             }
 
             INamespaceSymbol genericNamespace = definition.ContainingNamespace;

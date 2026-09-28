@@ -869,6 +869,15 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.context.GetSymbolInfo(member.Expression).Symbol is INamedTypeSymbol
                 { IsGenericType: true } receiverNamedType)
             {
+                if (member.Parent is InvocationExpressionSyntax invocation
+                    && invocation.Expression == member
+                    && this.TryGetManagedReferenceArrayProjectedMethod(
+                        invocation,
+                        out IMethodSymbol projectedMethod))
+                {
+                    receiverNamedType = projectedMethod.ContainingType;
+                }
+
                 // A qualified generic type is a MemberAccessExpressionSyntax;
                 // translate its bound type so its type arguments are retained.
                 target = new TypeExpression(

@@ -3616,7 +3616,8 @@ public sealed partial class CSharpToGSharpTranslator
                     ITypeSymbol forEachElement =
                         GetEnumerableElementType(
                             this.GetManagedReferenceArrayProjectedExpressionType(
-                                forEach.Expression))
+                                forEach.Expression),
+                            forEach.AwaitKeyword.RawKind != 0)
                         ?? forEachInfo.ElementType;
                     bool bindingTypeMatchesElementType =
                         forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity;

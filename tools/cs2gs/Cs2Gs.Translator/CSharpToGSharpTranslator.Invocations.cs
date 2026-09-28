@@ -4442,19 +4442,31 @@ public sealed partial class CSharpToGSharpTranslator
             this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
 
             INamedTypeSymbol projectedReceiver = null;
+            bool typeReceiverCanProject = false;
             if (call is InvocationExpressionSyntax
-                    { Expression: MemberAccessExpressionSyntax receiverMember }
-                && this.GetManagedReferenceArrayProjectedExpressionType(
-                        receiverMember.Expression) is INamedTypeSymbol receiverType
-                && SymbolEqualityComparer.Default.Equals(
-                    receiverType.OriginalDefinition,
-                    method.ContainingType?.OriginalDefinition))
+                { Expression: MemberAccessExpressionSyntax receiverMember })
             {
-                projectedReceiver = receiverType;
+                if (this.GetManagedReferenceArrayProjectedExpressionType(
+                            receiverMember.Expression) is INamedTypeSymbol receiverType
+                    && SymbolEqualityComparer.Default.Equals(
+                        receiverType.OriginalDefinition,
+                        method.ContainingType?.OriginalDefinition))
+                {
+                    projectedReceiver = receiverType;
+                }
+                else if (this.context.GetSymbolInfo(receiverMember.Expression).Symbol
+                        is INamedTypeSymbol receiverNamedType
+                    && SymbolEqualityComparer.Default.Equals(
+                        receiverNamedType.OriginalDefinition,
+                        method.ContainingType?.OriginalDefinition))
+                {
+                    typeReceiverCanProject = true;
+                }
             }
 
             bool canProjectContainingTypeFromArguments =
                 projectedReceiver != null
+                || typeReceiverCanProject
                 || (call is BaseObjectCreationExpressionSyntax objectCreation
                     && this.ObjectCreationCanProjectContainingType(objectCreation));
             var widenedMethodArguments = new bool[method.TypeArguments.Length];

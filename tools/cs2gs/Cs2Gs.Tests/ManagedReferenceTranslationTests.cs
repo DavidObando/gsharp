@@ -370,6 +370,47 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceArrayElementProjectsStaticGenericTypeReceiver()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayStaticGenericReceiver;
+            public sealed class Holder<T> {
+                public static bool IsNil(T value) => value is null;
+            }
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return Holder<ManagedRef<int>>.IsNil(source[0]) ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayStaticGenericReceiver.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "Holder[managed[int32]?].IsNil(source[0])",
+            text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayElementDoesNotProjectFixedGenericStorage()
     {
         const string source = """
@@ -1203,6 +1244,67 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void ProjectedDualEnumerableUsesTheSelectedForEachContract()
+    {
+        const string source = """
+            using System.Collections;
+            using System.Collections.Generic;
+            using System.Threading;
+            using System.Threading.Tasks;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedDualSequence;
+            public sealed class Dual<T> : IEnumerable<int>, IAsyncEnumerable<T> {
+                private readonly T[] items;
+                public Dual(T[] items) { this.items = items; }
+
+                public IEnumerator<int> GetEnumerator() {
+                    yield return 39;
+                }
+                IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+                public async IAsyncEnumerator<T> GetAsyncEnumerator(
+                    CancellationToken cancellationToken = default) {
+                    await Task.Yield();
+                    yield return items[0];
+                }
+            }
+            public class Probe {
+                private static Dual<T> Wrap<T>(T[] items) => new Dual<T>(items);
+
+                public static async Task<int> Run() {
+                    int[] values = { 3 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    int total = 0;
+                    foreach (var number in Wrap(source)) {
+                        total += number;
+                    }
+                    await foreach (var item in Wrap(source)) {
+                        total += item.Borrow();
+                    }
+                    return total;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedDualSequence.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("for number in Wrap(source)", text, StringComparison.Ordinal);
+        Assert.Contains("await for item in Wrap(source)", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("number!!", text, StringComparison.Ordinal);
+        Assert.Contains("item!!.Borrow()", text, StringComparison.Ordinal);
     }
 
     [Fact]
