@@ -3553,37 +3553,6 @@ internal sealed class ConversionClassifier
     }
 
     /// <summary>
-    /// Issue #4480: reports the imported-call form of ADR-0186 §3 rule 3.
-    /// Imported applicability uses erased CLR shapes, so this check runs after
-    /// overload selection against the nullability-aware parameter type.
-    /// </summary>
-    /// <param name="argument">The bound argument.</param>
-    /// <param name="parameter">The resolved imported parameter.</param>
-    /// <param name="targetType">The nullability-aware parameter type.</param>
-    /// <param name="call">The source call, when one is available.</param>
-    /// <param name="argumentIndex">The bound argument index.</param>
-    /// <param name="receiverArgCount">The number of synthesized leading receiver arguments.</param>
-    /// <param name="rebound">The error expression when the argument is rejected.</param>
-    /// <returns><see langword="true"/> when rule 3 rejected the argument.</returns>
-    internal bool TryRejectClrPlatformContainerArgument(
-        BoundExpression argument,
-        ParameterInfo parameter,
-        TypeSymbol targetType,
-        CallExpressionSyntax? call,
-        int argumentIndex,
-        int receiverArgCount,
-        out BoundExpression rebound)
-    {
-        // The classifier owns the distinction: unrelated no-conversion cases
-        // keep their established diagnostics and recovery.
-        var sourceIndex = argumentIndex - receiverArgCount;
-        var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
-            ? call.Arguments[sourceIndex].Location
-            : call?.Location ?? default;
-        return TryRejectClrPlatformContainerArgument(argument, parameter, targetType, location, out rebound);
-    }
-
-    /// <summary>
     /// Issue #4480: reports the imported-call form of ADR-0186 §3 rule 3 at an
     /// explicitly supplied argument location.
     /// </summary>
