@@ -5065,13 +5065,13 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     if (initializer.IsKind(SyntaxKind.CollectionInitializerExpression))
                     {
-                        IMethodSymbol addMethod =
+                        IMethodSymbol boundAddMethod =
                             this.context.SemanticModel.GetCollectionInitializerSymbolInfo(element)
                                 .Symbol as IMethodSymbol;
-                        addMethod = addMethod == null
+                        IMethodSymbol addMethod = boundAddMethod == null
                             ? null
-                            : this.GetProjectedMember(consumerType, addMethod)
-                                as IMethodSymbol ?? addMethod;
+                            : this.GetProjectedMember(consumerType, boundAddMethod)
+                                as IMethodSymbol ?? boundAddMethod;
                         IReadOnlyList<ExpressionSyntax> values =
                             element is InitializerExpressionSyntax complex
                                 && element.IsKind(SyntaxKind.ComplexElementInitializerExpression)
@@ -5091,8 +5091,16 @@ public sealed partial class CSharpToGSharpTranslator
                             }
 
                             ITypeSymbol parameterType = parameter.Type;
+                            IParameterSymbol boundParameter =
+                                i < boundAddMethod.Parameters.Length
+                                    ? boundAddMethod.Parameters[i]
+                                    : boundAddMethod.Parameters.LastOrDefault();
                             if (parameter.IsParams
-                                && parameterType is IArrayTypeSymbol paramsArray)
+                                && parameterType is IArrayTypeSymbol paramsArray
+                                && (i >= boundAddMethod.Parameters.Length
+                                    || !SymbolEqualityComparer.Default.Equals(
+                                        this.context.GetTypeInfo(values[i]).Type,
+                                        boundParameter?.Type)))
                             {
                                 parameterType = paramsArray.ElementType;
                             }
