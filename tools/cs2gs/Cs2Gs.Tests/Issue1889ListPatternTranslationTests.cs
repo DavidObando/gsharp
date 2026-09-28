@@ -142,17 +142,27 @@ namespace Corpus.Issue1889
     public void IsPattern_PatternProviderUsesBoundIndexerElementType()
     {
         string rendered = Render(@"
+using System.Collections;
+using System.Collections.Generic;
+
 namespace Corpus.Issue1889
 {
-    public sealed class Buffer<T>
+    public sealed class Buffer : IEnumerable<int>
     {
         public int Length => 1;
-        public T this[int index] => default;
+        public long this[int index] => 1L;
+
+        public IEnumerator<int> GetEnumerator()
+        {
+            yield return 0;
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
     }
 
     public class Holder
     {
-        public bool Describe(Buffer<long> values) => values is [1];
+        public bool Describe(Buffer values) => values is [1];
     }
 }
 ");

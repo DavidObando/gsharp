@@ -1750,21 +1750,22 @@ public sealed partial class CSharpToGSharpTranslator
             ListPatternSyntax listPattern,
             ITypeSymbol receiverType)
         {
-            ITypeSymbol enumerableElement = GetEnumerableElementType(receiverType);
-            if (enumerableElement != null)
+            if (this.context.SemanticModel.GetOperation(listPattern)
+                    is IListPatternOperation listOperation)
             {
-                return enumerableElement;
-            }
-
-            return this.context.SemanticModel.GetOperation(listPattern)
-                    is IListPatternOperation listOperation
-                ? listOperation.IndexerSymbol switch
+                ITypeSymbol indexedElement = listOperation.IndexerSymbol switch
                 {
                     IPropertySymbol property => property.Type,
                     IMethodSymbol method => method.ReturnType,
                     _ => null,
+                };
+                if (indexedElement != null)
+                {
+                    return indexedElement;
                 }
-                : null;
+            }
+
+            return GetEnumerableElementType(receiverType);
         }
 
         // Issue #1889: a slice ("rest") subpattern either captures the middle
@@ -3794,6 +3795,8 @@ public sealed partial class CSharpToGSharpTranslator
             NamedTypeReference targetRef = isConstructibleClassTarget
                 ? (NamedTypeReference)this.typeMapper.Map((INamedTypeSymbol)target, this.context, collection.GetLocation())
                 : null;
+            ICollectionExpressionOperation collectionOperation =
+                this.context.SemanticModel.GetOperation(collection) as ICollectionExpressionOperation;
 
             if (collection.Elements.Count == 0 && isConstructibleClassTarget)
             {
@@ -3828,8 +3831,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (isConstructibleClassTarget)
             {
                 var initElements = new List<CollectionInitializerElement>();
-                foreach (CollectionElementSyntax element in collection.Elements)
+                for (int i = 0; i < collection.Elements.Count; i++)
                 {
+                    CollectionElementSyntax element = collection.Elements[i];
                     if (element is SpreadElementSyntax spread)
                     {
                         initElements.Add(new CollectionInitializerElement(
@@ -3838,11 +3842,16 @@ public sealed partial class CSharpToGSharpTranslator
                     else
                     {
                         var expressionElement = (ExpressionElementSyntax)element;
+                        ITypeSymbol boundElementType = collectionOperation?.Elements[i].Type
+                            ?? elementTypeSymbol;
+                        GTypeReference boundElementRef = boundElementType != null
+                            ? this.typeMapper.Map(boundElementType, this.context, element.GetLocation())
+                            : elementType;
                         initElements.Add(new CollectionInitializerElement(
                             this.CoerceCollectionElement(
                                 expressionElement.Expression,
-                                elementType,
-                                elementTypeSymbol)));
+                                boundElementRef,
+                                boundElementType)));
                     }
                 }
 

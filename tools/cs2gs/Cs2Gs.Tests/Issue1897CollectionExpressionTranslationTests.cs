@@ -287,6 +287,44 @@ namespace Corpus.Issue1897
         AssertRoundTripParses(rendered);
     }
 
+    [Fact]
+    public void ConstructibleTarget_UsesBoundAddElementType()
+    {
+        string rendered = Render("""
+            using System.Collections;
+            using System.Collections.Generic;
+
+            namespace Corpus.Issue4525
+            {
+                public sealed class Bag : IEnumerable<int>
+                {
+                    public void Add(long value)
+                    {
+                    }
+
+                    public IEnumerator<int> GetEnumerator()
+                    {
+                        yield return 0;
+                    }
+
+                    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+                }
+
+                public class Holder
+                {
+                    public Bag Make()
+                    {
+                        Bag values = [1];
+                        return values;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("Bag(){ int64(1) }", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
     private static void AssertRoundTripParses(string rendered)
     {
         RoundTripResult result = TranslationTestValidation.AssertBinds(rendered);

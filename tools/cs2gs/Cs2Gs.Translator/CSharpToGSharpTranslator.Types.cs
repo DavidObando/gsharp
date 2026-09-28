@@ -2519,13 +2519,10 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // Determines a query range variable's element type. An explicit type
-        // (`from T x in xs`) wins; otherwise the type is derived from the source
-        // collection the same way C#'s foreach/query-from does: array element
-        // type, `IEnumerable<T>`'s `T`, or (for a dictionary) the `T` in the
-        // `IEnumerable<KeyValuePair<K,V>>` the dictionary implements — via the
-        // shared `GetEnumerableElementType` helper (issue #1738), not the former
-        // narrow "first generic type argument" guess that mistyped arrays
-        // (`object`) and dictionaries (the key type instead of `KeyValuePair`).
+        // (`from T x in xs`) wins; otherwise Roslyn's selected query operator
+        // supplies the initial range variable contract. Enumeration and the
+        // single-type-argument query-provider fallback cover shapes without a
+        // bound selector.
         private GTypeReference ResolveRangeVariableType(
             TypeSyntax explicitType, ExpressionSyntax source, SyntaxNode anchor)
         {
@@ -2534,7 +2531,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return this.MapTypeSyntax(explicitType);
             }
 
-            ITypeSymbol elementType = this.ResolveRangeVariableElementTypeSymbol(source);
+            ITypeSymbol elementType = this.ResolveRangeVariableElementTypeSymbol(source, anchor);
             if (elementType != null)
             {
                 return this.typeMapper.Map(elementType, this.context, anchor.GetLocation());
@@ -2546,13 +2543,34 @@ public sealed partial class CSharpToGSharpTranslator
             return new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
         }
 
-        // Shared by `ResolveRangeVariableType` (above) and the issue #1967
-        // Index/Range loud-gap check below: the source collection's element
-        // type, the same way C#'s foreach/query-from infers an implicit range
-        // variable's type (array element type, `IEnumerable<T>`'s `T`, or a
-        // dictionary's `KeyValuePair<K,V>`) via `GetEnumerableElementType`.
-        private ITypeSymbol ResolveRangeVariableElementTypeSymbol(ExpressionSyntax source)
+        private ITypeSymbol ResolveRangeVariableElementTypeSymbol(
+            ExpressionSyntax source,
+            SyntaxNode anchor)
         {
+            if (anchor is FromClauseSyntax { Parent: QueryExpressionSyntax } initialFrom)
+            {
+                QueryExpressionSyntax query = (QueryExpressionSyntax)initialFrom.Parent;
+                IMethodSymbol queryOperator =
+                    this.context.SemanticModel.GetQueryClauseInfo(initialFrom)
+                        .OperationInfo.Symbol as IMethodSymbol
+                    ?? (query.Body.Clauses.FirstOrDefault() is QueryClauseSyntax firstClause
+                        ? this.context.SemanticModel.GetQueryClauseInfo(firstClause)
+                            .OperationInfo.Symbol as IMethodSymbol
+                        : this.context.GetSymbolInfo(query.Body.SelectOrGroup)
+                            .Symbol as IMethodSymbol);
+                foreach (IParameterSymbol parameter in queryOperator?.Parameters
+                    ?? ImmutableArray<IParameterSymbol>.Empty)
+                {
+                    if (parameter.Type is INamedTypeSymbol
+                        {
+                            DelegateInvokeMethod.Parameters: [{ Type: { } rangeType }, ..],
+                        })
+                    {
+                        return rangeType;
+                    }
+                }
+            }
+
             ITypeSymbol sourceType = this.context.GetTypeInfo(source).Type
                 ?? this.context.GetTypeInfo(source).ConvertedType;
             ITypeSymbol enumerableElement = GetEnumerableElementType(sourceType);

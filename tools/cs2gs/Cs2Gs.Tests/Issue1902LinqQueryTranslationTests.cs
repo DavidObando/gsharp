@@ -250,6 +250,47 @@ namespace Corpus.Issue1902
         AssertRoundTripParses(rendered);
     }
 
+    [Fact]
+    public void InitialFromClause_UsesBoundQuerySelectorParameterType()
+    {
+        string rendered = Render("""
+            using System;
+            using System.Collections;
+            using System.Collections.Generic;
+
+            namespace Corpus.Issue4525
+            {
+                public sealed class Query : IEnumerable<int>
+                {
+                    public Result<TResult> Select<TResult>(Func<long, TResult> selector) => new();
+
+                    public IEnumerator<int> GetEnumerator()
+                    {
+                        yield return 0;
+                    }
+
+                    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+                }
+
+                public sealed class Result<T>
+                {
+                }
+
+                public class Holder
+                {
+                    public Result<long> Run(Query source)
+                    {
+                        return from item in source
+                               select item;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("source.Select((item int64) -> item)", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
     private static void AssertRoundTripParses(string rendered, string roundTripOnlyReason = null)
     {
         RoundTripResult result = roundTripOnlyReason is null
