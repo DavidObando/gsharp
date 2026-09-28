@@ -81,15 +81,15 @@ jobs:
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           exit 0
 
-      - name: Migrate and run latest Oahu (advisory)
-        id: oahu_latest
+      - name: Migrate and run Oahu C# branch head (advisory)
+        id: oahu_csharp_head
         env:
-          OAHU_GATE_LABEL: latest
-          OAHU_GATE_ROOT: ${{ runner.temp }}/cs2gs-oahu-latest
-          OAHU_REF: main
+          OAHU_GATE_LABEL: csharp-head
+          OAHU_GATE_ROOT: ${{ runner.temp }}/cs2gs-oahu-csharp-head
+          OAHU_REF: cs2gs/oahu-csharo
         run: |
           set +e
-          ./build/run-cs2gs-oahu.sh | tee cs2gs-oahu-latest.log
+          ./build/run-cs2gs-oahu.sh | tee cs2gs-oahu-csharp-head.log
           echo "exit_code=${PIPESTATUS[0]}" >> "$GITHUB_OUTPUT"
           exit 0
 
@@ -140,24 +140,24 @@ jobs:
             cs2gs-nightly-runs/**/summary.json
             cs2gs-nightly-runs/**/run.json
             cs2gs-oahu-pinned.log
-            cs2gs-oahu-latest.log
+            cs2gs-oahu-csharp-head.log
             ${{ runner.temp }}/cs2gs-oahu-pinned/migrate.log
             ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/report.html
             ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/summary.json
             ${{ runner.temp }}/cs2gs-oahu-pinned/runs/**/run.json
             ${{ runner.temp }}/cs2gs-oahu-pinned/smoke/*
-            ${{ runner.temp }}/cs2gs-oahu-latest/migrate.log
-            ${{ runner.temp }}/cs2gs-oahu-latest/runs/**/report.html
-            ${{ runner.temp }}/cs2gs-oahu-latest/runs/**/summary.json
-            ${{ runner.temp }}/cs2gs-oahu-latest/runs/**/run.json
-            ${{ runner.temp }}/cs2gs-oahu-latest/smoke/*
+            ${{ runner.temp }}/cs2gs-oahu-csharp-head/migrate.log
+            ${{ runner.temp }}/cs2gs-oahu-csharp-head/runs/**/report.html
+            ${{ runner.temp }}/cs2gs-oahu-csharp-head/runs/**/summary.json
+            ${{ runner.temp }}/cs2gs-oahu-csharp-head/runs/**/run.json
+            ${{ runner.temp }}/cs2gs-oahu-csharp-head/smoke/*
 
       - name: Report advisory and enforce gate outcome
         run: |
-          # Latest Oahu detects upstream drift but stays advisory so upstream
-          # changes cannot break this repository's pinned compatibility gate.
-          if [[ "${{ steps.oahu_latest.outputs.exit_code }}" != "0" ]]; then
-            echo "::warning title=Latest Oahu compatibility::Latest Oahu gate failed (exit ${{ steps.oahu_latest.outputs.exit_code }}); pinned Oahu remains the enforced compatibility baseline."
+          # The Oahu C# branch head detects upstream drift but stays advisory,
+          # so changes cannot break this repository's pinned compatibility gate.
+          if [[ "${{ steps.oahu_csharp_head.outputs.exit_code }}" != "0" ]]; then
+            echo "::warning title=Oahu C# branch compatibility::Oahu C# branch head gate failed (exit ${{ steps.oahu_csharp_head.outputs.exit_code }}); pinned Oahu remains the enforced compatibility baseline."
           fi
           if [[ "${{ steps.migrate.outputs.migrate_exit }}" != "0" ||
                 "${{ steps.oahu_pinned.outputs.exit_code }}" != "0" ]]; then
