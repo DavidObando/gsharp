@@ -45,6 +45,7 @@ internal static class ExternalClrOverrideResolver
         bool isAsync,
         bool isAsyncVoid,
         bool isValueTask,
+        bool isSuspending,
         ReferenceResolver references)
     {
         bool sawName = false;
@@ -60,8 +61,20 @@ internal static class ExternalClrOverrideResolver
             }
 
             sawName = true;
+
+            // Issue #4413 / ADR-0174: compare imported G# suspend methods by
+            // their source signature, while retaining the physical MethodInfo
+            // for the emitted MethodImpl.
+            var methodParameters = ImportedFunctionSymbol.GetLogicalParameters(method, out var hasHiddenContext);
+            var importedIsSuspending = ImportedFunctionSymbol.IsSuspendingMethod(method);
+            if (importedIsSuspending != isSuspending
+                || (importedIsSuspending && !hasHiddenContext))
+            {
+                continue;
+            }
+
             if (method.GetGenericArguments().Length != typeParameters.Length
-                || !ParametersMatch(method.GetParameters(), parameters, typeSubstitutions, method, methodTypeArguments)
+                || !ParametersMatch(methodParameters, parameters, typeSubstitutions, method, methodTypeArguments)
                 || !ReturnMatches(
                     method.ReturnType,
                     returnType,
@@ -69,9 +82,10 @@ internal static class ExternalClrOverrideResolver
                     typeSubstitutions,
                     method,
                     methodTypeArguments,
-                    isAsync,
+                    isAsync || isSuspending,
                     isAsyncVoid,
-                    isValueTask))
+                    isValueTask || isSuspending,
+                    allowCovariantReturn: !isSuspending))
             {
                 continue;
             }
@@ -878,7 +892,8 @@ internal static class ExternalClrOverrideResolver
         ImmutableArray<TypeSymbol?> methodTypeArguments = default,
         bool isAsync = false,
         bool isAsyncVoid = false,
-        bool isValueTask = false)
+        bool isValueTask = false,
+        bool allowCovariantReturn = true)
     {
         if (clrReturnType == null)
         {
@@ -929,7 +944,9 @@ internal static class ExternalClrOverrideResolver
             return true;
         }
 
-        return returnRefKind == RefKind.None && IsCovariantReturn(clrReturnType, returnType);
+        return allowCovariantReturn
+            && returnRefKind == RefKind.None
+            && IsCovariantReturn(clrReturnType, returnType);
     }
 
     private static bool TryUnwrapClrAsyncReturnType(

@@ -1405,6 +1405,7 @@ internal sealed partial class DeclarationBinder
                                 methodIsAsync,
                                 methodIsAsyncVoid,
                                 returnTypeIsValueTask,
+                                methodSyntax.IsSuspend,
                                 binderCtx.References);
                             if (externalMatch.Member != null)
                             {
