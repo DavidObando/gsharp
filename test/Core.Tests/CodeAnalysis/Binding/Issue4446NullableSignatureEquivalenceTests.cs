@@ -65,8 +65,12 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
             NullableTypeSymbol.Get(structParameter),
             structParameter));
 
-        var userCompilation = new Compilation(SyntaxTree.Parse(SourceText.From("struct Token { }")));
-        var userStruct = Assert.Single(userCompilation.GlobalScope.Structs);
+        var userCompilation = new Compilation(SyntaxTree.Parse(SourceText.From("""
+            struct Token { }
+            class Node { }
+            """)));
+        var userStruct = Assert.Single(userCompilation.GlobalScope.Structs, symbol => symbol.Name == "Token");
+        var userClass = Assert.Single(userCompilation.GlobalScope.Structs, symbol => symbol.Name == "Node");
         Assert.False(DeclarationBinder.TypeSignaturesEquivalent(
             NullableTypeSymbol.Get(userStruct),
             userStruct));
@@ -79,6 +83,15 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
                 typeof(List<object>),
                 typeof(List<>),
                 ImmutableArray.Create<TypeSymbol>(userStruct))));
+        Assert.True(DeclarationBinder.TypeSignaturesEquivalent(
+            ImportedTypeSymbol.GetConstructed(
+                typeof(List<object>),
+                typeof(List<>),
+                ImmutableArray.Create<TypeSymbol>(NullableTypeSymbol.Get(userClass))),
+            ImportedTypeSymbol.GetConstructed(
+                typeof(List<object>),
+                typeof(List<>),
+                ImmutableArray.Create<TypeSymbol>(userClass))));
 
         Assert.True(DeclarationBinder.TypeSignaturesEquivalent(
             NullableTypeSymbol.Get(TypeSymbol.String),
