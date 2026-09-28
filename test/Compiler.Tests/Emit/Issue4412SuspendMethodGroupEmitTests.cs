@@ -384,6 +384,54 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
     }
 
     [Fact]
+    public void ImportedGenericExtensionMethodGroup_IsClosedAgainstDelegateShape()
+    {
+        const string library = """
+            using System.Threading.Tasks;
+            using Gsharp.Concurrency;
+
+            namespace Interop;
+
+            public sealed class Box;
+            public delegate ValueTask<bool> ValuePredicate(int value);
+
+            public static class Extensions
+            {
+                [Suspending]
+                public static ValueTask<bool> Accept<T>(this Box box, T value, Context context) =>
+                    new(true);
+            }
+            """;
+        const string app = """
+            package App
+            import System
+            import Interop
+
+            suspend func run() {
+                let callback ValuePredicate = Box().Accept
+                Console.WriteLine(await callback(9))
+            }
+
+            run()
+            """;
+
+        var directory = PrepareDirectory(nameof(ImportedGenericExtensionMethodGroup_IsClosedAgainstDelegateShape));
+        try
+        {
+            var libraryPath = CompileCSharpLibrary(directory, "Interop", library);
+            var appPath = Compile(directory, "App", app, "/target:exe", "/reference:" + libraryPath);
+            IlVerifier.Verify(
+                appPath,
+                new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"True{Environment.NewLine}", Run(appPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void ImportedSuspendOverloadRanking_IgnoresHiddenContext()
     {
         const string library = """

@@ -2443,6 +2443,7 @@ internal sealed class ConversionClassifier
             argTypes[i + (closesExtensionReceiver ? 1 : 0)] = invokeParameterTypes[i];
         }
 
+        var hasByRefTarget = targetParameterRefKinds.Any(kind => kind != RefKind.None);
         var applicable = new List<MethodInfo>();
         foreach (var candidate in group.Candidates)
         {
@@ -2485,8 +2486,9 @@ internal sealed class ConversionClassifier
                     candidateParameters[i + (closesExtensionReceiver ? 1 : 0)].ParameterType;
                 if (targetParameterRefKinds[i] != RefKind.None
                     ? !candidateParameterType.IsSameAs(invokeParameterTypes[i])
-                    : ClrOverloadResolution.ClassifyImplicit(candidateParameterType, invokeParameterTypes[i])
-                        == ClrOverloadResolution.ImplicitConversionKind.None)
+                    : !(candidate.ContainsGenericParameters && !hasByRefTarget)
+                        && ClrOverloadResolution.ClassifyImplicit(candidateParameterType, invokeParameterTypes[i])
+                            == ClrOverloadResolution.ImplicitConversionKind.None)
                 {
                     parameterTypesMatch = false;
                     break;
@@ -2515,7 +2517,7 @@ internal sealed class ConversionClassifier
             // The CLR resolver models by-ref arguments as addresses, while a
             // delegate signature supplies pointee types. The filter above has
             // already checked every slot, so a sole by-ref candidate is final.
-            var resolvedMethod = targetParameterRefKinds.Any(kind => kind != RefKind.None) && applicable.Count == 1
+            var resolvedMethod = hasByRefTarget && applicable.Count == 1
                 ? applicable[0]
                 : ClrOverloadResolution.Resolve(
                         applicable,
