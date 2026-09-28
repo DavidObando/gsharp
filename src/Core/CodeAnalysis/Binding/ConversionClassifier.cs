@@ -2478,18 +2478,22 @@ internal sealed class ConversionClassifier
                 continue;
             }
 
-            var byRefTypesMatch = true;
+            var parameterTypesMatch = true;
             for (var i = 0; i < targetParameterRefKinds.Length; i++)
             {
+                var candidateParameterType =
+                    candidateParameters[i + (closesExtensionReceiver ? 1 : 0)].ParameterType;
                 if (targetParameterRefKinds[i] != RefKind.None
-                    && !candidateParameters[i + (closesExtensionReceiver ? 1 : 0)].ParameterType.IsSameAs(invokeParameterTypes[i]))
+                    ? !candidateParameterType.IsSameAs(invokeParameterTypes[i])
+                    : ClrOverloadResolution.ClassifyImplicit(candidateParameterType, invokeParameterTypes[i])
+                        == ClrOverloadResolution.ImplicitConversionKind.None)
                 {
-                    byRefTypesMatch = false;
+                    parameterTypesMatch = false;
                     break;
                 }
             }
 
-            if (!byRefTypesMatch)
+            if (!parameterTypesMatch)
             {
                 continue;
             }
@@ -2508,11 +2512,16 @@ internal sealed class ConversionClassifier
             // interpolated-string literal in the first place.
             // The same applies to constant-narrowing: there are no bound call
             // arguments here, only the target delegate signature.
-            var resolvedMethod = ClrOverloadResolution.Resolve(
-                applicable,
-                argTypes,
-                trailingParameterCountToIgnore: static candidate =>
-                    ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0).Best;
+            // The CLR resolver models by-ref arguments as addresses, while a
+            // delegate signature supplies pointee types. The filter above has
+            // already checked every slot, so a sole by-ref candidate is final.
+            var resolvedMethod = targetParameterRefKinds.Any(kind => kind != RefKind.None) && applicable.Count == 1
+                ? applicable[0]
+                : ClrOverloadResolution.Resolve(
+                        applicable,
+                        argTypes,
+                        trailingParameterCountToIgnore: static candidate =>
+                            ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0).Best;
             if (resolvedMethod != null)
             {
                 var resolved = new BoundClrMethodGroupExpression(

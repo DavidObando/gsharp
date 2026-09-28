@@ -1808,6 +1808,11 @@ internal sealed class LambdaBinder
             return group;
         }
 
+        if (!hasHiddenContext && methodParameters.Any(parameter => parameter.ParameterType.IsByRef))
+        {
+            return group;
+        }
+
         ParameterInfo[] invokeParameters;
         var exactSignature = false;
         if (!hasHiddenContext)
