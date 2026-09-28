@@ -178,10 +178,11 @@ internal static class NullableFlagsBuilder
 
             if (layout.IsArray)
             {
-                // Issue #4402: FromClrType represents a concrete vector as an
-                // imported CLR type, not one of the symbolic array shapes.
-                // With no open slot to preserve, let the direct funnel reader
-                // decode the complete subtree instead of skipping its child.
+                // Issues #4402/#4449: FromClrType represents a concrete array
+                // as an imported CLR type, not one of the symbolic array
+                // shapes. With no open slot to preserve, let the canonical
+                // direct funnel reader decode the complete subtree instead of
+                // skipping its child.
                 if (!layout.ContainsGenericParameters
                     && projected is not ArrayTypeSymbol
                     && projected is not SliceTypeSymbol
