@@ -137,8 +137,14 @@ public sealed class Conversion
         /// <summary>The one legal direction — <c>T!</c> into <c>T?</c>.</summary>
         Widening,
 
-        /// <summary>An unsound direction; no conversion exists.</summary>
-        Illegal,
+        /// <summary>A platform source exposed through a stated non-null target.</summary>
+        IllegalFromPlatform,
+
+        /// <summary>A stated source exposed through a platform target.</summary>
+        IllegalToPlatform,
+
+        /// <summary>An unsound nested relation whose direction is not comparable.</summary>
+        IllegalUnknown,
 
         /// <summary>
         /// Platform-free on both sides but <b>not equivalent</b>, so this arm
@@ -224,7 +230,7 @@ public sealed class Conversion
     /// <param name="target">The target argument position.</param>
     /// <returns><see langword="true"/> for a relation rule 3 forbids.</returns>
     internal static bool IsPlatformArgumentIllegal(TypeSymbol? source, TypeSymbol? target)
-        => RelatePlatformArguments(source, target) == PlatformArgumentRelation.Illegal;
+        => IsIllegalPlatformArgumentRelation(RelatePlatformArguments(source, target));
 
     /// <summary>
     /// ADR-0186 §3 rule 2, asked about a single ARGUMENT position: is
@@ -291,14 +297,37 @@ public sealed class Conversion
         TypeSymbol? source,
         TypeSymbol? target,
         out bool isImplicit)
+        => TryRelatePlatformContainer(source, target, out isImplicit, out _);
+
+    /// <summary>
+    /// Applies ADR-0186 §3 and identifies the illegal direction needed by
+    /// imported-call diagnostics.
+    /// </summary>
+    /// <param name="source">The source type.</param>
+    /// <param name="target">The target type.</param>
+    /// <param name="isImplicit">Whether the relation is the legal widening.</param>
+    /// <param name="rejectsImportedParameter">
+    /// Whether a platform source position is exposed as stated non-null.
+    /// </param>
+    /// <returns><see langword="true"/> when rule 3 owns the relation.</returns>
+    internal static bool TryRelatePlatformContainer(
+        TypeSymbol? source,
+        TypeSymbol? target,
+        out bool isImplicit,
+        out bool rejectsImportedParameter)
     {
-        if (TryClassifyPlatformTypeArgumentMismatch(source, target, out var conversion))
+        if (TryClassifyPlatformTypeArgumentMismatch(
+            source,
+            target,
+            out var conversion,
+            out rejectsImportedParameter))
         {
             isImplicit = conversion.IsImplicit;
             return true;
         }
 
         isImplicit = false;
+        rejectsImportedParameter = false;
         return false;
     }
 
@@ -3512,8 +3541,8 @@ public sealed class Conversion
         {
             for (var i = 0; i < elementSource.Length; i++)
             {
-                if (RelatePlatformArguments(elementSource[i], elementTarget[i])
-                    == PlatformArgumentRelation.Illegal)
+                if (IsIllegalPlatformArgumentRelation(
+                    RelatePlatformArguments(elementSource[i], elementTarget[i])))
                 {
                     return Conversion.None;
                 }
@@ -3629,8 +3658,16 @@ public sealed class Conversion
         TypeSymbol? from,
         TypeSymbol? to,
         out Conversion conversion)
+        => TryClassifyPlatformTypeArgumentMismatch(from, to, out conversion, out _);
+
+    private static bool TryClassifyPlatformTypeArgumentMismatch(
+        TypeSymbol? from,
+        TypeSymbol? to,
+        out Conversion conversion,
+        out bool rejectsImportedParameter)
     {
         conversion = Conversion.None;
+        rejectsImportedParameter = false;
         if (from is null || to is null)
         {
             return false;
@@ -3664,13 +3701,24 @@ public sealed class Conversion
         if (!IsValueTypeLikeFrom(UnwrapPlatformAndNullable(from))
             && TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments))
         {
+            var hasIllegalProjection = false;
             for (var i = 0; i < projected.Length; i++)
             {
-                if (IsProjectedPlatformArgumentIllegal(projected[i], supertypeArguments[i])
+                var directionalEscape = IsVariantPlatformEscape(projected[i], supertypeArguments[i]);
+                if (IsProjectedPlatformArgumentIllegal(
+                        projected[i],
+                        supertypeArguments[i],
+                        out var projectedRejectsImported)
                     || IsCovariantPlatformEscape(projected[i], supertypeArguments[i]))
                 {
-                    return true;
+                    hasIllegalProjection = true;
+                    rejectsImportedParameter |= projectedRejectsImported || directionalEscape;
                 }
+            }
+
+            if (hasIllegalProjection)
+            {
+                return true;
             }
         }
 
@@ -3762,6 +3810,8 @@ public sealed class Conversion
         }
 
         var widens = false;
+        var hasNonImportedIllegal = false;
+        var hasUnrelated = false;
         for (var i = 0; i < fromArguments.Length; i++)
         {
             // #4420: a same-definition variant view is decided here too. A
@@ -3773,7 +3823,14 @@ public sealed class Conversion
             if (IsCovariantPlatformEscape(fromArguments[i], toArguments[i]))
             {
                 conversion = Conversion.None;
-                return true;
+                if (IsVariantPlatformEscape(fromArguments[i], toArguments[i]))
+                {
+                    rejectsImportedParameter = true;
+                    return true;
+                }
+
+                hasNonImportedIllegal = true;
+                continue;
             }
 
             switch (RelatePlatformArguments(fromArguments[i], toArguments[i]))
@@ -3783,19 +3840,39 @@ public sealed class Conversion
                 case PlatformArgumentRelation.Unrelated:
                     // A platform-free position that does not agree. This arm
                     // has no opinion about such a pair; the ordinary rules do.
-                    return false;
+                    hasUnrelated = true;
+                    break;
                 case PlatformArgumentRelation.Widening:
                     widens = true;
                     break;
-                default:
-                    // `C[T!] -> C[T]` (a non-null read of a container that may
-                    // hold nil), `C[T] -> C[T!]` and `C[T?] -> C[T!]` (a `nil`
-                    // deposited through one view and read as non-null through
-                    // another). All three are the aliasing unsoundness, in one
-                    // direction or the other.
+                case PlatformArgumentRelation.IllegalFromPlatform:
+                    rejectsImportedParameter = true;
                     conversion = Conversion.None;
                     return true;
+                case PlatformArgumentRelation.IllegalToPlatform:
+                    // A stated source reaches a platform target. The relation
+                    // remains illegal, but imported CLR targets deliberately
+                    // keep this direction lenient.
+                    conversion = Conversion.None;
+                    hasNonImportedIllegal = true;
+                    break;
+                case PlatformArgumentRelation.IllegalUnknown:
+                    conversion = Conversion.None;
+                    hasNonImportedIllegal = true;
+                    break;
+                default:
+                    throw new InvalidOperationException("Unknown platform argument relation.");
             }
+        }
+
+        if (hasNonImportedIllegal)
+        {
+            return true;
+        }
+
+        if (hasUnrelated)
+        {
+            return false;
         }
 
         if (!widens)
@@ -3860,10 +3937,11 @@ public sealed class Conversion
                     sourcePlatform.UnderlyingType,
                     nilableTarget.UnderlyingType))
             {
-                return RelateNestedPlatformArguments(
-                        sourcePlatform.UnderlyingType,
-                        nilableTarget.UnderlyingType) == PlatformArgumentRelation.Illegal
-                    ? PlatformArgumentRelation.Illegal
+                var nestedRelation = RelateNestedPlatformArguments(
+                    sourcePlatform.UnderlyingType,
+                    nilableTarget.UnderlyingType);
+                return IsIllegalPlatformArgumentRelation(nestedRelation)
+                    ? nestedRelation
                     : PlatformArgumentRelation.Widening;
             }
 
@@ -3884,7 +3962,7 @@ public sealed class Conversion
             return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                 sourcePlatform.UnderlyingType,
                 UnwrapPlatformAndNullable(b) ?? b!)
-                ? PlatformArgumentRelation.Illegal
+                ? PlatformArgumentRelation.IllegalFromPlatform
                 : PlatformArgumentRelation.Unrelated;
         }
 
@@ -3913,7 +3991,7 @@ public sealed class Conversion
             return TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
                 UnwrapPlatformAndNullable(a) ?? a!,
                 targetPlatform.UnderlyingType)
-                ? PlatformArgumentRelation.Illegal
+                ? PlatformArgumentRelation.IllegalToPlatform
                 : PlatformArgumentRelation.Unrelated;
         }
 
@@ -3943,7 +4021,7 @@ public sealed class Conversion
             // (returns false, leaving the pair to the arms below) instead,
             // which is what keeps `[]string! -> object` and
             // `[]string! -> IEnumerable[string]` legal.
-            return PlatformArgumentRelation.Illegal;
+            return PlatformArgumentRelation.IllegalUnknown;
         }
 
         var relation = PlatformArgumentRelation.Same;
@@ -3958,13 +4036,26 @@ public sealed class Conversion
                 case PlatformArgumentRelation.Widening:
                     relation = PlatformArgumentRelation.Widening;
                     break;
+                case PlatformArgumentRelation.IllegalFromPlatform:
+                    return PlatformArgumentRelation.IllegalFromPlatform;
+                case PlatformArgumentRelation.IllegalToPlatform:
+                    relation = PlatformArgumentRelation.IllegalToPlatform;
+                    break;
+                case PlatformArgumentRelation.IllegalUnknown:
+                    relation = PlatformArgumentRelation.IllegalUnknown;
+                    break;
                 default:
-                    return PlatformArgumentRelation.Illegal;
+                    throw new InvalidOperationException("Unknown platform argument relation.");
             }
         }
 
         return relation;
     }
+
+    private static bool IsIllegalPlatformArgumentRelation(PlatformArgumentRelation relation)
+        => relation is PlatformArgumentRelation.IllegalFromPlatform
+            or PlatformArgumentRelation.IllegalToPlatform
+            or PlatformArgumentRelation.IllegalUnknown;
 
     /// <summary>
     /// #4420: whether a supertype view reads a platform element as a
@@ -4280,9 +4371,14 @@ public sealed class Conversion
         return false;
     }
 
-    private static bool IsProjectedPlatformArgumentIllegal(TypeSymbol projected, TypeSymbol target)
+    private static bool IsProjectedPlatformArgumentIllegal(
+        TypeSymbol projected,
+        TypeSymbol target,
+        out bool rejectsImportedParameter)
     {
-        if (RelatePlatformArguments(projected, target) != PlatformArgumentRelation.Illegal)
+        var relation = RelatePlatformArguments(projected, target);
+        rejectsImportedParameter = relation == PlatformArgumentRelation.IllegalFromPlatform;
+        if (!IsIllegalPlatformArgumentRelation(relation))
         {
             return false;
         }
@@ -4297,7 +4393,11 @@ public sealed class Conversion
             return true;
         }
 
-        return TryClassifyPlatformTypeArgumentMismatch(projected, target, out var nested)
+        return TryClassifyPlatformTypeArgumentMismatch(
+                projected,
+                target,
+                out var nested,
+                out rejectsImportedParameter)
             && !nested.IsImplicit;
     }
 

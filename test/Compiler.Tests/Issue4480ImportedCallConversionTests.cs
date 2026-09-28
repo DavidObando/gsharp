@@ -62,6 +62,11 @@ public class Issue4480ImportedCallConversionTests
 
             public static int RequiredMany(params IEnumerable<string>[] values) => values.Length;
 
+            public static int RequiredNamed(
+                int marker,
+                IEnumerable<string> values,
+                params int[] tail) => marker + values.Count() + tail.Length;
+
             public static int Nullable(IEnumerable<string?> values) => values.Count();
 
             public static int Value(IEnumerable<int> values) => values.Count();
@@ -108,6 +113,28 @@ public class Issue4480ImportedCallConversionTests
         public class GenericBase<T>
         {
             public GenericBase(T values) { }
+        }
+
+        public sealed class Pair<TFirst, TSecond>
+        {
+        }
+
+        public static class MixedCalls
+        {
+            public static int Required(
+        #nullable disable
+                Pair<string,
+        #nullable enable
+                string> values) => 0;
+        }
+
+        #nullable enable
+        public static class MixedOb
+        {
+            public static Pair<
+                string,
+        #nullable disable
+                string> Pair() => new();
         }
         """;
 
@@ -180,6 +207,34 @@ public class Issue4480ImportedCallConversionTests
             let value = RequiredParams(Ob.Strings())
             """,
             4,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "imported-mixed-nullability-call",
+            """
+            package P
+            import Issue4480.Library
+
+            let count = MixedCalls.Required(MixedOb.Pair())
+            """,
+            4,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "imported-expanded-named-call",
+            """
+            package P
+            import Issue4480.Library
+
+            let count = Calls.RequiredNamed(
+                values: Ob.Strings(),
+                marker: 0)
+            """,
+            5,
             "values",
         };
 

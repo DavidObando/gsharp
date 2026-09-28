@@ -1134,6 +1134,8 @@ internal sealed class ConversionClassifier
     /// <param name="expandedParamsIndex">The parameter index whose already
     /// converted expanded elements were packed into a synthesized array, or
     /// <c>-1</c> when the call was not expanded.</param>
+    /// <param name="parameterArgumentLocations">Original source locations keyed
+    /// by parameter index after expanded named arguments were reordered.</param>
     /// <returns>The (possibly rebound) argument array.</returns>
     public ImmutableArray<BoundExpression> BindClrParameterConversions(
         ImmutableArray<BoundExpression> arguments,
@@ -1145,7 +1147,8 @@ internal sealed class ConversionClassifier
         TypeSymbol? receiverType = null,
         ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default,
         IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null,
-        int expandedParamsIndex = -1)
+        int expandedParamsIndex = -1,
+        ImmutableArray<TextLocation?> parameterArgumentLocations = default)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -1194,9 +1197,13 @@ internal sealed class ConversionClassifier
                     // parameter is converted to the pointee type and passed
                     // by readonly reference, as in C#.
                     var sourceIndex = i - receiverArgCount;
-                    var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
-                        ? call.Arguments[sourceIndex].Location
-                        : call?.Location ?? default;
+                    var location = !parameterArgumentLocations.IsDefault
+                        && paramIndex < parameterArgumentLocations.Length
+                        && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                            ? mappedLocation
+                            : call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
+                                ? call.Arguments[sourceIndex].Location
+                                : call?.Location ?? default;
                     TypeSymbol? inPointeeOverride = null;
                     parameterTypeOverrides?.TryGetValue(paramIndex, out inPointeeOverride);
                     var inPointee = inPointeeOverride
@@ -1487,6 +1494,16 @@ internal sealed class ConversionClassifier
                     // user-defined generic function's method-group argument.
                     var isMethodGroupTarget = argument is BoundMethodGroupExpression or BoundClrMethodGroupExpression;
                     var parameterConversion = Conversion.Classify(argument.Type, targetType);
+                    var rejectionSourceIndex = i - receiverArgCount;
+                    var rejectionLocation = !parameterArgumentLocations.IsDefault
+                        && paramIndex < parameterArgumentLocations.Length
+                        && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                            ? mappedLocation
+                            : call != null
+                                && rejectionSourceIndex >= 0
+                                && rejectionSourceIndex < call.Arguments.Count
+                                    ? call.Arguments[rejectionSourceIndex].Location
+                                    : call?.Location ?? default;
                     if (substituted != null
                         && TypeSymbol.ContainsNullLiteralType(argument.Type)
                         && argument is BoundTupleLiteralExpression
@@ -1587,13 +1604,11 @@ internal sealed class ConversionClassifier
                     }
                     else if (paramIndex != expandedParamsIndex
                         && TryRejectClrPlatformContainerArgument(
-                        argument,
-                        parameters[paramIndex],
-                        targetType,
-                        call,
-                        i,
-                        receiverArgCount,
-                        out var rejectedArgument))
+                            argument,
+                            parameters[paramIndex],
+                            targetType,
+                            rejectionLocation,
+                            out var rejectedArgument))
                     {
                         rebound = rejectedArgument;
                     }
@@ -3250,6 +3265,8 @@ internal sealed class ConversionClassifier
     /// <param name="parameterMapping">Optional source-argument to parameter map.</param>
     /// <param name="method">The resolved CLR method, for symbolic slot recovery.</param>
     /// <param name="receiverType">The receiver/constraint type carrying symbolic type arguments.</param>
+    /// <param name="parameterArgumentLocations">Original source locations keyed
+    /// by parameter index after expanded named arguments were reordered.</param>
     /// <returns>The arguments, with each plain <c>in</c> argument passed by readonly reference.</returns>
     public ImmutableArray<BoundExpression> BindImplicitInClrArguments(
         ImmutableArray<BoundExpression> arguments,
@@ -3257,7 +3274,8 @@ internal sealed class ConversionClassifier
         CallExpressionSyntax call,
         ImmutableArray<int> parameterMapping,
         MethodInfo? method,
-        TypeSymbol? receiverType)
+        TypeSymbol? receiverType,
+        ImmutableArray<TextLocation?> parameterArgumentLocations = default)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -3265,7 +3283,11 @@ internal sealed class ConversionClassifier
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
             if (paramIndex < parameters.Length && IsImplicitInClrArgument(arguments[i], parameters[paramIndex]))
             {
-                var location = i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+                var location = !parameterArgumentLocations.IsDefault
+                    && paramIndex < parameterArgumentLocations.Length
+                    && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                        ? mappedLocation
+                        : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
                 var pointeeType = GetImplicitInClrPointeeType(
                     parameters[paramIndex],
                     paramIndex,
@@ -3289,7 +3311,11 @@ internal sealed class ConversionClassifier
                 && receiverType != null
                 && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType)
             {
-                var location = i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+                var location = !parameterArgumentLocations.IsDefault
+                    && paramIndex < parameterArgumentLocations.Length
+                    && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                        ? mappedLocation
+                        : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
                 if (TryRejectClrPlatformContainerArgument(
                     arguments[i],
                     parameters[paramIndex],
@@ -3575,10 +3601,14 @@ internal sealed class ConversionClassifier
             || sourceType.ClrType is not { } sourceClr
             || targetClr == null
             || !ClrLoadContext.IsAssignable(targetClr, sourceClr)
-            || Conversion.ContainsPlatformTypeInStructure(targetType)
             || (classifiedConversion ?? Conversion.Classify(sourceType, targetType)).Exists
-            || !Conversion.TryRelatePlatformContainer(sourceType, targetType, out var isImplicit)
-            || isImplicit)
+            || !Conversion.TryRelatePlatformContainer(
+                sourceType,
+                targetType,
+                out var isImplicit,
+                out var rejectsImportedParameter)
+            || isImplicit
+            || !rejectsImportedParameter)
         {
             return false;
         }
