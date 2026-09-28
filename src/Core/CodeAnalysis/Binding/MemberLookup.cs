@@ -3884,7 +3884,8 @@ internal sealed class MemberLookup
     {
         foreach (var candidate in structSymbol.GetMethodsIncludingInherited(clrMethod.Name))
         {
-            if (MethodMatchesClrSignature(candidate, clrMethod))
+            if (IsImplicitInterfaceImplementationCandidate(candidate)
+                && MethodMatchesClrSignature(candidate, clrMethod))
             {
                 return candidate;
             }
@@ -4037,7 +4038,8 @@ internal sealed class MemberLookup
     {
         foreach (var candidate in structSymbol.GetMethodsIncludingInherited(openMethod.Name))
         {
-            if (MethodMatchesSymbolicClrInterfaceSignature(candidate, openMethod, symbolicArgs))
+            if (IsImplicitInterfaceImplementationCandidate(candidate)
+                && MethodMatchesSymbolicClrInterfaceSignature(candidate, openMethod, symbolicArgs))
             {
                 return candidate;
             }
@@ -4134,7 +4136,7 @@ internal sealed class MemberLookup
 
         if (declared == null)
         {
-            var clr = ifaceSym?.ClrType;
+            var clr = ifaceSym.ClrType;
             if (clr == null || !clr.IsInterface)
             {
                 yield break;
@@ -4143,14 +4145,29 @@ internal sealed class MemberLookup
             declared = clr;
         }
 
-        foreach (var slot in MethodsOf(declared, symbolicArgs, isInherited: false, includeDefaultMethods))
+        foreach (var slot in MethodsOf(
+            declared,
+            ifaceSym,
+            symbolicArgs,
+            isInherited: false,
+            includeDefaultMethods))
         {
             yield return slot;
         }
 
         foreach (var baseIface in declared.GetInterfaces())
         {
-            foreach (var slot in MethodsOf(baseIface, symbolicArgs, isInherited: true, includeDefaultMethods))
+            var slotOwner = MapOpenClrTypeToSymbolicWithoutNullability(
+                baseIface,
+                declared,
+                symbolicArgs,
+                NullabilityFreeReason.TypeStructure);
+            foreach (var slot in MethodsOf(
+                baseIface,
+                slotOwner,
+                symbolicArgs,
+                isInherited: true,
+                includeDefaultMethods))
             {
                 yield return slot;
             }
@@ -4158,6 +4175,7 @@ internal sealed class MemberLookup
 
         static IEnumerable<ClrInterfaceSlot> MethodsOf(
             Type iface,
+            TypeSymbol slotOwner,
             ImmutableArray<TypeSymbol> symbolicArgs,
             bool isInherited,
             bool includeDefaultMethods)
@@ -4169,7 +4187,7 @@ internal sealed class MemberLookup
                     continue;
                 }
 
-                yield return new ClrInterfaceSlot(method, symbolicArgs, isInherited);
+                yield return new ClrInterfaceSlot(method, slotOwner, symbolicArgs, isInherited);
             }
         }
     }
@@ -4190,7 +4208,7 @@ internal sealed class MemberLookup
 
         if (declared == null)
         {
-            var clr = ifaceSym?.ClrType;
+            var clr = ifaceSym.ClrType;
             if (clr == null || !clr.IsInterface)
             {
                 yield break;
@@ -4201,14 +4219,27 @@ internal sealed class MemberLookup
 
         foreach (var property in PropertiesOf(declared))
         {
-            yield return new ClrInterfacePropertySlot(property, symbolicArgs, isInherited: false);
+            yield return new ClrInterfacePropertySlot(
+                property,
+                ifaceSym,
+                symbolicArgs,
+                isInherited: false);
         }
 
         foreach (var baseIface in declared.GetInterfaces())
         {
+            var slotOwner = MapOpenClrTypeToSymbolicWithoutNullability(
+                baseIface,
+                declared,
+                symbolicArgs,
+                NullabilityFreeReason.TypeStructure);
             foreach (var property in PropertiesOf(baseIface))
             {
-                yield return new ClrInterfacePropertySlot(property, symbolicArgs, isInherited: true);
+                yield return new ClrInterfacePropertySlot(
+                    property,
+                    slotOwner,
+                    symbolicArgs,
+                    isInherited: true);
             }
         }
 
@@ -4412,7 +4443,8 @@ internal sealed class MemberLookup
         foreach (var implProp in structSymbol.Properties)
         {
             // PropertyType.IsByRef guarantees a non-null reflected element type on that branch.
-            if (implProp.Name == openProp.Name
+            if (IsImplicitInterfaceImplementationCandidate(implProp)
+                && implProp.Name == openProp.Name
                 && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(openProp)
                 && ParameterTypeMatchesSubstituted(implProp.Type, openProp.PropertyType.IsByRef ? openProp.PropertyType.GetElementType()! : openProp.PropertyType, symbolicArgs))
             {
@@ -4486,7 +4518,8 @@ internal sealed class MemberLookup
         foreach (var implProp in structSymbol.Properties)
         {
             // PropertyType.IsByRef guarantees a non-null reflected element type on that branch.
-            if (implProp.Name == clrProp.Name
+            if (IsImplicitInterfaceImplementationCandidate(implProp)
+                && implProp.Name == clrProp.Name
                 && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(clrProp)
                 && ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(implProp.Type), clrProp.PropertyType.IsByRef ? clrProp.PropertyType.GetElementType()! : clrProp.PropertyType))
             {
@@ -4496,6 +4529,23 @@ internal sealed class MemberLookup
 
         return null;
     }
+
+    /// <summary>Returns whether a method may satisfy an interface slot implicitly.</summary>
+    /// <param name="method">The candidate method.</param>
+    /// <returns><see langword="true"/> when the method has no explicit interface linkage.</returns>
+    public static bool IsImplicitInterfaceImplementationCandidate(FunctionSymbol method)
+        => !method.HasExplicitInterfaceClause
+            && method.ExplicitInterfaceMember == null
+            && method.ExplicitInterfaceSlot == null;
+
+    /// <summary>Returns whether a property may satisfy an interface slot implicitly.</summary>
+    /// <param name="property">The candidate property.</param>
+    /// <returns><see langword="true"/> when the property has no explicit interface linkage.</returns>
+    public static bool IsImplicitInterfaceImplementationCandidate(PropertySymbol property)
+        => !property.HasExplicitInterfaceClause
+            && property.ExplicitInterfaceMember == null
+            && property.ExplicitInterfaceGetterSlot == null
+            && property.ExplicitInterfaceSetterSlot == null;
 
     // ----- Indexer / Nullable<> / extension-method probes (instance helpers) -----
 
@@ -9473,14 +9523,21 @@ internal sealed class MemberLookup
     /// </summary>
     public readonly struct ClrInterfaceSlot
     {
-        public ClrInterfaceSlot(MethodInfo method, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
+        public ClrInterfaceSlot(
+            MethodInfo method,
+            TypeSymbol slotOwner,
+            ImmutableArray<TypeSymbol> symbolicArgs,
+            bool isInherited)
         {
             this.Method = method;
+            this.SlotOwner = slotOwner;
             this.SymbolicArgs = symbolicArgs;
             this.IsInherited = isInherited;
         }
 
         public MethodInfo Method { get; }
+
+        public TypeSymbol SlotOwner { get; }
 
         public ImmutableArray<TypeSymbol> SymbolicArgs { get; }
 
@@ -9492,15 +9549,19 @@ internal sealed class MemberLookup
     {
         public ClrInterfacePropertySlot(
             PropertyInfo property,
+            TypeSymbol slotOwner,
             ImmutableArray<TypeSymbol> symbolicArgs,
             bool isInherited)
         {
             this.Property = property;
+            this.SlotOwner = slotOwner;
             this.SymbolicArgs = symbolicArgs;
             this.IsInherited = isInherited;
         }
 
         public PropertyInfo Property { get; }
+
+        public TypeSymbol SlotOwner { get; }
 
         public ImmutableArray<TypeSymbol> SymbolicArgs { get; }
 

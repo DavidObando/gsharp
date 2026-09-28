@@ -216,10 +216,14 @@ inert attribute.
 Override checks reuse the base slot already selected by override resolution.
 Imported interface checks prefer the source member explicitly linked to the
 current CLR slot, including the erased accessor slot of a symbolic generic
-interface, and only fall back to the existing signature matcher when no
-explicit implementation exists. The contract therefore follows actual
+interface. An explicit candidate must match both the slot definition and its
+exact constructed interface owner; `IBase[A].Slot` cannot satisfy
+`IBase[B].Slot` merely because the slot signature omits `T`. Signature fallback
+considers only members with no explicit-interface clause or linkage. The
+contract therefore follows actual
 interface dispatch even when a same-signature plain member appears first in
-source. A default interface body makes the implementation optional, but if a
+source, and an explicit implementation of an unrelated interface cannot mask a
+default body. A default interface body makes the implementation optional, but if a
 source member replaces that default its contract is validated identically to
 an abstract slot. That traversal includes inherited default properties and
 their getter/setter slots, not only ordinary interface methods. Imported CLR

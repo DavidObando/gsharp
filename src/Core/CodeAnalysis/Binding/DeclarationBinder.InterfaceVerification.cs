@@ -412,6 +412,11 @@ internal sealed partial class DeclarationBinder
             FunctionSymbol? signatureMatch = null;
             foreach (var candidate in implCandidates)
             {
+                if (!MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate))
+                {
+                    continue;
+                }
+
                 impl ??= candidate;
                 var methodTypeParamMap = TryBuildMethodTypeParameterMap(imethod, candidate);
                 if (methodTypeParamMap == null)
@@ -861,7 +866,7 @@ internal sealed partial class DeclarationBinder
         {
             foreach (var candidate in current.Properties)
             {
-                if (candidate.HasExplicitInterfaceClause
+                if (!MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
                     || candidate.Name != interfaceProperty.Name
                     || (!ReferenceEquals(current, structSymbol) && candidate.Accessibility != Accessibility.Public)
                     || candidate.IsIndexer != interfaceProperty.IsIndexer
@@ -2005,7 +2010,11 @@ internal sealed partial class DeclarationBinder
         MemberLookup.ClrInterfaceSlot slot)
         => FindClrInterfaceImplementation(
             structSymbol.Methods,
-            method => SameClrSlot(method.ExplicitInterfaceSlot, slot.Method)
+            method => ExplicitClrSlotMatches(
+                method.ExplicitInterfaceSlotContainingType,
+                slot.SlotOwner,
+                method.ExplicitInterfaceSlot,
+                slot.Method)
                 && MemberLookup.MethodSatisfiesClrSlot(method, slot),
             () => FindMatchingClrSlotImplementation(structSymbol, slot));
 
@@ -2027,7 +2036,8 @@ internal sealed partial class DeclarationBinder
 
             foreach (var candidate in c.Methods)
             {
-                if (candidate.Name == slot.Method.Name
+                if (MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
+                    && candidate.Name == slot.Method.Name
                     && MemberLookup.MethodSatisfiesClrSlot(candidate, slot))
                 {
                     return candidate;
@@ -2043,8 +2053,11 @@ internal sealed partial class DeclarationBinder
         MemberLookup.ClrInterfacePropertySlot slot)
         => FindClrInterfaceImplementation(
             structSymbol.Properties,
-            property => SameClrSlot(property.ExplicitInterfaceGetterSlot, slot.Property.GetMethod)
-                || SameClrSlot(property.ExplicitInterfaceSetterSlot, slot.Property.SetMethod),
+            property => ExplicitClrPropertySlotMatches(
+                property,
+                slot.SlotOwner,
+                slot.Property.GetMethod,
+                slot.Property.SetMethod),
             () => slot.SymbolicArgs.IsDefaultOrEmpty
                 ? MemberLookup.FindMatchingProperty(structSymbol, slot.Property)
                 : MemberLookup.FindMatchingPropertyForSymbolicClrInterface(
@@ -2190,9 +2203,11 @@ internal sealed partial class DeclarationBinder
         Func<FunctionSymbol?> findImplicit)
         => FindClrInterfaceImplementation(
             structSymbol.Methods,
-            method => method.ExplicitInterfaceSlotContainingType is { } explicitInterface
-                && ConformanceSignaturesEquivalent(explicitInterface, interfaceType)
-                && SameClrSlot(method.ExplicitInterfaceSlot, explicitSlot),
+            method => ExplicitClrSlotMatches(
+                method.ExplicitInterfaceSlotContainingType,
+                interfaceType,
+                method.ExplicitInterfaceSlot,
+                explicitSlot),
             findImplicit);
 
     private static PropertySymbol? FindClrInterfacePropertyImplementation(
@@ -2203,11 +2218,42 @@ internal sealed partial class DeclarationBinder
         Func<PropertySymbol?> findImplicit)
         => FindClrInterfaceImplementation(
             structSymbol.Properties,
-            property => property.ExplicitInterfaceSlotContainingType is { } explicitInterface
-                && ConformanceSignaturesEquivalent(explicitInterface, interfaceType)
-                && (SameClrSlot(property.ExplicitInterfaceGetterSlot, explicitGetter)
-                    || SameClrSlot(property.ExplicitInterfaceSetterSlot, explicitSetter)),
+            property => ExplicitClrPropertySlotMatches(
+                property,
+                interfaceType,
+                explicitGetter,
+                explicitSetter),
             findImplicit);
+
+    private static bool ExplicitClrPropertySlotMatches(
+        PropertySymbol property,
+        TypeSymbol slotOwner,
+        MethodInfo? slotGetter,
+        MethodInfo? slotSetter)
+        => ExplicitClrSlotMatches(
+                property.ExplicitInterfaceSlotContainingType,
+                slotOwner,
+                property.ExplicitInterfaceGetterSlot,
+                slotGetter)
+            || ExplicitClrSlotMatches(
+                property.ExplicitInterfaceSlotContainingType,
+                slotOwner,
+                property.ExplicitInterfaceSetterSlot,
+                slotSetter);
+
+    private static bool ExplicitClrSlotMatches(
+        TypeSymbol? implementationOwner,
+        TypeSymbol slotOwner,
+        MethodInfo? implementationSlot,
+        MethodInfo? slot)
+        => implementationOwner != null
+            && ExactInterfaceTypeMatches(implementationOwner, slotOwner)
+            && SameClrSlot(implementationSlot, slot);
+
+    private static bool ExactInterfaceTypeMatches(TypeSymbol implementationOwner, TypeSymbol slotOwner)
+        => TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            implementationOwner,
+            slotOwner);
 
     private static TMember? FindClrInterfaceImplementation<TMember>(
         ImmutableArray<TMember> members,

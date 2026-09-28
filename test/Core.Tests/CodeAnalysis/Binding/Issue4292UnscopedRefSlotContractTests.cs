@@ -701,6 +701,131 @@ class Derived : Base, IMethod {
         Assert.Single(diagnostics, d => d.Id == "GS0187");
     }
 
+    [Fact]
+    public void InheritedGenericExplicitMethod_RequiresExactConstructedOwner()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class A { }
+            class B { }
+            struct Buffer : IDerivedInvariantMethod[A], IDerivedInvariantMethod[B] {
+                var Value int32
+
+                @UnscopedRef
+                private func (IBaseInvariantMethod[A]) Slot(ref fallback int32) ref int32 {
+                    return ref this.Value
+                }
+            }
+            """, contracts);
+
+        Assert.Single(diagnostics, d => d.Id == "GS0187");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0590");
+    }
+
+    [Fact]
+    public void InheritedGenericExplicitProperty_RequiresExactConstructedOwner()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class A { }
+            class B { }
+            ref struct Buffer : IDerivedInvariantProperty[A], IDerivedInvariantProperty[B] {
+                @UnscopedRef
+                private prop (IBaseInvariantProperty[A]) Slot RefValue { set { } }
+            }
+            """, contracts);
+
+        Assert.Single(diagnostics, d => d.Id == "GS0187");
+        Assert.DoesNotContain(diagnostics, d => d.Id == "GS0590");
+    }
+
+    [Fact]
+    public void SourceDefaultMethod_IgnoresUnrelatedExplicitImplementation()
+    {
+        const string source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            interface IA {
+                func Slot(ref fallback int32) ref int32 { return ref fallback }
+            }
+            interface IB {
+                @UnscopedRef
+                func Slot(ref fallback int32) ref int32;
+            }
+            struct Buffer : IA, IB {
+                @UnscopedRef
+                private func (IB) Slot(ref fallback int32) ref int32 { return ref fallback }
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void SourceDefaultProperty_IgnoresUnrelatedExplicitImplementation()
+    {
+        const string source = """
+            package P
+            import System
+            import System.Diagnostics.CodeAnalysis
+            interface IA {
+                prop Slot Span[int32] { set { } }
+            }
+            interface IB {
+                @UnscopedRef
+                prop Slot Span[int32] { set; }
+            }
+            ref struct Buffer : IA, IB {
+                @UnscopedRef
+                private prop (IB) Slot Span[int32] { set { } }
+            }
+            """;
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void ImportedDefaultMethod_IgnoresUnrelatedExplicitImplementation()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            struct Buffer : IDefaultMethod, IAnnotatedMethod {
+                @UnscopedRef
+                private func (IAnnotatedMethod) Slot(ref fallback int32) ref int32 {
+                    return ref fallback
+                }
+            }
+            """;
+
+        Assert.Empty(BindWithFixtures(source, contracts));
+    }
+
+    [Fact]
+    public void ImportedDefaultProperty_IgnoresUnrelatedExplicitImplementation()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            ref struct Buffer : IDefaultProperty, IPropertyAnnotatedSetter {
+                @UnscopedRef
+                private prop (IPropertyAnnotatedSetter) Slot RefValue { set { } }
+            }
+            """;
+
+        Assert.Empty(BindWithFixtures(source, contracts));
+    }
+
     [Theory]
     [InlineData("public func Slot(ref fallback int32) ref int32 { return ref this.Value }")]
     [InlineData("private func (IDefaultMethod) Slot(ref fallback int32) ref int32 { return ref this.Value }")]

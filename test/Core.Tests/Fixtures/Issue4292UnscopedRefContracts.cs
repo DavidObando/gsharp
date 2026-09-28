@@ -157,12 +157,32 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
         {
         }
 
+        public interface IBaseInvariantMethod<T>
+        {
+            [UnscopedRef]
+            ref int Slot(ref int fallback);
+        }
+
+        public interface IDerivedInvariantMethod<T> : IBaseInvariantMethod<T>
+        {
+        }
+
         public interface IBaseGenericDefaultProperty<T>
         {
             RefValue Slot { set { } }
         }
 
         public interface IDerivedGenericDefaultProperty<T> : IBaseGenericDefaultProperty<T>
+        {
+        }
+
+        public interface IBaseInvariantProperty<T>
+        {
+            [UnscopedRef]
+            RefValue Slot { set; }
+        }
+
+        public interface IDerivedInvariantProperty<T> : IBaseInvariantProperty<T>
         {
         }
 
