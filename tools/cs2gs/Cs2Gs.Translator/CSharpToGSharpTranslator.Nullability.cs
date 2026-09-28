@@ -671,6 +671,33 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                if (node.Parent is ArgumentSyntax { Parent: TupleExpressionSyntax tuple })
+                {
+                    node = tuple;
+                    continue;
+                }
+
+                if (node.Parent is InitializerExpressionSyntax initializer)
+                {
+                    node = initializer;
+                    continue;
+                }
+
+                if (node is InitializerExpressionSyntax
+                    && node.Parent is (BaseObjectCreationExpressionSyntax
+                        or ArrayCreationExpressionSyntax
+                        or ImplicitArrayCreationExpressionSyntax))
+                {
+                    node = node.Parent;
+                    continue;
+                }
+
+                if (node.Parent is ExpressionElementSyntax element)
+                {
+                    node = element.Parent;
+                    continue;
+                }
+
                 break;
             }
 

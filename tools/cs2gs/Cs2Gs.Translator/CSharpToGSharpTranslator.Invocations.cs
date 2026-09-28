@@ -4440,6 +4440,13 @@ public sealed partial class CSharpToGSharpTranslator
             // Cache an in-progress sentinel before inspecting arguments and
             // local initializer/member flows, which can refer back to this call.
             this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
+            this.state.ManagedReferenceArrayProjectedCallsInProgress.Add(call);
+
+            bool Complete(bool result)
+            {
+                this.state.ManagedReferenceArrayProjectedCallsInProgress.Remove(call);
+                return result;
+            }
 
             INamedTypeSymbol projectedReceiver = null;
             bool typeReceiverCanProject = false;
@@ -4448,17 +4455,20 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (this.GetManagedReferenceArrayProjectedExpressionType(
                             receiverMember.Expression) is INamedTypeSymbol receiverType
-                    && SymbolEqualityComparer.Default.Equals(
-                        receiverType.OriginalDefinition,
-                        method.ContainingType?.OriginalDefinition))
+                    && ReceiverTypeHierarchy(receiverType).FirstOrDefault(candidate =>
+                        SymbolEqualityComparer.Default.Equals(
+                            candidate.OriginalDefinition,
+                            method.ContainingType?.OriginalDefinition))
+                        is { } matchingReceiverType)
                 {
-                    projectedReceiver = receiverType;
+                    projectedReceiver = matchingReceiverType;
                 }
                 else if (this.context.GetSymbolInfo(receiverMember.Expression).Symbol
                         is INamedTypeSymbol receiverNamedType
-                    && SymbolEqualityComparer.Default.Equals(
-                        receiverNamedType.OriginalDefinition,
-                        method.ContainingType?.OriginalDefinition))
+                    && ReceiverTypeHierarchy(receiverNamedType).Any(candidate =>
+                        SymbolEqualityComparer.Default.Equals(
+                            candidate.OriginalDefinition,
+                            method.ContainingType?.OriginalDefinition)))
                 {
                     typeReceiverCanProject = true;
                 }
@@ -4658,7 +4668,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.ReportUnsupported(
                     call,
                     message);
-                return false;
+                return Complete(false);
             }
 
             INamedTypeSymbol projectedContainingType = projectedReceiver;
@@ -4690,7 +4700,7 @@ public sealed partial class CSharpToGSharpTranslator
                     this.context.ReportUnsupported(
                         call,
                         $"could not project member '{method.Name}' through translated containing type '{projectedContainingType}'.");
-                    return false;
+                    return Complete(false);
                 }
             }
 
@@ -4723,7 +4733,30 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.ReportUnsupported(
                     call,
                     message);
-                return false;
+                return Complete(false);
+            }
+
+            ITypeSymbol originalResultType = call is BaseObjectCreationExpressionSyntax
+                ? method.ContainingType
+                : method.ReturnType;
+            ITypeSymbol projectedResultType = call is BaseObjectCreationExpressionSyntax
+                ? projectedMethod.ContainingType
+                : projectedMethod.ReturnType;
+            if (!SymbolEqualityComparer.IncludeNullability.Equals(
+                    originalResultType,
+                    projectedResultType)
+                && !this.ProjectedResultMatchesDestination(
+                    call,
+                    projectedResultType,
+                    out ITypeSymbol destinationType))
+            {
+                string message =
+                    "managed-reference array widening cannot change fixed destination storage " +
+                    $"'{destinationType}'; no exact G# translation exists.";
+                this.context.ReportUnsupported(
+                    call,
+                    message);
+                return Complete(false);
             }
 
             if (fixedStorageNeedsNullableArgument)
@@ -4746,7 +4779,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             this.state.ManagedReferenceArrayProjectedMethodByCall[call] = projected;
-            return projected != null;
+            return Complete(projected != null);
         }
 
         private bool ProjectedByRefArgumentsMatch(
@@ -4815,9 +4848,277 @@ public sealed partial class CSharpToGSharpTranslator
             BaseObjectCreationExpressionSyntax creation)
         {
             ISymbol sink = this.ResolveValueSink(creation);
-            return sink == null
+            return !HasFixedElementContext(creation)
+                && (sink == null
                 || (sink is ILocalSymbol local
-                    && IsImplicitlyTypedLocal(local));
+                    && IsImplicitlyTypedLocal(local)));
+        }
+
+        private bool ProjectedResultMatchesDestination(
+            ExpressionSyntax value,
+            ITypeSymbol projectedType,
+            out ITypeSymbol destinationType)
+        {
+            destinationType = null;
+            SyntaxNode directParent = value;
+            while (directParent.Parent is ParenthesizedExpressionSyntax)
+            {
+                directParent = directParent.Parent;
+            }
+
+            if (directParent.Parent is ArgumentSyntax
+                { Parent: BaseArgumentListSyntax } argument)
+            {
+                if (argument.Parent?.Parent is ExpressionSyntax outerCall
+                    && this.state.ManagedReferenceArrayProjectedCallsInProgress.Contains(
+                        outerCall))
+                {
+                    return true;
+                }
+
+                destinationType = this.GetArgumentParameter(argument)?.Type;
+                return ProjectionTypeFitsDestination(projectedType, destinationType);
+            }
+
+            ISymbol sink = this.ResolveValueSink(value);
+            destinationType = this.GetFixedElementDestinationType(value, sink);
+            if (destinationType != null)
+            {
+                return ProjectionTypeFitsDestination(projectedType, destinationType);
+            }
+
+            if (sink is ILocalSymbol local
+                && IsImplicitlyTypedLocal(local)
+                && !HasFixedElementContext(value))
+            {
+                if (!this.ValueDirectlyDefinesLocalStorage(value, local))
+                {
+                    return true;
+                }
+
+                return this.InferredLocalAssignmentsMatch(local, value, projectedType);
+            }
+
+            if (sink == null)
+            {
+                return true;
+            }
+
+            destinationType = this.context.GetTypeInfo(value).ConvertedType
+                ?? sink switch
+                {
+                    IFieldSymbol field => field.Type,
+                    ILocalSymbol destinationLocal => destinationLocal.Type,
+                    IParameterSymbol parameter => parameter.Type,
+                    IPropertySymbol property => property.Type,
+                    IMethodSymbol method => method.ReturnType,
+                    _ => null,
+                };
+            return ProjectionTypeFitsDestination(projectedType, destinationType);
+        }
+
+        private static bool ProjectionTypeFitsDestination(
+            ITypeSymbol projectedType,
+            ITypeSymbol destinationType) =>
+            destinationType == null
+            || SymbolEqualityComparer.IncludeNullability.Equals(
+                destinationType.WithNullableAnnotation(projectedType.NullableAnnotation),
+                projectedType);
+
+        private ITypeSymbol GetFixedElementDestinationType(
+            ExpressionSyntax value,
+            ISymbol sink)
+        {
+            SyntaxNode node = value;
+            while (node.Parent is ParenthesizedExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            var tupleIndices = new List<int>();
+            while (node.Parent is ArgumentSyntax tupleArgument
+                && tupleArgument.Parent is TupleExpressionSyntax tuple)
+            {
+                int index = tuple.Arguments.IndexOf(tupleArgument);
+                if (index < 0)
+                {
+                    break;
+                }
+
+                tupleIndices.Add(index);
+                node = tuple;
+            }
+
+            ITypeSymbol sinkType = sink switch
+            {
+                IFieldSymbol field => field.Type,
+                ILocalSymbol local => local.Type,
+                IParameterSymbol parameter => parameter.Type,
+                IPropertySymbol property => property.Type,
+                IMethodSymbol method => method.ReturnType,
+                _ => null,
+            };
+            sinkType ??= node is TupleExpressionSyntax containingTuple
+                ? this.context.GetTypeInfo(containingTuple).ConvertedType
+                : null;
+            for (int i = tupleIndices.Count - 1; i >= 0; i--)
+            {
+                if (sinkType is not INamedTypeSymbol { IsTupleType: true } tupleType
+                    || tupleIndices[i] >= tupleType.TupleElements.Length)
+                {
+                    return null;
+                }
+
+                sinkType = tupleType.TupleElements[tupleIndices[i]].Type;
+            }
+
+            if (tupleIndices.Count != 0)
+            {
+                return sinkType;
+            }
+
+            if (node.Parent is InitializerExpressionSyntax
+                    { Parent: ArrayCreationExpressionSyntax arrayCreation }
+                && this.context.GetTypeInfo(arrayCreation).Type is IArrayTypeSymbol arrayType)
+            {
+                return arrayType.ElementType;
+            }
+
+            return null;
+        }
+
+        private bool InferredLocalAssignmentsMatch(
+            ILocalSymbol local,
+            ExpressionSyntax projectedValue,
+            ITypeSymbol projectedType)
+        {
+            if (this.state.ManagedReferenceArrayProjectedLocalType.TryGetValue(
+                    local,
+                    out ITypeSymbol cached))
+            {
+                return SymbolEqualityComparer.IncludeNullability.Equals(
+                    cached,
+                    projectedType);
+            }
+
+            if (!this.state.ManagedReferenceArrayProjectedLocalTypeInProgress.Add(local))
+            {
+                return true;
+            }
+
+            bool matches = true;
+            try
+            {
+                if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                        is not VariableDeclaratorSyntax { Initializer.Value: { } initializer }
+                    || !ValueMatches(initializer))
+                {
+                    matches = false;
+                }
+
+                if (matches && this.state.CurrentBodyScope is { } scope)
+                {
+                    foreach (SyntaxNode write in scope.DescendantNodes(node =>
+                        node is not (LocalFunctionStatementSyntax
+                            or AnonymousFunctionExpressionSyntax)))
+                    {
+                        if (!this.SyntaxNodeWritesSymbol(write, local))
+                        {
+                            continue;
+                        }
+
+                        if (write is not AssignmentExpressionSyntax assignment
+                            || !assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                            || !this.BindsTo(assignment.Left, local)
+                            || !ValueMatches(assignment.Right))
+                        {
+                            matches = false;
+                            break;
+                        }
+                    }
+                }
+            }
+            finally
+            {
+                this.state.ManagedReferenceArrayProjectedLocalTypeInProgress.Remove(local);
+            }
+
+            this.state.ManagedReferenceArrayProjectedLocalType[local] =
+                matches ? projectedType : null;
+            return matches;
+
+            bool ValueMatches(ExpressionSyntax candidate)
+            {
+                candidate = Unparenthesize(candidate);
+                ITypeSymbol candidateType = candidate == projectedValue
+                    ? projectedType
+                    : this.GetManagedReferenceArrayProjectedArgumentType(candidate);
+                return SymbolEqualityComparer.IncludeNullability.Equals(
+                    candidateType,
+                    projectedType);
+            }
+        }
+
+        private bool ValueDirectlyDefinesLocalStorage(
+            ExpressionSyntax value,
+            ILocalSymbol local)
+        {
+            SyntaxNode node = value;
+            while (node.Parent is ParenthesizedExpressionSyntax
+                or CastExpressionSyntax
+                or ConditionalExpressionSyntax
+                or SwitchExpressionArmSyntax)
+            {
+                node = node.Parent;
+            }
+
+            return node.Parent switch
+            {
+                EqualsValueClauseSyntax { Parent: VariableDeclaratorSyntax declarator }
+                    => SymbolEqualityComparer.Default.Equals(
+                        this.context.GetDeclaredSymbol(declarator),
+                        local),
+                AssignmentExpressionSyntax assignment
+                    when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                        => this.BindsTo(assignment.Left, local),
+                _ => false,
+            };
+        }
+
+        private static bool HasFixedElementContext(ExpressionSyntax value)
+        {
+            SyntaxNode node = value;
+            while (node.Parent != null)
+            {
+                switch (node.Parent)
+                {
+                    case ParenthesizedExpressionSyntax:
+                    case CastExpressionSyntax:
+                    case ArgumentSyntax { Parent: TupleExpressionSyntax }:
+                    case TupleExpressionSyntax:
+                        node = node.Parent;
+                        continue;
+
+                    case InitializerExpressionSyntax initializer:
+                        if (initializer.Parent is ArrayCreationExpressionSyntax
+                            or ObjectCreationExpressionSyntax
+                            or ImplicitObjectCreationExpressionSyntax)
+                        {
+                            return true;
+                        }
+
+                        node = initializer;
+                        continue;
+
+                    case ExpressionElementSyntax:
+                        return true;
+
+                    default:
+                        return false;
+                }
+            }
+
+            return false;
         }
 
         private ITypeSymbol GetManagedReferenceArrayProjectedArgumentType(

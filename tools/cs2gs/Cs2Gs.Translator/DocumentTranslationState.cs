@@ -86,6 +86,17 @@ internal sealed class DocumentTranslationState
             new Dictionary<ExpressionSyntax, IMethodSymbol>(
                 ReferenceEqualityComparer.Instance);
 
+    public HashSet<ExpressionSyntax> ManagedReferenceArrayProjectedCallsInProgress { get; } =
+        new HashSet<ExpressionSyntax>(ReferenceEqualityComparer.Instance);
+
+    // Effective emitted type of an implicitly typed local whose initializer
+    // and every later assignment agree on managed-reference projection.
+    public Dictionary<ILocalSymbol, ITypeSymbol> ManagedReferenceArrayProjectedLocalType { get; } =
+        new Dictionary<ILocalSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
+
+    public HashSet<ILocalSymbol> ManagedReferenceArrayProjectedLocalTypeInProgress { get; } =
+        new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+
     // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
     // surrounding statement seam has hoisted into trailing `i++` statements
     // (G# models inc/dec as statements, not expressions; spec §Statements).

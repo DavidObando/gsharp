@@ -1053,11 +1053,24 @@ public sealed partial class CSharpToGSharpTranslator
             expression = Unparenthesize(expression);
             if (expression is IdentifierNameSyntax identifier
                 && this.context.GetSymbolInfo(identifier).Symbol is ILocalSymbol local
-                && !this.IsLocalReassigned(local)
-                && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                    is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                && IsImplicitlyTypedLocal(local))
             {
-                return this.GetManagedReferenceArrayProjectedExpressionType(initializer);
+                if (this.state.ManagedReferenceArrayProjectedLocalType.TryGetValue(
+                        local,
+                        out ITypeSymbol projectedLocalType))
+                {
+                    return projectedLocalType;
+                }
+
+                if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                        is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                {
+                    projectedLocalType =
+                        this.GetManagedReferenceArrayProjectedExpressionType(initializer);
+                    this.state.ManagedReferenceArrayProjectedLocalType[local] =
+                        projectedLocalType;
+                    return projectedLocalType;
+                }
             }
 
             if (expression is ElementAccessExpressionSyntax arrayElement
