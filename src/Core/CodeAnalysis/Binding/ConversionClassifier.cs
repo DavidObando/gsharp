@@ -3277,9 +3277,7 @@ internal sealed class ConversionClassifier
                     arguments[i],
                     parameters[paramIndex],
                     pointeeType,
-                    call,
-                    i,
-                    receiverArgCount: 0,
+                    location,
                     out var rejectedArgument)
                         ? rejectedArgument
                         : BindImplicitInArgument(location, arguments[i], pointeeType, parameter: null);
@@ -3295,9 +3293,7 @@ internal sealed class ConversionClassifier
                     arguments[i],
                     parameters[paramIndex],
                     parameterType,
-                    call,
-                    i,
-                    receiverArgCount: 0,
+                    location,
                     out var rejectedArgument))
                 {
                     builder ??= arguments.ToBuilder();

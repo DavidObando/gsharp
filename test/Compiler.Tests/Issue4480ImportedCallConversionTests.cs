@@ -382,7 +382,16 @@ public class Issue4480ImportedCallConversionTests
 
         public void Dispose()
         {
-            Directory.Delete(root, recursive: true);
+            try
+            {
+                Directory.Delete(root, recursive: true);
+            }
+            catch (IOException)
+            {
+            }
+            catch (UnauthorizedAccessException)
+            {
+            }
         }
 
         private static string CompileCSharpLibrary(string root)
@@ -416,5 +425,7 @@ public class Issue4480ImportedCallConversionTests
 
     /// <summary>Serializes tests that temporarily redirect process-wide console output.</summary>
     [CollectionDefinition("Issue4480Console", DisableParallelization = true)]
-    public sealed class Issue4480ConsoleCollection;
+    public sealed class Issue4480ConsoleCollection
+    {
+    }
 }
