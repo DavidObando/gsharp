@@ -140,12 +140,15 @@ public class Issue4479SupertypeNullabilityInferenceTests
     /// </summary>
     [Theory]
     [InlineData("Pick(Ob.Ambiguous())")]
+    [InlineData("Generic.Pick(Ob.Ambiguous())")]
     public void Conflicting_Interface_Projections_Do_Not_Infer(string expression)
     {
         using var library = new CSharpFixture(LibrarySource);
 
         var diagnostics = CompileErrors(library, "let probe = " + expression);
-        Assert.Contains(diagnostics, diagnostic => diagnostic.Id == "GS0151");
+        Assert.Contains(
+            diagnostics,
+            diagnostic => diagnostic.Id is "GS0151" or "GS0159");
     }
 
     /// <summary>

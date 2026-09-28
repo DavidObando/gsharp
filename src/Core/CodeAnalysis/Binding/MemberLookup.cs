@@ -8328,6 +8328,11 @@ internal sealed class MemberLookup
 
             if (foundHierarchyProjection)
             {
+                foreach (var openArgument in openArgs)
+                {
+                    AddSymbolicInferenceConflicts(openArgument, openMethod, bounds);
+                }
+
                 return;
             }
 
@@ -8582,6 +8587,46 @@ internal sealed class MemberLookup
                             GetNestedInferenceBoundKind(openDef, j, boundKind));
                     }
                 }
+            }
+        }
+    }
+
+    private static void AddSymbolicInferenceConflicts(
+        Type openClr,
+        MethodInfo openMethod,
+        SymbolicInferenceBounds bounds)
+    {
+        if (openClr.IsGenericParameter && openClr.DeclaringMethod != null)
+        {
+            if ((ReferenceEquals(openClr.DeclaringMethod, openMethod)
+                    || openClr.DeclaringMethod.MetadataToken == openMethod.MetadataToken)
+                && (uint)openClr.GenericParameterPosition < (uint)bounds.Arity)
+            {
+                bounds.Add(
+                    openClr.GenericParameterPosition,
+                    SymbolicInferenceConflict,
+                    SymbolicInferenceBoundKind.Exact);
+            }
+
+            return;
+        }
+
+        if (openClr.HasElementType)
+        {
+            var element = openClr.GetElementType();
+            if (element != null)
+            {
+                AddSymbolicInferenceConflicts(element, openMethod, bounds);
+            }
+
+            return;
+        }
+
+        if (openClr.IsGenericType)
+        {
+            foreach (var argument in openClr.GetGenericArguments())
+            {
+                AddSymbolicInferenceConflicts(argument, openMethod, bounds);
             }
         }
     }
