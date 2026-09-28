@@ -674,8 +674,8 @@ internal sealed class FunctionEmitter
 
         // Compute nullable flags for return + each non-`this` parameter. An
         // async kickoff's emitted return is the builder's task type, not
-        // `function.Type`, so its flags describe that shape (see
-        // AsyncKickoffReturnFlags). They used to be left EMPTY, on the
+        // `function.Type`, so its flags describe that physical shape. They
+        // used to be left EMPTY, on the
         // reasoning that a non-null `Task<T>` matches the assembly-level
         // NullableContextAttribute(1) default. That holds only while the
         // METHOD context stays 1: ChooseMethodNullableContext picks the
@@ -693,7 +693,7 @@ internal sealed class FunctionEmitter
         var drivenSynchronously = isEntryPoint && asyncPlan?.StateMachine.BuilderInfo.TaskProperty != null;
         var returnFlags = asyncPlan == null || drivenSynchronously
             ? NullableFlagsBuilder.Build(function.Type)
-            : AsyncKickoffReturnFlags(function, asyncPlan);
+            : this.AsyncKickoffReturnFlags(asyncPlan);
         var paramFlagsList = new List<ImmutableArray<byte>>();
         foreach (var p in function.EmittedParameters)
         {
@@ -969,71 +969,14 @@ internal sealed class FunctionEmitter
     }
 
     /// <summary>
-    /// Issue #4287: the <c>[Nullable]</c> flags of an async kickoff's emitted
-    /// return, which is the builder's task type (<c>Task</c>, <c>Task&lt;T&gt;</c>,
-    /// <c>ValueTask&lt;T&gt;</c>, …), not <c>function.Type</c>. Laid out the way
-    /// csc lays out the same signature, and as <see cref="NullableFlagsBuilder"/>
-    /// lays out any other type:
-    /// <list type="bullet">
-    /// <item><description>the task's own byte: non-null for a reference task
-    /// (the builder never returns nil), the oblivious placeholder for a
-    /// generic value task, nothing for a non-generic value task;</description></item>
-    /// <item><description>then, for a generic task, the awaited result's
-    /// flags.</description></item>
-    /// </list>
-    /// An <c>async void</c> kickoff has nothing to describe.
+    /// Issue #4465: builds nullable flags from the same physical return symbol
+    /// used by signature emission, so Task/ValueTask envelopes and their
+    /// logical results cannot drift.
     /// </summary>
-    /// <param name="function">The async function.</param>
     /// <param name="asyncPlan">Its state-machine plan.</param>
     /// <returns>The return position's flags.</returns>
-    private static ImmutableArray<byte> AsyncKickoffReturnFlags(FunctionSymbol function, AsyncStateMachinePlan asyncPlan)
-    {
-        var builderInfo = asyncPlan.StateMachine.BuilderInfo;
-        if (builderInfo.Kind == AsyncMethodBuilderKind.Void || builderInfo.TaskProperty is not { } taskProperty)
-        {
-            return ImmutableArray<byte>.Empty;
-        }
-
-        var taskType = taskProperty.PropertyType;
-
-        // `function.Type` IS the awaited result: the declaration binder
-        // (NormalizeAsyncDeclaredReturnType) already removed one declared
-        // `Task[T]` / `ValueTask[T]`. Unwrapping again here would drop a real
-        // nested task: `async func F() Task[Task[string?]]` awaits a
-        // `Task[string?]`, and its flags are `[1, 1, 2]`, not `[1, 2]`.
-        var awaitedFlags = taskType.IsGenericType
-            ? NullableFlagsBuilder.Build(function.Type)
-            : ImmutableArray<byte>.Empty;
-
-        // A VALUE task over an awaited type with no nullable positions
-        // (`ValueTask<int32>`, every suspending `func … int32`) has nothing to
-        // describe, and csc writes no [Nullable] for it. Emitting a lone
-        // placeholder `[0]` would add a sequence-0 return Param row that means
-        // nothing, and hot reload pairs a method across a suspension flip by
-        // its parameter rows.
-        if (taskType.IsValueType && awaitedFlags.IsEmpty)
-        {
-            return ImmutableArray<byte>.Empty;
-        }
-
-        var flags = ImmutableArray.CreateBuilder<byte>();
-        if (!taskType.IsValueType)
-        {
-            flags.Add(NullableFlagsBuilder.NotAnnotated);
-        }
-        else if (taskType.IsGenericType)
-        {
-            // A closed generic VALUE type (`ValueTask<T>`) still occupies a
-            // leading slot, the oblivious placeholder, before its type
-            // arguments: NullableFlagsBuilder's layout rule, and csc's. Without
-            // it every nested flag shifts by one, so `ValueTask<List<string?>>`
-            // would re-import as `ValueTask[List[string]?]` (Copilot review).
-            flags.Add(NullableFlagsBuilder.Oblivious);
-        }
-
-        flags.AddRange(awaitedFlags);
-        return flags.ToImmutable();
-    }
+    private ImmutableArray<byte> AsyncKickoffReturnFlags(AsyncStateMachinePlan asyncPlan)
+        => this.outer.GetAsyncReturnNullableFlags(asyncPlan);
 
     /// <summary>
     /// Issue #834: chooses the method-level <c>NullableContextAttribute</c>

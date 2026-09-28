@@ -263,6 +263,110 @@ public class Adr0186ObliviousRoundTripEmitTests
     }
 
     /// <summary>
+    /// Issue #4465: nullable metadata describes the physical async envelope,
+    /// with the logical result nested beneath it. An oblivious declaration
+    /// makes a reference-type <c>Task</c> envelope platform without erasing a
+    /// stated nullable result; suspending functions use the corresponding
+    /// <c>ValueTask</c> layout.
+    /// </summary>
+    [Fact]
+    public void Async_And_Suspending_Returns_Round_Trip_Their_Physical_Envelope()
+    {
+        const string source = """
+            package Probe
+            import System.ComponentModel
+            import System.Threading.Tasks
+
+            class Service {
+                async func Maybe() string? {
+                    await Task.Yield()
+                    return nil
+                }
+
+                @Oblivious async func ObliviousMaybe() string? {
+                    await Task.Yield()
+                    return nil
+                }
+
+                async func Text() string {
+                    await Task.Yield()
+                    return ""
+                }
+
+                async func Number() int32 {
+                    await Task.Yield()
+                    return 1
+                }
+
+                async func Done() {
+                    await Task.Yield()
+                }
+
+                @return:Description("async return")
+                async func Named() (Label string?, Count int32) {
+                    await Task.Yield()
+                    return (nil, 1)
+                }
+
+                suspend func SuspendedMaybe() string? {
+                    await Task.Yield()
+                    return nil
+                }
+
+                @Oblivious suspend func ObliviousSuspendedMaybe() string? {
+                    await Task.Yield()
+                    return nil
+                }
+            }
+            """;
+
+        WithCompiledType(source, "Probe.Service", Array.Empty<string>(), service =>
+        {
+            var maybeMethod = service.GetMethod("Maybe")!;
+            var maybe = ClrNullability.GetReturnTypeSymbol(maybeMethod);
+            Assert.IsNotType<PlatformTypeSymbol>(maybe);
+            AssertNullableString(FirstTypeArgument(maybe));
+            Assert.Equal(new byte[] { 1, 2 }, NullableBytes(maybeMethod.ReturnParameter.GetCustomAttributesData()));
+
+            var obliviousMaybeMethod = service.GetMethod("ObliviousMaybe")!;
+            var obliviousMaybe = Assert.IsType<PlatformTypeSymbol>(ClrNullability.GetReturnTypeSymbol(obliviousMaybeMethod));
+            AssertNullableString(FirstTypeArgument(obliviousMaybe.UnderlyingType));
+            Assert.Equal(new byte[] { 0, 2 }, NullableBytes(obliviousMaybeMethod.ReturnParameter.GetCustomAttributesData()));
+
+            var textMethod = service.GetMethod("Text")!;
+            var text = ClrNullability.GetReturnTypeSymbol(textMethod);
+            Assert.IsNotType<PlatformTypeSymbol>(text);
+            Assert.Same(TypeSymbol.String, FirstTypeArgument(text));
+            Assert.Equal(new byte[] { 1, 1 }, NullableBytes(textMethod.ReturnParameter.GetCustomAttributesData()));
+
+            var numberMethod = service.GetMethod("Number")!;
+            var number = ClrNullability.GetReturnTypeSymbol(numberMethod);
+            Assert.Same(TypeSymbol.Int32, FirstTypeArgument(number));
+            Assert.Null(NullableBytes(numberMethod.ReturnParameter.GetCustomAttributesData()));
+
+            var doneMethod = service.GetMethod("Done")!;
+            var done = ClrNullability.GetReturnTypeSymbol(doneMethod);
+            Assert.Equal("System.Threading.Tasks.Task", done.ClrType?.FullName);
+            Assert.Null(NullableBytes(doneMethod.ReturnParameter.GetCustomAttributesData()));
+
+            var namedMethod = service.GetMethod("Named")!;
+            var returnAttributes = namedMethod.ReturnParameter.GetCustomAttributesData();
+            Assert.Contains(returnAttributes, a => a.AttributeType.FullName == "System.ComponentModel.DescriptionAttribute");
+            Assert.Contains(returnAttributes, a => a.AttributeType.FullName == "System.Runtime.CompilerServices.TupleElementNamesAttribute");
+            Assert.Equal(new byte[] { 1, 0, 2 }, NullableBytes(returnAttributes));
+
+            foreach (var name in new[] { "SuspendedMaybe", "ObliviousSuspendedMaybe" })
+            {
+                var method = service.GetMethod(name)!;
+                var suspended = ClrNullability.GetReturnTypeSymbol(method);
+                Assert.Equal("System.Threading.Tasks.ValueTask`1", suspended.ClrType?.GetGenericTypeDefinition().FullName);
+                AssertNullableString(FirstTypeArgument(suspended));
+                Assert.Equal(new byte[] { 0, 2 }, NullableBytes(method.ReturnParameter.GetCustomAttributesData()));
+            }
+        });
+    }
+
+    /// <summary>
     /// Parameters and returns: a wholly oblivious method, and a method mixing
     /// all three values across its parameters (a parameter-level
     /// <c>@Oblivious</c>).
@@ -563,7 +667,11 @@ public class Adr0186ObliviousRoundTripEmitTests
     {
         var runtimeDir = Path.GetDirectoryName(typeof(object).Assembly.Location)!;
         var resolver = new PathAssemblyResolver(
-            Directory.GetFiles(runtimeDir, "*.dll").Concat(new[] { assemblyPath }));
+            Directory.GetFiles(runtimeDir, "*.dll").Concat(new[]
+            {
+                assemblyPath,
+                typeof(Gsharp.Concurrency.SuspendingAttribute).Assembly.Location,
+            }));
         return new MetadataLoadContext(resolver, "System.Private.CoreLib");
     }
 

@@ -4861,28 +4861,69 @@ internal sealed class ReflectionMetadataEmitter
     // return-type emission band (used by EmitCore too), not the user-token band.
     internal void EncodeAsyncReturnType(ReturnTypeEncoder encoder, AsyncStateMachinePlan plan)
     {
-        var builderInfo = plan.StateMachine.BuilderInfo;
-        if (builderInfo.Kind == AsyncMethodBuilderKind.Void)
+        if (this.GetAsyncReturnTypeSymbol(plan) is not { } returnType)
         {
             encoder.Void();
-        }
-        else if (builderInfo.TaskProperty != null)
-        {
-            if (TryCreateSymbolicAsyncTaskType(plan.StateMachine, out var symbolicTaskType))
-            {
-                this.signatures.EncodeTypeSymbol(encoder.Type(), symbolicTaskType);
-            }
-            else
-            {
-                // The Task property's return type IS the kickoff return type.
-                var taskClrType = builderInfo.TaskProperty.PropertyType;
-                this.signatures.EncodeClrType(encoder.Type(), taskClrType);
-            }
         }
         else
         {
-            encoder.Void();
+            this.signatures.EncodeTypeSymbol(encoder.Type(), returnType);
         }
+    }
+
+    /// <summary>
+    /// Gets the physical return type shared by async kickoff signature and
+    /// nullable-metadata emission.
+    /// </summary>
+    internal TypeSymbol? GetAsyncReturnTypeSymbol(AsyncStateMachinePlan plan)
+    {
+        var stateMachine = plan.StateMachine;
+        var builderInfo = stateMachine.BuilderInfo;
+        if (builderInfo.Kind == AsyncMethodBuilderKind.Void
+            || builderInfo.TaskProperty?.PropertyType is not Type taskClrType)
+        {
+            return null;
+        }
+
+        TypeSymbol taskType = taskClrType.IsConstructedGenericType
+            && taskClrType.GetGenericArguments().Length == 1
+            && stateMachine.ResultTypeSymbol is { } resultType
+            ? ImportedTypeSymbol.GetConstructed(
+                taskClrType,
+                taskClrType.GetGenericTypeDefinition(),
+                ImmutableArray.Create(resultType))
+            : ImportedTypeSymbol.GetWithoutNullability(taskClrType, NullabilityFreeReason.EmitShape);
+
+        var declaration = (SyntaxNode?)plan.KickoffMethod.Declaration ?? plan.KickoffMethod.LocalDeclaration;
+        return !taskClrType.IsValueType
+            && declaration != null
+            && ObliviousScope.IsInObliviousScope(declaration)
+            ? ObliviousScope.Wrap(taskType)
+            : taskType;
+    }
+
+    /// <summary>
+    /// Gets nullable flags for the physical async kickoff return. Generic value
+    /// tasks whose result contributes no nullable positions keep csc's
+    /// attribute-free shape.
+    /// </summary>
+    internal ImmutableArray<byte> GetAsyncReturnNullableFlags(AsyncStateMachinePlan plan)
+    {
+        var returnType = this.GetAsyncReturnTypeSymbol(plan);
+        if (returnType == null)
+        {
+            return ImmutableArray<byte>.Empty;
+        }
+
+        var builderInfo = plan.StateMachine.BuilderInfo;
+        if (builderInfo.TaskProperty?.PropertyType.IsValueType == true
+            && plan.StateMachine.ResultTypeSymbol is { } resultType
+            && NullableFlagsBuilder.Build(resultType).IsEmpty)
+        {
+            return ImmutableArray<byte>.Empty;
+        }
+
+        return NullableFlagsBuilder.Build(returnType);
     }
 
     /// <summary>
@@ -5479,36 +5520,6 @@ internal sealed class ReflectionMetadataEmitter
             }
         }
 
-        return true;
-    }
-
-    // Issue #1785: `async func f(...) T?` for a same-compilation user value
-    // type (struct/enum) has a ResultTypeSymbol that is a NullableTypeSymbol
-    // wrapping the struct/enum, not the bare struct/enum symbol itself.
-    // Recognize that shape too — symbol-based (NullableLifting), not
-    // ClrType.IsValueType, which is null for in-flight user types — so the
-    // kickoff method's real Task<T?> return type is closed over the emitted
-    // Nullable<UserT> instead of falling back to the erased Task<object>.
-    // Issues #2381/#2713: use the same symbolic projection predicate as
-    // WrapAsTask and async state-machine construction.
-    private static bool IsAsyncUserDefinedResultType(TypeSymbol type)
-        => TypeSymbol.RequiresSymbolicProjection(type);
-
-    private static bool TryCreateSymbolicAsyncTaskType(SynthesizedStateMachineType stateMachine, [NotNullWhen(true)] out TypeSymbol? taskType)
-    {
-        taskType = null;
-        if (stateMachine?.ResultTypeSymbol == null
-            || !IsAsyncUserDefinedResultType(stateMachine.ResultTypeSymbol)
-            || stateMachine.BuilderInfo?.TaskProperty?.PropertyType is not Type taskClrType
-            || !taskClrType.IsConstructedGenericType)
-        {
-            return false;
-        }
-
-        taskType = ImportedTypeSymbol.GetConstructed(
-            taskClrType,
-            taskClrType.GetGenericTypeDefinition(),
-            ImmutableArray.Create(stateMachine.ResultTypeSymbol));
         return true;
     }
 
