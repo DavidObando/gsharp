@@ -359,6 +359,89 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Equal(12, result.Value);
     }
 
+    [Fact]
+    public void ForEachNullabilityTracksOnlyInferredBindings()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayForEachConversions;
+            public class Probe {
+                public static int Run() {
+                    object?[] boxed = { 1 };
+                    int convertedResult = 0;
+                    foreach (int converted in boxed) {
+                        convertedResult = converted.ToString() == "1" ? converted : 0;
+                    }
+
+                    int[] values = { 3 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    foreach (ManagedRef<int> managed in source) {
+                        return convertedResult + managed.Borrow();
+                    }
+                    return 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("ManagedArrayForEachConversions.cs", source) }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("converted!!", text, StringComparison.Ordinal);
+        Assert.Contains("managed!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()", new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(4, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayGenericResultsKeepCSharpTypeArguments()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayGenericResults;
+            public class Probe {
+                private static T First<T>(T[] items) => items[0];
+                private static int Read(ManagedRef<int> value) => value.Borrow();
+
+                public static int Run() {
+                    int[] values = { 3 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    return First(source).Borrow()
+                        + First<ManagedRef<int>>(source).Borrow()
+                        + Read(First(source))
+                        + Read(First<ManagedRef<int>>(source));
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("ManagedArrayGenericResults.cs", source) }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("First(source)!!.Borrow()", text, StringComparison.Ordinal);
+        Assert.Contains("First[managed[int32]?](source)!!.Borrow()", text, StringComparison.Ordinal);
+        Assert.Contains("Read(First(source)!!)", text, StringComparison.Ordinal);
+        Assert.Contains("Read(First[managed[int32]?](source)!!)", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()", new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(12, result.Value);
+    }
+
     [Theory]
     [InlineData("int managed = 1;", "managed", 4)]
     [InlineData("int managed() => 2;", "managed()", 5)]

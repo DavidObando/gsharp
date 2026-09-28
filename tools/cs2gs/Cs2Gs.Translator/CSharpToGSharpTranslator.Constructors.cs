@@ -3611,12 +3611,14 @@ public sealed partial class CSharpToGSharpTranslator
                     // `IAsyncEnumerable<T>` with a plain `for` is rejected (GS0116).
                     ISymbol loopSymbol = this.context.GetDeclaredSymbol(forEach);
                     string loopIdentifier = this.EmittedName(loopSymbol, forEach.Identifier.ValueText);
-                    ITypeSymbol forEachElement = this.context.SemanticModel
-                        .GetForEachStatementInfo(forEach)
-                        .ElementType;
-                    bool nullableElement = this.ArrayExpressionHasNullableElement(forEach.Expression)
-                        || (forEachElement?.IsReferenceType == true
-                            && forEachElement.NullableAnnotation == NullableAnnotation.Annotated);
+                    ForEachStatementInfo forEachInfo =
+                        this.context.SemanticModel.GetForEachStatementInfo(forEach);
+                    ITypeSymbol forEachElement = forEachInfo.ElementType;
+                    bool inferredLoopVariable = forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity;
+                    bool nullableElement = inferredLoopVariable
+                        && (this.ArrayExpressionHasNullableElement(forEach.Expression)
+                            || (forEachElement?.IsReferenceType == true
+                                && forEachElement.NullableAnnotation == NullableAnnotation.Annotated));
                     if (nullableElement && loopSymbol != null)
                     {
                         this.state.NullableForEachBindings.Add(loopSymbol);
@@ -3650,10 +3652,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // is what #3925 replaced `__foreachN` synthesis with.
                     GTypeReference loopVariableType = null;
                     if (!forEach.Type.IsVar
-                        && !this.context.SemanticModel
-                            .GetForEachStatementInfo(forEach)
-                            .ElementConversion
-                            .IsIdentity)
+                        && !forEachInfo.ElementConversion.IsIdentity)
                     {
                         ITypeSymbol targetSymbol = this.context.GetTypeInfo(forEach.Type).Type;
                         loopVariableType = targetSymbol != null

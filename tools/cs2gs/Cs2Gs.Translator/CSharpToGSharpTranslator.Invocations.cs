@@ -530,6 +530,32 @@ public sealed partial class CSharpToGSharpTranslator
                     .ToList();
             }
 
+            // Issue #4525: an explicit type argument must agree with the widened
+            // G# array argument just as an inferred one does.
+            if (typeArguments is { Count: > 0 }
+                && this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol arrayWidenedGeneric)
+            {
+                List<GTypeReference> reconciledTypeArguments = null;
+                for (int i = 0; i < typeArguments.Count; i++)
+                {
+                    if (!this.MethodTypeParameterIsWidenedByManagedReferenceArrayArgument(
+                        invocation,
+                        arrayWidenedGeneric,
+                        i))
+                    {
+                        continue;
+                    }
+
+                    reconciledTypeArguments ??= typeArguments.ToList();
+                    reconciledTypeArguments[i] = MakeNullable(reconciledTypeArguments[i]);
+                }
+
+                if (reconciledTypeArguments != null)
+                {
+                    typeArguments = reconciledTypeArguments;
+                }
+            }
+
             return new InvocationExpression(target, arguments, typeArguments);
         }
 

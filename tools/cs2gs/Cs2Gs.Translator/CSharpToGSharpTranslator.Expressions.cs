@@ -1028,6 +1028,64 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
+        // Issue #4525: the mapped array argument is []managed[T]?, so G# binds
+        // the corresponding method type parameter as nullable even when Roslyn's
+        // constructed method retains the C# ManagedRef<T> argument.
+        private bool GenericResultInfersNilableThroughManagedReferenceArrayWidening(
+            ExpressionSyntax expression)
+        {
+            if (Unparenthesize(expression) is not InvocationExpressionSyntax invocation
+                || this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
+                || method.OriginalDefinition.ReturnType is not ITypeParameterSymbol returnParameter
+                || returnParameter.TypeParameterKind != TypeParameterKind.Method)
+            {
+                return false;
+            }
+
+            return this.MethodTypeParameterIsWidenedByManagedReferenceArrayArgument(
+                invocation,
+                method,
+                returnParameter.Ordinal);
+        }
+
+        private bool MethodTypeParameterIsWidenedByManagedReferenceArrayArgument(
+            InvocationExpressionSyntax invocation,
+            IMethodSymbol method,
+            int typeParameterOrdinal)
+        {
+            if (!method.IsGenericMethod
+                || typeParameterOrdinal < 0
+                || typeParameterOrdinal >= method.TypeArguments.Length
+                || !CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                    method.TypeArguments[typeParameterOrdinal],
+                    this.context.Compilation))
+            {
+                return false;
+            }
+
+            IMethodSymbol definition = method.OriginalDefinition;
+            foreach (ArgumentSyntax argument in invocation.ArgumentList.Arguments)
+            {
+                IParameterSymbol parameter = DetermineParameter(argument, this.context);
+                if (parameter == null
+                    || parameter.Ordinal >= definition.Parameters.Length
+                    || definition.Parameters[parameter.Ordinal].Type is not IArrayTypeSymbol
+                        { ElementType: ITypeParameterSymbol elementParameter }
+                    || elementParameter.TypeParameterKind != TypeParameterKind.Method
+                    || elementParameter.Ordinal != typeParameterOrdinal)
+                {
+                    continue;
+                }
+
+                if (this.ArrayExpressionHasNullableElement(argument.Expression))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
         private GExpression TranslateReceiverWithNullForgiveness(ExpressionSyntax recv)
         {
             GExpression translated = this.TranslateExpression(recv);
@@ -1063,11 +1121,14 @@ public sealed partial class CSharpToGSharpTranslator
                 this.ImportedGenericTupleElementRequiresAssertion(recv);
             bool byRefSuppressionDroppedRequiresAssertion =
                 this.GenericResultInfersNilableThroughDroppedByRefSuppression(recv);
+            bool managedArrayGenericResultRequiresAssertion =
+                this.GenericResultInfersNilableThroughManagedReferenceArrayWidening(recv);
 
             if (!iteratorForeachReceiverRequiresAssertion
                 && !nullableForEachBindingRequiresAssertion
                 && !importedGenericTupleElementRequiresAssertion
                 && !byRefSuppressionDroppedRequiresAssertion
+                && !managedArrayGenericResultRequiresAssertion
                 && this.GSharpExpressionIsStaticallyNonNull(recv, translated))
             {
                 return ParenthesizeIfBareNumericLiteral(translated);
@@ -1077,6 +1138,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || nullableForEachBindingRequiresAssertion
                 || importedGenericTupleElementRequiresAssertion
                 || byRefSuppressionDroppedRequiresAssertion
+                || managedArrayGenericResultRequiresAssertion
 
                 // Issue #4356: `T?` only on the G# analyzer API. Asked outside
                 // the pattern-binding gate below: a `var` designation
@@ -3183,7 +3245,10 @@ public sealed partial class CSharpToGSharpTranslator
         private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
         {
             bool nullableForEachBinding = this.IsNullableForEachBindingUse(value);
+            bool managedArrayGenericResult =
+                this.GenericResultInfersNilableThroughManagedReferenceArrayWidening(value);
             if ((!nullableForEachBinding
+                    && !managedArrayGenericResult
                     && this.GSharpExpressionIsStaticallyNonNull(
                         value,
                         checkNullableForEachBinding: false))
@@ -3198,7 +3263,8 @@ public sealed partial class CSharpToGSharpTranslator
             // Issues #4500 and #4525: an element read or foreach binding from
             // an array cs2gs emits with nullable elements.
             if (this.IsNullableArrayElementAccess(value)
-                || nullableForEachBinding)
+                || nullableForEachBinding
+                || managedArrayGenericResult)
             {
                 return true;
             }
