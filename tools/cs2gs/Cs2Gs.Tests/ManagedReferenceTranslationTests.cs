@@ -1856,6 +1856,43 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ZeroArgumentRefExtensionReceiverIsMutable()
+    {
+        const string source = """
+            namespace ZeroArgumentRefExtension;
+            public readonly struct Counter {
+                public int Value { get; }
+                public Counter(int value) { Value = value; }
+            }
+            public static class Extensions {
+                public static void Touch(this ref Counter counter) { }
+            }
+            public class Probe {
+                public static int Run() {
+                    var counter = new Counter(42);
+                    counter.Touch();
+                    return counter.Value;
+                }
+            }
+            """;
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ZeroArgumentRefExtension.cs", source) },
+            CSharpProjectLoader.RuntimeReferences());
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity != TranslationSeverity.Info);
+        Assert.Contains("var counter", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayElementRejectsNonNullableRefExtensionReceiver()
     {
         const string source = """

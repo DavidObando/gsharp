@@ -2192,14 +2192,18 @@ public sealed partial class CSharpToGSharpTranslator
             if (!this.BindsTo(receiver, symbol)
                 || this.context.SemanticModel.GetOperation(invocation)
                     is not IInvocationOperation operation
-                || !operation.TargetMethod.IsExtensionMethod
-                || operation.TargetMethod.Parameters.IsEmpty)
+                || !operation.TargetMethod.IsExtensionMethod)
             {
                 return false;
             }
 
             IMethodSymbol extensionMethod =
                 operation.TargetMethod.ReducedFrom ?? operation.TargetMethod;
+            if (extensionMethod.Parameters.IsEmpty)
+            {
+                return false;
+            }
+
             RefKind refKind = extensionMethod.Parameters[0].RefKind;
             return refKind == RefKind.Ref || refKind == RefKind.Out;
         }
