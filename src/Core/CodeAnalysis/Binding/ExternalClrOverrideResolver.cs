@@ -84,7 +84,8 @@ internal static class ExternalClrOverrideResolver
                     methodTypeArguments,
                     isAsync || isSuspending,
                     isAsyncVoid,
-                    isValueTask || isSuspending))
+                    isValueTask || isSuspending,
+                    allowCovariantReturn: !isSuspending))
             {
                 continue;
             }
@@ -891,7 +892,8 @@ internal static class ExternalClrOverrideResolver
         ImmutableArray<TypeSymbol?> methodTypeArguments = default,
         bool isAsync = false,
         bool isAsyncVoid = false,
-        bool isValueTask = false)
+        bool isValueTask = false,
+        bool allowCovariantReturn = true)
     {
         if (clrReturnType == null)
         {
@@ -942,7 +944,9 @@ internal static class ExternalClrOverrideResolver
             return true;
         }
 
-        return returnRefKind == RefKind.None && IsCovariantReturn(clrReturnType, returnType);
+        return allowCovariantReturn
+            && returnRefKind == RefKind.None
+            && IsCovariantReturn(clrReturnType, returnType);
     }
 
     private static bool TryUnwrapClrAsyncReturnType(

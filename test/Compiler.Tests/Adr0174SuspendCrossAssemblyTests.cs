@@ -489,6 +489,10 @@ public class Adr0174SuspendCrossAssemblyTests
                 public open suspend func Format[T](value T) string {
                     return "$value"
                 }
+
+                public open suspend func Covariant() object {
+                    return "base"
+                }
             }
             """;
 
@@ -499,6 +503,10 @@ public class Adr0174SuspendCrossAssemblyTests
             class Broken : Base {
                 override suspend func Format[T, U](value T) string {
                     return "$value"
+                }
+
+                override suspend func Covariant() string {
+                    return "derived"
                 }
             }
             """;
@@ -513,7 +521,7 @@ public class Adr0174SuspendCrossAssemblyTests
             var appPath = Path.Combine(tempDir, "App.dll");
             var appLog = Compile(tempDir, "App.gs", AppSource, appPath, "/target:library", "/reference:" + libPath);
             Assert.False(File.Exists(appPath), "mismatched override unexpectedly compiled");
-            Assert.Contains("GS0185", appLog, StringComparison.Ordinal);
+            Assert.Equal(2, appLog.Split("GS0185", StringSplitOptions.None).Length - 1);
         }
         finally
         {
