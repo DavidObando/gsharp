@@ -506,8 +506,41 @@ internal sealed partial class StatementBinder
         if (statement is BoundExpressionStatement { Expression: BoundAssignmentExpression assign }
             && TryClassifyNonNullAssignment(assign, out var variable, out var underlying))
         {
-            persistentFrame[Invariant.Required(variable, "a successful assignment narrowing has a variable")]
+            var narrowedVariable = Invariant.Required(variable, "a successful assignment narrowing has a variable");
+            persistentFrame[narrowedVariable]
                 = Invariant.Required(underlying, "a successful assignment narrowing has an underlying type");
+
+            foreach (var pending in binderCtx.PendingGotoAssignmentInvalidations.Values)
+            {
+                pending.Add(narrowedVariable);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Issue #4519: joins the current narrowing state with forward jumps that
+    /// can reach <paramref name="labelName"/>. Only assignment narrowings
+    /// created after such a jump are removed; narrowings established before
+    /// every jump, unrelated variables, and assignments after the label remain.
+    /// </summary>
+    private void InvalidateAssignmentNarrowingsBypassedByGoto(string labelName)
+    {
+        if (!binderCtx.PendingGotoAssignmentInvalidations.Remove(labelName, out var variables))
+        {
+            return;
+        }
+
+        binderCtx.PendingGotoNarrowingSnapshots.Remove(labelName, out var incomingSnapshots);
+        foreach (var frame in binderCtx.NarrowedVariables)
+        {
+            foreach (var variable in variables)
+            {
+                if (incomingSnapshots == null
+                    || incomingSnapshots.Any(snapshot => !snapshot.Contains(variable)))
+                {
+                    RemoveByRoot(frame, variable);
+                }
+            }
         }
     }
 

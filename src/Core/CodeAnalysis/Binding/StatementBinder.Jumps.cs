@@ -26,6 +26,35 @@ internal sealed partial class StatementBinder
     private BoundStatement BindGotoStatement(GotoStatementSyntax syntax)
     {
         var labelName = syntax.LabelIdentifier.ValueText;
+        if (!binderCtx.DefinedUserLabels.Contains(labelName)
+            && !binderCtx.PendingGotoAssignmentInvalidations.ContainsKey(labelName))
+        {
+            binderCtx.PendingGotoAssignmentInvalidations[labelName] = new HashSet<VariableSymbol>();
+        }
+
+        if (!binderCtx.DefinedUserLabels.Contains(labelName))
+        {
+            if (!binderCtx.PendingGotoNarrowingSnapshots.TryGetValue(labelName, out var snapshots))
+            {
+                snapshots = new List<HashSet<VariableSymbol>>();
+                binderCtx.PendingGotoNarrowingSnapshots[labelName] = snapshots;
+            }
+
+            var narrowedAtSource = new HashSet<VariableSymbol>();
+            foreach (var frame in binderCtx.NarrowedVariables)
+            {
+                foreach (var path in frame.Keys)
+                {
+                    if (!path.HasMembers)
+                    {
+                        narrowedAtSource.Add(path.Root);
+                    }
+                }
+            }
+
+            snapshots.Add(narrowedAtSource);
+        }
+
         var label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location);
         userGotoHandlerRegions.Add((
             labelName,
@@ -72,6 +101,7 @@ internal sealed partial class StatementBinder
         }
 
         userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray();
+        InvalidateAssignmentNarrowingsBypassedByGoto(labelName);
         binderCtx.UnresolvedGotoLabels.Remove(labelName);
         if (!binderCtx.UserLabels.TryGetValue(labelName, out var label))
         {
@@ -106,6 +136,8 @@ internal sealed partial class StatementBinder
         }
 
         binderCtx.UnresolvedGotoLabels.Clear();
+        binderCtx.PendingGotoAssignmentInvalidations.Clear();
+        binderCtx.PendingGotoNarrowingSnapshots.Clear();
         userGotoHandlerRegions.Clear();
         userLabelHandlerRegions.Clear();
     }
@@ -254,6 +286,12 @@ internal sealed partial class StatementBinder
         var pendingEarlyExitFrames = binderCtx.PendingEarlyExitFrames.ToArray();
         var pendingSwitchExitFrames = binderCtx.PendingSwitchExitFrames.ToArray();
         var definedUserLabels = binderCtx.DefinedUserLabels.ToArray();
+        var pendingGotoAssignmentInvalidations = binderCtx.PendingGotoAssignmentInvalidations.ToDictionary(
+            entry => entry.Key,
+            entry => new HashSet<VariableSymbol>(entry.Value));
+        var pendingGotoNarrowingSnapshots = binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
+            entry => entry.Key,
+            entry => entry.Value.Select(snapshot => new HashSet<VariableSymbol>(snapshot)).ToList());
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
         var syntheticLocalCounter = binderCtx.SyntheticLocalCounter;
 
@@ -314,6 +352,22 @@ internal sealed partial class StatementBinder
         RestoreDictionary(binderCtx.PendingEarlyExitFrames, pendingEarlyExitFrames);
         RestoreDictionary(binderCtx.PendingSwitchExitFrames, pendingSwitchExitFrames);
         RestoreSet(binderCtx.DefinedUserLabels, definedUserLabels);
+        binderCtx.PendingGotoAssignmentInvalidations.Clear();
+        foreach (var entry in pendingGotoAssignmentInvalidations)
+        {
+            binderCtx.PendingGotoAssignmentInvalidations.Add(
+                entry.Key,
+                new HashSet<VariableSymbol>(entry.Value));
+        }
+
+        binderCtx.PendingGotoNarrowingSnapshots.Clear();
+        foreach (var entry in pendingGotoNarrowingSnapshots)
+        {
+            binderCtx.PendingGotoNarrowingSnapshots.Add(
+                entry.Key,
+                entry.Value.Select(snapshot => new HashSet<VariableSymbol>(snapshot)).ToList());
+        }
+
         userGotoHandlerRegions.Clear();
         foreach (var region in userGotoHandlerSnapshot)
         {

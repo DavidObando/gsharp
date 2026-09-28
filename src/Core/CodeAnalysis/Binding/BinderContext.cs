@@ -286,6 +286,23 @@ internal sealed class BinderContext
         = new Dictionary<string, TextLocation>();
 
     /// <summary>
+    /// Gets assignment-narrowed variables whose narrowing may be bypassed by
+    /// a forward <c>goto</c>, grouped by the target label. A target entry is
+    /// opened when its first forward jump binds, populated by subsequent
+    /// straight-line assignment narrowings, and consumed when the label binds.
+    /// </summary>
+    public Dictionary<string, HashSet<VariableSymbol>> PendingGotoAssignmentInvalidations { get; }
+        = new Dictionary<string, HashSet<VariableSymbol>>();
+
+    /// <summary>
+    /// Gets the variables known non-null at each forward <c>goto</c> source,
+    /// grouped by target label. Label joins retain a later assignment
+    /// narrowing when every incoming jump already carried that proof.
+    /// </summary>
+    public Dictionary<string, List<HashSet<VariableSymbol>>> PendingGotoNarrowingSnapshots { get; }
+        = new Dictionary<string, List<HashSet<VariableSymbol>>>();
+
+    /// <summary>
     /// Gets or sets a value indicating whether the CURRENT function/lambda/
     /// local-function body contains any user-written <c>goto</c> statement or non-loop
     /// <c>label:</c> declaration (issue #4285), computed syntactically,

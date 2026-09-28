@@ -2321,6 +2321,8 @@ internal sealed class LambdaBinder
         binderCtx.UserLabels.Clear();
         binderCtx.DefinedUserLabels.Clear();
         binderCtx.UnresolvedGotoLabels.Clear();
+        binderCtx.PendingGotoAssignmentInvalidations.Clear();
+        binderCtx.PendingGotoNarrowingSnapshots.Clear();
         binderCtx.LoopStack.Clear();
         binderCtx.CurrentFallthroughTarget = null;
         binderCtx.CurrentFallthroughAnchor = null;
@@ -2372,6 +2374,19 @@ internal sealed class LambdaBinder
         foreach (var kvp in saved.UnresolvedGotoLabels)
         {
             binderCtx.UnresolvedGotoLabels[kvp.Key] = kvp.Value;
+        }
+
+        binderCtx.PendingGotoAssignmentInvalidations.Clear();
+        foreach (var kvp in saved.PendingGotoAssignmentInvalidations)
+        {
+            binderCtx.PendingGotoAssignmentInvalidations[kvp.Key] = new HashSet<VariableSymbol>(kvp.Value);
+        }
+
+        binderCtx.PendingGotoNarrowingSnapshots.Clear();
+        foreach (var kvp in saved.PendingGotoNarrowingSnapshots)
+        {
+            binderCtx.PendingGotoNarrowingSnapshots[kvp.Key] =
+                kvp.Value.Select(snapshot => new HashSet<VariableSymbol>(snapshot)).ToList();
         }
 
         // BinderContext.LoopStack.ToArray() orders elements top-of-stack
@@ -3014,6 +3029,12 @@ internal sealed class LambdaBinder
             UserLabels = new Dictionary<string, BoundLabel>(ctx.UserLabels);
             DefinedUserLabels = new HashSet<string>(ctx.DefinedUserLabels);
             UnresolvedGotoLabels = new Dictionary<string, TextLocation>(ctx.UnresolvedGotoLabels);
+            PendingGotoAssignmentInvalidations = ctx.PendingGotoAssignmentInvalidations.ToDictionary(
+                entry => entry.Key,
+                entry => new HashSet<VariableSymbol>(entry.Value));
+            PendingGotoNarrowingSnapshots = ctx.PendingGotoNarrowingSnapshots.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.Select(snapshot => new HashSet<VariableSymbol>(snapshot)).ToList());
             LoopStack = ctx.LoopStack.ToArray();
             FallthroughTarget = ctx.CurrentFallthroughTarget;
             FallthroughAnchor = ctx.CurrentFallthroughAnchor;
@@ -3025,6 +3046,10 @@ internal sealed class LambdaBinder
         public HashSet<string> DefinedUserLabels { get; }
 
         public Dictionary<string, TextLocation> UnresolvedGotoLabels { get; }
+
+        public Dictionary<string, HashSet<VariableSymbol>> PendingGotoAssignmentInvalidations { get; }
+
+        public Dictionary<string, List<HashSet<VariableSymbol>>> PendingGotoNarrowingSnapshots { get; }
 
         public (string? LabelName, BoundLabel BreakLabel, BoundLabel? ContinueLabel)[] LoopStack { get; }
 
