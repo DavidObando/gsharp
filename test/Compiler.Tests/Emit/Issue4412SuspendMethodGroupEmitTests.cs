@@ -1010,6 +1010,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 // The process exited between the timeout and the kill.
             }
 
+            process.WaitForExit();
             Assert.Fail("timed out after 30s");
         }
 
