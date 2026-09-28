@@ -429,6 +429,15 @@ public sealed partial class CSharpToGSharpTranslator
                             conditional.WhenFalse,
                             visited);
 
+                case BinaryExpressionSyntax coalesce
+                    when coalesce.IsKind(SyntaxKind.CoalesceExpression):
+                    return this.InferredInitializerOriginatesFromDefault(
+                            coalesce.Left,
+                            visited)
+                        || this.InferredInitializerOriginatesFromDefault(
+                            coalesce.Right,
+                            visited);
+
                 case SwitchExpressionSyntax switchExpression:
                     return switchExpression.Arms.Any(arm =>
                         this.InferredInitializerOriginatesFromDefault(

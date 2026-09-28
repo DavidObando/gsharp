@@ -94,7 +94,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 }
                 var narrowed = maybe;
                 var (narrowedLeft, narrowedRight) = (maybe, maybe);
+                var coalesced = default(T) ?? default(T);
+                var coalesceNarrowed = default(T) ?? replacement;
                 var (left, right) = (default(T), default(T));
+                Fill(ref coalesced, replacement);
                 Fill(ref left, replacement);
                 Fill(ref right, replacement);
                 return 2;
@@ -105,6 +108,28 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var directValue = default(int);
                 var (leftValue, rightValue) = (default(int), default(int));
                 return directValue + leftValue + rightValue + 3;
+            }
+
+            private static (T Left, T Right) Next<T>(ref int count, T replacement)
+            {
+                count++;
+                return (replacement, replacement);
+            }
+
+            private static int IncrementorControl<T>(T replacement)
+            {
+                T? left = default;
+                T? right = default;
+                var count = 0;
+                for (; count < 3; (left, right) = Next(ref count, replacement))
+                {
+                    if (count < 2)
+                    {
+                        continue;
+                    }
+                }
+
+                return count + (left is null ? 0 : 1) + (right is null ? 0 : 1);
             }
 
             private static async System.Threading.Tasks.Task<T> AwaitControl<T>(
@@ -131,7 +156,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             public static int Run() =>
                 Unconstrained<string>("u", true)
                 + ClassConstrained<string>("c")
-                + ValueTypeControl();
+                + ValueTypeControl()
+                + IncrementorControl<string>("i");
         }
         """;
 
@@ -193,7 +219,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "direct", "alias", "branch", "a", "b", "c", "d", "e", "f", "loop",
             "nestedA", "nestedB", "nestedC", "wholeLeft", "wholeRight",
             "wholeNestedA", "wholeNestedB", "wholeNestedC",
-            "loopLeft", "loopRight", "left", "right",
+            "loopLeft", "loopRight", "coalesced", "left", "right",
         })
         {
             Assert.Matches($@"\b(let|var) {name} T\? =", printed);
@@ -212,6 +238,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("narrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowedLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowedRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("coalesceNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("methodLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("methodRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("result T? =", printed, StringComparison.Ordinal);
@@ -225,7 +252,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0612");
         Assert.Null(result.UnhandledException);
-        Assert.Equal(13, result.Value);
+        Assert.Equal(18, result.Value);
     }
 
     private static ILocalSymbol Local(SyntaxNode root, SemanticModel model, string name)
