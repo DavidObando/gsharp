@@ -384,6 +384,56 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
     }
 
     [Fact]
+    public void ImportedSuspendOverloadRanking_IgnoresHiddenContext()
+    {
+        const string library = """
+            using System.Threading.Tasks;
+            using Gsharp.Concurrency;
+
+            namespace Interop;
+
+            public delegate ValueTask<string> StringRunner(string value);
+
+            public static class Api
+            {
+                public static ValueTask<string> Pick(object value) =>
+                    new("normal");
+
+                [Suspending]
+                public static ValueTask<string> Pick(string value, Context context) =>
+                    new("suspend");
+            }
+            """;
+        const string app = """
+            package App
+            import System
+            import Interop
+
+            suspend func run() {
+                let callback StringRunner = Api.Pick
+                Console.WriteLine(await callback("value"))
+            }
+
+            run()
+            """;
+
+        var directory = PrepareDirectory(nameof(ImportedSuspendOverloadRanking_IgnoresHiddenContext));
+        try
+        {
+            var libraryPath = CompileCSharpLibrary(directory, "Interop", library);
+            var appPath = Compile(directory, "App", app, "/target:exe", "/reference:" + libraryPath);
+            IlVerifier.Verify(
+                appPath,
+                new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"suspend{Environment.NewLine}", Run(appPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void StaticInitializerSuspendMethodGroups_VerifyAndRun()
     {
         const string source = """

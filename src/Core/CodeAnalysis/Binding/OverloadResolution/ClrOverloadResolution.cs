@@ -903,7 +903,7 @@ internal static class ClrOverloadResolution
             return Result<T>.Single(only.Method, BuildMappingArray(only.Mapping, argumentNames), only.IsExpanded);
         }
 
-        return RankApplicable(applicable, argTypes, argumentNames);
+        return RankApplicable(applicable, argTypes, argumentNames, trailingParameterCountToIgnore);
     }
 
     /// <summary>
@@ -4590,7 +4590,11 @@ internal static class ClrOverloadResolution
     /// candidate's <c>params T[]</c>-expanded form is propagated to the
     /// caller through <see cref="Result{T}.IsExpanded"/>.
     /// </remarks>
-    private static Result<T> RankApplicable<T>(List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable, IReadOnlyList<Type?> argTypes, IReadOnlyList<string?>? argumentNames)
+    private static Result<T> RankApplicable<T>(
+        List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)> applicable,
+        IReadOnlyList<Type?> argTypes,
+        IReadOnlyList<string?>? argumentNames,
+        Func<T, int>? trailingParameterCountToIgnore)
         where T : MethodBase
     {
         // Phase 1 — drop candidates that are strictly dominated by another.
@@ -4637,13 +4641,17 @@ internal static class ClrOverloadResolution
             var minParamCount = int.MaxValue;
             foreach (var candidate in pool)
             {
-                minParamCount = Math.Min(minParamCount, candidate.Method.GetParameters().Length);
+                var parameterCount = candidate.Method.GetParameters().Length
+                    - (trailingParameterCountToIgnore?.Invoke(candidate.Method) ?? 0);
+                minParamCount = Math.Min(minParamCount, parameterCount);
             }
 
             var fewestParams = new List<(T Method, ImplicitConversionKind[] Conversions, Type[] ParamTypes, int[]? Mapping, bool IsExpanded)>();
             foreach (var candidate in pool)
             {
-                if (candidate.Method.GetParameters().Length == minParamCount)
+                if (candidate.Method.GetParameters().Length
+                        - (trailingParameterCountToIgnore?.Invoke(candidate.Method) ?? 0)
+                    == minParamCount)
                 {
                     fewestParams.Add(candidate);
                 }
@@ -4672,7 +4680,11 @@ internal static class ClrOverloadResolution
                 foreach (var other in pool)
                 {
                     if (!ReferenceEquals(candidate.Method, other.Method)
-                        && !IsAtLeastAsSpecific(candidate.Method, other.Method))
+                        && !IsAtLeastAsSpecific(
+                            candidate.Method,
+                            other.Method,
+                            trailingParameterCountToIgnore?.Invoke(candidate.Method) ?? 0,
+                            trailingParameterCountToIgnore?.Invoke(other.Method) ?? 0))
                     {
                         atLeastAsSpecific = false;
                         break;
@@ -5359,7 +5371,11 @@ internal static class ClrOverloadResolution
         return type is { IsByRef: true } ? type.GetElementType() : type;
     }
 
-    private static bool IsAtLeastAsSpecific(MethodBase a, MethodBase b)
+    private static bool IsAtLeastAsSpecific(
+        MethodBase a,
+        MethodBase b,
+        int trailingParametersToIgnoreFromA,
+        int trailingParametersToIgnoreFromB)
     {
         // Compare generic definitions rather than their inferred closed forms.
         // Closing can erase the distinction that makes one overload more
@@ -5377,6 +5393,15 @@ internal static class ClrOverloadResolution
 
         var pa = a.GetParameters();
         var pb = b.GetParameters();
+        if (trailingParametersToIgnoreFromA > 0)
+        {
+            pa = pa[..^trailingParametersToIgnoreFromA];
+        }
+
+        if (trailingParametersToIgnoreFromB > 0)
+        {
+            pb = pb[..^trailingParametersToIgnoreFromB];
+        }
 
         // Issue #327/#321: optional-parameter omission can leave two applicable
         // candidates with different parameter counts. Compare only the shared
