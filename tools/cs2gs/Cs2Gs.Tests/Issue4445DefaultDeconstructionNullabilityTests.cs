@@ -27,6 +27,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         {
             private static void Fill<T>(ref T? value, T replacement) => value = replacement;
 
+            private static (string Text, System.Collections.Generic.List<string> Values) BuildPair() =>
+                ("pair", new System.Collections.Generic.List<string>());
+
             private static int Unconstrained<T>(T replacement, bool choose)
             {
                 var direct = default(T);
@@ -98,8 +101,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 T? annotated = default(T);
                 (T explicitLeft, T explicitRight) = (default(T), default(T));
                 var (ordinaryLeft, ordinaryRight) = ("left", "right");
+                var (callText, callValues) = BuildPair();
                 var lambda = (int value = 1) => value;
-                return ordinary.Length + ordinaryLeft.Length + ordinaryRight.Length + lambda();
+                return ordinary.Length + ordinaryLeft.Length + ordinaryRight.Length
+                    + callText.Length + callValues.Count + lambda();
             }
 
             public static int Run() =>
@@ -176,6 +181,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("ordinary string? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ordinaryLeft string? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("ordinaryRight string? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("callText string? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"\b(let|var) callValues [^=\r\n]*\? =", printed);
         Assert.DoesNotContain("explicitLocal T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("explicitLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("explicitRight T? =", printed, StringComparison.Ordinal);

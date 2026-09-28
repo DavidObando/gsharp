@@ -325,37 +325,42 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ExpressionSyntax initializer = this.GetInferredLocalInitializer(local);
-            if (initializer != null)
+            if (initializer == null)
             {
-                TypeInfo typeInfo = this.context.GetTypeInfo(initializer);
-                NullableFlowState flowState = typeInfo.Nullability.FlowState;
-                if (flowState == NullableFlowState.None)
-                {
-                    // Roslyn omits element flow in a deconstruction RHS, but
-                    // speculative binding at that exact position preserves it.
-                    flowState = this.context.SemanticModel.GetSpeculativeTypeInfo(
-                        initializer.SpanStart,
-                        initializer,
-                        SpeculativeBindingOption.BindAsExpression).Nullability.FlowState;
-                }
+                // A non-literal tuple/Deconstruct source has no per-leaf flow
+                // API. Preserve the pre-#4445 inference instead of treating
+                // Roslyn's declaration annotation as a maybe-null result.
+                return false;
+            }
 
-                if (flowState != NullableFlowState.None)
-                {
-                    return flowState == NullableFlowState.MaybeNull;
-                }
+            TypeInfo typeInfo = this.context.GetTypeInfo(initializer);
+            NullableFlowState flowState = typeInfo.Nullability.FlowState;
+            if (flowState == NullableFlowState.None)
+            {
+                // Roslyn omits element flow in a deconstruction RHS, but
+                // speculative binding at that exact position preserves it.
+                flowState = this.context.SemanticModel.GetSpeculativeTypeInfo(
+                    initializer.SpanStart,
+                    initializer,
+                    SpeculativeBindingOption.BindAsExpression).Nullability.FlowState;
+            }
 
-                if (IsNullForgiven(initializer))
-                {
-                    return false;
-                }
+            if (flowState != NullableFlowState.None)
+            {
+                return flowState == NullableFlowState.MaybeNull;
+            }
 
-                if (!IsNullOrDefaultLiteral(initializer)
-                    && (typeInfo.Type ?? typeInfo.ConvertedType) is { } initializerType
-                    && !IsAnnotatedNullableReference(initializerType)
-                    && initializerType is not ITypeParameterSymbol)
-                {
-                    return false;
-                }
+            if (IsNullForgiven(initializer))
+            {
+                return false;
+            }
+
+            if (!IsNullOrDefaultLiteral(initializer)
+                && (typeInfo.Type ?? typeInfo.ConvertedType) is { } initializerType
+                && !IsAnnotatedNullableReference(initializerType)
+                && initializerType is not ITypeParameterSymbol)
+            {
+                return false;
             }
 
             // Roslyn reports FlowState.None for individual tuple RHS leaves in
