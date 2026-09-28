@@ -7,11 +7,13 @@ using System.Collections.Generic;
 using System.Diagnostics;
 using System.IO;
 using System.Linq;
+using System.Reflection;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
+using System.Runtime.Loader;
 using System.Text;
 using System.Threading;
 using GSharp.Compiler;
-using System.Reflection.Metadata;
-using System.Reflection.PortableExecutable;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -375,6 +377,200 @@ public class Adr0174SuspendCrossAssemblyTests
         {
             Directory.Delete(tempDir, recursive: true);
         }
+    }
+
+    [Fact]
+    public void SuspendOverrides_OfImportedVirtualAndAbstractMethods_UseLogicalSignatures()
+    {
+        // Issue #4413 / ADR-0154 witness: before the fix both suspend
+        // overrides report GS0185 because imported signatures expose the
+        // physical ValueTask return and hidden Context parameter.
+        const string BaseLibrary = """
+            package Lib
+
+            public open class Base {
+                public open suspend func Format[T](value T) string {
+                    return "base:$value"
+                }
+
+                public open suspend func Required(value string?) string;
+
+                public open func Plain(value int32) string {
+                    return "plain:$value"
+                }
+            }
+            """;
+
+        const string AppSource = """
+            package App
+            import System
+            import Lib
+
+            class Derived : Base {
+                public override suspend func Format[T](value T) string {
+                    return "derived(" + base.Format[T](value) + ")"
+                }
+
+                public override suspend func Required(value string?) string {
+                    return "required:$value"
+                }
+
+                public override func Plain(value int32) string {
+                    return "derived-" + base.Plain(value)
+                }
+            }
+
+            suspend func run() {
+                let value Base = Derived()
+                Console.WriteLine(value.Format[string]("x"))
+                Console.WriteLine(value.Required("y"))
+                Console.WriteLine(value.Plain(7))
+            }
+
+            run()
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4413_override_").FullName;
+        try
+        {
+            var libPath = Path.Combine(tempDir, "Lib.dll");
+            var libLog = Compile(tempDir, "Lib.gs", BaseLibrary, libPath, "/target:library");
+            Assert.True(File.Exists(libPath), "library compile failed:\n" + libLog);
+
+            var appPath = Path.Combine(tempDir, "App.dll");
+            var appLog = Compile(tempDir, "App.gs", AppSource, appPath, "/target:exe", "/reference:" + libPath);
+            Assert.True(File.Exists(appPath), "app compile failed:\n" + appLog);
+            Assert.DoesNotContain("GS0185", appLog, StringComparison.Ordinal);
+
+            IlVerifier.Verify(appPath, new[] { libPath, Path.Combine(tempDir, "Gsharp.Runtime.Channels.dll") });
+
+            using (var stream = File.OpenRead(appPath))
+            using (var peReader = new PEReader(stream))
+            {
+                var metadata = peReader.GetMetadataReader();
+                var derived = metadata.TypeDefinitions
+                    .Select(metadata.GetTypeDefinition)
+                    .Single(type => metadata.GetString(type.Name) == "Derived");
+                Assert.Equal(3, derived.GetMethodImplementations().Count);
+            }
+
+            var loadContext = new AssemblyLoadContext("gs-4413-" + Guid.NewGuid().ToString("N"), isCollectible: true);
+            loadContext.Resolving += (_, name) =>
+            {
+                var dependency = Path.Combine(tempDir, name.Name + ".dll");
+                return File.Exists(dependency) ? loadContext.LoadFromAssemblyPath(dependency) : null;
+            };
+            try
+            {
+                var derived = loadContext.LoadFromAssemblyPath(appPath).GetType("App.Derived")!;
+                AssertPhysicalSuspendOverride(derived.GetMethod("Format")!, "Lib.Base", logicalParameterCount: 1);
+                AssertPhysicalSuspendOverride(derived.GetMethod("Required")!, "Lib.Base", logicalParameterCount: 1);
+
+                var plain = derived.GetMethod("Plain")!;
+                Assert.Equal(typeof(string), plain.ReturnType);
+                Assert.Single(plain.GetParameters());
+                Assert.Equal("Lib.Base", plain.GetBaseDefinition().DeclaringType!.FullName);
+            }
+            finally
+            {
+                loadContext.Unload();
+            }
+
+            var (exit, output) = RunDotnet(appPath);
+            Assert.True(exit == 0, output);
+            Assert.Equal(
+                new[] { "derived(base:x)", "required:y", "derived-plain:7" },
+                output.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void ImportedSuspendOverride_GenuineSignatureMismatch_StillReportsGS0185()
+    {
+        const string BaseLibrary = """
+            package Lib
+
+            public open class Base {
+                public open suspend func Format[T](value T) string {
+                    return "$value"
+                }
+            }
+            """;
+
+        const string AppSource = """
+            package App
+            import Lib
+
+            class Broken : Base {
+                override suspend func Format[T, U](value T) string {
+                    return "$value"
+                }
+            }
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4413_mismatch_").FullName;
+        try
+        {
+            var libPath = Path.Combine(tempDir, "Lib.dll");
+            var libLog = Compile(tempDir, "Lib.gs", BaseLibrary, libPath, "/target:library");
+            Assert.True(File.Exists(libPath), "library compile failed:\n" + libLog);
+
+            var appPath = Path.Combine(tempDir, "App.dll");
+            var appLog = Compile(tempDir, "App.gs", AppSource, appPath, "/target:library", "/reference:" + libPath);
+            Assert.False(File.Exists(appPath), "mismatched override unexpectedly compiled");
+            Assert.Contains("GS0185", appLog, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
+    public void SuspendOverride_InTheSameCompilation_RemainsValid()
+    {
+        var (exit, output, compileLog) = CompileAndRun("""
+            package App
+            import System
+
+            open class Base {
+                open suspend func Format(value string?) string {
+                    return "base:$value"
+                }
+            }
+
+            class Derived : Base {
+                override suspend func Format(value string?) string {
+                    return "derived(" + base.Format(value) + ")"
+                }
+            }
+
+            let value Base = Derived()
+            Console.WriteLine(value.Format("same"))
+            """);
+
+        Assert.True(exit == 0, compileLog + output);
+        Assert.DoesNotContain("GS0185", compileLog, StringComparison.Ordinal);
+        Assert.Equal("derived(base:same)", output.Trim());
+    }
+
+    private static void AssertPhysicalSuspendOverride(
+        MethodInfo method,
+        string expectedBaseType,
+        int logicalParameterCount)
+    {
+        Assert.Equal("System.Threading.Tasks.ValueTask`1", method.ReturnType.GetGenericTypeDefinition().FullName);
+        Assert.Equal(typeof(string), method.ReturnType.GetGenericArguments()[0]);
+
+        var parameters = method.GetParameters();
+        Assert.Equal(logicalParameterCount + 1, parameters.Length);
+        Assert.Equal("<>ctx", parameters[^1].Name);
+        Assert.Equal("Gsharp.Concurrency.Context", parameters[^1].ParameterType.FullName);
+        Assert.Equal(expectedBaseType, method.GetBaseDefinition().DeclaringType!.FullName);
     }
 
     private static (int Exit, string Output, string CompileLog) CompileAndRun(string appSource)
