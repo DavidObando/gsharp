@@ -4890,7 +4890,8 @@ internal sealed partial class ExpressionBinder
                 downstreamMapping,
                 method: method,
                 receiverType: constraintType,
-                symbolicMethodTypeArgs: symbolicMethodTypeArgs)
+                symbolicMethodTypeArgs: symbolicMethodTypeArgs,
+                expandedParamsIndex: resolution.IsExpanded ? parameters.Length - 1 : -1)
             : conversions.BindImplicitInClrArguments(arguments, parameters, callSyntax, downstreamMapping, method, constraintType);
         var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
         if (resolution.IsExpanded)

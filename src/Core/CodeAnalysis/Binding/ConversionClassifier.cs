@@ -1131,6 +1131,9 @@ internal sealed class ConversionClassifier
     /// keyed by resolved parameter index. Constructed generic constructors use
     /// this to retain delegate targets such as <c>Func&lt;Foo&gt;</c> when
     /// reflection exposes only the erased <c>Func&lt;object&gt;</c> shape.</param>
+    /// <param name="expandedParamsIndex">The parameter index whose already
+    /// converted expanded elements were packed into a synthesized array, or
+    /// <c>-1</c> when the call was not expanded.</param>
     /// <returns>The (possibly rebound) argument array.</returns>
     public ImmutableArray<BoundExpression> BindClrParameterConversions(
         ImmutableArray<BoundExpression> arguments,
@@ -1141,7 +1144,8 @@ internal sealed class ConversionClassifier
         MethodInfo? method = null,
         TypeSymbol? receiverType = null,
         ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default,
-        IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null)
+        IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null,
+        int expandedParamsIndex = -1)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -1581,7 +1585,8 @@ internal sealed class ConversionClassifier
                         // produced unverifiable IL at imported call sites.
                         rebound = udcArg;
                     }
-                    else if (TryRejectClrPlatformContainerArgument(
+                    else if (paramIndex != expandedParamsIndex
+                        && TryRejectClrPlatformContainerArgument(
                         argument,
                         parameters[paramIndex],
                         targetType,
@@ -3565,8 +3570,15 @@ internal sealed class ConversionClassifier
         out BoundExpression rebound)
     {
         rebound = argument;
-        if (Conversion.Classify(argument.Type, targetType).Exists
-            || !Conversion.TryRelatePlatformContainer(argument.Type, targetType, out var isImplicit)
+        var sourceType = argument.Type;
+        var targetClr = targetType.ClrType;
+        if (sourceType == null
+            || sourceType.ClrType is not { } sourceClr
+            || targetClr == null
+            || !ClrLoadContext.IsAssignable(targetClr, sourceClr)
+            || Conversion.ContainsPlatformTypeForInterop(targetType)
+            || Conversion.Classify(sourceType, targetType).Exists
+            || !Conversion.TryRelatePlatformContainer(sourceType, targetType, out var isImplicit)
             || isImplicit)
         {
             return false;

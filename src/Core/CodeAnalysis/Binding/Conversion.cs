@@ -302,6 +302,12 @@ public sealed class Conversion
         return false;
     }
 
+    /// <summary>Whether a platform type appears anywhere in the type structure.</summary>
+    /// <param name="type">The type to scan.</param>
+    /// <returns><see langword="true"/> when the type contains a platform position.</returns>
+    internal static bool ContainsPlatformTypeForInterop(TypeSymbol? type)
+        => ContainsPlatformType(type);
+
     /// <summary>
     /// Classifies only pre-ADR-0148 conversions. Projection planning uses this
     /// to keep member conversion non-recursive.
