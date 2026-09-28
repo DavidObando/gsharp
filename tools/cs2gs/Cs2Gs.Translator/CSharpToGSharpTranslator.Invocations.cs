@@ -5011,7 +5011,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (call is BaseObjectCreationExpressionSyntax creationSyntax
                 && canProjectContainingTypeFromArguments
                 && method.ContainingType?.TypeArguments.Any(argument =>
-                    CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                    TypeContainsRecognizedManagedReferenceConsumer(
                         argument,
                         this.context.Compilation)) == true
                 && creationSyntax.Parent is EqualsValueClauseSyntax
@@ -5385,13 +5385,16 @@ public sealed partial class CSharpToGSharpTranslator
         private bool SourceByRefParameterRequiresValidation(
             IParameterSymbol parameter)
         {
-            return parameter.ContainingSymbol is not IMethodSymbol containingMethod
+            return TypeContainsRecognizedManagedReferenceConsumer(
+                    parameter.Type,
+                    this.context.Compilation)
+                && (parameter.ContainingSymbol is not IMethodSymbol containingMethod
                 || !containingMethod.DeclaringSyntaxReferences.IsDefaultOrEmpty
                 || (this.context.RepositoryCompilations
                         ?? this.context.SiblingCompilations)?.Any(
                             compilation => compilation.AssemblyName
                                 == containingMethod.ContainingAssembly?.Name)
-                    == true;
+                    == true);
         }
 
         private bool ProjectedByRefStorageMatches(
