@@ -3163,6 +3163,20 @@ internal sealed partial class DeclarationBinder
             return false;
         }
 
+        // Issue #4446: reference `T?` is a signature annotation over the same
+        // CLR type as `T`, but value `T?` is the distinct Nullable<T> storage
+        // shape. Do this before recursive constructed-type comparison and the
+        // CLR leaf fallback so the distinction holds at every nesting depth.
+        if ((a is NullableTypeSymbol nullableA
+                && b is not NullableTypeSymbol
+                && NullableLifting.IsAnyValueTypeNullable(nullableA))
+            || (b is NullableTypeSymbol nullableB
+                && a is not NullableTypeSymbol
+                && NullableLifting.IsAnyValueTypeNullable(nullableB)))
+        {
+            return false;
+        }
+
         var aIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
             a,
             out var aSequenceDefinition,
