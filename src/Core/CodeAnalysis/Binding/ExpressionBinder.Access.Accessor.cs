@@ -3683,13 +3683,19 @@ internal sealed partial class ExpressionBinder
             // Issue #4024: the SLICE spelling `[]T` shares that backing and is
             // retained by the same gate, so `EqualityComparer[[]int32].Default`
             // no longer reads as a metadata-only `EqualityComparer<int32[]>`.
+            var constructedReceiver = ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs);
             var symbolicReceiver = NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _) || typeArgs.Any(static a =>
                 TypeSymbol.RequiresSymbolicProjection(a)
                 || TypeSymbol.ContainsNamedTupleElements(a)
                 || TypeSymbol.ContainsSourceArrayShape(a))
-                ? ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs)
+                ? constructedReceiver
                 : null;
-            constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver, scope.References);
+            constructedImported = new ImportedClassSymbol(
+                closed,
+                receiverSyntax,
+                symbolicReceiver,
+                scope.References,
+                constructedReceiver);
             return true;
         }
         catch (ArgumentException)

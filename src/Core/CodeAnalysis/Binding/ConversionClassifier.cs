@@ -1458,6 +1458,23 @@ internal sealed class ConversionClassifier
                         substituted = platformSlot;
                     }
 
+                    // Issue #4440: even a fully CLR-backed receiver needs the
+                    // shared receiver/method projection here. Reflection
+                    // exposes List<string>.Add as an oblivious string
+                    // parameter, while the open slot substituted with the
+                    // receiver's T is the declared non-null string argument.
+                    if (i >= receiverArgCount
+                        && method != null
+                        && TypeSymbol.ContainsNullLiteralType(argument.Type)
+                        && MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+                            receiverType,
+                            method,
+                            paramIndex,
+                            symbolicMethodTypeArgs) is { } nilTarget)
+                    {
+                        substituted = nilTarget;
+                    }
+
                     var targetType = substituted
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
                     var rejectionTargetType = substituted
@@ -3395,7 +3412,8 @@ internal sealed class ConversionClassifier
                         : BindImplicitInArgument(location, arguments[i], pointeeType, parameter: null);
             }
             else if (paramIndex < parameters.Length
-                && Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
+                && (Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
+                    || TypeSymbol.ContainsNullLiteralType(arguments[i].Type))
                 && parameters[paramIndex].ParameterType is { IsByRef: false }
                 && method != null
                 && receiverType != null
@@ -3415,6 +3433,12 @@ internal sealed class ConversionClassifier
                 {
                     builder ??= arguments.ToBuilder();
                     builder[i] = rejectedArgument;
+                }
+                else if (TypeSymbol.ContainsNullLiteralType(arguments[i].Type)
+                    && !Conversion.Classify(arguments[i].Type, parameterType).IsImplicit)
+                {
+                    builder ??= arguments.ToBuilder();
+                    builder[i] = BindConversion(location, arguments[i], parameterType);
                 }
                 else if (!parameters[paramIndex].ParameterType.IsGenericParameter
                     && arguments[i].Type is PlatformTypeSymbol

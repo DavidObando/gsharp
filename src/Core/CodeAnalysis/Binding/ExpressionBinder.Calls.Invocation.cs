@@ -3118,6 +3118,7 @@ internal sealed partial class ExpressionBinder
                     out var staticHandlerPrelude,
                     out _,
                     method: staticFn.Method,
+                    receiverType: classSymbol.ConstructedReceiver ?? receiver?.Type,
                     symbolicMethodTypeArgs: staticTypeArgSymbolsForCall,
                     isExpanded: staticIsExpanded);
                 var staticArguments = OverloadResolver.BuildOrderedCallArguments(staticConvertedArgs, staticDownstreamMapping, staticParameters);
