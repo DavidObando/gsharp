@@ -57,7 +57,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     break;
                 }
 
-                for ((var loopLeft, var loopRight) = (default(T), default(T)); choose;)
+                for (var (loopLeft, loopRight) = (default(T), default(T)); choose;)
                 {
                     Fill(ref loopLeft, replacement);
                     Fill(ref loopRight, replacement);
@@ -76,6 +76,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     throw new System.Exception();
                 }
                 var narrowed = maybe;
+                var (narrowedLeft, narrowedRight) = (maybe, maybe);
                 var (left, right) = (default(T), default(T));
                 Fill(ref left, replacement);
                 Fill(ref right, replacement);
@@ -121,6 +122,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         ILocalSymbol classLeaf = Local(root, model, "left");
         ILocalSymbol valueLeaf = Local(root, model, "leftValue");
         ILocalSymbol narrowed = Local(root, model, "narrowed");
+        ILocalSymbol narrowedLeaf = Local(root, model, "narrowedLeft");
         VariableDeclaratorSyntax suppressedSyntax = root.DescendantNodes()
             .OfType<VariableDeclaratorSyntax>()
             .Single(node => node.Identifier.ValueText == "suppressed");
@@ -137,9 +139,19 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Equal(NullableAnnotation.Annotated, classLeaf.NullableAnnotation);
         Assert.Equal(NullableAnnotation.NotAnnotated, valueLeaf.NullableAnnotation);
         Assert.Equal(NullableAnnotation.Annotated, narrowed.NullableAnnotation);
+        Assert.Equal(NullableAnnotation.Annotated, narrowedLeaf.NullableAnnotation);
         Assert.Equal(
             NullableFlowState.NotNull,
             model.GetTypeInfo(narrowedSyntax.Initializer.Value).Nullability.FlowState);
+        TupleExpressionSyntax narrowedTuple = root.DescendantNodes()
+            .OfType<TupleExpressionSyntax>()
+            .Single(tuple => tuple.ToString() == "(maybe, maybe)");
+        Assert.Equal(
+            NullableFlowState.NotNull,
+            model.GetSpeculativeTypeInfo(
+                narrowedTuple.Arguments[0].Expression.SpanStart,
+                narrowedTuple.Arguments[0].Expression,
+                SpeculativeBindingOption.BindAsExpression).Nullability.FlowState);
         Assert.Equal(
             NullableFlowState.NotNull,
             model.GetTypeInfo(suppressedSyntax.Initializer.Value).Nullability.FlowState);
@@ -168,6 +180,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("explicitLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("explicitRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowed T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("narrowedLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("narrowedRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotMatch(@"\b(let|var) lambda [^=\r\n]*\? =", printed);
         Assert.Contains("suppressed = default(T)!!", printed, StringComparison.Ordinal);
         Assert.Contains("annotated T? = default(T)", printed, StringComparison.Ordinal);

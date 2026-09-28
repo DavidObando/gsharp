@@ -329,6 +329,16 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 TypeInfo typeInfo = this.context.GetTypeInfo(initializer);
                 NullableFlowState flowState = typeInfo.Nullability.FlowState;
+                if (flowState == NullableFlowState.None)
+                {
+                    // Roslyn omits element flow in a deconstruction RHS, but
+                    // speculative binding at that exact position preserves it.
+                    flowState = this.context.SemanticModel.GetSpeculativeTypeInfo(
+                        initializer.SpanStart,
+                        initializer,
+                        SpeculativeBindingOption.BindAsExpression).Nullability.FlowState;
+                }
+
                 if (flowState != NullableFlowState.None)
                 {
                     return flowState == NullableFlowState.MaybeNull;
