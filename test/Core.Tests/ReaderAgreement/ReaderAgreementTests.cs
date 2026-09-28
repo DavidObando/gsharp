@@ -302,6 +302,20 @@ public sealed class CscFixtureReaderAgreementTests : ReaderAgreementTestBase, ID
                 public T Other;
             }
 
+            public class ArraySurface<T>
+            {
+                public string[] Field;
+                public string[] Property { get; set; }
+                public string[] Return() => null;
+                public void Parameter(string[] value) { }
+                public string[] this[string[] key] => null;
+                public string[,] Grid;
+                public int[] Values;
+                public ref string[] RefReturn() => throw null;
+                public void RefParameter(ref string[] value) { }
+                public T Marker;
+            }
+
             public static class Statics
             {
                 public static T Identity<T>(T value) => value;
