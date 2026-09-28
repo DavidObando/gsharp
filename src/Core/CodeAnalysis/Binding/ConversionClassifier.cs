@@ -1574,6 +1574,17 @@ internal sealed class ConversionClassifier
                         // produced unverifiable IL at imported call sites.
                         rebound = udcArg;
                     }
+                    else if (TryRejectClrPlatformContainerArgument(
+                        argument,
+                        parameters[paramIndex],
+                        targetType,
+                        call,
+                        i,
+                        receiverArgCount,
+                        out var rejectedArgument))
+                    {
+                        rebound = rejectedArgument;
+                    }
                     else if (substituted != null
                         && argument.Type != targetType
                         && !IsNaturalStructuralDelegateTarget(argument.Type, targetType)
@@ -3243,37 +3254,57 @@ internal sealed class ConversionClassifier
             if (paramIndex < parameters.Length && IsImplicitInClrArgument(arguments[i], parameters[paramIndex]))
             {
                 var location = i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+                var pointeeType = GetImplicitInClrPointeeType(
+                    parameters[paramIndex],
+                    paramIndex,
+                    method,
+                    receiverType,
+                    symbolicMethodTypeArgs: default);
                 builder ??= arguments.ToBuilder();
-                builder[i] = BindImplicitInArgument(
-                    location,
+                builder[i] = TryRejectClrPlatformContainerArgument(
                     arguments[i],
-                    GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs: default),
-                    parameter: null);
+                    parameters[paramIndex],
+                    pointeeType,
+                    call,
+                    i,
+                    receiverArgCount: 0,
+                    out var rejectedArgument)
+                        ? rejectedArgument
+                        : BindImplicitInArgument(location, arguments[i], pointeeType, parameter: null);
             }
             else if (paramIndex < parameters.Length
-                && arguments[i].Type is PlatformTypeSymbol
                 && parameters[paramIndex].ParameterType is { IsByRef: false, IsGenericParameter: false }
                 && method != null
                 && receiverType != null
-
-                // Receiver-aware: a constrained `ITaker[string?]` reflects its
-                // `Take(T)` as a CLR `string`, and only the receiver's
-                // symbolic argument says the slot is `string?`.
-                && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType
-                && Conversion.Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck)
+                && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType)
             {
-                // ADR-0186 §4, #4451: a platform argument at a non-null
-                // parameter of a constrained call is a coercion point like any
-                // other. This path otherwise passes arguments unconverted (the
-                // `!0` slots are reified), so it inserts only the check and
-                // leaves the value's CLR shape alone; a generic-parameter slot
-                // is skipped for the same reason.
                 var location = i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
-                builder ??= arguments.ToBuilder();
-                builder[i] = PlatformCoercion.InsertCheck(
+                if (TryRejectClrPlatformContainerArgument(
                     arguments[i],
-                    location,
-                    $"a conversion to the non-null type '{parameterType.Name}'");
+                    parameters[paramIndex],
+                    parameterType,
+                    call,
+                    i,
+                    receiverArgCount: 0,
+                    out var rejectedArgument))
+                {
+                    builder ??= arguments.ToBuilder();
+                    builder[i] = rejectedArgument;
+                }
+                else if (arguments[i].Type is PlatformTypeSymbol
+                    && Conversion.Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck)
+                {
+                    // ADR-0186 §4, #4451: a platform argument at a non-null
+                    // parameter of a constrained call is a coercion point like
+                    // any other. This path otherwise passes arguments
+                    // unconverted (the `!0` slots are reified), so it inserts
+                    // only the check and leaves the value's CLR shape alone.
+                    builder ??= arguments.ToBuilder();
+                    builder[i] = PlatformCoercion.InsertCheck(
+                        arguments[i],
+                        location,
+                        $"a conversion to the non-null type '{parameterType.Name}'");
+                }
             }
         }
 
@@ -3476,6 +3507,51 @@ internal sealed class ConversionClassifier
         var receiver2 = new BoundVariableExpression(null, variable);
         var clrCall = new BoundImportedInstanceCallExpression(null, receiver2, disposeAsyncMethod, valueTaskType, ImmutableArray<BoundExpression>.Empty);
         return new BoundAwaitExpression(null, clrCall, TypeSymbol.Void);
+    }
+
+    /// <summary>
+    /// Issue #4480: reports the imported-call form of ADR-0186 §3 rule 3.
+    /// Imported applicability uses erased CLR shapes, so this check runs after
+    /// overload selection against the nullability-aware parameter type.
+    /// </summary>
+    /// <param name="argument">The bound argument.</param>
+    /// <param name="parameter">The resolved imported parameter.</param>
+    /// <param name="targetType">The nullability-aware parameter type.</param>
+    /// <param name="call">The source call, when one is available.</param>
+    /// <param name="argumentIndex">The bound argument index.</param>
+    /// <param name="receiverArgCount">The number of synthesized leading receiver arguments.</param>
+    /// <param name="rebound">The error expression when the argument is rejected.</param>
+    /// <returns><see langword="true"/> when rule 3 rejected the argument.</returns>
+    internal bool TryRejectClrPlatformContainerArgument(
+        BoundExpression argument,
+        ParameterInfo parameter,
+        TypeSymbol targetType,
+        CallExpressionSyntax? call,
+        int argumentIndex,
+        int receiverArgCount,
+        out BoundExpression rebound)
+    {
+        rebound = argument;
+        if (Conversion.Classify(argument.Type, targetType).Exists
+            || !Conversion.TryRelatePlatformContainer(argument.Type, targetType, out var isImplicit)
+            || isImplicit)
+        {
+            return false;
+        }
+
+        // The classifier owns the distinction: unrelated no-conversion cases
+        // keep their established diagnostics and recovery.
+        var sourceIndex = argumentIndex - receiverArgCount;
+        var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
+            ? call.Arguments[sourceIndex].Location
+            : call?.Location ?? default;
+        Diagnostics.ReportWrongArgumentType(
+            location,
+            parameter.Name ?? $"arg{parameter.Position}",
+            targetType,
+            argument.Type);
+        rebound = new BoundErrorExpression(argument.Syntax);
+        return true;
     }
 
     // Issue #1334: shared accessor so the generic-LINQ delegate-argument rebind
