@@ -246,6 +246,13 @@ public sealed class Conversion
     internal static bool IsPlatformArgumentWidening(TypeSymbol? source, TypeSymbol? target)
         => RelatePlatformArguments(source, target) == PlatformArgumentRelation.Widening;
 
+    internal static bool IsArrayElementInterface(Type definition)
+        => definition.FullName is "System.Collections.Generic.IEnumerable`1"
+            or "System.Collections.Generic.ICollection`1"
+            or "System.Collections.Generic.IList`1"
+            or "System.Collections.Generic.IReadOnlyCollection`1"
+            or "System.Collections.Generic.IReadOnlyList`1";
+
     /// <summary>
     /// ADR-0186 §3, asked about a whole <b>container pair</b> rather than a
     /// single argument position: does the rule speak to
@@ -353,6 +360,35 @@ public sealed class Conversion
             && TryClassifyPlatformTypeArgumentMismatch(from, to, out var platformArgumentMismatch))
         {
             return platformArgumentMismatch;
+        }
+
+        // #4479: the inference fix can produce the faithful target
+        // `sequence[string!]` for a symbolic `List[string!]`, but the ordinary
+        // CLR upcast below cannot prove the cross-context constructed interface
+        // relation after nullability is erased. Reuse #4420's hierarchy
+        // projection and accept only an exact symbolic argument vector; illegal
+        // and variant projections were already decided by the mismatch arm.
+        if (from is not NullableTypeSymbol
+            && from is not PlatformTypeSymbol
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to)
+            && TryProjectPlatformArgumentsToSupertype(from, to, out var projectedArguments, out var targetArguments)
+            && projectedArguments.Length == targetArguments.Length)
+        {
+            var exactProjection = true;
+            for (var i = 0; i < projectedArguments.Length; i++)
+            {
+                if (RelatePlatformArguments(projectedArguments[i], targetArguments[i])
+                    != PlatformArgumentRelation.Same)
+                {
+                    exactProjection = false;
+                    break;
+                }
+            }
+
+            if (exactProjection)
+            {
+                return Conversion.Implicit;
+            }
         }
 
         // ADR-0186 §3: the platform type `T!` owns its whole conversion table,
@@ -3924,13 +3960,6 @@ public sealed class Conversion
         return relation;
     }
 
-    private static bool IsArrayElementInterface(Type definition)
-        => definition.FullName is "System.Collections.Generic.IEnumerable`1"
-            or "System.Collections.Generic.ICollection`1"
-            or "System.Collections.Generic.IList`1"
-            or "System.Collections.Generic.IReadOnlyCollection`1"
-            or "System.Collections.Generic.IReadOnlyList`1";
-
     /// <summary>
     /// #4420: whether a supertype view reads a platform element as a
     /// DIFFERENT non-null reference type through CLR variance
@@ -4511,6 +4540,13 @@ public sealed class Conversion
     {
         arguments = ImmutableArray<TypeSymbol>.Empty;
         definition = type.ClrType;
+
+        if (type is SequenceTypeSymbol or AsyncSequenceTypeSymbol
+            && SequenceTypeSymbol.TryGetEnumerableInterfaceShape(type, out definition, out var elementType))
+        {
+            arguments = ImmutableArray.Create(elementType);
+            return true;
+        }
 
         if (type is NullabilityAnnotatedTypeSymbol annotated)
         {

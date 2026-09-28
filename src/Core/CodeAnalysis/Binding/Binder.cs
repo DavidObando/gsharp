@@ -12195,30 +12195,13 @@ public sealed class Binder
             ImmutableArray<TypeSymbol> currentProjection = default;
             var currentFound = false;
             var currentAgrees = true;
-            if (current is ImportedTypeSymbol imported
-                && imported.OpenDefinition != null)
+            if (current is ImportedTypeSymbol or NullabilityAnnotatedTypeSymbol)
             {
-                currentAgrees =
-                    MemberLookup.TryMapUniqueConstructedTypeArgumentsThroughHierarchy(
-                        imported,
-                        openDefinition,
-                        out currentProjection,
-                        out currentFound);
-            }
-            else if (current is NullabilityAnnotatedTypeSymbol annotated
-                && annotated.ClrType is { IsGenericType: true, IsGenericTypeDefinition: false } annotatedClr
-                && ClrTypeUtilities.AreSame(annotatedClr.GetGenericTypeDefinition(), openDefinition))
-            {
-                // #4443: the argument IS the parameter's generic definition,
-                // so its type arguments are the projection. Read them through
-                // the annotated positions, not the CLR shape: the CLR shape
-                // erases each argument's nullability, so an oblivious
-                // `List<string>` (`List[string!]!`) against `List[T]` inferred
-                // `string`, and the argument then failed rule 3's conversion
-                // to `List[string]`. A projection through a base or an
-                // interface still reads the CLR shape below.
-                currentProjection = annotated.GetElementPositions();
-                currentFound = true;
+                currentAgrees = MemberLookup.TryMapUniqueConstructedTypeArgumentsThroughHierarchy(
+                    current,
+                    openDefinition,
+                    out currentProjection,
+                    out currentFound);
             }
             else if (current.ClrType is { } clrType)
             {
