@@ -2988,6 +2988,49 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ReducedExtensionDelegateArgumentsUseReducedParameterOrdinals()
+    {
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+            using System.Linq;
+            namespace ReducedExtensionDelegateOrdinals;
+            public sealed class Track {
+                public long Offset;
+                public IEnumerable<int> Items() => new[] { 42 };
+            }
+            public static class EnumerableExtensions {
+                public static IEnumerable<TResult> InterleaveBy<TSource, TResult, TKey>(
+                    this IEnumerable<TSource> source,
+                    Func<TSource, IEnumerable<TResult>> selector,
+                    Func<TResult, TKey> keySelector) =>
+                    selector(source.First());
+            }
+            public class Probe {
+                public static int Run() =>
+                    new[] { new Track() }
+                        .InterleaveBy(t => t.Items(), item => item)
+                        .First();
+            }
+            """;
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ReducedExtensionDelegateOrdinals.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("(t Track) -> t.Items()", text, StringComparison.Ordinal);
+        Assert.Contains("(item int32) -> item", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionUpdatesParameterlessAnonymousDelegate()
     {
         const string source = """

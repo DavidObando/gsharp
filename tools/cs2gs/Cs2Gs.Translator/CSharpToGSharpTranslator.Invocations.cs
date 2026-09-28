@@ -1917,6 +1917,18 @@ public sealed partial class CSharpToGSharpTranslator
                 (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
                     ?.Parameter;
             if (operationParameter != null
+                && method.MethodKind == MethodKind.ReducedExtension)
+            {
+                IParameterSymbol reducedParameter = method.Parameters.FirstOrDefault(
+                    parameter => parameter.Name == operationParameter.Name
+                        && parameter.RefKind == operationParameter.RefKind);
+                if (reducedParameter != null)
+                {
+                    return reducedParameter;
+                }
+            }
+
+            if (operationParameter != null
                 && operationParameter.Ordinal >= 0
                 && operationParameter.Ordinal < method.Parameters.Length
                 && method.Parameters[operationParameter.Ordinal].RefKind
