@@ -340,7 +340,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 if (!IsNullOrDefaultLiteral(initializer)
-                    && typeInfo.Type is { } initializerType
+                    && (typeInfo.Type ?? typeInfo.ConvertedType) is { } initializerType
                     && !IsAnnotatedNullableReference(initializerType)
                     && initializerType is not ITypeParameterSymbol)
                 {

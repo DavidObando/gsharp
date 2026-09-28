@@ -92,7 +92,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 T? annotated = default(T);
                 (T explicitLeft, T explicitRight) = (default(T), default(T));
                 var (ordinaryLeft, ordinaryRight) = ("left", "right");
-                return ordinary.Length + ordinaryLeft.Length + ordinaryRight.Length;
+                var lambda = (int value = 1) => value;
+                return ordinary.Length + ordinaryLeft.Length + ordinaryRight.Length + lambda();
             }
 
             public static int Run() =>
@@ -162,6 +163,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("explicitLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("explicitRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowed T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotMatch(@"\b(let|var) lambda [^=\r\n]*\? =", printed);
         Assert.Contains("suppressed = default(T)!!", printed, StringComparison.Ordinal);
         Assert.Contains("annotated T? = default(T)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("let _ =", printed, StringComparison.Ordinal);
