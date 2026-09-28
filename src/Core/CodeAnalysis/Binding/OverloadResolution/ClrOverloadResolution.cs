@@ -3113,13 +3113,12 @@ internal static class ClrOverloadResolution
         return returnConversion != ImplicitConversionKind.None;
     }
 
-    private static int GetIgnoredTrailingParameterCount<T>(
-        T candidate,
-        Func<T, int>? trailingParameterCountToIgnore)
-        where T : MethodBase
+    private static int NormalizeIgnoredTrailingParameterCount(
+        MethodBase candidate,
+        int ignoredTrailingParameterCount)
     {
         var parameterCount = candidate.GetParameters().Length;
-        return Math.Clamp(trailingParameterCountToIgnore?.Invoke(candidate) ?? 0, 0, parameterCount);
+        return Math.Clamp(ignoredTrailingParameterCount, 0, parameterCount);
     }
 
     /// <summary>
@@ -3141,9 +3140,9 @@ internal static class ClrOverloadResolution
             // violations drop the candidate silently (matches C# §7.5.2 "if
             // type inference fails, the method is not applicable").
             T candidate = rawCandidate;
-            var ignoredTrailingParameters = GetIgnoredTrailingParameterCount(
+            var ignoredTrailingParameters = NormalizeIgnoredTrailingParameterCount(
                 rawCandidate,
-                trailingParameterCountToIgnore);
+                trailingParameterCountToIgnore?.Invoke(rawCandidate) ?? 0);
 
             // Issue #1325: when a candidate must be closed over a
             // same-compilation user value type — erased to a `System.Object`
@@ -4021,9 +4020,9 @@ internal static class ClrOverloadResolution
         }
 
         var parameters = candidate.GetParameters();
-        var ignoredTrailingParameters = GetIgnoredTrailingParameterCount(
+        var ignoredTrailingParameters = NormalizeIgnoredTrailingParameterCount(
             candidate,
-            trailingParameterCountToIgnore);
+            trailingParameterCountToIgnore?.Invoke(candidate) ?? 0);
         if (ignoredTrailingParameters > 0)
         {
             parameters = parameters[..^ignoredTrailingParameters];
@@ -4615,7 +4614,9 @@ internal static class ClrOverloadResolution
         {
             if (!ignoredTrailingParameterCounts.TryGetValue(method, out var count))
             {
-                count = GetIgnoredTrailingParameterCount(method, trailingParameterCountToIgnore);
+                count = NormalizeIgnoredTrailingParameterCount(
+                    method,
+                    trailingParameterCountToIgnore?.Invoke(method) ?? 0);
                 ignoredTrailingParameterCounts.Add(method, count);
             }
 
