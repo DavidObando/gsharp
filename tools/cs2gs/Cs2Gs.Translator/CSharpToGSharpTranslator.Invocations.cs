@@ -4707,6 +4707,11 @@ public sealed partial class CSharpToGSharpTranslator
             bool Complete(bool result)
             {
                 this.state.ManagedReferenceArrayProjectedCallsInProgress.Remove(call);
+                if (!result)
+                {
+                    this.DiscardDependentManagedReferenceArrayProjections(call);
+                }
+
                 return result;
             }
 
@@ -4745,10 +4750,14 @@ public sealed partial class CSharpToGSharpTranslator
                 new ITypeSymbol[method.TypeArguments.Length];
             var observedMethodArguments =
                 new ITypeSymbol[method.TypeArguments.Length];
+            var observedMethodArgumentsRequireExactMatch =
+                new bool[method.TypeArguments.Length];
             var projectedContainingArguments =
                 new ITypeSymbol[method.ContainingType?.TypeArguments.Length ?? 0];
             var observedContainingArguments =
                 new ITypeSymbol[method.ContainingType?.TypeArguments.Length ?? 0];
+            var observedContainingArgumentsRequireExactMatch =
+                new bool[method.ContainingType?.TypeArguments.Length ?? 0];
             ITypeParameterSymbol blockedParameter = null;
             ITypeParameterSymbol conflictingParameter = null;
             bool fixedStorageNeedsNullableArgument = false;
@@ -4768,12 +4777,20 @@ public sealed partial class CSharpToGSharpTranslator
                     return;
                 }
 
-                if (argument is AnonymousFunctionExpressionSyntax
-                    || (this.context.SemanticModel.GetOperation(argument)
-                        is IDelegateCreationOperation delegateCreation
-                        && delegateCreation.Target is IMethodReferenceOperation))
+                if (argument is AnonymousFunctionExpressionSyntax)
                 {
                     return;
+                }
+
+                bool requiresExactMatch = false;
+                if (argument.Parent is ArgumentSyntax argumentSyntax
+                    && this.TryGetMethodGroupArgument(
+                        argumentSyntax,
+                        out IMethodSymbol methodGroup,
+                        out _,
+                        out _))
+                {
+                    requiresExactMatch = !methodGroup.IsGenericMethod;
                 }
 
                 ITypeSymbol argumentType =
@@ -4787,10 +4804,12 @@ public sealed partial class CSharpToGSharpTranslator
                     method.TypeParameters,
                     projectedMethodArguments,
                     observedMethodArguments,
+                    observedMethodArgumentsRequireExactMatch,
                     parameterType,
                     argumentType,
                     apply: true,
-                    nullableArrayArgument);
+                    nullableArrayArgument,
+                    requiresExactMatch);
                 if (method.ContainingType != null)
                 {
                     bool needsContainingProjection = RecordWidenedTypeParameters(
@@ -4798,10 +4817,12 @@ public sealed partial class CSharpToGSharpTranslator
                         method.ContainingType.TypeParameters,
                         projectedContainingArguments,
                         observedContainingArguments,
+                        observedContainingArgumentsRequireExactMatch,
                         parameterType,
                         argumentType,
                         canProjectContainingTypeFromArguments,
-                        nullableArrayArgument);
+                        nullableArrayArgument,
+                        requiresExactMatch);
                     fixedStorageNeedsNullableArgument |=
                         needsContainingProjection
                         && !canProjectContainingTypeFromArguments;
@@ -4813,10 +4834,12 @@ public sealed partial class CSharpToGSharpTranslator
                 ImmutableArray<ITypeParameterSymbol> typeParameters,
                 ITypeSymbol[] projectedArguments,
                 ITypeSymbol[] observedArguments,
+                bool[] observedArgumentsRequireExactMatch,
                 ITypeSymbol parameterType,
                 ITypeSymbol argumentType,
                 bool apply,
-                bool nullableArrayArgument = false)
+                bool nullableArrayArgument = false,
+                bool requiresExactMatch = false)
             {
                 bool needsProjection = false;
                 for (int i = 0; i < projectedArguments.Length; i++)
@@ -4850,16 +4873,27 @@ public sealed partial class CSharpToGSharpTranslator
                                 NullableAnnotation.Annotated);
                     }
 
-                    if (observedArguments[i] != null
-                        && !ProjectionTypeFitsDestination(
-                            projectedArgument,
-                            observedArguments[i]))
+                    if (apply
+                        && observedArguments[i] != null
+                        && !SymbolEqualityComparer.IncludeNullability.Equals(
+                            observedArguments[i],
+                            projectedArgument)
+                        && (requiresExactMatch
+                            || observedArgumentsRequireExactMatch[i]
+                            || !ProjectionTypeFitsDestination(
+                                projectedArgument,
+                                observedArguments[i])))
                     {
                         conflictingParameter ??= typeParameters[i];
                         continue;
                     }
 
-                    observedArguments[i] ??= projectedArgument;
+                    if (apply)
+                    {
+                        observedArguments[i] ??= projectedArgument;
+                        observedArgumentsRequireExactMatch[i] |= requiresExactMatch;
+                    }
+
                     if (SymbolEqualityComparer.IncludeNullability.Equals(
                             typeArguments[i],
                             projectedArgument))
@@ -4928,6 +4962,7 @@ public sealed partial class CSharpToGSharpTranslator
                     consumerContainingType.OriginalDefinition.TypeParameters,
                     projectedContainingArguments,
                     observedContainingArguments,
+                    observedContainingArgumentsRequireExactMatch,
                     consumerType,
                     this.GetManagedReferenceArrayProjectedArgumentType(argument),
                     apply: true,
@@ -5055,9 +5090,9 @@ public sealed partial class CSharpToGSharpTranslator
                     TypeContainsRecognizedManagedReferenceConsumer(
                         argument,
                         this.context.Compilation)) == true
-                && creationSyntax.Parent is EqualsValueClauseSyntax
-                    { Parent: VariableDeclaratorSyntax declarator }
-                && this.context.GetDeclaredSymbol(declarator) is ILocalSymbol local
+                && this.TryGetInferredLocalInitializedBy(
+                    creationSyntax,
+                    out ILocalSymbol local)
                 && this.state.CurrentBodyScope is { } body)
             {
                 foreach (SyntaxNode consumer
@@ -5130,6 +5165,7 @@ public sealed partial class CSharpToGSharpTranslator
                     reducedDefinition.TypeParameters,
                     projectedMethodArguments,
                     observedMethodArguments,
+                    observedMethodArgumentsRequireExactMatch,
                     receiverParameterType,
                     this.GetManagedReferenceArrayProjectedArgumentType(
                         reducedMember.Expression),
@@ -5518,12 +5554,59 @@ public sealed partial class CSharpToGSharpTranslator
                 ElementAccessExpressionSyntax element => element.Expression,
                 _ => null,
             };
-            return receiver != null
-                && this.context.GetSymbolInfo(receiver).Symbol is ILocalSymbol local
-                && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                    is VariableDeclaratorSyntax { Initializer.Value: { } initializer }
-                && this.state.ManagedReferenceArrayProjectedCallsInProgress.Contains(
-                    initializer);
+            if (receiver == null
+                || this.context.GetSymbolInfo(receiver).Symbol is not ILocalSymbol local
+                || local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is not VariableDeclaratorSyntax { Initializer.Value: { } rawInitializer })
+            {
+                return false;
+            }
+
+            ExpressionSyntax initializer = Unparenthesize(rawInitializer);
+            if (!this.state.ManagedReferenceArrayProjectedCallsInProgress.Contains(
+                    initializer)
+                || this.context.GetSymbolInfo(initializer).Symbol
+                    is not IMethodSymbol initializerMethod)
+            {
+                return false;
+            }
+
+            ISymbol targetMember =
+                this.context.GetSymbolInfo(assignment.Left).Symbol
+                ?? this.context.SemanticModel.GetOperation(assignment.Left) switch
+                {
+                    IFieldReferenceOperation field => field.Field,
+                    IPropertyReferenceOperation property => property.Property,
+                    _ => null,
+                };
+            if (targetMember?.ContainingType == null
+                || !SymbolEqualityComparer.Default.Equals(
+                    targetMember.ContainingType.OriginalDefinition,
+                    initializerMethod.ContainingType?.OriginalDefinition))
+            {
+                return false;
+            }
+
+            this.state.ManagedReferenceArrayProjectionParentByCall[value] =
+                initializer;
+            return true;
+        }
+
+        private bool TryGetInferredLocalInitializedBy(
+            ExpressionSyntax value,
+            out ILocalSymbol local)
+        {
+            SyntaxNode current = value;
+            while (current.Parent is ParenthesizedExpressionSyntax)
+            {
+                current = current.Parent;
+            }
+
+            local = current.Parent is EqualsValueClauseSyntax
+                { Parent: VariableDeclaratorSyntax declarator }
+                ? this.context.GetDeclaredSymbol(declarator) as ILocalSymbol
+                : null;
+            return local != null && IsImplicitlyTypedLocal(local);
         }
 
         private bool ProjectedResultMatchesDestination(
@@ -5535,6 +5618,15 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.IsValueAssignedToProjectedReceiverInProgress(value))
             {
                 return true;
+            }
+
+            if (this.TryGetFixedExpressionLambdaReturnType(
+                    value,
+                    out destinationType))
+            {
+                return ProjectionTypeFitsDestination(
+                    projectedType,
+                    destinationType);
             }
 
             SyntaxNode directParent = value;
@@ -5590,6 +5682,75 @@ public sealed partial class CSharpToGSharpTranslator
                     _ => null,
                 };
             return ProjectionTypeFitsDestination(projectedType, destinationType);
+        }
+
+        private bool TryGetFixedExpressionLambdaReturnType(
+            ExpressionSyntax value,
+            out ITypeSymbol returnType)
+        {
+            returnType = null;
+            SyntaxNode current = value;
+            while (current.Parent is ParenthesizedExpressionSyntax
+                or CastExpressionSyntax)
+            {
+                current = current.Parent;
+            }
+
+            if (current.Parent is not AnonymousFunctionExpressionSyntax lambda
+                || lambda.Body != current)
+            {
+                return false;
+            }
+
+            ISymbol sink = this.ResolveValueSink(lambda);
+            if (sink is ILocalSymbol local
+                && IsImplicitlyTypedLocal(local)
+                && this.ValueDirectlyDefinesLocalStorage(lambda, local))
+            {
+                return false;
+            }
+
+            if (sink is IParameterSymbol parameter
+                && parameter.ContainingSymbol is IMethodSymbol containingMethod
+                && containingMethod.IsGenericMethod
+                && lambda.Parent is ArgumentSyntax argument
+                && argument.Parent?.Parent is InvocationExpressionSyntax invocation
+                && invocation.Expression is not GenericNameSyntax
+                && invocation.Expression is not MemberAccessExpressionSyntax
+                    { Name: GenericNameSyntax }
+                && containingMethod.TypeParameters.Any(typeParameter =>
+                    TypeContainsTypeParameter(
+                        parameter.OriginalDefinition.Type,
+                        typeParameter)))
+            {
+                return false;
+            }
+
+            returnType = this.GetLambdaTargetDelegateType(lambda)
+                ?.DelegateInvokeMethod?.ReturnType;
+            return returnType != null;
+        }
+
+        private void DiscardDependentManagedReferenceArrayProjections(
+            ExpressionSyntax failedCall)
+        {
+            var pending = new Queue<ExpressionSyntax>();
+            pending.Enqueue(failedCall);
+            while (pending.Count > 0)
+            {
+                ExpressionSyntax parent = pending.Dequeue();
+                ExpressionSyntax[] children = this.state
+                    .ManagedReferenceArrayProjectionParentByCall
+                    .Where(pair => ReferenceEquals(pair.Value, parent))
+                    .Select(pair => pair.Key)
+                    .ToArray();
+                foreach (ExpressionSyntax child in children)
+                {
+                    this.state.ManagedReferenceArrayProjectedMethodByCall[child] = null;
+                    this.state.ManagedReferenceArrayProjectionParentByCall.Remove(child);
+                    pending.Enqueue(child);
+                }
+            }
         }
 
         private bool IsArgumentOfProjectedCallInProgress(ExpressionSyntax value)

@@ -698,13 +698,6 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                if (node.Parent is AnonymousFunctionExpressionSyntax lambda
-                    && lambda.Body == node)
-                {
-                    return this.GetLambdaTargetDelegateType(lambda)
-                        ?.DelegateInvokeMethod;
-                }
-
                 break;
             }
 

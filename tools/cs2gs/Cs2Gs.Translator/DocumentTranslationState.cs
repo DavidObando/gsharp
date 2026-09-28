@@ -89,6 +89,14 @@ internal sealed class DocumentTranslationState
     public HashSet<ExpressionSyntax> ManagedReferenceArrayProjectedCallsInProgress { get; } =
         new HashSet<ExpressionSyntax>(ReferenceEqualityComparer.Instance);
 
+    // Speculative nested projections enabled by an in-progress receiver
+    // projection. If the receiver projection fails, these cached child
+    // projections must be discarded with it.
+    public Dictionary<ExpressionSyntax, ExpressionSyntax>
+        ManagedReferenceArrayProjectionParentByCall { get; } =
+            new Dictionary<ExpressionSyntax, ExpressionSyntax>(
+                ReferenceEqualityComparer.Instance);
+
     // Built once per translated body. Each entry maps a receiver symbol to
     // later member calls and writes that can determine the receiver's projected
     // constructed type.
