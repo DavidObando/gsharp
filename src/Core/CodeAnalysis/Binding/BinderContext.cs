@@ -286,13 +286,22 @@ internal sealed class BinderContext
         = new Dictionary<string, TextLocation>();
 
     /// <summary>
-    /// Gets assignment-narrowed variables whose narrowing may be bypassed by
-    /// a forward <c>goto</c>, grouped by the target label. A target entry is
-    /// opened when its first forward jump binds, populated by subsequent
-    /// straight-line assignment narrowings, and consumed when the label binds.
+    /// Gets the assignment-narrowing generation at which each unresolved
+    /// forward-goto target was first encountered.
     /// </summary>
-    public Dictionary<string, HashSet<VariableSymbol>> PendingGotoAssignmentInvalidations { get; }
-        = new Dictionary<string, HashSet<VariableSymbol>>();
+    public Dictionary<string, int> PendingGotoAssignmentStarts { get; }
+        = new Dictionary<string, int>();
+
+    /// <summary>
+    /// Gets the latest assignment-narrowing generation for each variable.
+    /// </summary>
+    public Dictionary<VariableSymbol, int> AssignmentNarrowingGenerations { get; }
+        = new Dictionary<VariableSymbol, int>();
+
+    /// <summary>
+    /// Gets or sets the current assignment-narrowing generation.
+    /// </summary>
+    public int AssignmentNarrowingGeneration { get; set; }
 
     /// <summary>
     /// Gets the variables known non-null at each forward <c>goto</c> source,

@@ -28,9 +28,9 @@ internal sealed partial class StatementBinder
         var labelName = syntax.LabelIdentifier.ValueText;
         var labelDefined = binderCtx.DefinedUserLabels.Contains(labelName);
         if (!labelDefined
-            && !binderCtx.PendingGotoAssignmentInvalidations.ContainsKey(labelName))
+            && !binderCtx.PendingGotoAssignmentStarts.ContainsKey(labelName))
         {
-            binderCtx.PendingGotoAssignmentInvalidations[labelName] = new HashSet<VariableSymbol>();
+            binderCtx.PendingGotoAssignmentStarts[labelName] = binderCtx.AssignmentNarrowingGeneration;
         }
 
         if (!labelDefined)
@@ -42,8 +42,12 @@ internal sealed partial class StatementBinder
             }
 
             var narrowedAtSource = new Dictionary<VariableSymbol, TypeSymbol>();
-            foreach (var frame in binderCtx.NarrowedVariables)
+
+            // Frames are ordered outermost to innermost, so overwriting records
+            // the currently effective narrowing for a repeated root.
+            for (var i = 0; i < binderCtx.NarrowedVariables.Count; i++)
             {
+                var frame = binderCtx.NarrowedVariables[i];
                 foreach (var entry in frame)
                 {
                     if (!entry.Key.HasMembers)
@@ -139,7 +143,9 @@ internal sealed partial class StatementBinder
         }
 
         binderCtx.UnresolvedGotoLabels.Clear();
-        binderCtx.PendingGotoAssignmentInvalidations.Clear();
+        binderCtx.PendingGotoAssignmentStarts.Clear();
+        binderCtx.AssignmentNarrowingGenerations.Clear();
+        binderCtx.AssignmentNarrowingGeneration = 0;
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
         boundFinallyBlocks.Clear();
         finallyMutationSummaries.Clear();
@@ -291,9 +297,10 @@ internal sealed partial class StatementBinder
         var pendingEarlyExitFrames = binderCtx.PendingEarlyExitFrames.ToArray();
         var pendingSwitchExitFrames = binderCtx.PendingSwitchExitFrames.ToArray();
         var definedUserLabels = binderCtx.DefinedUserLabels.ToArray();
-        var pendingGotoAssignmentInvalidations = binderCtx.PendingGotoAssignmentInvalidations.ToDictionary(
-            entry => entry.Key,
-            entry => new HashSet<VariableSymbol>(entry.Value));
+        var pendingGotoAssignmentStarts = new Dictionary<string, int>(binderCtx.PendingGotoAssignmentStarts);
+        var assignmentNarrowingGenerations =
+            new Dictionary<VariableSymbol, int>(binderCtx.AssignmentNarrowingGenerations);
+        var assignmentNarrowingGeneration = binderCtx.AssignmentNarrowingGeneration;
         var pendingGotoNarrowingSnapshots = binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
             entry => entry.Key,
             entry => entry.Value.Select(snapshot => snapshot.Clone()).ToList());
@@ -357,13 +364,13 @@ internal sealed partial class StatementBinder
         RestoreDictionary(binderCtx.PendingEarlyExitFrames, pendingEarlyExitFrames);
         RestoreDictionary(binderCtx.PendingSwitchExitFrames, pendingSwitchExitFrames);
         RestoreSet(binderCtx.DefinedUserLabels, definedUserLabels);
-        binderCtx.PendingGotoAssignmentInvalidations.Clear();
-        foreach (var entry in pendingGotoAssignmentInvalidations)
-        {
-            binderCtx.PendingGotoAssignmentInvalidations.Add(
-                entry.Key,
-                new HashSet<VariableSymbol>(entry.Value));
-        }
+        RestoreDictionary(
+            binderCtx.PendingGotoAssignmentStarts,
+            pendingGotoAssignmentStarts.ToArray());
+        RestoreDictionary(
+            binderCtx.AssignmentNarrowingGenerations,
+            assignmentNarrowingGenerations.ToArray());
+        binderCtx.AssignmentNarrowingGeneration = assignmentNarrowingGeneration;
 
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
         foreach (var entry in pendingGotoNarrowingSnapshots)

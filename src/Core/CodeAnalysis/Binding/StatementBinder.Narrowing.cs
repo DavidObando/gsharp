@@ -510,10 +510,9 @@ internal sealed partial class StatementBinder
             persistentFrame[narrowedVariable]
                 = Invariant.Required(underlying, "a successful assignment narrowing has an underlying type");
 
-            foreach (var pending in binderCtx.PendingGotoAssignmentInvalidations.Values)
-            {
-                pending.Add(narrowedVariable);
-            }
+            binderCtx.AssignmentNarrowingGeneration++;
+            binderCtx.AssignmentNarrowingGenerations[narrowedVariable] =
+                binderCtx.AssignmentNarrowingGeneration;
         }
     }
 
@@ -525,11 +524,14 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void InvalidateAssignmentNarrowingsBypassedByGoto(string labelName)
     {
-        if (!binderCtx.PendingGotoAssignmentInvalidations.Remove(labelName, out var variables))
+        if (!binderCtx.PendingGotoAssignmentStarts.Remove(labelName, out var startGeneration))
         {
             return;
         }
 
+        var variables = binderCtx.AssignmentNarrowingGenerations
+            .Where(entry => entry.Value > startGeneration)
+            .Select(entry => entry.Key);
         binderCtx.PendingGotoNarrowingSnapshots.Remove(labelName, out var incomingSnapshots);
         if (incomingSnapshots != null)
         {

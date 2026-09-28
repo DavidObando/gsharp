@@ -2321,7 +2321,9 @@ internal sealed class LambdaBinder
         binderCtx.UserLabels.Clear();
         binderCtx.DefinedUserLabels.Clear();
         binderCtx.UnresolvedGotoLabels.Clear();
-        binderCtx.PendingGotoAssignmentInvalidations.Clear();
+        binderCtx.PendingGotoAssignmentStarts.Clear();
+        binderCtx.AssignmentNarrowingGenerations.Clear();
+        binderCtx.AssignmentNarrowingGeneration = 0;
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
         binderCtx.LoopStack.Clear();
         binderCtx.CurrentFallthroughTarget = null;
@@ -2376,11 +2378,19 @@ internal sealed class LambdaBinder
             binderCtx.UnresolvedGotoLabels[kvp.Key] = kvp.Value;
         }
 
-        binderCtx.PendingGotoAssignmentInvalidations.Clear();
-        foreach (var kvp in saved.PendingGotoAssignmentInvalidations)
+        binderCtx.PendingGotoAssignmentStarts.Clear();
+        foreach (var kvp in saved.PendingGotoAssignmentStarts)
         {
-            binderCtx.PendingGotoAssignmentInvalidations[kvp.Key] = new HashSet<VariableSymbol>(kvp.Value);
+            binderCtx.PendingGotoAssignmentStarts[kvp.Key] = kvp.Value;
         }
+
+        binderCtx.AssignmentNarrowingGenerations.Clear();
+        foreach (var kvp in saved.AssignmentNarrowingGenerations)
+        {
+            binderCtx.AssignmentNarrowingGenerations[kvp.Key] = kvp.Value;
+        }
+
+        binderCtx.AssignmentNarrowingGeneration = saved.AssignmentNarrowingGeneration;
 
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
         foreach (var kvp in saved.PendingGotoNarrowingSnapshots)
@@ -3029,9 +3039,10 @@ internal sealed class LambdaBinder
             UserLabels = new Dictionary<string, BoundLabel>(ctx.UserLabels);
             DefinedUserLabels = new HashSet<string>(ctx.DefinedUserLabels);
             UnresolvedGotoLabels = new Dictionary<string, TextLocation>(ctx.UnresolvedGotoLabels);
-            PendingGotoAssignmentInvalidations = ctx.PendingGotoAssignmentInvalidations.ToDictionary(
-                entry => entry.Key,
-                entry => new HashSet<VariableSymbol>(entry.Value));
+            PendingGotoAssignmentStarts = new Dictionary<string, int>(ctx.PendingGotoAssignmentStarts);
+            AssignmentNarrowingGenerations =
+                new Dictionary<VariableSymbol, int>(ctx.AssignmentNarrowingGenerations);
+            AssignmentNarrowingGeneration = ctx.AssignmentNarrowingGeneration;
             PendingGotoNarrowingSnapshots = ctx.PendingGotoNarrowingSnapshots.ToDictionary(
                 entry => entry.Key,
                 entry => entry.Value.Select(snapshot => snapshot.Clone()).ToList());
@@ -3047,7 +3058,11 @@ internal sealed class LambdaBinder
 
         public Dictionary<string, TextLocation> UnresolvedGotoLabels { get; }
 
-        public Dictionary<string, HashSet<VariableSymbol>> PendingGotoAssignmentInvalidations { get; }
+        public Dictionary<string, int> PendingGotoAssignmentStarts { get; }
+
+        public Dictionary<VariableSymbol, int> AssignmentNarrowingGenerations { get; }
+
+        public int AssignmentNarrowingGeneration { get; }
 
         public Dictionary<string, List<GotoNarrowingSnapshot>> PendingGotoNarrowingSnapshots { get; }
 
