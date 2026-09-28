@@ -2655,7 +2655,11 @@ internal sealed partial class ExpressionBinder
                 resolutionArguments[i + (closesExtensionReceiver ? 1 : 0)] = delegateParameterTypes[i];
             }
 
-            var resolution = ClrOverloadResolution.Resolve(clrGroup.Candidates, resolutionArguments);
+            var resolution = ClrOverloadResolution.Resolve(
+                clrGroup.Candidates,
+                resolutionArguments,
+                trailingParameterCountToIgnore: static candidate =>
+                    ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0);
             if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
                 || resolution.Best is not { } method)
             {

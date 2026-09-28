@@ -347,7 +347,11 @@ internal sealed partial class OverloadResolver
         // #835/#3753: `IsSameAs` rather than reference identity — the
         // candidate may come from a MetadataLoadContext, where the host
         // `typeof(void)` is a different Type instance.
-        var resolution = ClrOverloadResolution.Resolve(group.Candidates, resolutionArguments);
+        var resolution = ClrOverloadResolution.Resolve(
+            group.Candidates,
+            resolutionArguments,
+            trailingParameterCountToIgnore: static candidate =>
+                ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0);
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
             || resolution.Best is not { } best
             || best.IsGenericMethodDefinition

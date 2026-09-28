@@ -254,7 +254,12 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         const string app = """
             package App
             import System
+            import System.Linq
             import Interop
+
+            func Register[T](callback (int32) -> T) T {
+                return callback(11)
+            }
 
             suspend func run() {
                 var value = 4
@@ -263,6 +268,11 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 Console.WriteLine(value)
                 let echo ValueRunner = Api.Echo
                 Console.WriteLine(await echo(6))
+                let values = []int32{7}
+                for task in Enumerable.Select(values, Api.Echo) {
+                    Console.WriteLine(await task)
+                }
+                Console.WriteLine(await Register(Api.Echo))
             }
 
             run()
@@ -276,7 +286,9 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             IlVerifier.Verify(
                 appPath,
                 new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
-            Assert.Equal($"5{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}", Run(appPath));
+            Assert.Equal(
+                $"5{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}7{Environment.NewLine}11{Environment.NewLine}",
+                Run(appPath));
         }
         finally
         {
