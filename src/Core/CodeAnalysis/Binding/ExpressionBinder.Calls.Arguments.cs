@@ -2456,6 +2456,13 @@ internal sealed partial class ExpressionBinder
         bool isExpanded = false)
     {
         var expandedMapping = isExpanded ? parameterMapping : default;
+        var expandedArgumentLocations = CaptureExpandedArgumentLocations(
+            call,
+            arguments.Length,
+            parameterMapping,
+            parameters.Length,
+            receiverArgCount,
+            isExpanded);
         var rebound = RebindFormattableInterpolationArguments(
             arguments,
             argumentSyntax,
@@ -2508,7 +2515,9 @@ internal sealed partial class ExpressionBinder
             method,
             effectiveConversionReceiverType,
             conversionSymbolicMethodTypeArgs,
-            parameterTypeOverrides);
+            parameterTypeOverrides,
+            expandedParamsIndex: isExpanded ? parameters.Length - 1 : -1,
+            parameterArgumentLocations: expandedArgumentLocations);
         return isExpanded
             ? OverloadResolver.PreserveExpandedArgumentEvaluationOrder(
                 converted,
@@ -4179,6 +4188,13 @@ internal sealed partial class ExpressionBinder
             method);
 
         var downstreamMapping = resolution.ParameterMapping;
+        var expandedArgumentLocations = CaptureExpandedArgumentLocations(
+            ce,
+            arguments.Length,
+            downstreamMapping,
+            parameters.Length,
+            receiverArgCount: 0,
+            resolution.IsExpanded);
         arguments = RebindFormattableInterpolationArguments(
             arguments,
             ce.Arguments,
@@ -4259,8 +4275,17 @@ internal sealed partial class ExpressionBinder
                 downstreamMapping,
                 method: method,
                 receiverType: constraintType,
-                symbolicMethodTypeArgs: symbolicMethodTypeArgs)
-            : conversions.BindImplicitInClrArguments(arguments, parameters, ce, downstreamMapping, method, constraintType);
+                symbolicMethodTypeArgs: symbolicMethodTypeArgs,
+                expandedParamsIndex: resolution.IsExpanded ? parameters.Length - 1 : -1,
+                parameterArgumentLocations: expandedArgumentLocations)
+            : conversions.BindImplicitInClrArguments(
+                arguments,
+                parameters,
+                ce,
+                downstreamMapping,
+                method,
+                constraintType,
+                expandedArgumentLocations);
         var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
         if (resolution.IsExpanded)
         {
@@ -4282,6 +4307,34 @@ internal sealed partial class ExpressionBinder
             constrainedReceiverTypeParameter: tp,
             constrainedInterfaceType: declaringConstraint);
         return true;
+    }
+
+    private static ImmutableArray<TextLocation?> CaptureExpandedArgumentLocations(
+        CallExpressionSyntax call,
+        int argumentCount,
+        ImmutableArray<int> parameterMapping,
+        int parameterCount,
+        int receiverArgCount,
+        bool isExpanded)
+    {
+        if (!isExpanded || parameterMapping.IsDefault)
+        {
+            return default;
+        }
+
+        var locations = ImmutableArray.CreateBuilder<TextLocation?>(parameterCount);
+        locations.Count = parameterCount;
+        for (var i = receiverArgCount; i < argumentCount && i < parameterMapping.Length; i++)
+        {
+            var sourceIndex = i - receiverArgCount;
+            var parameterIndex = parameterMapping[i];
+            if (sourceIndex < call.Arguments.Count && parameterIndex < parameterCount - 1)
+            {
+                locations[parameterIndex] = call.Arguments[sourceIndex].Location;
+            }
+        }
+
+        return locations.MoveToImmutable();
     }
 
     /// <summary>

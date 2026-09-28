@@ -424,7 +424,16 @@ internal sealed partial class DeclarationBinder
             {
                 var srcIndex = paramsIndex + j;
                 var element = boundArguments[srcIndex];
-                if (element.Type != null && element.Type != TypeSymbol.Error && element.Type != elementTypeSymbol)
+                if (conversions.TryRejectClrPlatformContainerArgument(
+                    element,
+                    ctorParams[paramsIndex],
+                    elementTypeSymbol,
+                    argLocation(srcIndex),
+                    out var rejectedElement))
+                {
+                    element = rejectedElement;
+                }
+                else if (element.Type != null && element.Type != TypeSymbol.Error && element.Type != elementTypeSymbol)
                 {
                     if (Conversion.Classify(element.Type, elementTypeSymbol).Exists)
                     {
@@ -487,7 +496,15 @@ internal sealed partial class DeclarationBinder
                 {
                     var inPointee = TryProjectSymbolicBaseInPointeeType(openBaseCtorParams, openBaseDefinition, baseTypeArguments, i)
                         ?? ConversionClassifier.GetImplicitInClrPointeeType(ctorParams[i], i, method: null, receiverType: null, symbolicMethodTypeArgs: default);
-                    convertedArgs.Add(conversions.BindImplicitInArgument(argLocation(i), orderedArgs[i], inPointee, parameter: null));
+                    var inLocation = argLocation(i);
+                    convertedArgs.Add(conversions.TryRejectClrPlatformContainerArgument(
+                        orderedArgs[i],
+                        ctorParams[i],
+                        inPointee,
+                        inLocation,
+                        out var rejectedArgument)
+                            ? rejectedArgument
+                            : conversions.BindImplicitInArgument(inLocation, orderedArgs[i], inPointee, parameter: null));
                     continue;
                 }
 
@@ -545,6 +562,17 @@ internal sealed partial class DeclarationBinder
                 && orderedArg is BoundDefaultExpression)
             {
                 orderedArg = new BoundDefaultExpression(orderedArg.Syntax, symbolicTarget);
+            }
+
+            if (conversions.TryRejectClrPlatformContainerArgument(
+                orderedArg,
+                ctorParams[i],
+                targetType,
+                argLoc,
+                out var rejectedValueArgument))
+            {
+                convertedArgs.Add(rejectedValueArgument);
+                continue;
             }
 
             // Issue #506 follow-up: when the synthesised params array already
@@ -687,11 +715,17 @@ internal sealed partial class DeclarationBinder
         // shapes by shape rather than by spelling, so the raw projection is
         // accepted whichever way either side is written.
         var mapped = raw;
+        if (mapped == TypeSymbol.Error)
+        {
+            return null;
+        }
 
-        return mapped != TypeSymbol.Error
-            && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
-            ? mapped
-            : null;
+        var keepsSymbolicShape = TypeSymbol.ContainsTypeParameter(mapped)
+            || TypeSymbol.ContainsSameCompilationUserType(mapped)
+            || TypeSymbol.RequiresSymbolicProjection(mapped)
+            || TypeSymbol.ContainsFixedLengthArray(mapped)
+            || mapped is TupleTypeSymbol;
+        return keepsSymbolicShape ? mapped : null;
     }
 
     // Issue #4400: the symbolic pointee of a generic base constructor's `in`

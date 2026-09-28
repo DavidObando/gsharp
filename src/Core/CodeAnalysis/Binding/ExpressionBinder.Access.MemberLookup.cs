@@ -4831,6 +4831,13 @@ internal sealed partial class ExpressionBinder
         var declaringConstraint = MemberLookup.GetClrMemberDeclaringTypeSymbol(constraintType, method);
 
         var downstreamMapping = resolution.ParameterMapping;
+        var expandedArgumentLocations = CaptureExpandedArgumentLocations(
+            callSyntax,
+            arguments.Length,
+            downstreamMapping,
+            parameters.Length,
+            receiverArgCount: 0,
+            resolution.IsExpanded);
         arguments = RebindFormattableInterpolationArguments(
             arguments,
             callSyntax.Arguments,
@@ -4890,8 +4897,17 @@ internal sealed partial class ExpressionBinder
                 downstreamMapping,
                 method: method,
                 receiverType: constraintType,
-                symbolicMethodTypeArgs: symbolicMethodTypeArgs)
-            : conversions.BindImplicitInClrArguments(arguments, parameters, callSyntax, downstreamMapping, method, constraintType);
+                symbolicMethodTypeArgs: symbolicMethodTypeArgs,
+                expandedParamsIndex: resolution.IsExpanded ? parameters.Length - 1 : -1,
+                parameterArgumentLocations: expandedArgumentLocations)
+            : conversions.BindImplicitInClrArguments(
+                arguments,
+                parameters,
+                callSyntax,
+                downstreamMapping,
+                method,
+                constraintType,
+                expandedArgumentLocations);
         var orderedArgs = OverloadResolver.BuildOrderedCallArguments(arguments, downstreamMapping, parameters);
         if (resolution.IsExpanded)
         {

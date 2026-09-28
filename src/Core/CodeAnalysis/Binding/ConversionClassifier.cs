@@ -1131,6 +1131,11 @@ internal sealed class ConversionClassifier
     /// keyed by resolved parameter index. Constructed generic constructors use
     /// this to retain delegate targets such as <c>Func&lt;Foo&gt;</c> when
     /// reflection exposes only the erased <c>Func&lt;object&gt;</c> shape.</param>
+    /// <param name="expandedParamsIndex">The parameter index whose already
+    /// converted expanded elements were packed into a synthesized array, or
+    /// <c>-1</c> when the call was not expanded.</param>
+    /// <param name="parameterArgumentLocations">Original source locations keyed
+    /// by parameter index after expanded named arguments were reordered.</param>
     /// <returns>The (possibly rebound) argument array.</returns>
     public ImmutableArray<BoundExpression> BindClrParameterConversions(
         ImmutableArray<BoundExpression> arguments,
@@ -1141,7 +1146,9 @@ internal sealed class ConversionClassifier
         MethodInfo? method = null,
         TypeSymbol? receiverType = null,
         ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs = default,
-        IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null)
+        IReadOnlyDictionary<int, TypeSymbol>? parameterTypeOverrides = null,
+        int expandedParamsIndex = -1,
+        ImmutableArray<TextLocation?> parameterArgumentLocations = default)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -1190,14 +1197,25 @@ internal sealed class ConversionClassifier
                     // parameter is converted to the pointee type and passed
                     // by readonly reference, as in C#.
                     var sourceIndex = i - receiverArgCount;
-                    var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
-                        ? call.Arguments[sourceIndex].Location
-                        : call?.Location ?? default;
+                    var location = !parameterArgumentLocations.IsDefault
+                        && paramIndex < parameterArgumentLocations.Length
+                        && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                            ? mappedLocation
+                            : call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
+                                ? call.Arguments[sourceIndex].Location
+                                : call?.Location ?? default;
                     TypeSymbol? inPointeeOverride = null;
                     parameterTypeOverrides?.TryGetValue(paramIndex, out inPointeeOverride);
                     var inPointee = inPointeeOverride
                         ?? GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs);
-                    rebound = BindImplicitInArgument(location, argument, inPointee, parameter: null);
+                    rebound = TryRejectClrPlatformContainerArgument(
+                        argument,
+                        parameters[paramIndex],
+                        inPointee,
+                        location,
+                        out var rejectedArgument)
+                            ? rejectedArgument
+                            : BindImplicitInArgument(location, argument, inPointee, parameter: null);
                 }
                 else if (!parameterType.IsByRef
                     && (argument.Type != TypeSymbol.Error || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
@@ -1442,6 +1460,13 @@ internal sealed class ConversionClassifier
 
                     var targetType = substituted
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
+                    var rejectionTargetType = substituted
+                        ?? TrySubstituteParameterTypeFromMethodTypeArgs(
+                            method,
+                            paramIndex,
+                            symbolicMethodTypeArgs,
+                            allowConcreteSymbolic: true)
+                        ?? targetType;
 
                     // Issue #2142 (follow-up to #2130/#2139): a lambda/arrow
                     // literal flowing into an imported method's
@@ -1476,6 +1501,16 @@ internal sealed class ConversionClassifier
                     // user-defined generic function's method-group argument.
                     var isMethodGroupTarget = argument is BoundMethodGroupExpression or BoundClrMethodGroupExpression;
                     var parameterConversion = Conversion.Classify(argument.Type, targetType);
+                    var rejectionSourceIndex = i - receiverArgCount;
+                    var rejectionLocation = !parameterArgumentLocations.IsDefault
+                        && paramIndex < parameterArgumentLocations.Length
+                        && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                            ? mappedLocation
+                            : call != null
+                                && rejectionSourceIndex >= 0
+                                && rejectionSourceIndex < call.Arguments.Count
+                                    ? call.Arguments[rejectionSourceIndex].Location
+                                    : call?.Location ?? default;
                     if (substituted != null
                         && TypeSymbol.ContainsNullLiteralType(argument.Type)
                         && argument is BoundTupleLiteralExpression
@@ -1573,6 +1608,16 @@ internal sealed class ConversionClassifier
                         // the emitter pushed the source type directly and
                         // produced unverifiable IL at imported call sites.
                         rebound = udcArg;
+                    }
+                    else if (paramIndex != expandedParamsIndex
+                        && TryRejectClrPlatformContainerArgument(
+                            argument,
+                            parameters[paramIndex],
+                            rejectionTargetType,
+                            rejectionLocation,
+                            out var rejectedArgument))
+                    {
+                        rebound = rejectedArgument;
                     }
                     else if (substituted != null
                         && argument.Type != targetType
@@ -3227,6 +3272,8 @@ internal sealed class ConversionClassifier
     /// <param name="parameterMapping">Optional source-argument to parameter map.</param>
     /// <param name="method">The resolved CLR method, for symbolic slot recovery.</param>
     /// <param name="receiverType">The receiver/constraint type carrying symbolic type arguments.</param>
+    /// <param name="parameterArgumentLocations">Original source locations keyed
+    /// by parameter index after expanded named arguments were reordered.</param>
     /// <returns>The arguments, with each plain <c>in</c> argument passed by readonly reference.</returns>
     public ImmutableArray<BoundExpression> BindImplicitInClrArguments(
         ImmutableArray<BoundExpression> arguments,
@@ -3234,7 +3281,8 @@ internal sealed class ConversionClassifier
         CallExpressionSyntax call,
         ImmutableArray<int> parameterMapping,
         MethodInfo? method,
-        TypeSymbol? receiverType)
+        TypeSymbol? receiverType,
+        ImmutableArray<TextLocation?> parameterArgumentLocations = default)
     {
         ImmutableArray<BoundExpression>.Builder? builder = null;
         for (var i = 0; i < arguments.Length; i++)
@@ -3242,38 +3290,64 @@ internal sealed class ConversionClassifier
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
             if (paramIndex < parameters.Length && IsImplicitInClrArgument(arguments[i], parameters[paramIndex]))
             {
-                var location = i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+                var location = !parameterArgumentLocations.IsDefault
+                    && paramIndex < parameterArgumentLocations.Length
+                    && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                        ? mappedLocation
+                        : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+                var pointeeType = GetImplicitInClrPointeeType(
+                    parameters[paramIndex],
+                    paramIndex,
+                    method,
+                    receiverType,
+                    symbolicMethodTypeArgs: default);
                 builder ??= arguments.ToBuilder();
-                builder[i] = BindImplicitInArgument(
-                    location,
+                builder[i] = TryRejectClrPlatformContainerArgument(
                     arguments[i],
-                    GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs: default),
-                    parameter: null);
+                    parameters[paramIndex],
+                    pointeeType,
+                    location,
+                    out var rejectedArgument)
+                        ? rejectedArgument
+                        : BindImplicitInArgument(location, arguments[i], pointeeType, parameter: null);
             }
             else if (paramIndex < parameters.Length
-                && arguments[i].Type is PlatformTypeSymbol
-                && parameters[paramIndex].ParameterType is { IsByRef: false, IsGenericParameter: false }
+                && Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
+                && parameters[paramIndex].ParameterType is { IsByRef: false }
                 && method != null
                 && receiverType != null
-
-                // Receiver-aware: a constrained `ITaker[string?]` reflects its
-                // `Take(T)` as a CLR `string`, and only the receiver's
-                // symbolic argument says the slot is `string?`.
-                && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType
-                && Conversion.Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck)
+                && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType)
             {
-                // ADR-0186 §4, #4451: a platform argument at a non-null
-                // parameter of a constrained call is a coercion point like any
-                // other. This path otherwise passes arguments unconverted (the
-                // `!0` slots are reified), so it inserts only the check and
-                // leaves the value's CLR shape alone; a generic-parameter slot
-                // is skipped for the same reason.
-                var location = i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
-                builder ??= arguments.ToBuilder();
-                builder[i] = PlatformCoercion.InsertCheck(
+                var location = !parameterArgumentLocations.IsDefault
+                    && paramIndex < parameterArgumentLocations.Length
+                    && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                        ? mappedLocation
+                        : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+                if (TryRejectClrPlatformContainerArgument(
                     arguments[i],
+                    parameters[paramIndex],
+                    parameterType,
                     location,
-                    $"a conversion to the non-null type '{parameterType.Name}'");
+                    out var rejectedArgument))
+                {
+                    builder ??= arguments.ToBuilder();
+                    builder[i] = rejectedArgument;
+                }
+                else if (!parameters[paramIndex].ParameterType.IsGenericParameter
+                    && arguments[i].Type is PlatformTypeSymbol
+                    && Conversion.Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck)
+                {
+                    // ADR-0186 §4, #4451: a platform argument at a non-null
+                    // parameter of a constrained call is a coercion point like
+                    // any other. This path otherwise passes arguments
+                    // unconverted (the `!0` slots are reified), so it inserts
+                    // only the check and leaves the value's CLR shape alone.
+                    builder ??= arguments.ToBuilder();
+                    builder[i] = PlatformCoercion.InsertCheck(
+                        arguments[i],
+                        location,
+                        $"a conversion to the non-null type '{parameterType.Name}'");
+                }
             }
         }
 
@@ -3476,6 +3550,49 @@ internal sealed class ConversionClassifier
         var receiver2 = new BoundVariableExpression(null, variable);
         var clrCall = new BoundImportedInstanceCallExpression(null, receiver2, disposeAsyncMethod, valueTaskType, ImmutableArray<BoundExpression>.Empty);
         return new BoundAwaitExpression(null, clrCall, TypeSymbol.Void);
+    }
+
+    /// <summary>
+    /// Issue #4480: reports the imported-call form of ADR-0186 §3 rule 3 at an
+    /// explicitly supplied argument location.
+    /// </summary>
+    /// <param name="argument">The bound argument.</param>
+    /// <param name="parameter">The resolved imported parameter.</param>
+    /// <param name="targetType">The nullability-aware parameter type.</param>
+    /// <param name="location">The offending argument's location.</param>
+    /// <param name="rebound">The error expression when the argument is rejected.</param>
+    /// <param name="classifiedConversion">An already-classified conversion, when the caller has one.</param>
+    /// <returns><see langword="true"/> when rule 3 rejected the argument.</returns>
+    internal bool TryRejectClrPlatformContainerArgument(
+        BoundExpression argument,
+        ParameterInfo parameter,
+        TypeSymbol targetType,
+        TextLocation location,
+        out BoundExpression rebound,
+        Conversion? classifiedConversion = null)
+    {
+        rebound = argument;
+        var sourceType = argument.Type;
+        if (sourceType == null
+            || (classifiedConversion ?? Conversion.Classify(sourceType, targetType)).Exists
+            || !Conversion.TryRelatePlatformContainer(
+                sourceType,
+                targetType,
+                out var isImplicit,
+                out var rejectsImportedParameter)
+            || isImplicit
+            || !rejectsImportedParameter)
+        {
+            return false;
+        }
+
+        Diagnostics.ReportWrongArgumentType(
+            location,
+            parameter.Name ?? $"arg{parameter.Position}",
+            targetType,
+            argument.Type);
+        rebound = new BoundErrorExpression(argument.Syntax);
+        return true;
     }
 
     // Issue #1334: shared accessor so the generic-LINQ delegate-argument rebind
