@@ -74,7 +74,19 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
         Assert.True(DeclarationBinder.TypeSignaturesEquivalent(
             NullableTypeSymbol.Get(TypeSymbol.String),
             TypeSymbol.String));
-        Assert.True(DeclarationBinder.TypeSignaturesEquivalent(nullableInt, nullableInt));
+
+        var exactUnderlyingA = ImportedTypeSymbol.GetConstructed(
+            typeof(ValueTuple<int>),
+            typeof(ValueTuple<>),
+            ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32));
+        var exactUnderlyingB = ImportedTypeSymbol.GetConstructed(
+            typeof(ValueTuple<int>),
+            typeof(ValueTuple<>),
+            ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32));
+        var exactNullableA = NullableTypeSymbol.Get(exactUnderlyingA);
+        var exactNullableB = NullableTypeSymbol.Get(exactUnderlyingB);
+        Assert.NotSame(exactNullableA, exactNullableB);
+        Assert.True(DeclarationBinder.TypeSignaturesEquivalent(exactNullableA, exactNullableB));
     }
 
     [Fact]
