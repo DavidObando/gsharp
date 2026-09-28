@@ -34,9 +34,7 @@ namespace Cs2Gs.Translator;
 /// (gsgen's stub renders only top-level types, so no implementing part is
 /// generated, GS0609).</para>
 /// <para>An entry class declaring one is kept as a class rather than hoisted
-/// to top-level funcs, which cannot be partial (see
-/// <see cref="IsMemberOfKeptTopLevelProgram"/> for the top-level-statements
-/// <c>Program</c> class).</para>
+/// to top-level funcs, which cannot be partial.</para>
 /// </remarks>
 public sealed partial class CSharpToGSharpTranslator
 {
@@ -75,32 +73,6 @@ public sealed partial class CSharpToGSharpTranslator
     /// <returns><see langword="true"/> when any member is a <c>[GeneratedRegex]</c> definition.</returns>
     private static bool DeclaresGeneratedRegexDefinition(INamedTypeSymbol type) =>
         type.GetMembers().Any(member => member is IMethodSymbol method && IsGeneratedRegexDefinition(method));
-
-    /// <summary>
-    /// Whether <paramref name="symbol"/> is a member of the <c>Program</c>
-    /// class of a C# top-level-statements program that is kept as a G# class
-    /// because it declares a <c>[GeneratedRegex]</c> method. C# top-level
-    /// statements are the body of <c>Program</c>'s synthesized entry point, so
-    /// they reach its private members; G# top-level statements belong to the
-    /// compiler's own <c>&lt;Program&gt;</c> type, so a private member would
-    /// be inaccessible to them (GS0472). Such a member is emitted
-    /// <c>internal</c>, no looser than the top-level func it becomes when the
-    /// class is hoisted.
-    /// </summary>
-    /// <param name="symbol">A member (or nested type) with private accessibility.</param>
-    /// <returns><see langword="true"/> when the member is widened to internal.</returns>
-    private static bool IsMemberOfKeptTopLevelProgram(ISymbol symbol)
-    {
-        INamedTypeSymbol owner = symbol.ContainingType;
-        while (owner?.ContainingType is INamedTypeSymbol containingType)
-        {
-            owner = containingType;
-        }
-
-        return owner != null
-            && !owner.GetMembers(WellKnownMemberNames.TopLevelStatementsEntryPointMethodName).IsEmpty
-            && DeclaresGeneratedRegexDefinition(owner);
-    }
 
     private sealed partial class DeclarationVisitor
     {

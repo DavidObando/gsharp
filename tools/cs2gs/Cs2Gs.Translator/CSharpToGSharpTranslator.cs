@@ -387,6 +387,10 @@ public sealed partial class CSharpToGSharpTranslator
                 || entryType.GetTypeMembers().Any(type => type.TypeKind != TypeKind.Delegate)
                 || EntryTypeExportsNonEntryMembers(entryType, entryPoint)
                 || DeclaresGeneratedRegexDefinition(entryType));
+        INamedTypeSymbol keptTopLevelProgram = preserveEntryType
+            && IsTopLevelStatementsProgram(entryType)
+                ? entryType
+                : null;
 
         // Issue #1910 (gap 3): a merged-in member from a non-primary partial
         // part (see `VisitAggregateCore`) is translated using ITS OWN file's
@@ -443,6 +447,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             AnalyzerApiMode = this.analyzerApiMode,
         };
+        typeMapper.SetTopLevelStatementsEntryPoint(
+            keptTopLevelProgram is null ? null : entryPoint);
         typeMapper.ReserveImportNames(
             imports,
             contributingTrees,
@@ -453,6 +459,7 @@ public sealed partial class CSharpToGSharpTranslator
             openBases,
             staticUsingTargets,
             preserveEntryType ? null : entryPoint,
+            keptTopLevelProgram,
             partialTypeParts,
             ownedExtensions,
             nameAllocator,
@@ -666,6 +673,10 @@ public sealed partial class CSharpToGSharpTranslator
 
         return false;
     }
+
+    private static bool IsTopLevelStatementsProgram(INamedTypeSymbol type) =>
+        type != null
+        && !type.GetMembers(WellKnownMemberNames.TopLevelStatementsEntryPointMethodName).IsEmpty;
 
     private static IEnumerable<MemberDeclarationSyntax> EnumerateTopLevelDeclarations(CompilationUnitSyntax root)
     {
@@ -1725,6 +1736,7 @@ public sealed partial class CSharpToGSharpTranslator
         // block), so a sibling static call inside it must stay bare rather than
         // be qualified through a non-existent type (ADR-0115 §B.1/§B.18).
         private readonly INamedTypeSymbol entryType;
+        private readonly INamedTypeSymbol keptTopLevelProgram;
         private readonly HashSet<INamedTypeSymbol> efEntityTypes;
 
         // The per-document MUTABLE working state (caches, suppression/pending
@@ -1742,6 +1754,7 @@ public sealed partial class CSharpToGSharpTranslator
             HashSet<INamedTypeSymbol> subclassedBases,
             HashSet<INamedTypeSymbol> staticUsingTargets,
             IMethodSymbol entryPoint,
+            INamedTypeSymbol keptTopLevelProgram,
             Dictionary<INamedTypeSymbol, List<TypeDeclarationSyntax>> partialTypeParts,
             OwnedExtensionRegistry ownedExtensions,
             EmittedNameAllocator nameAllocator,
@@ -1774,6 +1787,7 @@ public sealed partial class CSharpToGSharpTranslator
             this.markMergedTypePartial = markMergedTypePartial;
             this.widenObliviousReferenceFields = widenObliviousReferenceFields;
             this.efEntityTypes = ObliviousNullabilityAnalyzer.CollectEfEntityTypes(context.Compilation);
+            this.keptTopLevelProgram = keptTopLevelProgram;
 
             // `entryPoint` is threaded in by the caller (`TranslateDocument`)
             // instead of being recomputed here: `Compilation.GetEntryPoint`

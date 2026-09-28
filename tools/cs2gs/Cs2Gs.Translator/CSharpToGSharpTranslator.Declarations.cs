@@ -614,7 +614,7 @@ public sealed partial class CSharpToGSharpTranslator
         private bool IsStaticUsingTarget(INamedTypeSymbol owner)
             => owner != null && this.staticUsingTargets.Contains(owner.OriginalDefinition);
 
-        private static Visibility MapVisibility(
+        private Visibility MapVisibility(
             ISymbol symbol,
             TranslationContext context,
             SyntaxNode node,
@@ -632,12 +632,13 @@ public sealed partial class CSharpToGSharpTranslator
                     // positions, so it is omitted (ADR-0115 §B.10).
                     return Visibility.Default;
                 case Accessibility.Private:
-                    // Issue #4301: see IsMemberOfKeptTopLevelProgram. This must
+                    // Issues #4301/#4472: see IsMemberOfKeptTopLevelProgram. This must
                     // precede the extension-owner rule below: a kept top-level
                     // Program can also declare extension methods, but its
                     // remaining members still need `internal` so hoisted
                     // top-level statements can reach them.
-                    if (IsMemberOfKeptTopLevelProgram(symbol))
+                    if (!IsExplicitInterfaceImplementation(symbol) &&
+                        IsMemberOfKeptTopLevelProgram(symbol))
                     {
                         return Visibility.Internal;
                     }
@@ -685,6 +686,38 @@ public sealed partial class CSharpToGSharpTranslator
                     return Visibility.Default;
             }
         }
+
+        /// <summary>
+        /// Whether <paramref name="symbol"/> belongs to a retained
+        /// top-level-statements <c>Program</c>. C# top-level statements execute
+        /// inside that type's synthesized entry point and can access private
+        /// members throughout its nested type hierarchy. Emitted G# top-level
+        /// statements live in a separate compiler-generated type, so those
+        /// members must be assembly-visible.
+        /// </summary>
+        private bool IsMemberOfKeptTopLevelProgram(ISymbol symbol)
+        {
+            INamedTypeSymbol owner = symbol.ContainingType;
+            while (owner?.ContainingType is INamedTypeSymbol containingType)
+            {
+                owner = containingType;
+            }
+
+            return SymbolEqualityComparer.Default.Equals(owner, this.keptTopLevelProgram);
+        }
+
+        /// <summary>
+        /// Whether <paramref name="symbol"/> is reachable only through an
+        /// explicit interface slot rather than through its containing type.
+        /// </summary>
+        private static bool IsExplicitInterfaceImplementation(ISymbol symbol)
+            => symbol switch
+            {
+                IMethodSymbol method => !method.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
+                IPropertySymbol property => !property.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
+                IEventSymbol @event => !@event.ExplicitInterfaceImplementations.IsDefaultOrEmpty,
+                _ => false,
+            };
 
         /// <summary>
         /// Returns <see langword="true"/> when <paramref name="symbol"/> is a member
