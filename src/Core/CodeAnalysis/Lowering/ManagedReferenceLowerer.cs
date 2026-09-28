@@ -166,14 +166,12 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
             isClass: true);
         helper.SetImportedBaseType(type);
         var enclosing = this.function?.ReceiverType ?? this.function?.StaticOwnerType ?? this.function?.LexicalEnclosingType;
-        if (enclosing is StructSymbol aggregate)
+        TypeSymbol? enclosingDefinition = enclosing switch
         {
-            helper.SetContainingType(aggregate.Definition);
-        }
-        else if (enclosing is InterfaceSymbol interfaceType)
-        {
-            helper.SetContainingType(interfaceType);
-        }
+            StructSymbol aggregate => aggregate.Definition,
+            InterfaceSymbol interfaceType => interfaceType.Definition,
+            _ => null,
+        };
 
         var borrow = new FunctionSymbol(
             "Borrow",
@@ -223,8 +221,39 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
         helper.SetMethods(ImmutableArray.Create(borrow, identity));
         this.helpers.Add(helper);
         var parameters = SynthesizedClosureReifier.CollectOrdered(new[] { selected.Type, type });
+        if (enclosingDefinition is StructSymbol or InterfaceSymbol)
+        {
+            var ownerTypeParameters = StructSymbol.CollectEnclosingTypeParameters(enclosingDefinition).AddRange(
+                enclosingDefinition switch
+                {
+                    StructSymbol aggregate => aggregate.TypeParameters,
+                    InterfaceSymbol interfaceType => interfaceType.Definition.TypeParameters,
+                    _ => ImmutableArray<TypeParameterSymbol>.Empty,
+                });
+            if (!ownerTypeParameters.IsDefaultOrEmpty)
+            {
+                var seeded = ImmutableArray.CreateBuilder<TypeParameterSymbol>(ownerTypeParameters.Length + parameters.Length);
+                seeded.AddRange(ownerTypeParameters);
+                foreach (var parameter in parameters)
+                {
+                    if (!ownerTypeParameters.Contains(parameter))
+                    {
+                        seeded.Add(parameter);
+                    }
+                }
+
+                parameters = seeded.ToImmutable();
+                helper.MarkCompleteReifiedTypeParameterVector();
+            }
+        }
+
         var construction = parameters.IsDefaultOrEmpty ? helper
             : SynthesizedClosureReifier.Reify(helper, parameters, this.references.MapClrTypeToReferences);
+        if (enclosingDefinition is StructSymbol or InterfaceSymbol)
+        {
+            helper.SetContainingType(enclosingDefinition);
+        }
+
         var instance = new BoundStructLiteralExpression(null, construction, ImmutableArray.Create(
             new BoundFieldInitializer(construction.Fields[0], selectedRead),
             new BoundFieldInitializer(construction.Fields[1], key)));

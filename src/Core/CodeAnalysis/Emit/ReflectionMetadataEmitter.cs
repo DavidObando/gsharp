@@ -651,6 +651,14 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var def = s.Definition ?? s;
+            if (def.HasCompleteReifiedTypeParameterVector)
+            {
+                // Synthesized helpers explicitly seeded with the complete
+                // enclosing-plus-own parameter vector need only the split.
+                this.remaps.SetNestedTypeEnclosingArity(def, enclosing.Length);
+                continue;
+            }
+
             var own = originalOwnParams.TryGetValue(def, out var snapshot) ? snapshot : def.TypeParameters;
 
             var combined = ImmutableArray.CreateBuilder<TypeParameterSymbol>(

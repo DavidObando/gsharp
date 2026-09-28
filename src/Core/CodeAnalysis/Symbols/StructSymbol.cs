@@ -553,6 +553,13 @@ public sealed class StructSymbol : TypeSymbol
     /// </summary>
     public ImmutableArray<TypeParameterSymbol> ReifiedFromTypeParameters { get; private set; } = ImmutableArray<TypeParameterSymbol>.Empty;
 
+    /// <summary>
+    /// Gets a value indicating whether <see cref="ReifiedFromTypeParameters"/>
+    /// already includes every generic parameter required by this type's
+    /// enclosing type chain.
+    /// </summary>
+    public bool HasCompleteReifiedTypeParameterVector { get; private set; }
+
     /// <summary>Gets the first class generic-parameter ordinal occupied by <see cref="ReifiedFromTypeParameters"/>.</summary>
     public int ReifiedTypeParameterOrdinalOffset { get; private set; }
 
@@ -1005,6 +1012,10 @@ public sealed class StructSymbol : TypeSymbol
         ReifiedFromTypeParameters = reifiedFrom;
         ReifiedTypeParameterOrdinalOffset = ordinalOffset;
     }
+
+    /// <summary>Marks the reified parameter vector as complete for nested-type emission.</summary>
+    public void MarkCompleteReifiedTypeParameterVector() =>
+        HasCompleteReifiedTypeParameterVector = true;
 
     /// <summary>
     /// Marks this class as an <c>@Attribute</c>-sugar attribute type per

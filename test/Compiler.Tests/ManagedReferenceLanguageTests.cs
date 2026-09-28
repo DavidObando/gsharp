@@ -371,6 +371,46 @@ public sealed class ManagedReferenceLanguageTests
         });
     }
 
+    [Fact]
+    public void NestedGenericManagedLocationKeepsEnclosingAndOwnTypeParameters()
+    {
+        using var fixture = new NativeSliceLanguageTests.Fixture();
+        var dll = fixture.Compile(
+            """
+            package ManagedNestedGenericHelper
+            import System
+
+            class Box[V] {
+                var Value V
+            }
+
+            class Counter[T, U] {
+                func Read[V](box Box[V]) V {
+                    let location = managed(box.Value)
+                    return *location
+                }
+            }
+
+            func Main() {
+                let counter = Counter[int32, string]()
+                let box = Box[bool]{Value: true}
+                Console.WriteLine(counter.Read[bool](box))
+            }
+            """,
+            "ManagedNestedGenericHelper",
+            executable: true);
+
+        IlVerifier.Verify(dll);
+        Assert.Equal("True\n", fixture.Run(dll));
+
+        var assembly = EmittedFixture.Load(dll);
+        var counter = Assert.Single(assembly.GetTypes(), type => type.Name == "Counter`2");
+        var helper = Assert.Single(
+            counter.GetNestedTypes(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.NonPublic),
+            type => type.Name.StartsWith("<>__ManagedLocation", System.StringComparison.Ordinal));
+        Assert.Equal(3, helper.GetGenericArguments().Length);
+    }
+
     [Theory]
     [InlineData("func Bad(ref value int32) managed[int32] { return managed(value) }", "GS0604")]
     [InlineData("func Bad() { var p managed[int32] = default }", "GS0604")]
