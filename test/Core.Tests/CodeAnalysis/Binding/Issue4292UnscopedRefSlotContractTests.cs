@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
+using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -703,6 +704,42 @@ class Derived : Base, IMethod {
         Assert.Empty(diagnostics);
     }
 
+    [Fact]
+    public void ImportedConcreteExplicitProperty_WithConstructedResult_IsLinked()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import System.Collections.Generic
+            import Issue4292.Contracts
+            struct Buffer : IGenericCollectionProperty[int32] {
+                private prop (IGenericCollectionProperty[int32]) Values ICollection[int32] {
+                    get { throw System.NotImplementedException() }
+                }
+            }
+            """, contracts);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void UnscopedRefPropertyCache_OnlyAcceptsPropertyAccessorNames()
+    {
+        var getter = typeof(string).GetProperty(nameof(string.Length)).GetMethod;
+        var explicitGetter = typeof(ExplicitPropertyAccessorProbe)
+            .GetProperties(System.Reflection.BindingFlags.NonPublic | System.Reflection.BindingFlags.Instance)
+            .Single()
+            .GetMethod;
+        var eventAdder = typeof(AppDomain).GetEvent(nameof(AppDomain.AssemblyLoad)).AddMethod;
+        var operatorMethod = typeof(decimal).GetMethods()
+            .Single(method => method.Name == "op_Addition");
+
+        Assert.True(RefCapabilities.IsPropertyAccessor(getter));
+        Assert.True(RefCapabilities.IsPropertyAccessor(explicitGetter));
+        Assert.False(RefCapabilities.IsPropertyAccessor(eventAdder));
+        Assert.False(RefCapabilities.IsPropertyAccessor(operatorMethod));
+    }
+
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
@@ -1209,6 +1246,16 @@ ref struct Buffer : IDefaultProperty {
             """;
 
         Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
+    private interface IPropertyAccessorProbe
+    {
+        int Value { get; }
+    }
+
+    private sealed class ExplicitPropertyAccessorProbe : IPropertyAccessorProbe
+    {
+        int IPropertyAccessorProbe.Value => 0;
     }
 
     private static ImmutableArray<Diagnostic> Bind(string source)

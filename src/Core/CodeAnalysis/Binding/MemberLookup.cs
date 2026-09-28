@@ -4624,7 +4624,7 @@ internal sealed class MemberLookup
 
         if (property.Name != clrProperty.Name
             || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(clrProperty)
-            || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(property.Type, slotType))
+            || !SameTypeSymbol(property.Type, slotType))
         {
             return false;
         }
@@ -4638,7 +4638,7 @@ internal sealed class MemberLookup
         for (var i = 0; i < clrParameters.Length; i++)
         {
             if (property.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(clrParameters[i])
-                || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                || !SameTypeSymbol(
                     property.Parameters[i].Type,
                     GetIndexerParameterTypeSymbol(slotOwner, clrProperty, i)))
             {

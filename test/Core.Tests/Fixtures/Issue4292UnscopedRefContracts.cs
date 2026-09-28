@@ -77,6 +77,11 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
             T Value { get; }
         }
 
+        public interface IGenericCollectionProperty<T>
+        {
+            System.Collections.Generic.ICollection<T> Values { get; }
+        }
+
         public interface IGenericOverloadedIndexer<T>
         {
             RefValue this[T key] { set; }

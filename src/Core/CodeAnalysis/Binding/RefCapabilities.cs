@@ -230,7 +230,7 @@ internal static class RefCapabilities
             return true;
         }
 
-        if (!method.IsSpecialName || method.DeclaringType == null)
+        if (!IsPropertyAccessor(method) || method.DeclaringType == null)
         {
             return false;
         }
@@ -262,6 +262,18 @@ internal static class RefCapabilities
 
                 return accessors;
             }).Contains((method.Module, method.MetadataToken));
+    }
+
+    internal static bool IsPropertyAccessor(MethodInfo method)
+    {
+        if (!method.IsSpecialName)
+        {
+            return false;
+        }
+
+        var accessorName = method.Name.AsSpan(method.Name.LastIndexOf('.') + 1);
+        return accessorName.StartsWith("get_", StringComparison.Ordinal)
+            || accessorName.StartsWith("set_", StringComparison.Ordinal);
     }
 
     /// <summary>Returns the by-reference kind encoded by an imported parameter.</summary>
