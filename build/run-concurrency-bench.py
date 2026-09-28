@@ -786,7 +786,10 @@ def validate_loaded_payload(path: str, payload: dict, fingerprint: dict | None) 
         "gsharp_aot": {scenario["gsharp"] for scenario in selected},
         "go": {scenario["go"] for scenario in selected if scenario.get("go")},
     }
-    for mode in comparison.get("modes", []):
+    modes = comparison.get("modes")
+    if not isinstance(modes, list) or not modes:
+        raise SystemExit(f"'{path}' has missing or empty comparison modes")
+    for mode in modes:
         rows = payload.get(mode)
         if not isinstance(rows, dict):
             raise SystemExit(f"'{path}' is missing declared mode '{mode}'")

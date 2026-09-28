@@ -45,7 +45,7 @@ def measurement(value, runs, launches):
 def normalize(payload, registry, run, artifact, raw, checked_at):
     if payload.get("schemaVersion") != 2:
         raise ValueError("Unsupported concurrency artifact schema")
-    if registry.get("schemaVersion") != 1:
+    if registry.get("schemaVersion") not in (1, 2):
         raise ValueError("Unsupported scenario registry schema")
     fingerprint = payload["fingerprint"]
     method = fingerprint["comparison"]

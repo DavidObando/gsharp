@@ -372,6 +372,17 @@ class ConcurrencyBenchTests(unittest.TestCase):
             "go": {},
         }
         run = SCRATCH / "missing-go.json"
+
+        modes = payload["fingerprint"]["comparison"].pop("modes")
+        run.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(SystemExit, "missing or empty comparison modes"):
+            bench.load_runs([str(run)])
+        payload["fingerprint"]["comparison"]["modes"] = []
+        run.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(SystemExit, "missing or empty comparison modes"):
+            bench.load_runs([str(run)])
+        payload["fingerprint"]["comparison"]["modes"] = modes
+
         run.write_text(json.dumps(payload))
 
         with self.assertRaisesRegex(SystemExit, "mode 'go' is missing rows"):

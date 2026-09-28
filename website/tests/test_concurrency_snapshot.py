@@ -15,7 +15,7 @@ class SnapshotTests(unittest.TestCase):
                     "path": ".github/workflows/concurrency-bench.yml",
                     "head_sha": "a" * 40, "head_branch": "main", "conclusion": "success"}
         self.artifact = {"id": 2, "expires_at": "2026-02-01T00:00:00Z"}
-        self.registry = {"schemaVersion": 1, "scenarios": [
+        self.registry = {"schemaVersion": 2, "scenarios": [
             {"name": "paired", "gsharp": "paired", "go": "go-paired", "what": "Same operation."},
             {"name": "unpaired", "gsharp": "unpaired", "go": None, "what": "No equivalent Go row."},
         ]}
@@ -57,6 +57,10 @@ class SnapshotTests(unittest.TestCase):
         self.assertIsNone(result["scenarios"][1]["go"])
         self.assertIsNone(result["scenarios"][1]["jitOverGo"])
         self.assertEqual(result["source"]["commit"], self.run["head_sha"])
+
+    def test_legacy_registry_schema_is_accepted(self):
+        self.registry["schemaVersion"] = 1
+        self.normalize()
 
     def test_wrong_commit_is_rejected(self):
         data = copy.deepcopy(self.payload)
