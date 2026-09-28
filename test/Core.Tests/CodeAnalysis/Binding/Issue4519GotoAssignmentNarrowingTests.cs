@@ -101,6 +101,26 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void MultipleGotosToSameLabel_IntersectTheirNarrowingStates()
+    {
+        var result = Evaluate("""
+            func Run(first bool, second bool) int32 {
+                var x string? = nil
+                if first { goto Done }
+                x = "safe"
+                if second { goto Done }
+            Done:
+                return x.Length
+            }
+
+            Run(true, false)
+            """);
+
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void AssignmentBeforeEveryForwardJump_RemainsNarrowedAtLabel()
     {
         AssertRuns("""
@@ -162,6 +182,10 @@ public class Issue4519GotoAssignmentNarrowingTests
 
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
         Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        var text = diagnostic.Location.Text.ToString();
+        Assert.Equal(
+            text.IndexOf("skipped.Length", StringComparison.Ordinal) + "skipped.".Length,
+            diagnostic.Location.Span.Start);
     }
 
     [Fact]
@@ -207,6 +231,53 @@ public class Issue4519GotoAssignmentNarrowingTests
 
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
         Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+    }
+
+    [Fact]
+    public void GotoLeavingTry_AppliesFinallyMutationBeforeLabelJoin()
+    {
+        var result = Evaluate("""
+            func Run(jump bool) int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    if jump { goto Done }
+                } finally {
+                    x = nil
+                }
+                x = "again"
+            Done:
+                return x.Length
+            }
+
+            Run(true)
+            """);
+
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void GotoLeavingTry_PreservesNarrowingWhenFinallyAssignsNonNull()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(jump bool) {
+                var x string? = nil
+                x = "safe"
+                try {
+                    if jump { goto Done }
+                } finally {
+                    x = "final"
+                }
+                x = "again"
+            Done:
+                Console.WriteLine(x.Length)
+            }
+
+            Run(true)
+            """, "5");
     }
 
     private static EmittedOracleResult Evaluate(string source)

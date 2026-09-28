@@ -36,23 +36,25 @@ internal sealed partial class StatementBinder
         {
             if (!binderCtx.PendingGotoNarrowingSnapshots.TryGetValue(labelName, out var snapshots))
             {
-                snapshots = new List<HashSet<VariableSymbol>>();
+                snapshots = new List<GotoNarrowingSnapshot>();
                 binderCtx.PendingGotoNarrowingSnapshots[labelName] = snapshots;
             }
 
-            var narrowedAtSource = new HashSet<VariableSymbol>();
+            var narrowedAtSource = new Dictionary<VariableSymbol, TypeSymbol>();
             foreach (var frame in binderCtx.NarrowedVariables)
             {
-                foreach (var path in frame.Keys)
+                foreach (var entry in frame)
                 {
-                    if (!path.HasMembers)
+                    if (!entry.Key.HasMembers)
                     {
-                        narrowedAtSource.Add(path.Root);
+                        narrowedAtSource[entry.Key.Root] = entry.Value;
                     }
                 }
             }
 
-            snapshots.Add(narrowedAtSource);
+            snapshots.Add(new GotoNarrowingSnapshot(
+                narrowedAtSource,
+                activeFinallyClauses.Reverse().ToImmutableArray()));
         }
 
         var label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location);
@@ -138,6 +140,7 @@ internal sealed partial class StatementBinder
         binderCtx.UnresolvedGotoLabels.Clear();
         binderCtx.PendingGotoAssignmentInvalidations.Clear();
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
+        boundFinallyBlocks.Clear();
         userGotoHandlerRegions.Clear();
         userLabelHandlerRegions.Clear();
     }
@@ -291,7 +294,7 @@ internal sealed partial class StatementBinder
             entry => new HashSet<VariableSymbol>(entry.Value));
         var pendingGotoNarrowingSnapshots = binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
             entry => entry.Key,
-            entry => entry.Value.Select(snapshot => new HashSet<VariableSymbol>(snapshot)).ToList());
+            entry => entry.Value.Select(CloneGotoNarrowingSnapshot).ToList());
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
         var syntheticLocalCounter = binderCtx.SyntheticLocalCounter;
 
@@ -365,7 +368,7 @@ internal sealed partial class StatementBinder
         {
             binderCtx.PendingGotoNarrowingSnapshots.Add(
                 entry.Key,
-                entry.Value.Select(snapshot => new HashSet<VariableSymbol>(snapshot)).ToList());
+                entry.Value.Select(CloneGotoNarrowingSnapshot).ToList());
         }
 
         userGotoHandlerRegions.Clear();
@@ -378,6 +381,11 @@ internal sealed partial class StatementBinder
 
         InvalidateInheritedNarrowings(narrowingInvalidations);
         return BindCore(out breakLabel, out continueLabel);
+
+        static GotoNarrowingSnapshot CloneGotoNarrowingSnapshot(GotoNarrowingSnapshot snapshot)
+            => new(
+                new Dictionary<VariableSymbol, TypeSymbol>(snapshot.NarrowedVariables),
+                snapshot.ActiveFinallyClauses);
 
         BoundStatement BindCore(out BoundLabel localBreakLabel, out BoundLabel localContinueLabel)
         {

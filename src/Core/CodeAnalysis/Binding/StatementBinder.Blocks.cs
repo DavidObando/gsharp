@@ -308,7 +308,23 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
     {
-        var tryBlock = BindBlockStatement(syntax.TryBlock);
+        BoundStatement tryBlock;
+        if (syntax.FinallyClause == null)
+        {
+            tryBlock = BindBlockStatement(syntax.TryBlock);
+        }
+        else
+        {
+            activeFinallyClauses.Push(syntax.FinallyClause);
+            try
+            {
+                tryBlock = BindBlockStatement(syntax.TryBlock);
+            }
+            finally
+            {
+                activeFinallyClauses.Pop();
+            }
+        }
 
         var exceptionType = ResolveExceptionType();
         if (exceptionType == null)
@@ -364,6 +380,11 @@ internal sealed partial class StatementBinder
             var (filterWhenTrue, _) = PatternVariables.Classify(filter);
 
             exceptionHandlerRegions.Push(catchSyntax);
+            if (syntax.FinallyClause != null)
+            {
+                activeFinallyClauses.Push(syntax.FinallyClause);
+            }
+
             BoundStatement body;
             try
             {
@@ -377,6 +398,11 @@ internal sealed partial class StatementBinder
             }
             finally
             {
+                if (syntax.FinallyClause != null)
+                {
+                    activeFinallyClauses.Pop();
+                }
+
                 exceptionHandlerRegions.Pop();
             }
 
@@ -397,6 +423,7 @@ internal sealed partial class StatementBinder
             try
             {
                 finallyBlock = BindBlockStatement(syntax.FinallyClause.Body);
+                boundFinallyBlocks[syntax.FinallyClause] = finallyBlock;
             }
             finally
             {
@@ -684,7 +711,9 @@ internal sealed partial class StatementBinder
     internal T OutsideExceptionHandlers<T>(Func<T> bind)
     {
         var saved = exceptionHandlerRegions.ToArray();
+        var savedFinallyClauses = activeFinallyClauses.ToArray();
         exceptionHandlerRegions.Clear();
+        activeFinallyClauses.Clear();
         try
         {
             return bind();
@@ -692,11 +721,17 @@ internal sealed partial class StatementBinder
         finally
         {
             exceptionHandlerRegions.Clear();
+            activeFinallyClauses.Clear();
 
             // Stack.ToArray() yields top-first; push back in reverse to restore.
             for (var i = saved.Length - 1; i >= 0; i--)
             {
                 exceptionHandlerRegions.Push(saved[i]);
+            }
+
+            for (var i = savedFinallyClauses.Length - 1; i >= 0; i--)
+            {
+                activeFinallyClauses.Push(savedFinallyClauses[i]);
             }
         }
     }

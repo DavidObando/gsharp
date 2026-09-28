@@ -2386,7 +2386,7 @@ internal sealed class LambdaBinder
         foreach (var kvp in saved.PendingGotoNarrowingSnapshots)
         {
             binderCtx.PendingGotoNarrowingSnapshots[kvp.Key] =
-                kvp.Value.Select(snapshot => new HashSet<VariableSymbol>(snapshot)).ToList();
+                kvp.Value.Select(CloneGotoNarrowingSnapshot).ToList();
         }
 
         // BinderContext.LoopStack.ToArray() orders elements top-of-stack
@@ -2411,6 +2411,11 @@ internal sealed class LambdaBinder
         => outerFunction?.ReceiverType
             ?? outerFunction?.StaticOwnerType
             ?? outerFunction?.LexicalEnclosingType;
+
+    private static GotoNarrowingSnapshot CloneGotoNarrowingSnapshot(GotoNarrowingSnapshot snapshot)
+        => new(
+            new Dictionary<VariableSymbol, TypeSymbol>(snapshot.NarrowedVariables),
+            snapshot.ActiveFinallyClauses);
 
     // Issue #893: rewrite a value-returning function-literal block body so a bare
     // trailing expression statement becomes the implicit `return` value. This is
@@ -3034,7 +3039,7 @@ internal sealed class LambdaBinder
                 entry => new HashSet<VariableSymbol>(entry.Value));
             PendingGotoNarrowingSnapshots = ctx.PendingGotoNarrowingSnapshots.ToDictionary(
                 entry => entry.Key,
-                entry => entry.Value.Select(snapshot => new HashSet<VariableSymbol>(snapshot)).ToList());
+                entry => entry.Value.Select(CloneGotoNarrowingSnapshot).ToList());
             LoopStack = ctx.LoopStack.ToArray();
             FallthroughTarget = ctx.CurrentFallthroughTarget;
             FallthroughAnchor = ctx.CurrentFallthroughAnchor;
@@ -3049,7 +3054,7 @@ internal sealed class LambdaBinder
 
         public Dictionary<string, HashSet<VariableSymbol>> PendingGotoAssignmentInvalidations { get; }
 
-        public Dictionary<string, List<HashSet<VariableSymbol>>> PendingGotoNarrowingSnapshots { get; }
+        public Dictionary<string, List<GotoNarrowingSnapshot>> PendingGotoNarrowingSnapshots { get; }
 
         public (string? LabelName, BoundLabel BreakLabel, BoundLabel? ContinueLabel)[] LoopStack { get; }
 

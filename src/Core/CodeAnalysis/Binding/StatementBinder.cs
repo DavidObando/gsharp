@@ -110,6 +110,8 @@ internal sealed partial class StatementBinder
     /// </summary>
     private readonly Action<IReadOnlyList<BoundFunctionLiteralExpression>>? reconcileGenericLocalFunctionGroupCaptures;
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
+    private readonly Stack<FinallyClauseSyntax> activeFinallyClauses = new();
+    private readonly Dictionary<FinallyClauseSyntax, BoundStatement> boundFinallyBlocks = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
         new(StringComparer.Ordinal);
     private readonly List<(string LabelName, TextLocation Location, ImmutableArray<SyntaxNode> SourceRegions)>

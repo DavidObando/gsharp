@@ -299,8 +299,8 @@ internal sealed class BinderContext
     /// grouped by target label. Label joins retain a later assignment
     /// narrowing when every incoming jump already carried that proof.
     /// </summary>
-    public Dictionary<string, List<HashSet<VariableSymbol>>> PendingGotoNarrowingSnapshots { get; }
-        = new Dictionary<string, List<HashSet<VariableSymbol>>>();
+    public Dictionary<string, List<GotoNarrowingSnapshot>> PendingGotoNarrowingSnapshots { get; }
+        = new Dictionary<string, List<GotoNarrowingSnapshot>>();
 
     /// <summary>
     /// Gets or sets a value indicating whether the CURRENT function/lambda/

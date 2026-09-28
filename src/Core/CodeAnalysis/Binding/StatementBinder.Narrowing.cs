@@ -531,14 +531,44 @@ internal sealed partial class StatementBinder
         }
 
         binderCtx.PendingGotoNarrowingSnapshots.Remove(labelName, out var incomingSnapshots);
+        if (incomingSnapshots != null)
+        {
+            foreach (var snapshot in incomingSnapshots)
+            {
+                ApplyExitedFinallyEffects(snapshot);
+            }
+        }
+
         foreach (var frame in binderCtx.NarrowedVariables)
         {
             foreach (var variable in variables)
             {
                 if (incomingSnapshots == null
-                    || incomingSnapshots.Any(snapshot => !snapshot.Contains(variable)))
+                    || incomingSnapshots.Any(snapshot => !snapshot.NarrowedVariables.ContainsKey(variable)))
                 {
                     RemoveByRoot(frame, variable);
+                }
+            }
+        }
+    }
+
+    private void ApplyExitedFinallyEffects(GotoNarrowingSnapshot snapshot)
+    {
+        foreach (var finallyClause in snapshot.ActiveFinallyClauses)
+        {
+            if (activeFinallyClauses.Contains(finallyClause)
+                || !boundFinallyBlocks.TryGetValue(finallyClause, out var finallyBlock))
+            {
+                continue;
+            }
+
+            var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
+            mutations.Visit(finallyBlock);
+            foreach (var entry in snapshot.NarrowedVariables.ToArray())
+            {
+                if (mutations.InvalidatesNarrowing(entry.Key, entry.Value))
+                {
+                    snapshot.NarrowedVariables.Remove(entry.Key);
                 }
             }
         }
