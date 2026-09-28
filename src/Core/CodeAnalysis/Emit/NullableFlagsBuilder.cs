@@ -178,6 +178,18 @@ internal static class NullableFlagsBuilder
 
             if (layout.IsArray)
             {
+                // Issue #4402: FromClrType represents a concrete vector as an
+                // imported CLR type, not one of the symbolic array shapes.
+                // With no open slot to preserve, let the direct funnel reader
+                // decode the complete subtree instead of skipping its child.
+                if (!layout.ContainsGenericParameters
+                    && projected is not ArrayTypeSymbol
+                    && projected is not SliceTypeSymbol
+                    && projected is not RectangularArrayTypeSymbol)
+                {
+                    return ReadConcretePosition(layout);
+                }
+
                 var flag = declaredFlags[position++];
                 var elementLayout = Invariant.Required(
                     layout.GetElementType(),
@@ -203,10 +215,22 @@ internal static class NullableFlagsBuilder
             var isClosedGeneric = layout.IsGenericType && !layout.IsGenericTypeDefinition;
             if (isClosedGeneric)
             {
-                var flag = declaredFlags[position++];
-                var layoutArguments = layout.GetGenericArguments();
                 var nullable = projected as NullableTypeSymbol;
                 var core = nullable?.UnderlyingType ?? projected;
+
+                // The corresponding concrete ValueTuple shape is a
+                // TupleTypeSymbol, so the ImportedTypeSymbol-only recursion
+                // below cannot carry its element flags.
+                if (!layout.ContainsGenericParameters && core is not ImportedTypeSymbol)
+                {
+                    var concrete = ReadConcretePosition(layout);
+                    return nullable != null && layout.IsValueType
+                        ? NullabilityImportRule.RestorePeeledNullable(concrete)
+                        : concrete;
+                }
+
+                var flag = declaredFlags[position++];
+                var layoutArguments = layout.GetGenericArguments();
                 TypeSymbol merged = core;
                 if (core is ImportedTypeSymbol imported
                     && imported.ClrType is Type importedClr)
@@ -269,6 +293,16 @@ internal static class NullableFlagsBuilder
             }
 
             return projected;
+        }
+
+        TypeSymbol ReadConcretePosition(Type layout)
+        {
+            var merged = ClrNullability.SymbolFromFlagsOffset(
+                layout,
+                declaredFlags,
+                position);
+            position += ClrNullability.CountNullabilityBytes(layout);
+            return merged;
         }
 
         TypeSymbol SkipChildren(TypeSymbol projected, Type childLayout)

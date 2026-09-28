@@ -46,13 +46,6 @@ internal static class ReaderAgreementAllowlist
                 + "(#1922); the symbolic projection keeps it an ImportedTypeSymbol reference. Only the CLR "
                 + "readers' side of the split is excused, so the symbolic readers must still agree."),
         new Entry(
-            Readers: ImmutableArray.Create("merge-symbolic", "member-symbolic", "lazy-symbolic"),
-            Tag: "concrete-array-or-tuple",
-            Issue: "https://github.com/DavidObando/gsharp/issues/4402",
-            Reason: "MergeDeclarationNullability does not descend into FromClrType's ImportedTypeSymbol array "
-                + "or TupleTypeSymbol, so a concrete array/tuple position read through a symbolic receiver "
-                + "loses its inner nullability."),
-        new Entry(
             Readers: ImmutableArray.Create("direct"),
             Tag: "optional-null-default",
             Issue: "https://github.com/DavidObando/gsharp/issues/4403",
