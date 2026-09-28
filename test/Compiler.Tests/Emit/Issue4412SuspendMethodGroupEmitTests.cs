@@ -25,6 +25,44 @@ namespace GSharp.Compiler.Tests.Emit;
 public sealed class Issue4412SuspendMethodGroupEmitTests
 {
     [Fact]
+    public void SuspendMethodGroupWithDeclaredContext_PreservesDelegateIdentity()
+    {
+        const string source = """
+            package Issue4412NoHiddenContext
+            import System
+            import Gsharp.Concurrency
+
+            delegate ExplicitContextRunner(value int32, ctx Context) System.Threading.Tasks.ValueTask[int32];
+
+            class C {
+                suspend func Explicit(value int32, ctx Context) int32 {
+                    return value + 1
+                }
+            }
+
+            let c = C()
+            var explicitFirst ExplicitContextRunner = c.Explicit
+            var explicitSecond ExplicitContextRunner = c.Explicit
+            Console.WriteLine(object.Equals(explicitFirst, explicitSecond))
+            Console.WriteLine(explicitFirst(1, Context.None).AsTask().GetAwaiter().GetResult())
+            """;
+
+        var directory = PrepareDirectory(nameof(SuspendMethodGroupWithDeclaredContext_PreservesDelegateIdentity));
+        try
+        {
+            var outputPath = Compile(directory, "App", source, "/target:exe");
+            IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal(
+                $"True{Environment.NewLine}2{Environment.NewLine}",
+                Run(outputPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void DirectInstanceAndBaseSuspendMethodGroups_VerifyAndRun()
     {
         const string source = """
