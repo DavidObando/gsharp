@@ -654,11 +654,27 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         const string source = """
             package Issue4412
             import System
+            import Gsharp.Concurrency
 
             delegate AsyncRunner(value int32) System.Threading.Tasks.ValueTask[int32];
+            delegate ContextRunner(ch chan[int32]) System.Threading.Tasks.ValueTask[string];
 
             suspend func Twice(value int32) int32 {
                 return value * 2
+            }
+
+            suspend func ContextState(ch chan[int32]) string {
+                select {
+                case cancelled {
+                    return "cancelled"
+                }
+                case <-ch {
+                    return "received"
+                }
+                default {
+                    return "live"
+                }
+                }
             }
 
             func Take(ch chan[int32]) int32 {
@@ -680,6 +696,23 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 init() : base(Twice) { }
             }
 
+            open class ContextBase {
+                let callback ContextRunner
+                init(callback ContextRunner) {
+                    this.callback = callback
+                }
+                func Run(ch chan[int32]) string {
+                    return callback(ch).AsTask().GetAwaiter().GetResult()
+                }
+            }
+
+            class PrimaryContext(ctx Context) : ContextBase(ContextState) {
+                let fieldCallback ContextRunner = ContextState
+                func RunField(ch chan[int32]) string {
+                    return fieldCallback(ch).AsTask().GetAwaiter().GetResult()
+                }
+            }
+
             open class SyncBase {
                 let callback (chan[int32]) -> int32
                 init(callback (chan[int32]) -> int32) {
@@ -697,6 +730,13 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
 
             Console.WriteLine(PrimaryAsync().Run(3))
             Console.WriteLine(ExplicitAsync().Run(4))
+            scope {
+                let never = chan[int32](1)
+                let primary = PrimaryContext(ctx)
+                ctx.TryCancel()
+                Console.WriteLine(primary.Run(never))
+                Console.WriteLine(primary.RunField(never))
+            }
             let first = chan[int32](1)
             first <- 5
             Console.WriteLine(PrimarySync().Run(first))
@@ -711,7 +751,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
             var outputPath = Compile(directory, "App", source, "/target:exe");
             IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
             Assert.Equal(
-                $"6{Environment.NewLine}8{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}",
+                $"6{Environment.NewLine}8{Environment.NewLine}cancelled{Environment.NewLine}cancelled{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}",
                 Run(outputPath));
         }
         finally

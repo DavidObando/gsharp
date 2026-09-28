@@ -189,6 +189,7 @@ internal static class SuspensionInference
                     {
                         IsExpressionInitializer = true,
                     };
+                primaryConstructor.AdoptDeclaredContextParameter(runtime.ContextType);
                 type.SetBaseConstructorInitializer(RewriteBaseInitializer(
                     primaryBaseInitializer,
                     primaryConstructor,
@@ -267,9 +268,12 @@ internal static class SuspensionInference
             return initializers;
         }
 
+        var parameters = !isStatic && owner is StructSymbol structOwner
+            ? structOwner.PrimaryConstructorParameters
+            : ImmutableArray<ParameterSymbol>.Empty;
         var container = new FunctionSymbol(
             "<field_initializer>",
-            ImmutableArray<ParameterSymbol>.Empty,
+            parameters,
             TypeSymbol.Void,
             declaration: null,
             package: null,
@@ -281,6 +285,7 @@ internal static class SuspensionInference
             StaticOwnerType = isStatic ? owner : null,
             LexicalEnclosingType = owner,
         };
+        container.AdoptDeclaredContextParameter(runtime.ContextType);
         var builder = initializers.ToBuilder();
         foreach (var (field, initializer) in initializers
             .OrderBy(static pair => pair.Key.DeclaringSyntaxNodes.FirstOrDefault()?.Span.Start ?? int.MaxValue)
