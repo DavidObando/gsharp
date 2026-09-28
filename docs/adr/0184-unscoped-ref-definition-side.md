@@ -216,12 +216,18 @@ ref-returning member with no additional parameter, may carry the otherwise
 inert attribute.
 
 Override checks reuse the base slot already selected by override resolution.
+Source generic property and indexer contracts are evaluated after substituting
+the implemented interface's constructed type arguments, while retaining the
+slot accessor's ref/scoped modifiers.
 Imported interface checks prefer the source member explicitly linked to the
 current CLR slot, including the erased accessor slot of a symbolic generic
 interface. An explicit candidate must match both the slot definition and its
 exact constructed interface owner; `IBase[A].Slot` cannot satisfy
 `IBase[B].Slot` merely because the slot signature omits `T`. Signature fallback
-considers only members with no explicit-interface clause or linkage. Symbolic
+considers only members with no explicit-interface clause or linkage. Exact
+explicit lookup walks the source base hierarchy before that fallback, because a
+base class's explicit implementation remains the interface dispatch target when
+a derived class repeats the interface. Symbolic
 slot matching uses the open member definition for identity, the projected
 constructed owner for generic substitution (including reordered inherited
 arguments such as `IChild[T, U] : IBase[U, T]`), and the complete member

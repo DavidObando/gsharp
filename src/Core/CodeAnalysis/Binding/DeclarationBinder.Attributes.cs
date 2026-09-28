@@ -196,7 +196,8 @@ internal sealed partial class DeclarationBinder
         PropertySymbol implementation,
         PropertySymbol slot,
         TypeSymbol? implementationReceiver,
-        string slotDescription)
+        string slotDescription,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap = null)
     {
         var annotation = FindUnscopedRefAttribute(implementation.Attributes);
         ValidateUnscopedRefAccessorContract(
@@ -205,14 +206,16 @@ internal sealed partial class DeclarationBinder
             implementation,
             implementationReceiver,
             isSetter: false,
-            slotDescription + " getter");
+            slotDescription + " getter",
+            typeParameterMap);
         ValidateUnscopedRefAccessorContract(
             annotation,
             slot,
             implementation,
             implementationReceiver,
             isSetter: true,
-            slotDescription + " setter");
+            slotDescription + " setter",
+            typeParameterMap);
     }
 
     private void ValidateUnscopedRefPropertyContract(
@@ -245,7 +248,8 @@ internal sealed partial class DeclarationBinder
         PropertySymbol implementation,
         TypeSymbol? implementationReceiver,
         bool isSetter,
-        string slotDescription)
+        string slotDescription,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
     {
         var slotHasAccessor = isSetter ? slot.HasSetter : slot.HasGetter;
         var implementationHasAccessor = isSetter ? implementation.HasSetter : implementation.HasGetter;
@@ -257,20 +261,57 @@ internal sealed partial class DeclarationBinder
         var slotAccessor = isSetter ? slot.SetterSymbol : slot.GetterSymbol;
         var implementationAccessor = isSetter ? implementation.SetterSymbol : implementation.GetterSymbol;
         implementationReceiver = implementationAccessor?.ReceiverType ?? implementationReceiver;
-        var contractIsRelevant = slotAccessor == null
-            ? RequiresUnscopedRefContract(
-                isSetter ? TypeSymbol.Void : slot.Type,
-                isSetter ? RefKind.None : slot.ReturnRefKind,
-                GetPropertyAccessorParameters(slot, isSetter),
-                implementation.IsStatic ? null : implementationReceiver)
-            : RequiresUnscopedRefContract(
-                slotAccessor,
-                implementation.IsStatic ? null : implementationReceiver);
+        var contractIsRelevant = RequiresUnscopedRefPropertyContract(
+            slot,
+            implementation.IsStatic ? null : implementationReceiver,
+            isSetter,
+            typeParameterMap);
         ValidateUnscopedRefContract(
             implementationAttribute,
             contractIsRelevant,
             slotAccessor?.HasUnscopedRef == true || KnownAttributes.HasUnscopedRef(slot.Attributes),
             slotDescription);
+    }
+
+    internal static bool RequiresUnscopedRefPropertyContract(
+        PropertySymbol slot,
+        TypeSymbol? implementationReceiver,
+        bool isSetter,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
+    {
+        var slotAccessor = isSetter ? slot.SetterSymbol : slot.GetterSymbol;
+        var returnType = slotAccessor?.Type ?? (isSetter ? TypeSymbol.Void : slot.Type);
+        var parameters = slotAccessor == null
+            ? GetPropertyAccessorParameters(slot, isSetter)
+            : GetCallableParameters(slotAccessor);
+        if (typeParameterMap != null)
+        {
+            returnType = StructSymbol.SubstituteTypeParameters(returnType, typeParameterMap);
+            parameters = SubstituteParameterTypes(parameters, typeParameterMap);
+        }
+
+        return RequiresUnscopedRefContract(
+            returnType,
+            slotAccessor?.ReturnRefKind ?? (isSetter ? RefKind.None : slot.ReturnRefKind),
+            parameters,
+            implementationReceiver);
+    }
+
+    private static ImmutableArray<ParameterSymbol> SubstituteParameterTypes(
+        ImmutableArray<ParameterSymbol> parameters,
+        Dictionary<TypeParameterSymbol, TypeSymbol> typeParameterMap)
+    {
+        var substituted = ImmutableArray.CreateBuilder<ParameterSymbol>(parameters.Length);
+        foreach (var parameter in parameters)
+        {
+            substituted.Add(new ParameterSymbol(
+                parameter.Name,
+                StructSymbol.SubstituteTypeParameters(parameter.Type, typeParameterMap),
+                isScoped: parameter.IsScoped,
+                refKind: parameter.RefKind));
+        }
+
+        return substituted.MoveToImmutable();
     }
 
     private void ValidateUnscopedRefAccessorContract(

@@ -600,7 +600,8 @@ internal sealed partial class DeclarationBinder
                     explicitImplementation,
                     iprop,
                     structSymbol,
-                    $"implemented property '{iface.Name}.{iprop.Name}'");
+                    $"implemented property '{iface.Name}.{iprop.Name}'",
+                    typeParameterMap);
 
                 if (explicitSetterKindMismatch)
                 {
@@ -639,7 +640,8 @@ internal sealed partial class DeclarationBinder
                     implProp,
                     iprop,
                     structSymbol,
-                    $"implemented property '{iface.Name}.{iprop.Name}'");
+                    $"implemented property '{iface.Name}.{iprop.Name}'",
+                    typeParameterMap);
 
                 if (iprop.HasGetter && !implProp.HasGetter)
                 {
@@ -2015,7 +2017,8 @@ internal sealed partial class DeclarationBinder
         StructSymbol structSymbol,
         MemberLookup.ClrInterfaceSlot slot)
         => FindClrInterfaceImplementation(
-            structSymbol.Methods,
+            structSymbol,
+            type => type.Methods,
             method => ExplicitClrSlotMatches(
                 method.ExplicitInterfaceSlotContainingType,
                 slot.SlotOwner,
@@ -2058,7 +2061,8 @@ internal sealed partial class DeclarationBinder
         StructSymbol structSymbol,
         MemberLookup.ClrInterfacePropertySlot slot)
         => FindClrInterfaceImplementation(
-            structSymbol.Properties,
+            structSymbol,
+            type => type.Properties,
             property => ExplicitClrPropertySlotMatches(
                 property,
                 slot.SlotOwner,
@@ -2208,7 +2212,8 @@ internal sealed partial class DeclarationBinder
         MethodInfo? explicitSlot,
         Func<FunctionSymbol?> findImplicit)
         => FindClrInterfaceImplementation(
-            structSymbol.Methods,
+            structSymbol,
+            type => type.Methods,
             method => ExplicitClrSlotMatches(
                 method.ExplicitInterfaceSlotContainingType,
                 interfaceType,
@@ -2223,7 +2228,8 @@ internal sealed partial class DeclarationBinder
         MethodInfo? explicitSetter,
         Func<PropertySymbol?> findImplicit)
         => FindClrInterfaceImplementation(
-            structSymbol.Properties,
+            structSymbol,
+            type => type.Properties,
             property => ExplicitClrPropertySlotMatches(
                 property,
                 interfaceType,
@@ -2262,12 +2268,13 @@ internal sealed partial class DeclarationBinder
             slotOwner);
 
     private static TMember? FindClrInterfaceImplementation<TMember>(
-        ImmutableArray<TMember> members,
+        StructSymbol structSymbol,
+        Func<StructSymbol, ImmutableArray<TMember>> getMembers,
         Func<TMember, bool> implementsExplicitSlot,
         Func<TMember?> findImplicit)
         where TMember : class
     {
-        foreach (var member in members)
+        foreach (var member in GetMembersIncludingInherited(structSymbol, getMembers))
         {
             if (implementsExplicitSlot(member))
             {
@@ -2276,6 +2283,19 @@ internal sealed partial class DeclarationBinder
         }
 
         return findImplicit();
+    }
+
+    private static IEnumerable<TMember> GetMembersIncludingInherited<TMember>(
+        StructSymbol structSymbol,
+        Func<StructSymbol, ImmutableArray<TMember>> getMembers)
+    {
+        foreach (var type in structSymbol.GetHierarchy())
+        {
+            foreach (var member in getMembers(type))
+            {
+                yield return member;
+            }
+        }
     }
 
     private static PropertySymbol? FindClrInterfacePropertyImplementationOrField(

@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
@@ -210,6 +211,117 @@ ref struct Buffer : IRefSlot {
 
         var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0590");
         Assert.Contains("implemented property 'IRefSlot.Slot'", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("set", false)]
+    [InlineData("set", true)]
+    [InlineData("init", false)]
+    [InlineData("init", true)]
+    public void ConstructedSourceProperty_WithOrdinaryType_IsNotRelevant(
+        string accessor,
+        bool explicitImplementation)
+    {
+        var declaration = explicitImplementation
+            ? "private prop (IRefSlot[int32]) Slot"
+            : "public prop Slot";
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            interface IRefSlot[T any] {
+                prop Slot T { ACCESSOR; }
+            }
+            struct Buffer : IRefSlot[int32] {
+                @UnscopedRef
+                DECLARATION int32 { ACCESSOR { } }
+            }
+            """
+            .Replace("ACCESSOR", accessor, StringComparison.Ordinal)
+            .Replace("DECLARATION", declaration, StringComparison.Ordinal);
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Theory]
+    [InlineData("set")]
+    [InlineData("init")]
+    public void ConstructedSourcePropertySetter_RelevanceUsesSubstitutedSlotType(string accessor)
+    {
+        var source = """
+            package P
+            interface IRefSlot[T any] {
+                prop Slot T { ACCESSOR; }
+            }
+            """.Replace("ACCESSOR", accessor, StringComparison.Ordinal);
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        var globalScope = GSharp.Core.CodeAnalysis.Binding.Binder.BindGlobalScope(
+            previous: null,
+            ImmutableArray.Create(tree),
+            compilation.References);
+        var iface = Assert.Single(globalScope.Interfaces);
+        var slot = Assert.Single(iface.Properties);
+        var typeParameter = Assert.Single(iface.TypeParameters);
+        var byRefLikeMap = new Dictionary<TypeParameterSymbol, TypeSymbol>
+        {
+            [typeParameter] = TypeSymbol.FromClrType(typeof(Span<int>)),
+        };
+        var ordinaryMap = new Dictionary<TypeParameterSymbol, TypeSymbol>
+        {
+            [typeParameter] = TypeSymbol.Int32,
+        };
+
+        Assert.True(DeclarationBinder.RequiresUnscopedRefPropertyContract(
+            slot,
+            TypeSymbol.FromClrType(typeof(Span<int>)),
+            isSetter: true,
+            byRefLikeMap));
+        Assert.False(DeclarationBinder.RequiresUnscopedRefPropertyContract(
+            slot,
+            TypeSymbol.Int32,
+            isSetter: true,
+            ordinaryMap));
+    }
+
+    [Fact]
+    public void ConstructedSourceIndexerGetter_RelevanceUsesSubstitutedSlotType()
+    {
+        var typeParameter = new TypeParameterSymbol(
+            "T",
+            0,
+            TypeParameterConstraint.Any,
+            TypeParameterVariance.None);
+        var byRefLikeMap = new Dictionary<TypeParameterSymbol, TypeSymbol>
+        {
+            [typeParameter] = TypeSymbol.FromClrType(typeof(Span<int>)),
+        };
+        var ordinaryMap = new Dictionary<TypeParameterSymbol, TypeSymbol>
+        {
+            [typeParameter] = TypeSymbol.Int32,
+        };
+        var indexerSlot = new PropertySymbol(
+            "Item",
+            typeParameter,
+            Accessibility.Public,
+            hasGetter: true,
+            hasSetter: false,
+            isAutoProperty: false,
+            isVirtual: false,
+            isOverride: false)
+        {
+            Parameters = ImmutableArray.Create(
+                new ParameterSymbol("key", TypeSymbol.Int32, refKind: RefKind.Ref)),
+        };
+        Assert.True(DeclarationBinder.RequiresUnscopedRefPropertyContract(
+            indexerSlot,
+            implementationReceiver: null,
+            isSetter: false,
+            byRefLikeMap));
+        Assert.False(DeclarationBinder.RequiresUnscopedRefPropertyContract(
+            indexerSlot,
+            implementationReceiver: null,
+            isSetter: false,
+            ordinaryMap));
     }
 
     [Theory]
@@ -1246,6 +1358,117 @@ ref struct Buffer : IDefaultProperty {
             """;
 
         Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
+    [Theory]
+    [InlineData("method")]
+    [InlineData("property")]
+    [InlineData("indexer")]
+    public void SourceInterface_UsesInheritedExactExplicitImplementation(string memberKind)
+    {
+        var interfaceMember = memberKind switch
+        {
+            "method" => "func Slot() int32;",
+            "property" => "prop Slot int32 { get; }",
+            _ => "prop this[key int32] int32 { get; }",
+        };
+        var implementation = memberKind switch
+        {
+            "method" => "private func (IContract) Slot() int32 { return 0 }",
+            "property" => "private prop (IContract) Slot int32 { get { return 0 } }",
+            _ => "private prop (IContract) this[key int32] int32 { get { return key } }",
+        };
+        var source = """
+            package P
+            interface IContract {
+                INTERFACE_MEMBER
+            }
+            open class Base : IContract {
+                IMPLEMENTATION
+            }
+            class Derived : Base, IContract { }
+            """
+            .Replace("INTERFACE_MEMBER", interfaceMember, StringComparison.Ordinal)
+            .Replace("IMPLEMENTATION", implementation, StringComparison.Ordinal);
+
+        Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void UnrelatedInheritedExplicitImplementation_DoesNotSatisfyInterface()
+    {
+        var source = """
+            package P
+            interface IA { func Slot() int32; }
+            interface IB { func Slot() int32; }
+            open class Base : IB {
+                private func (IB) Slot() int32 { return 0 }
+            }
+            class Derived : Base, IA { }
+            """;
+
+        Assert.Single(Bind(source), d => d.Id == "GS0187");
+    }
+
+    [Theory]
+    [InlineData("method")]
+    [InlineData("property")]
+    [InlineData("indexer")]
+    [InlineData("symbolic-method")]
+    [InlineData("symbolic-property")]
+    public void ImportedInterface_UsesInheritedExactExplicitImplementation(string memberKind)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var baseDeclaration = memberKind switch
+        {
+            "method" => """
+                open class Base : IMethod {
+                    var Value int32
+                    private func (IMethod) Slot(ref fallback int32) ref int32 { return ref this.Value }
+                }
+                class Derived : Base, IMethod { }
+                """,
+            "property" => """
+                open class Base : ISetterProperty {
+                    private prop (ISetterProperty) Slot RefValue { set { } }
+                }
+                class Derived : Base, ISetterProperty { }
+                """,
+            "indexer" => """
+                open class Base : IUnannotatedIndexer {
+                    var Value int32
+                    private prop (IUnannotatedIndexer) this[view RefValue] ref int32 {
+                        get { return ref this.Value }
+                    }
+                }
+                class Derived : Base, IUnannotatedIndexer { }
+                """,
+            "symbolic-method" => """
+                class Token { }
+                open class Base : IGenericMethod[Token] {
+                    var Value int32
+                    private func (IGenericMethod[Token]) Slot(ref fallback int32, value Token) ref int32 {
+                        return ref this.Value
+                    }
+                }
+                class Derived : Base, IGenericMethod[Token] { }
+                """,
+            _ => """
+                class Token { }
+                open class Base : IGenericValueProperty[Token] {
+                    private prop (IGenericValueProperty[Token]) Value Token {
+                        get { return Token() }
+                    }
+                }
+                class Derived : Base, IGenericValueProperty[Token] { }
+                """,
+        };
+        var source = """
+            package P
+            import Issue4292.Contracts
+            """ + Environment.NewLine + baseDeclaration;
+
+        Assert.Empty(BindWithFixtures(source, contracts));
     }
 
     private interface IPropertyAccessorProbe
