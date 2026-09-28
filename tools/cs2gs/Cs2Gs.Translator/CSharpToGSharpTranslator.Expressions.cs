@@ -1052,24 +1052,35 @@ public sealed partial class CSharpToGSharpTranslator
         {
             expression = Unparenthesize(expression);
             if (expression is IdentifierNameSyntax identifier
-                && this.context.GetSymbolInfo(identifier).Symbol is ILocalSymbol local
-                && IsImplicitlyTypedLocal(local))
+                && this.context.GetSymbolInfo(identifier).Symbol is { } identifierSymbol)
             {
-                if (this.state.ManagedReferenceArrayProjectedLocalType.TryGetValue(
-                        local,
-                        out ITypeSymbol projectedLocalType))
+                if (identifierSymbol is IParameterSymbol parameter
+                    && this.state.ProjectedCallableParameterType.TryGetValue(
+                        parameter,
+                        out ITypeSymbol projectedParameterType))
                 {
-                    return projectedLocalType;
+                    return projectedParameterType;
                 }
 
-                if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                        is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                if (identifierSymbol is ILocalSymbol local
+                    && IsImplicitlyTypedLocal(local))
                 {
-                    projectedLocalType =
-                        this.GetManagedReferenceArrayProjectedExpressionType(initializer);
-                    this.state.ManagedReferenceArrayProjectedLocalType[local] =
-                        projectedLocalType;
-                    return projectedLocalType;
+                    if (this.state.ManagedReferenceArrayProjectedLocalType.TryGetValue(
+                            local,
+                            out ITypeSymbol projectedLocalType))
+                    {
+                        return projectedLocalType;
+                    }
+
+                    if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                            is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                    {
+                        projectedLocalType =
+                            this.GetManagedReferenceArrayProjectedExpressionType(initializer);
+                        this.state.ManagedReferenceArrayProjectedLocalType[local] =
+                            projectedLocalType;
+                        return projectedLocalType;
+                    }
                 }
             }
 

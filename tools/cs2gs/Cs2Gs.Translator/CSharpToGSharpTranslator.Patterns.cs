@@ -1687,7 +1687,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             SeparatedSyntaxList<PatternSyntax> elements = listPattern.Patterns;
             int sliceIndex = FindSlicePatternIndex(elements);
-            ITypeSymbol elementType = GetEnumerableElementType(receiverType);
+            ITypeSymbol elementType =
+                this.GetListPatternElementType(listPattern, receiverType);
 
             // Issue #4356: the nil guard below tests `receiver`; every read under
             // it goes through `receiver!!` when it is a stored `var` capture,
@@ -1743,6 +1744,27 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return test;
+        }
+
+        private ITypeSymbol GetListPatternElementType(
+            ListPatternSyntax listPattern,
+            ITypeSymbol receiverType)
+        {
+            ITypeSymbol enumerableElement = GetEnumerableElementType(receiverType);
+            if (enumerableElement != null)
+            {
+                return enumerableElement;
+            }
+
+            return this.context.SemanticModel.GetOperation(listPattern)
+                    is IListPatternOperation listOperation
+                ? listOperation.IndexerSymbol switch
+                {
+                    IPropertySymbol property => property.Type,
+                    IMethodSymbol method => method.ReturnType,
+                    _ => null,
+                }
+                : null;
         }
 
         // Issue #1889: a slice ("rest") subpattern either captures the middle

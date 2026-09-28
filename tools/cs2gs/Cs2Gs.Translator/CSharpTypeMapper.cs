@@ -1798,13 +1798,24 @@ public sealed class CSharpTypeMapper
         Compilation compilation,
         bool isNullable)
     {
-        if (IsRecognizedManagedReferenceConsumerType(array.ElementType, compilation))
+        if (ArrayElementContainsManagedReferenceLeaf(
+                array.ElementType,
+                compilation))
         {
             element = WithNullable(element, true);
         }
 
         return new ArrayTypeReference(element, array.Rank) { IsNullable = isNullable };
     }
+
+    private static bool ArrayElementContainsManagedReferenceLeaf(
+        ITypeSymbol type,
+        Compilation compilation) =>
+        IsRecognizedManagedReferenceConsumerType(type, compilation)
+        || (type is IArrayTypeSymbol nested
+            && ArrayElementContainsManagedReferenceLeaf(
+                nested.ElementType,
+                compilation));
 
     private string DelegateTypeName(
         INamedTypeSymbol named,

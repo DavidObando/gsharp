@@ -139,6 +139,29 @@ namespace Corpus.Issue1889
     }
 
     [Fact]
+    public void IsPattern_PatternProviderUsesBoundIndexerElementType()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1889
+{
+    public sealed class Buffer<T>
+    {
+        public int Length => 1;
+        public T this[int index] => default;
+    }
+
+    public class Holder
+    {
+        public bool Describe(Buffer<long> values) => values is [1];
+    }
+}
+");
+
+        Assert.Contains("values[0] == int64(1)", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void IsPattern_HeadAndRestBinders_BindHeadByIndexAndRestBySlice()
     {
         string rendered = Render(@"

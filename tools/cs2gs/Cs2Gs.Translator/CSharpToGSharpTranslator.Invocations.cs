@@ -5065,13 +5065,19 @@ public sealed partial class CSharpToGSharpTranslator
                                 && element.IsKind(SyntaxKind.ComplexElementInitializerExpression)
                             ? complex.Expressions
                             : new[] { element };
-                        for (int i = 0;
-                            addMethod != null
-                                && i < values.Count
-                                && i < addMethod.Parameters.Length;
-                            i++)
+                        for (int i = 0; addMethod != null && i < values.Count; i++)
                         {
-                            IParameterSymbol parameter = addMethod.Parameters[i];
+                            IParameterSymbol parameter =
+                                i < addMethod.Parameters.Length
+                                    ? addMethod.Parameters[i]
+                                    : addMethod.Parameters.LastOrDefault();
+                            if (parameter == null
+                                || (i >= addMethod.Parameters.Length
+                                    && !parameter.IsParams))
+                            {
+                                break;
+                            }
+
                             ITypeSymbol parameterType = parameter.Type;
                             if (parameter.IsParams
                                 && parameterType is IArrayTypeSymbol paramsArray)
