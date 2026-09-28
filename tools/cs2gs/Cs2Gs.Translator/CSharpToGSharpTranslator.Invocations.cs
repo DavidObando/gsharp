@@ -4649,19 +4649,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (fixedStorageNeedsNullableArgument)
-            {
-                string storageKind = call is BaseObjectCreationExpressionSyntax
-                    ? "destination"
-                    : "receiver";
-                string message =
-                    $"managed-reference array widening cannot change fixed {storageKind} storage " +
-                    $"'{method.ContainingType}'; a nil argument has no exact G# translation.";
-                this.context.ReportUnsupported(
-                    call,
-                    message);
-            }
-
             INamedTypeSymbol projectedContainingType = projectedReceiver;
             if (widenedContainingArguments.Any(value => value))
             {
@@ -4712,6 +4699,34 @@ public sealed partial class CSharpToGSharpTranslator
                 projectedMethod = projectedMethod.ConstructedFrom.Construct(typeArguments);
             }
 
+            if (!this.ProjectedByRefArgumentsMatch(
+                    arguments,
+                    projectedMethod,
+                    out IParameterSymbol incompatibleByRefParameter))
+            {
+                string message =
+                    $"managed-reference array widening changes by-reference storage for parameter " +
+                    $"'{incompatibleByRefParameter.Name}', but the caller cannot adopt " +
+                    "the projected nullable type; no exact G# translation exists.";
+                this.context.ReportUnsupported(
+                    call,
+                    message);
+                return false;
+            }
+
+            if (fixedStorageNeedsNullableArgument)
+            {
+                string storageKind = call is BaseObjectCreationExpressionSyntax
+                    ? "destination"
+                    : "receiver";
+                string message =
+                    $"managed-reference array widening cannot change fixed {storageKind} storage " +
+                    $"'{method.ContainingType}'; a nil argument has no exact G# translation.";
+                this.context.ReportUnsupported(
+                    call,
+                    message);
+            }
+
             if (projectedContainingType != null
                 || widenedMethodArguments.Any(value => value))
             {
@@ -4720,6 +4735,68 @@ public sealed partial class CSharpToGSharpTranslator
 
             this.state.ManagedReferenceArrayProjectedMethodByCall[call] = projected;
             return projected != null;
+        }
+
+        private bool ProjectedByRefArgumentsMatch(
+            ImmutableArray<IArgumentOperation> arguments,
+            IMethodSymbol projectedMethod,
+            out IParameterSymbol incompatibleParameter)
+        {
+            incompatibleParameter = null;
+            foreach (IArgumentOperation argument in arguments)
+            {
+                IParameterSymbol originalParameter = argument.Parameter;
+                if (originalParameter == null
+                    || originalParameter.RefKind == RefKind.None
+                    || originalParameter.Ordinal >= projectedMethod.Parameters.Length)
+                {
+                    continue;
+                }
+
+                IParameterSymbol projectedParameter =
+                    projectedMethod.Parameters[originalParameter.Ordinal];
+                if (SymbolEqualityComparer.IncludeNullability.Equals(
+                        originalParameter.Type,
+                        projectedParameter.Type)
+                    || (argument.Syntax is ArgumentSyntax argumentSyntax
+                        && this.ProjectedByRefStorageMatches(
+                                argumentSyntax.Expression,
+                                projectedParameter.Type)))
+                {
+                    continue;
+                }
+
+                incompatibleParameter = projectedParameter;
+                return false;
+            }
+
+            return true;
+        }
+
+        private bool ProjectedByRefStorageMatches(
+            ExpressionSyntax expression,
+            ITypeSymbol projectedParameterType)
+        {
+            expression = Unparenthesize(expression);
+            if (expression is DeclarationExpressionSyntax declaration
+                && declaration.Type.IsVar)
+            {
+                return true;
+            }
+
+            if (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
+                && IsImplicitlyTypedLocal(local)
+                && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+            {
+                expression = initializer;
+            }
+
+            ITypeSymbol storageType =
+                this.GetManagedReferenceArrayProjectedArgumentType(expression);
+            return SymbolEqualityComparer.IncludeNullability.Equals(
+                storageType,
+                projectedParameterType);
         }
 
         private bool ObjectCreationCanProjectContainingType(

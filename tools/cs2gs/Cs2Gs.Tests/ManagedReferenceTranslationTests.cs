@@ -939,6 +939,93 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceArrayProjectionAcceptsCompatibleInferredRefStorage()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayCompatibleRefStorage;
+            public class Probe {
+                private static void CopyFirst<T>(T[] source, ref T value) =>
+                    value = source[0];
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    var value = source[0];
+                    CopyFirst<ManagedRef<int>>(source, ref value);
+                    return value == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayCompatibleRefStorage.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("CopyFirst[managed[int32]?](source, &value)", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionRejectsIncompatibleFixedRefStorage()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayFixedRefStorage;
+            public class Probe {
+                private static void CopyRef<T>(T[] source, ref T value) =>
+                    value = source[0];
+                private static void CopyOut<T>(T[] source, out T output) =>
+                    output = source[0];
+
+                public static int Run() {
+                    int[] values = { 3 };
+                    var source = new ManagedRef<int>[1];
+                    ManagedRef<int> value = ManagedRef<int>.FromArray(values, 0);
+                    ManagedRef<int> output;
+                    CopyRef<ManagedRef<int>>(source, ref value);
+                    CopyOut<ManagedRef<int>>(source, out output);
+                    return value.Borrow() + output.Borrow();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayFixedRefStorage.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Equal(
+            2,
+            context.Diagnostics.Count(diagnostic =>
+                diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains("by-reference storage", StringComparison.Ordinal)));
+        Assert.DoesNotContain("CopyRef[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("CopyOut[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.Contains("CopyRef[managed[int32]](source, &value)", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "CopyOut[managed[int32]](source, out output)",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayExpandedParamsUseSubstitutedElementContract()
     {
         const string source = """
