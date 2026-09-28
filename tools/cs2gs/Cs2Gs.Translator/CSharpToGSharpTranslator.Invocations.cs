@@ -2204,9 +2204,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ITypeSymbol sourceType = this.context.GetTypeInfo(argument.Expression).Type;
-            if (sourceType != null
-                && SymbolEqualityComparer.Default.Equals(sourceType, parameter.Type))
+            TypeInfo sourceType = this.context.GetTypeInfo(argument.Expression);
+            if (SymbolEqualityComparer.Default.Equals(sourceType.Type, parameter.Type)
+                || SymbolEqualityComparer.Default.Equals(
+                    sourceType.ConvertedType,
+                    parameter.Type))
             {
                 return false;
             }
@@ -5393,6 +5395,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.ReportUnsupported(
                     call,
                     message);
+                return Complete(false);
             }
 
             if (projectedContainingType != null
