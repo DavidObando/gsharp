@@ -4011,9 +4011,10 @@ public sealed partial class CSharpToGSharpTranslator
                 translated = EnsureNonNullAssertion(translated);
             }
 
-            if (elementSymbol != null && convertedSymbol != null &&
-                !SymbolEqualityComparer.Default.Equals(elementSymbol, convertedSymbol) &&
-                IsPrimitiveNumeric(elementSymbol) && IsPrimitiveNumeric(convertedSymbol))
+            ITypeSymbol numericTarget = targetElementSymbol ?? convertedSymbol;
+            if (elementSymbol != null && numericTarget != null &&
+                !SymbolEqualityComparer.Default.Equals(elementSymbol, numericTarget) &&
+                IsPrimitiveNumeric(elementSymbol) && IsPrimitiveNumeric(numericTarget))
             {
                 return new ConversionExpression(elementType, translated);
             }
