@@ -146,6 +146,9 @@ public sealed class Conversion
         /// <summary>An unsound nested relation whose direction is not comparable.</summary>
         IllegalUnknown,
 
+        /// <summary>Nested arguments contain both imported-rejected and lenient illegality.</summary>
+        IllegalMixed,
+
         /// <summary>
         /// Platform-free on both sides but <b>not equivalent</b>, so this arm
         /// cannot decide the pair and must hand it back to the ordinary
@@ -3810,7 +3813,7 @@ public sealed class Conversion
         }
 
         var widens = false;
-        var hasNonImportedIllegal = false;
+        var hasIllegal = false;
         var hasUnrelated = false;
         for (var i = 0; i < fromArguments.Length; i++)
         {
@@ -3826,10 +3829,9 @@ public sealed class Conversion
                 if (IsVariantPlatformEscape(fromArguments[i], toArguments[i]))
                 {
                     rejectsImportedParameter = true;
-                    return true;
                 }
 
-                hasNonImportedIllegal = true;
+                hasIllegal = true;
                 continue;
             }
 
@@ -3848,31 +3850,38 @@ public sealed class Conversion
                 case PlatformArgumentRelation.IllegalFromPlatform:
                     rejectsImportedParameter = true;
                     conversion = Conversion.None;
-                    return true;
+                    hasIllegal = true;
+                    break;
                 case PlatformArgumentRelation.IllegalToPlatform:
                     // A stated source reaches a platform target. The relation
                     // remains illegal, but imported CLR targets deliberately
                     // keep this direction lenient.
                     conversion = Conversion.None;
-                    hasNonImportedIllegal = true;
+                    hasIllegal = true;
                     break;
                 case PlatformArgumentRelation.IllegalUnknown:
                     conversion = Conversion.None;
-                    hasNonImportedIllegal = true;
+                    hasIllegal = true;
+                    break;
+                case PlatformArgumentRelation.IllegalMixed:
+                    rejectsImportedParameter = true;
+                    conversion = Conversion.None;
+                    hasIllegal = true;
                     break;
                 default:
                     throw new InvalidOperationException("Unknown platform argument relation.");
             }
         }
 
-        if (hasNonImportedIllegal)
-        {
-            return true;
-        }
-
         if (hasUnrelated)
         {
+            rejectsImportedParameter = false;
             return false;
+        }
+
+        if (hasIllegal)
+        {
+            return true;
         }
 
         if (!widens)
@@ -4024,7 +4033,10 @@ public sealed class Conversion
             return PlatformArgumentRelation.IllegalUnknown;
         }
 
-        var relation = PlatformArgumentRelation.Same;
+        var widens = false;
+        var hasIllegalFromPlatform = false;
+        var hasIllegalToPlatform = false;
+        var hasIllegalUnknown = false;
         for (var i = 0; i < nestedFrom.Length; i++)
         {
             switch (RelatePlatformArguments(nestedFrom[i], nestedTo[i]))
@@ -4034,28 +4046,56 @@ public sealed class Conversion
                 case PlatformArgumentRelation.Unrelated:
                     return PlatformArgumentRelation.Unrelated;
                 case PlatformArgumentRelation.Widening:
-                    relation = PlatformArgumentRelation.Widening;
+                    widens = true;
                     break;
                 case PlatformArgumentRelation.IllegalFromPlatform:
-                    return PlatformArgumentRelation.IllegalFromPlatform;
+                    hasIllegalFromPlatform = true;
+                    break;
                 case PlatformArgumentRelation.IllegalToPlatform:
-                    relation = PlatformArgumentRelation.IllegalToPlatform;
+                    hasIllegalToPlatform = true;
                     break;
                 case PlatformArgumentRelation.IllegalUnknown:
-                    relation = PlatformArgumentRelation.IllegalUnknown;
+                    hasIllegalUnknown = true;
+                    break;
+                case PlatformArgumentRelation.IllegalMixed:
+                    hasIllegalFromPlatform = true;
+                    hasIllegalToPlatform = true;
                     break;
                 default:
                     throw new InvalidOperationException("Unknown platform argument relation.");
             }
         }
 
-        return relation;
+        if (hasIllegalFromPlatform && (hasIllegalToPlatform || hasIllegalUnknown))
+        {
+            return PlatformArgumentRelation.IllegalMixed;
+        }
+
+        if (hasIllegalUnknown)
+        {
+            return PlatformArgumentRelation.IllegalUnknown;
+        }
+
+        if (hasIllegalFromPlatform)
+        {
+            return PlatformArgumentRelation.IllegalFromPlatform;
+        }
+
+        if (hasIllegalToPlatform)
+        {
+            return PlatformArgumentRelation.IllegalToPlatform;
+        }
+
+        return widens
+            ? PlatformArgumentRelation.Widening
+            : PlatformArgumentRelation.Same;
     }
 
     private static bool IsIllegalPlatformArgumentRelation(PlatformArgumentRelation relation)
         => relation is PlatformArgumentRelation.IllegalFromPlatform
             or PlatformArgumentRelation.IllegalToPlatform
-            or PlatformArgumentRelation.IllegalUnknown;
+            or PlatformArgumentRelation.IllegalUnknown
+            or PlatformArgumentRelation.IllegalMixed;
 
     /// <summary>
     /// #4420: whether a supertype view reads a platform element as a
@@ -4377,7 +4417,8 @@ public sealed class Conversion
         out bool rejectsImportedParameter)
     {
         var relation = RelatePlatformArguments(projected, target);
-        rejectsImportedParameter = relation == PlatformArgumentRelation.IllegalFromPlatform;
+        rejectsImportedParameter = relation is PlatformArgumentRelation.IllegalFromPlatform
+            or PlatformArgumentRelation.IllegalMixed;
         if (!IsIllegalPlatformArgumentRelation(relation))
         {
             return false;

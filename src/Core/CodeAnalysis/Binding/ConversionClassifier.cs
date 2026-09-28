@@ -1460,6 +1460,13 @@ internal sealed class ConversionClassifier
 
                     var targetType = substituted
                         ?? GetClrParameterTargetType(argument.Type, parameters[paramIndex]);
+                    var rejectionTargetType = substituted
+                        ?? TrySubstituteParameterTypeFromMethodTypeArgs(
+                            method,
+                            paramIndex,
+                            symbolicMethodTypeArgs,
+                            allowConcreteSymbolic: true)
+                        ?? targetType;
 
                     // Issue #2142 (follow-up to #2130/#2139): a lambda/arrow
                     // literal flowing into an imported method's
@@ -1606,7 +1613,7 @@ internal sealed class ConversionClassifier
                         && TryRejectClrPlatformContainerArgument(
                             argument,
                             parameters[paramIndex],
-                            targetType,
+                            rejectionTargetType,
                             rejectionLocation,
                             out var rejectedArgument))
                     {

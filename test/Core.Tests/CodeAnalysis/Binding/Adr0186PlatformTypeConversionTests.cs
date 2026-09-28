@@ -161,6 +161,34 @@ public sealed class Adr0186PlatformTypeConversionTests
         Assert.False(referenceContainer.Exists, "`[]string! -> []string` is rule 3's illegal direction");
     }
 
+    /// <summary>Nested relation aggregation never lets widening erase illegality.</summary>
+    [Fact]
+    public void Section3_NestedMixedRelations_RemainIllegal()
+    {
+        var platform = PlatformTypeSymbol.Get(TypeSymbol.String);
+        var source = SliceTypeSymbol.Get(MapTypeSymbol.Get(TypeSymbol.String, platform));
+        var wideningTarget = SliceTypeSymbol.Get(MapTypeSymbol.Get(
+            platform,
+            NullableTypeSymbol.Get(TypeSymbol.String)));
+        var mixedTarget = SliceTypeSymbol.Get(MapTypeSymbol.Get(platform, TypeSymbol.String));
+
+        Assert.True(Conversion.TryRelatePlatformContainer(
+            source,
+            wideningTarget,
+            out var wideningIsImplicit,
+            out var wideningRejectsImported));
+        Assert.False(wideningIsImplicit);
+        Assert.False(wideningRejectsImported);
+
+        Assert.True(Conversion.TryRelatePlatformContainer(
+            source,
+            mixedTarget,
+            out var mixedIsImplicit,
+            out var mixedRejectsImported));
+        Assert.False(mixedIsImplicit);
+        Assert.True(mixedRejectsImported);
+    }
+
     /// <summary>
     /// §3's first row, and the prerequisite this whole step rests on:
     /// <c>T! → T</c> is implicit and <b>inserts a check</b>.

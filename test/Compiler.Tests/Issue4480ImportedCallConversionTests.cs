@@ -72,6 +72,8 @@ public class Issue4480ImportedCallConversionTests
             public static int Value(IEnumerable<int> values) => values.Count();
 
             public static int Generic<T>(T value) => value is null ? 0 : 1;
+
+            public static int GenericSequence<T>(IEnumerable<T> values) => values.Count();
         }
 
         public interface IInstanceCalls
@@ -135,6 +137,7 @@ public class Issue4480ImportedCallConversionTests
                 string,
         #nullable disable
                 string> Pair() => new();
+
         }
         """;
 
@@ -316,6 +319,7 @@ public class Issue4480ImportedCallConversionTests
             5,
             "values",
         };
+
     }
 
     /// <summary>Rule 3 is enforced equally at imported and G# callees.</summary>
@@ -352,6 +356,7 @@ public class Issue4480ImportedCallConversionTests
             Console.WriteLine(String.Join(",", Ob.Strings()))
             Console.WriteLine(Calls.Value(Ob.Ints()))
             Console.WriteLine(Calls.Generic(Ob.Name()))
+            Console.WriteLine(Calls.GenericSequence(Ob.Strings()))
             """;
 
         using var fixture = new Fixture("controls");
@@ -432,20 +437,28 @@ public class Issue4480ImportedCallConversionTests
                 Console.SetError(previousError);
             }
 
-            return stdout.ToString() + stderr;
+            return stdout.ToString() + stderr.ToString();
         }
 
         public void Dispose()
         {
-            try
+            for (var attempt = 0; attempt < 3; attempt++)
             {
-                Directory.Delete(root, recursive: true);
-            }
-            catch (IOException)
-            {
-            }
-            catch (UnauthorizedAccessException)
-            {
+                try
+                {
+                    Directory.Delete(root, recursive: true);
+                    return;
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+                {
+                    if (attempt == 2)
+                    {
+                        Console.Error.WriteLine($"Could not delete test directory '{root}': {ex.Message}");
+                        return;
+                    }
+
+                    Thread.Sleep(50 * (attempt + 1));
+                }
             }
         }
 
