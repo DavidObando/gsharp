@@ -20,6 +20,53 @@ namespace Cs2Gs.Translator;
 
 public sealed partial class CSharpToGSharpTranslator
 {
+    internal static bool MethodMayRequireManagedReferenceArrayProjection(
+        IMethodSymbol method,
+        Compilation compilation)
+    {
+        return method != null
+            && (TypeContainsRecognizedManagedReferenceConsumer(
+                    method.ContainingType,
+                    compilation)
+                || TypeContainsRecognizedManagedReferenceConsumer(
+                    method.ReceiverType,
+                    compilation)
+                || TypeContainsRecognizedManagedReferenceConsumer(
+                    method.ReturnType,
+                    compilation)
+                || method.Parameters.Any(parameter =>
+                    TypeContainsRecognizedManagedReferenceConsumer(
+                        parameter.Type,
+                        compilation)));
+    }
+
+    private static bool TypeContainsRecognizedManagedReferenceConsumer(
+        ITypeSymbol type,
+        Compilation compilation)
+    {
+        return type != null
+            && (CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                    type,
+                    compilation)
+                || (type is IArrayTypeSymbol array
+                    && TypeContainsRecognizedManagedReferenceConsumer(
+                        array.ElementType,
+                        compilation))
+                || (type is IPointerTypeSymbol pointer
+                    && TypeContainsRecognizedManagedReferenceConsumer(
+                        pointer.PointedAtType,
+                        compilation))
+                || (type is INamedTypeSymbol named
+                    && (named.TypeArguments.Any(argument =>
+                            TypeContainsRecognizedManagedReferenceConsumer(
+                                argument,
+                                compilation))
+                        || (named.ContainingType is { } containing
+                            && TypeContainsRecognizedManagedReferenceConsumer(
+                                containing,
+                                compilation)))));
+    }
+
     private sealed partial class DeclarationVisitor
     {
         private GExpression TranslateInvocation(InvocationExpressionSyntax invocation)
@@ -4796,6 +4843,14 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            if (!MethodMayRequireManagedReferenceArrayProjection(
+                    method,
+                    this.context.Compilation))
+            {
+                this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
+                return false;
+            }
+
             // Cache an in-progress sentinel before inspecting arguments and
             // local initializer/member flows, which can refer back to this call.
             this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
@@ -6374,33 +6429,6 @@ public sealed partial class CSharpToGSharpTranslator
                     target,
                     compilation,
                     out projectedArgument);
-        }
-
-        private static bool TypeContainsRecognizedManagedReferenceConsumer(
-            ITypeSymbol type,
-            Compilation compilation)
-        {
-            return type != null
-                && (CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
-                        type,
-                        compilation)
-                    || (type is IArrayTypeSymbol array
-                        && TypeContainsRecognizedManagedReferenceConsumer(
-                            array.ElementType,
-                            compilation))
-                    || (type is IPointerTypeSymbol pointer
-                        && TypeContainsRecognizedManagedReferenceConsumer(
-                            pointer.PointedAtType,
-                            compilation))
-                    || (type is INamedTypeSymbol named
-                        && (named.TypeArguments.Any(argument =>
-                                TypeContainsRecognizedManagedReferenceConsumer(
-                                    argument,
-                                    compilation))
-                            || (named.ContainingType is { } containing
-                                && TypeContainsRecognizedManagedReferenceConsumer(
-                                    containing,
-                                    compilation)))));
         }
 
         private static bool TypeContainsTypeParameter(

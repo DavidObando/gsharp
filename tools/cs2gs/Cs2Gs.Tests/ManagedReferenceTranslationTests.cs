@@ -795,6 +795,42 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ForEachTypeNamedVarRespectsElementConversion()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayNamedVarForEach;
+            public sealed class var {
+                public int Value;
+                public static implicit operator var(ManagedRef<int> value) =>
+                    new var { Value = value is null ? 42 : value.Borrow() };
+            }
+            public class Probe {
+                public static int Run() {
+                    ManagedRef<int>[] source = new ManagedRef<int>[1];
+                    foreach (var item in source) {
+                        return item.Value;
+                    }
+                    return 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayNamedVarForEach.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("item!!.Value", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void NullableValueArrayReadsAndForEachBindingsStayNullableValues()
     {
         const string source = """
@@ -1700,6 +1736,65 @@ public sealed class ManagedReferenceTranslationTests
             "default(managed[int32]?)",
             text,
             StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ProjectionEligibilitySkipsOrdinaryCallsButKeepsManagedArrayCalls()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectionEligibility;
+            public class Probe {
+                private static int Twice(int value) => value * 2;
+                private static T First<T>(T[] source) => source[0];
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return Twice(21) + (First(source) is null ? 0 : -42);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectionEligibility.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        IMethodSymbol[] invokedMethods = document.SyntaxTree.GetRoot()
+            .DescendantNodes()
+            .OfType<Microsoft.CodeAnalysis.CSharp.Syntax.InvocationExpressionSyntax>()
+            .Select(invocation =>
+                document.SemanticModel.GetSymbolInfo(invocation).Symbol as IMethodSymbol)
+            .Where(method => method != null)
+            .ToArray();
+        IMethodSymbol ordinaryMethod = Assert.Single(
+            invokedMethods,
+            method => method.Name == "Twice");
+        IMethodSymbol managedArrayMethod = Assert.Single(
+            invokedMethods,
+            method => method.Name == "First");
+        Assert.False(
+            CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
+                ordinaryMethod,
+                project.Compilation));
+        Assert.True(
+            CSharpToGSharpTranslator.MethodMayRequireManagedReferenceArrayProjection(
+                managedArrayMethod,
+                project.Compilation));
+
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("First(source)!!", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
