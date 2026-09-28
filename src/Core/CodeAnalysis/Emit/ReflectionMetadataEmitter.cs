@@ -651,11 +651,10 @@ internal sealed class ReflectionMetadataEmitter
             }
 
             var def = s.Definition ?? s;
-            if (!def.ReifiedFromTypeParameters.IsDefaultOrEmpty)
+            if (def.HasCompleteReifiedTypeParameterVector)
             {
-                // Synthesized closure/box types already carry the complete
-                // enclosing-plus-own parameter vector. Record only the split;
-                // reifying again would duplicate the enclosing parameters.
+                // Synthesized helpers explicitly seeded with the complete
+                // enclosing-plus-own parameter vector need only the split.
                 this.remaps.SetNestedTypeEnclosingArity(def, enclosing.Length);
                 continue;
             }

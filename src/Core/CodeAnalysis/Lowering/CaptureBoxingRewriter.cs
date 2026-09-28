@@ -259,6 +259,12 @@ internal static class CaptureBoxingRewriter
         var enclosingType = function.ReceiverType
             ?? function.StaticOwnerType
             ?? function.LexicalEnclosingType;
+        TypeSymbol? enclosingDefinition = enclosingType switch
+        {
+            StructSymbol enclosingStruct => enclosingStruct.Definition,
+            InterfaceSymbol enclosingInterface => enclosingInterface.Definition,
+            _ => null,
+        };
 
         foreach (var variable in capturedSet)
         {
@@ -294,14 +300,14 @@ internal static class CaptureBoxingRewriter
             // `Box<…enclosing args…>` TypeSpec; the open definition (added to
             // newStructs) gets the TypeDef + generic-param rows.
             var origTPs = SynthesizedClosureReifier.CollectOrdered(new[] { variable.Type });
-            if (enclosingType is StructSymbol or InterfaceSymbol)
+            if (enclosingDefinition is StructSymbol or InterfaceSymbol)
             {
                 // A nested helper must redeclare every enclosing type parameter,
                 // even when its Value field does not reference all of them.
-                var ownerTypeParameters = StructSymbol.CollectEnclosingTypeParameters(enclosingType).AddRange(
-                    enclosingType switch
+                var ownerTypeParameters = StructSymbol.CollectEnclosingTypeParameters(enclosingDefinition).AddRange(
+                    enclosingDefinition switch
                     {
-                        StructSymbol enclosingStruct => (enclosingStruct.Definition ?? enclosingStruct).TypeParameters,
+                        StructSymbol enclosingStruct => enclosingStruct.TypeParameters,
                         InterfaceSymbol enclosingInterface => enclosingInterface.Definition.TypeParameters,
                         _ => ImmutableArray<TypeParameterSymbol>.Empty,
                     });
@@ -333,9 +339,10 @@ internal static class CaptureBoxingRewriter
             // enclosing member. Keep the helper in that member's CLR access domain.
             // Set this after reification, matching closure synthesis: constructing
             // an already-nested generic symbol would prepend owner arguments twice.
-            if (enclosingType is StructSymbol or InterfaceSymbol)
+            if (enclosingDefinition is StructSymbol or InterfaceSymbol)
             {
-                boxClass.SetContainingType(enclosingType);
+                boxClass.SetContainingType(enclosingDefinition);
+                boxClass.MarkCompleteReifiedTypeParameterVector();
             }
 
             // For captured locals: a new LocalVariableSymbol of the box type

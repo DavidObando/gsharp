@@ -169,6 +169,72 @@ public class ClosureEmitTests
         Assert.Equal($"42{Environment.NewLine}", output);
     }
 
+    [Fact]
+    public void CapturedPrivateNestedStructInGenericOwnerRuns()
+    {
+        var source = """
+            package Issue4526Generic
+            import System
+
+            class Outer[T] {
+                private data struct Hidden(Value int32) {
+                }
+
+                private func Read(hidden Hidden) int32 {
+                    let read = () -> hidden.Value
+                    return read()
+                }
+
+                func Run() int32 {
+                    return Read(Hidden(43))
+                }
+            }
+
+            func Main() {
+                Console.WriteLine(Outer[string]().Run())
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"43{Environment.NewLine}", output);
+    }
+
+    [Fact]
+    public void CapturedPrivateNestedStructInDeepGenericOwnerRuns()
+    {
+        var source = """
+            package Issue4526DeepGeneric
+            import System
+
+            class Outer[T] {
+                func RunInner[U]() int32 {
+                    return Inner[U]().Run()
+                }
+
+                class Inner[U] {
+                    private data struct Hidden(Value int32) {
+                    }
+
+                    private func Read(hidden Hidden) int32 {
+                        let read = () -> hidden.Value
+                        return read()
+                    }
+
+                    func Run() int32 {
+                        return Read(Hidden(44))
+                    }
+                }
+            }
+
+            func Main() {
+                Console.WriteLine(Outer[string]().RunInner[bool]())
+            }
+            """;
+
+        var output = CompileAndRun(source);
+        Assert.Equal($"44{Environment.NewLine}", output);
+    }
+
     private static string CompileAndRun(string source)
     {
         var tempDir = Directory.CreateTempSubdirectory("gs_closure_emit_").FullName;
