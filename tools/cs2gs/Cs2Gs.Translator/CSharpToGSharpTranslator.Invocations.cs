@@ -5696,8 +5696,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            this.state.ManagedReferenceArrayProjectionParentByCall[value] =
-                initializer;
+            this.RecordManagedReferenceArrayProjectionParent(value, initializer);
             return true;
         }
 
@@ -5848,17 +5847,76 @@ public sealed partial class CSharpToGSharpTranslator
             while (pending.Count > 0)
             {
                 ExpressionSyntax parent = pending.Dequeue();
-                ExpressionSyntax[] children = this.state
-                    .ManagedReferenceArrayProjectionParentByCall
-                    .Where(pair => ReferenceEquals(pair.Value, parent))
-                    .Select(pair => pair.Key)
-                    .ToArray();
+                if (!this.state.ManagedReferenceArrayProjectionChildrenByCall.Remove(
+                        parent,
+                        out HashSet<ExpressionSyntax> children))
+                {
+                    continue;
+                }
+
                 foreach (ExpressionSyntax child in children)
                 {
+                    if (!this.state.ManagedReferenceArrayProjectionParentByCall.TryGetValue(
+                            child,
+                            out ExpressionSyntax recordedParent)
+                        || !ReferenceEquals(recordedParent, parent))
+                    {
+                        continue;
+                    }
+
                     this.state.ManagedReferenceArrayProjectedMethodByCall[child] = null;
                     this.state.ManagedReferenceArrayProjectionParentByCall.Remove(child);
                     pending.Enqueue(child);
                 }
+            }
+
+            this.RemoveManagedReferenceArrayProjectionParent(failedCall);
+        }
+
+        private void RecordManagedReferenceArrayProjectionParent(
+            ExpressionSyntax child,
+            ExpressionSyntax parent)
+        {
+            if (this.state.ManagedReferenceArrayProjectionParentByCall.TryGetValue(
+                    child,
+                    out ExpressionSyntax oldParent)
+                && !ReferenceEquals(oldParent, parent))
+            {
+                this.RemoveManagedReferenceArrayProjectionParent(child);
+            }
+
+            this.state.ManagedReferenceArrayProjectionParentByCall[child] = parent;
+            if (!this.state.ManagedReferenceArrayProjectionChildrenByCall.TryGetValue(
+                    parent,
+                    out HashSet<ExpressionSyntax> children))
+            {
+                children = new HashSet<ExpressionSyntax>(
+                    ReferenceEqualityComparer.Instance);
+                this.state.ManagedReferenceArrayProjectionChildrenByCall.Add(
+                    parent,
+                    children);
+            }
+
+            children.Add(child);
+        }
+
+        private void RemoveManagedReferenceArrayProjectionParent(
+            ExpressionSyntax child)
+        {
+            if (!this.state.ManagedReferenceArrayProjectionParentByCall.Remove(
+                    child,
+                    out ExpressionSyntax parent)
+                || !this.state.ManagedReferenceArrayProjectionChildrenByCall.TryGetValue(
+                    parent,
+                    out HashSet<ExpressionSyntax> children))
+            {
+                return;
+            }
+
+            children.Remove(child);
+            if (children.Count == 0)
+            {
+                this.state.ManagedReferenceArrayProjectionChildrenByCall.Remove(parent);
             }
         }
 

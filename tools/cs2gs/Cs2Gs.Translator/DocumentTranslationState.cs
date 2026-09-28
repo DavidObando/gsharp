@@ -97,6 +97,11 @@ internal sealed class DocumentTranslationState
             new Dictionary<ExpressionSyntax, ExpressionSyntax>(
                 ReferenceEqualityComparer.Instance);
 
+    public Dictionary<ExpressionSyntax, HashSet<ExpressionSyntax>>
+        ManagedReferenceArrayProjectionChildrenByCall { get; } =
+            new Dictionary<ExpressionSyntax, HashSet<ExpressionSyntax>>(
+                ReferenceEqualityComparer.Instance);
+
     // Built once per translated body. Each entry maps a receiver symbol to
     // later member calls and writes that can determine the receiver's projected
     // constructed type.

@@ -1663,6 +1663,52 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceArrayTargetTypedParamsCarrierIsNotExpanded()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayTargetTypedParams;
+            public class Probe {
+                private static bool Missing<T>(
+                    T[] source,
+                    params T[] values) =>
+                    source[0] is null;
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return Missing<ManagedRef<int>>(source, default) ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayTargetTypedParams.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "default([]managed[int32]?)",
+            text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "default(managed[int32]?)",
+            text,
+            StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayAsSpanTracksProjectedCurrentType()
     {
         const string source = """
@@ -3001,6 +3047,7 @@ public sealed class ManagedReferenceTranslationTests
             namespace ManagedArrayFailedReceiverProjection;
             public sealed class Holder<T> {
                 public T Value;
+                public T Other;
                 public bool Same(T other) => true;
             }
             public class Probe {
@@ -3010,6 +3057,7 @@ public sealed class ManagedReferenceTranslationTests
                     var source = new ManagedRef<int>[1];
                     var holder = (new Holder<List<ManagedRef<int>>>());
                     holder.Value = (new List<ManagedRef<int>> { source[0] });
+                    holder.Other = (new List<ManagedRef<int>> { source[0] });
                     holder.Value = FixedList;
                     return holder.Same(FixedList);
                 }
@@ -3031,6 +3079,49 @@ public sealed class ManagedReferenceTranslationTests
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
         Assert.DoesNotContain(
             "List[managed[int32]?]{ source[0] }",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FixedReceiverFailureDoesNotRetainMethodProjection()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayFailedReceiverMethodProjection;
+            public sealed class Holder<T> {
+                public bool Same<U>(T first, U second) => true;
+            }
+            public class Probe {
+                private static readonly Holder<ManagedRef<int>> Fixed = new();
+
+                public static bool Run() {
+                    var source = new ManagedRef<int>[1];
+                    return Fixed.Same<ManagedRef<int>>(source[0], source[0]);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayFailedReceiverMethodProjection.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains("fixed receiver storage", StringComparison.Ordinal));
+        Assert.Contains(
+            "Fixed.Same[managed[int32]](source[0]!!, source[0]!!)",
+            text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "Fixed.Same[managed[int32]?]",
             text,
             StringComparison.Ordinal);
     }
