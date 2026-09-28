@@ -718,9 +718,9 @@ internal sealed partial class DeclarationBinder
 
         var keepsSymbolicShape = TypeSymbol.ContainsTypeParameter(mapped)
             || TypeSymbol.ContainsSameCompilationUserType(mapped)
-            || baseTypeArguments.Any(static argument => TypeSymbol.RequiresSymbolicProjection(argument)
-                || TypeSymbol.ContainsFixedLengthArray(argument)
-                || argument is TupleTypeSymbol);
+            || TypeSymbol.RequiresSymbolicProjection(mapped)
+            || TypeSymbol.ContainsFixedLengthArray(mapped)
+            || mapped is TupleTypeSymbol;
         return mapped != TypeSymbol.Error && keepsSymbolicShape ? mapped : null;
     }
 

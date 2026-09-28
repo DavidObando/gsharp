@@ -34,6 +34,7 @@ namespace GSharp.Compiler.Tests;
 /// restores that exact red/green split.
 /// </para>
 /// </remarks>
+[Collection("Issue4480Console")]
 public class Issue4480ImportedCallConversionTests
 {
     private const string LibrarySource = """
@@ -412,4 +413,8 @@ public class Issue4480ImportedCallConversionTests
                 : tpa.Split(Path.PathSeparator).Where(File.Exists);
         }
     }
+
+    /// <summary>Serializes tests that temporarily redirect process-wide console output.</summary>
+    [CollectionDefinition("Issue4480Console", DisableParallelization = true)]
+    public sealed class Issue4480ConsoleCollection;
 }
