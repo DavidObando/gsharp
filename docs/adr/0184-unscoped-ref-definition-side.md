@@ -197,22 +197,24 @@ shape can reach the check carrying the annotation. One descriptor with a
 free-text reason, following the GS0360 (`@MarshalAs`) / GS9306
 (`@ExtensionOwner`) convention.
 
-Interface members may carry the annotation. An override or interface
-implementation may carry it only when the matched slot does too; otherwise
-GS0590 reports the mismatch at the implementation's annotation, matching C#'s
-CS9102 direction and explicitly names the missing `@UnscopedRef` contract.
-The reverse is legal: an implementation may omit
-`@UnscopedRef` from an annotated slot and keep its own receiver scoped. The
-interface contract is checked for every matched slot, as C# does, and uses the
-same ref-safety relevance gate as overrides. A mismatch is immediately relevant
-for an unscoped `ref` byref-like parameter or an explicitly scoped `out`
-byref-like parameter. Otherwise it is relevant only when the signature has both
-a potential ref-safety source and enough additional parameters: one
+Interface members may carry the annotation. An interface implementation may
+carry it only when the matched slot does too; otherwise GS0590 reports the
+mismatch at the implementation's annotation, matching C#'s CS9102 direction
+and explicitly naming the missing `@UnscopedRef` contract. This interface rule
+is unconditional: C# checks the attribute identity separately from its scoped
+ref-safety relevance predicate, including ordinary by-value methods and
+property accessors. The reverse is legal: an implementation may omit
+`@UnscopedRef` from an annotated slot and keep its own receiver scoped.
+
+Overrides use C#'s narrower ref-safety relevance gate. A mismatch is immediately
+relevant for an unscoped `ref` byref-like parameter or an explicitly scoped
+`out` byref-like parameter. Otherwise it is relevant only when the signature
+has both a potential ref-safety source and enough additional parameters: one
 `ref`/`in`/`out` parameter (or one by-value byref-like parameter) when the
 receiver or return is byref-like or the return is by reference; two such
 by-reference parameters when the trigger is a `ref`/`out` byref-like parameter.
 Thus an ordinary value-returning struct override such as `ToString`, and a
-ref-returning member with no additional parameter, may carry the otherwise
+ref-returning override with no additional parameter, may carry the otherwise
 inert attribute.
 
 Override checks reuse the base slot already selected by override resolution.

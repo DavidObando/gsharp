@@ -404,7 +404,7 @@ internal sealed partial class DeclarationBinder
             {
                 ValidateUnscopedRefContract(
                     explicitImplementation,
-                    RequiresUnscopedRefContract(imethod, explicitImplementation),
+                    enforceContract: true,
                     imethod.HasUnscopedRef,
                     $"implemented member '{iface.Name}.{imethod.Name}'");
                 continue;
@@ -443,7 +443,7 @@ internal sealed partial class DeclarationBinder
             {
                 ValidateUnscopedRefContract(
                     signatureMatch,
-                    RequiresUnscopedRefContract(imethod, signatureMatch),
+                    enforceContract: true,
                     imethod.HasUnscopedRef,
                     $"implemented member '{iface.Name}.{imethod.Name}'");
 
@@ -601,7 +601,8 @@ internal sealed partial class DeclarationBinder
                     iprop,
                     structSymbol,
                     $"implemented property '{iface.Name}.{iprop.Name}'",
-                    typeParameterMap);
+                    typeParameterMap,
+                    enforceInterfaceContract: true);
 
                 if (explicitSetterKindMismatch)
                 {
@@ -641,7 +642,8 @@ internal sealed partial class DeclarationBinder
                     iprop,
                     structSymbol,
                     $"implemented property '{iface.Name}.{iprop.Name}'",
-                    typeParameterMap);
+                    typeParameterMap,
+                    enforceInterfaceContract: true);
 
                 if (iprop.HasGetter && !implProp.HasGetter)
                 {
@@ -1802,7 +1804,7 @@ internal sealed partial class DeclarationBinder
                         () => MemberLookup.FindMatchingMethodForClrSignature(structSymbol, clrMethod)),
                     validateImplementation: implementation => ValidateUnscopedRefContract(
                         implementation,
-                        RequiresUnscopedRefContract(clrMethod, implementation),
+                        enforceContract: true,
                         RefCapabilities.HasUnscopedRef(clrMethod),
                         $"implemented member '{interfaceName}.{clrMethod.Name}'"),
                     reportMissing: () => Diagnostics.ReportInterfaceMethodNotImplemented(
@@ -1833,7 +1835,8 @@ internal sealed partial class DeclarationBinder
                             clrProp.GetMethod,
                             clrProp.SetMethod,
                             structSymbol,
-                            $"implemented property '{interfaceName}.{clrProp.Name}'");
+                            $"implemented property '{interfaceName}.{clrProp.Name}'",
+                            enforceInterfaceContract: true);
 
                         if (requiresGetter && !implProp.HasGetter)
                         {
@@ -1924,7 +1927,7 @@ internal sealed partial class DeclarationBinder
                     findImplementation: () => FindClrInterfaceMethodImplementation(structSymbol, slot),
                     validateImplementation: implementation => ValidateUnscopedRefContract(
                         implementation,
-                        RequiresUnscopedRefContract(slot.Method, implementation),
+                        enforceContract: true,
                         RefCapabilities.HasUnscopedRef(slot.Method),
                         $"implemented member '{slotKey}'"),
                     reportMissing: () =>
@@ -1968,7 +1971,8 @@ internal sealed partial class DeclarationBinder
                             property.GetMethod,
                             property.SetMethod,
                             structSymbol,
-                            $"implemented property '{interfaceName}.{property.Name}'");
+                            $"implemented property '{interfaceName}.{property.Name}'",
+                            enforceInterfaceContract: true);
 
                         if (requiresGetter && !implementation.HasGetter)
                         {
@@ -2115,7 +2119,7 @@ internal sealed partial class DeclarationBinder
                         symbolicArgs)),
                 validateImplementation: implementation => ValidateUnscopedRefContract(
                     implementation,
-                    RequiresUnscopedRefContract(openMethod, implementation),
+                    enforceContract: true,
                     RefCapabilities.HasUnscopedRef(openMethod),
                     $"implemented member '{interfaceName}.{openMethod.Name}'"),
                 reportMissing: () => Diagnostics.ReportInterfaceMethodNotImplemented(
@@ -2150,7 +2154,8 @@ internal sealed partial class DeclarationBinder
                         openProp.GetMethod,
                         openProp.SetMethod,
                         structSymbol,
-                        $"implemented property '{interfaceName}.{openProp.Name}'");
+                        $"implemented property '{interfaceName}.{openProp.Name}'",
+                        enforceInterfaceContract: true);
 
                     if (requiresGetter && !implProp.HasGetter)
                     {

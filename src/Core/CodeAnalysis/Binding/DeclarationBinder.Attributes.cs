@@ -162,27 +162,29 @@ internal sealed partial class DeclarationBinder
     /// <summary>
     /// Issue #4292: enforces C#'s CS9102-compatible one-way slot rule.
     /// An implementation may remove <c>@UnscopedRef</c>, but may not add it
-    /// when the overridden or implemented slot does not advertise it.
+    /// to an interface slot that does not advertise it. Override compatibility
+    /// is checked only for signatures where C# performs scoped ref-safety
+    /// validation.
     /// </summary>
     private void ValidateUnscopedRefContract(
         FunctionSymbol implementation,
-        bool contractIsRelevant,
+        bool enforceContract,
         bool slotHasUnscopedRef,
         string slotDescription)
         => ValidateUnscopedRefContract(
             FindUnscopedRefAttribute(implementation.Attributes),
-            contractIsRelevant,
+            enforceContract,
             slotHasUnscopedRef,
             slotDescription);
 
     private void ValidateUnscopedRefContract(
         BoundAttribute? implementationAttribute,
-        bool contractIsRelevant,
+        bool enforceContract,
         bool slotHasUnscopedRef,
         string slotDescription)
     {
         if (implementationAttribute != null
-            && contractIsRelevant
+            && enforceContract
             && !slotHasUnscopedRef
             && reportedUnscopedRefDiagnostics.Add(implementationAttribute.Syntax))
         {
@@ -197,7 +199,8 @@ internal sealed partial class DeclarationBinder
         PropertySymbol slot,
         TypeSymbol? implementationReceiver,
         string slotDescription,
-        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap = null)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap = null,
+        bool enforceInterfaceContract = false)
     {
         var annotation = FindUnscopedRefAttribute(implementation.Attributes);
         ValidateUnscopedRefAccessorContract(
@@ -207,7 +210,8 @@ internal sealed partial class DeclarationBinder
             implementationReceiver,
             isSetter: false,
             slotDescription + " getter",
-            typeParameterMap);
+            typeParameterMap,
+            enforceInterfaceContract);
         ValidateUnscopedRefAccessorContract(
             annotation,
             slot,
@@ -215,7 +219,8 @@ internal sealed partial class DeclarationBinder
             implementationReceiver,
             isSetter: true,
             slotDescription + " setter",
-            typeParameterMap);
+            typeParameterMap,
+            enforceInterfaceContract);
     }
 
     private void ValidateUnscopedRefPropertyContract(
@@ -223,7 +228,8 @@ internal sealed partial class DeclarationBinder
         MethodInfo? slotGetter,
         MethodInfo? slotSetter,
         TypeSymbol? implementationReceiver,
-        string slotDescription)
+        string slotDescription,
+        bool enforceInterfaceContract = false)
     {
         var annotation = FindUnscopedRefAttribute(implementation.Attributes);
         ValidateUnscopedRefAccessorContract(
@@ -232,14 +238,16 @@ internal sealed partial class DeclarationBinder
             implementation,
             implementationReceiver,
             isSetter: false,
-            slotDescription + " getter");
+            slotDescription + " getter",
+            enforceInterfaceContract);
         ValidateUnscopedRefAccessorContract(
             annotation,
             slotSetter,
             implementation,
             implementationReceiver,
             isSetter: true,
-            slotDescription + " setter");
+            slotDescription + " setter",
+            enforceInterfaceContract);
     }
 
     private void ValidateUnscopedRefAccessorContract(
@@ -249,7 +257,8 @@ internal sealed partial class DeclarationBinder
         TypeSymbol? implementationReceiver,
         bool isSetter,
         string slotDescription,
-        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap)
+        Dictionary<TypeParameterSymbol, TypeSymbol>? typeParameterMap,
+        bool enforceInterfaceContract)
     {
         var slotHasAccessor = isSetter ? slot.HasSetter : slot.HasGetter;
         var implementationHasAccessor = isSetter ? implementation.HasSetter : implementation.HasGetter;
@@ -268,7 +277,7 @@ internal sealed partial class DeclarationBinder
             typeParameterMap);
         ValidateUnscopedRefContract(
             implementationAttribute,
-            contractIsRelevant,
+            enforceInterfaceContract || contractIsRelevant,
             slotAccessor?.HasUnscopedRef == true || KnownAttributes.HasUnscopedRef(slot.Attributes),
             slotDescription);
     }
@@ -320,7 +329,8 @@ internal sealed partial class DeclarationBinder
         PropertySymbol implementation,
         TypeSymbol? implementationReceiver,
         bool isSetter,
-        string slotDescription)
+        string slotDescription,
+        bool enforceInterfaceContract)
     {
         if (slot == null || !(isSetter ? implementation.HasSetter : implementation.HasGetter))
         {
@@ -328,13 +338,15 @@ internal sealed partial class DeclarationBinder
         }
 
         var implementationAccessor = isSetter ? implementation.SetterSymbol : implementation.GetterSymbol;
-        ValidateUnscopedRefContract(
-            implementationAttribute,
-            RequiresUnscopedRefContract(
+        var contractIsRelevant = enforceInterfaceContract
+            || RequiresUnscopedRefContract(
                 slot,
                 isSetter ? TypeSymbol.Void : implementation.Type,
                 GetPropertyAccessorParameters(implementation, isSetter),
-                implementation.IsStatic ? null : implementationAccessor?.ReceiverType ?? implementationReceiver),
+                implementation.IsStatic ? null : implementationAccessor?.ReceiverType ?? implementationReceiver);
+        ValidateUnscopedRefContract(
+            implementationAttribute,
+            contractIsRelevant,
             RefCapabilities.HasUnscopedRef(slot),
             slotDescription);
     }
@@ -387,7 +399,7 @@ internal sealed partial class DeclarationBinder
             ? property.Parameters.Add(new ParameterSymbol(property.SetterParameterName, property.Type))
             : property.Parameters;
 
-    private static bool RequiresUnscopedRefContract(
+    internal static bool RequiresUnscopedRefContract(
         TypeSymbol returnType,
         RefKind returnRefKind,
         ImmutableArray<ParameterSymbol> parameters,

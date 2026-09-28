@@ -91,22 +91,27 @@ struct Buffer : IRefSlot {
         Assert.Empty(Bind(source));
     }
 
-    [Fact]
-    public void UnannotatedInterfaceMethod_WithValueReturnAndNoAdditionalParameter_IsIrrelevant()
+    [Theory]
+    [InlineData("public func Get() int32 { return 0 }")]
+    [InlineData("private func (IValue) Get() int32 { return 0 }")]
+    public void UnannotatedOrdinaryInterfaceMethod_RejectsAnnotatedImplementation(string implementation)
     {
-        var source = @"
-package P
-import System.Diagnostics.CodeAnalysis
-interface IValue {
-    func Get() int32;
-}
-struct Value : IValue {
-    @UnscopedRef
-    public func Get() int32 { return 0 }
-}
-";
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            interface IValue {
+                func Get() int32;
+            }
+            struct Value : IValue {
+                @UnscopedRef
+                IMPLEMENTATION
+            }
+            """.Replace("IMPLEMENTATION", implementation, StringComparison.Ordinal);
 
-        Assert.Empty(Bind(source));
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0590");
+        Assert.Equal(
+            "'@UnscopedRef' cannot be applied because implemented member 'IValue.Get' does not have @UnscopedRef.",
+            diagnostic.Message);
     }
 
     [Fact]
@@ -218,7 +223,7 @@ ref struct Buffer : IRefSlot {
     [InlineData("set", true)]
     [InlineData("init", false)]
     [InlineData("init", true)]
-    public void ConstructedSourceProperty_WithOrdinaryType_IsNotRelevant(
+    public void UnannotatedConstructedSourceProperty_RejectsAnnotatedImplementation(
         string accessor,
         bool explicitImplementation)
     {
@@ -238,6 +243,54 @@ ref struct Buffer : IRefSlot {
             """
             .Replace("ACCESSOR", accessor, StringComparison.Ordinal)
             .Replace("DECLARATION", declaration, StringComparison.Ordinal);
+
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0590");
+        Assert.Equal(
+            "'@UnscopedRef' cannot be applied because implemented property 'IRefSlot[int32].Slot' setter does not have @UnscopedRef.",
+            diagnostic.Message);
+    }
+
+    [Theory]
+    [InlineData("public prop Slot int32 { get { return 0 } }")]
+    [InlineData("private prop (IValue) Slot int32 { get { return 0 } }")]
+    public void UnannotatedOrdinaryInterfaceGetter_RejectsAnnotatedImplementation(string implementation)
+    {
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            interface IValue {
+                prop Slot int32 { get; }
+            }
+            struct Value : IValue {
+                @UnscopedRef
+                IMPLEMENTATION
+            }
+            """.Replace("IMPLEMENTATION", implementation, StringComparison.Ordinal);
+
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0590");
+        Assert.Equal(
+            "'@UnscopedRef' cannot be applied because implemented property 'IValue.Slot' getter does not have @UnscopedRef.",
+            diagnostic.Message);
+    }
+
+    [Fact]
+    public void AnnotatedOrdinaryInterfaceSlots_AllowUnannotatedImplementation()
+    {
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            interface IValue {
+                @UnscopedRef
+                func Get() int32;
+
+                @UnscopedRef
+                prop Slot int32 { get; set; }
+            }
+            struct Value : IValue {
+                public func Get() int32 { return 0 }
+                public prop Slot int32 { get { return 0 } set { } }
+            }
+            """;
 
         Assert.Empty(Bind(source));
     }
@@ -325,64 +378,64 @@ ref struct Buffer : IRefSlot {
     }
 
     [Theory]
-    [InlineData("", "", false)]
-    [InlineData("ref other int32", "", true)]
-    [InlineData("in other int32", "", true)]
-    [InlineData("out other int32", "other = 0", true)]
-    [InlineData("view Span[int32]", "", true)]
+    [InlineData(false, RefKind.None, false)]
+    [InlineData(true, RefKind.Ref, false)]
+    [InlineData(true, RefKind.In, false)]
+    [InlineData(true, RefKind.Out, false)]
+    [InlineData(true, RefKind.None, true)]
     public void RefReturn_RelevanceRequiresAnAdditionalParameter(
-        string parameters,
-        string bodyPrefix,
-        bool expectContractDiagnostic)
+        bool hasParameter,
+        RefKind refKind,
+        bool parameterIsByRefLike)
     {
-        var source = @"
-package P
-import System
-import System.Diagnostics.CodeAnalysis
-interface IRefSlot {
-    func Slot(" + parameters + @") ref int32;
-}
-struct Buffer : IRefSlot {
-    var Value int32
+        var parameters = hasParameter
+            ? ImmutableArray.Create(new ParameterSymbol(
+                "value",
+                parameterIsByRefLike
+                    ? TypeSymbol.FromClrType(typeof(Span<int>))
+                    : TypeSymbol.Int32,
+                refKind: refKind))
+            : ImmutableArray<ParameterSymbol>.Empty;
 
-    @UnscopedRef
-    public func Slot(" + parameters + @") ref int32 {
-        " + bodyPrefix + @"
-        return ref this.Value
-    }
-}
-";
-
-        Assert.Equal(expectContractDiagnostic, Bind(source).Any(d => d.Id == "GS0590"));
+        Assert.Equal(
+            hasParameter,
+            DeclarationBinder.RequiresUnscopedRefContract(
+                TypeSymbol.Int32,
+                RefKind.Ref,
+                parameters,
+                implementationReceiver: null));
     }
 
     [Theory]
-    [InlineData("ref view Span[int32]", "", true)]
-    [InlineData("scoped ref view Span[int32]", "", false)]
-    [InlineData("scoped out view Span[int32]", "view = default(Span[int32])", true)]
-    [InlineData("out view Span[int32]", "view = default(Span[int32])", false)]
-    [InlineData("out view Span[int32], in other int32", "view = default(Span[int32])", true)]
+    [InlineData(RefKind.Ref, false, false, true)]
+    [InlineData(RefKind.Ref, true, false, false)]
+    [InlineData(RefKind.Out, true, false, true)]
+    [InlineData(RefKind.Out, false, false, false)]
+    [InlineData(RefKind.Out, false, true, true)]
     public void RefStructParameter_RelevanceMatchesCSharp(
-        string parameters,
-        string body,
-        bool expectContractDiagnostic)
+        RefKind refKind,
+        bool isScoped,
+        bool hasAdditionalParameter,
+        bool expected)
     {
-        var source = @"
-package P
-import System
-import System.Diagnostics.CodeAnalysis
-interface IStore {
-    func Store(" + parameters + @");
-}
-struct Buffer : IStore {
-    @UnscopedRef
-    public func Store(" + parameters + @") {
-        " + body + @"
-    }
-}
-";
+        var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>();
+        parameters.Add(new ParameterSymbol(
+            "view",
+            TypeSymbol.FromClrType(typeof(Span<int>)),
+            isScoped: isScoped,
+            refKind: refKind));
+        if (hasAdditionalParameter)
+        {
+            parameters.Add(new ParameterSymbol("other", TypeSymbol.Int32, refKind: RefKind.In));
+        }
 
-        Assert.Equal(expectContractDiagnostic, Bind(source).Any(d => d.Id == "GS0590"));
+        Assert.Equal(
+            expected,
+            DeclarationBinder.RequiresUnscopedRefContract(
+                TypeSymbol.Void,
+                RefKind.None,
+                parameters.ToImmutable(),
+                implementationReceiver: null));
     }
 
     [Fact]
@@ -459,8 +512,46 @@ struct Buffer : IAnnotatedMethod {
         Assert.Empty(accepted);
     }
 
+    [Theory]
+    [InlineData("public func Get() int32 { return 0 }")]
+    [InlineData("private func (IValueMethod) Get() int32 { return 0 }")]
+    public void ImportedOrdinaryMethod_RejectsAddedContract(string implementation)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            struct Buffer : IValueMethod {
+                @UnscopedRef
+                IMPLEMENTATION
+            }
+            """.Replace("IMPLEMENTATION", implementation, StringComparison.Ordinal);
+
+        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
+    [Theory]
+    [InlineData("public prop Value int32 { get { return 0 } set { } }")]
+    [InlineData("private prop (IValueProperty) Value int32 { get { return 0 } set { } }")]
+    public void ImportedOrdinaryProperty_RejectsAddedContract(string implementation)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            struct Buffer : IValueProperty {
+                @UnscopedRef
+                IMPLEMENTATION
+            }
+            """.Replace("IMPLEMENTATION", implementation, StringComparison.Ordinal);
+
+        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
     [Fact]
-    public void ImportedScopedRef_RequiresRuntimeAttributeIdentity()
+    public void ImportedScopedRef_IdentityDoesNotRelaxInterfaceContract()
     {
         using var contracts = new Issue4292ScopedRefIdentityContracts();
         using (var resolver = ReferenceResolver.WithReferences(contracts.Paths))
@@ -511,12 +602,14 @@ struct Buffer : IAnnotatedMethod {
                     StringComparison.Ordinal),
                 contracts.Paths),
             d => d.Id == "GS0590");
-        Assert.Empty(BindWithReferences(
-            prefix + Environment.NewLine + implementation.Replace(
-                "INTERFACE",
-                "IRuntimeScoped",
-                StringComparison.Ordinal),
-            contracts.Paths));
+        Assert.Single(
+            BindWithReferences(
+                prefix + Environment.NewLine + implementation.Replace(
+                    "INTERFACE",
+                    "IRuntimeScoped",
+                    StringComparison.Ordinal),
+                contracts.Paths),
+            d => d.Id == "GS0590");
     }
 
     [Fact]
@@ -560,7 +653,7 @@ struct Buffer : IGenericMethod[Token] {
     }
 
     [Fact]
-    public void ImportedRefProperty_WithoutAdditionalParameter_IsIrrelevant()
+    public void ImportedUnannotatedRefProperty_RejectsAnnotatedImplementation()
     {
         using var contracts = new Issue4292UnscopedRefContracts();
         var source = @"
@@ -575,7 +668,7 @@ struct Buffer : IRefProperty {
 }
 ";
 
-        Assert.Empty(BindWithFixtures(source, contracts));
+        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
     }
 
     [Fact]
