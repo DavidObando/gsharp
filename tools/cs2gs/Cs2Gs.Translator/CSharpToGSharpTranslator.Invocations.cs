@@ -1897,7 +1897,10 @@ public sealed partial class CSharpToGSharpTranslator
                 return operationParameter;
             }
 
-            IParameterSymbol parameter = this.GetArgumentParameter(argument, method);
+            IParameterSymbol parameter = this.GetArgumentParameter(
+                argument,
+                method,
+                operationParameter);
             if (parameter != null
                 && argument.Parent?.Parent is ExpressionSyntax call
                 && this.TryGetManagedReferenceArrayProjectedMethod(
@@ -1919,6 +1922,14 @@ public sealed partial class CSharpToGSharpTranslator
             IParameterSymbol operationParameter =
                 (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
                     ?.Parameter;
+            return this.GetArgumentParameter(argument, method, operationParameter);
+        }
+
+        private IParameterSymbol GetArgumentParameter(
+            ArgumentSyntax argument,
+            IMethodSymbol method,
+            IParameterSymbol operationParameter)
+        {
             if (operationParameter != null
                 && method.MethodKind == MethodKind.ReducedExtension)
             {

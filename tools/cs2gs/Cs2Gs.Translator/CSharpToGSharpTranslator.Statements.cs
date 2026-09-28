@@ -845,7 +845,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ISymbol leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ISymbol leftSymbol = this.GetProjectedAssignmentTarget(
+                assignment.Left,
+                this.context.GetSymbolInfo(assignment.Left).Symbol);
             ITypeSymbol leftType = this.GetAssignmentTargetType(assignment.Left, leftSymbol);
             if (leftType is not { IsReferenceType: true }
                 || leftType.NullableAnnotation == NullableAnnotation.Annotated)
@@ -894,7 +896,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedRhs;
             }
 
-            ISymbol leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ISymbol leftSymbol = this.GetProjectedAssignmentTarget(
+                assignment.Left,
+                this.context.GetSymbolInfo(assignment.Left).Symbol);
             ITypeSymbol leftType = this.GetAssignmentTargetType(assignment.Left, leftSymbol);
             if (leftType is not { IsReferenceType: true }
                 || leftType.NullableAnnotation == NullableAnnotation.Annotated)
@@ -2157,7 +2161,6 @@ public sealed partial class CSharpToGSharpTranslator
         // when the declared indexer or array element explicitly permits null.
         private ITypeSymbol GetAssignmentTargetType(ExpressionSyntax left, ISymbol target)
         {
-            target = this.GetProjectedAssignmentTarget(left, target);
             return target switch
             {
                 ILocalSymbol local => local.Type,
