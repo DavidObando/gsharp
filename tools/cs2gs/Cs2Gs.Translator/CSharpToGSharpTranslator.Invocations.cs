@@ -4416,71 +4416,78 @@ public sealed partial class CSharpToGSharpTranslator
             InvocationExpressionSyntax invocation,
             out IMethodSymbol substituted)
         {
+            if (this.state.ManagedReferenceArraySubstitutedMethodByInvocation.TryGetValue(
+                    invocation,
+                    out substituted))
+            {
+                return substituted != null;
+            }
+
             substituted = null;
-            if (this.context.GetSymbolInfo(invocation).Symbol is not IMethodSymbol method
-                || !method.IsGenericMethod
-                || method.TypeArguments.IsDefaultOrEmpty)
+            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol method
+                && method.IsGenericMethod
+                && !method.TypeArguments.IsDefaultOrEmpty)
             {
-                return false;
-            }
-
-            var widened = new bool[method.TypeArguments.Length];
-            void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
-            {
-                if (!this.ArrayExpressionHasNullableElement(argument))
+                var widened = new bool[method.TypeArguments.Length];
+                void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
                 {
-                    return;
-                }
-
-                for (int i = 0; i < widened.Length; i++)
-                {
-                    widened[i] = widened[i]
-                        || (CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
-                                method.TypeArguments[i],
-                                this.context.Compilation)
-                            && TypeContainsMethodTypeParameter(parameterType, i));
-                }
-            }
-
-            if (this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation operation)
-            {
-                foreach (IArgumentOperation argument in operation.Arguments)
-                {
-                    if (argument.Syntax is ArgumentSyntax argumentSyntax
-                        && argument.Parameter?.OriginalDefinition.Type is { } parameterType)
+                    if (!this.ArrayExpressionHasNullableElement(argument))
                     {
-                        RecordWidenedArguments(argumentSyntax.Expression, parameterType);
+                        return;
+                    }
+
+                    for (int i = 0; i < widened.Length; i++)
+                    {
+                        widened[i] = widened[i]
+                            || (CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                                    method.TypeArguments[i],
+                                    this.context.Compilation)
+                                && TypeContainsMethodTypeParameter(parameterType, i));
                     }
                 }
 
-                if (method.MethodKind == MethodKind.ReducedExtension
-                    && invocation.Expression is MemberAccessExpressionSyntax reducedMember
-                    && method.ReducedFrom?.OriginalDefinition.Parameters.FirstOrDefault()?.Type
-                        is { } receiverParameterType)
+                if (this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation operation)
                 {
-                    RecordWidenedArguments(
-                        reducedMember.Expression,
-                        receiverParameterType);
+                    foreach (IArgumentOperation argument in operation.Arguments)
+                    {
+                        if (argument.Syntax is ArgumentSyntax argumentSyntax
+                            && argument.Parameter?.OriginalDefinition.Type is { } parameterType)
+                        {
+                            RecordWidenedArguments(argumentSyntax.Expression, parameterType);
+                        }
+                    }
+
+                    if (method.MethodKind == MethodKind.ReducedExtension
+                        && invocation.Expression is MemberAccessExpressionSyntax reducedMember
+                        && method.ReducedFrom?.OriginalDefinition.Parameters.FirstOrDefault()?.Type
+                            is { } receiverParameterType)
+                    {
+                        RecordWidenedArguments(
+                            reducedMember.Expression,
+                            receiverParameterType);
+                    }
+                }
+
+                if (widened.Any(value => value))
+                {
+                    ITypeSymbol[] typeArguments = method.TypeArguments.ToArray();
+                    for (int i = 0; i < typeArguments.Length; i++)
+                    {
+                        if (widened[i])
+                        {
+                            typeArguments[i] =
+                                typeArguments[i].WithNullableAnnotation(NullableAnnotation.Annotated);
+                        }
+                    }
+
+                    substituted = method.ConstructedFrom.Construct(typeArguments);
                 }
             }
 
-            if (!widened.Any(value => value))
-            {
-                return false;
-            }
-
-            ITypeSymbol[] typeArguments = method.TypeArguments.ToArray();
-            for (int i = 0; i < typeArguments.Length; i++)
-            {
-                if (widened[i])
-                {
-                    typeArguments[i] =
-                        typeArguments[i].WithNullableAnnotation(NullableAnnotation.Annotated);
-                }
-            }
-
-            substituted = method.ConstructedFrom.Construct(typeArguments);
-            return true;
+            this.state.ManagedReferenceArraySubstitutedMethodByInvocation.Add(
+                invocation,
+                substituted);
+            return substituted != null;
         }
 
         private static bool TypeContainsMethodTypeParameter(

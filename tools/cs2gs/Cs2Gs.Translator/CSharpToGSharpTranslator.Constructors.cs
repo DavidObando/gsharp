@@ -3614,8 +3614,9 @@ public sealed partial class CSharpToGSharpTranslator
                     ForEachStatementInfo forEachInfo =
                         this.context.SemanticModel.GetForEachStatementInfo(forEach);
                     ITypeSymbol forEachElement = forEachInfo.ElementType;
-                    bool inferredLoopVariable = forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity;
-                    bool nullableElement = inferredLoopVariable
+                    bool bindingTypeMatchesElementType =
+                        forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity;
+                    bool nullableElement = bindingTypeMatchesElementType
                         && (this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression)
                             || (forEachElement?.IsReferenceType == true
                                 && forEachElement.NullableAnnotation == NullableAnnotation.Annotated));

@@ -593,12 +593,11 @@ public sealed class CSharpTypeMapper
         if (type is IArrayTypeSymbol array)
         {
             GTypeReference explicitElement = this.MapExplicitType(array.ElementType, context, location);
-            if (IsRecognizedManagedReferenceConsumerType(array.ElementType, context.Compilation))
-            {
-                explicitElement = WithNullable(explicitElement, true);
-            }
-
-            return new ArrayTypeReference(explicitElement, array.Rank) { IsNullable = type.NullableAnnotation == NullableAnnotation.Annotated };
+            return CreateMappedArrayType(
+                array,
+                explicitElement,
+                context.Compilation,
+                type.NullableAnnotation == NullableAnnotation.Annotated);
         }
 
         if (type is INamedTypeSymbol genericNamed
@@ -1627,12 +1626,11 @@ public sealed class CSharpTypeMapper
         if (type is IArrayTypeSymbol array)
         {
             GTypeReference element = this.Map(array.ElementType, context, location);
-            if (IsRecognizedManagedReferenceConsumerType(array.ElementType, context.Compilation))
-            {
-                element = WithNullable(element, true);
-            }
-
-            return new ArrayTypeReference(element, array.Rank);
+            return CreateMappedArrayType(
+                array,
+                element,
+                context.Compilation,
+                isNullable: false);
         }
 
         if (type is ITypeParameterSymbol typeParameter)
@@ -1792,6 +1790,20 @@ public sealed class CSharpTypeMapper
         }
 
         return new NamedTypeReference(this.Names(context).GetName(type));
+    }
+
+    private static ArrayTypeReference CreateMappedArrayType(
+        IArrayTypeSymbol array,
+        GTypeReference element,
+        Compilation compilation,
+        bool isNullable)
+    {
+        if (IsRecognizedManagedReferenceConsumerType(array.ElementType, compilation))
+        {
+            element = WithNullable(element, true);
+        }
+
+        return new ArrayTypeReference(element, array.Rank) { IsNullable = isNullable };
     }
 
     private string DelegateTypeName(
