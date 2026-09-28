@@ -3616,7 +3616,7 @@ public sealed partial class CSharpToGSharpTranslator
                     ITypeSymbol forEachElement =
                         this.GetProjectedForEachElementType(forEach, forEachInfo);
                     bool bindingTypeMatchesElementType =
-                        forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity;
+                        forEachInfo.ElementConversion.IsIdentity;
                     bool nullableElement = bindingTypeMatchesElementType
                         && (this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression)
                             || (this.IsReferenceLikeOrManagedReference(forEachElement)
