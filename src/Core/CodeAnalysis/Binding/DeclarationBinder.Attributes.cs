@@ -188,7 +188,7 @@ internal sealed partial class DeclarationBinder
         {
             Diagnostics.ReportUnscopedRefInvalidTarget(
                 implementationAttribute.Syntax.Location,
-                $"cannot be applied because {slotDescription} does not have this attribute");
+                $"cannot be applied because {slotDescription} does not have @UnscopedRef");
         }
     }
 

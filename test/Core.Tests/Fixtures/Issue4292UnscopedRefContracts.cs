@@ -5,6 +5,9 @@
 using System;
 using System.Collections.Immutable;
 using System.IO;
+using System.Linq;
+using System.Reflection.Metadata;
+using System.Reflection.PortableExecutable;
 using System.Text;
 using Microsoft.CodeAnalysis;
 
@@ -252,24 +255,59 @@ internal sealed class Issue4292ScopedRefIdentityContracts : IDisposable
 
     private static void RenameScopedRefLookalike(string path)
     {
+        const string sourceName = "ScopfdRefAttribute";
+        const string targetName = "ScopedRefAttribute";
+        AssertMetadataTypeNameCount(path, sourceName, expected: 1);
+        var targetCountBefore = CountMetadataTypeNames(path, targetName);
+
+        // The metadata assertion identifies the string as a type name; requiring
+        // one raw occurrence makes that metadata entry the only possible target.
         var bytes = File.ReadAllBytes(path);
-        var source = Encoding.ASCII.GetBytes("ScopfdRefAttribute");
-        var target = Encoding.ASCII.GetBytes("ScopedRefAttribute");
-        var replacements = 0;
+        var source = Encoding.ASCII.GetBytes(sourceName);
+        var target = Encoding.ASCII.GetBytes(targetName);
+        var replacementOffset = -1;
         for (var i = 0; i <= bytes.Length - source.Length; i++)
         {
             if (bytes.AsSpan(i, source.Length).SequenceEqual(source))
             {
-                target.CopyTo(bytes, i);
-                replacements++;
+                if (replacementOffset >= 0)
+                {
+                    throw new InvalidOperationException("ScopedRef lookalike metadata name occurs more than once.");
+                }
+
+                replacementOffset = i;
             }
         }
 
-        if (replacements == 0)
+        if (replacementOffset < 0)
         {
             throw new InvalidOperationException("ScopedRef lookalike metadata name was not found.");
         }
 
+        target.CopyTo(bytes, replacementOffset);
         File.WriteAllBytes(path, bytes);
+        AssertMetadataTypeNameCount(path, sourceName, expected: 0);
+        AssertMetadataTypeNameCount(path, targetName, expected: targetCountBefore + 1);
+    }
+
+    private static void AssertMetadataTypeNameCount(string path, string name, int expected)
+    {
+        var count = CountMetadataTypeNames(path, name);
+        if (count != expected)
+        {
+            throw new InvalidOperationException(
+                $"Expected {expected} metadata types named '{name}', found {count}.");
+        }
+    }
+
+    private static int CountMetadataTypeNames(string path, string name)
+    {
+        using var stream = File.OpenRead(path);
+        using var peReader = new PEReader(stream);
+        var reader = peReader.GetMetadataReader();
+        return reader.TypeDefinitions.Count(handle =>
+                reader.GetString(reader.GetTypeDefinition(handle).Name) == name)
+            + reader.TypeReferences.Count(handle =>
+                reader.GetString(reader.GetTypeReference(handle).Name) == name);
     }
 }

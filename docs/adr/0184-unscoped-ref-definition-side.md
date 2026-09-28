@@ -199,7 +199,8 @@ free-text reason, following the GS0360 (`@MarshalAs`) / GS9306
 Interface members may carry the annotation. An override or interface
 implementation may carry it only when the matched slot does too; otherwise
 GS0590 reports the mismatch at the implementation's annotation, matching C#'s
-CS9102 direction. The reverse is legal: an implementation may omit
+CS9102 direction and explicitly names the missing `@UnscopedRef` contract.
+The reverse is legal: an implementation may omit
 `@UnscopedRef` from an annotated slot and keep its own receiver scoped. The
 interface contract is checked for every matched slot, as C# does, and uses the
 same ref-safety relevance gate as overrides. A mismatch is immediately relevant
@@ -219,7 +220,10 @@ current CLR slot, including the erased accessor slot of a symbolic generic
 interface. An explicit candidate must match both the slot definition and its
 exact constructed interface owner; `IBase[A].Slot` cannot satisfy
 `IBase[B].Slot` merely because the slot signature omits `T`. Signature fallback
-considers only members with no explicit-interface clause or linkage. The
+considers only members with no explicit-interface clause or linkage.
+Compiler-recognized covariant interface bridges carry that same slot-and-owner linkage,
+so they remain valid explicit dispatch members rather than falling through as
+implicit candidates. The
 contract therefore follows actual
 interface dispatch even when a same-signature plain member appears first in
 source, and an explicit implementation of an unrelated interface cannot mask a

@@ -1650,11 +1650,15 @@ internal sealed partial class DeclarationBinder
                                     existingMethod,
                                     methodSymbol,
                                     out var bridgeMethod,
-                                    out var bridgeSlot))
+                                    out var bridgeSlot,
+                                    out var bridgeSlotOwner))
                             {
                                 var resolvedBridgeMethod = bridgeMethod
                                     ?? throw new InvalidOperationException("A covariant interface bridge must identify its bridge method.");
+                                var resolvedBridgeSlotOwner = bridgeSlotOwner
+                                    ?? throw new InvalidOperationException("A covariant interface bridge must identify its constructed slot owner.");
                                 resolvedBridgeMethod.ExplicitInterfaceSlot = bridgeSlot;
+                                resolvedBridgeMethod.ExplicitInterfaceSlotContainingType = resolvedBridgeSlotOwner;
                                 continue;
                             }
 

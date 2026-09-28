@@ -66,10 +66,9 @@ struct Buffer : IRefSlot {
 
         var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0590");
         Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
-        Assert.Contains(
-            "implemented member 'IRefSlot.Slot' does not have this attribute",
-            diagnostic.Message,
-            StringComparison.Ordinal);
+        Assert.Equal(
+            "'@UnscopedRef' cannot be applied because implemented member 'IRefSlot.Slot' does not have @UnscopedRef.",
+            diagnostic.Message);
     }
 
     [Fact]
@@ -185,11 +184,9 @@ ref struct Buffer : IRefSlot {
 
         var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0590");
         Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
-        Assert.Contains(
-            "implemented property 'IRefSlot.Slot'",
-            diagnostic.Message,
-            StringComparison.Ordinal);
-        Assert.Contains("does not have this attribute", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Equal(
+            "'@UnscopedRef' cannot be applied because implemented property 'IRefSlot.Slot' setter does not have @UnscopedRef.",
+            diagnostic.Message);
     }
 
     [Theory]

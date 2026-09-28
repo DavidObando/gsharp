@@ -6,12 +6,15 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal static class RefCapabilities
 {
+    private static readonly ConditionalWeakTable<Type, HashSet<(Module Module, int MetadataToken)>> UnscopedRefPropertyAccessors = new();
+
     /// <summary>
     /// Issue #4224: true when <paramref name="expression"/> is a call to a
     /// same-compilation (native) ref-returning function/method or a read of a
@@ -232,11 +235,33 @@ internal static class RefCapabilities
             return false;
         }
 
-        return method.DeclaringType
-            .GetProperties(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static)
-            .Any(property =>
-                (property.GetMethod == method || property.SetMethod == method)
-                && HasUnscopedRefAttribute(property.GetCustomAttributesData()));
+        return UnscopedRefPropertyAccessors.GetValue(
+            method.DeclaringType,
+            static declaringType =>
+            {
+                var accessors = new HashSet<(Module Module, int MetadataToken)>();
+                foreach (var property in ClrTypeUtilities.SafeGetProperties(
+                    declaringType,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+                {
+                    if (!HasUnscopedRefAttribute(property.GetCustomAttributesData()))
+                    {
+                        continue;
+                    }
+
+                    if (property.GetMethod != null)
+                    {
+                        accessors.Add((property.GetMethod.Module, property.GetMethod.MetadataToken));
+                    }
+
+                    if (property.SetMethod != null)
+                    {
+                        accessors.Add((property.SetMethod.Module, property.SetMethod.MetadataToken));
+                    }
+                }
+
+                return accessors;
+            }).Contains((method.Module, method.MetadataToken));
     }
 
     /// <summary>Returns the by-reference kind encoded by an imported parameter.</summary>

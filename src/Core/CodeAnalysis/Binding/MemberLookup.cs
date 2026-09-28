@@ -4321,16 +4321,19 @@ internal sealed class MemberLookup
     /// <param name="second">The new same-signature method.</param>
     /// <param name="bridgeMethod">The method that explicitly bridges an inherited slot.</param>
     /// <param name="bridgeSlot">The inherited CLR interface slot to bind via MethodImpl.</param>
+    /// <param name="bridgeSlotOwner">The constructed interface type that owns <paramref name="bridgeSlot"/>.</param>
     /// <returns><see langword="true"/> when the pair forms a valid covariant interface bridge.</returns>
     public static bool TryResolveCovariantInterfaceBridge(
         ImmutableArray<TypeSymbol> implementedClrInterfaces,
         FunctionSymbol first,
         FunctionSymbol second,
         out FunctionSymbol? bridgeMethod,
-        out MethodInfo? bridgeSlot)
+        out MethodInfo? bridgeSlot,
+        out TypeSymbol? bridgeSlotOwner)
     {
         bridgeMethod = null;
         bridgeSlot = null;
+        bridgeSlotOwner = null;
 
         if (first == null || second == null || implementedClrInterfaces.IsDefaultOrEmpty)
         {
@@ -4389,6 +4392,7 @@ internal sealed class MemberLookup
         {
             bridgeMethod = second;
             bridgeSlot = secondOnly.Value.Method;
+            bridgeSlotOwner = secondOnly.Value.SlotOwner;
             return true;
         }
 
@@ -4396,6 +4400,7 @@ internal sealed class MemberLookup
         {
             bridgeMethod = first;
             bridgeSlot = firstOnly.Value.Method;
+            bridgeSlotOwner = firstOnly.Value.SlotOwner;
             return true;
         }
 
