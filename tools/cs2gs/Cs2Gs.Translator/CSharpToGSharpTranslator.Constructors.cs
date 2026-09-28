@@ -3613,7 +3613,11 @@ public sealed partial class CSharpToGSharpTranslator
                     string loopIdentifier = this.EmittedName(loopSymbol, forEach.Identifier.ValueText);
                     ForEachStatementInfo forEachInfo =
                         this.context.SemanticModel.GetForEachStatementInfo(forEach);
-                    ITypeSymbol forEachElement = forEachInfo.ElementType;
+                    ITypeSymbol forEachElement =
+                        GetEnumerableElementType(
+                            this.GetManagedReferenceArrayProjectedExpressionType(
+                                forEach.Expression))
+                        ?? forEachInfo.ElementType;
                     bool bindingTypeMatchesElementType =
                         forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity;
                     bool nullableElement = bindingTypeMatchesElementType

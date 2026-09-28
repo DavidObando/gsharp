@@ -533,6 +533,13 @@ public sealed partial class CSharpToGSharpTranslator
             // model; emit the explicit constructed type (`List[T]()`) so the G#
             // construction names the type (ADR-0115 §B.7/§B.16).
             ITypeSymbol typeSymbol = this.context.GetTypeInfo(creation).Type;
+            if (this.TryGetManagedReferenceArrayProjectedMethod(
+                    creation,
+                    out IMethodSymbol projectedConstructor))
+            {
+                typeSymbol = projectedConstructor.ContainingType;
+            }
+
             GTypeReference type = typeSymbol != null
                 ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);

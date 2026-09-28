@@ -79,11 +79,11 @@ internal sealed class DocumentTranslationState
     public Dictionary<IArrayTypeSymbol, bool> MappedArrayElementIsNullableByArrayType { get; } =
         new Dictionary<IArrayTypeSymbol, bool>(SymbolEqualityComparer.IncludeNullability);
 
-    // Per-invocation effective method after managed-array widening. A null
-    // value caches that the invocation needs no substitution.
-    public Dictionary<InvocationExpressionSyntax, IMethodSymbol>
-        ManagedReferenceArraySubstitutedMethodByInvocation { get; } =
-            new Dictionary<InvocationExpressionSyntax, IMethodSymbol>(
+    // Per-call effective method after managed-array projection. A null value
+    // caches that the invocation or construction needs no substitution.
+    public Dictionary<ExpressionSyntax, IMethodSymbol>
+        ManagedReferenceArrayProjectedMethodByCall { get; } =
+            new Dictionary<ExpressionSyntax, IMethodSymbol>(
                 ReferenceEqualityComparer.Instance);
 
     // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the

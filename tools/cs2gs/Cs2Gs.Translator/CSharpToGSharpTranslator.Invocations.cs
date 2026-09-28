@@ -1918,14 +1918,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (parameter != null
-                && argument.Parent?.Parent is InvocationExpressionSyntax invocation
-                && this.TryGetManagedReferenceArraySubstitutedMethod(
-                    invocation,
-                    out IMethodSymbol substituted)
-                && parameter.Ordinal < substituted.Parameters.Length
-                && substituted.Parameters[parameter.Ordinal].RefKind == parameter.RefKind)
+                && argument.Parent?.Parent is ExpressionSyntax call
+                && this.TryGetManagedReferenceArrayProjectedMethod(
+                    call,
+                    out IMethodSymbol projected)
+                && parameter.Ordinal < projected.Parameters.Length
+                && projected.Parameters[parameter.Ordinal].RefKind == parameter.RefKind)
             {
-                return substituted.Parameters[parameter.Ordinal];
+                return projected.Parameters[parameter.Ordinal];
             }
 
             return parameter;
@@ -2900,6 +2900,13 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateObjectCreation(ObjectCreationExpressionSyntax creation)
         {
             ITypeSymbol typeSymbol = this.context.GetTypeInfo(creation).Type;
+            if (this.TryGetManagedReferenceArrayProjectedMethod(
+                    creation,
+                    out IMethodSymbol projectedConstructor))
+            {
+                typeSymbol = projectedConstructor.ContainingType;
+            }
+
             GTypeReference type = typeSymbol != null
                 ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
                 : new NamedTypeReference(creation.Type.ToString());
@@ -4378,11 +4385,11 @@ public sealed partial class CSharpToGSharpTranslator
             // retain nullability recursively for every semantic type shape.
             ImmutableArray<ITypeSymbol> boundTypeArguments = this.GetBoundTypeArguments(generic);
             if (GetContainingInvocation(generic) is { } invocation
-                && this.TryGetManagedReferenceArraySubstitutedMethod(
+                && this.TryGetManagedReferenceArrayProjectedMethod(
                     invocation,
-                    out IMethodSymbol substitutedMethod))
+                    out IMethodSymbol projectedMethod))
             {
-                boundTypeArguments = substitutedMethod.TypeArguments;
+                boundTypeArguments = projectedMethod.TypeArguments;
             }
 
             var result = new List<GTypeReference>();
@@ -4409,103 +4416,224 @@ public sealed partial class CSharpToGSharpTranslator
             return result;
         }
 
-        // Issue #4525: construct the method with the type arguments G# infers
-        // from widened managed-reference arrays. Every invocation form maps
-        // explicit arguments and result types through this one substitution.
-        private bool TryGetManagedReferenceArraySubstitutedMethod(
-            InvocationExpressionSyntax invocation,
-            out IMethodSymbol substituted)
+        // Issue #4525: project the callable through the nullable managed-reference
+        // type arguments G# requires for array storage. This covers method and
+        // containing-type parameters for invocations and constructions.
+        private bool TryGetManagedReferenceArrayProjectedMethod(
+            ExpressionSyntax call,
+            out IMethodSymbol projected)
         {
-            if (this.state.ManagedReferenceArraySubstitutedMethodByInvocation.TryGetValue(
-                    invocation,
-                    out substituted))
+            if (this.state.ManagedReferenceArrayProjectedMethodByCall.TryGetValue(
+                    call,
+                    out projected))
             {
-                return substituted != null;
+                return projected != null;
             }
 
-            substituted = null;
-            if (this.context.GetSymbolInfo(invocation).Symbol is IMethodSymbol method
-                && method.IsGenericMethod
-                && !method.TypeArguments.IsDefaultOrEmpty)
+            projected = null;
+            if (this.context.GetSymbolInfo(call).Symbol is not IMethodSymbol method)
             {
-                var widened = new bool[method.TypeArguments.Length];
-                void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
-                {
-                    if (!this.ArrayExpressionHasNullableElement(argument))
-                    {
-                        return;
-                    }
+                this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
+                return false;
+            }
 
-                    for (int i = 0; i < widened.Length; i++)
-                    {
-                        widened[i] = widened[i]
-                            || (CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
-                                    method.TypeArguments[i],
-                                    this.context.Compilation)
-                                && TypeContainsMethodTypeParameter(parameterType, i));
-                    }
+            var widenedMethodArguments = new bool[method.TypeArguments.Length];
+            var widenedContainingArguments =
+                new bool[method.ContainingType?.TypeArguments.Length ?? 0];
+            ITypeParameterSymbol blockedParameter = null;
+            void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
+            {
+                if (!this.ArrayExpressionHasNullableElement(argument))
+                {
+                    return;
                 }
 
-                if (this.context.SemanticModel.GetOperation(invocation) is IInvocationOperation operation)
+                RecordWidenedTypeParameters(
+                    method.TypeArguments,
+                    method.TypeParameters,
+                    widenedMethodArguments,
+                    parameterType);
+                if (method.ContainingType != null)
                 {
-                    foreach (IArgumentOperation argument in operation.Arguments)
-                    {
-                        if (argument.Syntax is ArgumentSyntax argumentSyntax
-                            && argument.Parameter?.OriginalDefinition.Type is { } parameterType)
-                        {
-                            RecordWidenedArguments(argumentSyntax.Expression, parameterType);
-                        }
-                    }
-
-                    if (method.MethodKind == MethodKind.ReducedExtension
-                        && invocation.Expression is MemberAccessExpressionSyntax reducedMember
-                        && method.ReducedFrom?.OriginalDefinition.Parameters.FirstOrDefault()?.Type
-                            is { } receiverParameterType)
-                    {
-                        RecordWidenedArguments(
-                            reducedMember.Expression,
-                            receiverParameterType);
-                    }
-                }
-
-                if (widened.Any(value => value))
-                {
-                    ITypeSymbol[] typeArguments = method.TypeArguments.ToArray();
-                    for (int i = 0; i < typeArguments.Length; i++)
-                    {
-                        if (widened[i])
-                        {
-                            typeArguments[i] =
-                                typeArguments[i].WithNullableAnnotation(NullableAnnotation.Annotated);
-                        }
-                    }
-
-                    substituted = method.ConstructedFrom.Construct(typeArguments);
+                    RecordWidenedTypeParameters(
+                        method.ContainingType.TypeArguments,
+                        method.ContainingType.TypeParameters,
+                        widenedContainingArguments,
+                        parameterType);
                 }
             }
 
-            this.state.ManagedReferenceArraySubstitutedMethodByInvocation.Add(
-                invocation,
-                substituted);
-            return substituted != null;
+            void RecordWidenedTypeParameters(
+                ImmutableArray<ITypeSymbol> typeArguments,
+                ImmutableArray<ITypeParameterSymbol> typeParameters,
+                bool[] widened,
+                ITypeSymbol parameterType)
+            {
+                for (int i = 0; i < widened.Length; i++)
+                {
+                    if (widened[i]
+                        || !CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                            typeArguments[i],
+                            this.context.Compilation)
+                        || !TypeContainsTypeParameter(parameterType, typeParameters[i]))
+                    {
+                        continue;
+                    }
+
+                    if (NullableTypeArgumentViolatesTranslatedConstraints(typeParameters[i]))
+                    {
+                        blockedParameter ??= typeParameters[i];
+                        continue;
+                    }
+
+                    widened[i] = true;
+                }
+            }
+
+            ImmutableArray<IArgumentOperation> arguments =
+                this.context.SemanticModel.GetOperation(call) switch
+                {
+                    IInvocationOperation invocation => invocation.Arguments,
+                    IObjectCreationOperation creation => creation.Arguments,
+                    _ => default,
+                };
+            foreach (IArgumentOperation argument in arguments)
+            {
+                if (argument.Syntax is ArgumentSyntax argumentSyntax
+                    && argument.Parameter?.OriginalDefinition.Type is { } parameterType)
+                {
+                    RecordWidenedArguments(argumentSyntax.Expression, parameterType);
+                }
+            }
+
+            if (call is InvocationExpressionSyntax invocationCall
+                && method.MethodKind == MethodKind.ReducedExtension
+                && invocationCall.Expression is MemberAccessExpressionSyntax reducedMember
+                && method.ReducedFrom?.OriginalDefinition is { } reducedDefinition
+                && reducedDefinition.Parameters.FirstOrDefault()?.Type
+                    is { } receiverParameterType)
+            {
+                if (this.ArrayExpressionHasNullableElement(reducedMember.Expression))
+                {
+                    RecordWidenedTypeParameters(
+                        method.TypeArguments,
+                        reducedDefinition.TypeParameters,
+                        widenedMethodArguments,
+                        receiverParameterType);
+                }
+            }
+
+            if (blockedParameter != null)
+            {
+                string message =
+                    $"managed-reference array widening requires nullable type parameter '{blockedParameter.Name}', " +
+                    "but its translated constraints do not admit nullable type arguments; no exact G# translation exists.";
+                this.context.ReportUnsupported(
+                    call,
+                    message);
+                this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
+                return false;
+            }
+
+            INamedTypeSymbol projectedContainingType = null;
+            if (call is InvocationExpressionSyntax
+                    { Expression: MemberAccessExpressionSyntax memberAccess }
+                && this.GetManagedReferenceArrayProjectedExpressionType(memberAccess.Expression)
+                    is INamedTypeSymbol projectedReceiver
+                && SymbolEqualityComparer.Default.Equals(
+                    projectedReceiver.OriginalDefinition,
+                    method.ContainingType?.OriginalDefinition))
+            {
+                projectedContainingType = projectedReceiver;
+            }
+
+            if (widenedContainingArguments.Any(value => value))
+            {
+                ITypeSymbol[] typeArguments =
+                    (projectedContainingType?.TypeArguments
+                        ?? method.ContainingType.TypeArguments).ToArray();
+                for (int i = 0; i < typeArguments.Length; i++)
+                {
+                    if (widenedContainingArguments[i])
+                    {
+                        typeArguments[i] =
+                            typeArguments[i].WithNullableAnnotation(NullableAnnotation.Annotated);
+                    }
+                }
+
+                projectedContainingType =
+                    method.ContainingType.ConstructedFrom.Construct(typeArguments);
+            }
+
+            IMethodSymbol projectedMethod = method;
+            if (projectedContainingType != null)
+            {
+                projectedMethod =
+                    this.GetProjectedMember(projectedContainingType, method) as IMethodSymbol;
+                if (projectedMethod == null)
+                {
+                    this.context.ReportUnsupported(
+                        call,
+                        $"could not project member '{method.Name}' through translated containing type '{projectedContainingType}'.");
+                    this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
+                    return false;
+                }
+            }
+
+            if (method.IsGenericMethod
+                && (projectedContainingType != null
+                    || widenedMethodArguments.Any(value => value)))
+            {
+                ITypeSymbol[] typeArguments = method.TypeArguments.ToArray();
+                for (int i = 0; i < typeArguments.Length; i++)
+                {
+                    if (widenedMethodArguments[i])
+                    {
+                        typeArguments[i] =
+                            typeArguments[i].WithNullableAnnotation(NullableAnnotation.Annotated);
+                    }
+                }
+
+                projectedMethod = projectedMethod.ConstructedFrom.Construct(typeArguments);
+            }
+
+            if (projectedContainingType != null
+                || widenedMethodArguments.Any(value => value))
+            {
+                projected = projectedMethod;
+            }
+
+            this.state.ManagedReferenceArrayProjectedMethodByCall.Add(
+                call,
+                projected);
+            return projected != null;
         }
 
-        private static bool TypeContainsMethodTypeParameter(
+        private static bool NullableTypeArgumentViolatesTranslatedConstraints(
+            ITypeParameterSymbol parameter)
+            => parameter.HasReferenceTypeConstraint
+                || parameter.HasValueTypeConstraint
+                || parameter.HasUnmanagedTypeConstraint
+                || parameter.HasConstructorConstraint
+                || !parameter.ConstraintTypes.IsEmpty;
+
+        private static bool TypeContainsTypeParameter(
             ITypeSymbol type,
-            int ordinal)
+            ITypeParameterSymbol target)
         {
             return (type is ITypeParameterSymbol parameter
-                    && parameter.TypeParameterKind == TypeParameterKind.Method
-                    && parameter.Ordinal == ordinal)
+                    && SymbolEqualityComparer.Default.Equals(
+                        parameter.OriginalDefinition,
+                        target.OriginalDefinition))
                 || (type is IArrayTypeSymbol array
-                    && TypeContainsMethodTypeParameter(array.ElementType, ordinal))
+                    && TypeContainsTypeParameter(array.ElementType, target))
                 || (type is IPointerTypeSymbol pointer
-                    && TypeContainsMethodTypeParameter(pointer.PointedAtType, ordinal))
+                    && TypeContainsTypeParameter(pointer.PointedAtType, target))
                 || (type is INamedTypeSymbol named
                     && (named.TypeArguments.Any(argument =>
-                            TypeContainsMethodTypeParameter(argument, ordinal))
+                            TypeContainsTypeParameter(argument, target))
                         || (named.ContainingType is { } containing
-                            && TypeContainsMethodTypeParameter(containing, ordinal))));
+                            && TypeContainsTypeParameter(containing, target))));
         }
 
         private static InvocationExpressionSyntax GetContainingInvocation(GenericNameSyntax generic)

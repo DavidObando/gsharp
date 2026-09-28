@@ -1032,7 +1032,7 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression)
         {
             ITypeSymbol effectiveType =
-                this.GetManagedReferenceArraySubstitutedExpressionType(expression);
+                this.GetManagedReferenceArrayProjectedExpressionType(expression);
             return effectiveType != null
                 && effectiveType.NullableAnnotation == NullableAnnotation.Annotated
                 && (effectiveType.IsReferenceType
@@ -1041,46 +1041,87 @@ public sealed partial class CSharpToGSharpTranslator
                         this.context.Compilation));
         }
 
-        private ITypeSymbol GetManagedReferenceArraySubstitutedExpressionType(
+        private ITypeSymbol GetManagedReferenceArrayProjectedExpressionType(
             ExpressionSyntax expression)
         {
             expression = Unparenthesize(expression);
+            if (expression is IdentifierNameSyntax identifier
+                && this.context.GetSymbolInfo(identifier).Symbol is ILocalSymbol local
+                && !this.IsLocalReassigned(local)
+                && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+            {
+                return this.GetManagedReferenceArrayProjectedExpressionType(initializer);
+            }
+
             if (expression is InvocationExpressionSyntax invocation)
             {
-                return this.TryGetManagedReferenceArraySubstitutedMethod(
+                return this.TryGetManagedReferenceArrayProjectedMethod(
                     invocation,
-                    out IMethodSymbol substitutedMethod)
-                        ? substitutedMethod.ReturnType
-                        : this.GetManagedReferenceArraySubstitutedExpressionType(
+                    out IMethodSymbol projectedMethod)
+                        ? projectedMethod.ReturnType
+                        : this.GetManagedReferenceArrayProjectedExpressionType(
                             invocation.Expression);
             }
 
-            if (expression is not MemberAccessExpressionSyntax member
-                || this.GetManagedReferenceArraySubstitutedExpressionType(member.Expression)
+            if (expression is BaseObjectCreationExpressionSyntax creation
+                && this.TryGetManagedReferenceArrayProjectedMethod(
+                    creation,
+                    out IMethodSymbol projectedConstructor))
+            {
+                return projectedConstructor.ContainingType;
+            }
+
+            ExpressionSyntax receiver;
+            ISymbol memberSymbol;
+            switch (expression)
+            {
+                case MemberAccessExpressionSyntax member:
+                    receiver = member.Expression;
+                    memberSymbol = this.context.GetSymbolInfo(member).Symbol;
+                    break;
+                case ElementAccessExpressionSyntax element:
+                    receiver = element.Expression;
+                    memberSymbol = this.context.GetSymbolInfo(element).Symbol;
+                    break;
+                default:
+                    return null;
+            }
+
+            if (this.GetManagedReferenceArrayProjectedExpressionType(receiver)
                     is not INamedTypeSymbol receiverType
-                || this.context.GetSymbolInfo(member).Symbol is not { } memberSymbol)
+                || memberSymbol == null)
             {
                 return null;
             }
 
+            return this.GetProjectedMember(receiverType, memberSymbol) switch
+            {
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                IMethodSymbol method => method.ReturnType,
+                _ => null,
+            };
+        }
+
+        private ISymbol GetProjectedMember(
+            INamedTypeSymbol receiverType,
+            ISymbol memberSymbol)
+        {
             foreach (INamedTypeSymbol candidateType in ReceiverTypeHierarchy(receiverType))
             {
-                foreach (ISymbol candidate in candidateType.GetMembers(memberSymbol.Name))
+                IEnumerable<ISymbol> candidates =
+                    memberSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor }
+                        ? candidateType.InstanceConstructors
+                        : candidateType.GetMembers(memberSymbol.Name);
+                foreach (ISymbol candidate in candidates)
                 {
-                    if (!SymbolEqualityComparer.Default.Equals(
+                    if (SymbolEqualityComparer.Default.Equals(
                         candidate.OriginalDefinition,
                         memberSymbol.OriginalDefinition))
                     {
-                        continue;
+                        return candidate;
                     }
-
-                    return candidate switch
-                    {
-                        IFieldSymbol field => field.Type,
-                        IPropertySymbol property => property.Type,
-                        IMethodSymbol method => method.ReturnType,
-                        _ => null,
-                    };
                 }
             }
 
