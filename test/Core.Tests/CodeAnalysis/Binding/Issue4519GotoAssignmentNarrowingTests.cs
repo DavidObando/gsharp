@@ -289,6 +289,50 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void GotoLeavingTry_UsesNarrowingEstablishedByFinally()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(jump bool) {
+                var x string? = nil
+                try {
+                    if jump { goto Done }
+                } finally {
+                    x = "final"
+                }
+                x = "again"
+            Done:
+                Console.WriteLine(x.Length)
+            }
+
+            Run(true)
+            """, "5");
+    }
+
+    [Fact]
+    public void ConditionalFinallyAssignment_DoesNotEstablishNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(jump bool, assign bool) int32 {
+                var x string? = nil
+                try {
+                    if jump { goto Done }
+                } finally {
+                    if assign { x = "final" }
+                }
+                x = "again"
+            Done:
+                return x.Length
+            }
+
+            Run(true, false)
+            """);
+
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+    }
+
+    [Fact]
     public void NestedFunctionBetweenFinallyAndTarget_DoesNotLoseOuterFinallyEffects()
     {
         var result = Evaluate("""

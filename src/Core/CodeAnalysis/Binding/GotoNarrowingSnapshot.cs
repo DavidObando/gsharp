@@ -32,4 +32,7 @@ internal sealed class GotoNarrowingSnapshot
 
     public void RemoveNarrowing(VariableSymbol variable)
         => narrowedVariables.Remove(variable);
+
+    public void SetNarrowing(VariableSymbol variable, TypeSymbol type)
+        => narrowedVariables[variable] = type;
 }

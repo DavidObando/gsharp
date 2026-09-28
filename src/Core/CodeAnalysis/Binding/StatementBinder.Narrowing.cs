@@ -542,9 +542,12 @@ internal sealed partial class StatementBinder
         if (incomingSnapshots != null)
         {
             var activeFinallySet = new HashSet<FinallyClauseSyntax>(activeFinallyClauses);
-            foreach (var snapshot in incomingSnapshots)
+            for (var i = incomingSnapshots.Count - 1; i >= 0; i--)
             {
-                ApplyExitedFinallyEffects(snapshot, activeFinallySet);
+                if (!ApplyExitedFinallyEffects(incomingSnapshots[i], activeFinallySet))
+                {
+                    incomingSnapshots.RemoveAt(i);
+                }
             }
         }
 
@@ -572,7 +575,7 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private void ApplyExitedFinallyEffects(
+    private bool ApplyExitedFinallyEffects(
         GotoNarrowingSnapshot snapshot,
         HashSet<FinallyClauseSyntax> activeFinallySet)
     {
@@ -584,21 +587,39 @@ internal sealed partial class StatementBinder
                 continue;
             }
 
-            if (!finallyMutationSummaries.TryGetValue(finallyBlock, out var mutations))
+            if (!finallyFlowSummaries.TryGetValue(finallyBlock, out var summary))
             {
-                mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
+                var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
                 mutations.Visit(finallyBlock);
-                finallyMutationSummaries.Add(finallyBlock, mutations);
+                summary = new FinallyFlowSummary(
+                    mutations,
+                    ComputeBranchFallthroughNonNull(finallyBlock, entry: null));
+                finallyFlowSummaries.Add(finallyBlock, summary);
+            }
+
+            if (summary.NonNullOnNormalExit == null)
+            {
+                return false;
             }
 
             foreach (var entry in snapshot.NarrowedVariables.ToArray())
             {
-                if (mutations.InvalidatesNarrowing(entry.Key, entry.Value))
+                if (summary.Mutations.InvalidatesNarrowing(entry.Key, entry.Value))
                 {
                     snapshot.RemoveNarrowing(entry.Key);
                 }
             }
+
+            foreach (var entry in summary.NonNullOnNormalExit)
+            {
+                if (!entry.Key.HasMembers)
+                {
+                    snapshot.SetNarrowing(entry.Key.Root, entry.Value);
+                }
+            }
         }
+
+        return true;
     }
 
     /// <summary>
@@ -1314,6 +1335,10 @@ internal sealed partial class StatementBinder
 
         private readonly record struct AssignedProperty(VariableSymbol? Receiver, PropertySymbol Property);
     }
+
+    private sealed record FinallyFlowSummary(
+        AssignedRootsCollector Mutations,
+        Dictionary<AccessPath, TypeSymbol>? NonNullOnNormalExit);
 
     private sealed class LoopBackEdgeMutationCollector : AssignedRootsCollector
     {

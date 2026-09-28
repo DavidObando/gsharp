@@ -148,7 +148,7 @@ internal sealed partial class StatementBinder
         binderCtx.AssignmentNarrowingGeneration = 0;
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
         boundFinallyBlocks.Clear();
-        finallyMutationSummaries.Clear();
+        finallyFlowSummaries.Clear();
         userGotoHandlerRegions.Clear();
         userLabelHandlerRegions.Clear();
     }
@@ -306,7 +306,7 @@ internal sealed partial class StatementBinder
             entry => entry.Value.Select(snapshot => snapshot.Clone()).ToList());
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
         var boundFinallyBlocksSnapshot = boundFinallyBlocks.ToArray();
-        var finallyMutationSummariesSnapshot = finallyMutationSummaries.ToArray();
+        var finallyFlowSummariesSnapshot = finallyFlowSummaries.ToArray();
         var activeFinallyClausesSnapshot = activeFinallyClauses.ToArray();
         var syntheticLocalCounter = binderCtx.SyntheticLocalCounter;
 
@@ -390,7 +390,7 @@ internal sealed partial class StatementBinder
         }
 
         RestoreDictionary(boundFinallyBlocks, boundFinallyBlocksSnapshot);
-        RestoreDictionary(finallyMutationSummaries, finallyMutationSummariesSnapshot);
+        RestoreDictionary(finallyFlowSummaries, finallyFlowSummariesSnapshot);
         activeFinallyClauses.Clear();
         for (var i = activeFinallyClausesSnapshot.Length - 1; i >= 0; i--)
         {
