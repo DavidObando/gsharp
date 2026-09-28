@@ -284,7 +284,7 @@ internal sealed partial class DeclarationBinder
                     parameterName,
                     parameterType,
                     isVariadic,
-                    asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : null);
+                    asyncOrIteratorKind: methodSyntax.IsAsync ? "async" : methodSyntax.IsSuspend ? "suspend" : null);
 
                 // Issue #1262: `_` is the discard identifier — repeated `_` parameters are
                 // permitted on named functions/methods. Each `_` occupies a positional slot

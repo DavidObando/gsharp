@@ -124,7 +124,8 @@ internal sealed partial class OverloadResolver
             foreach (var possibleMethod in clrGroup.Candidates)
             {
                 var candidateOffset = clrGroup.Receiver != null && possibleMethod.IsStatic ? 1 : 0;
-                if (possibleMethod.GetParameters().Length - candidateOffset != delegateArity)
+                var candidateParameters = ImportedFunctionSymbol.GetLogicalParameters(possibleMethod, out _);
+                if (candidateParameters.Length - candidateOffset != delegateArity)
                 {
                     continue;
                 }
@@ -147,7 +148,7 @@ internal sealed partial class OverloadResolver
             // method group's signature feeds type inference, which has always
             // seen the erased shapes here; inferring from the declared
             // nullability instead is a Phase 4 change (issue #4363).
-            var methodParameters = method.GetParameters();
+            var methodParameters = ImportedFunctionSymbol.GetLogicalParameters(method, out _);
             parameters = new TypeSymbol[delegateArity];
             for (var i = 0; i < parameters.Length; i++)
             {
@@ -346,7 +347,12 @@ internal sealed partial class OverloadResolver
         // #835/#3753: `IsSameAs` rather than reference identity — the
         // candidate may come from a MetadataLoadContext, where the host
         // `typeof(void)` is a different Type instance.
-        var resolution = ClrOverloadResolution.Resolve(group.Candidates, resolutionArguments);
+        var resolution = ClrOverloadResolution.Resolve(
+            group.Candidates,
+            resolutionArguments,
+            trailingParameterCountToIgnore: static candidate =>
+                candidate is MethodInfo method
+                    && ImportedFunctionSymbol.HasHiddenContextParameter(method) ? 1 : 0);
         if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
             || resolution.Best is not { } best
             || best.IsGenericMethodDefinition

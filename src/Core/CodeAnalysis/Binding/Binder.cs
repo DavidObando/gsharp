@@ -220,7 +220,7 @@ public sealed class Binder
                     targetFunctionType,
                     exactTargetReturnType: exactTargetReturnType),
             createClrMethodGroupAdapter: (group, targetFunctionType) => Lambdas.CreateClrMethodGroupAdapter(group, targetFunctionType),
-            createUserExtensionMethodGroupAdapter: group => Lambdas.CreateUserExtensionMethodGroupAdapter(group),
+            createUserMethodGroupAdapter: group => Lambdas.CreateUserMethodGroupAdapter(group),
             getMethodGroupObservableReturnType: (method, returnType) =>
                 method.IsAsyncOrSuspending && !method.IsAsyncVoid && !IsAsyncIteratorReturnType(returnType)
                     ? Lambdas.WrapAsTask(returnType, method.AsyncReturnsValueTask)
@@ -2717,7 +2717,24 @@ public sealed class Binder
         // the caller passed none; inference must see the same references the
         // bodies were bound against, or a references-less compilation would
         // bind channel operations yet never colour the functions around them.
-        Suspension.SuspensionInference.Run(functionBodies, globalScope.EntryPoint, parentScope.References, diagnostics);
+        var inferenceBinders = new Dictionary<FunctionSymbol, Binder>();
+        Suspension.SuspensionInference.Run(
+            functionBodies,
+            globalScope.EntryPoint,
+            parentScope.References,
+            diagnostics,
+            (container, group) =>
+            {
+                if (!inferenceBinders.TryGetValue(container, out var inferenceBinder))
+                {
+                    inferenceBinder = new Binder(parentScope, container);
+                    inferenceBinders.Add(container, inferenceBinder);
+                }
+
+                return inferenceBinder.Lambdas.CreateUserMethodGroupAdapter(group);
+            },
+            allStructs,
+            globalScope.Interfaces);
 
         // ADR-0174 D10 / GS0562: batching a rendezvous channel is correct and
         // pointless. Reported here, over the bound bodies, because the question

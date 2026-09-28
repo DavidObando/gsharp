@@ -2,6 +2,7 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 // </copyright>
 
+using System;
 using System.Collections.Immutable;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
@@ -26,18 +27,26 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     private readonly ImmutableHashSet<FunctionSymbol> newlySuspending;
     private readonly ChannelRuntimeBinder runtime;
     private readonly DiagnosticBag diagnostics;
+    private readonly Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter;
     private int goDepth;
     private int resultGoDepth;
     private int lockDepth;
     private BoundExpression? lexicalContext;
 
-    private SuspendingCallRewriter(FunctionSymbol container, bool containerIsRoot, ImmutableHashSet<FunctionSymbol> newlySuspending, ChannelRuntimeBinder runtime, DiagnosticBag diagnostics)
+    private SuspendingCallRewriter(
+        FunctionSymbol container,
+        bool containerIsRoot,
+        ImmutableHashSet<FunctionSymbol> newlySuspending,
+        ChannelRuntimeBinder runtime,
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
     {
         this.container = container;
         this.containerIsRoot = containerIsRoot || container.IsTopLevelEntryPoint;
         this.newlySuspending = newlySuspending;
         this.runtime = runtime;
         this.diagnostics = diagnostics;
+        this.createMethodGroupAdapter = createMethodGroupAdapter;
     }
 
     private bool ContainerSuspends => container.IsAsyncOrSuspending;
@@ -59,6 +68,7 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     /// <param name="newlySuspending">The functions inference marked in this pass.</param>
     /// <param name="runtime">The channel runtime binder.</param>
     /// <param name="diagnostics">Receives GS0558.</param>
+    /// <param name="createMethodGroupAdapter">Creates a verifier-safe adapter after suspension inference has finalized a method's emitted shape.</param>
     /// <returns>The rewritten body, or <paramref name="body"/> when nothing changed.</returns>
     public static BoundBlockStatement Rewrite(
         BoundBlockStatement body,
@@ -66,10 +76,43 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
         bool containerIsRoot,
         ImmutableHashSet<FunctionSymbol> newlySuspending,
         ChannelRuntimeBinder runtime,
-        DiagnosticBag diagnostics)
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
     {
-        var rewriter = new SuspendingCallRewriter(container, containerIsRoot, newlySuspending, runtime, diagnostics);
+        var rewriter = new SuspendingCallRewriter(
+            container,
+            containerIsRoot,
+            newlySuspending,
+            runtime,
+            diagnostics,
+            createMethodGroupAdapter);
         return (BoundBlockStatement)rewriter.RewriteStatement(body);
+    }
+
+    /// <summary>Rewrites a field initializer after suspension inference.</summary>
+    /// <param name="expression">The initializer expression.</param>
+    /// <param name="container">A synthetic container carrying the field owner's lexical context.</param>
+    /// <param name="newlySuspending">The functions inference marked in this pass.</param>
+    /// <param name="runtime">The channel runtime binder.</param>
+    /// <param name="diagnostics">Receives suspension diagnostics.</param>
+    /// <param name="createMethodGroupAdapter">Creates a verifier-safe inferred-suspension adapter.</param>
+    /// <returns>The rewritten initializer.</returns>
+    public static BoundExpression RewriteInitializer(
+        BoundExpression expression,
+        FunctionSymbol container,
+        ImmutableHashSet<FunctionSymbol> newlySuspending,
+        ChannelRuntimeBinder runtime,
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
+    {
+        var rewriter = new SuspendingCallRewriter(
+            container,
+            containerIsRoot: false,
+            newlySuspending,
+            runtime,
+            diagnostics,
+            createMethodGroupAdapter);
+        return rewriter.RewriteExpression(expression);
     }
 
     /// <inheritdoc/>
@@ -188,11 +231,58 @@ internal sealed class SuspendingCallRewriter : BoundTreeRewriter
     /// <inheritdoc/>
     protected override BoundExpression RewriteFunctionLiteralExpression(BoundFunctionLiteralExpression node)
     {
-        var inner = new SuspendingCallRewriter(node.Function, containerIsRoot: false, newlySuspending, runtime, diagnostics);
+        var inner = new SuspendingCallRewriter(
+            node.Function,
+            containerIsRoot: false,
+            newlySuspending,
+            runtime,
+            diagnostics,
+            createMethodGroupAdapter);
+
+        // ADR-0174 D7: a suspending delegate carries the context active when
+        // the delegate is created, not the context active when it is invoked.
+        var capturedContext = Ambient ?? runtime.BindContextNone();
+        inner.lexicalContext = capturedContext;
         var body = (BoundBlockStatement)inner.RewriteStatement(node.Body);
-        return ReferenceEquals(body, node.Body)
-            ? node
-            : new BoundFunctionLiteralExpression(node.Syntax, node.Function, node.FunctionType, body, node.CapturedVariables);
+        if (ReferenceEquals(body, node.Body))
+        {
+            return node;
+        }
+
+        var capturedVariables = node.CapturedVariables;
+        foreach (var variable in GoCapturedVariableCollector.CollectCapturedVariables(capturedContext))
+        {
+            if (!capturedVariables.Contains(variable))
+            {
+                capturedVariables = capturedVariables.Add(variable);
+            }
+        }
+
+        return new BoundFunctionLiteralExpression(node.Syntax, node.Function, node.FunctionType, body, capturedVariables);
+    }
+
+    /// <inheritdoc/>
+    protected override BoundExpression RewriteMethodGroupExpression(BoundMethodGroupExpression node)
+    {
+        if (node.Function?.IsSuspending == true && node.FunctionType != null)
+        {
+            var adapter = createMethodGroupAdapter(container, node);
+            if (!ReferenceEquals(adapter, node))
+            {
+                return RewriteExpression(adapter);
+            }
+        }
+
+        return base.RewriteMethodGroupExpression(node);
+    }
+
+    /// <inheritdoc/>
+    protected override BoundExpression RewriteClrStaticCallExpression(BoundClrStaticCallExpression node)
+    {
+        var rewritten = (BoundClrStaticCallExpression)base.RewriteClrStaticCallExpression(node);
+        return Ambient is { } ambient
+            ? ChannelRuntimeBinder.SupplyImportedContext(rewritten, ambient)
+            : rewritten;
     }
 
     /// <inheritdoc/>

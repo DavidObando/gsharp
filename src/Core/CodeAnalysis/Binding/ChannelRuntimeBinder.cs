@@ -816,6 +816,26 @@ internal sealed class ChannelRuntimeBinder
             call.IsNonVirtualBaseCall);
     }
 
+    /// <summary>
+    /// Supplies the ambient context to a synthesized CLR static call used by
+    /// an imported suspending method-group adapter.
+    /// </summary>
+    /// <param name="call">A CLR static call.</param>
+    /// <param name="context">The ambient context.</param>
+    /// <returns>The call with the context supplied, or <paramref name="call"/> when it takes none.</returns>
+    public static BoundExpression SupplyImportedContext(BoundClrStaticCallExpression call, BoundExpression context)
+    {
+        if (!TryAppendImportedContext(call.Method, call.Arguments, context, out var arguments))
+        {
+            return call;
+        }
+
+        var refKinds = call.ArgumentRefKinds.IsDefault
+            ? default
+            : call.ArgumentRefKinds.Add(RefKind.None);
+        return call.WithArguments(arguments, refKinds);
+    }
+
     /// <summary>Recovers the direction a facade call was bound with from its carrier parameter.</summary>
     /// <param name="call">A facade call.</param>
     /// <returns>The direction.</returns>
@@ -1109,19 +1129,12 @@ internal sealed class ChannelRuntimeBinder
         out ImmutableArray<BoundExpression> arguments)
     {
         arguments = callArguments;
-        if (!ImportedFunctionSymbol.IsSuspendingMethod(method))
+        if (!ImportedFunctionSymbol.HasHiddenContextParameter(method))
         {
             return false;
         }
 
         var parameters = method.GetParameters();
-        if (parameters.Length == 0
-            || parameters[^1].ParameterType.FullName != "Gsharp.Concurrency.Context"
-            || parameters[^1].Name != FunctionSymbol.HiddenContextParameterName)
-        {
-            return false;
-        }
-
         if (callArguments.Length == parameters.Length - 1)
         {
             arguments = callArguments.Add(context);

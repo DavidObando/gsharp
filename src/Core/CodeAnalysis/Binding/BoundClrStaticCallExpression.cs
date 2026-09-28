@@ -55,4 +55,26 @@ public sealed class BoundClrStaticCallExpression : BoundCallOperationExpression
     /// Gets the per-argument ref-kind annotations. May be default (all-None).
     /// </summary>
     public ImmutableArray<RefKind> ArgumentRefKinds { get; }
+
+    /// <summary>Creates an equivalent call with replacement arguments.</summary>
+    /// <param name="arguments">The replacement arguments.</param>
+    /// <returns>An equivalent call containing <paramref name="arguments"/>.</returns>
+    public BoundClrStaticCallExpression WithArguments(ImmutableArray<BoundExpression> arguments)
+    {
+        if (!ArgumentRefKinds.IsDefault && ArgumentRefKinds.Length != arguments.Length)
+        {
+            throw new ArgumentException("Replacement arguments must preserve the tracked ref-kind arity.", nameof(arguments));
+        }
+
+        return new(Syntax, Method, Type, arguments, ArgumentRefKinds);
+    }
+
+    /// <summary>Creates an equivalent call with replacement arguments and ref kinds.</summary>
+    /// <param name="arguments">The replacement arguments.</param>
+    /// <param name="argumentRefKinds">The replacement per-argument ref kinds.</param>
+    /// <returns>An equivalent call containing the replacements.</returns>
+    public BoundClrStaticCallExpression WithArguments(
+        ImmutableArray<BoundExpression> arguments,
+        ImmutableArray<RefKind> argumentRefKinds)
+        => new(Syntax, Method, Type, arguments, argumentRefKinds);
 }

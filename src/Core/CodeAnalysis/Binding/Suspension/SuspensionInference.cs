@@ -48,12 +48,18 @@ internal static class SuspensionInference
     /// <param name="entryPoint">The program's entry point — synthesized or a user <c>Main</c> — which is the root that blocks and never suspends.</param>
     /// <param name="references">The compilation's reference resolver; when the channel runtime does not resolve nothing can suspend and the pass is a no-op.</param>
     /// <param name="diagnostics">Receives GS0558 and the re-run async analyses' diagnostics.</param>
+    /// <param name="createMethodGroupAdapter">Creates a verifier-safe adapter after inferred suspension has finalized a method's emitted shape.</param>
+    /// <param name="structs">User and synthesized structs whose field initializers also require the rewrite.</param>
+    /// <param name="interfaces">User interfaces whose static field initializers also require the rewrite.</param>
     /// <returns>The set of functions the pass marked <see cref="SuspendingKind.Inferred"/>.</returns>
     public static ImmutableHashSet<FunctionSymbol> Run(
         ImmutableDictionary<FunctionSymbol, BoundBlockStatement>.Builder bodies,
         FunctionSymbol? entryPoint,
         ReferenceResolver? references,
-        ImmutableArray<Diagnostic>.Builder diagnostics)
+        ImmutableArray<Diagnostic>.Builder diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter,
+        ImmutableArray<StructSymbol> structs,
+        ImmutableArray<InterfaceSymbol> interfaces)
     {
         if (references == null)
         {
@@ -68,19 +74,21 @@ internal static class SuspensionInference
 
         var ordered = bodies.Keys.OrderBy(SortKey, StringComparer.Ordinal).ToList();
         var facts = new Dictionary<FunctionSymbol, SuspensionPointCollector.Facts>();
+        var bag = new DiagnosticBag();
         foreach (var function in ordered)
         {
             facts[function] = SuspensionPointCollector.Collect(bodies[function]);
         }
 
         var inferred = new HashSet<FunctionSymbol>();
+        var rejected = new HashSet<FunctionSymbol>();
         var changed = true;
         while (changed)
         {
             changed = false;
             foreach (var function in ordered)
             {
-                if (function.IsSuspending || function.IsAsync || ReferenceEquals(function, entryPoint) || IsBoundary(function, bodies[function]))
+                if (function.IsSuspending || function.IsAsync || rejected.Contains(function) || ReferenceEquals(function, entryPoint) || IsBoundary(function, bodies[function]))
                 {
                     continue;
                 }
@@ -88,6 +96,27 @@ internal static class SuspensionInference
                 var own = facts[function];
                 if (own.HasDirectPoint || own.Callees.Any(static callee => callee.IsSuspending))
                 {
+                    var hasRefKindParameter = false;
+                    foreach (var parameter in function.Parameters)
+                    {
+                        if (parameter.RefKind == RefKind.None || parameter.DeclaringSyntax == null)
+                        {
+                            continue;
+                        }
+
+                        bag.ReportRefKindOnAsyncOrIterator(
+                            parameter.DeclaringSyntax.Location,
+                            parameter.Name,
+                            "newly inferred suspending");
+                        hasRefKindParameter = true;
+                    }
+
+                    if (hasRefKindParameter)
+                    {
+                        rejected.Add(function);
+                        continue;
+                    }
+
                     function.SuspendingKind = SuspendingKind.Inferred;
                     function.AsyncReturnsValueTask = true;
                     inferred.Add(function);
@@ -117,12 +146,18 @@ internal static class SuspensionInference
             }
         }
 
-        var bag = new DiagnosticBag();
         var newlySuspending = inferred.ToImmutableHashSet();
         foreach (var function in ordered)
         {
             var body = bodies[function];
-            var rewritten = SuspendingCallRewriter.Rewrite(body, function, ReferenceEquals(function, entryPoint), newlySuspending, runtime, bag);
+            var rewritten = SuspendingCallRewriter.Rewrite(
+                body,
+                function,
+                ReferenceEquals(function, entryPoint),
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter);
             if (!ReferenceEquals(rewritten, body))
             {
                 SyntaxAnchoringWalker.Anchor(rewritten, function.Declaration);
@@ -136,8 +171,136 @@ internal static class SuspensionInference
             }
         }
 
+        foreach (var type in structs)
+        {
+            if (type.BaseConstructorInitializer is { } primaryBaseInitializer)
+            {
+                var primaryConstructor = type.EffectiveExplicitConstructors
+                    .FirstOrDefault(constructor => constructor.IsSynthesizedFromPrimaryConstructor)
+                    ?.Function
+                    ?? new FunctionSymbol(
+                        ".ctor",
+                        type.PrimaryConstructorParameters,
+                        TypeSymbol.Void,
+                        declaration: null,
+                        package: null,
+                        Accessibility.Public,
+                        receiverType: type)
+                    {
+                        IsExpressionInitializer = true,
+                    };
+                primaryConstructor.AdoptDeclaredContextParameter(runtime.ContextType);
+                type.SetBaseConstructorInitializer(RewriteBaseInitializer(
+                    primaryBaseInitializer,
+                    primaryConstructor,
+                    newlySuspending,
+                    runtime,
+                    bag,
+                    createMethodGroupAdapter));
+            }
+
+            foreach (var constructor in type.ExplicitConstructors)
+            {
+                if (constructor.BaseInitializer is { } baseInitializer)
+                {
+                    constructor.SetBaseInitializer(RewriteBaseInitializer(
+                        baseInitializer,
+                        constructor.Function,
+                        newlySuspending,
+                        runtime,
+                        bag,
+                        createMethodGroupAdapter));
+                }
+            }
+
+            type.SetStaticFieldInitializers(RewriteInitializers(
+                type.StaticFieldInitializers,
+                type,
+                isStatic: true,
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter));
+            type.SetStaticInitializerStatements(RewriteStaticInitializerStatements(
+                type.StaticInitializerStatements,
+                type,
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter));
+            type.SetInstanceFieldInitializers(RewriteInitializers(
+                type.InstanceFieldInitializers,
+                type,
+                isStatic: false,
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter));
+        }
+
+        foreach (var type in interfaces)
+        {
+            type.SetStaticFieldInitializers(RewriteInitializers(
+                type.StaticFieldInitializers,
+                type,
+                isStatic: true,
+                newlySuspending,
+                runtime,
+                bag,
+                createMethodGroupAdapter));
+        }
+
         diagnostics.AddRange(bag);
         return newlySuspending;
+    }
+
+    internal static ImmutableDictionary<FieldSymbol, BoundExpression> RewriteInitializers(
+        ImmutableDictionary<FieldSymbol, BoundExpression> initializers,
+        TypeSymbol owner,
+        bool isStatic,
+        ImmutableHashSet<FunctionSymbol> newlySuspending,
+        ChannelRuntimeBinder runtime,
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
+    {
+        if (initializers.IsEmpty)
+        {
+            return initializers;
+        }
+
+        var parameters = !isStatic && owner is StructSymbol structOwner
+            ? structOwner.PrimaryConstructorParameters
+            : ImmutableArray<ParameterSymbol>.Empty;
+        var container = new FunctionSymbol(
+            "<field_initializer>",
+            parameters,
+            TypeSymbol.Void,
+            declaration: null,
+            package: null,
+            Accessibility.Private,
+            receiverType: isStatic ? null : owner)
+        {
+            IsStatic = isStatic,
+            IsExpressionInitializer = true,
+            StaticOwnerType = isStatic ? owner : null,
+            LexicalEnclosingType = owner,
+        };
+        container.AdoptDeclaredContextParameter(runtime.ContextType);
+        var builder = initializers.ToBuilder();
+        foreach (var (field, initializer) in initializers
+            .OrderBy(static pair => pair.Key.DeclaringSyntaxNodes.FirstOrDefault()?.Span.Start ?? int.MaxValue)
+            .ThenBy(static pair => pair.Key.Name, StringComparer.Ordinal))
+        {
+            builder[field] = SuspendingCallRewriter.RewriteInitializer(
+                initializer,
+                container,
+                newlySuspending,
+                runtime,
+                diagnostics,
+                createMethodGroupAdapter);
+        }
+
+        return builder.ToImmutable();
     }
 
     /// <summary>ADR-0174 D4 "where inference stops": functions whose signature inference may not change.</summary>
@@ -192,6 +355,65 @@ internal static class SuspensionInference
         }
 
         return IteratorDetection.ContainsYield(body) || ContainsFixed(body);
+    }
+
+    private static ImmutableArray<BoundStatement> RewriteStaticInitializerStatements(
+        ImmutableArray<BoundStatement> statements,
+        StructSymbol owner,
+        ImmutableHashSet<FunctionSymbol> newlySuspending,
+        ChannelRuntimeBinder runtime,
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
+    {
+        if (statements.IsDefaultOrEmpty)
+        {
+            return statements;
+        }
+
+        var container = new FunctionSymbol(
+            "<static-initializer>",
+            ImmutableArray<ParameterSymbol>.Empty,
+            TypeSymbol.Void,
+            declaration: null,
+            package: null,
+            Accessibility.Private)
+        {
+            IsStatic = true,
+            IsStaticInitializer = true,
+            StaticOwnerType = owner,
+            LexicalEnclosingType = owner,
+        };
+        return SuspendingCallRewriter.Rewrite(
+            new BoundBlockStatement(null, statements),
+            container,
+            containerIsRoot: false,
+            newlySuspending,
+            runtime,
+            diagnostics,
+            createMethodGroupAdapter).Statements;
+    }
+
+    private static BaseConstructorInitializer RewriteBaseInitializer(
+        BaseConstructorInitializer initializer,
+        FunctionSymbol constructor,
+        ImmutableHashSet<FunctionSymbol> newlySuspending,
+        ChannelRuntimeBinder runtime,
+        DiagnosticBag diagnostics,
+        Func<FunctionSymbol, BoundMethodGroupExpression, BoundExpression> createMethodGroupAdapter)
+    {
+        var arguments = ImmutableArray.CreateBuilder<BoundExpression>(initializer.Arguments.Length);
+        foreach (var argument in initializer.Arguments)
+        {
+            arguments.Add(SuspendingCallRewriter.RewriteInitializer(
+                argument,
+                constructor,
+                newlySuspending,
+                runtime,
+                diagnostics,
+                createMethodGroupAdapter));
+        }
+
+        return initializer.WithArguments(arguments.MoveToImmutable());
     }
 
     private static bool ContainsFixed(BoundStatement body)
