@@ -86,6 +86,8 @@ public class Issue4480ImportedCallConversionTests
             public static int Required(IEnumerable<string> values) => values.Count();
 
             public static int RequiredIn(in IEnumerable<string> values) => values.Count();
+
+            public static int RequiredPair(IPair<string, T> values) => 0;
         }
 
         public interface ITaker<T>
@@ -152,6 +154,11 @@ public class Issue4480ImportedCallConversionTests
 
         public sealed class Pair<TFirst, TSecond>
         {
+        }
+
+        public interface IPair<TFirst, TSecond>
+        {
+            TSecond GetSecond();
         }
 
         public static class MixedCalls
@@ -478,6 +485,37 @@ public class Issue4480ImportedCallConversionTests
         Assert.DoesNotContain("GS0154", log, StringComparison.Ordinal);
         Assert.DoesNotContain("GS0155", log, StringComparison.Ordinal);
         Assert.DoesNotContain("GS0159", log, StringComparison.Ordinal);
+    }
+
+    /// <summary>An unrelated projected sibling keeps ordinary recovery.</summary>
+    [Fact]
+    public void ProjectedUnrelatedSibling_DoesNotBecomeGs0154()
+    {
+        const string source = """
+            package P
+            import Issue4480.Library
+
+            class A {
+            }
+            class B {
+            }
+            class Repo[TFirst, TSecond] : IPair[TFirst, TSecond] {
+                private let second TSecond
+                init(first TFirst, second TSecond) {
+                    this.second = second
+                }
+                func GetSecond() TSecond -> second
+            }
+
+            let count = GenericCalls[B].RequiredPair(Repo(Ob.Strings()[0], A()))
+            """;
+
+        using var fixture = new Fixture("projected-unrelated");
+        var log = fixture.Compile(source);
+
+        Assert.True(File.Exists(fixture.AppPath), log);
+        Assert.DoesNotContain("GS0154", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("GS9998", log, StringComparison.Ordinal);
     }
 
     /// <summary>A nullable closed generic base target preserves rule-2 widening.</summary>

@@ -3705,18 +3705,30 @@ public sealed class Conversion
             && TryProjectPlatformArgumentsToSupertype(from, to, out var projected, out var supertypeArguments))
         {
             var hasIllegalProjection = false;
+            var hasUnrelatedProjection = false;
             for (var i = 0; i < projected.Length; i++)
             {
                 var directionalEscape = IsVariantPlatformEscape(projected[i], supertypeArguments[i]);
                 if (IsProjectedPlatformArgumentIllegal(
                         projected[i],
                         supertypeArguments[i],
-                        out var projectedRejectsImported)
+                        out var projectedRejectsImported,
+                        out var projectedIsUnrelated)
                     || IsCovariantPlatformEscape(projected[i], supertypeArguments[i]))
                 {
                     hasIllegalProjection = true;
                     rejectsImportedParameter |= projectedRejectsImported || directionalEscape;
                 }
+                else
+                {
+                    hasUnrelatedProjection |= projectedIsUnrelated;
+                }
+            }
+
+            if (hasUnrelatedProjection)
+            {
+                rejectsImportedParameter = false;
+                return false;
             }
 
             if (hasIllegalProjection)
@@ -4414,9 +4426,11 @@ public sealed class Conversion
     private static bool IsProjectedPlatformArgumentIllegal(
         TypeSymbol projected,
         TypeSymbol target,
-        out bool rejectsImportedParameter)
+        out bool rejectsImportedParameter,
+        out bool isUnrelated)
     {
         var relation = RelatePlatformArguments(projected, target);
+        isUnrelated = relation == PlatformArgumentRelation.Unrelated;
         rejectsImportedParameter = relation is PlatformArgumentRelation.IllegalFromPlatform
             or PlatformArgumentRelation.IllegalMixed;
         if (!IsIllegalPlatformArgumentRelation(relation))
