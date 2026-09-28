@@ -63,6 +63,36 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
     }
 
     [Fact]
+    public void InferredSuspendMethodGroupWithDeclaredContext_VerifiesAndRuns()
+    {
+        const string source = """
+            package Issue4412InferredDeclaredContext
+            import System
+            import System.Threading.Tasks
+            import Gsharp.Concurrency
+
+            func Inferred(value int32, ctx Context) int32 {
+                return await Task.FromResult(value + 1)
+            }
+
+            let callback = Inferred
+            Console.WriteLine(callback(1, Context.None))
+            """;
+
+        var directory = PrepareDirectory(nameof(InferredSuspendMethodGroupWithDeclaredContext_VerifiesAndRuns));
+        try
+        {
+            var outputPath = Compile(directory, "App", source, "/target:exe");
+            IlVerifier.Verify(outputPath, new[] { Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"2{Environment.NewLine}", Run(outputPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void DirectInstanceAndBaseSuspendMethodGroups_VerifyAndRun()
     {
         const string source = """

@@ -1946,8 +1946,9 @@ internal sealed class LambdaBinder
     /// Wraps a method group in a capturing lambda when its emitted method
     /// signature cannot be used directly as the delegate target. Suspend
     /// methods with an ADR-0174 hidden context parameter need that parameter
-    /// supplied, while value-type extension receivers cannot be closed over by
-    /// the CLR delegate constructor.
+    /// supplied, inferred suspend methods need their post-inference return
+    /// shape bridged, and value-type extension receivers cannot be closed over
+    /// by the CLR delegate constructor.
     /// </summary>
     /// <param name="group">Resolved user method group.</param>
     /// <returns>The original group when direct delegate construction is valid; otherwise a capturing adapter.</returns>
@@ -1963,7 +1964,9 @@ internal sealed class LambdaBinder
         var needsValueTypeExtensionAdapter = function.IsExtension
             && group.Receiver != null
             && GSharp.Core.CodeAnalysis.Emit.ReflectionMetadataEmitter.IsValueTypeSymbol(group.Receiver.Type);
-        if (function.HiddenContextParameter == null && !needsValueTypeExtensionAdapter)
+        if (function.HiddenContextParameter == null
+            && function.SuspendingKind != SuspendingKind.Inferred
+            && !needsValueTypeExtensionAdapter)
         {
             return group;
         }
