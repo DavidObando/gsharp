@@ -300,7 +300,7 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         /// <summary>
-        /// Issue #1072/#2305/#3771: whether a <c>var</c> local's emitted G#
+        /// Issue #1072/#2305/#3771/#4445: whether a <c>var</c> local's emitted G#
         /// declaration is widened to <c>T?</c>.
         /// </summary>
         /// <remarks>
@@ -310,10 +310,148 @@ public sealed partial class CSharpToGSharpTranslator
         /// unlike C#'s erased <c>!</c>, G#'s <c>!!</c> is a checked assertion that
         /// THROWS on nil.
         /// </remarks>
-        private bool InferredLocalDeclarationIsNullable(ILocalSymbol local) =>
-            this.ShouldPromoteToNullableReference(local)
-            || (IsAnnotatedNullableReference(local.Type)
-                && this.IsUsedAsNullable(local, this.GetNullabilityScope(local)));
+        private bool InferredLocalDeclarationIsNullable(ILocalSymbol local)
+        {
+            if (this.ShouldPromoteToNullableReference(local)
+                || (IsAnnotatedNullableReference(local.Type)
+                    && this.IsUsedAsNullable(local, this.GetNullabilityScope(local))))
+            {
+                return true;
+            }
+
+            if (!IsAnnotatedNullableReference(local.Type))
+            {
+                return false;
+            }
+
+            ExpressionSyntax initializer = this.GetInferredLocalInitializer(local);
+            if (initializer != null)
+            {
+                TypeInfo typeInfo = this.context.GetTypeInfo(initializer);
+                NullableFlowState flowState = typeInfo.Nullability.FlowState;
+                if (flowState != NullableFlowState.None)
+                {
+                    return flowState == NullableFlowState.MaybeNull;
+                }
+
+                if (IsNullForgiven(initializer))
+                {
+                    return false;
+                }
+
+                if (!IsNullOrDefaultLiteral(initializer)
+                    && typeInfo.Type is { } initializerType
+                    && !IsAnnotatedNullableReference(initializerType)
+                    && initializerType is not ITypeParameterSymbol)
+                {
+                    return false;
+                }
+            }
+
+            // Roslyn reports FlowState.None for individual tuple RHS leaves in
+            // deconstruction, while preserving the inferred annotation here.
+            return local.NullableAnnotation == NullableAnnotation.Annotated;
+        }
+
+        private static bool IsNullForgiven(ExpressionSyntax expression)
+        {
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            return expression is PostfixUnaryExpressionSyntax
+            {
+                RawKind: (int)SyntaxKind.SuppressNullableWarningExpression,
+            };
+        }
+
+        private ExpressionSyntax GetInferredLocalInitializer(ILocalSymbol local)
+        {
+            SyntaxNode declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            if (declaration is VariableDeclaratorSyntax declarator)
+            {
+                return declarator.Initializer?.Value;
+            }
+
+            if (declaration is not SingleVariableDesignationSyntax designation
+                || designation.Ancestors().OfType<AssignmentExpressionSyntax>().FirstOrDefault()
+                    is not { Left: { } left, Right: { } right })
+            {
+                return null;
+            }
+
+            return FindDeconstructionInitializer(designation, left, right);
+        }
+
+        private static ExpressionSyntax FindDeconstructionInitializer(
+            SingleVariableDesignationSyntax target,
+            ExpressionSyntax left,
+            ExpressionSyntax right)
+        {
+            left = Unwrap(left);
+            right = Unwrap(right);
+
+            if (left is DeclarationExpressionSyntax declaration)
+            {
+                return FindDeconstructionInitializer(target, declaration.Designation, right);
+            }
+
+            if (left is not TupleExpressionSyntax leftTuple
+                || right is not TupleExpressionSyntax rightTuple
+                || leftTuple.Arguments.Count != rightTuple.Arguments.Count)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < leftTuple.Arguments.Count; i++)
+            {
+                ExpressionSyntax found = FindDeconstructionInitializer(
+                    target,
+                    leftTuple.Arguments[i].Expression,
+                    rightTuple.Arguments[i].Expression);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+
+            return null;
+        }
+
+        private static ExpressionSyntax FindDeconstructionInitializer(
+            SingleVariableDesignationSyntax target,
+            VariableDesignationSyntax designation,
+            ExpressionSyntax right)
+        {
+            if (designation.SyntaxTree == target.SyntaxTree
+                && designation.Span == target.Span)
+            {
+                return right;
+            }
+
+            right = Unwrap(right);
+            if (designation is not ParenthesizedVariableDesignationSyntax parenthesized
+                || right is not TupleExpressionSyntax rightTuple
+                || parenthesized.Variables.Count != rightTuple.Arguments.Count)
+            {
+                return null;
+            }
+
+            for (int i = 0; i < parenthesized.Variables.Count; i++)
+            {
+                ExpressionSyntax found = FindDeconstructionInitializer(
+                    target,
+                    parenthesized.Variables[i],
+                    rightTuple.Arguments[i].Expression);
+                if (found != null)
+                {
+                    return found;
+                }
+            }
+
+            return null;
+        }
 
         /// <summary>
         /// Translates every declarator of a ref-local declaration (<c>ref int r =
@@ -2343,6 +2481,22 @@ public sealed partial class CSharpToGSharpTranslator
                             names,
                             this.TranslateExpression(assignment.Right)),
                     };
+                }
+
+                if (assignment.Left is DeclarationExpressionSyntax
+                    {
+                        Type.IsVar: true,
+                        Designation: ParenthesizedVariableDesignationSyntax designation,
+                    })
+                {
+                    var statements = new List<GStatement>();
+                    this.LowerDeconstructionDeclaration(
+                        designation,
+                        this.TranslateExpression(assignment.Right),
+                        preserveValue: false,
+                        statements,
+                        inferredType: true);
+                    return statements;
                 }
 
                 // `(a, b) = (x, y)` deconstruction *assignment*. Flat existing

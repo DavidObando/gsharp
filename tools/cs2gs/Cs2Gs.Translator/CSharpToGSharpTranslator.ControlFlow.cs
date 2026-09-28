@@ -1750,6 +1750,10 @@ public sealed partial class CSharpToGSharpTranslator
             if (declaratorCount > 1 ||
                 forStatement.Initializers.Count > 1 ||
                 forStatement.Incrementors.Count > 1 ||
+                forStatement.Initializers
+                    .Concat(forStatement.Incrementors)
+                    .OfType<AssignmentExpressionSyntax>()
+                    .Any(AssignmentRequiresStatementLowering) ||
                 this.ForConditionRequiresHoist(forStatement.Condition))
             {
                 return this.LowerForToWhile(forStatement);
