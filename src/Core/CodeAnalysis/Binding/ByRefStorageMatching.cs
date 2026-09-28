@@ -21,8 +21,9 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// </para>
 /// <para>
 /// This replaces <see cref="DeclarationBinder.TypeSignaturesEquivalent(TypeSymbol, TypeSymbol)"/>
-/// at the by-ref gates. Signature equivalence answers only whether declarations
-/// occupy the same slot; this matcher additionally records the direction and
+/// at the by-ref gates. The shared comparer answers a boolean equivalence
+/// question for declarations, inference, overload identity, and related
+/// signature decisions. This matcher additionally records the direction and
 /// nesting of reference-nullability differences for <c>GS0612</c>, and
 /// normalizes equivalent imported-array and native-slice storage views.
 /// </para>
