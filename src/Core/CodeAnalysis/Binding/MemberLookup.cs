@@ -8144,7 +8144,14 @@ internal sealed class MemberLookup
             return;
         }
 
-        var annotatedActualForProjection = actual as NullabilityAnnotatedTypeSymbol;
+        var actualForHierarchyProjection = actual;
+        while (actualForHierarchyProjection is NullableTypeSymbol nullableProjectionActual
+            && !NullableLifting.IsAnyValueTypeNullable(nullableProjectionActual))
+        {
+            actualForHierarchyProjection = nullableProjectionActual.UnderlyingType;
+        }
+
+        var annotatedActualForProjection = actualForHierarchyProjection as NullabilityAnnotatedTypeSymbol;
 
         // A direct MVar match must observe the complete symbolic actual before
         // nullable-reference wrappers are removed for outer structural

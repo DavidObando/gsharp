@@ -363,6 +363,7 @@ public sealed class Conversion
         // and variant projections were already decided by the mismatch arm.
         if (from is not NullableTypeSymbol
             && from is not PlatformTypeSymbol
+            && !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(from, to)
             && TryProjectPlatformArgumentsToSupertype(from, to, out var projectedArguments, out var targetArguments)
             && projectedArguments.Length == targetArguments.Length)
         {

@@ -50,6 +50,8 @@ public class Issue4479SupertypeNullabilityInferenceTests
                 public static List<string> Strings() { return new List<string> { "a", "b" }; }
 
                 public static List<string?> NullableStrings() { return new List<string?> { null, "b" }; }
+
+                public static List<string?>? MaybeNullableStrings() { return null; }
             }
 
             public interface IBox<T>
@@ -63,6 +65,8 @@ public class Issue4479SupertypeNullabilityInferenceTests
             public static class Generic
             {
                 public static T Pick<T>(IBox<T> box) { return default!; }
+
+                public static List<T> Copy<T>(IEnumerable<T>? values) { return new List<T>(); }
             }
         #nullable restore
         }
@@ -101,6 +105,9 @@ public class Issue4479SupertypeNullabilityInferenceTests
         Assert.Equal(
             "System.Collections.Generic.IEnumerable[string?]",
             ProbeType(library, "let probe = En.NullableStrings().Select(s -> s)"));
+        Assert.Equal(
+            "System.Collections.Generic.List[string?]",
+            ProbeType(library, "let probe = Generic.Copy(En.MaybeNullableStrings())"));
     }
 
     /// <summary>
