@@ -472,6 +472,62 @@ namespace Demo
 
         Assert.Contains("partial func Scale(value int32, factor int32 = 3) int32;", printed[0]);
         Assert.Contains("partial func Scale(value int32, factor int32 = 3) int32 {", printed[1]);
+        Assert.Equal(2, CountOccurrences(string.Join("\n", printed), "factor int32 = 3"));
+    }
+
+    [Fact]
+    public void ImplementedPair_DemotedForDifferentImports_InheritsDefaultInImplementationScope()
+    {
+        IReadOnlyList<string> printed = TranslateFiles(
+            preservePartialParts: true,
+            ("DefaultChoice.cs", @"
+namespace Defaults
+{
+    public enum Choice
+    {
+        First,
+    }
+}"),
+            ("OtherChoice.cs", @"
+namespace Other
+{
+    public enum Choice
+    {
+        Second,
+    }
+}"),
+            ("Api.Decl.cs", @"
+using Defaults;
+
+namespace Demo
+{
+    public partial class Api
+    {
+        partial void Select(int value, Choice choice = Choice.First);
+
+        public void Use() => Select(1);
+    }
+}"),
+            ("Api.Impl.cs", @"
+using Other;
+
+namespace Demo
+{
+    public partial class Api
+    {
+        partial void Select(int value, Defaults.Choice selected)
+        {
+        }
+
+        public Choice OtherChoice() => Choice.Second;
+    }
+}"));
+
+        string combined = string.Join("\n---\n", printed);
+        Assert.DoesNotContain("partial func Select(", combined);
+        Assert.Equal(1, CountOccurrences(combined, "func Select("));
+        Assert.Contains("func Select(value int32, selected Defaults.Choice = Defaults.Choice.First)", combined);
+        Assert.Contains("Select(1)", combined);
     }
 
     [Fact]
@@ -874,9 +930,9 @@ namespace Demo
 {
     public partial class VM
     {
-        partial void OnSet(int value);
+        partial void OnSet(int value = 5);
 
-        public void Set(int v) => OnSet(v);
+        public void Set() => OnSet();
     }
 }"),
             ("VM.Impl.cs", @"
@@ -896,7 +952,8 @@ namespace Demo
         string combined = string.Join("\n---\n", printed);
         Assert.DoesNotContain("partial func", combined);
         Assert.Equal(1, CountOccurrences(combined, "func OnSet("));
-        Assert.Contains("func OnSet(newValue int32)", combined);
+        Assert.Contains("func OnSet(newValue int32 = 5)", combined);
+        Assert.Contains("OnSet()", combined);
     }
 
     [Fact]
@@ -911,7 +968,7 @@ namespace Demo
 {
     public static partial class TextExtensions
     {
-        public static partial string Shout(this string text);
+        public static partial string Shout(this string text, string suffix = ""!"");
     }
 }"),
             ("Ext.Impl.cs", @"
@@ -919,13 +976,17 @@ namespace Demo
 {
     public static partial class TextExtensions
     {
-        public static partial string Shout(this string text) => text + ""!"";
+        public static partial string Shout(this string text, string suffix) => text + suffix;
+
+        public static string Use(string text) => text.Shout();
     }
 }"));
 
         string combined = string.Join("\n---\n", printed);
         Assert.DoesNotContain("partial func", combined);
-        Assert.Equal(1, CountOccurrences(combined, "Shout("));
+        Assert.Equal(2, CountOccurrences(combined, "Shout("));
+        Assert.Contains("Shout(suffix string = \"!\")", combined);
+        Assert.Contains("text.Shout()", combined);
     }
 
     [Fact]
@@ -940,7 +1001,7 @@ namespace Demo
 {
     public partial class VM
     {
-        partial void OnConfigured(int value);
+        partial void OnConfigured(int value = 5);
     }
 }"),
             ("VM.Impl.cs", @"
@@ -954,12 +1015,16 @@ namespace Demo
         {
             _seen = value;
         }
+
+        public void Configure() => OnConfigured();
     }
 }"));
 
         string combined = string.Join("\n---\n", printed);
         Assert.DoesNotContain("partial func", combined);
         Assert.Equal(1, CountOccurrences(combined, "func OnConfigured("));
+        Assert.Contains("func OnConfigured(value int32 = 5)", combined);
+        Assert.Contains("OnConfigured()", combined);
         Assert.Contains("_seen = value", combined);
     }
 
@@ -1000,6 +1065,7 @@ namespace Demo
         string translated = Assert.Single(printed);
         Assert.DoesNotContain("partial func", translated);
         Assert.Equal(1, CountOccurrences(translated, "func OnConfigured("));
+        Assert.Contains("func OnConfigured(value int32) {", translated);
         Assert.Contains("_seen = value", translated);
     }
 

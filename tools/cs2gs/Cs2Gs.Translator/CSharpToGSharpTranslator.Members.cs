@@ -1233,6 +1233,14 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 parameters = this.ReconcilePartialMethodParameters(symbol, parameters, isDeclaringPart);
             }
+            else if (!isGeneratedImplementingPart && symbol?.PartialDefinitionPart != null)
+            {
+                parameters = this.ApplyPartialMethodDefinitionDefaults(
+                    symbol,
+                    parameters,
+                    useDefinitionScope: false,
+                    parameterOffset: skipFirstParameter ? 1 : 0);
+            }
 
             // ADR-0174 D4: an `async ValueTask`/`ValueTask<T>` method that
             // touches the Gsharp.Concurrency runtime (or carries [Suspending])
@@ -1655,19 +1663,17 @@ public sealed partial class CSharpToGSharpTranslator
             List<Parameter> parameters,
             bool isDeclaringPart)
         {
+            parameters = this.ApplyPartialMethodDefinitionDefaults(
+                symbol,
+                parameters,
+                isDeclaringPart,
+                parameterOffset: 0);
             IMethodSymbol definition = symbol.PartialDefinitionPart ?? symbol;
             var reconciled = new List<Parameter>(parameters.Count);
             for (int i = 0; i < parameters.Count; i++)
             {
                 Parameter mapped = parameters[i];
                 IParameterSymbol definitionParameter = definition.Parameters[i];
-                IParameterSymbol ownParameter = isDeclaringPart ? definitionParameter : symbol.Parameters[i];
-                SyntaxNode ownParameterSyntax = ownParameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-                GExpression defaultValue = this.BuildOptionalParameterDefault(
-                    definitionParameter,
-                    mapped.Type,
-                    ownParameterSyntax,
-                    spellingNode: ownParameterSyntax);
                 var attributes = new List<AttributeUse>();
                 foreach (IParameterSymbol part in new[] { definitionParameter, symbol.Parameters[i] })
                 {
@@ -1682,8 +1688,43 @@ public sealed partial class CSharpToGSharpTranslator
                     mapped.Type,
                     mapped.IsVariadic,
                     mapped.RefKind,
-                    defaultValue,
+                    mapped.DefaultValue,
                     attributes));
+            }
+
+            return reconciled;
+        }
+
+        private List<Parameter> ApplyPartialMethodDefinitionDefaults(
+            IMethodSymbol implementation,
+            List<Parameter> parameters,
+            bool useDefinitionScope,
+            int parameterOffset)
+        {
+            IMethodSymbol definition = implementation.PartialDefinitionPart ?? implementation;
+            var reconciled = new List<Parameter>(parameters.Count);
+            for (int i = 0; i < parameters.Count; i++)
+            {
+                Parameter mapped = parameters[i];
+                int symbolIndex = i + parameterOffset;
+                IParameterSymbol spellingParameter =
+                    useDefinitionScope
+                        ? definition.Parameters[symbolIndex]
+                        : implementation.Parameters[symbolIndex];
+                SyntaxNode spellingSyntax =
+                    spellingParameter.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+                GExpression defaultValue = this.BuildOptionalParameterDefault(
+                    definition.Parameters[symbolIndex],
+                    mapped.Type,
+                    spellingSyntax,
+                    spellingNode: spellingSyntax);
+                reconciled.Add(new Parameter(
+                    mapped.Name,
+                    mapped.Type,
+                    mapped.IsVariadic,
+                    mapped.RefKind,
+                    defaultValue,
+                    mapped.Attributes));
             }
 
             return reconciled;
