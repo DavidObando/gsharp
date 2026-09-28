@@ -66,9 +66,11 @@ public sealed partial class CSharpToGSharpTranslator
                 // not reference them. G# function literals always name params
                 // explicitly, so synthesize them from the converted delegate
                 // type's Invoke signature; if that type can't be resolved, this is
-                // a genuine gap. Translation still has an empty parameter list,
-                // but the loud Unsupported diagnostic prevents silent acceptance.
-                if (this.context.GetTypeInfo(implicitParamsAnonymousMethod).ConvertedType is INamedTypeSymbol { DelegateInvokeMethod: { } invokeMethod })
+                // a genuine gap rather than a silent zero-arg guess.
+                IMethodSymbol invokeMethod = exactTargetInvoke
+                    ?? (this.context.GetTypeInfo(implicitParamsAnonymousMethod).ConvertedType
+                        as INamedTypeSymbol)?.DelegateInvokeMethod;
+                if (invokeMethod != null)
                 {
                     // The body can never reference these params (C# gives them no
                     // source names here), so use G#'s repeatable, non-referenceable

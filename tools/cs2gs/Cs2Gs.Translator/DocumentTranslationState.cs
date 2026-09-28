@@ -90,11 +90,11 @@ internal sealed class DocumentTranslationState
         new HashSet<ExpressionSyntax>(ReferenceEqualityComparer.Instance);
 
     // Built once per translated body. Each entry maps a receiver symbol to
-    // member invocations that use it, avoiding one full body scan per eligible
-    // projected construction.
-    public Dictionary<SyntaxNode, Dictionary<ISymbol, List<InvocationExpressionSyntax>>>
-        ReceiverInvocationsByBody { get; } =
-            new Dictionary<SyntaxNode, Dictionary<ISymbol, List<InvocationExpressionSyntax>>>(
+    // later member calls and writes that can determine the receiver's projected
+    // constructed type.
+    public Dictionary<SyntaxNode, Dictionary<ISymbol, List<SyntaxNode>>>
+        ReceiverConsumersByBody { get; } =
+            new Dictionary<SyntaxNode, Dictionary<ISymbol, List<SyntaxNode>>>(
                 ReferenceEqualityComparer.Instance);
 
     // Effective emitted type of an implicitly typed local whose initializer

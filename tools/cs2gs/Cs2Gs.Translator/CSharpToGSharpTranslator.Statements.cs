@@ -2114,7 +2114,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return value;
             }
 
-            ISymbol assignmentTarget = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ISymbol assignmentTarget = this.GetProjectedAssignmentTarget(
+                assignment.Left,
+                this.context.GetSymbolInfo(assignment.Left).Symbol);
             ITypeSymbol assignmentTargetType = this.GetAssignmentTargetType(assignment.Left, assignmentTarget);
             ISymbol promotionTarget = assignmentTarget;
             if (assignmentTarget is ILocalSymbol inferredAssignmentLocal
@@ -2153,8 +2155,10 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Expression nullability is absent when warnings are disabled, even
         // when the declared indexer or array element explicitly permits null.
-        private ITypeSymbol GetAssignmentTargetType(ExpressionSyntax left, ISymbol target) =>
-            target switch
+        private ITypeSymbol GetAssignmentTargetType(ExpressionSyntax left, ISymbol target)
+        {
+            target = this.GetProjectedAssignmentTarget(left, target);
+            return target switch
             {
                 ILocalSymbol local => local.Type,
                 IParameterSymbol parameter => parameter.Type,
@@ -2164,6 +2168,31 @@ public sealed partial class CSharpToGSharpTranslator
                     && this.context.GetTypeInfo(element.Expression).Type is IArrayTypeSymbol array => array.ElementType,
                 _ => this.context.GetTypeInfo(left).Type,
             };
+        }
+
+        private ISymbol GetProjectedAssignmentTarget(
+            ExpressionSyntax left,
+            ISymbol target)
+        {
+            target ??= this.context.SemanticModel.GetOperation(left) switch
+            {
+                IFieldReferenceOperation field => field.Field,
+                IPropertyReferenceOperation property => property.Property,
+                _ => null,
+            };
+            ExpressionSyntax receiver = left switch
+            {
+                MemberAccessExpressionSyntax member => member.Expression,
+                ElementAccessExpressionSyntax element => element.Expression,
+                _ => null,
+            };
+            return receiver != null
+                && target != null
+                && this.GetManagedReferenceArrayProjectedExpressionType(receiver)
+                    is INamedTypeSymbol projectedReceiver
+                    ? this.GetProjectedMember(projectedReceiver, target) ?? target
+                    : target;
+        }
 
         // Translates the target (left-hand side) of an assignment. Two member-access
         // LHS shapes that gsc cannot bind through the usual receiver path are fixed

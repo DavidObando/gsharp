@@ -3882,7 +3882,11 @@ public sealed partial class CSharpToGSharpTranslator
                     e.IsKind(SyntaxKind.ComplexElementInitializerExpression)
                     && e is InitializerExpressionSyntax { Expressions.Count: not 2 }))
             {
-                result = this.TranslateAddCallCollectionInitializer(initializer, type, arguments);
+                result = this.TranslateAddCallCollectionInitializer(
+                    initializer,
+                    constructedType,
+                    type,
+                    arguments);
                 return result != null;
             }
 
@@ -3904,6 +3908,7 @@ public sealed partial class CSharpToGSharpTranslator
         // suffixed only on a (syntactic) collision with the element expressions.
         private GExpression TranslateAddCallCollectionInitializer(
             InitializerExpressionSyntax initializer,
+            INamedTypeSymbol constructedType,
             GTypeReference type,
             IReadOnlyList<GExpression> arguments)
         {
@@ -3928,6 +3933,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 IMethodSymbol addMethod =
                     this.context.SemanticModel.GetCollectionInitializerSymbolInfo(element).Symbol as IMethodSymbol;
+                addMethod = constructedType == null || addMethod == null
+                    ? addMethod
+                    : this.GetProjectedMember(constructedType, addMethod)
+                        as IMethodSymbol ?? addMethod;
                 IReadOnlyList<ExpressionSyntax> valueSyntaxes =
                     element is InitializerExpressionSyntax complex
                         && element.IsKind(SyntaxKind.ComplexElementInitializerExpression)
@@ -5010,19 +5019,52 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.context.GetDeclaredSymbol(declarator) is ILocalSymbol local
                 && this.state.CurrentBodyScope is { } body)
             {
-                foreach (InvocationExpressionSyntax laterCall
-                    in this.GetReceiverInvocations(body, local))
+                foreach (SyntaxNode consumer
+                    in this.GetReceiverConsumers(body, local))
                 {
-                    if (laterCall.SpanStart <= creationSyntax.SpanStart
-                        || this.context.SemanticModel.GetOperation(laterCall)
-                            is not IInvocationOperation laterInvocation)
+                    if (consumer.SpanStart <= creationSyntax.SpanStart)
                     {
                         continue;
                     }
 
-                    RecordContainingTypeArguments(
-                        laterInvocation.TargetMethod,
-                        laterInvocation.Arguments);
+                    if (consumer is InvocationExpressionSyntax laterCall
+                        && this.context.SemanticModel.GetOperation(laterCall)
+                            is IInvocationOperation laterInvocation)
+                    {
+                        RecordContainingTypeArguments(
+                            laterInvocation.TargetMethod,
+                            laterInvocation.Arguments);
+                        continue;
+                    }
+
+                    if (consumer is AssignmentExpressionSyntax assignment
+                        && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+                    {
+                        ISymbol member =
+                            this.context.GetSymbolInfo(assignment.Left).Symbol
+                            ?? this.context.SemanticModel.GetOperation(assignment.Left)
+                                switch
+                                {
+                                    IFieldReferenceOperation field => field.Field,
+                                    IPropertyReferenceOperation property =>
+                                        property.Property,
+                                    _ => null,
+                                };
+                        ITypeSymbol memberType = member switch
+                        {
+                            IFieldSymbol field => field.OriginalDefinition.Type,
+                            IPropertySymbol property =>
+                                property.OriginalDefinition.Type,
+                            _ => null,
+                        };
+                        if (member?.ContainingType != null && memberType != null)
+                        {
+                            RecordContainingTypeArgument(
+                                member.ContainingType,
+                                memberType,
+                                assignment.Right);
+                        }
+                    }
                 }
             }
 
@@ -5517,28 +5559,39 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        private IReadOnlyList<InvocationExpressionSyntax> GetReceiverInvocations(
+        private IReadOnlyList<SyntaxNode> GetReceiverConsumers(
             SyntaxNode body,
             ISymbol receiver)
         {
-            if (!this.state.ReceiverInvocationsByBody.TryGetValue(
+            if (!this.state.ReceiverConsumersByBody.TryGetValue(
                     body,
-                    out Dictionary<ISymbol, List<InvocationExpressionSyntax>> index))
+                    out Dictionary<ISymbol, List<SyntaxNode>> index))
             {
                 index =
-                    new Dictionary<ISymbol, List<InvocationExpressionSyntax>>(
+                    new Dictionary<ISymbol, List<SyntaxNode>>(
                         SymbolEqualityComparer.Default);
-                foreach (InvocationExpressionSyntax invocation in body
-                    .DescendantNodes()
-                    .OfType<InvocationExpressionSyntax>())
+                foreach (SyntaxNode candidate in body.DescendantNodes())
                 {
-                    if (invocation.Expression is not MemberAccessExpressionSyntax member)
+                    ExpressionSyntax receiverExpression = candidate switch
+                    {
+                        InvocationExpressionSyntax
+                            { Expression: MemberAccessExpressionSyntax member } =>
+                            member.Expression,
+                        AssignmentExpressionSyntax
+                            { Left: MemberAccessExpressionSyntax member } =>
+                            member.Expression,
+                        AssignmentExpressionSyntax
+                            { Left: ElementAccessExpressionSyntax element } =>
+                            element.Expression,
+                        _ => null,
+                    };
+                    if (receiverExpression == null)
                     {
                         continue;
                     }
 
                     ISymbol symbol = this.context.GetSymbolInfo(
-                        Unparenthesize(member.Expression)).Symbol;
+                        Unparenthesize(receiverExpression)).Symbol;
                     if (symbol == null)
                     {
                         continue;
@@ -5546,23 +5599,23 @@ public sealed partial class CSharpToGSharpTranslator
 
                     if (!index.TryGetValue(
                             symbol,
-                            out List<InvocationExpressionSyntax> invocations))
+                            out List<SyntaxNode> consumers))
                     {
-                        invocations = new List<InvocationExpressionSyntax>();
-                        index.Add(symbol, invocations);
+                        consumers = new List<SyntaxNode>();
+                        index.Add(symbol, consumers);
                     }
 
-                    invocations.Add(invocation);
+                    consumers.Add(candidate);
                 }
 
-                this.state.ReceiverInvocationsByBody.Add(body, index);
+                this.state.ReceiverConsumersByBody.Add(body, index);
             }
 
             return index.TryGetValue(
                     receiver,
-                    out List<InvocationExpressionSyntax> receiverInvocations)
-                ? receiverInvocations
-                : Array.Empty<InvocationExpressionSyntax>();
+                    out List<SyntaxNode> receiverConsumers)
+                ? receiverConsumers
+                : Array.Empty<SyntaxNode>();
         }
 
         private static bool ProjectionTypeFitsDestination(

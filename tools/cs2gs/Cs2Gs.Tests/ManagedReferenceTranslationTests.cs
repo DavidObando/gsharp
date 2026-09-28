@@ -1845,6 +1845,7 @@ public sealed class ManagedReferenceTranslationTests
         Assert.DoesNotContain(
             context.Diagnostics,
             diagnostic => diagnostic.Severity != TranslationSeverity.Info);
+        Assert.Contains("var slot", text, StringComparison.Ordinal);
         Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
@@ -2259,6 +2260,150 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayNAryCollectionInitializerUsesProjectedAdd()
+    {
+        const string source = """
+            using System.Collections;
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayNAryCollectionInitializer;
+            public sealed class Rows<T> : IEnumerable {
+                private readonly List<T> values = new();
+                public T First => this.values[0];
+                public void Add(int key, T value, bool keep) {
+                    if (keep) {
+                        this.values.Add(value);
+                    }
+                }
+                IEnumerator IEnumerable.GetEnumerator() => this.values.GetEnumerator();
+            }
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    var rows = new Rows<ManagedRef<int>> {
+                        { 0, source[0], true },
+                    };
+                    return rows.First == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayNAryCollectionInitializer.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Rows[managed[int32]?]()", text, StringComparison.Ordinal);
+        Assert.Contains("values.Add(0, source[0], true)", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Theory]
+    [InlineData("holder.Field = source[0];", "holder.Field")]
+    [InlineData("holder.Property = source[0];", "holder.Property")]
+    [InlineData("holder[0] = source[0];", "holder[0]")]
+    public void ManagedReferenceArrayProjectionIncludesLaterMemberWrites(
+        string assignment,
+        string read)
+    {
+        var source = $$"""
+            using Gsharp.Values;
+            namespace ManagedArrayLaterMemberWrite;
+            public sealed class Holder<T> {
+                public T Field;
+                public T Property { get; set; }
+                public T this[int index] {
+                    get => this.Field;
+                    set => this.Field = value;
+                }
+            }
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    var holder = new Holder<ManagedRef<int>>();
+                    {{assignment}}
+                    return {{read}} == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayLaterMemberWrite.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Holder[managed[int32]?]()", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionUpdatesParameterlessAnonymousDelegate()
+    {
+        const string source = """
+            using System.Linq;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedAnonymousDelegate;
+            public class Probe {
+                private static TResult Apply<T, TResult>(
+                    T[] items,
+                    System.Func<T, TResult> selector) =>
+                    selector(items[0]);
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return Apply(source, delegate { return true; }) ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedAnonymousDelegate.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "__anon0 Gsharp.Values.ManagedRef[int32]?",
+            text,
+            StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
     }
 
     [Fact]

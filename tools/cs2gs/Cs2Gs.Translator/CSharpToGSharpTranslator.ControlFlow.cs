@@ -2198,7 +2198,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            RefKind refKind = operation.TargetMethod.Parameters[0].RefKind;
+            IMethodSymbol extensionMethod =
+                operation.TargetMethod.ReducedFrom ?? operation.TargetMethod;
+            RefKind refKind = extensionMethod.Parameters[0].RefKind;
             return refKind == RefKind.Ref || refKind == RefKind.Out;
         }
 
