@@ -715,8 +715,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.context.GetSymbolInfo(assignment.Left).Symbol;
 
                 case ArgumentSyntax argument:
-                    return (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
-                        ?.Parameter;
+                    return this.GetArgumentParameter(argument);
 
                 case ReturnStatementSyntax returnStatement:
                     return this.context.SemanticModel

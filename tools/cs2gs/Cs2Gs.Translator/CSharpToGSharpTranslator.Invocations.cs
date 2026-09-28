@@ -4749,10 +4749,25 @@ public sealed partial class CSharpToGSharpTranslator
             bool fixedStorageNeedsNullableArgument = false;
             void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
             {
+                if (argument is TupleExpressionSyntax tuple
+                    && parameterType is INamedTypeSymbol { IsTupleType: true } parameterTuple
+                    && tuple.Arguments.Count == parameterTuple.TupleElements.Length)
+                {
+                    for (int i = 0; i < tuple.Arguments.Count; i++)
+                    {
+                        RecordWidenedArguments(
+                            tuple.Arguments[i].Expression,
+                            parameterTuple.TupleElements[i].Type);
+                    }
+
+                    return;
+                }
+
                 ITypeSymbol argumentType =
                     this.GetManagedReferenceArrayProjectedArgumentType(argument);
                 bool nullableArrayArgument =
-                    this.ArrayExpressionHasNullableElement(argument);
+                    this.ArrayExpressionHasNullableElement(argument)
+                    || this.IsNullableArrayElementAccess(argument);
 
                 RecordWidenedTypeParameters(
                     method.TypeArguments,

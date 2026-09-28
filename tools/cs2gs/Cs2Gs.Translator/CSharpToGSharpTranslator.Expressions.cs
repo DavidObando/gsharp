@@ -3641,6 +3641,15 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => null,
             };
 
+            if (target == null
+                && current.Parent is ArgumentSyntax { Parent: TupleExpressionSyntax }
+                && this.ResolveValueSink(value) is { } tupleSink
+                && this.GetFixedElementDestinationType(value, tupleSink)
+                    is { } tupleTargetType)
+            {
+                return (tupleTargetType, tupleSink);
+            }
+
             // An arm's effective target is the sink of the whole expression — a
             // local, field, property, assignment target or parameter — and
             // the type is the one that sink declares, which cs2gs may have
