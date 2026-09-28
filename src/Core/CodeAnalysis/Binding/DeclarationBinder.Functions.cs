@@ -3260,14 +3260,7 @@ internal sealed partial class DeclarationBinder
                 && pb.OpenDefinition != null
                 && pa.OpenDefinition == pb.OpenDefinition)
             {
-                if (TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap))
-                {
-                    return true;
-                }
-
-                return !TypeSymbol.ContainsTypeParameter(pa)
-                    && !TypeSymbol.ContainsTypeParameter(pb)
-                    && TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(pa, pb);
+                return TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap);
             }
 
             // Otherwise (one or both sides expressed as a plain closed CLR

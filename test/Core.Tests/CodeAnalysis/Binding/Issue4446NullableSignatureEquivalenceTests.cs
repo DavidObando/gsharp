@@ -92,6 +92,15 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
                 typeof(List<object>),
                 typeof(List<>),
                 ImmutableArray.Create<TypeSymbol>(userClass))));
+        Assert.False(DeclarationBinder.TypeSignaturesEquivalent(
+            ImportedTypeSymbol.GetConstructed(
+                typeof(List<object>),
+                typeof(List<>),
+                ImmutableArray.Create(PlatformTypeSymbol.Get(userClass))),
+            ImportedTypeSymbol.GetConstructed(
+                typeof(List<object>),
+                typeof(List<>),
+                ImmutableArray.Create<TypeSymbol>(userClass))));
         Assert.True(DeclarationBinder.TypeSignaturesEquivalent(
             NullableTypeSymbol.Get(userClass),
             userClass));
