@@ -147,6 +147,35 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void NullableArrayInitializerPreservesReferenceConversion()
+    {
+        const string source = """
+            namespace NullableArrayInitializerConversion;
+            public class Base { }
+            public class Derived : Base { }
+            public class Probe {
+                private static Derived? Maybe(bool present) => present ? new Derived() : null;
+                public static int Run() {
+                    var items = new Base?[] { Maybe(true), Maybe(false) };
+                    return items[0] is Derived && items[1] == null ? 42 : 0;
+                }
+            }
+            """;
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("NullableArrayInitializerConversion.cs", source) },
+            CSharpProjectLoader.RuntimeReferences());
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayForEachBindingsRemainNullable()
     {
         const string source = """

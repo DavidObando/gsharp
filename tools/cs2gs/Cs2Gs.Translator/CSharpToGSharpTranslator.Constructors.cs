@@ -3617,9 +3617,9 @@ public sealed partial class CSharpToGSharpTranslator
                     bool nullableElement = this.ArrayExpressionHasNullableElement(forEach.Expression)
                         || (forEachElement?.IsReferenceType == true
                             && forEachElement.NullableAnnotation == NullableAnnotation.Annotated);
-                    if (nullableElement)
+                    if (nullableElement && loopSymbol != null)
                     {
-                        this.state.NullableForEachStatements.Add(forEach);
+                        this.state.NullableForEachBindings.Add(loopSymbol);
                     }
 
                     BlockStatement loopBody;
@@ -3629,9 +3629,9 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                     finally
                     {
-                        if (nullableElement)
+                        if (nullableElement && loopSymbol != null)
                         {
-                            this.state.NullableForEachStatements.Remove(forEach);
+                            this.state.NullableForEachBindings.Remove(loopSymbol);
                         }
                     }
 

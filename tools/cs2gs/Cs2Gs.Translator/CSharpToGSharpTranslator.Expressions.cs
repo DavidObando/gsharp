@@ -2270,7 +2270,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IsNullableForEachBindingUse(ExpressionSyntax expression)
         {
-            if (this.state.NullableForEachStatements.Count == 0)
+            if (this.state.NullableForEachBindings.Count == 0)
             {
                 return false;
             }
@@ -2287,12 +2287,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
-            return symbol != null
-                && expression.Ancestors().OfType<ForEachStatementSyntax>().Any(forEach =>
-                    this.state.NullableForEachStatements.Contains(forEach)
-                    && SymbolEqualityComparer.Default.Equals(
-                        this.context.GetDeclaredSymbol(forEach),
-                        symbol));
+            return symbol != null && this.state.NullableForEachBindings.Contains(symbol);
         }
 
         private static GExpression EnsureNonNullAssertion(GExpression expression) =>
