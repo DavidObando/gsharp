@@ -1035,10 +1035,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.GetManagedReferenceArrayProjectedExpressionType(expression);
             return effectiveType != null
                 && effectiveType.NullableAnnotation == NullableAnnotation.Annotated
-                && (effectiveType.IsReferenceType
-                    || CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
-                        effectiveType,
-                        this.context.Compilation));
+                && this.IsReferenceLikeOrManagedReference(effectiveType);
         }
 
         private ITypeSymbol GetManagedReferenceArrayProjectedExpressionType(
@@ -1052,6 +1049,14 @@ public sealed partial class CSharpToGSharpTranslator
                     is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
             {
                 return this.GetManagedReferenceArrayProjectedExpressionType(initializer);
+            }
+
+            if (expression is ElementAccessExpressionSyntax arrayElement
+                && this.ArrayExpressionHasNullableReferenceLikeElement(
+                    arrayElement.Expression)
+                && this.context.GetTypeInfo(arrayElement).Type is { } elementType)
+            {
+                return elementType.WithNullableAnnotation(NullableAnnotation.Annotated);
             }
 
             if (expression is InvocationExpressionSyntax invocation)
@@ -1110,8 +1115,9 @@ public sealed partial class CSharpToGSharpTranslator
         {
             foreach (INamedTypeSymbol candidateType in ReceiverTypeHierarchy(receiverType))
             {
+                IMethodSymbol method = memberSymbol as IMethodSymbol;
                 IEnumerable<ISymbol> candidates =
-                    memberSymbol is IMethodSymbol { MethodKind: MethodKind.Constructor }
+                    method != null && method.MethodKind == MethodKind.Constructor
                         ? candidateType.InstanceConstructors
                         : candidateType.GetMembers(memberSymbol.Name);
                 foreach (ISymbol candidate in candidates)

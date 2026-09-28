@@ -325,6 +325,51 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceArrayElementWidensGenericContainer()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayGenericContainer;
+            public class Holder<T> {
+                public readonly T Value;
+                public Holder(T value) { this.Value = value; }
+            }
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    var holder = new Holder<ManagedRef<int>>(source[0]);
+                    var list = new List<ManagedRef<int>>();
+                    list.Add(source[0]);
+                    return holder.Value == null && list[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayGenericContainer.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Holder[managed[int32]?](source[0])", text, StringComparison.Ordinal);
+        Assert.Contains("List[managed[int32]?]()", text, StringComparison.Ordinal);
+        Assert.Contains("list.Add(source[0])", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("list.Add(source[0]!!)", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayForEachBindingsBridgeEveryNonNullUse()
     {
         const string source = """

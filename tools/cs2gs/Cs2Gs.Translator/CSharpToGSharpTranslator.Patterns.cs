@@ -3025,6 +3025,13 @@ public sealed partial class CSharpToGSharpTranslator
                 expression,
                 requireReferenceLikeElement: false);
 
+        private bool IsReferenceLikeOrManagedReference(ITypeSymbol type) =>
+            type != null
+            && (type.IsReferenceType
+                || CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                    type,
+                    this.context.Compilation));
+
         private bool ArrayExpressionHasNullableElement(
             ExpressionSyntax expression,
             bool requireReferenceLikeElement)
@@ -3033,10 +3040,7 @@ public sealed partial class CSharpToGSharpTranslator
             TypeInfo typeInfo = this.context.GetTypeInfo(expression);
             if ((typeInfo.Type ?? typeInfo.ConvertedType) is not IArrayTypeSymbol array
                 || (requireReferenceLikeElement
-                    && !array.ElementType.IsReferenceType
-                    && !CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
-                        array.ElementType,
-                        this.context.Compilation)))
+                    && !this.IsReferenceLikeOrManagedReference(array.ElementType)))
             {
                 return false;
             }

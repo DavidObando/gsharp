@@ -3622,7 +3622,7 @@ public sealed partial class CSharpToGSharpTranslator
                         forEach.Type.IsVar || forEachInfo.ElementConversion.IsIdentity;
                     bool nullableElement = bindingTypeMatchesElementType
                         && (this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression)
-                            || (forEachElement?.IsReferenceType == true
+                            || (this.IsReferenceLikeOrManagedReference(forEachElement)
                                 && forEachElement.NullableAnnotation == NullableAnnotation.Annotated));
                     if (nullableElement && loopSymbol != null)
                     {
