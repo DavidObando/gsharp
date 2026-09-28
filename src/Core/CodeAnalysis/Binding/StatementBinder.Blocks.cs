@@ -308,23 +308,9 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
     {
-        BoundStatement tryBlock;
-        if (syntax.FinallyClause == null)
-        {
-            tryBlock = BindBlockStatement(syntax.TryBlock);
-        }
-        else
-        {
-            activeFinallyClauses.Push(syntax.FinallyClause);
-            try
-            {
-                tryBlock = BindBlockStatement(syntax.TryBlock);
-            }
-            finally
-            {
-                activeFinallyClauses.Pop();
-            }
-        }
+        var tryBlock = BindWithinFinallyScope(
+            syntax.FinallyClause,
+            () => BindBlockStatement(syntax.TryBlock));
 
         var exceptionType = ResolveExceptionType();
         if (exceptionType == null)
@@ -380,10 +366,6 @@ internal sealed partial class StatementBinder
             var (filterWhenTrue, _) = PatternVariables.Classify(filter);
 
             exceptionHandlerRegions.Push(catchSyntax);
-            if (syntax.FinallyClause != null)
-            {
-                activeFinallyClauses.Push(syntax.FinallyClause);
-            }
 
             BoundStatement body;
             try
@@ -391,18 +373,15 @@ internal sealed partial class StatementBinder
                 // The handler runs only when its filter returned true, so any
                 // pattern variables the filter definitely assigns on that path
                 // are in scope and assigned throughout the handler.
-                body = PatternVariables.BindInScope(
-                    binderCtx,
-                    filterWhenTrue,
-                    () => BindBlockStatement(catchSyntax.Body));
+                body = BindWithinFinallyScope(
+                    syntax.FinallyClause,
+                    () => PatternVariables.BindInScope(
+                        binderCtx,
+                        filterWhenTrue,
+                        () => BindBlockStatement(catchSyntax.Body)));
             }
             finally
             {
-                if (syntax.FinallyClause != null)
-                {
-                    activeFinallyClauses.Pop();
-                }
-
                 exceptionHandlerRegions.Pop();
             }
 
@@ -455,6 +434,26 @@ internal sealed partial class StatementBinder
         }
 
         return new BoundTryStatement(syntax, tryBlock, catches.ToImmutable(), finallyBlock);
+    }
+
+    private BoundStatement BindWithinFinallyScope(
+        FinallyClauseSyntax? finallyClause,
+        Func<BoundStatement> bind)
+    {
+        if (finallyClause == null)
+        {
+            return bind();
+        }
+
+        activeFinallyClauses.Push(finallyClause);
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            activeFinallyClauses.Pop();
+        }
     }
 
     /// <summary>

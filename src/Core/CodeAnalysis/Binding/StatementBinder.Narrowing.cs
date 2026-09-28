@@ -529,9 +529,15 @@ internal sealed partial class StatementBinder
             return;
         }
 
-        var variables = binderCtx.AssignmentNarrowingGenerations
-            .Where(entry => entry.Value > startGeneration)
-            .Select(entry => entry.Key);
+        var variables = new HashSet<VariableSymbol>();
+        foreach (var entry in binderCtx.AssignmentNarrowingGenerations)
+        {
+            if (entry.Value > startGeneration)
+            {
+                variables.Add(entry.Key);
+            }
+        }
+
         binderCtx.PendingGotoNarrowingSnapshots.Remove(labelName, out var incomingSnapshots);
         if (incomingSnapshots != null)
         {
@@ -555,12 +561,14 @@ internal sealed partial class StatementBinder
             variablesToInvalidate.ExceptWith(preservedByEveryJump);
         }
 
+        if (variablesToInvalidate.Count == 0)
+        {
+            return;
+        }
+
         foreach (var frame in binderCtx.NarrowedVariables)
         {
-            foreach (var variable in variablesToInvalidate)
-            {
-                RemoveByRoot(frame, variable);
-            }
+            RemoveByRoots(frame, variablesToInvalidate);
         }
     }
 
@@ -1149,6 +1157,28 @@ internal sealed partial class StatementBinder
         foreach (var key in state.Keys)
         {
             if (ReferenceEquals(key.Root, root))
+            {
+                (toRemove ??= new List<AccessPath>()).Add(key);
+            }
+        }
+
+        if (toRemove != null)
+        {
+            foreach (var key in toRemove)
+            {
+                state.Remove(key);
+            }
+        }
+    }
+
+    private static void RemoveByRoots(
+        Dictionary<AccessPath, TypeSymbol> state,
+        HashSet<VariableSymbol> roots)
+    {
+        List<AccessPath>? toRemove = null;
+        foreach (var key in state.Keys)
+        {
+            if (roots.Contains(key.Root))
             {
                 (toRemove ??= new List<AccessPath>()).Add(key);
             }
