@@ -1045,12 +1045,14 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression)
         {
             expression = Unparenthesize(expression);
-            if (expression is InvocationExpressionSyntax invocation
-                && this.TryGetManagedReferenceArraySubstitutedMethod(
-                    invocation,
-                    out IMethodSymbol substitutedMethod))
+            if (expression is InvocationExpressionSyntax invocation)
             {
-                return substitutedMethod.ReturnType;
+                return this.TryGetManagedReferenceArraySubstitutedMethod(
+                    invocation,
+                    out IMethodSymbol substitutedMethod)
+                        ? substitutedMethod.ReturnType
+                        : this.GetManagedReferenceArraySubstitutedExpressionType(
+                            invocation.Expression);
             }
 
             if (expression is not MemberAccessExpressionSyntax member

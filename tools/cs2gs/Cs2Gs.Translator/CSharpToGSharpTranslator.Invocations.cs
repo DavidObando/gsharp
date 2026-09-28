@@ -1885,25 +1885,44 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>The parameter, or <see langword="null"/>.</returns>
         private IParameterSymbol GetArgumentParameter(ArgumentSyntax argument)
         {
-            if (this.context.SemanticModel.GetOperation(argument) is IArgumentOperation { Parameter: { } direct })
+            IParameterSymbol parameter =
+                (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
+                    ?.Parameter;
+            if (parameter == null)
             {
-                return direct;
+                if (argument.Parent is not BaseArgumentListSyntax list
+                    || list.Parent is null
+                    || this.context.GetSymbolInfo(list.Parent).Symbol is not IMethodSymbol method)
+                {
+                    return null;
+                }
+
+                if (argument.NameColon is { } nameColon)
+                {
+                    parameter = method.Parameters.FirstOrDefault(
+                        p => p.Name == nameColon.Name.Identifier.ValueText);
+                }
+                else
+                {
+                    int index = list.Arguments.IndexOf(argument);
+                    parameter = index >= 0 && index < method.Parameters.Length
+                        ? method.Parameters[index]
+                        : null;
+                }
             }
 
-            if (argument.Parent is not BaseArgumentListSyntax list
-                || list.Parent is null
-                || this.context.GetSymbolInfo(list.Parent).Symbol is not IMethodSymbol method)
+            if (parameter != null
+                && argument.Parent?.Parent is InvocationExpressionSyntax invocation
+                && this.TryGetManagedReferenceArraySubstitutedMethod(
+                    invocation,
+                    out IMethodSymbol substituted)
+                && parameter.Ordinal < substituted.Parameters.Length
+                && substituted.Parameters[parameter.Ordinal].RefKind == parameter.RefKind)
             {
-                return null;
+                return substituted.Parameters[parameter.Ordinal];
             }
 
-            if (argument.NameColon is { } nameColon)
-            {
-                return method.Parameters.FirstOrDefault(p => p.Name == nameColon.Name.Identifier.ValueText);
-            }
-
-            int index = list.Arguments.IndexOf(argument);
-            return index >= 0 && index < method.Parameters.Length ? method.Parameters[index] : null;
+            return parameter;
         }
 
         private GExpression TranslateArgumentValue(ArgumentSyntax argument)
@@ -1987,11 +2006,12 @@ public sealed partial class CSharpToGSharpTranslator
             // is rejected (GS0190) — never assert inside a `nameof` argument.
             bool isXunitNullAssertion = this.IsXunitNullAssertionArgument(argument);
             IArgumentOperation argumentOperation = this.context.SemanticModel.GetOperation(argument) as IArgumentOperation;
+            IParameterSymbol argumentParameter = this.GetArgumentParameter(argument);
             ILocalSymbol argumentLocal = this.context.GetSymbolInfo(argument.Expression).Symbol as ILocalSymbol
                 ?? GetReferencedLocal(argumentOperation?.Value);
             bool isFlowNarrowedLocal = argumentLocal != null
                 && this.IsDominatedByNullCheckGuard(argument.Expression, argumentLocal);
-            bool targetIsPromotedMigratedSibling = argumentOperation?.Parameter is { } siblingParameter
+            bool targetIsPromotedMigratedSibling = argumentParameter is { } siblingParameter
                 && !SymbolEqualityComparer.Default.Equals(
                     siblingParameter.ContainingAssembly,
                     this.context.Compilation.Assembly)
@@ -2012,7 +2032,7 @@ public sealed partial class CSharpToGSharpTranslator
             // one turns a legal nil into a throw.
             bool analyzerNullableArgument = this.IsGSharpNullableAnalyzerExpression(argument.Expression);
             bool targetRequiresNonNull;
-            if (argumentOperation?.Parameter is { } targetParameter)
+            if (argumentParameter is { } targetParameter)
             {
                 targetRequiresNonNull =
                     (this.TargetWillRemainNonNullableReference(targetParameter.Type, targetParameter)
@@ -2065,7 +2085,7 @@ public sealed partial class CSharpToGSharpTranslator
             if (!IsNameOfArgument(argument)
                 && !isXunitNullAssertion
                 && targetRequiresNonNull
-                && argumentOperation is { Parameter: { } parameter })
+                && argumentParameter is { } parameter)
             {
                 // A warning-level C# null passed through a substituted generic
                 // slot needs the target's static type without a runtime check.
