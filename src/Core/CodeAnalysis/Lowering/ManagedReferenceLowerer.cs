@@ -243,6 +243,7 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
                 }
 
                 parameters = seeded.ToImmutable();
+                helper.MarkCompleteReifiedTypeParameterVector();
             }
         }
 
@@ -251,7 +252,6 @@ internal sealed class ManagedReferenceLowerer : BoundTreeRewriter
         if (enclosingDefinition is StructSymbol or InterfaceSymbol)
         {
             helper.SetContainingType(enclosingDefinition);
-            helper.MarkCompleteReifiedTypeParameterVector();
         }
 
         var instance = new BoundStructLiteralExpression(null, construction, ImmutableArray.Create(

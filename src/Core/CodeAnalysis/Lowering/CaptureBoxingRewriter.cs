@@ -324,6 +324,7 @@ internal static class CaptureBoxingRewriter
                     }
 
                     origTPs = seeded.ToImmutable();
+                    boxClass.MarkCompleteReifiedTypeParameterVector();
                 }
             }
 
@@ -342,7 +343,6 @@ internal static class CaptureBoxingRewriter
             if (enclosingDefinition is StructSymbol or InterfaceSymbol)
             {
                 boxClass.SetContainingType(enclosingDefinition);
-                boxClass.MarkCompleteReifiedTypeParameterVector();
             }
 
             // For captured locals: a new LocalVariableSymbol of the box type
