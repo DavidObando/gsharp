@@ -30,6 +30,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             private static (string Text, System.Collections.Generic.List<string> Values) BuildPair() =>
                 ("pair", new System.Collections.Generic.List<string>());
 
+            private static (T? Left, T? Right) NullablePair<T>() =>
+                (default, default);
+
             private static int Unconstrained<T>(T replacement, bool choose)
             {
                 var direct = default(T);
@@ -40,6 +43,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var ((d, e), f) = ((default(T), default(T)), default(T));
                 (var (nestedA, nestedB), var nestedC) =
                     ((default(T), default(T)), default(T));
+                var (wholeLeft, wholeRight) = default((T, T));
+                var ((wholeNestedA, wholeNestedB), wholeNestedC) =
+                    default(((T, T), T));
+                var (methodLeft, methodRight) = NullablePair<T>();
 
                 Fill(ref direct, replacement);
                 Fill(ref alias, replacement);
@@ -53,6 +60,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref nestedA, replacement);
                 Fill(ref nestedB, replacement);
                 Fill(ref nestedC, replacement);
+                Fill(ref wholeLeft, replacement);
+                Fill(ref wholeRight, replacement);
+                Fill(ref wholeNestedA, replacement);
+                Fill(ref wholeNestedB, replacement);
+                Fill(ref wholeNestedC, replacement);
+                Fill(ref methodLeft, replacement);
+                Fill(ref methodRight, replacement);
 
                 for (var loop = default(T); choose;)
                 {
@@ -91,6 +105,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var directValue = default(int);
                 var (leftValue, rightValue) = (default(int), default(int));
                 return directValue + leftValue + rightValue + 3;
+            }
+
+            private static async System.Threading.Tasks.Task<T> AwaitControl<T>(
+                System.Func<System.Threading.Tasks.Task<T>> body)
+            {
+                var result = await body().ConfigureAwait(false);
+                return result;
             }
 
             private static int Controls<T>(T replacement)
@@ -170,7 +191,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         foreach (string name in new[]
         {
             "direct", "alias", "branch", "a", "b", "c", "d", "e", "f", "loop",
-            "nestedA", "nestedB", "nestedC", "loopLeft", "loopRight", "left", "right",
+            "nestedA", "nestedB", "nestedC", "wholeLeft", "wholeRight",
+            "wholeNestedA", "wholeNestedB", "wholeNestedC",
+            "loopLeft", "loopRight", "left", "right",
         })
         {
             Assert.Matches($@"\b(let|var) {name} T\? =", printed);
@@ -189,6 +212,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("narrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowedLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowedRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("methodLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("methodRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("result T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotMatch(@"\b(let|var) lambda [^=\r\n]*\? =", printed);
         Assert.Contains("suppressed = default(T)!!", printed, StringComparison.Ordinal);
         Assert.Contains("annotated T? = default(T)", printed, StringComparison.Ordinal);

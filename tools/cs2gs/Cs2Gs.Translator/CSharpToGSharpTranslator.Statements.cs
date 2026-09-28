@@ -319,6 +319,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            return this.InferredLocalDefaultRequiresTypedDeclaration(local);
+        }
+
+        private bool InferredLocalDefaultRequiresTypedDeclaration(ILocalSymbol local)
+        {
             if (!IsAnnotatedNullableReference(local.Type))
             {
                 return false;
@@ -333,7 +338,28 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            // Roslyn also reports MaybeNull for ordinary unconstrained-T
+            // expressions such as `await Func<Task<T>>()`. Issue #4445 is the
+            // narrower default-value rule: follow aliases and branch expressions
+            // back to a written default, then let Roslyn's flow state decide
+            // whether that default still reaches this declaration.
+            if (!this.InferredInitializerOriginatesFromDefault(
+                initializer,
+                new HashSet<ISymbol>(SymbolEqualityComparer.Default)))
+            {
+                return false;
+            }
+
             TypeInfo typeInfo = this.context.GetTypeInfo(initializer);
+            if (IsNullOrDefaultLiteral(initializer)
+                && typeInfo.Type is { IsTupleType: true })
+            {
+                // `default((T, T))` is a non-null ValueTuple as a whole, so
+                // Roslyn reports NotNull for the expression even though each
+                // reference-capable element has its default (maybe-null) value.
+                return true;
+            }
+
             NullableFlowState flowState = typeInfo.Nullability.FlowState;
             if (flowState == NullableFlowState.None)
             {
@@ -366,6 +392,59 @@ public sealed partial class CSharpToGSharpTranslator
             // Roslyn reports FlowState.None for individual tuple RHS leaves in
             // deconstruction, while preserving the inferred annotation here.
             return local.NullableAnnotation == NullableAnnotation.Annotated;
+        }
+
+        private bool InferredInitializerOriginatesFromDefault(
+            ExpressionSyntax expression,
+            HashSet<ISymbol> visited)
+        {
+            switch (expression)
+            {
+                case ParenthesizedExpressionSyntax parenthesized:
+                    return this.InferredInitializerOriginatesFromDefault(
+                        parenthesized.Expression,
+                        visited);
+
+                case PostfixUnaryExpressionSyntax suppression
+                    when suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression):
+                    return this.InferredInitializerOriginatesFromDefault(
+                        suppression.Operand,
+                        visited);
+
+                case LiteralExpressionSyntax literal
+                    when literal.IsKind(SyntaxKind.DefaultLiteralExpression):
+                case DefaultExpressionSyntax:
+                    return true;
+
+                case CastExpressionSyntax cast:
+                    return this.InferredInitializerOriginatesFromDefault(
+                        cast.Expression,
+                        visited);
+
+                case ConditionalExpressionSyntax conditional:
+                    return this.InferredInitializerOriginatesFromDefault(
+                            conditional.WhenTrue,
+                            visited)
+                        || this.InferredInitializerOriginatesFromDefault(
+                            conditional.WhenFalse,
+                            visited);
+
+                case SwitchExpressionSyntax switchExpression:
+                    return switchExpression.Arms.Any(arm =>
+                        this.InferredInitializerOriginatesFromDefault(
+                            arm.Expression,
+                            visited));
+            }
+
+            if (this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local
+                || !visited.Add(local)
+                || local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is not VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+            {
+                return false;
+            }
+
+            return this.InferredInitializerOriginatesFromDefault(initializer, visited);
         }
 
         private static bool IsNullForgiven(ExpressionSyntax expression)
@@ -407,6 +486,13 @@ public sealed partial class CSharpToGSharpTranslator
             left = Unwrap(left);
             right = Unwrap(right);
 
+            if (left.SyntaxTree == target.SyntaxTree
+                && left.Span.Contains(target.Span)
+                && IsNullOrDefaultLiteral(right))
+            {
+                return right;
+            }
+
             if (left is DeclarationExpressionSyntax declaration)
             {
                 return FindDeconstructionInitializer(target, declaration.Designation, right);
@@ -446,6 +532,13 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             right = Unwrap(right);
+            if (designation.SyntaxTree == target.SyntaxTree
+                && designation.Span.Contains(target.Span)
+                && IsNullOrDefaultLiteral(right))
+            {
+                return right;
+            }
+
             if (designation is not ParenthesizedVariableDesignationSyntax parenthesized
                 || right is not TupleExpressionSyntax rightTuple
                 || parenthesized.Variables.Count != rightTuple.Arguments.Count)

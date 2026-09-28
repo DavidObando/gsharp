@@ -839,7 +839,7 @@ public sealed partial class CSharpToGSharpTranslator
                             || declaration.Designation is ParenthesizedVariableDesignationSyntax
                             || (declaration.Designation is SingleVariableDesignationSyntax single
                                 && this.context.GetDeclaredSymbol(single) is ILocalSymbol local
-                                && this.InferredLocalDeclarationIsNullable(local)))))
+                                && this.InferredLocalDefaultRequiresTypedDeclaration(local)))))
                 {
                     return false;
                 }
@@ -1007,7 +1007,7 @@ public sealed partial class CSharpToGSharpTranslator
                     && this.context.GetDeclaredSymbol(directSingle) is ILocalSymbol directLocal
                     && !this.IsLocalReassigned(directLocal)
                     && (!directDecl.Type.IsVar
-                        || !this.InferredLocalDeclarationIsNullable(directLocal))
+                        || !this.InferredLocalDefaultRequiresTypedDeclaration(directLocal))
                     && (directDecl.Type.IsVar
                         || (rhsTupleType is { IsTupleType: true }
                             && i < rhsTupleType.TupleElements.Length
@@ -1287,7 +1287,7 @@ public sealed partial class CSharpToGSharpTranslator
                 ILocalSymbol local = this.context.GetDeclaredSymbol(single) as ILocalSymbol;
                 GTypeReference type = inferredType
                     && local != null
-                    && this.InferredLocalDeclarationIsNullable(local)
+                    && this.InferredLocalDefaultRequiresTypedDeclaration(local)
                         ? MakeNullable(this.typeMapper.MapEventType(
                             local.Type,
                             this.context,
@@ -1416,7 +1416,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local)
                         {
-                            if (this.InferredLocalDeclarationIsNullable(local))
+                            if (this.InferredLocalDefaultRequiresTypedDeclaration(local))
                             {
                                 return false;
                             }
@@ -1462,7 +1462,7 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local
                             && declaration.Type.IsVar
-                            && this.InferredLocalDeclarationIsNullable(local))
+                            && this.InferredLocalDefaultRequiresTypedDeclaration(local))
                         {
                             return false;
                         }
