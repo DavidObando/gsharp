@@ -74,10 +74,10 @@ internal sealed class DocumentTranslationState
     public HashSet<ISymbol> NullableForEachBindings { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
-    // Keyed by the Roslyn array type symbol; each value records whether
-    // CSharpTypeMapper emits that array's element type as nullable.
-    public Dictionary<IArrayTypeSymbol, bool> MappedArrayElementIsNullableByArrayType { get; } =
-        new Dictionary<IArrayTypeSymbol, bool>(SymbolEqualityComparer.IncludeNullability);
+    // Keyed by the Roslyn element type; outer array nullability does not affect
+    // whether CSharpTypeMapper emits the element as nullable.
+    public Dictionary<ITypeSymbol, bool> MappedArrayElementIsNullableByElementType { get; } =
+        new Dictionary<ITypeSymbol, bool>(SymbolEqualityComparer.IncludeNullability);
 
     // Per-call effective method after managed-array projection. A null value
     // caches that the invocation or construction needs no substitution.

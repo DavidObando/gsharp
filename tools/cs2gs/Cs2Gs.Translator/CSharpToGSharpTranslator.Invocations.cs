@@ -2167,8 +2167,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Issue #3644: resolves the element contract an argument binds to when
         // it sits in the EXPANDED tail of a `params T[]` /
-        // `params ReadOnlySpan<T>` (or other single-type-argument params
-        // collection) parameter. The single-argument DIRECT collection form
+        // `params ReadOnlySpan<T>` parameter. The single-argument DIRECT collection form
         // (`Path.Combine(paths)`) binds the parameter itself and is excluded.
         private bool TryGetExpandedParamsElementTarget(
             ArgumentSyntax argument,
@@ -2188,7 +2187,9 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol candidateElementType = parameter.Type switch
             {
                 IArrayTypeSymbol arrayType => arrayType.ElementType,
-                INamedTypeSymbol { TypeArguments.Length: 1 } spanLike => spanLike.TypeArguments[0],
+                INamedTypeSymbol { TypeArguments.Length: 1 } spanLike
+                    when IsSpanParamsCollectionType(spanLike)
+                    => spanLike.TypeArguments[0],
                 _ => null,
             };
             if (candidateElementType == null

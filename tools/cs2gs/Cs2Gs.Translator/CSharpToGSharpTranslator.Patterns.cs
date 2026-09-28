@@ -3067,13 +3067,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            if (!this.state.MappedArrayElementIsNullableByArrayType.TryGetValue(
-                    array,
+            if (!this.state.MappedArrayElementIsNullableByElementType.TryGetValue(
+                    array.ElementType,
                     out bool mappedNullable))
             {
                 mappedNullable = this.typeMapper.Map(array, this.context, expression.GetLocation())
                     is ArrayTypeReference { ElementType.IsNullable: true };
-                this.state.MappedArrayElementIsNullableByArrayType.Add(array, mappedNullable);
+                this.state.MappedArrayElementIsNullableByElementType.Add(
+                    array.ElementType,
+                    mappedNullable);
             }
 
             return mappedNullable
