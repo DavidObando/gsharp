@@ -305,7 +305,7 @@ public sealed class Conversion
     /// <summary>Whether a platform type appears anywhere in the type structure.</summary>
     /// <param name="type">The type to scan.</param>
     /// <returns><see langword="true"/> when the type contains a platform position.</returns>
-    internal static bool ContainsPlatformTypeForInterop(TypeSymbol? type)
+    internal static bool ContainsPlatformTypeInStructure(TypeSymbol? type)
         => ContainsPlatformType(type);
 
     /// <summary>

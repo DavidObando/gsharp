@@ -478,17 +478,18 @@ internal sealed partial class OverloadResolver
             return arg;
         }
 
+        var conversion = Conversion.Classify(arg.Type, elementTypeSymbol);
         if (conversions.TryRejectClrPlatformContainerArgument(
             arg,
             parameter,
             elementTypeSymbol,
             location,
-            out var rejectedArgument))
+            out var rejectedArgument,
+            conversion))
         {
             return rejectedArgument;
         }
 
-        var conversion = Conversion.Classify(arg.Type, elementTypeSymbol);
         if (conversion.IsExplicit
             && conversions.TryApplyUserDefinedImplicitArgumentConversion(arg, elementTypeSymbol, out var implicitArg))
         {

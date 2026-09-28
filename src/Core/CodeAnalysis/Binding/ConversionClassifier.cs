@@ -3283,6 +3283,7 @@ internal sealed class ConversionClassifier
                         : BindImplicitInArgument(location, arguments[i], pointeeType, parameter: null);
             }
             else if (paramIndex < parameters.Length
+                && Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
                 && parameters[paramIndex].ParameterType is { IsByRef: false, IsGenericParameter: false }
                 && method != null
                 && receiverType != null
@@ -3557,13 +3558,15 @@ internal sealed class ConversionClassifier
     /// <param name="targetType">The nullability-aware parameter type.</param>
     /// <param name="location">The offending argument's location.</param>
     /// <param name="rebound">The error expression when the argument is rejected.</param>
+    /// <param name="classifiedConversion">An already-classified conversion, when the caller has one.</param>
     /// <returns><see langword="true"/> when rule 3 rejected the argument.</returns>
     internal bool TryRejectClrPlatformContainerArgument(
         BoundExpression argument,
         ParameterInfo parameter,
         TypeSymbol targetType,
         TextLocation location,
-        out BoundExpression rebound)
+        out BoundExpression rebound,
+        Conversion? classifiedConversion = null)
     {
         rebound = argument;
         var sourceType = argument.Type;
@@ -3572,8 +3575,8 @@ internal sealed class ConversionClassifier
             || sourceType.ClrType is not { } sourceClr
             || targetClr == null
             || !ClrLoadContext.IsAssignable(targetClr, sourceClr)
-            || Conversion.ContainsPlatformTypeForInterop(targetType)
-            || Conversion.Classify(sourceType, targetType).Exists
+            || Conversion.ContainsPlatformTypeInStructure(targetType)
+            || (classifiedConversion ?? Conversion.Classify(sourceType, targetType)).Exists
             || !Conversion.TryRelatePlatformContainer(sourceType, targetType, out var isImplicit)
             || isImplicit)
         {
