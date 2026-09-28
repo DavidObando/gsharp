@@ -10,10 +10,10 @@ using System.Linq;
 using System.Reflection;
 using System.Reflection.Metadata;
 using System.Reflection.PortableExecutable;
-using System.Runtime.Loader;
 using System.Text;
 using System.Threading;
 using GSharp.Compiler;
+using GSharp.Tests;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Xunit;
@@ -454,27 +454,18 @@ public class Adr0174SuspendCrossAssemblyTests
                 Assert.Equal(3, derived.GetMethodImplementations().Count);
             }
 
-            var loadContext = new AssemblyLoadContext("gs-4413-" + Guid.NewGuid().ToString("N"), isCollectible: true);
-            loadContext.Resolving += (_, name) =>
-            {
-                var dependency = Path.Combine(tempDir, name.Name + ".dll");
-                return File.Exists(dependency) ? loadContext.LoadFromAssemblyPath(dependency) : null;
-            };
-            try
-            {
-                var derived = loadContext.LoadFromAssemblyPath(appPath).GetType("App.Derived")!;
-                AssertPhysicalSuspendOverride(derived.GetMethod("Format")!, "Lib.Base", logicalParameterCount: 1);
-                AssertPhysicalSuspendOverride(derived.GetMethod("Required")!, "Lib.Base", logicalParameterCount: 1);
+            var assemblies = EmittedFixture.LoadTogether(
+                libPath,
+                Path.Combine(tempDir, "Gsharp.Runtime.Channels.dll"),
+                appPath);
+            var derivedType = assemblies[^1].GetType("App.Derived")!;
+            AssertPhysicalSuspendOverride(derivedType.GetMethod("Format")!, "Lib.Base", logicalParameterCount: 1);
+            AssertPhysicalSuspendOverride(derivedType.GetMethod("Required")!, "Lib.Base", logicalParameterCount: 1);
 
-                var plain = derived.GetMethod("Plain")!;
-                Assert.Equal(typeof(string), plain.ReturnType);
-                Assert.Single(plain.GetParameters());
-                Assert.Equal("Lib.Base", plain.GetBaseDefinition().DeclaringType!.FullName);
-            }
-            finally
-            {
-                loadContext.Unload();
-            }
+            var plain = derivedType.GetMethod("Plain")!;
+            Assert.Equal(typeof(string), plain.ReturnType);
+            Assert.Single(plain.GetParameters());
+            Assert.Equal("Lib.Base", plain.GetBaseDefinition().DeclaringType!.FullName);
 
             var (exit, output) = RunDotnet(appPath);
             Assert.True(exit == 0, output);
@@ -531,6 +522,104 @@ public class Adr0174SuspendCrossAssemblyTests
     }
 
     [Fact]
+    public void ImportedSuspendOverride_RejectsPhysicalAbiColoringMismatches()
+    {
+        const string ClrBaseSource = """
+            using System.Threading.Tasks;
+            using Gsharp.Concurrency;
+
+            namespace ClrLib;
+
+            public class OrdinaryBase
+            {
+                public virtual ValueTask<string> Format(string value) => new(value);
+            }
+
+            public class MalformedBase
+            {
+                [Suspending]
+                public virtual ValueTask<string> Format(string value) => new(value);
+            }
+            """;
+
+        const string SuspendAppSource = """
+            package App
+            import ClrLib
+
+            class BadOrdinary : OrdinaryBase {
+                override suspend func Format(value string) string {
+                    return value
+                }
+            }
+
+            class BadMalformed : MalformedBase {
+                override suspend func Format(value string) string {
+                    return value
+                }
+            }
+            """;
+
+        const string GSharpBaseSource = """
+            package Lib
+
+            public open class SuspendBase {
+                public open suspend func Format(value string) string {
+                    return value
+                }
+            }
+            """;
+
+        const string PlainAppSource = """
+            package App
+            import System.Threading.Tasks
+            import Lib
+
+            class BadPlain : SuspendBase {
+                override func Format(value string) ValueTask[string] {
+                    return ValueTask[string](value)
+                }
+            }
+            """;
+
+        var tempDir = Directory.CreateTempSubdirectory("gs_4413_coloring_").FullName;
+        try
+        {
+            var clrLibPath = Path.Combine(tempDir, "ClrLib.dll");
+            CompileCSharpLibrary(ClrBaseSource, clrLibPath);
+
+            var suspendAppPath = Path.Combine(tempDir, "SuspendApp.dll");
+            var suspendLog = Compile(
+                tempDir,
+                "SuspendApp.gs",
+                SuspendAppSource,
+                suspendAppPath,
+                "/target:library",
+                "/reference:" + clrLibPath);
+            Assert.False(File.Exists(suspendAppPath), "ABI-mismatched suspend overrides unexpectedly compiled");
+            Assert.Equal(2, suspendLog.Split("GS0185", StringSplitOptions.None).Length - 1);
+
+            var gsLibPath = Path.Combine(tempDir, "Lib.dll");
+            var libLog = Compile(tempDir, "Lib.gs", GSharpBaseSource, gsLibPath, "/target:library");
+            Assert.True(File.Exists(gsLibPath), "library compile failed:\n" + libLog);
+
+            var plainAppPath = Path.Combine(tempDir, "PlainApp.dll");
+            var plainLog = Compile(
+                tempDir,
+                "PlainApp.gs",
+                PlainAppSource,
+                plainAppPath,
+                "/target:library",
+                "/reference:" + gsLibPath);
+            Assert.False(File.Exists(plainAppPath), "plain override of a suspend slot unexpectedly compiled");
+            Assert.Contains("GS0185", plainLog, StringComparison.Ordinal);
+        }
+        finally
+        {
+            Directory.Delete(tempDir, recursive: true);
+        }
+    }
+
+    [Fact]
     public void SuspendOverride_InTheSameCompilation_RemainsValid()
     {
         var (exit, output, compileLog) = CompileAndRun("""
@@ -571,6 +660,24 @@ public class Adr0174SuspendCrossAssemblyTests
         Assert.Equal("<>ctx", parameters[^1].Name);
         Assert.Equal("Gsharp.Concurrency.Context", parameters[^1].ParameterType.FullName);
         Assert.Equal(expectedBaseType, method.GetBaseDefinition().DeclaringType!.FullName);
+    }
+
+    private static void CompileCSharpLibrary(string source, string outputPath)
+    {
+        var references = TrustedPlatformAssemblies()
+            .Append(typeof(Gsharp.Concurrency.SuspendingAttribute).Assembly.Location)
+            .Distinct(StringComparer.OrdinalIgnoreCase)
+            .Select(path => MetadataReference.CreateFromFile(path));
+        var compilation = CSharpCompilation.Create(
+            Path.GetFileNameWithoutExtension(outputPath),
+            new[] { CSharpSyntaxTree.ParseText(source) },
+            references,
+            new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
+        var result = compilation.Emit(outputPath);
+        Assert.True(
+            result.Success,
+            "C# library compile failed:\n"
+                + string.Join("\n", result.Diagnostics.Where(diagnostic => diagnostic.Severity == DiagnosticSeverity.Error)));
     }
 
     private static (int Exit, string Output, string CompileLog) CompileAndRun(string appSource)
