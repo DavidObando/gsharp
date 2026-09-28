@@ -2992,7 +2992,7 @@ public sealed partial class CSharpToGSharpTranslator
             return new ArrayAllocationExpression(elementType, length);
         }
 
-        // Issues #4482, #4500, #4507 and #4525: the one decision "this local's
+        // Issues #4482, #4500 and #4507: the one decision "this local's
         // `new T[n]` allocation has a `T?` element". The allocation, its
         // inferred local aliases, and every element read/write ask it, so they
         // cannot disagree.
@@ -3005,21 +3005,28 @@ public sealed partial class CSharpToGSharpTranslator
                 local,
                 new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default));
             return owner != null
-                && (this.DefaultInitializedManagedReferenceElementNeedsNullableStorage(owner)
-                    || this.ElementPassedToNullableByRefParameter(owner)
+                && (this.ElementPassedToNullableByRefParameter(owner)
                     || this.ElementWrittenMaybeNil(owner));
         }
 
-        private bool DefaultInitializedManagedReferenceElementNeedsNullableStorage(ILocalSymbol owner)
+        private bool IsNullableArrayElementAccess(ExpressionSyntax expression)
         {
-            if (owner.Type is not IArrayTypeSymbol array)
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            if (expression is not ElementAccessExpressionSyntax elementAccess
+                || this.context.GetTypeInfo(elementAccess.Expression).Type is not IArrayTypeSymbol array)
             {
                 return false;
             }
 
-            Location location = owner.Locations.FirstOrDefault(candidate => candidate.IsInSource) ?? Location.None;
-            return this.typeMapper.Map(array.ElementType, this.context, location)
-                is ManagedReferenceTypeReference { IsNullable: false };
+            return CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                    array.ElementType,
+                    this.context.Compilation)
+                || (this.context.GetSymbolInfo(elementAccess.Expression).Symbol is ILocalSymbol local
+                    && this.IsWidenedArrayElementLocal(local));
         }
 
         private ILocalSymbol GetArrayAllocationOwner(
@@ -3685,11 +3692,11 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol arrayType = info.Type ?? info.ConvertedType;
             if (arrayType is IArrayTypeSymbol array)
             {
-                GTypeReference mapped = this.typeMapper.Map(
-                    array.ElementType,
+                var mapped = (ArrayTypeReference)this.typeMapper.Map(
+                    array,
                     this.context,
                     arrayExpression.GetLocation());
-                return nullableElementSyntax ? MakeNullable(mapped) : mapped;
+                return nullableElementSyntax ? MakeNullable(mapped.ElementType) : mapped.ElementType;
             }
 
             if (arrayType is INamedTypeSymbol { IsGenericType: true } generic &&

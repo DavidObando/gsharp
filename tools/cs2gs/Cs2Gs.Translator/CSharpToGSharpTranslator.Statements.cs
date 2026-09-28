@@ -2098,14 +2098,11 @@ public sealed partial class CSharpToGSharpTranslator
                 assignment.Right,
                 this.CoercePointerConversion(assignment.Right, value));
 
-            // Issue #4500: a write into an element of an array whose element
-            // cs2gs widened to `T?` (IsWidenedArrayElementLocal) accepts nil,
-            // so none of the null-forgiveness bridges below may assert the
-            // value. The coercions above still apply.
+            // Issues #4500 and #4525: a write into an element of an array
+            // cs2gs emits as `T?` accepts nil, so none of the null-forgiveness
+            // bridges below may assert the value. The coercions above still apply.
             if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
-                && assignment.Left is ElementAccessExpressionSyntax elementTarget
-                && this.context.GetSymbolInfo(elementTarget.Expression).Symbol is ILocalSymbol widenedArray
-                && this.IsWidenedArrayElementLocal(widenedArray))
+                && this.IsNullableArrayElementAccess(assignment.Left))
             {
                 return value;
             }

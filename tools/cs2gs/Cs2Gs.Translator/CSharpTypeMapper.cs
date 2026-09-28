@@ -1259,6 +1259,9 @@ public sealed class CSharpTypeMapper
         => IsRecognizedRuntimeType(type, names)
             && !SymbolEqualityComparer.Default.Equals(type.OriginalDefinition.ContainingAssembly, compilation.Assembly);
 
+    internal static bool IsRecognizedManagedReferenceConsumerType(ITypeSymbol type, Compilation compilation)
+        => IsRecognizedRuntimeConsumerType(type, compilation, "ManagedRef", "ReadOnlyManagedRef");
+
     /// <summary>
     /// ADR-0187 §6: whether <paramref name="type"/> has the assembly, namespace
     /// and generic name of a compiler-recognized <c>Gsharp.Runtime.Values</c>
@@ -1618,7 +1621,13 @@ public sealed class CSharpTypeMapper
 
         if (type is IArrayTypeSymbol array)
         {
-            return new ArrayTypeReference(this.Map(array.ElementType, context, location), array.Rank);
+            GTypeReference element = this.Map(array.ElementType, context, location);
+            if (IsRecognizedManagedReferenceConsumerType(array.ElementType, context.Compilation))
+            {
+                element = WithNullable(element, true);
+            }
+
+            return new ArrayTypeReference(element, array.Rank);
         }
 
         if (type is ITypeParameterSymbol typeParameter)
@@ -1628,7 +1637,7 @@ public sealed class CSharpTypeMapper
 
         if (type is INamedTypeSymbol named)
         {
-            if (IsRecognizedRuntimeConsumerType(named, context.Compilation, "ManagedRef", "ReadOnlyManagedRef"))
+            if (IsRecognizedManagedReferenceConsumerType(named, context.Compilation))
             {
                 var readOnly = named.Name == "ReadOnlyManagedRef";
                 var element = this.Map(named.TypeArguments[0], context, location);

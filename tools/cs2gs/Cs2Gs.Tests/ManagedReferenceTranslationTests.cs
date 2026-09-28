@@ -54,6 +54,61 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Equal(7, result.Value);
     }
 
+    [Fact]
+    public void ManagedReferenceArraysUseNullableElementsAcrossStorageShapes()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayShapes;
+            public class Probe {
+                private static ManagedRef<int>[] field = new ManagedRef<int>[1];
+
+                public static ManagedRef<int>[] Create() => new ManagedRef<int>[1];
+                private static int Read(ManagedRef<int>[] items) => items[0].Borrow();
+                private static int ReadRectangular(ReadOnlyManagedRef<int>[,] items) => items[0, 0].Borrow();
+
+                public static int Run() {
+                    int[] values = { 3, 4 };
+                    field[0] = ManagedRef<int>.FromArray(values, 0);
+
+                    ManagedRef<int>[] assigned;
+                    assigned = new ManagedRef<int>[1];
+                    assigned[0] = ManagedRef<int>.FromArray(values, 1);
+
+                    var returned = Create();
+                    returned[0] = ManagedRef<int>.FromArray(values, 0);
+
+                    var rectangular = new ReadOnlyManagedRef<int>[1, 1];
+                    rectangular[0, 0] = ReadOnlyManagedRef<int>.FromArray(values, 1);
+
+                    return Read(field)
+                        + Read(assigned)
+                        + Read(returned)
+                        + ReadRectangular(rectangular);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("ManagedArrayShapes.cs", source) }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("[1]managed[int32]?", text);
+        Assert.Contains("func Create() []managed[int32]?", text);
+        Assert.Contains("[1, 1]readonly managed[int32]?", text);
+        Assert.Contains("items[0]!!.Borrow()", text);
+        Assert.Contains("items[0, 0]!!.Borrow()", text);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()", new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(14, result.Value);
+    }
+
     [Theory]
     [InlineData("int managed = 1;", "managed", 4)]
     [InlineData("int managed() => 2;", "managed()", 5)]
