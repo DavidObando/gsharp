@@ -4878,6 +4878,7 @@ internal sealed class ReflectionMetadataEmitter
         }
 
         TypeSymbol taskType = taskClrType.IsConstructedGenericType
+            && taskClrType.GetGenericArguments().Length == 1
             && stateMachine.ResultTypeSymbol is { } resultType
             ? ImportedTypeSymbol.GetConstructed(
                 taskClrType,
@@ -4886,7 +4887,9 @@ internal sealed class ReflectionMetadataEmitter
             : ImportedTypeSymbol.GetWithoutNullability(taskClrType, NullabilityFreeReason.EmitShape);
 
         var declaration = (SyntaxNode?)plan.KickoffMethod.Declaration ?? plan.KickoffMethod.LocalDeclaration;
-        return declaration != null && ObliviousScope.IsInObliviousScope(declaration)
+        return !taskClrType.IsValueType
+            && declaration != null
+            && ObliviousScope.IsInObliviousScope(declaration)
             ? ObliviousScope.Wrap(taskType)
             : taskType;
     }
