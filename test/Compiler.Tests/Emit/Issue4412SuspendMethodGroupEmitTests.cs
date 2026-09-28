@@ -234,7 +234,10 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
 
             namespace Interop;
 
+            public sealed class Box;
             public delegate ValueTask<int> RefRunner(ref int value);
+            public delegate void GenericRefAction<T>(ref T value);
+            public delegate void GenericRefValueAction<T>(ref int target, T value);
             public delegate ValueTask<int> ValueRunner(int value);
 
             public static class Api
@@ -245,6 +248,11 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                     value++;
                     return new ValueTask<int>(value);
                 }
+
+                public static void Clear<T>(this Box box, ref T value) => value = default!;
+
+                public static void Set<T>(this Box box, ref int target, T value) =>
+                    target = value is int number ? number : -1;
 
                 [Suspending]
                 public static ValueTask<int> Echo(int value, Context ctx4412) =>
@@ -265,6 +273,12 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 var value = 4
                 let callback RefRunner = Api.Increment
                 Console.WriteLine(await callback(ref value))
+                Console.WriteLine(value)
+                let clear GenericRefAction[int32] = Box().Clear
+                clear(ref value)
+                Console.WriteLine(value)
+                let set GenericRefValueAction[int32] = Box().Set
+                set(ref value, 42)
                 Console.WriteLine(value)
                 let echo ValueRunner = Api.Echo
                 Console.WriteLine(await echo(6))
@@ -287,7 +301,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
                 appPath,
                 new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
             Assert.Equal(
-                $"5{Environment.NewLine}5{Environment.NewLine}6{Environment.NewLine}7{Environment.NewLine}11{Environment.NewLine}",
+                $"5{Environment.NewLine}5{Environment.NewLine}0{Environment.NewLine}42{Environment.NewLine}6{Environment.NewLine}7{Environment.NewLine}11{Environment.NewLine}",
                 Run(appPath));
         }
         finally

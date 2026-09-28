@@ -2480,13 +2480,20 @@ internal sealed class ConversionClassifier
             }
 
             var parameterTypesMatch = true;
+
+            // Ordinary open generic methods defer slot compatibility until
+            // inference closes them. Hidden-context by-ref adapters do not yet
+            // support generic closure, so keep rejecting those safely.
+            var deferGenericParameterChecks = candidate.IsGenericMethodDefinition
+                && (!hasHiddenContext || !hasByRefTarget);
             for (var i = 0; i < targetParameterRefKinds.Length; i++)
             {
                 var candidateParameterType =
                     candidateParameters[i + (closesExtensionReceiver ? 1 : 0)].ParameterType;
                 if (targetParameterRefKinds[i] != RefKind.None
-                    ? !candidateParameterType.IsSameAs(invokeParameterTypes[i])
-                    : !(candidate.ContainsGenericParameters && !hasByRefTarget)
+                    ? !deferGenericParameterChecks
+                        && !candidateParameterType.IsSameAs(invokeParameterTypes[i])
+                    : !deferGenericParameterChecks
                         && ClrOverloadResolution.ClassifyImplicit(candidateParameterType, invokeParameterTypes[i])
                             == ClrOverloadResolution.ImplicitConversionKind.None)
                 {
@@ -2516,14 +2523,32 @@ internal sealed class ConversionClassifier
             // arguments here, only the target delegate signature.
             // The CLR resolver models by-ref arguments as addresses, while a
             // delegate signature supplies pointee types. The filter above has
-            // already checked every slot, so a sole by-ref candidate is final.
-            var resolvedMethod = hasByRefTarget && applicable.Count == 1
+            // already checked every closed slot, so a sole closed by-ref
+            // candidate is final. Open generic candidates still need inference.
+            var resolvedMethod = hasByRefTarget
+                && applicable.Count == 1
+                && !applicable[0].IsGenericMethodDefinition
                 ? applicable[0]
                 : ClrOverloadResolution.Resolve(
                         applicable,
                         argTypes,
                         trailingParameterCountToIgnore: static candidate =>
                             ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0).Best;
+            if (resolvedMethod != null && hasByRefTarget)
+            {
+                var resolvedParameters = ImportedFunctionSymbol.GetLogicalParameters(resolvedMethod, out _);
+                for (var i = 0; i < targetParameterRefKinds.Length; i++)
+                {
+                    if (targetParameterRefKinds[i] != RefKind.None
+                        && !resolvedParameters[i + (closesExtensionReceiver ? 1 : 0)].ParameterType
+                            .IsSameAs(invokeParameterTypes[i]))
+                    {
+                        resolvedMethod = null;
+                        break;
+                    }
+                }
+            }
+
             if (resolvedMethod != null)
             {
                 var resolved = new BoundClrMethodGroupExpression(
