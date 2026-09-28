@@ -107,7 +107,7 @@ internal static class SuspensionInference
                         bag.ReportRefKindOnAsyncOrIterator(
                             parameter.DeclaringSyntax.Location,
                             parameter.Name,
-                            "inferred-suspending");
+                            "newly inferred suspending");
                         hasRefKindParameter = true;
                     }
 

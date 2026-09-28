@@ -561,7 +561,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
         {
             var diagnostics = CompileExpectingError(directory, "App", source, "/target:library");
             Assert.Contains("GS0422", diagnostics, StringComparison.Ordinal);
-            Assert.Contains("inferred-suspending function", diagnostics, StringComparison.Ordinal);
+            Assert.Contains("newly inferred suspending function", diagnostics, StringComparison.Ordinal);
             Assert.DoesNotContain("GS9998", diagnostics, StringComparison.Ordinal);
         }
         finally
