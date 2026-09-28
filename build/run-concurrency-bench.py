@@ -1065,7 +1065,8 @@ def update(
 def complete_baseline_fingerprint(fingerprint: dict) -> bool:
     comparison = fingerprint["comparison"]
     return (
-        comparison["scenario"] == "all"
+        comparison.get("methodologyVersion") == METHODOLOGY_VERSION
+        and comparison["scenario"] == "all"
         and comparison["modes"] == ["gsharp", "gsharp_aot", "go"]
         and comparison["wholeRuns"] == BASELINE_RUNS
         and comparison["intervalMethod"] == "range-of-run-medians"

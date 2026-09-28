@@ -425,6 +425,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
 
     def test_baseline_update_requires_all_scenarios_and_modes(self) -> None:
         full = {"comparison": {
+            "methodologyVersion": bench.METHODOLOGY_VERSION,
             "scenario": "all",
             "modes": ["gsharp", "gsharp_aot", "go"],
             "wholeRuns": 3,
@@ -438,6 +439,8 @@ class ConcurrencyBenchTests(unittest.TestCase):
         }}
 
         self.assertTrue(bench.complete_baseline_fingerprint(full))
+        full["comparison"]["methodologyVersion"] -= 1
+        self.assertFalse(bench.complete_baseline_fingerprint(full))
         self.assertFalse(bench.complete_baseline_fingerprint(partial))
         scenarios = [{"name": "paired", "go": "go-paired"}, {"name": "jit-only", "go": None}]
         with mock.patch.object(bench, "load_scenarios", return_value=scenarios):
