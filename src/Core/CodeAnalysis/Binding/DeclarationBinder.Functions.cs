@@ -3177,6 +3177,16 @@ internal sealed partial class DeclarationBinder
             return false;
         }
 
+        if (a is NullableTypeSymbol referenceNullableA && b is not NullableTypeSymbol)
+        {
+            return TypeSignaturesEquivalent(referenceNullableA.UnderlyingType, b, typeParamMap);
+        }
+
+        if (b is NullableTypeSymbol referenceNullableB && a is not NullableTypeSymbol)
+        {
+            return TypeSignaturesEquivalent(a, referenceNullableB.UnderlyingType, typeParamMap);
+        }
+
         var aIsSequence = SequenceTypeSymbol.TryGetEnumerableInterfaceShape(
             a,
             out var aSequenceDefinition,

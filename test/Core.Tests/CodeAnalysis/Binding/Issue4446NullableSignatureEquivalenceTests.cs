@@ -92,6 +92,9 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
                 typeof(List<object>),
                 typeof(List<>),
                 ImmutableArray.Create<TypeSymbol>(userClass))));
+        Assert.True(DeclarationBinder.TypeSignaturesEquivalent(
+            NullableTypeSymbol.Get(userClass),
+            userClass));
 
         Assert.True(DeclarationBinder.TypeSignaturesEquivalent(
             NullableTypeSymbol.Get(TypeSymbol.String),
@@ -115,15 +118,19 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
     public void Override_ValueNullableMismatchIsRejected_ReferenceNullableAndExactValueNullableMatch()
     {
         var diagnostics = Compile("""
+            class Node { }
+
             open class Base {
                 open func Bad(x int32) int32 { return x }
                 open func Ref(x string) string { return x }
+                open func UserRef(x Node) Node { return x }
                 open func Exact(x int32?) int32 { return x ?? 0 }
             }
 
             class Derived : Base {
                 override func Bad(x int32?) int32 { return x ?? 0 }
                 override func Ref(x string?) string { return x ?? "" }
+                override func UserRef(x Node?) Node? { return x }
                 override func Exact(x int32?) int32 { return x ?? 0 }
             }
             """);
@@ -135,15 +142,19 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
     public void Interface_ValueNullableMismatchIsRejected_ReferenceNullableAndExactValueNullableMatch()
     {
         var diagnostics = Compile("""
+            class Node { }
+
             interface IContract {
                 func Bad(x int32) int32;
                 func Ref(x string) string;
+                func UserRef(x Node) Node;
                 func Exact(x int32?) int32;
             }
 
             class Implementation : IContract {
                 func Bad(x int32?) int32 { return x ?? 0 }
                 func Ref(x string?) string { return x ?? "" }
+                func UserRef(x Node?) Node? { return x }
                 func Exact(x int32?) int32 { return x ?? 0 }
             }
             """);
