@@ -1057,12 +1057,15 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool iteratorForeachReceiverRequiresAssertion =
                 this.IteratorForeachReceiverRequiresAssertion(recv);
+            bool nullableForEachBindingRequiresAssertion =
+                this.IsNullableForEachBindingUse(recv);
             bool importedGenericTupleElementRequiresAssertion =
                 this.ImportedGenericTupleElementRequiresAssertion(recv);
             bool byRefSuppressionDroppedRequiresAssertion =
                 this.GenericResultInfersNilableThroughDroppedByRefSuppression(recv);
 
             if (!iteratorForeachReceiverRequiresAssertion
+                && !nullableForEachBindingRequiresAssertion
                 && !importedGenericTupleElementRequiresAssertion
                 && !byRefSuppressionDroppedRequiresAssertion
                 && this.GSharpExpressionIsStaticallyNonNull(recv, translated))
@@ -1071,6 +1074,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (iteratorForeachReceiverRequiresAssertion
+                || nullableForEachBindingRequiresAssertion
                 || importedGenericTupleElementRequiresAssertion
                 || byRefSuppressionDroppedRequiresAssertion
 
@@ -2264,6 +2268,13 @@ public sealed partial class CSharpToGSharpTranslator
             return translated;
         }
 
+        private bool IsNullableForEachBindingUse(ExpressionSyntax expression)
+            => expression is IdentifierNameSyntax identifier
+                && expression.Ancestors().OfType<ForEachStatementSyntax>().Any(forEach =>
+                    this.state.NullableForEachStatements.Contains(forEach)
+                    && forEach.Identifier.ValueText == identifier.Identifier.ValueText)
+                && !this.IsGSharpFlowNarrowedLocal(expression);
+
         private static GExpression EnsureNonNullAssertion(GExpression expression) =>
             TranslatedExpressionIsStaticallyNonNull(expression)
                 ? expression
@@ -2273,6 +2284,11 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression,
             GExpression translated = null)
         {
+            if (this.IsNullableForEachBindingUse(expression))
+            {
+                return false;
+            }
+
             if (translated != null && TranslatedExpressionIsStaticallyNonNull(translated))
             {
                 return true;

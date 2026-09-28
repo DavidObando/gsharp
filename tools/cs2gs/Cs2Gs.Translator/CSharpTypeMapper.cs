@@ -593,6 +593,11 @@ public sealed class CSharpTypeMapper
         if (type is IArrayTypeSymbol array)
         {
             GTypeReference explicitElement = this.MapExplicitType(array.ElementType, context, location);
+            if (IsRecognizedManagedReferenceConsumerType(array.ElementType, context.Compilation))
+            {
+                explicitElement = WithNullable(explicitElement, true);
+            }
+
             return new ArrayTypeReference(explicitElement, array.Rank) { IsNullable = type.NullableAnnotation == NullableAnnotation.Annotated };
         }
 

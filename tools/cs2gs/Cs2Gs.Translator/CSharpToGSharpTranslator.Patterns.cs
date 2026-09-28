@@ -2927,13 +2927,13 @@ public sealed partial class CSharpToGSharpTranslator
 
                     GTypeReference leafElementType = this.PromoteElementTypeForNullElements(
                         elementType, elementTypeSymbol, leaves);
-                    bool leafPromoted = !ReferenceEquals(leafElementType, elementType);
+                    bool leafAcceptsNil = leafElementType.IsNullable;
                     return new ArrayAllocationExpression(
                         leafElementType,
                         dimensions,
                         leaves.Select(expression =>
                             this.TranslateArrayInitializerElement(
-                                expression, elementTypeSymbol, leafPromoted)).ToList());
+                                expression, elementTypeSymbol, leafAcceptsNil)).ToList());
                 }
 
                 return new ArrayAllocationExpression(
@@ -2949,13 +2949,13 @@ public sealed partial class CSharpToGSharpTranslator
                 // initializer) → the slice literal `[]T{a, b}`.
                 GTypeReference literalElementType = this.PromoteElementTypeForNullElements(
                     elementType, elementTypeSymbol, creation.Initializer.Expressions, creation);
-                bool literalPromoted = !ReferenceEquals(literalElementType, elementType);
+                bool literalAcceptsNil = literalElementType.IsNullable;
                 return new ArrayLiteralExpression(
                     literalElementType,
                     creation.Initializer.Expressions
                         .Select(expression =>
                             this.TranslateArrayInitializerElement(
-                                expression, elementTypeSymbol, literalPromoted))
+                                expression, elementTypeSymbol, literalAcceptsNil))
                         .ToList());
             }
 
@@ -3016,16 +3016,23 @@ public sealed partial class CSharpToGSharpTranslator
                 expression = parenthesized.Expression;
             }
 
-            if (expression is not ElementAccessExpressionSyntax elementAccess
-                || this.context.GetTypeInfo(elementAccess.Expression).Type is not IArrayTypeSymbol array)
+            return expression is ElementAccessExpressionSyntax elementAccess
+                && this.ArrayExpressionHasNullableElement(elementAccess.Expression);
+        }
+
+        private bool ArrayExpressionHasNullableElement(ExpressionSyntax expression)
+        {
+            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
+            if ((typeInfo.Type ?? typeInfo.ConvertedType) is not IArrayTypeSymbol array)
             {
                 return false;
             }
 
-            return CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+            return array.ElementNullableAnnotation == NullableAnnotation.Annotated
+                || CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
                     array.ElementType,
                     this.context.Compilation)
-                || (this.context.GetSymbolInfo(elementAccess.Expression).Symbol is ILocalSymbol local
+                || (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
                     && this.IsWidenedArrayElementLocal(local));
         }
 
@@ -3377,15 +3384,14 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateArrayInitializerElement(
             ExpressionSyntax expression,
             ITypeSymbol elementType,
-            bool elementTypePromotedToNullable = false)
+            bool elementTypeAcceptsNil = false)
         {
             GExpression translated = this.TranslateExpression(expression);
 
-            // Issue #3682: the literal's element type was widened to `T?`
-            // because the literal writes a `nil` into it, so no element needs
-            // (or may take) a `!!` bridge against a non-nullable element — the
-            // slot accepts nil by construction now.
-            if (elementTypePromotedToNullable)
+            // Issues #3682 and #4525: the effective translated element type
+            // accepts nil, so no initializer element needs (or may take) a
+            // `!!` bridge against the C# element annotation.
+            if (elementTypeAcceptsNil)
             {
                 return translated;
             }
@@ -3464,25 +3470,25 @@ public sealed partial class CSharpToGSharpTranslator
                     leaves);
                 GTypeReference leafElementType = this.PromoteElementTypeForNullElements(
                     elementType, elementTypeSymbol, leaves, creation);
-                bool leafPromoted = !ReferenceEquals(leafElementType, elementType);
+                bool leafAcceptsNil = leafElementType.IsNullable;
                 return new ArrayAllocationExpression(
                     leafElementType,
                     dims.Select(d => (GExpression)LiteralExpression.Int(
                         d.ToString(CultureInfo.InvariantCulture))).ToList(),
                     leaves.Select(expression =>
                         this.TranslateArrayInitializerElement(
-                            expression, elementTypeSymbol, leafPromoted)).ToList());
+                            expression, elementTypeSymbol, leafAcceptsNil)).ToList());
             }
 
             GTypeReference literalElementType = this.PromoteElementTypeForNullElements(
                 elementType, elementTypeSymbol, creation.Initializer.Expressions, creation);
-            bool literalPromoted = !ReferenceEquals(literalElementType, elementType);
+            bool literalAcceptsNil = literalElementType.IsNullable;
             return new ArrayLiteralExpression(
                 literalElementType,
                 creation.Initializer.Expressions
                     .Select(expression =>
                         this.TranslateArrayInitializerElement(
-                            expression, elementTypeSymbol, literalPromoted))
+                            expression, elementTypeSymbol, literalAcceptsNil))
                     .ToList());
         }
 
@@ -3538,7 +3544,10 @@ public sealed partial class CSharpToGSharpTranslator
                     dims.Select(d => (GExpression)LiteralExpression.Int(
                         d.ToString(CultureInfo.InvariantCulture))).ToList(),
                     leaves.Select(expression =>
-                        this.TranslateArrayInitializerElement(expression, arrayType.ElementType)).ToList());
+                        this.TranslateArrayInitializerElement(
+                            expression,
+                            arrayType.ElementType,
+                            rectangularElementType.IsNullable)).ToList());
             }
 
             // A bare `{ a, b, c }` array initializer (a field/local of array type
@@ -3553,7 +3562,10 @@ public sealed partial class CSharpToGSharpTranslator
                 elementType,
                 initializer.Expressions
                     .Select(expression =>
-                        this.TranslateArrayInitializerElement(expression, elementTypeSymbol))
+                        this.TranslateArrayInitializerElement(
+                            expression,
+                            elementTypeSymbol,
+                            elementType.IsNullable))
                     .ToList());
         }
 
@@ -3745,9 +3757,21 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ITypeSymbol elementTypeSymbol = GetEnumerableElementType(target);
-            GTypeReference elementType = elementTypeSymbol != null
-                ? this.typeMapper.Map(elementTypeSymbol, this.context, collection.GetLocation())
-                : this.GetCollectionElementType(collection);
+            GTypeReference elementType;
+            if (target is IArrayTypeSymbol targetArray
+                && this.typeMapper.Map(
+                    targetArray,
+                    this.context,
+                    collection.GetLocation()) is ArrayTypeReference mappedArray)
+            {
+                elementType = mappedArray.ElementType;
+            }
+            else
+            {
+                elementType = elementTypeSymbol != null
+                    ? this.typeMapper.Map(elementTypeSymbol, this.context, collection.GetLocation())
+                    : this.GetCollectionElementType(collection);
+            }
 
             // A `List<T>`/`HashSet<T>`/... collection-expression target maps to
             // the canonical G# collection-initializer form (`List[int32]{...}`,
@@ -3796,7 +3820,7 @@ public sealed partial class CSharpToGSharpTranslator
                 elementTypeSymbol,
                 collection.Elements.OfType<ExpressionElementSyntax>().Select(e => e.Expression),
                 collection);
-            bool slicePromoted = !ReferenceEquals(sliceElementType, elementType);
+            bool sliceAcceptsNil = sliceElementType.IsNullable;
 
             var elements = new List<GExpression>();
             foreach (CollectionElementSyntax element in collection.Elements)
@@ -3808,7 +3832,7 @@ public sealed partial class CSharpToGSharpTranslator
                 else
                 {
                     var expressionElement = (ExpressionElementSyntax)element;
-                    elements.Add(slicePromoted
+                    elements.Add(sliceAcceptsNil
                         ? this.TranslateExpression(expressionElement.Expression)
                         : this.CoerceCollectionElement(
                             expressionElement.Expression,

@@ -69,6 +69,11 @@ internal sealed class DocumentTranslationState
     public HashSet<ISymbol> HoistedNullableGuardLocals { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
+    // Active foreach statements whose G# inferred element type is nullable
+    // even though Roslyn reports the C# binding as non-nullable.
+    public HashSet<SyntaxNode> NullableForEachStatements { get; } =
+        new HashSet<SyntaxNode>();
+
     // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
     // surrounding statement seam has hoisted into trailing `i++` statements
     // (G# models inc/dec as statements, not expressions; spec §Statements).

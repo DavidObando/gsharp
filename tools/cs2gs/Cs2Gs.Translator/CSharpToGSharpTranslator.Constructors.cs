@@ -3609,10 +3609,34 @@ public sealed partial class CSharpToGSharpTranslator
                     // lowers to G#'s async-iteration form `await for x in seq`
                     // (spec AwaitForRangeStmt). Without it, iterating an
                     // `IAsyncEnumerable<T>` with a plain `for` is rejected (GS0116).
-                    string loopIdentifier = this.EmittedName(
-                        this.context.GetDeclaredSymbol(forEach),
-                        forEach.Identifier.ValueText);
-                    BlockStatement loopBody = this.TranslateStatementAsBlock(forEach.Statement);
+                    ISymbol loopSymbol = this.context.GetDeclaredSymbol(forEach);
+                    string loopIdentifier = this.EmittedName(loopSymbol, forEach.Identifier.ValueText);
+                    ITypeSymbol forEachElement = this.context.SemanticModel
+                        .GetForEachStatementInfo(forEach)
+                        .ElementType;
+                    bool nullableElement = this.ArrayExpressionHasNullableElement(forEach.Expression)
+                        || (forEachElement?.IsReferenceType == true
+                            && (forEachElement.NullableAnnotation == NullableAnnotation.Annotated
+                                || CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                                    forEachElement,
+                                    this.context.Compilation)));
+                    if (nullableElement)
+                    {
+                        this.state.NullableForEachStatements.Add(forEach);
+                    }
+
+                    BlockStatement loopBody;
+                    try
+                    {
+                        loopBody = this.TranslateStatementAsBlock(forEach.Statement);
+                    }
+                    finally
+                    {
+                        if (nullableElement)
+                        {
+                            this.state.NullableForEachStatements.Remove(forEach);
+                        }
+                    }
 
                     // Issue #3935: an IDENTITY element conversion means the
                     // declared type IS the sequence's element type, so a typed
