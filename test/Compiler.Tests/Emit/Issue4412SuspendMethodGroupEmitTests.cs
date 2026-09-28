@@ -324,6 +324,54 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
     }
 
     [Fact]
+    public void ImportedGenericExtensionSuspendMethodGroup_IgnoresHiddenContextDuringInference()
+    {
+        const string library = """
+            using System.Threading.Tasks;
+            using Gsharp.Concurrency;
+
+            namespace Interop;
+
+            public sealed class Box<T>;
+            public delegate ValueTask<int> ValueRunner(int value);
+
+            public static class Extensions
+            {
+                [Suspending]
+                public static ValueTask<int> Identity<T>(this Box<T> box, int value, Context context) =>
+                    new(value);
+            }
+            """;
+        const string app = """
+            package App
+            import System
+            import Interop
+
+            suspend func run() {
+                let callback ValueRunner = Box[int32]().Identity
+                Console.WriteLine(await callback(8))
+            }
+
+            run()
+            """;
+
+        var directory = PrepareDirectory(nameof(ImportedGenericExtensionSuspendMethodGroup_IgnoresHiddenContextDuringInference));
+        try
+        {
+            var libraryPath = CompileCSharpLibrary(directory, "Interop", library);
+            var appPath = Compile(directory, "App", app, "/target:exe", "/reference:" + libraryPath);
+            IlVerifier.Verify(
+                appPath,
+                new[] { libraryPath, Path.Combine(directory, "Gsharp.Runtime.Channels.dll") });
+            Assert.Equal($"8{Environment.NewLine}", Run(appPath));
+        }
+        finally
+        {
+            Directory.Delete(directory, recursive: true);
+        }
+    }
+
+    [Fact]
     public void StaticInitializerSuspendMethodGroups_VerifyAndRun()
     {
         const string source = """

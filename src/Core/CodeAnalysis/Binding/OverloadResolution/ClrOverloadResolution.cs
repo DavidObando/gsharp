@@ -1267,12 +1267,14 @@ internal static class ClrOverloadResolution
     /// <param name="argTypes">CLR types of the supplied arguments.</param>
     /// <param name="typeArgs">On success, the inferred type arguments in declaration order.</param>
     /// <param name="methodGroupInference">Optional deferred method-group signature resolver.</param>
+    /// <param name="trailingParameterCountToIgnore">Trailing ABI-only parameters excluded from inference.</param>
     /// <returns>Whether inference succeeded.</returns>
     public static bool TryInferTypeArguments(
         MethodInfo openMethod,
         IReadOnlyList<Type?> argTypes,
         [NotNullWhen(true)] out Type[]? typeArgs,
-        Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null)
+        Func<int, IReadOnlyList<Type>, (Type[] Parameters, Type Return)?>? methodGroupInference = null,
+        int trailingParameterCountToIgnore = 0)
     {
         typeArgs = null;
         if (openMethod is null || !openMethod.IsGenericMethodDefinition)
@@ -1281,6 +1283,10 @@ internal static class ClrOverloadResolution
         }
 
         var parameters = openMethod.GetParameters();
+        if (trailingParameterCountToIgnore > 0)
+        {
+            parameters = parameters[..^trailingParameterCountToIgnore];
+        }
 
         // Issue #327/#321: allow the call to omit trailing optional parameters.
         // We infer type arguments from the supplied positional arguments only;
@@ -3126,6 +3132,7 @@ internal static class ClrOverloadResolution
             // violations drop the candidate silently (matches C# §7.5.2 "if
             // type inference fails, the method is not applicable").
             T candidate = rawCandidate;
+            var ignoredTrailingParameters = trailingParameterCountToIgnore?.Invoke(rawCandidate) ?? 0;
 
             // Issue #1325: when a candidate must be closed over a
             // same-compilation user value type — erased to a `System.Object`
@@ -3349,7 +3356,12 @@ internal static class ClrOverloadResolution
                         projectTypeArgument,
                         out typeArgs);
                 if (!useRecoveredInference
-                    && !TryInferTypeArguments(mi, inferenceArgTypes, out typeArgs, inferenceMethodGroup)
+                    && !TryInferTypeArguments(
+                        mi,
+                        inferenceArgTypes,
+                        out typeArgs,
+                        inferenceMethodGroup,
+                        ignoredTrailingParameters)
                     && !TryRecoverErasedTypeArguments(
                         mi,
                         symbolicTypeArgs,
@@ -3447,7 +3459,6 @@ internal static class ClrOverloadResolution
             }
 
             var parameters = candidate.GetParameters();
-            var ignoredTrailingParameters = trailingParameterCountToIgnore?.Invoke(candidate) ?? 0;
             if (ignoredTrailingParameters > 0)
             {
                 parameters = parameters[..^ignoredTrailingParameters];
