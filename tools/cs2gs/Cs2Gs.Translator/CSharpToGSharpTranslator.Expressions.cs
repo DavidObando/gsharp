@@ -5373,7 +5373,11 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (parameter == null
-                && !this.TryGetExpandedParamsElementTarget(argument, out _, out parameter))
+                && !this.TryGetExpandedParamsElementTarget(
+                    argument,
+                    this.GetArgumentParameter(argument),
+                    out _,
+                    out parameter))
             {
                 return false;
             }

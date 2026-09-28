@@ -74,10 +74,10 @@ internal sealed class DocumentTranslationState
     public HashSet<ISymbol> NullableForEachBindings { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
-    // Array element nullability as emitted by CSharpTypeMapper. Cache the
-    // mapped answer so hot element/foreach checks do not remap the same type.
-    public Dictionary<ITypeSymbol, bool> MappedArrayElementNullability { get; } =
-        new Dictionary<ITypeSymbol, bool>(SymbolEqualityComparer.IncludeNullability);
+    // Keyed by the Roslyn array type symbol; each value records whether
+    // CSharpTypeMapper emits that array's element type as nullable.
+    public Dictionary<IArrayTypeSymbol, bool> MappedArrayElementIsNullableByArrayType { get; } =
+        new Dictionary<IArrayTypeSymbol, bool>(SymbolEqualityComparer.IncludeNullability);
 
     // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
     // surrounding statement seam has hoisted into trailing `i++` statements

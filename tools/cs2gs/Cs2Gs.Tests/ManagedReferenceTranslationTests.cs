@@ -695,6 +695,48 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Equal(42, result.Value);
     }
 
+    [Fact]
+    public void ManagedReferenceArrayExpandedParamsUseSubstitutedElementContract()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayGenericParams;
+            public class Probe {
+                private static bool AllNil<T>(T[] source, params T[] values) =>
+                    values[0] is null && values[1] is null;
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return AllNil<ManagedRef<int>>(source, source[0], source[0])
+                        && AllNil<ManagedRef<int>>(
+                            source,
+                            values: new ManagedRef<int>[] { source[0], source[0] })
+                            ? 42
+                            : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayGenericParams.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
     [Theory]
     [InlineData("int managed = 1;", "managed", 4)]
     [InlineData("int managed() => 2;", "managed()", 5)]

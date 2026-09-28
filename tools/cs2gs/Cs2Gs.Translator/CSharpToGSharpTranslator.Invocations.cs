@@ -1905,9 +1905,15 @@ public sealed partial class CSharpToGSharpTranslator
                 else
                 {
                     int index = list.Arguments.IndexOf(argument);
-                    parameter = index >= 0 && index < method.Parameters.Length
-                        ? method.Parameters[index]
-                        : null;
+                    if (index >= 0 && index < method.Parameters.Length)
+                    {
+                        parameter = method.Parameters[index];
+                    }
+                    else if (index >= method.Parameters.Length
+                        && method.Parameters.LastOrDefault() is { IsParams: true } paramsParameter)
+                    {
+                        parameter = paramsParameter;
+                    }
                 }
             }
 
@@ -2007,11 +2013,25 @@ public sealed partial class CSharpToGSharpTranslator
             bool isXunitNullAssertion = this.IsXunitNullAssertionArgument(argument);
             IArgumentOperation argumentOperation = this.context.SemanticModel.GetOperation(argument) as IArgumentOperation;
             IParameterSymbol argumentParameter = this.GetArgumentParameter(argument);
+            ITypeSymbol paramsElementType = null;
+            IParameterSymbol paramsParameter = null;
+            bool expandedParamsArgument = argumentOperation == null
+                && this.TryGetExpandedParamsElementTarget(
+                    argument,
+                    argumentParameter,
+                    out paramsElementType,
+                    out paramsParameter);
+            ITypeSymbol targetType = expandedParamsArgument
+                ? paramsElementType
+                : argumentParameter?.Type;
+            IParameterSymbol targetParameter = expandedParamsArgument
+                ? paramsParameter
+                : argumentParameter;
             ILocalSymbol argumentLocal = this.context.GetSymbolInfo(argument.Expression).Symbol as ILocalSymbol
                 ?? GetReferencedLocal(argumentOperation?.Value);
             bool isFlowNarrowedLocal = argumentLocal != null
                 && this.IsDominatedByNullCheckGuard(argument.Expression, argumentLocal);
-            bool targetIsPromotedMigratedSibling = argumentParameter is { } siblingParameter
+            bool targetIsPromotedMigratedSibling = targetParameter is { } siblingParameter
                 && !SymbolEqualityComparer.Default.Equals(
                     siblingParameter.ContainingAssembly,
                     this.context.Compilation.Assembly)
@@ -2032,26 +2052,21 @@ public sealed partial class CSharpToGSharpTranslator
             // one turns a legal nil into a throw.
             bool analyzerNullableArgument = this.IsGSharpNullableAnalyzerExpression(argument.Expression);
             bool targetRequiresNonNull;
-            if (argumentParameter is { } targetParameter)
+            if (targetParameter != null && targetType != null)
             {
                 targetRequiresNonNull =
-                    (this.TargetWillRemainNonNullableReference(targetParameter.Type, targetParameter)
+                    (this.TargetWillRemainNonNullableReference(targetType, targetParameter)
                         && !targetIsPromotedMigratedSibling)
                     || (analyzerNullableArgument
                         && !targetIsPromotedMigratedSibling
-                        && this.AnalyzerBridgeTargetIsNonNull(targetParameter.Type, targetParameter, argument.Expression));
-            }
-            else if (analyzerNullableArgument)
-            {
-                targetRequiresNonNull = this.TryGetExpandedParamsElementTarget(
-                        argument,
-                        out ITypeSymbol analyzerParamsElementType,
-                        out IParameterSymbol analyzerParamsParameter)
-                    && this.AnalyzerBridgeTargetIsNonNull(analyzerParamsElementType, analyzerParamsParameter, argument.Expression);
+                        && this.AnalyzerBridgeTargetIsNonNull(
+                            targetType,
+                            targetParameter,
+                            argument.Expression));
             }
             else
             {
-                targetRequiresNonNull = true;
+                targetRequiresNonNull = !analyzerNullableArgument;
             }
 
             if (!IsNameOfArgument(argument)
@@ -2085,58 +2100,24 @@ public sealed partial class CSharpToGSharpTranslator
             if (!IsNameOfArgument(argument)
                 && !isXunitNullAssertion
                 && targetRequiresNonNull
-                && argumentParameter is { } parameter)
+                && targetParameter is { } parameter
+                && targetType != null)
             {
                 // A warning-level C# null passed through a substituted generic
                 // slot needs the target's static type without a runtime check.
                 translated = IsNullOrSuppressedNull(argument.Expression)
-                    && parameter.Type.IsReferenceType
+                    && targetType.IsReferenceType
                     && (parameter.ContainingAssembly?.Name == "Gsharp.Runtime.Values"
                         || ContainsTypeParameter(parameter.OriginalDefinition.Type))
                         ? new DefaultValueExpression(this.typeMapper.Map(
-                            parameter.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
+                            targetType.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                             this.context,
                             argument.Expression.GetLocation()))
                         : this.ForgiveNullableReferenceValue(
                             argument.Expression,
                             translated,
-                            parameter.Type,
+                            targetType,
                             parameter,
-                            includePromotedValue: true);
-            }
-            else if (!IsNameOfArgument(argument)
-                && !isXunitNullAssertion
-                && argumentOperation is null
-                && this.TryGetExpandedParamsElementTarget(
-                    argument,
-                    out ITypeSymbol paramsElementType,
-                    out IParameterSymbol paramsParameter))
-            {
-                // Issue #3644: an argument in the EXPANDED tail of a params
-                // call (`params T[]` or the C#13 `params ReadOnlySpan<T>`,
-                // e.g. `Path.Combine(a, b, c, d, e)` binding
-                // `Path.Combine(params ReadOnlySpan<string>)`) has no
-                // IArgumentOperation of its own — Roslyn wraps the whole tail
-                // in one synthesized collection argument — so the
-                // parameter-targeted bridge above never sees it and a
-                // promoted/declared-nullable value flowed into the non-null
-                // element slot bare (GS0154/GS0155, the migrated
-                // Cs2Gs.Pipeline `FindNupkgForVersion` wall). Bridge against
-                // the params ELEMENT contract instead.
-                translated = IsNullOrSuppressedNull(argument.Expression)
-                    && paramsElementType.IsReferenceType
-                    && this.TargetWillRemainNonNullableReference(
-                        paramsElementType,
-                        paramsParameter)
-                        ? new DefaultValueExpression(this.typeMapper.Map(
-                            paramsElementType.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
-                            this.context,
-                            argument.Expression.GetLocation()))
-                        : this.ForgiveNullableReferenceValue(
-                            argument.Expression,
-                            translated,
-                            paramsElementType,
-                            paramsParameter,
                             includePromotedValue: true);
             }
 
@@ -2162,42 +2143,40 @@ public sealed partial class CSharpToGSharpTranslator
         // (`Path.Combine(paths)`) binds the parameter itself and is excluded.
         private bool TryGetExpandedParamsElementTarget(
             ArgumentSyntax argument,
+            IParameterSymbol parameter,
             out ITypeSymbol elementType,
             out IParameterSymbol paramsParameter)
         {
             elementType = null;
             paramsParameter = null;
             if (argument.NameColon != null
-                || argument.Parent is not BaseArgumentListSyntax { Parent: ExpressionSyntax call } argumentList
-                || this.context.GetSymbolInfo(call).Symbol is not IMethodSymbol method
-                || method.Parameters.Length == 0)
+                || argument.Parent is not BaseArgumentListSyntax argumentList
+                || parameter?.IsParams != true)
             {
                 return false;
             }
 
-            IParameterSymbol lastParameter = method.Parameters[^1];
-            ITypeSymbol candidateElementType = lastParameter.Type switch
+            ITypeSymbol candidateElementType = parameter.Type switch
             {
                 IArrayTypeSymbol arrayType => arrayType.ElementType,
                 INamedTypeSymbol { TypeArguments.Length: 1 } spanLike => spanLike.TypeArguments[0],
                 _ => null,
             };
-            if (!lastParameter.IsParams
-                || candidateElementType == null
-                || argumentList.Arguments.IndexOf(argument) < method.Parameters.Length - 1)
+            if (candidateElementType == null
+                || argumentList.Arguments.IndexOf(argument) < parameter.Ordinal)
             {
                 return false;
             }
 
             ITypeSymbol convertedType = this.context.GetTypeInfo(argument.Expression).ConvertedType;
             if (convertedType != null
-                && SymbolEqualityComparer.Default.Equals(convertedType, lastParameter.Type))
+                && SymbolEqualityComparer.Default.Equals(convertedType, parameter.Type))
             {
                 return false;
             }
 
             elementType = candidateElementType;
-            paramsParameter = lastParameter;
+            paramsParameter = parameter;
             return true;
         }
 

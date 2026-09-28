@@ -3016,11 +3016,24 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private bool ArrayExpressionHasNullableReferenceLikeElement(ExpressionSyntax expression)
+            => this.ArrayExpressionHasNullableElement(
+                expression,
+                requireReferenceLikeElement: true);
+
+        private bool ArrayExpressionHasNullableElement(ExpressionSyntax expression)
+            => this.ArrayExpressionHasNullableElement(
+                expression,
+                requireReferenceLikeElement: false);
+
+        private bool ArrayExpressionHasNullableElement(
+            ExpressionSyntax expression,
+            bool requireReferenceLikeElement)
         {
             expression = Unparenthesize(expression);
             TypeInfo typeInfo = this.context.GetTypeInfo(expression);
             if ((typeInfo.Type ?? typeInfo.ConvertedType) is not IArrayTypeSymbol array
-                || (!array.ElementType.IsReferenceType
+                || (requireReferenceLikeElement
+                    && !array.ElementType.IsReferenceType
                     && !CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
                         array.ElementType,
                         this.context.Compilation)))
@@ -3028,23 +3041,13 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            return this.ArrayExpressionHasNullableElement(expression);
-        }
-
-        private bool ArrayExpressionHasNullableElement(ExpressionSyntax expression)
-        {
-            expression = Unparenthesize(expression);
-            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
-            if ((typeInfo.Type ?? typeInfo.ConvertedType) is not IArrayTypeSymbol array)
-            {
-                return false;
-            }
-
-            if (!this.state.MappedArrayElementNullability.TryGetValue(array, out bool mappedNullable))
+            if (!this.state.MappedArrayElementIsNullableByArrayType.TryGetValue(
+                    array,
+                    out bool mappedNullable))
             {
                 mappedNullable = this.typeMapper.Map(array, this.context, expression.GetLocation())
                     is ArrayTypeReference { ElementType.IsNullable: true };
-                this.state.MappedArrayElementNullability.Add(array, mappedNullable);
+                this.state.MappedArrayElementIsNullableByArrayType.Add(array, mappedNullable);
             }
 
             return mappedNullable
