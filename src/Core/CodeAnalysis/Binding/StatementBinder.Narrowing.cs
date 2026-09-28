@@ -577,7 +577,7 @@ internal sealed partial class StatementBinder
             {
                 if (mutations.InvalidatesNarrowing(entry.Key, entry.Value))
                 {
-                    snapshot.NarrowedVariables.Remove(entry.Key);
+                    snapshot.RemoveNarrowing(entry.Key);
                 }
             }
         }

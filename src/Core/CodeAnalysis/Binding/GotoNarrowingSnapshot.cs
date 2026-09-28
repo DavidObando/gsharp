@@ -11,15 +11,23 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed class GotoNarrowingSnapshot
 {
+    private readonly Dictionary<VariableSymbol, TypeSymbol> narrowedVariables;
+
     public GotoNarrowingSnapshot(
-        Dictionary<VariableSymbol, TypeSymbol> narrowedVariables,
+        IReadOnlyDictionary<VariableSymbol, TypeSymbol> narrowedVariables,
         ImmutableArray<FinallyClauseSyntax> activeFinallyClauses)
     {
-        NarrowedVariables = narrowedVariables;
+        this.narrowedVariables = new Dictionary<VariableSymbol, TypeSymbol>(narrowedVariables);
         ActiveFinallyClauses = activeFinallyClauses;
     }
 
-    public Dictionary<VariableSymbol, TypeSymbol> NarrowedVariables { get; }
+    public IReadOnlyDictionary<VariableSymbol, TypeSymbol> NarrowedVariables => narrowedVariables;
 
     public ImmutableArray<FinallyClauseSyntax> ActiveFinallyClauses { get; }
+
+    public GotoNarrowingSnapshot Clone()
+        => new(narrowedVariables, ActiveFinallyClauses);
+
+    public void RemoveNarrowing(VariableSymbol variable)
+        => narrowedVariables.Remove(variable);
 }

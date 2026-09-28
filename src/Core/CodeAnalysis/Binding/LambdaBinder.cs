@@ -2386,7 +2386,7 @@ internal sealed class LambdaBinder
         foreach (var kvp in saved.PendingGotoNarrowingSnapshots)
         {
             binderCtx.PendingGotoNarrowingSnapshots[kvp.Key] =
-                kvp.Value.Select(CloneGotoNarrowingSnapshot).ToList();
+                kvp.Value.Select(snapshot => snapshot.Clone()).ToList();
         }
 
         // BinderContext.LoopStack.ToArray() orders elements top-of-stack
@@ -2411,11 +2411,6 @@ internal sealed class LambdaBinder
         => outerFunction?.ReceiverType
             ?? outerFunction?.StaticOwnerType
             ?? outerFunction?.LexicalEnclosingType;
-
-    private static GotoNarrowingSnapshot CloneGotoNarrowingSnapshot(GotoNarrowingSnapshot snapshot)
-        => new(
-            new Dictionary<VariableSymbol, TypeSymbol>(snapshot.NarrowedVariables),
-            snapshot.ActiveFinallyClauses);
 
     // Issue #893: rewrite a value-returning function-literal block body so a bare
     // trailing expression statement becomes the implicit `return` value. This is
@@ -3039,7 +3034,7 @@ internal sealed class LambdaBinder
                 entry => new HashSet<VariableSymbol>(entry.Value));
             PendingGotoNarrowingSnapshots = ctx.PendingGotoNarrowingSnapshots.ToDictionary(
                 entry => entry.Key,
-                entry => entry.Value.Select(CloneGotoNarrowingSnapshot).ToList());
+                entry => entry.Value.Select(snapshot => snapshot.Clone()).ToList());
             LoopStack = ctx.LoopStack.ToArray();
             FallthroughTarget = ctx.CurrentFallthroughTarget;
             FallthroughAnchor = ctx.CurrentFallthroughAnchor;

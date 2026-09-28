@@ -54,7 +54,7 @@ internal sealed partial class StatementBinder
 
             snapshots.Add(new GotoNarrowingSnapshot(
                 narrowedAtSource,
-                activeFinallyClauses.Reverse().ToImmutableArray()));
+                activeFinallyClauses.ToImmutableArray()));
         }
 
         var label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location);
@@ -294,7 +294,7 @@ internal sealed partial class StatementBinder
             entry => new HashSet<VariableSymbol>(entry.Value));
         var pendingGotoNarrowingSnapshots = binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
             entry => entry.Key,
-            entry => entry.Value.Select(CloneGotoNarrowingSnapshot).ToList());
+            entry => entry.Value.Select(snapshot => snapshot.Clone()).ToList());
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
         var syntheticLocalCounter = binderCtx.SyntheticLocalCounter;
 
@@ -368,7 +368,7 @@ internal sealed partial class StatementBinder
         {
             binderCtx.PendingGotoNarrowingSnapshots.Add(
                 entry.Key,
-                entry.Value.Select(CloneGotoNarrowingSnapshot).ToList());
+                entry.Value.Select(snapshot => snapshot.Clone()).ToList());
         }
 
         userGotoHandlerRegions.Clear();
@@ -381,11 +381,6 @@ internal sealed partial class StatementBinder
 
         InvalidateInheritedNarrowings(narrowingInvalidations);
         return BindCore(out breakLabel, out continueLabel);
-
-        static GotoNarrowingSnapshot CloneGotoNarrowingSnapshot(GotoNarrowingSnapshot snapshot)
-            => new(
-                new Dictionary<VariableSymbol, TypeSymbol>(snapshot.NarrowedVariables),
-                snapshot.ActiveFinallyClauses);
 
         BoundStatement BindCore(out BoundLabel localBreakLabel, out BoundLabel localContinueLabel)
         {
