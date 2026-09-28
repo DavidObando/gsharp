@@ -94,7 +94,7 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
             }
             """);
 
-        Assert.Equal(1, diagnostics.Count(diagnostic => diagnostic.Id == "GS0185"));
+        AssertErrorIds(diagnostics, "GS0185");
     }
 
     [Fact]
@@ -114,7 +114,7 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
             }
             """);
 
-        Assert.Equal(1, diagnostics.Count(diagnostic => diagnostic.Id == "GS0187"));
+        AssertErrorIds(diagnostics, "GS0187");
     }
 
     [Fact]
@@ -135,9 +135,7 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
         using var pe = new MemoryStream();
         var diagnostics = compilation.Emit(pe).Diagnostics;
 
-        Assert.True(
-            diagnostics.Count(diagnostic => diagnostic.Id == "GS0611") == 1,
-            string.Join(Environment.NewLine, diagnostics.Select(diagnostic => diagnostic.Id + ": " + diagnostic.Message)));
+        AssertErrorIds(diagnostics, "GS0611");
     }
 
     [Fact]
@@ -164,9 +162,8 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
                 let value = Api.Pick(Api.Make())
                 """)));
 
-        Assert.Contains(
-            compilation.GlobalScope.Diagnostics,
-            diagnostic => diagnostic.Id is "GS0151" or "GS0159");
+        var error = Assert.Single(compilation.GlobalScope.Diagnostics, diagnostic => diagnostic.IsError);
+        Assert.True(error.Id is "GS0151" or "GS0159", error.Id + ": " + error.Message);
     }
 
     [Fact]
@@ -215,8 +212,7 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
                 }
                 """)));
 
-        Assert.Contains(compilation.GlobalScope.Diagnostics, diagnostic => diagnostic.Id == "GS0185");
-        Assert.Contains(compilation.GlobalScope.Diagnostics, diagnostic => diagnostic.Id == "GS0187");
+        AssertErrorIds(compilation.GlobalScope.Diagnostics, "GS0185", "GS0187");
     }
 
     private static ImmutableArray<Diagnostic> Compile(string source)
@@ -224,4 +220,11 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
         var compilation = new Compilation(SyntaxTree.Parse(SourceText.From(source)));
         return compilation.GlobalScope.Diagnostics;
     }
+
+    private static void AssertErrorIds(ImmutableArray<Diagnostic> diagnostics, params string[] expected)
+        => Assert.Equal(
+            expected.OrderBy(id => id, StringComparer.Ordinal),
+            diagnostics.Where(diagnostic => diagnostic.IsError)
+                .Select(diagnostic => diagnostic.Id)
+                .OrderBy(id => id, StringComparer.Ordinal));
 }
