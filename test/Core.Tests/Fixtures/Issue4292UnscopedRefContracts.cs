@@ -53,6 +53,15 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
             int Value { get; set; }
         }
 
+        public interface IBaseValueProperty
+        {
+            int Value { get; }
+        }
+
+        public interface IDerivedValueProperty : IBaseValueProperty
+        {
+        }
+
         public interface IGenericMethod<T>
         {
             ref int Slot(ref int fallback, T value);

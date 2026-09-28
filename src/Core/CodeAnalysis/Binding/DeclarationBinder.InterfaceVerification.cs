@@ -245,7 +245,7 @@ internal sealed partial class DeclarationBinder
                     }
                 }
 
-                foreach (var property in structSymbol.Properties)
+                foreach (var property in GetMembersIncludingInherited(structSymbol, type => type.Properties))
                 {
                     var target = property.ExplicitInterfaceClauseTarget;
                     if (!property.HasExplicitInterfaceClause
@@ -1826,6 +1826,9 @@ internal sealed partial class DeclarationBinder
                         structSymbol,
                         ifaceSym,
                         clrProp,
+                        clrProp.GetMethod,
+                        clrProp.SetMethod,
+                        ImmutableArray<TypeSymbol>.Empty,
                         requiresSetter,
                         isRequired),
                     validateImplementation: implProp =>
@@ -1963,7 +1966,15 @@ internal sealed partial class DeclarationBinder
                 bool requiresSetter = property.SetMethod?.IsAbstract == true;
                 VerifyClrInterfaceMember(
                     isRequired: requiresGetter || requiresSetter,
-                    findImplementation: () => FindClrInterfacePropertyImplementation(structSymbol, slot),
+                    findImplementation: () => FindClrInterfacePropertyImplementationOrField(
+                        structSymbol,
+                        slot.SlotOwner,
+                        property,
+                        property.GetMethod,
+                        property.SetMethod,
+                        slot.SymbolicArgs,
+                        requiresSetter,
+                        requiresGetter || requiresSetter),
                     validateImplementation: implementation =>
                     {
                         ValidateUnscopedRefPropertyContract(
@@ -2061,24 +2072,6 @@ internal sealed partial class DeclarationBinder
         return null;
     }
 
-    private static PropertySymbol? FindClrInterfacePropertyImplementation(
-        StructSymbol structSymbol,
-        MemberLookup.ClrInterfacePropertySlot slot)
-        => FindClrInterfaceImplementation(
-            structSymbol,
-            type => type.Properties,
-            property => ExplicitClrPropertySlotMatches(
-                property,
-                slot.SlotOwner,
-                slot.Property.GetMethod,
-                slot.Property.SetMethod),
-            () => slot.SymbolicArgs.IsDefaultOrEmpty
-                ? MemberLookup.FindMatchingProperty(structSymbol, slot.SlotOwner, slot.Property)
-                : MemberLookup.FindMatchingPropertyForSymbolicClrInterface(
-                    structSymbol,
-                    slot.Property,
-                    slot.SymbolicArgs));
-
     /// <summary>
     /// Issue #949: verifies a class against a CLR generic interface that is
     /// closed over at least one user-defined G# type argument (e.g.
@@ -2141,12 +2134,15 @@ internal sealed partial class DeclarationBinder
             bool requiresSetter = openProp.SetMethod?.IsAbstract == true;
             VerifyClrInterfaceMember(
                 isRequired: requiresGetter || requiresSetter,
-                findImplementation: () => FindClrInterfacePropertyImplementation(
+                findImplementation: () => FindClrInterfacePropertyImplementationOrField(
                     structSymbol,
                     interfaceType,
+                    openProp,
                     erasedGetter,
                     erasedSetter,
-                    () => MemberLookup.FindMatchingPropertyForSymbolicClrInterface(structSymbol, openProp, symbolicArgs)),
+                    symbolicArgs,
+                    requiresSetter,
+                    requiresGetter || requiresSetter),
                 validateImplementation: implProp =>
                 {
                     ValidateUnscopedRefPropertyContract(
@@ -2226,22 +2222,6 @@ internal sealed partial class DeclarationBinder
                 explicitSlot),
             findImplicit);
 
-    private static PropertySymbol? FindClrInterfacePropertyImplementation(
-        StructSymbol structSymbol,
-        TypeSymbol interfaceType,
-        MethodInfo? explicitGetter,
-        MethodInfo? explicitSetter,
-        Func<PropertySymbol?> findImplicit)
-        => FindClrInterfaceImplementation(
-            structSymbol,
-            type => type.Properties,
-            property => ExplicitClrPropertySlotMatches(
-                property,
-                interfaceType,
-                explicitGetter,
-                explicitSetter),
-            findImplicit);
-
     private static bool ExplicitClrPropertySlotMatches(
         PropertySymbol property,
         TypeSymbol slotOwner,
@@ -2307,15 +2287,41 @@ internal sealed partial class DeclarationBinder
         StructSymbol structSymbol,
         TypeSymbol interfaceType,
         PropertyInfo clrProperty,
+        MethodInfo? explicitGetter,
+        MethodInfo? explicitSetter,
+        ImmutableArray<TypeSymbol> symbolicArgs,
         bool requiresSetter,
         bool isRequired)
     {
-        var implementation = FindClrInterfacePropertyImplementation(
-            structSymbol,
-            interfaceType,
-            clrProperty.GetMethod,
-            clrProperty.SetMethod,
-            () => MemberLookup.FindMatchingProperty(structSymbol, interfaceType, clrProperty));
+        PropertySymbol? implementation = null;
+        foreach (var property in GetMembersIncludingInherited(structSymbol, type => type.Properties))
+        {
+            if (ExplicitClrPropertySlotMatches(
+                property,
+                interfaceType,
+                explicitGetter,
+                explicitSetter))
+            {
+                implementation = property;
+                break;
+            }
+        }
+
+        if (implementation == null)
+        {
+            foreach (var property in GetMembersIncludingInherited(structSymbol, type => type.Properties))
+            {
+                if (MemberLookup.IsImplicitInterfaceImplementationCandidate(property)
+                    && (symbolicArgs.IsDefaultOrEmpty
+                        ? MemberLookup.PropertyMatchesClrInterfaceSignature(property, interfaceType, clrProperty)
+                        : MemberLookup.PropertyMatchesSymbolicClrInterfaceSignature(property, clrProperty, symbolicArgs)))
+                {
+                    implementation = property;
+                    break;
+                }
+            }
+        }
+
         if (implementation != null || !isRequired)
         {
             return implementation;

@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.IO;
 using System.Linq;
+using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
 using GSharp.Core.CodeAnalysis.Compilation;
@@ -14,6 +15,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Core.Tests.Fixtures;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -147,6 +149,25 @@ struct Buffer {
 ";
 
         Assert.Empty(Bind(source));
+    }
+
+    [Fact]
+    public void PrivateInterfaceHelper_RejectsUnscopedRef()
+    {
+        const string source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            interface IHelpers {
+                @UnscopedRef
+                private func Helper() int32 { return 0 }
+            }
+            """;
+
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0590");
+        Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+        Assert.Equal(
+            "'@UnscopedRef' requires a virtual interface instance member; a private interface helper has no implementation slot.",
+            diagnostic.Message);
     }
 
     [Theory]
@@ -1398,7 +1419,10 @@ ref struct Buffer : IDefaultProperty {
             }
             """;
 
-        Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+        Assert.Contains("IBaseDefaultProperty.Slot", diagnostic.Message, StringComparison.Ordinal);
+        Assert.Contains("setter does not have @UnscopedRef", diagnostic.Message, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -1419,6 +1443,121 @@ ref struct Buffer : IDefaultProperty {
             """;
 
         Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+    }
+
+    [Fact]
+    public void ImportedInheritedProperty_UsesPlainPropertyFromBaseClass()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            open class Base {
+                public prop Value int32 { get { return 1 } }
+            }
+            class Derived : Base, IDerivedValueProperty { }
+            """, contracts);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void ImportedInheritedProperty_UsesPublicFieldFromBaseClass()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            open class Base {
+                public var Value int32
+            }
+            class Derived : Base, IDerivedValueProperty { }
+            """, contracts);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void ImportedInheritedProperty_PublicFieldFromBaseClass_EmitsAndDispatches()
+    {
+        var contracts = new Issue4292UnscopedRefContracts();
+        try
+        {
+            AssertInheritedFieldDispatches(contracts.Path);
+        }
+        finally
+        {
+            GC.Collect();
+            GC.WaitForPendingFinalizers();
+            GC.Collect();
+            contracts.Dispose();
+        }
+    }
+
+    [MethodImpl(MethodImplOptions.NoInlining)]
+    private static void AssertInheritedFieldDispatches(string contractPath)
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            package P
+            import Issue4292.Contracts
+            open class Base {
+                public var Value int32
+            }
+            class Derived : Base, IDerivedValueProperty { }
+            let value = Derived()
+            value.Value = 42
+            var contract IDerivedValueProperty = value
+            contract.Value
+            """,
+            new[] { contractPath });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedInheritedProperty_PrefersExactExplicitMemberOverPlainProperty(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = "public prop Value int32 { get { return 1 } }";
+        const string explicitMember = """
+            @UnscopedRef
+            private prop (IBaseValueProperty) Value int32 { get { return 2 } }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            ref struct Derived : IDerivedValueProperty {
+            """ + members + """
+            }
+            """;
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Contains("IBaseValueProperty.Value", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ImportedInheritedProperty_WrongBaseMemberReportsMissingSlot()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            open class Base {
+                public prop Value string { get { return ""wrong"" } }
+            }
+            class Derived : Base, IDerivedValueProperty { }
+            """, contracts);
+
+        Assert.Single(diagnostics, d => d.Id == "GS0187");
     }
 
     [Theory]

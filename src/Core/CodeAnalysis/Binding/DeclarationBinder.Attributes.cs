@@ -484,6 +484,11 @@ internal sealed partial class DeclarationBinder
 
         if (function.ContainingType is InterfaceSymbol)
         {
+            if (function.Accessibility == Accessibility.Private)
+            {
+                return "requires a virtual interface instance member; a private interface helper has no implementation slot";
+            }
+
             return null;
         }
 

@@ -803,7 +803,7 @@ internal sealed class MemberLookup
     /// <returns>The matching <see cref="FieldSymbol"/>, or <c>null</c>.</returns>
     public static FieldSymbol? FindMatchingFieldForPropertyContract(StructSymbol structSymbol, PropertyInfo clrProp)
     {
-        if (!structSymbol.TryGetField(clrProp.Name, out var field))
+        if (!structSymbol.TryGetFieldIncludingInherited(clrProp.Name, out var field, out _))
         {
             return null;
         }

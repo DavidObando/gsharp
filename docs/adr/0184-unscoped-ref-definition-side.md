@@ -197,11 +197,13 @@ shape can reach the check carrying the annotation. One descriptor with a
 free-text reason, following the GS0360 (`@MarshalAs`) / GS9306
 (`@ExtensionOwner`) convention.
 
-Interface members may carry the annotation. An interface implementation may
-carry it only when the matched slot does too; otherwise GS0590 reports the
-mismatch at the implementation's annotation, matching C#'s CS9102 direction
-and explicitly naming the missing `@UnscopedRef` contract. This interface rule
-is unconditional: C# checks the attribute identity separately from its scoped
+Virtual interface instance members may carry the annotation; private interface
+helpers cannot supply an implementation slot and are rejected, matching C#'s
+CS9101 placement rule. An interface implementation may carry it only when the
+matched slot does too; otherwise GS0590 reports the mismatch at the
+implementation's annotation, matching C#'s CS9102 direction and explicitly
+naming the missing `@UnscopedRef` contract. This interface rule is
+unconditional: C# checks the attribute identity separately from its scoped
 ref-safety relevance predicate, including ordinary by-value methods and
 property accessors. The reverse is legal: an implementation may omit
 `@UnscopedRef` from an annotated slot and keep its own receiver scoped.
