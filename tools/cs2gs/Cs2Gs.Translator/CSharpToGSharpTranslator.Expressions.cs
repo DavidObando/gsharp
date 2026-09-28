@@ -2269,11 +2269,22 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private bool IsNullableForEachBindingUse(ExpressionSyntax expression)
-            => expression is IdentifierNameSyntax identifier
+        {
+            if (this.state.NullableForEachStatements.Count == 0
+                || expression is not IdentifierNameSyntax identifier
+                || this.IsGSharpFlowNarrowedLocal(expression))
+            {
+                return false;
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+            return symbol != null
                 && expression.Ancestors().OfType<ForEachStatementSyntax>().Any(forEach =>
                     this.state.NullableForEachStatements.Contains(forEach)
-                    && forEach.Identifier.ValueText == identifier.Identifier.ValueText)
-                && !this.IsGSharpFlowNarrowedLocal(expression);
+                    && SymbolEqualityComparer.Default.Equals(
+                        this.context.GetDeclaredSymbol(forEach),
+                        symbol));
+        }
 
         private static GExpression EnsureNonNullAssertion(GExpression expression) =>
             TranslatedExpressionIsStaticallyNonNull(expression)

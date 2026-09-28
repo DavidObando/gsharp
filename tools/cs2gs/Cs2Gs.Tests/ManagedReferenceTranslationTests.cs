@@ -187,6 +187,42 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Equal(14, result.Value);
     }
 
+    [Fact]
+    public void ManagedReferenceArrayForEachBindingDoesNotTaintShadowingParameter()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayForEachShadow;
+            public class Probe {
+                public static int Run() {
+                    int[] values = { 3 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    foreach (var item in source) {
+                        static int Read(ManagedRef<int> item) => item.Borrow();
+                        return Read(ManagedRef<int>.FromArray(values, 0));
+                    }
+                    return 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("ManagedArrayForEachShadow.cs", source) }, references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("item!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()", new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(3, result.Value);
+    }
+
     [Theory]
     [InlineData("int managed = 1;", "managed", 4)]
     [InlineData("int managed() => 2;", "managed()", 5)]

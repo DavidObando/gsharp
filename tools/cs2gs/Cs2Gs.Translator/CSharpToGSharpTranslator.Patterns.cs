@@ -3702,13 +3702,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             TypeInfo info = this.context.GetTypeInfo(arrayExpression);
             ITypeSymbol arrayType = info.Type ?? info.ConvertedType;
-            if (arrayType is IArrayTypeSymbol array)
-            {
-                var mapped = (ArrayTypeReference)this.typeMapper.Map(
+            if (arrayType is IArrayTypeSymbol array
+                && this.typeMapper.Map(
                     array,
                     this.context,
-                    arrayExpression.GetLocation());
-                return nullableElementSyntax ? MakeNullable(mapped.ElementType) : mapped.ElementType;
+                    arrayExpression.GetLocation()) is ArrayTypeReference mappedArray)
+            {
+                return nullableElementSyntax ? MakeNullable(mappedArray.ElementType) : mappedArray.ElementType;
             }
 
             if (arrayType is INamedTypeSymbol { IsGenericType: true } generic &&
