@@ -407,6 +407,25 @@ struct Buffer : IAnnotatedMethod {
     }
 
     [Fact]
+    public void ScopedRefIdentityFixture_DisposesPartialConstructionOnFailure()
+    {
+        var lookalikeDirectory = string.Empty;
+        var contractsDirectory = string.Empty;
+        Assert.Throws<InvalidOperationException>(() =>
+            new Issue4292ScopedRefIdentityContracts((lookalike, contracts) =>
+            {
+                lookalikeDirectory = lookalike;
+                contractsDirectory = contracts;
+                throw new InvalidOperationException("injected rewrite failure");
+            }));
+
+        Assert.NotEmpty(lookalikeDirectory);
+        Assert.NotEmpty(contractsDirectory);
+        Assert.False(Directory.Exists(lookalikeDirectory));
+        Assert.False(Directory.Exists(contractsDirectory));
+    }
+
+    [Fact]
     public void ImportedSymbolicGenericInterface_EnforcesContract()
     {
         using var contracts = new Issue4292UnscopedRefContracts();
@@ -667,6 +686,99 @@ class Derived : Base, IMethod {
     }
 
     [Fact]
+    public void ImportedSymbolicExplicitProperty_WithTypeArgument_IsLinked()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            class Token { }
+            struct Buffer : IGenericValueProperty[Token] {
+                private prop (IGenericValueProperty[Token]) Value Token {
+                    get { return Token() }
+                }
+            }
+            """, contracts);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedSymbolicIndexer_UsesCompleteSignature(bool explicitFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string plain = "public prop this[key int32] RefValue { set { } }";
+        const string explicitMember = """
+            @UnscopedRef
+            private prop (IGenericOverloadedIndexer[Token]) this[key Token] RefValue { set { } }
+            """;
+        var members = explicitFirst
+            ? explicitMember + Environment.NewLine + plain
+            : plain + Environment.NewLine + explicitMember;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class Token { }
+            ref struct Buffer : IGenericOverloadedIndexer[Token] {
+
+            """ + members + """
+
+            }
+            """;
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ImportedSymbolicImplicitIndexer_UsesCompleteSignature(bool annotatedFirst)
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        const string annotated = """
+            @UnscopedRef
+            public prop this[key Token] RefValue { set { } }
+            """;
+        const string plain = "public prop this[key int32] RefValue { set { } }";
+        var members = annotatedFirst
+            ? annotated + Environment.NewLine + plain
+            : plain + Environment.NewLine + annotated;
+        var source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            import Issue4292.Contracts
+            class Token { }
+            ref struct Buffer : IGenericOverloadedIndexer[Token] {
+
+            """ + members + """
+
+            }
+            """;
+
+        var diagnostic = Assert.Single(BindWithFixtures(source, contracts), d => d.Id == "GS0590");
+        Assert.Equal(source.IndexOf("@UnscopedRef", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Fact]
+    public void ImportedIndexer_UsesRefKindInCompleteSignature()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            ref struct Buffer : IRefKindIndexer {
+                public prop this[key int32] RefValue { set { } }
+            }
+            """, contracts);
+
+        Assert.Single(diagnostics, d => d.Id == "GS0187");
+    }
+
+    [Fact]
     public void InheritedSymbolicSlots_CheckEachConstructedInterface()
     {
         using var contracts = new Issue4292UnscopedRefContracts();
@@ -681,6 +793,42 @@ class Derived : Base, IMethod {
             """, contracts);
 
         Assert.Single(diagnostics, d => d.Id == "GS0187");
+    }
+
+    [Fact]
+    public void InheritedSwappedSymbolicMethod_UsesProjectedOwnerArguments()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            class A { }
+            class B { }
+            ref struct Buffer : IProjectedChild[A, B] {
+                public func Put(first B, second A) { }
+                public prop this[first B, second A] RefValue { set { } }
+            }
+            """, contracts);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void InheritedSwappedSymbolicProperty_UsesProjectedOwnerArguments()
+    {
+        using var contracts = new Issue4292UnscopedRefContracts();
+        var diagnostics = BindWithFixtures("""
+            package P
+            import Issue4292.Contracts
+            class A { }
+            class B { }
+            ref struct Buffer : IProjectedChild[A, B] {
+                public func Put(first B, second A) { }
+                public prop this[first B, second A] RefValue { set { } }
+            }
+            """, contracts);
+
+        Assert.Empty(diagnostics);
     }
 
     [Fact]

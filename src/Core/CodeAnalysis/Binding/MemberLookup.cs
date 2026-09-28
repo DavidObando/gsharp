@@ -4105,6 +4105,28 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Selects the member-definition type and projected arguments for an inherited CLR interface slot.
+    /// </summary>
+    /// <param name="reflectedInterface">The inherited interface returned by reflection.</param>
+    /// <param name="slotOwner">The projected constructed interface that owns the slot.</param>
+    /// <param name="symbolicArgs">The projected owner arguments used to substitute open member signatures.</param>
+    /// <returns>The open interface definition for symbolic owners; otherwise the reflected interface.</returns>
+    public static Type GetClrInterfaceSlotProjection(
+        Type reflectedInterface,
+        TypeSymbol slotOwner,
+        out ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        if (TryGetSymbolicClrGenericInterface(slotOwner, out _, out symbolicArgs)
+            && reflectedInterface.IsGenericType)
+        {
+            return reflectedInterface.GetGenericTypeDefinition();
+        }
+
+        symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
+        return reflectedInterface;
+    }
+
+    /// <summary>
     /// Issue #985: enumerates instance method slots contributed by
     /// a CLR interface listed in a type's base-type clause, INCLUDING the
     /// methods of every interface it transitively inherits. The declared
@@ -4112,8 +4134,7 @@ internal sealed class MemberLookup
     /// = <see langword="false"/>; inherited base-interface slots with
     /// <see langword="true"/>. Generic-parameter positions in each slot's
     /// signature resolve against the declared interface's symbolic type
-    /// arguments (the base interfaces obtained from the open definition carry
-    /// those same generic parameters position-aligned). Abstract slots are
+    /// arguments projected through each slot's constructed owner. Abstract slots are
     /// returned by default; <paramref name="includeDefaultMethods"/> also
     /// returns default interface methods so an existing replacement can be
     /// validated even though a missing replacement is optional.
@@ -4162,10 +4183,14 @@ internal sealed class MemberLookup
                 declared,
                 symbolicArgs,
                 NullabilityFreeReason.TypeStructure);
-            foreach (var slot in MethodsOf(
+            var slotDefinition = GetClrInterfaceSlotProjection(
                 baseIface,
                 slotOwner,
-                symbolicArgs,
+                out var slotArgs);
+            foreach (var slot in MethodsOf(
+                slotDefinition,
+                slotOwner,
+                slotArgs,
                 isInherited: true,
                 includeDefaultMethods))
             {
@@ -4176,7 +4201,7 @@ internal sealed class MemberLookup
         static IEnumerable<ClrInterfaceSlot> MethodsOf(
             Type iface,
             TypeSymbol slotOwner,
-            ImmutableArray<TypeSymbol> symbolicArgs,
+            ImmutableArray<TypeSymbol> slotArgs,
             bool isInherited,
             bool includeDefaultMethods)
         {
@@ -4187,7 +4212,7 @@ internal sealed class MemberLookup
                     continue;
                 }
 
-                yield return new ClrInterfaceSlot(method, slotOwner, symbolicArgs, isInherited);
+                yield return new ClrInterfaceSlot(method, slotOwner, slotArgs, isInherited);
             }
         }
     }
@@ -4233,12 +4258,16 @@ internal sealed class MemberLookup
                 declared,
                 symbolicArgs,
                 NullabilityFreeReason.TypeStructure);
-            foreach (var property in PropertiesOf(baseIface))
+            var slotDefinition = GetClrInterfaceSlotProjection(
+                baseIface,
+                slotOwner,
+                out var slotArgs);
+            foreach (var property in PropertiesOf(slotDefinition))
             {
                 yield return new ClrInterfacePropertySlot(
                     property,
                     slotOwner,
-                    symbolicArgs,
+                    slotArgs,
                     isInherited: true);
             }
         }
@@ -4447,17 +4476,58 @@ internal sealed class MemberLookup
     {
         foreach (var implProp in structSymbol.Properties)
         {
-            // PropertyType.IsByRef guarantees a non-null reflected element type on that branch.
             if (IsImplicitInterfaceImplementationCandidate(implProp)
-                && implProp.Name == openProp.Name
-                && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(openProp)
-                && ParameterTypeMatchesSubstituted(implProp.Type, openProp.PropertyType.IsByRef ? openProp.PropertyType.GetElementType()! : openProp.PropertyType, symbolicArgs))
+                && PropertyMatchesSymbolicClrInterfaceSignature(implProp, openProp, symbolicArgs))
             {
                 return implProp;
             }
         }
 
         return null;
+    }
+
+    /// <summary>Tests a property against an open CLR interface property after symbolic substitution.</summary>
+    /// <param name="property">The candidate G# property.</param>
+    /// <param name="openProperty">The CLR property from the open generic interface definition.</param>
+    /// <param name="symbolicArgs">The projected symbolic arguments for the property owner.</param>
+    /// <returns><see langword="true"/> when the complete property signature matches.</returns>
+    public static bool PropertyMatchesSymbolicClrInterfaceSignature(
+        PropertySymbol property,
+        PropertyInfo openProperty,
+        ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        var openPropertyType = openProperty.PropertyType.IsByRef
+            ? openProperty.PropertyType.GetElementType()
+            : openProperty.PropertyType;
+        if (openPropertyType == null
+            || property.Name != openProperty.Name
+            || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(openProperty)
+            || !ParameterTypeMatchesSubstituted(property.Type, openPropertyType, symbolicArgs))
+        {
+            return false;
+        }
+
+        var openParameters = openProperty.GetIndexParameters();
+        if (property.Parameters.Length != openParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < openParameters.Length; i++)
+        {
+            var openParameter = openParameters[i];
+            var openParameterType = openParameter.ParameterType.IsByRef
+                ? openParameter.ParameterType.GetElementType()
+                : openParameter.ParameterType;
+            if (openParameterType == null
+                || property.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(openParameter)
+                || !ParameterTypeMatchesSubstituted(property.Parameters[i].Type, openParameterType, symbolicArgs))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -4515,24 +4585,68 @@ internal sealed class MemberLookup
     /// whose name and CLR-projected type match <paramref name="clrProp"/>.
     /// </summary>
     /// <param name="structSymbol">The user struct symbol to inspect.</param>
+    /// <param name="slotOwner">The constructed interface that owns the property slot.</param>
     /// <param name="clrProp">The CLR property to match.</param>
     /// <returns>The matching <see cref="PropertySymbol"/>, or
     /// <see langword="null"/> when no match exists.</returns>
-    public static PropertySymbol? FindMatchingProperty(StructSymbol structSymbol, PropertyInfo clrProp)
+    public static PropertySymbol? FindMatchingProperty(
+        StructSymbol structSymbol,
+        TypeSymbol slotOwner,
+        PropertyInfo clrProp)
     {
         foreach (var implProp in structSymbol.Properties)
         {
-            // PropertyType.IsByRef guarantees a non-null reflected element type on that branch.
             if (IsImplicitInterfaceImplementationCandidate(implProp)
-                && implProp.Name == clrProp.Name
-                && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(clrProp)
-                && ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(implProp.Type), clrProp.PropertyType.IsByRef ? clrProp.PropertyType.GetElementType()! : clrProp.PropertyType))
+                && PropertyMatchesClrInterfaceSignature(implProp, slotOwner, clrProp))
             {
                 return implProp;
             }
         }
 
         return null;
+    }
+
+    /// <summary>Tests a property against a CLR interface property using the complete signature.</summary>
+    /// <param name="property">The candidate G# property.</param>
+    /// <param name="slotOwner">The constructed interface that owns the property slot.</param>
+    /// <param name="clrProperty">The CLR interface property.</param>
+    /// <returns><see langword="true"/> when the complete property signature matches.</returns>
+    public static bool PropertyMatchesClrInterfaceSignature(
+        PropertySymbol property,
+        TypeSymbol slotOwner,
+        PropertyInfo clrProperty)
+    {
+        var slotType = GetClrPropertyTypeSymbol(slotOwner, clrProperty);
+        if (slotType is ByRefTypeSymbol byRef)
+        {
+            slotType = byRef.PointeeType;
+        }
+
+        if (property.Name != clrProperty.Name
+            || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(clrProperty)
+            || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(property.Type, slotType))
+        {
+            return false;
+        }
+
+        var clrParameters = clrProperty.GetIndexParameters();
+        if (property.Parameters.Length != clrParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < clrParameters.Length; i++)
+        {
+            if (property.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(clrParameters[i])
+                || !TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+                    property.Parameters[i].Type,
+                    GetIndexerParameterTypeSymbol(slotOwner, clrProperty, i)))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>Returns whether a method may satisfy an interface slot implicitly.</summary>

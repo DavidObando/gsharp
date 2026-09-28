@@ -72,6 +72,27 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
             RefValue Slot { set; }
         }
 
+        public interface IGenericValueProperty<T>
+        {
+            T Value { get; }
+        }
+
+        public interface IGenericOverloadedIndexer<T>
+        {
+            RefValue this[T key] { set; }
+
+            [UnscopedRef]
+            RefValue this[int key] { set; }
+        }
+
+        public interface IRefKindIndexer
+        {
+            RefValue this[int key] { set; }
+
+            [UnscopedRef]
+            RefValue this[in int key] { set; }
+        }
+
         public interface IDefaultMethod
         {
             ref int Slot(ref int fallback) => ref fallback;
@@ -113,6 +134,17 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
         }
 
         public interface IChild<T> : IBaseSlot<T>
+        {
+        }
+
+        public interface IProjectedBase<T, U>
+        {
+            void Put(T first, U second);
+
+            RefValue this[T first, U second] { set; }
+        }
+
+        public interface IProjectedChild<T, U> : IProjectedBase<U, T>
         {
         }
 
@@ -201,48 +233,64 @@ internal sealed class Issue4292UnscopedRefContracts : IDisposable
 /// <summary>Builds real and cross-assembly lookalike scoped-ref metadata.</summary>
 internal sealed class Issue4292ScopedRefIdentityContracts : IDisposable
 {
-    private readonly CSharpFixture lookalike = new("""
-        namespace System.Runtime.CompilerServices;
-
-        [System.AttributeUsage(System.AttributeTargets.Parameter)]
-        public sealed class ScopfdRefAttribute : System.Attribute
-        {
-        }
-        """);
-
+    private readonly CSharpFixture lookalike;
     private readonly CSharpFixture contracts;
 
-    public Issue4292ScopedRefIdentityContracts()
+    public Issue4292ScopedRefIdentityContracts(Action<string, string> beforeRewrite = null)
     {
-        var reference = MetadataReference.CreateFromFile(
-            lookalike.AssemblyPath,
-            new MetadataReferenceProperties(aliases: ImmutableArray.Create("lookalike")));
-        contracts = new CSharpFixture("""
-            extern alias lookalike;
+        CSharpFixture createdLookalike = null;
+        CSharpFixture createdContracts = null;
+        try
+        {
+            createdLookalike = new CSharpFixture("""
+                namespace System.Runtime.CompilerServices;
 
-            namespace Issue4292.ScopedIdentity;
+                [System.AttributeUsage(System.AttributeTargets.Parameter)]
+                public sealed class ScopfdRefAttribute : System.Attribute
+                {
+                }
+                """);
+            var reference = MetadataReference.CreateFromFile(
+                createdLookalike.AssemblyPath,
+                new MetadataReferenceProperties(aliases: ImmutableArray.Create("lookalike")));
+            createdContracts = new CSharpFixture("""
+                extern alias lookalike;
 
-            public ref struct RefValue
-            {
-            }
+                namespace Issue4292.ScopedIdentity;
 
-            public interface ILookalikeScoped
-            {
-                void Store(
-                    [lookalike::System.Runtime.CompilerServices.ScopfdRef]
-                    ref RefValue view);
-            }
+                public ref struct RefValue
+                {
+                }
 
-            public interface IRuntimeScoped
-            {
-                void Store(scoped ref RefValue view);
-            }
-            """, new[] { reference });
+                public interface ILookalikeScoped
+                {
+                    void Store(
+                        [lookalike::System.Runtime.CompilerServices.ScopfdRef]
+                        ref RefValue view);
+                }
 
-        // C# rejects spelling ScopedRefAttribute directly (CS9065), so compile
-        // a same-length lookalike and patch only its metadata name afterward.
-        RenameScopedRefLookalike(lookalike.AssemblyPath);
-        RenameScopedRefLookalike(contracts.AssemblyPath);
+                public interface IRuntimeScoped
+                {
+                    void Store(scoped ref RefValue view);
+                }
+                """, new[] { reference });
+
+            beforeRewrite?.Invoke(createdLookalike.DirectoryPath, createdContracts.DirectoryPath);
+
+            // C# rejects spelling ScopedRefAttribute directly (CS9065), so compile
+            // a same-length lookalike and patch only its metadata name afterward.
+            RenameScopedRefLookalike(createdLookalike.AssemblyPath);
+            RenameScopedRefLookalike(createdContracts.AssemblyPath);
+
+            lookalike = createdLookalike;
+            contracts = createdContracts;
+        }
+        catch
+        {
+            createdContracts?.Dispose();
+            createdLookalike?.Dispose();
+            throw;
+        }
     }
 
     public string[] Paths => new[] { lookalike.AssemblyPath, contracts.AssemblyPath };

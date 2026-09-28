@@ -267,6 +267,43 @@ internal sealed partial class DeclarationBinder
                         property.ExplicitInterfaceSlotContainingType = target;
                         break;
                     }
+
+                    if (property.ExplicitInterfaceGetterSlot != null
+                        || property.ExplicitInterfaceSetterSlot != null
+                        || !MemberLookup.TryGetSymbolicClrGenericInterface(target, out var openInterface, out var symbolicArgs))
+                    {
+                        continue;
+                    }
+
+                    foreach (var openSlot in openInterface.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if ((openSlot.GetMethod != null) != property.HasGetter
+                            || (openSlot.SetMethod != null) != property.HasSetter
+                            || !MemberLookup.PropertyMatchesSymbolicClrInterfaceSignature(
+                                property,
+                                openSlot,
+                                symbolicArgs))
+                        {
+                            continue;
+                        }
+
+                        var erasedGetter = openSlot.GetMethod == null
+                            ? null
+                            : FindErasedSlotForOpenMethod(target.ClrType, openSlot.GetMethod);
+                        var erasedSetter = openSlot.SetMethod == null
+                            ? null
+                            : FindErasedSlotForOpenMethod(target.ClrType, openSlot.SetMethod);
+                        if ((openSlot.GetMethod != null && erasedGetter == null)
+                            || (openSlot.SetMethod != null && erasedSetter == null))
+                        {
+                            continue;
+                        }
+
+                        property.ExplicitInterfaceGetterSlot = erasedGetter;
+                        property.ExplicitInterfaceSetterSlot = erasedSetter;
+                        property.ExplicitInterfaceSlotContainingType = target;
+                        break;
+                    }
                 }
 
                 foreach (var eventSymbol in structSymbol.Events)
@@ -334,40 +371,9 @@ internal sealed partial class DeclarationBinder
         PropertySymbol property,
         TypeSymbol target,
         PropertyInfo slot)
-    {
-        var slotType = MemberLookup.GetClrPropertyTypeSymbol(target, slot);
-        if (slotType is ByRefTypeSymbol byRef)
-        {
-            slotType = byRef.PointeeType;
-        }
-
-        if (slot.Name != property.Name
-            || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot)
-            || (slot.GetMethod != null) != property.HasGetter
-            || (slot.SetMethod != null) != property.HasSetter
-            || !ConformanceSignaturesEquivalent(property.Type, slotType))
-        {
-            return false;
-        }
-
-        var slotParameters = slot.GetIndexParameters();
-        if (slotParameters.Length != property.Parameters.Length)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < slotParameters.Length; i++)
-        {
-            if (!ClrTypeUtilities.AreSame(
-                NullableLifting.GetEffectiveClrType(property.Parameters[i].Type),
-                slotParameters[i].ParameterType))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+        => (slot.GetMethod != null) == property.HasGetter
+            && (slot.SetMethod != null) == property.HasSetter
+            && MemberLookup.PropertyMatchesClrInterfaceSignature(property, target, slot);
 
     private void VerifyInterfaceMethodImplementationsAndDefaultConflicts(
         StructDeclarationSyntax syntax,
@@ -2059,7 +2065,7 @@ internal sealed partial class DeclarationBinder
                 slot.Property.GetMethod,
                 slot.Property.SetMethod),
             () => slot.SymbolicArgs.IsDefaultOrEmpty
-                ? MemberLookup.FindMatchingProperty(structSymbol, slot.Property)
+                ? MemberLookup.FindMatchingProperty(structSymbol, slot.SlotOwner, slot.Property)
                 : MemberLookup.FindMatchingPropertyForSymbolicClrInterface(
                     structSymbol,
                     slot.Property,
@@ -2284,7 +2290,7 @@ internal sealed partial class DeclarationBinder
             interfaceType,
             clrProperty.GetMethod,
             clrProperty.SetMethod,
-            () => MemberLookup.FindMatchingProperty(structSymbol, clrProperty));
+            () => MemberLookup.FindMatchingProperty(structSymbol, interfaceType, clrProperty));
         if (implementation != null || !isRequired)
         {
             return implementation;

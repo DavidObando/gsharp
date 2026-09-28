@@ -3,8 +3,9 @@
 - **Status**: Proposed (flips to Accepted on merge; the decisions below were
   approved through the design-and-decision process that produced this ADR)
 - **Date**: 2026-09-17
-- **Amended**: 2026-09-27 for issue #4292 — interface members and
-  override/interface implementations now use a CS9102-compatible slot contract.
+- **Amended**: 2026-09-28 for issue #4292 — interface members and
+  override/interface implementations now use a CS9102-compatible slot contract,
+  including projected symbolic interface slots.
 - **Amends**: [ADR-0058](0058-ref-safe-to-escape.md) §4 — corrects its
   "Follow-ups (completed): ✅ Full RSTE for `ref` returns and `[UnscopedRef]`
   enforcement" claim. Only a narrow `IsScoped`-clearing sliver had actually
@@ -220,7 +221,13 @@ current CLR slot, including the erased accessor slot of a symbolic generic
 interface. An explicit candidate must match both the slot definition and its
 exact constructed interface owner; `IBase[A].Slot` cannot satisfy
 `IBase[B].Slot` merely because the slot signature omits `T`. Signature fallback
-considers only members with no explicit-interface clause or linkage.
+considers only members with no explicit-interface clause or linkage. Symbolic
+slot matching uses the open member definition for identity, the projected
+constructed owner for generic substitution (including reordered inherited
+arguments such as `IChild[T, U] : IBase[U, T]`), and the complete member
+signature. For properties and indexers that signature includes every index
+parameter's type and ref-kind; a same-name, same-result property cannot mask a
+different indexer slot.
 Compiler-recognized covariant interface bridges carry that same slot-and-owner linkage,
 so they remain valid explicit dispatch members rather than falling through as
 implicit candidates. The
