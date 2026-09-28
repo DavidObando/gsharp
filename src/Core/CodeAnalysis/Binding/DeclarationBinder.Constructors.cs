@@ -716,10 +716,12 @@ internal sealed partial class DeclarationBinder
         // accepted whichever way either side is written.
         var mapped = raw;
 
-        return mapped != TypeSymbol.Error
-            && (TypeSymbol.ContainsTypeParameter(mapped) || TypeSymbol.ContainsSameCompilationUserType(mapped))
-            ? mapped
-            : null;
+        var keepsSymbolicShape = TypeSymbol.ContainsTypeParameter(mapped)
+            || TypeSymbol.ContainsSameCompilationUserType(mapped)
+            || baseTypeArguments.Any(static argument => TypeSymbol.RequiresSymbolicProjection(argument)
+                || TypeSymbol.ContainsFixedLengthArray(argument)
+                || argument is TupleTypeSymbol);
+        return mapped != TypeSymbol.Error && keepsSymbolicShape ? mapped : null;
     }
 
     // Issue #4400: the symbolic pointee of a generic base constructor's `in`

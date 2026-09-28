@@ -107,7 +107,13 @@ internal sealed partial class OverloadResolver
 
             foreach (var sourceIndex in paramsSourceIndices)
             {
-                paramsElementBuilder.Add(ConvertParamsElement(arguments[sourceIndex], elementTypeSymbol, callSyntax, sourceIndex, receiverArgCount));
+                paramsElementBuilder.Add(ConvertParamsElement(
+                    arguments[sourceIndex],
+                    parameters[paramsIndex],
+                    elementTypeSymbol,
+                    callSyntax,
+                    sourceIndex,
+                    receiverArgCount));
             }
 
             ordered[paramsIndex] = new BoundArrayCreationExpression(callSyntax, sliceType, paramsElementBuilder.ToImmutable());
@@ -127,7 +133,13 @@ internal sealed partial class OverloadResolver
         for (var i = 0; i < tailCount; i++)
         {
             var sourceIndex = fixedCount + i;
-            packed.Add(ConvertParamsElement(arguments[sourceIndex], elementTypeSymbol, callSyntax, sourceIndex, receiverArgCount));
+            packed.Add(ConvertParamsElement(
+                arguments[sourceIndex],
+                parameters[paramsIndex],
+                elementTypeSymbol,
+                callSyntax,
+                sourceIndex,
+                receiverArgCount));
         }
 
         var arrayExpr = new BoundArrayCreationExpression(callSyntax, sliceType, packed.MoveToImmutable());
@@ -442,7 +454,13 @@ internal sealed partial class OverloadResolver
     /// <c>params T[]</c> element slot to the element type, threading the
     /// originating source location for diagnostic reporting.
     /// </summary>
-    private BoundExpression ConvertParamsElement(BoundExpression arg, TypeSymbol elementTypeSymbol, CallExpressionSyntax callSyntax, int sourceIndex, int receiverArgCount)
+    private BoundExpression ConvertParamsElement(
+        BoundExpression arg,
+        ParameterInfo parameter,
+        TypeSymbol elementTypeSymbol,
+        CallExpressionSyntax callSyntax,
+        int sourceIndex,
+        int receiverArgCount)
     {
         var conversionSyntaxIndex = sourceIndex - receiverArgCount;
         var location = callSyntax != null
@@ -458,6 +476,16 @@ internal sealed partial class OverloadResolver
         if (arg.Type == null || arg.Type == TypeSymbol.Error || arg.Type == elementTypeSymbol)
         {
             return arg;
+        }
+
+        if (conversions.TryRejectClrPlatformContainerArgument(
+            arg,
+            parameter,
+            elementTypeSymbol,
+            location,
+            out var rejectedArgument))
+        {
+            return rejectedArgument;
         }
 
         var conversion = Conversion.Classify(arg.Type, elementTypeSymbol);

@@ -59,6 +59,8 @@ public class Issue4480ImportedCallConversionTests
 
             public static int RequiredIn(in IEnumerable<string> values) => values.Count();
 
+            public static int RequiredMany(params IEnumerable<string>[] values) => values.Length;
+
             public static int Nullable(IEnumerable<string?> values) => values.Count();
 
             public static int Value(IEnumerable<int> values) => values.Count();
@@ -95,6 +97,16 @@ public class Issue4480ImportedCallConversionTests
         public class RequiredParamsBase
         {
             public RequiredParamsBase(params IEnumerable<string>[] values) { }
+        }
+
+        public class RequiredParams
+        {
+            public RequiredParams(params IEnumerable<string>[] values) { }
+        }
+
+        public class GenericBase<T>
+        {
+            public GenericBase(T values) { }
         }
         """;
 
@@ -141,6 +153,32 @@ public class Issue4480ImportedCallConversionTests
             let count = Calls.RequiredIn(xs)
             """,
             5,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "imported-expanded-call",
+            """
+            package P
+            import Issue4480.Library
+
+            let count = Calls.RequiredMany(Ob.Strings())
+            """,
+            4,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "imported-expanded-constructor",
+            """
+            package P
+            import Issue4480.Library
+
+            let value = RequiredParams(Ob.Strings())
+            """,
+            4,
             "values",
         };
 
@@ -267,6 +305,28 @@ public class Issue4480ImportedCallConversionTests
         Assert.DoesNotContain("GS0154", log, StringComparison.Ordinal);
         Assert.DoesNotContain("GS0155", log, StringComparison.Ordinal);
         Assert.DoesNotContain("GS0159", log, StringComparison.Ordinal);
+    }
+
+    /// <summary>A nullable closed generic base target preserves rule-2 widening.</summary>
+    [Fact]
+    public void NullableGenericBaseTarget_StillCompiles()
+    {
+        const string source = """
+            package P
+            import System.Collections.Generic
+            import Issue4480.Library
+
+            class Derived : GenericBase[IEnumerable[string?]] {
+                init() : base(Ob.Strings()) { }
+            }
+            """;
+
+        using var fixture = new Fixture("nullable-generic-base");
+        var log = fixture.Compile(source);
+
+        Assert.True(File.Exists(fixture.AppPath), log);
+        Assert.DoesNotContain("GS0154", log, StringComparison.Ordinal);
+        Assert.DoesNotContain("GS0155", log, StringComparison.Ordinal);
     }
 
     private sealed class Fixture : IDisposable
