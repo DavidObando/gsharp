@@ -46,6 +46,7 @@
          JIT rows link the same runtime build. -->
     <Reference Include="$(GsharpRuntimeDir)/Gsharp.Extensions.dll" />
     <Reference Include="$(GsharpRuntimeDir)/Gsharp.Runtime.Channels.dll" />
+    <Reference Include="$(GsharpRuntimeDir)/Gsharp.Runtime.Values.dll" />
   </ItemGroup>
 
   <Target Name="SubstituteGsharpBench" AfterTargets="CoreCompile"

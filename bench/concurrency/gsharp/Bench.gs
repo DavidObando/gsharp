@@ -11,8 +11,9 @@
 // Methodology, normative per D11 and enforced here rather than documented and
 // forgotten:
 //
-//   * Three in-process rounds; only the last is printed. Tiered JIT depresses
-//     cold numbers by 2-3x, so a comparison taken from round 1 is invalid.
+//   * 240 cheap call-counted entries, then one measured run. Tiered JIT
+//     depresses cold numbers by 2-3x, so a Tier0/instrumented comparison is
+//     invalid.
 //   * Release build. A Debug number is meaningless.
 //   * The runner takes several process launches and reports a confidence
 //     interval, because in-process repetition alone understates variance.
@@ -36,11 +37,13 @@ import System.Threading
 // the ordinary path before the measured round runs. This sidesteps H2 rather
 // than solving it; H2 remains open, and matters wherever a hot loop inside a
 // suspending function does not park.
-// 120 rounds, not 40: a body that never parks is entered ONCE per call, and
+// 240 rounds, not 40: a body that never parks is entered ONCE per call, and
 // promotion is two-stage — roughly 30 calls to earn an instrumented rejit, then
-// 30 more on that version to earn Tier1. Bodies that park reach both far sooner
-// because every resume is another entry. 120 clears it for all eight.
-let warmupRounds = 120
+// 30 more on that version to earn final optimized Tier1. Compilation and
+// call-counting installation happen asynchronously, so use ample margin beyond
+// both thresholds. Bodies that park reach both sooner because every resume is
+// another entry.
+let warmupRounds = 240
 let warmupOps = 4000
 
 // Issue #3902: counts are set so every scenario MEASURES for roughly a quarter
@@ -57,13 +60,17 @@ let parkOps = 900000
 let chunk64Ops = 32000000
 let chunk1kOps = 75000000
 
-func report(name string, elapsed TimeSpan, count int32) {
+func report(name string, elapsed TimeSpan, count int32, checksum int64) {
     let perOp = elapsed.TotalNanoseconds / float64(count)
 
     // Elapsed milliseconds travel with the rate so a scenario that is too short
     // to measure is visible as such rather than merely noisy. The Go side has
     // always printed it; the runner reads the `ns_per_op` token either way.
-    Console.WriteLine(name + " ns_per_op " + perOp.ToString("F2") + " ms " + elapsed.TotalMilliseconds.ToString("F1"))
+    Console.WriteLine(
+        name + " ns_per_op " + perOp.ToString("F2")
+        + " ms " + elapsed.TotalMilliseconds.ToString("F1")
+        + " checksum " + checksum.ToString()
+    )
 }
 
 // A bounded channel driven producer-to-consumer: the shape a pipeline stage
@@ -304,41 +311,87 @@ func produceBatched(ch chan[int32], count int32, size int32) {
     ch.Close()
 }
 
-// Go's chunk rows send whole `[]int` slices over a `chan []int`; the `chunks()`
+// Go's chunk rows send whole `[]int32` slices over a `chan []int32`; the `chunks()`
 // rows above are a G# construct that copies elements into a fresh array per
-// chunk. Comparing the two measured different transports (issue #3902 S1d), so
-// this is the row that pairs with Go, and `chunk64`/`chunk1k` are now G#-only.
-func chunkedArrays(size int32, count int32) TimeSpan {
+// chunk. The CLR-array rows below remain controls; the native-slice rows carry
+// the Go pairing because both sides transport a descriptor plus backing array.
+func chunkedArrays(size int32, count int32)(TimeSpan, int64) {
     let ch = chan[[]int32](64)
     let sw = Stopwatch.StartNew()
+    var checksum int64
     scope {
         go produceArrays(ch, count, size)
-        var sum = 0
         for batch in ch {
             var i = 0
             while i < batch.Length {
-                sum = sum + batch[i]
+                checksum = checksum + int64(batch[i])
                 i = i + 1
             }
         }
     }
 
     sw.Stop()
-    return sw.Elapsed
+    return (sw.Elapsed, checksum)
 }
 
 func produceArrays(ch out chan[[]int32], count int32, size int32) {
     var sent = 0
     while sent < count {
-        var chunk = [size]int32{}
+        var length = size
+        if count - sent < length {
+            length = count - sent
+        }
+
+        var chunk = [length]int32{}
         var i = 0
-        while i < size && sent + i < count {
+        while i < length {
             chunk[i] = sent + i
             i = i + 1
         }
 
         ch <- chunk
-        sent = sent + i
+        sent = sent + length
+    }
+
+    ch.Close()
+}
+
+func chunkedSlices(size int32, count int32)(TimeSpan, int64) {
+    let ch = chan[slice[int32]](64)
+    let sw = Stopwatch.StartNew()
+    var checksum int64
+    scope {
+        go produceSlices(ch, count, size)
+        for batch in ch {
+            var i = 0
+            while i < batch.Length {
+                checksum = checksum + int64(batch[i])
+                i = i + 1
+            }
+        }
+    }
+
+    sw.Stop()
+    return (sw.Elapsed, checksum)
+}
+
+func produceSlices(ch out chan[slice[int32]], count int32, size int32) {
+    var sent = 0
+    while sent < count {
+        var length = size
+        if count - sent < length {
+            length = count - sent
+        }
+
+        var chunk = slice[int32].Create(length, length)
+        var i = 0
+        while i < length {
+            chunk[i] = sent + i
+            i = i + 1
+        }
+
+        ch <- chunk
+        sent = sent + length
     }
 
     ch.Close()
@@ -346,29 +399,37 @@ func produceArrays(ch out chan[[]int32], count int32, size int32) {
 
 func run(name string) {
     if name == "buf64" {
-        report("buf64", buf64(ops), ops)
+        report("buf64", buf64(ops), ops, 0)
     } else if name == "rendezvous" {
-        report("rendezvous", rendezvous(pingPongOps), pingPongOps)
+        report("rendezvous", rendezvous(pingPongOps), pingPongOps, 0)
     } else if name == "closed-recv" {
-        report("closed-recv", closedRecv(closedOps), closedOps)
+        report("closed-recv", closedRecv(closedOps), closedOps, 0)
     } else if name == "spawn" {
-        report("spawn", spawn(spawnOps), spawnOps)
+        report("spawn", spawn(spawnOps), spawnOps, 0)
     } else if name == "select-ready" {
-        report("select-ready", selectReady(ops), ops)
+        report("select-ready", selectReady(ops), ops, 0)
     } else if name == "select-stream" {
-        report("select-stream", selectStream(ops), ops)
+        report("select-stream", selectStream(ops), ops, 0)
     } else if name == "select-park" {
-        report("select-park", selectPark(parkOps), parkOps)
+        report("select-park", selectPark(parkOps), parkOps, 0)
     } else if name == "chunk64" {
-        report("chunk64", chunked(64, chunk64Ops), chunk64Ops)
+        report("chunk64", chunked(64, chunk64Ops), chunk64Ops, 0)
     } else if name == "chunk1k" {
-        report("chunk1k", chunked(1024, chunk1kOps), chunk1kOps)
+        report("chunk1k", chunked(1024, chunk1kOps), chunk1kOps, 0)
     } else if name == "pingpong" {
-        report("pingpong", pingpong(roundTripOps), roundTripOps)
+        report("pingpong", pingpong(roundTripOps), roundTripOps, 0)
     } else if name == "chunk64-arrays" {
-        report("chunk64-arrays", chunkedArrays(64, chunk64Ops), chunk64Ops)
+        let (elapsed, checksum) = chunkedArrays(64, chunk64Ops)
+        report("chunk64-arrays", elapsed, chunk64Ops, checksum)
     } else if name == "chunk1k-arrays" {
-        report("chunk1k-arrays", chunkedArrays(1024, chunk1kOps), chunk1kOps)
+        let (elapsed, checksum) = chunkedArrays(1024, chunk1kOps)
+        report("chunk1k-arrays", elapsed, chunk1kOps, checksum)
+    } else if name == "chunk64-slices" {
+        let (elapsed, checksum) = chunkedSlices(64, chunk64Ops)
+        report("chunk64-slices", elapsed, chunk64Ops, checksum)
+    } else if name == "chunk1k-slices" {
+        let (elapsed, checksum) = chunkedSlices(1024, chunk1kOps)
+        report("chunk1k-slices", elapsed, chunk1kOps, checksum)
     }
 }
 
@@ -399,6 +460,10 @@ func runWarmup(name string) {
         let ignored = chunkedArrays(64, warmupOps)
     } else if name == "chunk1k-arrays" {
         let ignored = chunkedArrays(1024, warmupOps)
+    } else if name == "chunk64-slices" {
+        let ignored = chunkedSlices(64, warmupOps)
+    } else if name == "chunk1k-slices" {
+        let ignored = chunkedSlices(1024, warmupOps)
     }
 }
 
@@ -414,7 +479,9 @@ let all = []string{
     "chunk64",
     "chunk1k",
     "chunk64-arrays",
-    "chunk1k-arrays"
+    "chunk1k-arrays",
+    "chunk64-slices",
+    "chunk1k-slices"
 }
 let requested = Environment.GetEnvironmentVariable("GSHARP_BENCH_SCENARIO")
 

@@ -526,7 +526,6 @@
         5.67
       ],
       "ceiling_ns": 6.39,
-      "go_median_ns": 7.0,
       "target_vs_go": null,
       "target_status": "provisional",
       "history": [
@@ -565,7 +564,6 @@
         2.95
       ],
       "ceiling_ns": 3.39,
-      "go_median_ns": 1.1,
       "target_vs_go": null,
       "target_status": "provisional",
       "history": [
@@ -596,6 +594,36 @@
         "runs": 3
       },
       "runs": 3
+    },
+    "chunk64-slices": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
+    },
+    "chunk1k-slices": {
+      "median_ns": null,
+      "ci95_ns": null,
+      "ceiling_ns": null,
+      "go_median_ns": null,
+      "target_vs_go": null,
+      "target_status": "provisional",
+      "history": [],
+      "aot": {
+        "median_ns": null,
+        "ci95_ns": null,
+        "ceiling_ns": null,
+        "history": []
+      }
     }
   }
 }

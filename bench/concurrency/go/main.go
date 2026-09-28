@@ -31,12 +31,18 @@ const (
 // `[name] ms ns/op` lines, so a warm-up round must emit none of them.
 var quiet bool
 
-func report(name string, d time.Duration, ops int) {
+func report(name string, d time.Duration, ops int, checksum int64) {
 	if quiet {
 		return
 	}
 
-	fmt.Printf("[%-12s] %8.1f ms   %7.1f ns/op\n", name, float64(d.Nanoseconds())/1e6, float64(d.Nanoseconds())/float64(ops))
+	fmt.Printf(
+		"[%-12s] %8.1f ms   %7.1f ns/op checksum %d\n",
+		name,
+		float64(d.Nanoseconds())/1e6,
+		float64(d.Nanoseconds())/float64(ops),
+		checksum,
+	)
 }
 
 func throughput() {
@@ -48,71 +54,48 @@ func throughput() {
 		}
 		close(ch)
 	}()
-	sum := 0
+	var sum int64
 	for v := range ch {
-		sum += v
+		sum += int64(v)
 	}
-	report("go-buf64", time.Since(start), N)
+	report("go-buf64", time.Since(start), N, sum)
 }
 
 func chunked() {
-	const N = NChunk64
-	const C = 64
-	ch := make(chan []int, 64)
-	start := time.Now()
-	go func() {
-		chunk := make([]int, 0, C)
-		for i := 0; i < N; i++ {
-			chunk = append(chunk, i)
-			if len(chunk) == C {
-				ch <- chunk
-				chunk = make([]int, 0, C)
-			}
-		}
-		close(ch)
-	}()
-	sum := 0
-	for a := range ch {
-		for _, v := range a {
-			sum += v
-		}
-	}
-	report("go-chunk64", time.Since(start), N)
+	chunkedArrays("go-chunk64", NChunk64, 64)
 }
 
-// Fair counterpart to the CLR chunk+pool stage: 1024-element chunks, pooled.
 func chunked1k() {
-	const N = NChunk1k
-	const C = 1024
-	ch := make(chan []int, 16)
-	pool := make(chan []int, 32)
+	chunkedArrays("go-chunk1k", NChunk1k, 1024)
+}
+
+// Shape-matched counterpart to G# chunkedSlices: fresh int32 backing arrays, capacity
+// 64, exact tail length, indexed filling, and the same counted checksum.
+func chunkedArrays(name string, count int, size int) {
+	ch := make(chan []int32, 64)
 	start := time.Now()
 	go func() {
-		for b := 0; b < N/C; b++ {
-			var chunk []int
-			select {
-			case chunk = <-pool:
-			default:
-				chunk = make([]int, C)
+		for sent := 0; sent < count; {
+			length := size
+			if remaining := count - sent; remaining < length {
+				length = remaining
 			}
-			for k := 0; k < C; k++ {
-				chunk[k] = b*C + k
+			chunk := make([]int32, length)
+			for i := 0; i < length; i++ {
+				chunk[i] = int32(sent + i)
 			}
 			ch <- chunk
+			sent += length
 		}
 		close(ch)
 	}()
-	sum := 0
+	var sum int64
 	for a := range ch {
 		for _, v := range a {
-			sum += v
-		}
-		select {
-		case pool <- a:
-		default:
+			sum += int64(v)
 		}
 	}
-	report("go-chunk1k", time.Since(start), N)
+	report(name, time.Since(start), count, sum)
 }
 
 // Same compute-bound stage, scalar (Go has no portable SIMD).
@@ -148,7 +131,7 @@ func computeStage() {
 		default:
 		}
 	}
-	report("go-compute", time.Since(start), N)
+	report("go-compute", time.Since(start), N, int64(s))
 	_ = s
 }
 
@@ -167,7 +150,7 @@ func pingpong() {
 		a <- i
 		<-b
 	}
-	report("go-pingpong", time.Since(start), R)
+	report("go-pingpong", time.Since(start), R, 0)
 }
 
 func closedRecv() {
@@ -181,7 +164,7 @@ func closedRecv() {
 			n++
 		}
 	}
-	report("go-closed", time.Since(start), R)
+	report("go-closed", time.Since(start), R, int64(n))
 	_ = n
 }
 
@@ -194,19 +177,19 @@ func spawn() {
 		go func() { wg.Done() }()
 	}
 	wg.Wait()
-	report("go-spawn", time.Since(start), R)
+	report("go-spawn", time.Since(start), R, int64(R))
 }
 
 func selectCost() {
 	const R = NSelect
 	a := make(chan int, 1024)
 	b := make(chan int, 1024)
+	start := time.Now()
 	go func() {
 		for i := 0; i < R; i++ {
 			a <- i
 		}
 	}()
-	start := time.Now()
 	for got := 0; got < R; {
 		select {
 		case <-a:
@@ -215,7 +198,7 @@ func selectCost() {
 			got++
 		}
 	}
-	report("go-select2", time.Since(start), R)
+	report("go-select2", time.Since(start), R, 0)
 }
 
 func parkScale() {

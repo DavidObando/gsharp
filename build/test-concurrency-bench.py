@@ -76,6 +76,70 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual(6, combined["samples"])
         self.assertEqual(2, combined["runs"])
 
+        with self.assertRaisesRegex(SystemExit, "missing from source runs \\[2\\]"):
+            bench.aggregate([first, {}])
+
+    def test_checksums_are_stable_and_match_across_paired_runtimes(self) -> None:
+        jit = bench.summarize({"chunk": [1.0, 2.0]}, {"chunk": [42, 42]})
+        aot = bench.summarize({"chunk": [1.5, 2.5]}, {"chunk": [42, 42]})
+        go = bench.summarize({"go-chunk": [0.5, 0.6]}, {"go-chunk": [42, 42]})
+        scenarios = [{"name": "chunk", "gsharp": "chunk", "go": "go-chunk", "checksum": True}]
+
+        bench.validate_paired_checksums(scenarios, jit, aot, go)
+        self.assertEqual(42, jit["chunk"]["checksum"])
+
+        with self.assertRaisesRegex(SystemExit, "checksum changed or was missing across launches"):
+            bench.summarize({"chunk": [1.0, 2.0]}, {"chunk": [41, 42]})
+
+        go["go-chunk"]["checksum"] = 43
+        with self.assertRaisesRegex(SystemExit, "checksum differs across runtimes"):
+            bench.validate_paired_checksums(scenarios, jit, aot, go)
+
+        bench.validate_paired_checksums(
+            scenarios,
+            {"chunk": {"median_ns": 1.0}},
+            {"chunk": {"median_ns": 1.0}},
+            {"go-chunk": {"median_ns": 1.0}},
+            required=False,
+        )
+        with self.assertRaisesRegex(SystemExit, "produced no checksummed runtime rows"):
+            bench.validate_paired_checksums(scenarios, {}, {}, {})
+
+    def test_run_rejects_duplicate_rows_and_missing_checksums(self) -> None:
+        spec = {
+            "name": "test",
+            "command": ["test"],
+            "cwd": REPO,
+            "env": {},
+            "pattern": bench.ROW,
+            "expectedRows": {"row"},
+            "expectedChecksumRows": {"row"},
+        }
+        duplicate = mock.Mock(
+            returncode=0,
+            stdout=(
+                "row ns_per_op 1.0 ms 1.0 checksum 1\n"
+                "row ns_per_op 2.0 ms 2.0 checksum 1\n"
+            ),
+            stderr="",
+        )
+        with (
+            mock.patch.object(bench.subprocess, "run", return_value=duplicate),
+            self.assertRaisesRegex(SystemExit, "duplicate row"),
+        ):
+            bench.run_once(spec)
+
+        missing = mock.Mock(
+            returncode=0,
+            stdout="row ns_per_op 1.0 ms 1.0\n",
+            stderr="",
+        )
+        with (
+            mock.patch.object(bench.subprocess, "run", return_value=missing),
+            self.assertRaisesRegex(SystemExit, "omitted checksums"),
+        ):
+            bench.run_once(spec)
+
     def test_fingerprint_separates_comparison_methodology_from_build_identity(self) -> None:
         environment = {
             "cpuAffinity": [0, 1],
@@ -86,6 +150,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
             "Bench.dll": "bench-hash",
             "Gsharp.Extensions.dll": "extensions-hash",
             "Gsharp.Runtime.Channels.dll": "runtime-hash",
+            "Gsharp.Runtime.Values.dll": "values-hash",
             "Bench": "aot-hash",
             "BenchAot.csproj": "aot-project-hash",
             "baseline": "go-hash",
@@ -137,6 +202,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
         self.assertEqual(3, fingerprint["comparison"]["goWarmupRounds"])
         self.assertEqual("0.4.test", fingerprint["build"]["gscInformationalVersion"])
         self.assertEqual("bench-hash", fingerprint["build"]["artifacts"]["Bench.dll"])
+        self.assertEqual("values-hash", fingerprint["build"]["artifacts"]["Gsharp.Runtime.Values.dll"])
         self.assertEqual("aot-hash", fingerprint["build"]["artifacts"]["NativeAOT"])
         self.assertEqual("aot-project-hash", fingerprint["comparison"]["aotProjectSha256"])
         self.assertFalse(fingerprint["build"]["gitDirty"])
@@ -193,6 +259,14 @@ class ConcurrencyBenchTests(unittest.TestCase):
         gsharp, _, _, hardware, _ = bench.load_runs([str(first), str(second)])
         self.assertEqual("test-host", hardware)
         self.assertEqual(2, len(gsharp))
+        second_without_mode = json.loads(json.dumps(second_run))
+        second_without_mode["gsharp"] = {}
+        second.write_text(json.dumps({**second_without_mode, "aggregationKey": "same"}))
+        gsharp, _, _, _, _ = bench.load_runs([str(first), str(second)])
+        with self.assertRaisesRegex(SystemExit, "missing from source runs \\[2\\]"):
+            bench.combine_loaded_runs(gsharp)
+
+        second.write_text(json.dumps({**second_run, "aggregationKey": "same"}))
         with self.assertRaisesRegex(SystemExit, "duplicate --from-json path"):
             bench.load_runs([str(first), str(first)])
         second.write_text(first.read_text())
@@ -276,6 +350,63 @@ class ConcurrencyBenchTests(unittest.TestCase):
         with self.assertRaisesRegex(SystemExit, "duplicate source run evidence"):
             bench.load_runs([str(first), str(second)])
 
+    def test_current_json_rejects_missing_declared_mode_rows(self) -> None:
+        payload = {
+            "aggregationKey": "same",
+            "fingerprint": {
+                "runId": "run-1",
+                "comparison": {
+                    "methodologyVersion": bench.METHODOLOGY_VERSION,
+                    "wholeRuns": 1,
+                    "scenario": "chunk64-slices",
+                    "modes": ["gsharp", "go"],
+                },
+                "comparable": True,
+            },
+            "gsharp": {
+                "chunk64-slices": {
+                    "median_ns": 1.0,
+                    "checksum": 42,
+                }
+            },
+            "go": {},
+        }
+        run = SCRATCH / "missing-go.json"
+
+        modes = payload["fingerprint"]["comparison"].pop("modes")
+        run.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(SystemExit, "missing or empty comparison modes"):
+            bench.load_runs([str(run)])
+        payload["fingerprint"]["comparison"]["modes"] = []
+        run.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(SystemExit, "missing or empty comparison modes"):
+            bench.load_runs([str(run)])
+        payload["fingerprint"]["comparison"]["modes"] = modes
+
+        run.write_text(json.dumps(payload))
+
+        with self.assertRaisesRegex(SystemExit, "mode 'go' is missing rows"):
+            bench.load_runs([str(run)])
+
+        payload["go"] = {"go-chunk64": {"median_ns": 1.0}}
+        run.write_text(json.dumps(payload))
+        with self.assertRaisesRegex(SystemExit, "mode 'go' is missing checksums"):
+            bench.load_runs([str(run)])
+
+    def test_json_replay_uses_captured_scenario_scope(self) -> None:
+        fingerprint = {"comparison": {"scenario": "select-ready"}}
+
+        selected = bench.select_scenarios(bench.load_scenarios(), fingerprint=fingerprint)
+
+        self.assertEqual(["select-ready"], [scenario["name"] for scenario in selected])
+        bench.validate_paired_checksums(
+            selected,
+            {"select-ready": {"median_ns": 1.0}},
+            {},
+            {},
+            required=True,
+        )
+
     def test_baseline_without_comparison_key_is_report_only(self) -> None:
         result = {"median_ns": 200.0, "ci95_ns": [190.0, 210.0], "samples": 3}
         baseline = {
@@ -305,6 +436,7 @@ class ConcurrencyBenchTests(unittest.TestCase):
 
     def test_baseline_update_requires_all_scenarios_and_modes(self) -> None:
         full = {"comparison": {
+            "methodologyVersion": bench.METHODOLOGY_VERSION,
             "scenario": "all",
             "modes": ["gsharp", "gsharp_aot", "go"],
             "wholeRuns": 3,
@@ -318,6 +450,8 @@ class ConcurrencyBenchTests(unittest.TestCase):
         }}
 
         self.assertTrue(bench.complete_baseline_fingerprint(full))
+        full["comparison"]["methodologyVersion"] -= 1
+        self.assertFalse(bench.complete_baseline_fingerprint(full))
         self.assertFalse(bench.complete_baseline_fingerprint(partial))
         scenarios = [{"name": "paired", "go": "go-paired"}, {"name": "jit-only", "go": None}]
         with mock.patch.object(bench, "load_scenarios", return_value=scenarios):
@@ -332,7 +466,17 @@ class ConcurrencyBenchTests(unittest.TestCase):
                 {"go-paired": {}},
             ))
         self.assertEqual("jit=unknown (legacy evidence)", bench.methodology_label(None))
-        self.assertEqual("jit=tiered-pgo delay=0", bench.methodology_label({"comparison": {}}))
+        self.assertEqual(
+            "jit=tiered-pgo delay=0 threshold=30",
+            bench.methodology_label({
+                "comparison": {
+                    "jitEnvironment": {
+                        "DOTNET_TC_CallCountingDelayMs": "0",
+                        "DOTNET_TC_CallCountThreshold": "30",
+                    }
+                }
+            }),
+        )
 
     def test_missing_power_or_changing_processor_count_marks_run_incomparable(self) -> None:
         start = {

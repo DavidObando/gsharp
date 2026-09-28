@@ -4,18 +4,14 @@ Evidence harness for **ADR-0174** (goroutines and channels, wave 2). It exists
 to make the ADR's performance claims refutable, and to stop new ones from
 being asserted without measurement.
 
-> **Status: the G# side and the runner exist; no budget has been measured.**
-> The Phase-0 spike measured *today's* lowering and the CLR primitives the ADR
-> proposes to adopt; Phase 1 added two rows over the real
-> `Gsharp.Runtime.Channels` assembly. Phase 5-2 adds the missing half: eight
-> paired scenarios written in **G#**, a registry, a runner with the two gates,
-> and a nightly workflow.
+> **Status:** the harness has fourteen G# scenarios, seven Go-paired rows, and a
+> historical named-workstation baseline. The baseline predates the current
+> comparison fingerprint and remains report-only until that same machine
+> records three complete runs with the current methodology. Hosted-runner
+> nightlies also report rather than gate.
 >
-> **Every median in `baseline.json` is `null`, deliberately.** A budget that was
-> not measured is worse than no budget, because it reads as evidence. The gate
-> is armed by the first nightly runs, and `target_status` stays `provisional`
-> until a ratio has met its target on three separate nights on the same
-> hardware class (ADR-0174 P5-3).
+> `target_status` remains `provisional` until a ratio meets its target on three
+> separate qualifying runs on the same hardware class (ADR-0174 P5-3).
 
 ## Phase 3-4a rows (`ctx-param`, `ctx-asynclocal`, `spawn-noec`, `spawn-ec`)
 
@@ -29,7 +25,7 @@ errata 12.
 
 | Path | What it is |
 | --- | --- |
-| `gsharp/Bench.gs` | **The G# side.** Twelve scenarios in the language itself, 120 cheap call-counted warm-up entries, then one measured `<name> ns_per_op <float>` line each. `GSHARP_BENCH_SCENARIO` runs one. |
+| `gsharp/Bench.gs` | **The G# side.** Fourteen scenarios in the language itself, 240 cheap call-counted warm-up entries, then one measured `<name> ns_per_op <float> ... checksum <integer>` line each. `GSHARP_BENCH_SCENARIO` runs one. |
 | `scenarios.json` | The registry: which G# scenario pairs with which Go row, and what each one measures. |
 | `baseline.json` | The recorded medians, ceilings and Go ratios. Written only by `--update-baseline`, never by hand. |
 | `aot/` | The NativeAOT measurement mode. Compiles no G# and holds no benchmark logic: it borrows the SDK's `PublishAot` pipeline and points ILC at the assembly gsc already emitted, so the AOT and JIT rows run byte-identical IL. |
@@ -74,7 +70,8 @@ cd clr && dotnet run -c Release -- --quick
 cd go && go build -o baseline . && ./baseline
 ```
 
-Both print `name, ns/op` rows on stdout.
+The G# and Go witnesses print `name`, `ns/op`, and checksum fields on stdout.
+The older CLR spike retains its legacy `name` and `ns/op` output.
 
 ## Methodology requirements
 
@@ -82,18 +79,23 @@ These are not optional. ADR-0174 §D11 makes them normative because ignoring
 any one of them produced a wrong conclusion at least once during the original
 spike:
 
-1. **Warm up, and pin the JIT tier.** Tiered JIT depresses cold CLR numbers by
-   **2–3×**. The G# program makes 120 cheap call-counted entries into each
+1. **Warm up, and pin the JIT policy.** Tiered JIT depresses cold CLR numbers
+   by **2–3×**. The G# program makes 240 cheap call-counted entries into each
    selected scenario, waits for promotion to install, then runs one measured
-   round. The runtime's call-counting delay is 100 ms and restarts on every new
+   round. Current .NET terminology calls the final optimized dynamic-PGO
+   version Tier1; an intermediate instrumented tier can require another call
+   threshold, but there is no official Tier2 contract. The runner pins the
+   current 30-call threshold explicitly. The runtime's default call-counting
+   delay is 100 ms and restarts on every new
    JIT compilation, so a bench process that keeps first-calling methods can exit
    before counting ever begins: the scenario's own loop gets promoted by
    on-stack replacement while every method it calls stays at Tier0. That is a
    real measurement this harness reported for weeks, and it moved
    `select-ready` by **3.4×** between launches of an unchanged binary (issue
    #3901). The runner therefore sets
-   `DOTNET_TieredCompilation=1`, `DOTNET_TieredPGO=1`, and
-   `DOTNET_TC_CallCountingDelayMs=0` for the JIT mode, after removing inherited
+   `DOTNET_TieredCompilation=1`, `DOTNET_TieredPGO=1`,
+   `DOTNET_TC_CallCountingDelayMs=0`, and
+   `DOTNET_TC_CallCountThreshold=30` for the JIT mode, after removing inherited
    `DOTNET_*` / `COMPlus_*` tier and JIT overrides. Do not substitute
    `DOTNET_TieredCompilation=0`, which also discards dynamic PGO.
    Paired Go launches use their existing three unreported warm-up rounds; a
@@ -157,38 +159,38 @@ spike:
    power identity. It uses `--allow-incomparable-aggregate` to retain a
    clearly-marked aggregate for diagnosis; that flag never makes the result
    baseline-comparable, and baseline update/check logic remains report-only.
+9. **Validate counted work where a checksum is declared.** Every measured
+   launch must emit a stable checksum. Paired JIT, NativeAOT, and Go rows must
+   agree exactly before a ratio is reported. The native-slice chunk pairs use
+   fresh backing arrays, capacity-64 channels, identical indexed filling,
+   exact tail lengths, and the same element-sum checksum. CLR-array chunk rows
+   remain G#-only controls. Fresh and recycled ownership policies require
+   separate rows rather than an unlabelled mixed comparison.
 
 ## Known limits of the current numbers
 
 Carried here so they are not lost when the numbers are quoted:
 
-- **The rendezvous row is the Phase 1 runtime, not emitted G#.** `gs-rendezvous`
-  drives two capacity-0 `Chan<int>`s from two tasks with `await SendAsync` /
-  `await ReceiveAsync` — the exact shape the Phase 3 lowering emits — so it is
-  the honest rendezvous number wave 1 could not produce (`gs-pingpong` remains
-  the capacity-1 stand-in for comparison). First same-machine measurement
-  (Linux x64, 20 cores, .NET 10.0.11 / Go 1.27.0, round 3 of 3, single
-  launch): **`gs-rendezvous` 1.18–1.30 µs/op vs `go-pingpong` 617 ns/op ≈ 2×**.
-  The runtime completes waiters with `RunContinuationsAsynchronously = true`
-  (a thread-pool hop per hand-off, stack-safe under ping-pong chains); the
-  ADR's decision gate G6 measures the synchronous alternative before Phase 5
-  sets the budget. Note how machine-dependent the absolute numbers are: the
-  same Go program measured 219 ns/op on the ADR's Apple-silicon reference.
-- **`closed-chan` is the Phase 1 runtime's closed receive**: `TryReceive` on a
-  closed, drained `Chan<T>` takes a lock-free path (`closed` is monotonic and
-  the buffer can only drain after close) and measured **0.7 ns/op** vs
-  `closed-flag` (BCL `TryRead`) 3.8 ns and `go-closed` 32.5 ns on the same
-  machine — the ADR's 382× defect, removed.
-- **The `select` row is fast-path only**, over pre-filled channels, and it
-  compares G#'s deterministic source-order probing against Go's randomized
-  choice. It partly measures the semantic divergence D8 removes. The parking
-  path is not measured at all.
-- **The spawn row is queueing cost only.** It excludes argument capture,
+- **`rendezvous` is G#-only; `pingpong` is the paired row.** Rendezvous counts
+  one hand-off, while ping-pong counts a two-handoff round trip. Comparing them
+  would introduce a 2× denominator error.
+- **`select-ready` is G#-only; `select-stream` is the paired row.**
+  `select-ready` measures four operations around an always-ready randomized
+  select. `select-stream` measures one receive against a producer and mixes
+  ready and parked paths. `select-park` separately isolates registration and
+  parking.
+- **The spawn row remains a narrow empty-body spawn-plus-join shape.** It
+  excludes argument capture,
   state-machine construction, context plumbing, scope registration,
   completion observation, and exception handling.
 - **The parked-memory row is suspension depth 1.** ADR-0174 D4 trades one
   state-machine box *per suspended frame* against Go's one growable stack per
   goroutine, so this advantage narrows with depth. Measure depths 1/4/16.
+- **Chunk rows are fresh/fresh controls, not pooling evidence.** The paired
+  native-slice rows align descriptor transport, payload width, channel
+  capacity, indexed construction, exact tail handling, and checksums. The
+  G#-only CLR-array rows isolate descriptor overhead. A recycled/recycled
+  comparison still needs an explicit ownership protocol and its own scenario.
 
 ## Notable negative results
 
