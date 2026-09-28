@@ -1887,11 +1887,14 @@ public sealed partial class CSharpToGSharpTranslator
         /// <returns>The parameter, or <see langword="null"/>.</returns>
         private IParameterSymbol GetArgumentParameter(ArgumentSyntax argument)
         {
+            IParameterSymbol operationParameter =
+                (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
+                    ?.Parameter;
             if (argument.Parent is not BaseArgumentListSyntax list
                 || list.Parent is null
                 || this.context.GetSymbolInfo(list.Parent).Symbol is not IMethodSymbol method)
             {
-                return null;
+                return operationParameter;
             }
 
             IParameterSymbol parameter = this.GetArgumentParameter(argument, method);
