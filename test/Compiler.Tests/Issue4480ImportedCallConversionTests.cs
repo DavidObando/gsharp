@@ -81,6 +81,13 @@ public class Issue4480ImportedCallConversionTests
             public static int GenericSequence<T>(IEnumerable<T> values) => values.Count();
         }
 
+        public static class GenericCalls<T>
+        {
+            public static int Required(IEnumerable<string> values) => values.Count();
+
+            public static int RequiredIn(in IEnumerable<string> values) => values.Count();
+        }
+
         public interface IInstanceCalls
         {
             int Required(IEnumerable<string> values);
@@ -344,6 +351,34 @@ public class Issue4480ImportedCallConversionTests
             let count = Calls.Required(Repo(Ob.Strings()[0]))
             """,
             13,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "symbolic-static-receiver",
+            """
+            package P
+            import Issue4480.Library
+
+            func Probe[T]() int32 -> GenericCalls[T].Required(Ob.Strings())
+            let count = Probe[int32]()
+            """,
+            4,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "symbolic-static-receiver-in",
+            """
+            package P
+            import Issue4480.Library
+
+            func Probe[T]() int32 -> GenericCalls[T].RequiredIn(Ob.Strings())
+            let count = Probe[int32]()
+            """,
+            4,
             "values",
         };
     }

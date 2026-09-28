@@ -776,7 +776,14 @@ internal sealed partial class ExpressionBinder
             if (ConversionClassifier.IsImplicitInClrArgument(argument, openParameters[i])
                 && TypeSymbol.TryGetPointeeType(symbolicParamType, out var symbolicInPointee))
             {
-                convertedArgs.Add(conversions.BindImplicitInArgument(argLoc, argument, symbolicInPointee, parameter: null));
+                convertedArgs.Add(conversions.TryRejectClrPlatformContainerArgument(
+                    argument,
+                    openParameters[i],
+                    symbolicInPointee,
+                    argLoc,
+                    out var rejectedInArgument)
+                        ? rejectedInArgument
+                        : conversions.BindImplicitInArgument(argLoc, argument, symbolicInPointee, parameter: null));
                 continue;
             }
 
@@ -785,7 +792,15 @@ internal sealed partial class ExpressionBinder
                 conversion.IsExplicit
                     && conversions.TryApplyUserDefinedImplicitArgumentConversion(argument, symbolicParamType, out var implicitArg)
                         ? implicitArg
-                        : conversions.BindConversion(argLoc, argument, symbolicParamType));
+                        : conversions.TryRejectClrPlatformContainerArgument(
+                            argument,
+                            openParameters[i],
+                            symbolicParamType,
+                            argLoc,
+                            out var rejectedArgument,
+                            conversion)
+                                ? rejectedArgument
+                                : conversions.BindConversion(argLoc, argument, symbolicParamType));
         }
 
         var symbolicReturn = MemberLookup.GetClrOpenMethodReturnTypeSymbol(openMethod, openDef, symbolicArgs);
