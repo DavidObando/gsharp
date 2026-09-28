@@ -2270,8 +2270,17 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IsNullableForEachBindingUse(ExpressionSyntax expression)
         {
-            if (this.state.NullableForEachStatements.Count == 0
-                || expression is not IdentifierNameSyntax identifier
+            if (this.state.NullableForEachStatements.Count == 0)
+            {
+                return false;
+            }
+
+            while (expression is ParenthesizedExpressionSyntax parenthesized)
+            {
+                expression = parenthesized.Expression;
+            }
+
+            if (expression is not IdentifierNameSyntax identifier
                 || this.IsGSharpFlowNarrowedLocal(expression))
             {
                 return false;
@@ -3185,9 +3194,10 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            // Issues #4500 and #4525: an element read of an array cs2gs emits
-            // with nullable elements.
-            if (this.IsNullableArrayElementAccess(value))
+            // Issues #4500 and #4525: an element read or foreach binding from
+            // an array cs2gs emits with nullable elements.
+            if (this.IsNullableArrayElementAccess(value)
+                || this.IsNullableForEachBindingUse(value))
             {
                 return true;
             }

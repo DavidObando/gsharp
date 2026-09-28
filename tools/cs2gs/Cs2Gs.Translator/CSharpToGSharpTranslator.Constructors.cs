@@ -3616,10 +3616,7 @@ public sealed partial class CSharpToGSharpTranslator
                         .ElementType;
                     bool nullableElement = this.ArrayExpressionHasNullableElement(forEach.Expression)
                         || (forEachElement?.IsReferenceType == true
-                            && (forEachElement.NullableAnnotation == NullableAnnotation.Annotated
-                                || CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
-                                    forEachElement,
-                                    this.context.Compilation)));
+                            && forEachElement.NullableAnnotation == NullableAnnotation.Annotated);
                     if (nullableElement)
                     {
                         this.state.NullableForEachStatements.Add(forEach);
