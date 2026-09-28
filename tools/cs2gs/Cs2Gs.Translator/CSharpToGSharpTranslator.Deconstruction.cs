@@ -1445,6 +1445,11 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (ArgumentSyntax argument in tuple.Arguments)
                 {
                     var declaration = (DeclarationExpressionSyntax)argument.Expression;
+                    if (declaration.Designation is ParenthesizedVariableDesignationSyntax)
+                    {
+                        return false;
+                    }
+
                     collected.Add(declaration.Designation switch
                     {
                         SingleVariableDesignationSyntax single => this.EmittedName(single, single.Identifier),

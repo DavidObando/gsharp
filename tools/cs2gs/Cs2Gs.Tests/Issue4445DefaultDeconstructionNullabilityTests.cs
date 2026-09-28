@@ -35,6 +35,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var (a, _) = (default(T), 0);
                 (var b, var c) = (default(T), default(T));
                 var ((d, e), f) = ((default(T), default(T)), default(T));
+                (var (nestedA, nestedB), var nestedC) =
+                    ((default(T), default(T)), default(T));
 
                 Fill(ref direct, replacement);
                 Fill(ref alias, replacement);
@@ -45,6 +47,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref d, replacement);
                 Fill(ref e, replacement);
                 Fill(ref f, replacement);
+                Fill(ref nestedA, replacement);
+                Fill(ref nestedB, replacement);
+                Fill(ref nestedC, replacement);
 
                 for (var loop = default(T); choose;)
                 {
@@ -148,7 +153,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         foreach (string name in new[]
         {
             "direct", "alias", "branch", "a", "b", "c", "d", "e", "f", "loop",
-            "loopLeft", "loopRight", "left", "right",
+            "nestedA", "nestedB", "nestedC", "loopLeft", "loopRight", "left", "right",
         })
         {
             Assert.Matches($@"\b(let|var) {name} T\? =", printed);
