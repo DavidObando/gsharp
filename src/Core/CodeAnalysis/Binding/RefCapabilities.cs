@@ -6,12 +6,15 @@ using System.Collections.Generic;
 using System.Collections.Immutable;
 using System.Linq;
 using System.Reflection;
+using System.Runtime.CompilerServices;
 using GSharp.Core.CodeAnalysis.Symbols;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal static class RefCapabilities
 {
+    private static readonly ConditionalWeakTable<Type, HashSet<(Module Module, int MetadataToken)>> UnscopedRefPropertyAccessors = new();
+
     /// <summary>
     /// Issue #4224: true when <paramref name="expression"/> is a call to a
     /// same-compilation (native) ref-returning function/method or a read of a
@@ -134,10 +137,12 @@ internal static class RefCapabilities
     /// type is a concrete struct — the call then names the implementation it
     /// dispatches to — a member WITHOUT <c>@UnscopedRef</c> cannot be the
     /// source of a reference into the receiver's storage, and C# excludes the
-    /// receiver from the result's ref-safe-context entirely. Any other shape
-    /// (a type-parameter or interface receiver, whose implementation may carry
-    /// <c>@UnscopedRef</c> the called slot does not advertise; a base call; an
-    /// unrecognized node) keeps the conservative answer.
+    /// receiver from the result's ref-safe-context entirely. Interface
+    /// implementations are now held to the same one-way slot contract, so
+    /// they cannot add <c>@UnscopedRef</c> behind an unannotated interface
+    /// member. This helper still recognizes only direct native struct-member
+    /// nodes; type-parameter dispatch, imported calls, base calls, and
+    /// unrecognized nodes keep the conservative answer.
     /// </remarks>
     /// <param name="expression">The ref-returning call or property read.</param>
     /// <param name="receiver">Its instance receiver.</param>
@@ -214,6 +219,78 @@ internal static class RefCapabilities
                 attribute => attribute.AttributeType.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute")
             || method.DeclaringType?.GetCustomAttributesData().Any(
                 attribute => attribute.AttributeType.FullName == "System.Runtime.CompilerServices.IsReadOnlyAttribute") == true;
+
+    /// <summary>Returns whether an imported method advertises <c>[UnscopedRef]</c>.</summary>
+    /// <param name="method">The imported method.</param>
+    /// <returns><see langword="true"/> when the method carries the attribute.</returns>
+    internal static bool HasUnscopedRef(MethodInfo method)
+    {
+        if (HasUnscopedRefAttribute(method.GetCustomAttributesData()))
+        {
+            return true;
+        }
+
+        if (!IsPropertyAccessor(method) || method.DeclaringType == null)
+        {
+            return false;
+        }
+
+        return UnscopedRefPropertyAccessors.GetValue(
+            method.DeclaringType,
+            static declaringType =>
+            {
+                var accessors = new HashSet<(Module Module, int MetadataToken)>();
+                foreach (var property in ClrTypeUtilities.SafeGetProperties(
+                    declaringType,
+                    BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Instance | BindingFlags.Static))
+                {
+                    if (!HasUnscopedRefAttribute(property.GetCustomAttributesData()))
+                    {
+                        continue;
+                    }
+
+                    if (property.GetMethod != null)
+                    {
+                        accessors.Add((property.GetMethod.Module, property.GetMethod.MetadataToken));
+                    }
+
+                    if (property.SetMethod != null)
+                    {
+                        accessors.Add((property.SetMethod.Module, property.SetMethod.MetadataToken));
+                    }
+                }
+
+                return accessors;
+            }).Contains((method.Module, method.MetadataToken));
+    }
+
+    internal static bool IsPropertyAccessor(MethodInfo method)
+    {
+        if (!method.IsSpecialName)
+        {
+            return false;
+        }
+
+        var accessorName = method.Name.AsSpan(method.Name.LastIndexOf('.') + 1);
+        return accessorName.StartsWith("get_", StringComparison.Ordinal)
+            || accessorName.StartsWith("set_", StringComparison.Ordinal);
+    }
+
+    /// <summary>Returns the by-reference kind encoded by an imported parameter.</summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <returns>The corresponding G# ref kind.</returns>
+    internal static RefKind GetParameterRefKind(ParameterInfo parameter)
+        => !parameter.ParameterType.IsByRef ? RefKind.None
+            : parameter.IsOut && !parameter.IsIn ? RefKind.Out
+            : parameter.IsIn && !parameter.IsOut ? RefKind.In
+            : RefKind.Ref;
+
+    /// <summary>Returns whether an imported parameter carries <c>[ScopedRef]</c>.</summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <returns><see langword="true"/> when the parameter is explicitly scoped.</returns>
+    internal static bool IsScoped(ParameterInfo parameter)
+        => parameter.GetCustomAttributesData().Any(attribute =>
+            KnownAttributes.IsScopedRef(attribute.AttributeType));
 
     /// <summary>
     /// Issue #4265 soundness guard: true when <paramref name="indexer"/> (or
@@ -459,5 +536,5 @@ internal static class RefCapabilities
 
     private static bool HasUnscopedRefAttribute(IEnumerable<CustomAttributeData>? attributes)
         => attributes?.Any(
-            attribute => attribute.AttributeType.FullName == "System.Diagnostics.CodeAnalysis.UnscopedRefAttribute") == true;
+            attribute => KnownAttributes.IsUnscopedRef(attribute.AttributeType)) == true;
 }

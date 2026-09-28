@@ -3,6 +3,9 @@
 - **Status**: Proposed (flips to Accepted on merge; the decisions below were
   approved through the design-and-decision process that produced this ADR)
 - **Date**: 2026-09-17
+- **Amended**: 2026-09-28 for issue #4292 — interface members and
+  override/interface implementations now use a CS9102-compatible slot contract,
+  including projected symbolic interface slots.
 - **Amends**: [ADR-0058](0058-ref-safe-to-escape.md) §4 — corrects its
   "Follow-ups (completed): ✅ Full RSTE for `ref` returns and `[UnscopedRef]`
   enforcement" claim. Only a narrow `IsScoped`-clearing sliver had actually
@@ -181,26 +184,76 @@ through to the escape check naturally. GS0589 is therefore reported from inside
 the escape-scope branch, and GS0253 is left alone so `return ref this.<letField>`
 still reports the accurate readonly error.
 
-### 6. GS0590, placement validation (D4)
+### 6. GS0590, placement and slot-contract validation (D4, amended by #4292)
 
 `@UnscopedRef` is rejected, with a specific reason, on: a class member; a
 `shared` (static) member or property; a receiver-clause function (ADR-0182 makes
 every receiver clause an extension, whose receiver is an ordinary by-value
 parameter — un-scoping it would hand out a reference into the extension's own
-stack copy); a free function; and — per D4 — an `override`, an explicit
-interface implementation, or an interface member. There is deliberately no
-constructor or `init` arm: a G# constructor binds no annotations at all, and an
-`init` accessor — like every property accessor — has no attribute list of its
-own, so neither shape can reach the check carrying the annotation. One descriptor
-with a free-text reason, following the GS0360 (`@MarshalAs`) / GS9306
+stack copy); and a free function. There is deliberately no constructor or
+`init` arm: a G# constructor binds no annotations at all, and an `init` accessor
+— like every property accessor — has no attribute list of its own, so neither
+shape can reach the check carrying the annotation. One descriptor with a
+free-text reason, following the GS0360 (`@MarshalAs`) / GS9306
 (`@ExtensionOwner`) convention.
 
-The `override`/interface rejection is the C# CS9102 case and is explicitly
-**deferred work, not a permanent rule**: honouring it would require matching the
-ref-safe-context contract across a whole override chain, which this release does
-not attempt. Note the check catches an *explicit* interface implementation; an
-implicit one is not detected at declaration-binding time, and is left as a known
-hole in the deferral rather than a claimed guarantee.
+Virtual interface instance members may carry the annotation; private interface
+helpers cannot supply an implementation slot and are rejected, matching C#'s
+CS9101 placement rule. An interface implementation may carry it only when the
+matched slot does too; otherwise GS0590 reports the mismatch at the
+implementation's annotation, matching C#'s CS9102 direction and explicitly
+naming the missing `@UnscopedRef` contract. This interface rule is
+unconditional: C# checks the attribute identity separately from its scoped
+ref-safety relevance predicate, including ordinary by-value methods and
+property accessors. The reverse is legal: an implementation may omit
+`@UnscopedRef` from an annotated slot and keep its own receiver scoped.
+
+Overrides use C#'s narrower ref-safety relevance gate. A mismatch is immediately
+relevant for an unscoped `ref` byref-like parameter or an explicitly scoped
+`out` byref-like parameter. Otherwise it is relevant only when the signature
+has both a potential ref-safety source and enough additional parameters: one
+`ref`/`in`/`out` parameter (or one by-value byref-like parameter) when the
+receiver or return is byref-like or the return is by reference; two such
+by-reference parameters when the trigger is a `ref`/`out` byref-like parameter.
+Thus an ordinary value-returning struct override such as `ToString`, and a
+ref-returning override with no additional parameter, may carry the otherwise
+inert attribute.
+
+Override checks reuse the base slot already selected by override resolution.
+Source generic property and indexer contracts are evaluated after substituting
+the implemented interface's constructed type arguments, while retaining the
+slot accessor's ref/scoped modifiers.
+Imported interface checks prefer the source member explicitly linked to the
+current CLR slot, including the erased accessor slot of a symbolic generic
+interface. An explicit candidate must match both the slot definition and its
+exact constructed interface owner; `IBase[A].Slot` cannot satisfy
+`IBase[B].Slot` merely because the slot signature omits `T`. Signature fallback
+considers only members with no explicit-interface clause or linkage. Exact
+explicit lookup walks the source base hierarchy before that fallback, because a
+base class's explicit implementation remains the interface dispatch target when
+a derived class repeats the interface. Symbolic
+slot matching uses the open member definition for identity, the projected
+constructed owner for generic substitution (including reordered inherited
+arguments such as `IChild[T, U] : IBase[U, T]`), and the complete member
+signature. For properties and indexers that signature includes every index
+parameter's type and ref-kind; a same-name, same-result property cannot mask a
+different indexer slot.
+Compiler-recognized covariant interface bridges carry that same slot-and-owner linkage,
+so they remain valid explicit dispatch members rather than falling through as
+implicit candidates. The
+contract therefore follows actual
+interface dispatch even when a same-signature plain member appears first in
+source, and an explicit implementation of an unrelated interface cannot mask a
+default body. A default interface body makes the implementation optional, but if a
+source member replaces that default its contract is validated identically to
+an abstract slot. That traversal includes inherited default properties and
+their getter/setter slots, not only ordinary interface methods. Imported CLR
+slots are read from their real `UnscopedRefAttribute` metadata. `ScopedRef`
+relevance likewise recognizes only the runtime attribute identity, so a
+same-named attribute from another assembly cannot alter the safety decision.
+This closes the original declaration-time gap:
+an implicit implementation is diagnosed after interface satisfaction resolves
+it, rather than guessed from its name before the interface contract is known.
 
 `@UnscopedRef` also requires no `unsafe` context (D3). It expresses a lifetime
 contract the compiler then enforces; it does not weaken any check.
@@ -228,9 +281,12 @@ G# spells the annotation once, on the property or indexer. The binder pushes it
 down onto `GetterSymbol`/`SetterSymbol` after the property's attributes are
 bound (which runs after the accessors are constructed), because accessors have
 no attribute list of their own. This matches C#, which accepts `[UnscopedRef]`
-on either the property or its `get` accessor and treats them equivalently — the
-same two placements `RefCapabilities.IsUnscopedRefIndexerGetter` already reads
-back out of imported metadata.
+on the property, getter, or setter and treats them as the corresponding accessor
+contract. Imported contract lookup therefore reads the property row and either
+accessor row, including setter-only properties.
+Auto-properties participate by their declared getter/setter/init flags even
+though their accessor symbols do not exist yet; setter/init relevance includes
+the synthesized `value` parameter.
 
 ### 9. cs2gs accessor-attribute hoist
 
@@ -404,15 +460,19 @@ It reports GS0254 rather than GS0591, which is accurate: by the time the
 
 **What it does NOT address**
 
-- `override` and interface members (D4). Deferred, with an explicit diagnostic
-  rather than silent acceptance. Implicit interface implementations are not
-  detected.
 - **`out` parameters and `ref`-to-`ref struct` parameters are not implicitly
   scoped.** C# scopes both by default; G# does not, which makes G# *less* safe
   than C# in that corner today. It is a separate, pre-existing gap with its own
   soundness argument to make and is deliberately untouched here — widening
   scoping rules and adding an escape hatch in the same change would make neither
   reviewable.
+- **Parameter-level scoped-contract mismatches remain unchecked.** This
+  amendment governs the member-level `UnscopedRefAttribute` contract only; it
+  does not yet compare `scoped`/unscoped parameter contracts across override or
+  interface slots.
+- **Interface-to-interface redeclaration remains unchecked.** The contract is
+  enforced when a concrete member implements an interface slot, not when one
+  interface redeclares a member inherited from another interface.
 - No `unsafe` gate (D3), by decision, not by omission.
 - ~~**A call's receiver contributes to the result's ref-safe-context
   unconditionally**~~ — **resolved by ADR-0187 / issue #4350.** C# is more
@@ -426,10 +486,11 @@ It reports GS0254 rather than GS0591, which is accurate: by the time the
   `RefCapabilities.ReceiverContributesRefScope` now encodes that rule and is
   consulted by `HasFunctionLocalRefScope`, `IsDefensivelyCopiedReceiverForwarding`,
   the #4224 read-only-storage classifier, and the ref-getter write-through
-  check. Type-parameter and interface receivers keep the conservative answer,
-  because the implementation they dispatch to may be `@UnscopedRef` where the
-  called slot is not. A ref struct receiver's VALUE scope still contributes,
-  exactly like a by-value byref-like argument.
+  check. Interface implementations can no longer add `@UnscopedRef` behind an
+  unannotated slot; the helper nevertheless remains conservative for interface,
+  type-parameter, imported, and other indirect receiver shapes until those
+  bound-node paths expose the same member fact directly. A ref struct receiver's
+  VALUE scope still contributes, exactly like a by-value byref-like argument.
 - **G# has no `readonly` MEMBER concept.** C# exempts a `readonly` struct member
   from the defensive copy on a read-only receiver; G# has no `readonly func`, so
   every native instance member forces the copy. Since ADR-0187 that copy only

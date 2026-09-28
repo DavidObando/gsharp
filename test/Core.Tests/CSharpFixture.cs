@@ -3,6 +3,7 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Reflection;
@@ -17,7 +18,9 @@ namespace GSharp.Core.Tests;
 /// <summary>Compiles an imported C# contract without migrating its metadata premises.</summary>
 internal sealed class CSharpFixture : IDisposable
 {
-    internal CSharpFixture(string source)
+    internal CSharpFixture(
+        string source,
+        IEnumerable<MetadataReference> additionalReferences = null)
     {
         DirectoryPath = Path.Combine(AppContext.BaseDirectory, "csharp-fixtures", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(DirectoryPath);
@@ -28,7 +31,8 @@ internal sealed class CSharpFixture : IDisposable
                 Path.GetFileNameWithoutExtension(AssemblyPath),
                 new[] { CSharpSyntaxTree.ParseText(source) },
                 ReferenceResolver.HostTrustedPlatformAssemblyPaths()
-                    .Select(path => MetadataReference.CreateFromFile(path)),
+                    .Select(path => MetadataReference.CreateFromFile(path))
+                    .Concat(additionalReferences ?? Array.Empty<MetadataReference>()),
                 new CSharpCompilationOptions(OutputKind.DynamicallyLinkedLibrary));
             using var stream = File.Create(AssemblyPath);
             var result = compilation.Emit(stream);

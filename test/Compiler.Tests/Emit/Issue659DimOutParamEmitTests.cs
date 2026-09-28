@@ -17,7 +17,7 @@ namespace GSharp.Compiler.Tests.Emit;
 /// out/ref parameters. Two root causes:
 ///   1) <c>DeclarationBinder.VerifyClrInterfaceImplementations</c> did not skip
 ///      DIM (non-abstract) methods — so it demanded implementations for them.
-///   2) <c>MemberLookup.HasMatchingMethodForClrSignature</c> compared
+///   2) <c>MemberLookup.FindMatchingMethodForClrSignature</c> compared
 ///      <c>callable[i].Type</c> against the CLR by-ref parameter type without
 ///      unwrapping the ByRef envelope or checking RefKind, so out/ref params
 ///      never matched.

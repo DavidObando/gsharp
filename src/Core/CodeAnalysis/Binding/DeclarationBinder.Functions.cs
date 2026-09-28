@@ -2230,14 +2230,10 @@ internal sealed partial class DeclarationBinder
     /// </summary>
     private static FunctionSymbol? TryResolveExplicitInterfaceImplementation(StructSymbol structSymbol, InterfaceSymbol iface, FunctionSymbol imethod)
     {
-        if (structSymbol.Methods.IsDefaultOrEmpty)
+        foreach (var candidate in GetMembersIncludingInherited(structSymbol, type => type.Methods))
         {
-            return null;
-        }
-
-        foreach (var candidate in structSymbol.Methods)
-        {
-            if (ReferenceEquals(candidate.ExplicitInterfaceMember, imethod))
+            if (ReferenceEquals(candidate.ExplicitInterfaceMember, imethod)
+                && ConformanceSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface))
             {
                 return candidate;
             }
@@ -2297,12 +2293,7 @@ internal sealed partial class DeclarationBinder
         out bool setterKindMismatch)
     {
         setterKindMismatch = false;
-        if (structSymbol.Properties.IsDefaultOrEmpty)
-        {
-            return null;
-        }
-
-        foreach (var candidate in structSymbol.Properties)
+        foreach (var candidate in GetMembersIncludingInherited(structSymbol, type => type.Properties))
         {
             if (ReferenceEquals(candidate.ExplicitInterfaceMember, iprop)
                 && ConformanceSignaturesEquivalent(candidate.ExplicitInterfaceClauseTarget, iface))

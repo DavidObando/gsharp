@@ -21,7 +21,7 @@ namespace GSharp.Core.Tests.CodeAnalysis.Binding;
 /// when the interface came from an IMPORTED (metadata) assembly — the
 /// separate CLR-interface verification path
 /// (<c>DeclarationBinder.VerifyClrInterfaceImplementations</c> /
-/// <c>MemberLookup.HasMatchingMethodForClrSignature</c>) never unified the
+/// <c>MemberLookup.FindMatchingMethodForClrSignature</c>) never unified the
 /// interface method's own generic parameters against the implementer's,
 /// spuriously reporting GS0187 (e.g. <c>ILogger.BeginScope&lt;TState&gt;</c> /
 /// <c>ILogger.Log&lt;TState&gt;</c>).

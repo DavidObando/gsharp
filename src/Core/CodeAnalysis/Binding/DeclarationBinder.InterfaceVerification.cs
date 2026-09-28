@@ -245,7 +245,7 @@ internal sealed partial class DeclarationBinder
                     }
                 }
 
-                foreach (var property in structSymbol.Properties)
+                foreach (var property in GetMembersIncludingInherited(structSymbol, type => type.Properties))
                 {
                     var target = property.ExplicitInterfaceClauseTarget;
                     if (!property.HasExplicitInterfaceClause
@@ -264,6 +264,43 @@ internal sealed partial class DeclarationBinder
 
                         property.ExplicitInterfaceGetterSlot = slot.GetMethod;
                         property.ExplicitInterfaceSetterSlot = slot.SetMethod;
+                        property.ExplicitInterfaceSlotContainingType = target;
+                        break;
+                    }
+
+                    if (property.ExplicitInterfaceGetterSlot != null
+                        || property.ExplicitInterfaceSetterSlot != null
+                        || !MemberLookup.TryGetSymbolicClrGenericInterface(target, out var openInterface, out var symbolicArgs))
+                    {
+                        continue;
+                    }
+
+                    foreach (var openSlot in openInterface.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+                    {
+                        if ((openSlot.GetMethod != null) != property.HasGetter
+                            || (openSlot.SetMethod != null) != property.HasSetter
+                            || !MemberLookup.PropertyMatchesSymbolicClrInterfaceSignature(
+                                property,
+                                openSlot,
+                                symbolicArgs))
+                        {
+                            continue;
+                        }
+
+                        var erasedGetter = openSlot.GetMethod == null
+                            ? null
+                            : FindErasedSlotForOpenMethod(target.ClrType, openSlot.GetMethod);
+                        var erasedSetter = openSlot.SetMethod == null
+                            ? null
+                            : FindErasedSlotForOpenMethod(target.ClrType, openSlot.SetMethod);
+                        if ((openSlot.GetMethod != null && erasedGetter == null)
+                            || (openSlot.SetMethod != null && erasedSetter == null))
+                        {
+                            continue;
+                        }
+
+                        property.ExplicitInterfaceGetterSlot = erasedGetter;
+                        property.ExplicitInterfaceSetterSlot = erasedSetter;
                         property.ExplicitInterfaceSlotContainingType = target;
                         break;
                     }
@@ -334,40 +371,9 @@ internal sealed partial class DeclarationBinder
         PropertySymbol property,
         TypeSymbol target,
         PropertyInfo slot)
-    {
-        var slotType = MemberLookup.GetClrPropertyTypeSymbol(target, slot);
-        if (slotType is ByRefTypeSymbol byRef)
-        {
-            slotType = byRef.PointeeType;
-        }
-
-        if (slot.Name != property.Name
-            || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(slot)
-            || (slot.GetMethod != null) != property.HasGetter
-            || (slot.SetMethod != null) != property.HasSetter
-            || !ConformanceSignaturesEquivalent(property.Type, slotType))
-        {
-            return false;
-        }
-
-        var slotParameters = slot.GetIndexParameters();
-        if (slotParameters.Length != property.Parameters.Length)
-        {
-            return false;
-        }
-
-        for (var i = 0; i < slotParameters.Length; i++)
-        {
-            if (!ClrTypeUtilities.AreSame(
-                NullableLifting.GetEffectiveClrType(property.Parameters[i].Type),
-                slotParameters[i].ParameterType))
-            {
-                return false;
-            }
-        }
-
-        return true;
-    }
+        => (slot.GetMethod != null) == property.HasGetter
+            && (slot.SetMethod != null) == property.HasSetter
+            && MemberLookup.PropertyMatchesClrInterfaceSignature(property, target, slot);
 
     private void VerifyInterfaceMethodImplementationsAndDefaultConflicts(
         StructDeclarationSyntax syntax,
@@ -394,8 +400,13 @@ internal sealed partial class DeclarationBinder
             // Skip the name-based lookup entirely once found; no
             // diagnostic, and the emitter binds the slot via
             // `FunctionSymbol.ExplicitInterfaceMember`.
-            if (TryResolveExplicitInterfaceImplementation(structSymbol, iface, imethod) != null)
+            if (TryResolveExplicitInterfaceImplementation(structSymbol, iface, imethod) is { } explicitImplementation)
             {
+                ValidateUnscopedRefContract(
+                    explicitImplementation,
+                    enforceContract: true,
+                    imethod.HasUnscopedRef,
+                    $"implemented member '{iface.Name}.{imethod.Name}'");
                 continue;
             }
 
@@ -407,6 +418,11 @@ internal sealed partial class DeclarationBinder
             FunctionSymbol? signatureMatch = null;
             foreach (var candidate in implCandidates)
             {
+                if (!MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate))
+                {
+                    continue;
+                }
+
                 impl ??= candidate;
                 var methodTypeParamMap = TryBuildMethodTypeParameterMap(imethod, candidate);
                 if (methodTypeParamMap == null)
@@ -425,6 +441,12 @@ internal sealed partial class DeclarationBinder
 
             if (signatureMatch != null)
             {
+                ValidateUnscopedRefContract(
+                    signatureMatch,
+                    enforceContract: true,
+                    imethod.HasUnscopedRef,
+                    $"implemented member '{iface.Name}.{imethod.Name}'");
+
                 // The class itself provides an implementation that exactly
                 // matches the interface signature — no default needed and
                 // any earlier-seen conflicting default is preempted.
@@ -574,6 +596,14 @@ internal sealed partial class DeclarationBinder
                 out var explicitSetterKindMismatch);
             if (explicitImplementation != null)
             {
+                ValidateUnscopedRefPropertyContract(
+                    explicitImplementation,
+                    iprop,
+                    structSymbol,
+                    $"implemented property '{iface.Name}.{iprop.Name}'",
+                    typeParameterMap,
+                    enforceInterfaceContract: true);
+
                 if (explicitSetterKindMismatch)
                 {
                     ReportInterfacePropertySetterKindMismatch(
@@ -607,6 +637,14 @@ internal sealed partial class DeclarationBinder
 
             if (found && implProp != null)
             {
+                ValidateUnscopedRefPropertyContract(
+                    implProp,
+                    iprop,
+                    structSymbol,
+                    $"implemented property '{iface.Name}.{iprop.Name}'",
+                    typeParameterMap,
+                    enforceInterfaceContract: true);
+
                 if (iprop.HasGetter && !implProp.HasGetter)
                 {
                     Diagnostics.ReportInterfaceMethodNotImplemented(
@@ -838,7 +876,7 @@ internal sealed partial class DeclarationBinder
         {
             foreach (var candidate in current.Properties)
             {
-                if (candidate.HasExplicitInterfaceClause
+                if (!MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
                     || candidate.Name != interfaceProperty.Name
                     || (!ReferenceEquals(current, structSymbol) && candidate.Accessibility != Accessibility.Public)
                     || candidate.IsIndexer != interfaceProperty.IsIndexer
@@ -1710,9 +1748,9 @@ internal sealed partial class DeclarationBinder
     }
 
     // Issue #525: verify CLR interfaces declared in the base-type clause.
-    // Walks each public abstract member on the imported interface and
-    // confirms the G# class provides a same-name, same-CLR-signature
-    // method or property. Diagnostic uses the same GS0187 channel.
+    // Walks each public member on the imported interface. Existing
+    // implementations are contract-checked even for default members; only a
+    // missing abstract member reports through the GS0187 channel.
     private void VerifyClrInterfaceImplementations(StructDeclarationSyntax syntax, StructSymbol structSymbol)
     {
         if (structSymbol.ImplementedClrInterfaces.IsDefaultOrEmpty)
@@ -1741,6 +1779,7 @@ internal sealed partial class DeclarationBinder
                 VerifySymbolicClrGenericInterface(
                     syntax,
                     structSymbol,
+                    ifaceSym,
                     openDefinition,
                     symbolicArgs,
                     interfaceName);
@@ -1756,25 +1795,23 @@ internal sealed partial class DeclarationBinder
                     continue;
                 }
 
-                // Skip Default Interface Methods (non-abstract virtual methods).
-                // G# does not yet support DIMs (ADR-0018, Phase 6+); a class is
-                // not required to implement them — the runtime dispatches to the
-                // default body when no explicit override is present.
-                if (!clrMethod.IsAbstract)
-                {
-                    continue;
-                }
-
-                if (MemberLookup.HasMatchingMethodForClrSignature(structSymbol, clrMethod))
-                {
-                    continue;
-                }
-
-                Diagnostics.ReportInterfaceMethodNotImplemented(
-                    syntax.Identifier.Location,
-                    structSymbol,
-                    interfaceName,
-                    FormatClrMethodSignature(clrMethod));
+                VerifyClrInterfaceMember(
+                    isRequired: clrMethod.IsAbstract,
+                    findImplementation: () => FindClrInterfaceMethodImplementation(
+                        structSymbol,
+                        ifaceSym,
+                        clrMethod,
+                        () => MemberLookup.FindMatchingMethodForClrSignature(structSymbol, clrMethod)),
+                    validateImplementation: implementation => ValidateUnscopedRefContract(
+                        implementation,
+                        enforceContract: true,
+                        RefCapabilities.HasUnscopedRef(clrMethod),
+                        $"implemented member '{interfaceName}.{clrMethod.Name}'"),
+                    reportMissing: () => Diagnostics.ReportInterfaceMethodNotImplemented(
+                        syntax.Identifier.Location,
+                        structSymbol,
+                        interfaceName,
+                        FormatClrMethodSignature(clrMethod)));
             }
 
             // Properties.
@@ -1782,74 +1819,61 @@ internal sealed partial class DeclarationBinder
             {
                 bool requiresGetter = clrProp.GetMethod?.IsAbstract == true;
                 bool requiresSetter = clrProp.SetMethod?.IsAbstract == true;
-                if (!requiresGetter && !requiresSetter)
-                {
-                    continue;
-                }
-
-                var implProp = MemberLookup.FindMatchingProperty(structSymbol, clrProp);
-                if (implProp == null)
-                {
-                    // #573/#606: check whether a public field satisfies the property contract.
-                    var matchingField = MemberLookup.FindMatchingFieldForPropertyContract(structSymbol, clrProp);
-                    if (matchingField != null)
+                var isRequired = requiresGetter || requiresSetter;
+                VerifyClrInterfaceMember(
+                    isRequired,
+                    findImplementation: () => FindClrInterfacePropertyImplementationOrField(
+                        structSymbol,
+                        ifaceSym,
+                        clrProp,
+                        clrProp.GetMethod,
+                        clrProp.SetMethod,
+                        ImmutableArray<TypeSymbol>.Empty,
+                        requiresSetter,
+                        isRequired),
+                    validateImplementation: implProp =>
                     {
-                        // Synthesize a PropertySymbol backed by the field so the emit
-                        // path handles it via the existing auto-property machinery.
-                        bool contractHasSetter = requiresSetter;
-                        bool contractIsInitOnly = contractHasSetter
-                            && ImportedTypeSymbol.IsInitOnlySetter(
-                                Invariant.Required(clrProp.SetMethod, "a property requiring a setter exposes its setter"));
-                        var synthesized = new PropertySymbol(
-                            name: clrProp.Name,
-                            type: matchingField.Type,
-                            accessibility: Accessibility.Public,
-                            hasGetter: true,
-                            hasSetter: contractHasSetter,
-                            isAutoProperty: true,
-                            isVirtual: true,
-                            isOverride: false,
-                            isInitOnly: contractIsInitOnly);
-                        synthesized.BackingField = matchingField;
-                        structSymbol.SetProperties(structSymbol.Properties.Add(synthesized));
-                        continue;
-                    }
+                        ValidateUnscopedRefPropertyContract(
+                            implProp,
+                            clrProp.GetMethod,
+                            clrProp.SetMethod,
+                            structSymbol,
+                            $"implemented property '{interfaceName}.{clrProp.Name}'",
+                            enforceInterfaceContract: true);
 
-                    Diagnostics.ReportInterfaceMethodNotImplemented(
+                        if (requiresGetter && !implProp.HasGetter)
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol,
+                                interfaceName,
+                                clrProp.Name + " (getter)");
+                        }
+
+                        if (requiresSetter && !implProp.HasSetter)
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol,
+                                interfaceName,
+                                clrProp.Name + " (setter)");
+                        }
+                        else if (requiresSetter)
+                        {
+                            ReportClrInterfacePropertySetterKindMismatchIfNeeded(
+                                syntax,
+                                structSymbol,
+                                interfaceName,
+                                clrProp.Name,
+                                Invariant.Required(clrProp.SetMethod, "an interface property requiring a setter has a setter"),
+                                implProp);
+                        }
+                    },
+                    reportMissing: () => Diagnostics.ReportInterfaceMethodNotImplemented(
                         syntax.Identifier.Location,
                         structSymbol,
                         interfaceName,
-                        clrProp.Name);
-                    continue;
-                }
-
-                if (requiresGetter && !implProp.HasGetter)
-                {
-                    Diagnostics.ReportInterfaceMethodNotImplemented(
-                        syntax.Identifier.Location,
-                        structSymbol,
-                        interfaceName,
-                        clrProp.Name + " (getter)");
-                }
-
-                if (requiresSetter && !implProp.HasSetter)
-                {
-                    Diagnostics.ReportInterfaceMethodNotImplemented(
-                        syntax.Identifier.Location,
-                        structSymbol,
-                        interfaceName,
-                        clrProp.Name + " (setter)");
-                }
-                else if (requiresSetter)
-                {
-                    ReportClrInterfacePropertySetterKindMismatchIfNeeded(
-                        syntax,
-                        structSymbol,
-                        interfaceName,
-                        clrProp.Name,
-                        Invariant.Required(clrProp.SetMethod, "an interface property requiring a setter has a setter"),
-                        implProp);
-                }
+                        clrProp.Name));
             }
         }
     }
@@ -1886,7 +1910,7 @@ internal sealed partial class DeclarationBinder
         var reported = new HashSet<string>(System.StringComparer.Ordinal);
         foreach (var ifaceSym in structSymbol.ImplementedClrInterfaces)
         {
-            foreach (var slot in MemberLookup.EnumerateClrInterfaceSlots(ifaceSym))
+            foreach (var slot in MemberLookup.EnumerateClrInterfaceSlots(ifaceSym, includeDefaultMethods: true))
             {
                 if (!slot.IsInherited)
                 {
@@ -1898,30 +1922,129 @@ internal sealed partial class DeclarationBinder
                 var declaringType = slot.Method.DeclaringType;
                 var slotKey = (declaringType?.FullName ?? declaringType?.Name ?? string.Empty)
                     + "::" + MemberLookup.FormatClrSlotSignature(slot.Method);
-                if (reported.Contains(slotKey))
-                {
-                    continue;
-                }
-
-                if (StructSatisfiesClrSlot(structSymbol, slot))
-                {
-                    continue;
-                }
-
-                reported.Add(slotKey);
                 var interfaceName = declaringType == null
                     ? "interface"
                     : SymbolDisplay.ToTypeDisplayString(declaringType);
-                Diagnostics.ReportInterfaceMethodNotImplemented(
-                    syntax.Identifier.Location,
-                    structSymbol,
-                    interfaceName,
-                    FormatClrMethodSignature(slot.Method));
+                VerifyClrInterfaceMember(
+                    isRequired: slot.Method.IsAbstract,
+                    findImplementation: () => FindClrInterfaceMethodImplementation(structSymbol, slot),
+                    validateImplementation: implementation => ValidateUnscopedRefContract(
+                        implementation,
+                        enforceContract: true,
+                        RefCapabilities.HasUnscopedRef(slot.Method),
+                        $"implemented member '{slotKey}'"),
+                    reportMissing: () =>
+                    {
+                        if (reported.Add(slotKey))
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol,
+                                interfaceName,
+                                FormatClrMethodSignature(slot.Method));
+                        }
+                    });
+            }
+
+            foreach (var slot in MemberLookup.EnumerateClrInterfacePropertySlots(ifaceSym))
+            {
+                if (!slot.IsInherited)
+                {
+                    continue;
+                }
+
+                var property = slot.Property;
+                var declaringType = property.DeclaringType;
+                var interfaceName = declaringType == null
+                    ? "interface"
+                    : SymbolDisplay.ToTypeDisplayString(declaringType);
+                var slotKey = (declaringType?.FullName ?? declaringType?.Name ?? string.Empty)
+                    + "::" + property.Name
+                    + "::" + (property.GetMethod == null ? string.Empty : MemberLookup.FormatClrSlotSignature(property.GetMethod))
+                    + "::" + (property.SetMethod == null ? string.Empty : MemberLookup.FormatClrSlotSignature(property.SetMethod));
+                bool requiresGetter = property.GetMethod?.IsAbstract == true;
+                bool requiresSetter = property.SetMethod?.IsAbstract == true;
+                VerifyClrInterfaceMember(
+                    isRequired: requiresGetter || requiresSetter,
+                    findImplementation: () => FindClrInterfacePropertyImplementationOrField(
+                        structSymbol,
+                        slot.SlotOwner,
+                        property,
+                        property.GetMethod,
+                        property.SetMethod,
+                        slot.SymbolicArgs,
+                        requiresSetter,
+                        requiresGetter || requiresSetter),
+                    validateImplementation: implementation =>
+                    {
+                        ValidateUnscopedRefPropertyContract(
+                            implementation,
+                            property.GetMethod,
+                            property.SetMethod,
+                            structSymbol,
+                            $"implemented property '{interfaceName}.{property.Name}'",
+                            enforceInterfaceContract: true);
+
+                        if (requiresGetter && !implementation.HasGetter)
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol,
+                                interfaceName,
+                                property.Name + " (getter)");
+                        }
+
+                        if (requiresSetter && !implementation.HasSetter)
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol,
+                                interfaceName,
+                                property.Name + " (setter)");
+                        }
+                        else if (requiresSetter)
+                        {
+                            ReportClrInterfacePropertySetterKindMismatchIfNeeded(
+                                syntax,
+                                structSymbol,
+                                interfaceName,
+                                property.Name,
+                                Invariant.Required(property.SetMethod, "an interface property requiring a setter has a setter"),
+                                implementation);
+                        }
+                    },
+                    reportMissing: () =>
+                    {
+                        if (reported.Add(slotKey))
+                        {
+                            Diagnostics.ReportInterfaceMethodNotImplemented(
+                                syntax.Identifier.Location,
+                                structSymbol,
+                                interfaceName,
+                                property.Name);
+                        }
+                    });
             }
         }
     }
 
-    private static bool StructSatisfiesClrSlot(StructSymbol structSymbol, MemberLookup.ClrInterfaceSlot slot)
+    private static FunctionSymbol? FindClrInterfaceMethodImplementation(
+        StructSymbol structSymbol,
+        MemberLookup.ClrInterfaceSlot slot)
+        => FindClrInterfaceImplementation(
+            structSymbol,
+            type => type.Methods,
+            method => ExplicitClrSlotMatches(
+                method.ExplicitInterfaceSlotContainingType,
+                slot.SlotOwner,
+                method.ExplicitInterfaceSlot,
+                slot.Method)
+                && MemberLookup.MethodSatisfiesClrSlot(method, slot),
+            () => FindMatchingClrSlotImplementation(structSymbol, slot));
+
+    private static FunctionSymbol? FindMatchingClrSlotImplementation(
+        StructSymbol structSymbol,
+        MemberLookup.ClrInterfaceSlot slot)
     {
         // Note: do NOT route through GetMethodsIncludingInherited here — it
         // dedups same-name overloads by parameter signature (ignoring return
@@ -1937,15 +2060,16 @@ internal sealed partial class DeclarationBinder
 
             foreach (var candidate in c.Methods)
             {
-                if (candidate.Name == slot.Method.Name
+                if (MemberLookup.IsImplicitInterfaceImplementationCandidate(candidate)
+                    && candidate.Name == slot.Method.Name
                     && MemberLookup.MethodSatisfiesClrSlot(candidate, slot))
                 {
-                    return true;
+                    return candidate;
                 }
             }
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>
@@ -1961,71 +2085,277 @@ internal sealed partial class DeclarationBinder
     private void VerifySymbolicClrGenericInterface(
         StructDeclarationSyntax syntax,
         StructSymbol structSymbol,
+        TypeSymbol interfaceType,
         System.Type openDefinition,
         ImmutableArray<TypeSymbol> symbolicArgs,
         string interfaceName)
     {
         foreach (var openMethod in openDefinition.GetMethods(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
         {
-            if (openMethod.IsSpecialName || !openMethod.IsAbstract)
+            if (openMethod.IsSpecialName)
             {
                 continue;
             }
 
-            if (MemberLookup.HasMatchingMethodForSymbolicClrInterface(structSymbol, openMethod, symbolicArgs))
-            {
-                continue;
-            }
-
-            Diagnostics.ReportInterfaceMethodNotImplemented(
-                syntax.Identifier.Location,
-                structSymbol,
-                interfaceName,
-                FormatClrMethodSignature(openMethod));
+            var erasedSlot = interfaceType.ClrType == null
+                ? null
+                : FindErasedSlotForOpenMethod(interfaceType.ClrType, openMethod);
+            VerifyClrInterfaceMember(
+                isRequired: openMethod.IsAbstract,
+                findImplementation: () => FindClrInterfaceMethodImplementation(
+                    structSymbol,
+                    interfaceType,
+                    erasedSlot,
+                    () => MemberLookup.FindMatchingMethodForSymbolicClrInterface(
+                        structSymbol,
+                        openMethod,
+                        symbolicArgs)),
+                validateImplementation: implementation => ValidateUnscopedRefContract(
+                    implementation,
+                    enforceContract: true,
+                    RefCapabilities.HasUnscopedRef(openMethod),
+                    $"implemented member '{interfaceName}.{openMethod.Name}'"),
+                reportMissing: () => Diagnostics.ReportInterfaceMethodNotImplemented(
+                    syntax.Identifier.Location,
+                    structSymbol,
+                    interfaceName,
+                    FormatClrMethodSignature(openMethod)));
         }
 
         foreach (var openProp in openDefinition.GetProperties(System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance))
         {
-            var implProp = MemberLookup.FindMatchingPropertyForSymbolicClrInterface(structSymbol, openProp, symbolicArgs);
-            if (implProp == null)
-            {
-                Diagnostics.ReportInterfaceMethodNotImplemented(
-                    syntax.Identifier.Location,
+            var erasedGetter = interfaceType.ClrType == null || openProp.GetMethod == null
+                ? null
+                : FindErasedSlotForOpenMethod(interfaceType.ClrType, openProp.GetMethod);
+            var erasedSetter = interfaceType.ClrType == null || openProp.SetMethod == null
+                ? null
+                : FindErasedSlotForOpenMethod(interfaceType.ClrType, openProp.SetMethod);
+            bool requiresGetter = openProp.GetMethod?.IsAbstract == true;
+            bool requiresSetter = openProp.SetMethod?.IsAbstract == true;
+            VerifyClrInterfaceMember(
+                isRequired: requiresGetter || requiresSetter,
+                findImplementation: () => FindClrInterfacePropertyImplementationOrField(
                     structSymbol,
-                    interfaceName,
-                    openProp.Name);
-                continue;
-            }
+                    interfaceType,
+                    openProp,
+                    erasedGetter,
+                    erasedSetter,
+                    symbolicArgs,
+                    requiresSetter,
+                    requiresGetter || requiresSetter),
+                validateImplementation: implProp =>
+                {
+                    ValidateUnscopedRefPropertyContract(
+                        implProp,
+                        openProp.GetMethod,
+                        openProp.SetMethod,
+                        structSymbol,
+                        $"implemented property '{interfaceName}.{openProp.Name}'",
+                        enforceInterfaceContract: true);
 
-            if (openProp.GetMethod != null && !implProp.HasGetter)
-            {
-                Diagnostics.ReportInterfaceMethodNotImplemented(
-                    syntax.Identifier.Location,
-                    structSymbol,
-                    interfaceName,
-                    openProp.Name + " (getter)");
-            }
+                    if (requiresGetter && !implProp.HasGetter)
+                    {
+                        Diagnostics.ReportInterfaceMethodNotImplemented(
+                            syntax.Identifier.Location,
+                            structSymbol,
+                            interfaceName,
+                            openProp.Name + " (getter)");
+                    }
 
-            if (openProp.SetMethod != null && !implProp.HasSetter)
-            {
-                Diagnostics.ReportInterfaceMethodNotImplemented(
+                    if (requiresSetter && !implProp.HasSetter)
+                    {
+                        Diagnostics.ReportInterfaceMethodNotImplemented(
+                            syntax.Identifier.Location,
+                            structSymbol,
+                            interfaceName,
+                            openProp.Name + " (setter)");
+                    }
+                    else if (requiresSetter)
+                    {
+                        ReportClrInterfacePropertySetterKindMismatchIfNeeded(
+                            syntax,
+                            structSymbol,
+                            interfaceName,
+                            openProp.Name,
+                            Invariant.Required(openProp.SetMethod, "an interface property requiring a setter has a setter"),
+                            implProp);
+                    }
+                },
+                reportMissing: () => Diagnostics.ReportInterfaceMethodNotImplemented(
                     syntax.Identifier.Location,
                     structSymbol,
                     interfaceName,
-                    openProp.Name + " (setter)");
-            }
-            else if (openProp.SetMethod != null)
+                    openProp.Name));
+        }
+    }
+
+    private static void VerifyClrInterfaceMember<TMember>(
+        bool isRequired,
+        Func<TMember?> findImplementation,
+        Action<TMember> validateImplementation,
+        Action reportMissing)
+        where TMember : class
+    {
+        var implementation = findImplementation();
+        if (implementation != null)
+        {
+            validateImplementation(implementation);
+        }
+        else if (isRequired)
+        {
+            reportMissing();
+        }
+    }
+
+    private static FunctionSymbol? FindClrInterfaceMethodImplementation(
+        StructSymbol structSymbol,
+        TypeSymbol interfaceType,
+        MethodInfo? explicitSlot,
+        Func<FunctionSymbol?> findImplicit)
+        => FindClrInterfaceImplementation(
+            structSymbol,
+            type => type.Methods,
+            method => ExplicitClrSlotMatches(
+                method.ExplicitInterfaceSlotContainingType,
+                interfaceType,
+                method.ExplicitInterfaceSlot,
+                explicitSlot),
+            findImplicit);
+
+    private static bool ExplicitClrPropertySlotMatches(
+        PropertySymbol property,
+        TypeSymbol slotOwner,
+        MethodInfo? slotGetter,
+        MethodInfo? slotSetter)
+        => ExplicitClrSlotMatches(
+                property.ExplicitInterfaceSlotContainingType,
+                slotOwner,
+                property.ExplicitInterfaceGetterSlot,
+                slotGetter)
+            || ExplicitClrSlotMatches(
+                property.ExplicitInterfaceSlotContainingType,
+                slotOwner,
+                property.ExplicitInterfaceSetterSlot,
+                slotSetter);
+
+    private static bool ExplicitClrSlotMatches(
+        TypeSymbol? implementationOwner,
+        TypeSymbol slotOwner,
+        MethodInfo? implementationSlot,
+        MethodInfo? slot)
+        => implementationOwner != null
+            && ExactInterfaceTypeMatches(implementationOwner, slotOwner)
+            && SameClrSlot(implementationSlot, slot);
+
+    private static bool ExactInterfaceTypeMatches(TypeSymbol implementationOwner, TypeSymbol slotOwner)
+        => TypeSymbol.AreRuntimeEquivalentIgnoringReferenceNullability(
+            implementationOwner,
+            slotOwner);
+
+    private static TMember? FindClrInterfaceImplementation<TMember>(
+        StructSymbol structSymbol,
+        Func<StructSymbol, ImmutableArray<TMember>> getMembers,
+        Func<TMember, bool> implementsExplicitSlot,
+        Func<TMember?> findImplicit)
+        where TMember : class
+    {
+        foreach (var member in GetMembersIncludingInherited(structSymbol, getMembers))
+        {
+            if (implementsExplicitSlot(member))
             {
-                ReportClrInterfacePropertySetterKindMismatchIfNeeded(
-                    syntax,
-                    structSymbol,
-                    interfaceName,
-                    openProp.Name,
-                    openProp.SetMethod,
-                    implProp);
+                return member;
+            }
+        }
+
+        return findImplicit();
+    }
+
+    private static IEnumerable<TMember> GetMembersIncludingInherited<TMember>(
+        StructSymbol structSymbol,
+        Func<StructSymbol, ImmutableArray<TMember>> getMembers)
+    {
+        foreach (var type in structSymbol.GetHierarchy())
+        {
+            foreach (var member in getMembers(type))
+            {
+                yield return member;
             }
         }
     }
+
+    private static PropertySymbol? FindClrInterfacePropertyImplementationOrField(
+        StructSymbol structSymbol,
+        TypeSymbol interfaceType,
+        PropertyInfo clrProperty,
+        MethodInfo? explicitGetter,
+        MethodInfo? explicitSetter,
+        ImmutableArray<TypeSymbol> symbolicArgs,
+        bool requiresSetter,
+        bool isRequired)
+    {
+        PropertySymbol? implementation = null;
+        foreach (var property in GetMembersIncludingInherited(structSymbol, type => type.Properties))
+        {
+            if (ExplicitClrPropertySlotMatches(
+                property,
+                interfaceType,
+                explicitGetter,
+                explicitSetter))
+            {
+                implementation = property;
+                break;
+            }
+        }
+
+        if (implementation == null)
+        {
+            foreach (var property in GetMembersIncludingInherited(structSymbol, type => type.Properties))
+            {
+                if (MemberLookup.IsImplicitInterfaceImplementationCandidate(property)
+                    && (symbolicArgs.IsDefaultOrEmpty
+                        ? MemberLookup.PropertyMatchesClrInterfaceSignature(property, interfaceType, clrProperty)
+                        : MemberLookup.PropertyMatchesSymbolicClrInterfaceSignature(property, clrProperty, symbolicArgs)))
+                {
+                    implementation = property;
+                    break;
+                }
+            }
+        }
+
+        if (implementation != null || !isRequired)
+        {
+            return implementation;
+        }
+
+        var matchingField = MemberLookup.FindMatchingFieldForPropertyContract(structSymbol, clrProperty);
+        if (matchingField == null)
+        {
+            return null;
+        }
+
+        bool contractIsInitOnly = requiresSetter
+            && ImportedTypeSymbol.IsInitOnlySetter(
+                Invariant.Required(clrProperty.SetMethod, "a property requiring a setter exposes its setter"));
+        var synthesized = new PropertySymbol(
+            name: clrProperty.Name,
+            type: matchingField.Type,
+            accessibility: Accessibility.Public,
+            hasGetter: true,
+            hasSetter: requiresSetter,
+            isAutoProperty: true,
+            isVirtual: true,
+            isOverride: false,
+            isInitOnly: contractIsInitOnly);
+        synthesized.BackingField = matchingField;
+        structSymbol.SetProperties(structSymbol.Properties.Add(synthesized));
+        return synthesized;
+    }
+
+    private static bool SameClrSlot(MethodInfo? first, MethodInfo? second)
+        => first != null
+            && second != null
+            && first.MetadataToken == second.MetadataToken
+            && first.Module == second.Module;
 
     private void ReportClrInterfacePropertySetterKindMismatchIfNeeded(
         StructDeclarationSyntax syntax,

@@ -803,7 +803,7 @@ internal sealed class MemberLookup
     /// <returns>The matching <see cref="FieldSymbol"/>, or <c>null</c>.</returns>
     public static FieldSymbol? FindMatchingFieldForPropertyContract(StructSymbol structSymbol, PropertyInfo clrProp)
     {
-        if (!structSymbol.TryGetField(clrProp.Name, out var field))
+        if (!structSymbol.TryGetFieldIncludingInherited(clrProp.Name, out var field, out _))
         {
             return null;
         }
@@ -3874,26 +3874,24 @@ internal sealed class MemberLookup
     // ----- User-symbol member walks -----
 
     /// <summary>
-    /// Walks <paramref name="structSymbol"/> and its base-class chain looking
-    /// for an instance method overload whose CLR-projected signature matches
-    /// <paramref name="clrMethod"/>. Used by the interface-implementation
-    /// check to decide whether the user struct supplies a given CLR contract
-    /// member.
+    /// Finds the user method whose CLR-projected signature satisfies an
+    /// imported interface slot.
     /// </summary>
     /// <param name="structSymbol">The user struct symbol to inspect.</param>
-    /// <param name="clrMethod">The CLR method whose signature to match.</param>
-    /// <returns><see langword="true"/> when a matching overload exists.</returns>
-    public static bool HasMatchingMethodForClrSignature(StructSymbol structSymbol, MethodInfo clrMethod)
+    /// <param name="clrMethod">The imported interface slot.</param>
+    /// <returns>The matching method, or <see langword="null"/>.</returns>
+    public static FunctionSymbol? FindMatchingMethodForClrSignature(StructSymbol structSymbol, MethodInfo clrMethod)
     {
         foreach (var candidate in structSymbol.GetMethodsIncludingInherited(clrMethod.Name))
         {
-            if (MethodMatchesClrSignature(candidate, clrMethod))
+            if (IsImplicitInterfaceImplementationCandidate(candidate)
+                && MethodMatchesClrSignature(candidate, clrMethod))
             {
-                return true;
+                return candidate;
             }
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>Determines whether one G# method matches an imported CLR method signature.</summary>
@@ -4032,21 +4030,22 @@ internal sealed class MemberLookup
     /// <param name="structSymbol">The user struct symbol to inspect.</param>
     /// <param name="openMethod">The interface method from the open definition.</param>
     /// <param name="symbolicArgs">The symbolic type arguments closing the interface.</param>
-    /// <returns><see langword="true"/> when a matching overload exists.</returns>
-    public static bool HasMatchingMethodForSymbolicClrInterface(
+    /// <returns>The matching method, or <see langword="null"/>.</returns>
+    public static FunctionSymbol? FindMatchingMethodForSymbolicClrInterface(
         StructSymbol structSymbol,
         MethodInfo openMethod,
         ImmutableArray<TypeSymbol> symbolicArgs)
     {
         foreach (var candidate in structSymbol.GetMethodsIncludingInherited(openMethod.Name))
         {
-            if (MethodMatchesSymbolicClrInterfaceSignature(candidate, openMethod, symbolicArgs))
+            if (IsImplicitInterfaceImplementationCandidate(candidate)
+                && MethodMatchesSymbolicClrInterfaceSignature(candidate, openMethod, symbolicArgs))
             {
-                return true;
+                return candidate;
             }
         }
 
-        return false;
+        return null;
     }
 
     /// <summary>
@@ -4054,7 +4053,7 @@ internal sealed class MemberLookup
     /// — a method of a CLR generic interface's OPEN definition — once the
     /// interface's <paramref name="symbolicArgs"/> are substituted in. The
     /// per-candidate core of
-    /// <see cref="HasMatchingMethodForSymbolicClrInterface"/>, factored out so
+    /// <see cref="FindMatchingMethodForSymbolicClrInterface"/>, factored out so
     /// the explicit-interface-clause resolver can ask the same question about
     /// one specific method (its name may not even be the slot's, and it must
     /// pick a slot rather than answer "some method matched").
@@ -4106,19 +4105,46 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
-    /// Issue #985: enumerates every abstract instance method slot contributed by
+    /// Selects the member-definition type and projected arguments for an inherited CLR interface slot.
+    /// </summary>
+    /// <param name="reflectedInterface">The inherited interface returned by reflection.</param>
+    /// <param name="slotOwner">The projected constructed interface that owns the slot.</param>
+    /// <param name="symbolicArgs">The projected owner arguments used to substitute open member signatures.</param>
+    /// <returns>The open interface definition for symbolic owners; otherwise the reflected interface.</returns>
+    public static Type GetClrInterfaceSlotProjection(
+        Type reflectedInterface,
+        TypeSymbol slotOwner,
+        out ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        if (TryGetSymbolicClrGenericInterface(slotOwner, out _, out symbolicArgs)
+            && reflectedInterface.IsGenericType)
+        {
+            return reflectedInterface.GetGenericTypeDefinition();
+        }
+
+        symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
+        return reflectedInterface;
+    }
+
+    /// <summary>
+    /// Issue #985: enumerates instance method slots contributed by
     /// a CLR interface listed in a type's base-type clause, INCLUDING the
     /// methods of every interface it transitively inherits. The declared
     /// interface's slots are reported with <see cref="ClrInterfaceSlot.IsInherited"/>
     /// = <see langword="false"/>; inherited base-interface slots with
     /// <see langword="true"/>. Generic-parameter positions in each slot's
     /// signature resolve against the declared interface's symbolic type
-    /// arguments (the base interfaces obtained from the open definition carry
-    /// those same generic parameters position-aligned).
+    /// arguments projected through each slot's constructed owner. Abstract slots are
+    /// returned by default; <paramref name="includeDefaultMethods"/> also
+    /// returns default interface methods so an existing replacement can be
+    /// validated even though a missing replacement is optional.
     /// </summary>
     /// <param name="ifaceSym">A CLR interface type symbol from the base clause.</param>
+    /// <param name="includeDefaultMethods">Whether to include non-abstract default methods.</param>
     /// <returns>The slots, or an empty sequence when the symbol is not a CLR interface.</returns>
-    public static IEnumerable<ClrInterfaceSlot> EnumerateClrInterfaceSlots(TypeSymbol ifaceSym)
+    public static IEnumerable<ClrInterfaceSlot> EnumerateClrInterfaceSlots(
+        TypeSymbol ifaceSym,
+        bool includeDefaultMethods = false)
     {
         Type? declared = null;
         var symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
@@ -4131,7 +4157,7 @@ internal sealed class MemberLookup
 
         if (declared == null)
         {
-            var clr = ifaceSym?.ClrType;
+            var clr = ifaceSym.ClrType;
             if (clr == null || !clr.IsInterface)
             {
                 yield break;
@@ -4140,31 +4166,115 @@ internal sealed class MemberLookup
             declared = clr;
         }
 
-        foreach (var slot in MethodsOf(declared, symbolicArgs, isInherited: false))
+        foreach (var slot in MethodsOf(
+            declared,
+            ifaceSym,
+            symbolicArgs,
+            isInherited: false,
+            includeDefaultMethods))
         {
             yield return slot;
         }
 
         foreach (var baseIface in declared.GetInterfaces())
         {
-            foreach (var slot in MethodsOf(baseIface, symbolicArgs, isInherited: true))
+            var slotOwner = MapOpenClrTypeToSymbolicWithoutNullability(
+                baseIface,
+                declared,
+                symbolicArgs,
+                NullabilityFreeReason.TypeStructure);
+            var slotDefinition = GetClrInterfaceSlotProjection(
+                baseIface,
+                slotOwner,
+                out var slotArgs);
+            foreach (var slot in MethodsOf(
+                slotDefinition,
+                slotOwner,
+                slotArgs,
+                isInherited: true,
+                includeDefaultMethods))
             {
                 yield return slot;
             }
         }
 
-        static IEnumerable<ClrInterfaceSlot> MethodsOf(Type iface, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
+        static IEnumerable<ClrInterfaceSlot> MethodsOf(
+            Type iface,
+            TypeSymbol slotOwner,
+            ImmutableArray<TypeSymbol> slotArgs,
+            bool isInherited,
+            bool includeDefaultMethods)
         {
             foreach (var method in iface.GetMethods(BindingFlags.Public | BindingFlags.Instance))
             {
-                if (method.IsSpecialName || !method.IsAbstract)
+                if (method.IsSpecialName || (!method.IsAbstract && !includeDefaultMethods))
                 {
                     continue;
                 }
 
-                yield return new ClrInterfaceSlot(method, symbolicArgs, isInherited);
+                yield return new ClrInterfaceSlot(method, slotOwner, slotArgs, isInherited);
             }
         }
+    }
+
+    /// <summary>Enumerates direct and inherited CLR interface property slots.</summary>
+    /// <param name="ifaceSym">A CLR interface type symbol from the base clause.</param>
+    /// <returns>Property slots with the symbolic arguments needed for matching.</returns>
+    public static IEnumerable<ClrInterfacePropertySlot> EnumerateClrInterfacePropertySlots(TypeSymbol ifaceSym)
+    {
+        Type? declared = null;
+        var symbolicArgs = ImmutableArray<TypeSymbol>.Empty;
+        if (TryGetSymbolicClrGenericInterface(ifaceSym, out var openDefinition, out var args)
+            && openDefinition != null)
+        {
+            declared = openDefinition;
+            symbolicArgs = args;
+        }
+
+        if (declared == null)
+        {
+            var clr = ifaceSym.ClrType;
+            if (clr == null || !clr.IsInterface)
+            {
+                yield break;
+            }
+
+            declared = clr;
+        }
+
+        foreach (var property in PropertiesOf(declared))
+        {
+            yield return new ClrInterfacePropertySlot(
+                property,
+                ifaceSym,
+                symbolicArgs,
+                isInherited: false);
+        }
+
+        foreach (var baseIface in declared.GetInterfaces())
+        {
+            var slotOwner = MapOpenClrTypeToSymbolicWithoutNullability(
+                baseIface,
+                declared,
+                symbolicArgs,
+                NullabilityFreeReason.TypeStructure);
+            var slotDefinition = GetClrInterfaceSlotProjection(
+                baseIface,
+                slotOwner,
+                out var slotArgs);
+            foreach (var property in PropertiesOf(slotDefinition))
+            {
+                yield return new ClrInterfacePropertySlot(
+                    property,
+                    slotOwner,
+                    slotArgs,
+                    isInherited: true);
+            }
+        }
+
+        static IEnumerable<PropertyInfo> PropertiesOf(Type iface)
+            => iface.GetProperties(
+                BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly);
     }
 
     /// <summary>
@@ -4240,16 +4350,19 @@ internal sealed class MemberLookup
     /// <param name="second">The new same-signature method.</param>
     /// <param name="bridgeMethod">The method that explicitly bridges an inherited slot.</param>
     /// <param name="bridgeSlot">The inherited CLR interface slot to bind via MethodImpl.</param>
+    /// <param name="bridgeSlotOwner">The constructed interface type that owns <paramref name="bridgeSlot"/>.</param>
     /// <returns><see langword="true"/> when the pair forms a valid covariant interface bridge.</returns>
     public static bool TryResolveCovariantInterfaceBridge(
         ImmutableArray<TypeSymbol> implementedClrInterfaces,
         FunctionSymbol first,
         FunctionSymbol second,
         out FunctionSymbol? bridgeMethod,
-        out MethodInfo? bridgeSlot)
+        out MethodInfo? bridgeSlot,
+        out TypeSymbol? bridgeSlotOwner)
     {
         bridgeMethod = null;
         bridgeSlot = null;
+        bridgeSlotOwner = null;
 
         if (first == null || second == null || implementedClrInterfaces.IsDefaultOrEmpty)
         {
@@ -4308,6 +4421,7 @@ internal sealed class MemberLookup
         {
             bridgeMethod = second;
             bridgeSlot = secondOnly.Value.Method;
+            bridgeSlotOwner = secondOnly.Value.SlotOwner;
             return true;
         }
 
@@ -4315,6 +4429,7 @@ internal sealed class MemberLookup
         {
             bridgeMethod = first;
             bridgeSlot = firstOnly.Value.Method;
+            bridgeSlotOwner = firstOnly.Value.SlotOwner;
             return true;
         }
 
@@ -4361,16 +4476,58 @@ internal sealed class MemberLookup
     {
         foreach (var implProp in structSymbol.Properties)
         {
-            // PropertyType.IsByRef guarantees a non-null reflected element type on that branch.
-            if (implProp.Name == openProp.Name
-                && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(openProp)
-                && ParameterTypeMatchesSubstituted(implProp.Type, openProp.PropertyType.IsByRef ? openProp.PropertyType.GetElementType()! : openProp.PropertyType, symbolicArgs))
+            if (IsImplicitInterfaceImplementationCandidate(implProp)
+                && PropertyMatchesSymbolicClrInterfaceSignature(implProp, openProp, symbolicArgs))
             {
                 return implProp;
             }
         }
 
         return null;
+    }
+
+    /// <summary>Tests a property against an open CLR interface property after symbolic substitution.</summary>
+    /// <param name="property">The candidate G# property.</param>
+    /// <param name="openProperty">The CLR property from the open generic interface definition.</param>
+    /// <param name="symbolicArgs">The projected symbolic arguments for the property owner.</param>
+    /// <returns><see langword="true"/> when the complete property signature matches.</returns>
+    public static bool PropertyMatchesSymbolicClrInterfaceSignature(
+        PropertySymbol property,
+        PropertyInfo openProperty,
+        ImmutableArray<TypeSymbol> symbolicArgs)
+    {
+        var openPropertyType = openProperty.PropertyType.IsByRef
+            ? openProperty.PropertyType.GetElementType()
+            : openProperty.PropertyType;
+        if (openPropertyType == null
+            || property.Name != openProperty.Name
+            || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(openProperty)
+            || !ParameterTypeMatchesSubstituted(property.Type, openPropertyType, symbolicArgs))
+        {
+            return false;
+        }
+
+        var openParameters = openProperty.GetIndexParameters();
+        if (property.Parameters.Length != openParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < openParameters.Length; i++)
+        {
+            var openParameter = openParameters[i];
+            var openParameterType = openParameter.ParameterType.IsByRef
+                ? openParameter.ParameterType.GetElementType()
+                : openParameter.ParameterType;
+            if (openParameterType == null
+                || property.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(openParameter)
+                || !ParameterTypeMatchesSubstituted(property.Parameters[i].Type, openParameterType, symbolicArgs))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     /// <summary>
@@ -4428,17 +4585,19 @@ internal sealed class MemberLookup
     /// whose name and CLR-projected type match <paramref name="clrProp"/>.
     /// </summary>
     /// <param name="structSymbol">The user struct symbol to inspect.</param>
+    /// <param name="slotOwner">The constructed interface that owns the property slot.</param>
     /// <param name="clrProp">The CLR property to match.</param>
     /// <returns>The matching <see cref="PropertySymbol"/>, or
     /// <see langword="null"/> when no match exists.</returns>
-    public static PropertySymbol? FindMatchingProperty(StructSymbol structSymbol, PropertyInfo clrProp)
+    public static PropertySymbol? FindMatchingProperty(
+        StructSymbol structSymbol,
+        TypeSymbol slotOwner,
+        PropertyInfo clrProp)
     {
         foreach (var implProp in structSymbol.Properties)
         {
-            // PropertyType.IsByRef guarantees a non-null reflected element type on that branch.
-            if (implProp.Name == clrProp.Name
-                && implProp.ReturnRefKind == RefCapabilities.GetReturnRefKind(clrProp)
-                && ClrTypeUtilities.AreSame(NullableLifting.GetEffectiveClrType(implProp.Type), clrProp.PropertyType.IsByRef ? clrProp.PropertyType.GetElementType()! : clrProp.PropertyType))
+            if (IsImplicitInterfaceImplementationCandidate(implProp)
+                && PropertyMatchesClrInterfaceSignature(implProp, slotOwner, clrProp))
             {
                 return implProp;
             }
@@ -4446,6 +4605,66 @@ internal sealed class MemberLookup
 
         return null;
     }
+
+    /// <summary>Tests a property against a CLR interface property using the complete signature.</summary>
+    /// <param name="property">The candidate G# property.</param>
+    /// <param name="slotOwner">The constructed interface that owns the property slot.</param>
+    /// <param name="clrProperty">The CLR interface property.</param>
+    /// <returns><see langword="true"/> when the complete property signature matches.</returns>
+    public static bool PropertyMatchesClrInterfaceSignature(
+        PropertySymbol property,
+        TypeSymbol slotOwner,
+        PropertyInfo clrProperty)
+    {
+        var slotType = GetClrPropertyTypeSymbol(slotOwner, clrProperty);
+        if (slotType is ByRefTypeSymbol byRef)
+        {
+            slotType = byRef.PointeeType;
+        }
+
+        if (property.Name != clrProperty.Name
+            || property.ReturnRefKind != RefCapabilities.GetReturnRefKind(clrProperty)
+            || !SameTypeSymbol(property.Type, slotType))
+        {
+            return false;
+        }
+
+        var clrParameters = clrProperty.GetIndexParameters();
+        if (property.Parameters.Length != clrParameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < clrParameters.Length; i++)
+        {
+            if (property.Parameters[i].RefKind != RefCapabilities.GetParameterRefKind(clrParameters[i])
+                || !SameTypeSymbol(
+                    property.Parameters[i].Type,
+                    GetIndexerParameterTypeSymbol(slotOwner, clrProperty, i)))
+            {
+                return false;
+            }
+        }
+
+        return true;
+    }
+
+    /// <summary>Returns whether a method may satisfy an interface slot implicitly.</summary>
+    /// <param name="method">The candidate method.</param>
+    /// <returns><see langword="true"/> when the method has no explicit interface linkage.</returns>
+    public static bool IsImplicitInterfaceImplementationCandidate(FunctionSymbol method)
+        => !method.HasExplicitInterfaceClause
+            && method.ExplicitInterfaceMember == null
+            && method.ExplicitInterfaceSlot == null;
+
+    /// <summary>Returns whether a property may satisfy an interface slot implicitly.</summary>
+    /// <param name="property">The candidate property.</param>
+    /// <returns><see langword="true"/> when the property has no explicit interface linkage.</returns>
+    public static bool IsImplicitInterfaceImplementationCandidate(PropertySymbol property)
+        => !property.HasExplicitInterfaceClause
+            && property.ExplicitInterfaceMember == null
+            && property.ExplicitInterfaceGetterSlot == null
+            && property.ExplicitInterfaceSetterSlot == null;
 
     // ----- Indexer / Nullable<> / extension-method probes (instance helpers) -----
 
@@ -9158,7 +9377,7 @@ internal sealed class MemberLookup
     /// generic, etc.), at any nesting depth (e.g.
     /// <c>IEnumerable&lt;IEnumerable&lt;TState&gt;&gt;</c>).
     /// Falls back to the existing erased-<c>ClrType</c> comparison
-    /// (<see cref="HasMatchingMethodForClrSignature"/>'s prior behavior) for
+    /// (<see cref="FindMatchingMethodForClrSignature"/>'s comparison) for
     /// every other position, so ordinary non-generic contract members are
     /// unaffected.
     /// </summary>
@@ -9423,14 +9642,45 @@ internal sealed class MemberLookup
     /// </summary>
     public readonly struct ClrInterfaceSlot
     {
-        public ClrInterfaceSlot(MethodInfo method, ImmutableArray<TypeSymbol> symbolicArgs, bool isInherited)
+        public ClrInterfaceSlot(
+            MethodInfo method,
+            TypeSymbol slotOwner,
+            ImmutableArray<TypeSymbol> symbolicArgs,
+            bool isInherited)
         {
             this.Method = method;
+            this.SlotOwner = slotOwner;
             this.SymbolicArgs = symbolicArgs;
             this.IsInherited = isInherited;
         }
 
         public MethodInfo Method { get; }
+
+        public TypeSymbol SlotOwner { get; }
+
+        public ImmutableArray<TypeSymbol> SymbolicArgs { get; }
+
+        public bool IsInherited { get; }
+    }
+
+    /// <summary>A CLR interface property slot and its symbolic substitutions.</summary>
+    public readonly struct ClrInterfacePropertySlot
+    {
+        public ClrInterfacePropertySlot(
+            PropertyInfo property,
+            TypeSymbol slotOwner,
+            ImmutableArray<TypeSymbol> symbolicArgs,
+            bool isInherited)
+        {
+            this.Property = property;
+            this.SlotOwner = slotOwner;
+            this.SymbolicArgs = symbolicArgs;
+            this.IsInherited = isInherited;
+        }
+
+        public PropertyInfo Property { get; }
+
+        public TypeSymbol SlotOwner { get; }
 
         public ImmutableArray<TypeSymbol> SymbolicArgs { get; }
 

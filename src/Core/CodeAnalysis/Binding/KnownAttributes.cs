@@ -19,13 +19,14 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 /// user code never breaks compiler semantics.
 /// </summary>
 /// <remarks>
-/// Issue #835 / ADR-0084 §L5: every recogniser below compares by
-/// <see cref="Type.FullName"/> (via <see cref="ClrTypeUtilities.IsSameAs"/>)
-/// rather than CLR reference identity (<c>clrType.IsSameAs(typeof(X))</c>). The
-/// reference-identity form silently regresses on the BuildTask path, where
+/// Issue #835 / ADR-0084 §L5: recognisers compare resolved metadata identity
+/// rather than CLR reference identity (<c>clrType.IsSameAs(typeof(X))</c>).
+/// The reference-identity form silently regresses on the BuildTask path, where
 /// imported attribute types are materialised through a
 /// <see cref="System.Reflection.MetadataLoadContext"/> and therefore are
 /// never reference-equal to the gsc host process's <c>typeof()</c> instances.
+/// Safety-sensitive runtime attributes additionally require the runtime
+/// assembly's simple name and public key token.
 /// </remarks>
 internal static class KnownAttributes
 {
@@ -431,13 +432,46 @@ internal static class KnownAttributes
     /// is <see cref="System.Diagnostics.CodeAnalysis.UnscopedRefAttribute"/>.
     /// Recognition is type-identity based (ADR-0084 §L5) — the string-matching
     /// recognition this replaces could be defeated by a same-named user
-    /// attribute and could not see the attribute through an alias.
+    /// attribute and could not see the attribute through an alias. Runtime
+    /// identity compares the full type name, assembly simple name and public
+    /// key token; assembly version and culture do not affect recognition.
     /// </summary>
     /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
     /// <returns><c>true</c> when the attribute is <c>[UnscopedRef]</c>.</returns>
     public static bool IsUnscopedRef(Type? clrType)
     {
-        return clrType.IsSameAs(typeof(System.Diagnostics.CodeAnalysis.UnscopedRefAttribute));
+        return IsKnownRuntimeAttribute(
+            clrType,
+            typeof(System.Diagnostics.CodeAnalysis.UnscopedRefAttribute));
+    }
+
+    /// <summary>Returns whether <paramref name="clrType"/> is the runtime <c>ScopedRefAttribute</c>.</summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute has the runtime type identity.</returns>
+    public static bool IsScopedRef(Type? clrType)
+    {
+        return IsKnownRuntimeAttribute(
+            clrType,
+            typeof(System.Runtime.CompilerServices.ScopedRefAttribute));
+    }
+
+    private static bool IsKnownRuntimeAttribute(Type? candidate, Type expected)
+    {
+        if (candidate == null
+            || !string.Equals(candidate.FullName, expected.FullName, StringComparison.Ordinal))
+        {
+            return false;
+        }
+
+        var candidateAssembly = candidate.Assembly.GetName();
+        var expectedAssembly = expected.Assembly.GetName();
+        var candidateToken = candidateAssembly.GetPublicKeyToken() ?? Array.Empty<byte>();
+        var expectedToken = expectedAssembly.GetPublicKeyToken() ?? Array.Empty<byte>();
+        return string.Equals(
+                candidateAssembly.Name,
+                expectedAssembly.Name,
+                StringComparison.OrdinalIgnoreCase)
+            && candidateToken.AsSpan().SequenceEqual(expectedToken);
     }
 
     /// <summary>
