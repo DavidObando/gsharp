@@ -2297,9 +2297,11 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool GSharpExpressionIsStaticallyNonNull(
             ExpressionSyntax expression,
-            GExpression translated = null)
+            GExpression translated = null,
+            bool checkNullableForEachBinding = true)
         {
-            if (this.IsNullableForEachBindingUse(expression))
+            if (checkNullableForEachBinding
+                && this.IsNullableForEachBindingUse(expression))
             {
                 return false;
             }
@@ -3180,7 +3182,11 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool NullableReferenceValueMayBeNull(ExpressionSyntax value)
         {
-            if (this.GSharpExpressionIsStaticallyNonNull(value)
+            bool nullableForEachBinding = this.IsNullableForEachBindingUse(value);
+            if ((!nullableForEachBinding
+                    && this.GSharpExpressionIsStaticallyNonNull(
+                        value,
+                        checkNullableForEachBinding: false))
                 || value is PostfixUnaryExpressionSyntax
                     { RawKind: (int)SyntaxKind.SuppressNullableWarningExpression }
                 || this.IsWithinExpressionTreeLambda(value)
@@ -3192,7 +3198,7 @@ public sealed partial class CSharpToGSharpTranslator
             // Issues #4500 and #4525: an element read or foreach binding from
             // an array cs2gs emits with nullable elements.
             if (this.IsNullableArrayElementAccess(value)
-                || this.IsNullableForEachBindingUse(value))
+                || nullableForEachBinding)
             {
                 return true;
             }

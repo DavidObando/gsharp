@@ -139,7 +139,7 @@ public sealed class ManagedReferenceTranslationTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Empty(context.Diagnostics);
-        Assert.True(!text.Contains("source[0]!!", StringComparison.Ordinal), text);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(text + "\nProbe.Run()", new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
