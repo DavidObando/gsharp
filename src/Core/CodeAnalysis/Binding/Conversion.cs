@@ -246,6 +246,13 @@ public sealed class Conversion
     internal static bool IsPlatformArgumentWidening(TypeSymbol? source, TypeSymbol? target)
         => RelatePlatformArguments(source, target) == PlatformArgumentRelation.Widening;
 
+    internal static bool IsArrayElementInterface(Type definition)
+        => definition.FullName is "System.Collections.Generic.IEnumerable`1"
+            or "System.Collections.Generic.ICollection`1"
+            or "System.Collections.Generic.IList`1"
+            or "System.Collections.Generic.IReadOnlyCollection`1"
+            or "System.Collections.Generic.IReadOnlyList`1";
+
     /// <summary>
     /// ADR-0186 §3, asked about a whole <b>container pair</b> rather than a
     /// single argument position: does the rule speak to
@@ -3952,13 +3959,6 @@ public sealed class Conversion
 
         return relation;
     }
-
-    private static bool IsArrayElementInterface(Type definition)
-        => definition.FullName is "System.Collections.Generic.IEnumerable`1"
-            or "System.Collections.Generic.ICollection`1"
-            or "System.Collections.Generic.IList`1"
-            or "System.Collections.Generic.IReadOnlyCollection`1"
-            or "System.Collections.Generic.IReadOnlyList`1";
 
     /// <summary>
     /// #4420: whether a supertype view reads a platform element as a

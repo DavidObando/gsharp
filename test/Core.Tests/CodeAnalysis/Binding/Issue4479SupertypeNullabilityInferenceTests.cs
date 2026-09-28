@@ -41,6 +41,8 @@ public class Issue4479SupertypeNullabilityInferenceTests
 
                 public static List<int> Numbers() { return new List<int> { 1, 2 }; }
 
+                public static string[] StringArray() { return new[] { "a", null }; }
+
                 public static Ambiguous Ambiguous() { return new Ambiguous(); }
             }
 
@@ -106,6 +108,9 @@ public class Issue4479SupertypeNullabilityInferenceTests
             "System.Collections.Generic.IEnumerable[string?]",
             ProbeType(library, "let probe = En.NullableStrings().Select(s -> s)"));
         Assert.Equal(
+            "System.Collections.Generic.IEnumerable[string!]",
+            ProbeType(library, "let probe = Ob.StringArray().Select(s -> s)"));
+        Assert.Equal(
             "System.Collections.Generic.List[string?]",
             ProbeType(library, "let probe = Generic.Copy(En.MaybeNullableStrings())"));
     }
@@ -117,6 +122,7 @@ public class Issue4479SupertypeNullabilityInferenceTests
     /// </summary>
     [Theory]
     [InlineData("Ob.Strings()", "string!")]
+    [InlineData("Ob.StringArray()", "string!")]
     [InlineData("En.NullableStrings()", "string?")]
     [InlineData("En.Strings()", "string")]
     [InlineData("Ob.Numbers()", "int32")]

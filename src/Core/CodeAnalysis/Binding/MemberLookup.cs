@@ -6009,6 +6009,19 @@ internal sealed class MemberLookup
     {
         mappedArguments = default;
         foundProjection = false;
+        if (source.ClrType is { IsArray: true } sourceArray
+            && sourceArray.GetArrayRank() == 1
+            && Conversion.IsArrayElementInterface(targetOpenDefinition))
+        {
+            var positions = source.GetElementPositions();
+            if (positions.Length == 1)
+            {
+                mappedArguments = positions;
+                foundProjection = true;
+                return true;
+            }
+        }
+
         Type? sourceOpenDefinition;
         ImmutableArray<TypeSymbol> sourceArguments;
         if (source is ImportedTypeSymbol { OpenDefinition: { } importedOpen } imported)
