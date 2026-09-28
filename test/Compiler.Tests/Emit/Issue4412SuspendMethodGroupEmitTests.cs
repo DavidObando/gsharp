@@ -272,7 +272,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
 
             namespace Interop;
 
-            public sealed class Box;
+            public sealed class Box { }
             public delegate ValueTask<int> RefRunner(ref int value);
             public delegate void GenericRefAction<T>(ref T value);
             public delegate void GenericRefValueAction<T>(ref int target, T value);
@@ -396,7 +396,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
 
             namespace Interop;
 
-            public sealed class Box<T>;
+            public sealed class Box<T> { }
             public delegate ValueTask<int> ValueRunner(int value);
 
             public static class Extensions
@@ -444,7 +444,7 @@ public sealed class Issue4412SuspendMethodGroupEmitTests
 
             namespace Interop;
 
-            public sealed class Box;
+            public sealed class Box { }
             public delegate ValueTask<bool> ValuePredicate(int value);
 
             public static class Extensions
