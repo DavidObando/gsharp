@@ -1197,7 +1197,14 @@ internal sealed class ConversionClassifier
                     parameterTypeOverrides?.TryGetValue(paramIndex, out inPointeeOverride);
                     var inPointee = inPointeeOverride
                         ?? GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs);
-                    rebound = BindImplicitInArgument(location, argument, inPointee, parameter: null);
+                    rebound = TryRejectClrPlatformContainerArgument(
+                        argument,
+                        parameters[paramIndex],
+                        inPointee,
+                        location,
+                        out var rejectedArgument)
+                            ? rejectedArgument
+                            : BindImplicitInArgument(location, argument, inPointee, parameter: null);
                 }
                 else if (!parameterType.IsByRef
                     && (argument.Type != TypeSymbol.Error || ClrOverloadResolution.IsUnresolvedMethodGroupArgument(argument)))
@@ -3531,6 +3538,32 @@ internal sealed class ConversionClassifier
         int receiverArgCount,
         out BoundExpression rebound)
     {
+        // The classifier owns the distinction: unrelated no-conversion cases
+        // keep their established diagnostics and recovery.
+        var sourceIndex = argumentIndex - receiverArgCount;
+        var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
+            ? call.Arguments[sourceIndex].Location
+            : call?.Location ?? default;
+        return TryRejectClrPlatformContainerArgument(argument, parameter, targetType, location, out rebound);
+    }
+
+    /// <summary>
+    /// Issue #4480: reports the imported-call form of ADR-0186 §3 rule 3 at an
+    /// explicitly supplied argument location.
+    /// </summary>
+    /// <param name="argument">The bound argument.</param>
+    /// <param name="parameter">The resolved imported parameter.</param>
+    /// <param name="targetType">The nullability-aware parameter type.</param>
+    /// <param name="location">The offending argument's location.</param>
+    /// <param name="rebound">The error expression when the argument is rejected.</param>
+    /// <returns><see langword="true"/> when rule 3 rejected the argument.</returns>
+    internal bool TryRejectClrPlatformContainerArgument(
+        BoundExpression argument,
+        ParameterInfo parameter,
+        TypeSymbol targetType,
+        TextLocation location,
+        out BoundExpression rebound)
+    {
         rebound = argument;
         if (Conversion.Classify(argument.Type, targetType).Exists
             || !Conversion.TryRelatePlatformContainer(argument.Type, targetType, out var isImplicit)
@@ -3539,12 +3572,6 @@ internal sealed class ConversionClassifier
             return false;
         }
 
-        // The classifier owns the distinction: unrelated no-conversion cases
-        // keep their established diagnostics and recovery.
-        var sourceIndex = argumentIndex - receiverArgCount;
-        var location = call != null && sourceIndex >= 0 && sourceIndex < call.Arguments.Count
-            ? call.Arguments[sourceIndex].Location
-            : call?.Location ?? default;
         Diagnostics.ReportWrongArgumentType(
             location,
             parameter.Name ?? $"arg{parameter.Position}",

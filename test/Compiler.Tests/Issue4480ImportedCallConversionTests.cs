@@ -28,7 +28,7 @@ namespace GSharp.Compiler.Tests;
 /// </para>
 /// <para>
 /// <b>Discrimination (ADR-0154).</b> On parent commit
-/// <c>19ed00e5abeab6164100cfab611ed3777b0f4648</c>, all four imported rejection
+/// <c>19ed00e5abeab6164100cfab611ed3777b0f4648</c>, all imported rejection
 /// rows compile successfully while the G# parity row already reports GS0154.
 /// The accepting rows compile on both sides. Reverting the product guard
 /// restores that exact red/green split.
@@ -57,6 +57,8 @@ public class Issue4480ImportedCallConversionTests
         {
             public static int Required(IEnumerable<string> values) => values.Count();
 
+            public static int RequiredIn(in IEnumerable<string> values) => values.Count();
+
             public static int Nullable(IEnumerable<string?> values) => values.Count();
 
             public static int Value(IEnumerable<int> values) => values.Count();
@@ -83,6 +85,16 @@ public class Issue4480ImportedCallConversionTests
         public sealed class StaticCalls : IStaticCalls<StaticCalls>
         {
             public static int Required(IEnumerable<string> values) => values.Count();
+        }
+
+        public class RequiredBase
+        {
+            public RequiredBase(IEnumerable<string> values) { }
+        }
+
+        public class RequiredParamsBase
+        {
+            public RequiredParamsBase(params IEnumerable<string>[] values) { }
         }
         """;
 
@@ -116,6 +128,20 @@ public class Issue4480ImportedCallConversionTests
             """,
             5,
             "collection",
+        };
+
+        yield return new object[]
+        {
+            "imported-in-call",
+            """
+            package P
+            import Issue4480.Library
+
+            let xs = Ob.Strings()
+            let count = Calls.RequiredIn(xs)
+            """,
+            5,
+            "values",
         };
 
         yield return new object[]
@@ -164,6 +190,36 @@ public class Issue4480ImportedCallConversionTests
             let count = Via[StaticCalls]()
             """,
             6,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "imported-base-constructor",
+            """
+            package P
+            import Issue4480.Library
+
+            class Derived : RequiredBase {
+                init() : base(Ob.Strings()) { }
+            }
+            """,
+            5,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "imported-expanded-base-constructor",
+            """
+            package P
+            import Issue4480.Library
+
+            class Derived : RequiredParamsBase {
+                init() : base(Ob.Strings(), Ob.Strings()) { }
+            }
+            """,
+            5,
             "values",
         };
     }
