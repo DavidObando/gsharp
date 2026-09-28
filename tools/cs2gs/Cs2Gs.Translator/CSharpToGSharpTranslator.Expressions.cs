@@ -2337,10 +2337,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            while (expression is ParenthesizedExpressionSyntax parenthesized)
-            {
-                expression = parenthesized.Expression;
-            }
+            expression = Unparenthesize(expression);
 
             if (expression is not IdentifierNameSyntax identifier
                 || this.IsGSharpFlowNarrowedLocal(expression))

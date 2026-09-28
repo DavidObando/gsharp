@@ -3011,27 +3011,27 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IsNullableArrayElementAccess(ExpressionSyntax expression)
         {
-            while (expression is ParenthesizedExpressionSyntax parenthesized)
-            {
-                expression = parenthesized.Expression;
-            }
-
-            return expression is ElementAccessExpressionSyntax elementAccess
+            return Unparenthesize(expression) is ElementAccessExpressionSyntax elementAccess
                 && this.ArrayExpressionHasNullableElement(elementAccess.Expression);
         }
 
         private bool ArrayExpressionHasNullableElement(ExpressionSyntax expression)
         {
+            expression = Unparenthesize(expression);
             TypeInfo typeInfo = this.context.GetTypeInfo(expression);
             if ((typeInfo.Type ?? typeInfo.ConvertedType) is not IArrayTypeSymbol array)
             {
                 return false;
             }
 
-            return array.ElementNullableAnnotation == NullableAnnotation.Annotated
-                || CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
-                    array.ElementType,
-                    this.context.Compilation)
+            if (!this.state.MappedArrayElementNullability.TryGetValue(array, out bool mappedNullable))
+            {
+                mappedNullable = this.typeMapper.Map(array, this.context, expression.GetLocation())
+                    is ArrayTypeReference { ElementType.IsNullable: true };
+                this.state.MappedArrayElementNullability.Add(array, mappedNullable);
+            }
+
+            return mappedNullable
                 || (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
                     && this.IsWidenedArrayElementLocal(local));
         }

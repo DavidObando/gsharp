@@ -176,6 +176,41 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void NullableArrayReadsUseMappedElementNullability()
+    {
+        const string source = """
+            namespace NullableArrayReads;
+            public class Probe {
+                public static int Run() {
+                    string[] plain = { "y" };
+                    string?[] source = { "x" };
+                    var alias = source;
+                    int total = plain[0].Length + (alias)[0].Length;
+                    foreach (var item in (alias)) {
+                        total += item.Length;
+                    }
+                    return total;
+                }
+            }
+            """;
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("NullableArrayReads.cs", source) },
+            CSharpProjectLoader.RuntimeReferences());
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("plain[0]!!", text, StringComparison.Ordinal);
+        Assert.Contains("(alias)[0]!!.Length", text, StringComparison.Ordinal);
+        Assert.Contains("item!!.Length", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayForEachBindingsRemainNullable()
     {
         const string source = """
