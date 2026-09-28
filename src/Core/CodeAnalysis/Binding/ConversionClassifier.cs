@@ -2533,7 +2533,8 @@ internal sealed class ConversionClassifier
                         applicable,
                         argTypes,
                         trailingParameterCountToIgnore: static candidate =>
-                            ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0).Best;
+                            candidate is MethodInfo method
+                                && ImportedFunctionSymbol.HasHiddenContextParameter(method) ? 1 : 0).Best;
             if (resolvedMethod != null && hasByRefTarget)
             {
                 var resolvedParameters = ImportedFunctionSymbol.GetLogicalParameters(resolvedMethod, out _);

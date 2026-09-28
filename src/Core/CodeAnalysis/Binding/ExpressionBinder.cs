@@ -2659,7 +2659,8 @@ internal sealed partial class ExpressionBinder
                 clrGroup.Candidates,
                 resolutionArguments,
                 trailingParameterCountToIgnore: static candidate =>
-                    ImportedFunctionSymbol.HasHiddenContextParameter(candidate) ? 1 : 0);
+                    candidate is MethodInfo method
+                        && ImportedFunctionSymbol.HasHiddenContextParameter(method) ? 1 : 0);
             if (resolution.Outcome != ClrOverloadResolution.ResolutionOutcome.Resolved
                 || resolution.Best is not { } method)
             {
