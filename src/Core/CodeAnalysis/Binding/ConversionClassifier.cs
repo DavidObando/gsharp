@@ -3603,11 +3603,7 @@ internal sealed class ConversionClassifier
     {
         rebound = argument;
         var sourceType = argument.Type;
-        var targetClr = targetType.ClrType;
         if (sourceType == null
-            || sourceType.ClrType is not { } sourceClr
-            || targetClr == null
-            || !ClrLoadContext.IsAssignable(targetClr, sourceClr)
             || (classifiedConversion ?? Conversion.Classify(sourceType, targetType)).Exists
             || !Conversion.TryRelatePlatformContainer(
                 sourceType,

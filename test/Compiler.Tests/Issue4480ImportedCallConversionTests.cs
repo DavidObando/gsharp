@@ -320,6 +320,27 @@ public class Issue4480ImportedCallConversionTests
             "values",
         };
 
+        yield return new object[]
+        {
+            "source-container-imported-call",
+            """
+            package P
+            import System.Collections
+            import System.Collections.Generic
+            import Issue4480.Library
+
+            class Repo[T] : IEnumerable[T] {
+                private let items List[T] = List[T]()
+                init(value T) { items.Add(value) }
+                func GetEnumerator() IEnumerator[T] -> items.GetEnumerator()
+                private func GetEnumerator() IEnumerator -> GetEnumerator()
+            }
+
+            let count = Calls.Required(Repo(Ob.Strings()[0]))
+            """,
+            13,
+            "values",
+        };
     }
 
     /// <summary>Rule 3 is enforced equally at imported and G# callees.</summary>
