@@ -280,6 +280,36 @@ public class Issue4519GotoAssignmentNarrowingTests
             """, "5");
     }
 
+    [Fact]
+    public void NestedFunctionBetweenFinallyAndTarget_DoesNotLoseOuterFinallyEffects()
+    {
+        var result = Evaluate("""
+            func Run(jump bool) int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    if jump { goto Done }
+                } finally {
+                    x = nil
+                }
+                var helper = func() int32 {
+                    try {
+                        return 1
+                    } finally {
+                    }
+                }
+                x = "again"
+            Done:
+                return x.Length
+            }
+
+            Run(true)
+            """);
+
+        Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
     private static EmittedOracleResult Evaluate(string source)
         => EmittedOracle.Evaluate(source);
 

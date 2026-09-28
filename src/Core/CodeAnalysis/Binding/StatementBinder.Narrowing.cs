@@ -539,15 +539,24 @@ internal sealed partial class StatementBinder
             }
         }
 
+        var variablesToInvalidate = new HashSet<VariableSymbol>(variables);
+        if (incomingSnapshots is { Count: > 0 })
+        {
+            var preservedByEveryJump = new HashSet<VariableSymbol>(
+                incomingSnapshots[0].NarrowedVariables.Keys);
+            for (var i = 1; i < incomingSnapshots.Count; i++)
+            {
+                preservedByEveryJump.IntersectWith(incomingSnapshots[i].NarrowedVariables.Keys);
+            }
+
+            variablesToInvalidate.ExceptWith(preservedByEveryJump);
+        }
+
         foreach (var frame in binderCtx.NarrowedVariables)
         {
-            foreach (var variable in variables)
+            foreach (var variable in variablesToInvalidate)
             {
-                if (incomingSnapshots == null
-                    || incomingSnapshots.Any(snapshot => !snapshot.NarrowedVariables.ContainsKey(variable)))
-                {
-                    RemoveByRoot(frame, variable);
-                }
+                RemoveByRoot(frame, variable);
             }
         }
     }
