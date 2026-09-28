@@ -88,6 +88,27 @@ public class Issue4480ImportedCallConversionTests
             public static int RequiredIn(in IEnumerable<string> values) => values.Count();
         }
 
+        public interface ITaker<T>
+        {
+            int Required(T values);
+        }
+
+        public sealed class Taker : ITaker<IEnumerable<string>>
+        {
+            public int Required(IEnumerable<string> values) => values.Count();
+        }
+
+        public interface IStaticTaker<TSelf, T>
+            where TSelf : IStaticTaker<TSelf, T>
+        {
+            static abstract int Required(T values);
+        }
+
+        public sealed class StaticTaker : IStaticTaker<StaticTaker, IEnumerable<string>>
+        {
+            public static int Required(IEnumerable<string> values) => values.Count();
+        }
+
         public interface IInstanceCalls
         {
             int Required(IEnumerable<string> values);
@@ -379,6 +400,36 @@ public class Issue4480ImportedCallConversionTests
             let count = Probe[int32]()
             """,
             4,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "constrained-generic-instance-slot",
+            """
+            package P
+            import System.Collections.Generic
+            import Issue4480.Library
+
+            func Probe[R ITaker[IEnumerable[string]]](receiver R) int32 -> receiver.Required(Ob.Strings())
+            let count = Probe(Taker())
+            """,
+            5,
+            "values",
+        };
+
+        yield return new object[]
+        {
+            "constrained-generic-static-slot",
+            """
+            package P
+            import System.Collections.Generic
+            import Issue4480.Library
+
+            func Probe[R IStaticTaker[R, IEnumerable[string]]]() int32 -> R.Required(Ob.Strings())
+            let count = Probe[StaticTaker]()
+            """,
+            5,
             "values",
         };
     }

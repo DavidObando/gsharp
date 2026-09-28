@@ -3313,7 +3313,7 @@ internal sealed class ConversionClassifier
             }
             else if (paramIndex < parameters.Length
                 && Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
-                && parameters[paramIndex].ParameterType is { IsByRef: false, IsGenericParameter: false }
+                && parameters[paramIndex].ParameterType is { IsByRef: false }
                 && method != null
                 && receiverType != null
                 && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType)
@@ -3333,7 +3333,8 @@ internal sealed class ConversionClassifier
                     builder ??= arguments.ToBuilder();
                     builder[i] = rejectedArgument;
                 }
-                else if (arguments[i].Type is PlatformTypeSymbol
+                else if (!parameters[paramIndex].ParameterType.IsGenericParameter
+                    && arguments[i].Type is PlatformTypeSymbol
                     && Conversion.Classify(arguments[i].Type, parameterType).RequiresPlatformNilCheck)
                 {
                     // ADR-0186 §4, #4451: a platform argument at a non-null
