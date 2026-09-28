@@ -4441,45 +4441,88 @@ public sealed partial class CSharpToGSharpTranslator
             // local initializer/member flows, which can refer back to this call.
             this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
 
+            INamedTypeSymbol projectedReceiver = null;
+            if (call is InvocationExpressionSyntax
+                    { Expression: MemberAccessExpressionSyntax receiverMember }
+                && this.GetManagedReferenceArrayProjectedExpressionType(
+                        receiverMember.Expression) is INamedTypeSymbol receiverType
+                && SymbolEqualityComparer.Default.Equals(
+                    receiverType.OriginalDefinition,
+                    method.ContainingType?.OriginalDefinition))
+            {
+                projectedReceiver = receiverType;
+            }
+
+            bool canProjectContainingTypeFromArguments =
+                call is BaseObjectCreationExpressionSyntax
+                || projectedReceiver != null;
             var widenedMethodArguments = new bool[method.TypeArguments.Length];
             var widenedContainingArguments =
                 new bool[method.ContainingType?.TypeArguments.Length ?? 0];
             ITypeParameterSymbol blockedParameter = null;
+            bool fixedReceiverStorageNeedsNullableArgument = false;
             void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
             {
-                if (!this.ManagedReferenceArrayProjectedArgumentNeedsNullableType(argument))
-                {
-                    return;
-                }
+                ITypeSymbol argumentType =
+                    this.GetManagedReferenceArrayProjectedArgumentType(argument);
+                bool nullableArrayArgument =
+                    this.ArrayExpressionHasNullableElement(argument);
 
                 RecordWidenedTypeParameters(
                     method.TypeArguments,
                     method.TypeParameters,
                     widenedMethodArguments,
-                    parameterType);
+                    parameterType,
+                    argumentType,
+                    apply: true,
+                    nullableArrayArgument);
                 if (method.ContainingType != null)
                 {
-                    RecordWidenedTypeParameters(
+                    bool needsContainingProjection = RecordWidenedTypeParameters(
                         method.ContainingType.TypeArguments,
                         method.ContainingType.TypeParameters,
                         widenedContainingArguments,
-                        parameterType);
+                        parameterType,
+                        argumentType,
+                        canProjectContainingTypeFromArguments,
+                        nullableArrayArgument);
+                    fixedReceiverStorageNeedsNullableArgument |=
+                        needsContainingProjection
+                        && !canProjectContainingTypeFromArguments;
                 }
             }
 
-            void RecordWidenedTypeParameters(
+            bool RecordWidenedTypeParameters(
                 ImmutableArray<ITypeSymbol> typeArguments,
                 ImmutableArray<ITypeParameterSymbol> typeParameters,
                 bool[] widened,
-                ITypeSymbol parameterType)
+                ITypeSymbol parameterType,
+                ITypeSymbol argumentType,
+                bool apply,
+                bool nullableArrayArgument = false)
             {
+                bool needsProjection = false;
                 for (int i = 0; i < widened.Length; i++)
                 {
                     if (widened[i]
                         || !CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
                             typeArguments[i],
                             this.context.Compilation)
-                        || !TypeContainsTypeParameter(parameterType, typeParameters[i]))
+                        || (!ProjectedTypeSuppliesNullableManagedReference(
+                                parameterType,
+                                argumentType,
+                                typeParameters[i],
+                                this.context.Compilation)
+                            && (!nullableArrayArgument
+                                || !TypeContainsTypeParameter(
+                                    parameterType,
+                                    typeParameters[i]))))
+                    {
+                        continue;
+                    }
+
+                    needsProjection = true;
+                    if (!apply)
                     {
                         continue;
                     }
@@ -4492,6 +4535,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                     widened[i] = true;
                 }
+
+                return needsProjection;
             }
 
             void RecordContainingTypeArguments(
@@ -4512,15 +4557,18 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (IArgumentOperation argument in consumerArguments)
                 {
                     if (argument.Syntax is ArgumentSyntax argumentSyntax
-                        && argument.Parameter?.OriginalDefinition.Type is { } parameterType
-                        && this.ManagedReferenceArrayProjectedArgumentNeedsNullableType(
-                            argumentSyntax.Expression))
+                        && argument.Parameter?.OriginalDefinition.Type is { } parameterType)
                     {
                         RecordWidenedTypeParameters(
                             method.ContainingType.TypeArguments,
                             consumerTypeParameters,
                             widenedContainingArguments,
-                            parameterType);
+                            parameterType,
+                            this.GetManagedReferenceArrayProjectedArgumentType(
+                                argumentSyntax.Expression),
+                            apply: true,
+                            this.ArrayExpressionHasNullableElement(
+                                argumentSyntax.Expression));
                     }
                 }
             }
@@ -4542,6 +4590,10 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (call is BaseObjectCreationExpressionSyntax creationSyntax
+                && method.ContainingType?.TypeArguments.Any(argument =>
+                    CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                        argument,
+                        this.context.Compilation)) == true
                 && creationSyntax.Parent is EqualsValueClauseSyntax
                     { Parent: VariableDeclaratorSyntax declarator }
                 && this.context.GetDeclaredSymbol(declarator) is ILocalSymbol local
@@ -4572,14 +4624,16 @@ public sealed partial class CSharpToGSharpTranslator
                 && reducedDefinition.Parameters.FirstOrDefault()?.Type
                     is { } receiverParameterType)
             {
-                if (this.ArrayExpressionHasNullableElement(reducedMember.Expression))
-                {
-                    RecordWidenedTypeParameters(
-                        method.TypeArguments,
-                        reducedDefinition.TypeParameters,
-                        widenedMethodArguments,
-                        receiverParameterType);
-                }
+                RecordWidenedTypeParameters(
+                    method.TypeArguments,
+                    reducedDefinition.TypeParameters,
+                    widenedMethodArguments,
+                    receiverParameterType,
+                    this.GetManagedReferenceArrayProjectedArgumentType(
+                        reducedMember.Expression),
+                    apply: true,
+                    this.ArrayExpressionHasNullableElement(
+                        reducedMember.Expression));
             }
 
             if (blockedParameter != null)
@@ -4593,18 +4647,17 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            INamedTypeSymbol projectedContainingType = null;
-            if (call is InvocationExpressionSyntax
-                    { Expression: MemberAccessExpressionSyntax memberAccess }
-                && this.GetManagedReferenceArrayProjectedExpressionType(memberAccess.Expression)
-                    is INamedTypeSymbol projectedReceiver
-                && SymbolEqualityComparer.Default.Equals(
-                    projectedReceiver.OriginalDefinition,
-                    method.ContainingType?.OriginalDefinition))
+            if (fixedReceiverStorageNeedsNullableArgument)
             {
-                projectedContainingType = projectedReceiver;
+                string message =
+                    $"managed-reference array widening cannot change fixed receiver storage " +
+                    $"'{method.ContainingType}'; a nil argument has no exact G# translation.";
+                this.context.ReportUnsupported(
+                    call,
+                    message);
             }
 
+            INamedTypeSymbol projectedContainingType = projectedReceiver;
             if (widenedContainingArguments.Any(value => value))
             {
                 ITypeSymbol[] typeArguments =
@@ -4664,11 +4717,24 @@ public sealed partial class CSharpToGSharpTranslator
             return projected != null;
         }
 
-        private bool ManagedReferenceArrayProjectedArgumentNeedsNullableType(
+        private ITypeSymbol GetManagedReferenceArrayProjectedArgumentType(
             ExpressionSyntax argument)
-            => this.ArrayExpressionHasNullableElement(argument)
-                || this.IsNullableForEachBindingUse(argument)
-                || this.ManagedReferenceArrayWidenedExpressionMayBeNull(argument);
+        {
+            ITypeSymbol projected =
+                this.GetManagedReferenceArrayProjectedExpressionType(argument);
+            if (projected != null)
+            {
+                return projected;
+            }
+
+            ITypeSymbol type = this.context.GetTypeInfo(argument).Type
+                ?? this.context.GetTypeInfo(argument).ConvertedType;
+            return type != null
+                && (this.IsNullableForEachBindingUse(argument)
+                    || this.ManagedReferenceArrayWidenedExpressionMayBeNull(argument))
+                    ? type.WithNullableAnnotation(NullableAnnotation.Annotated)
+                    : type;
+        }
 
         private static bool NullableTypeArgumentViolatesTranslatedConstraints(
             ITypeParameterSymbol parameter)
@@ -4677,6 +4743,83 @@ public sealed partial class CSharpToGSharpTranslator
                 || parameter.HasUnmanagedTypeConstraint
                 || parameter.HasConstructorConstraint
                 || !parameter.ConstraintTypes.IsEmpty;
+
+        private static bool ProjectedTypeSuppliesNullableManagedReference(
+            ITypeSymbol parameterType,
+            ITypeSymbol argumentType,
+            ITypeParameterSymbol target,
+            Compilation compilation)
+        {
+            if (parameterType is ITypeParameterSymbol parameter)
+            {
+                return SymbolEqualityComparer.Default.Equals(
+                        parameter.OriginalDefinition,
+                        target.OriginalDefinition)
+                    && argumentType?.NullableAnnotation == NullableAnnotation.Annotated
+                    && CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                        argumentType,
+                        compilation);
+            }
+
+            if (parameterType is IArrayTypeSymbol parameterArray
+                && argumentType is IArrayTypeSymbol argumentArray)
+            {
+                return ProjectedTypeSuppliesNullableManagedReference(
+                    parameterArray.ElementType,
+                    argumentArray.ElementType,
+                    target,
+                    compilation);
+            }
+
+            if (parameterType is IPointerTypeSymbol parameterPointer
+                && argumentType is IPointerTypeSymbol argumentPointer)
+            {
+                return ProjectedTypeSuppliesNullableManagedReference(
+                    parameterPointer.PointedAtType,
+                    argumentPointer.PointedAtType,
+                    target,
+                    compilation);
+            }
+
+            if (parameterType is not INamedTypeSymbol parameterNamed
+                || argumentType is not INamedTypeSymbol argumentNamed)
+            {
+                return false;
+            }
+
+            INamedTypeSymbol matchingArgument = ReceiverTypeHierarchy(argumentNamed)
+                .FirstOrDefault(candidate =>
+                    SymbolEqualityComparer.Default.Equals(
+                        candidate.OriginalDefinition,
+                        parameterNamed.OriginalDefinition));
+            if (matchingArgument == null)
+            {
+                return false;
+            }
+
+            for (int i = 0;
+                i < parameterNamed.TypeArguments.Length
+                    && i < matchingArgument.TypeArguments.Length;
+                i++)
+            {
+                if (ProjectedTypeSuppliesNullableManagedReference(
+                        parameterNamed.TypeArguments[i],
+                        matchingArgument.TypeArguments[i],
+                        target,
+                        compilation))
+                {
+                    return true;
+                }
+            }
+
+            return parameterNamed.ContainingType != null
+                && matchingArgument.ContainingType != null
+                && ProjectedTypeSuppliesNullableManagedReference(
+                    parameterNamed.ContainingType,
+                    matchingArgument.ContainingType,
+                    target,
+                    compilation);
+        }
 
         private static bool TypeContainsTypeParameter(
             ITypeSymbol type,

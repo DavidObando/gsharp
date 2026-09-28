@@ -4033,7 +4033,9 @@ public sealed partial class CSharpToGSharpTranslator
                 case IArrayTypeSymbol array:
                     return array.ElementType;
                 case INamedTypeSymbol named:
-                    if (named.IsGenericType && named.TypeArguments.Length == 1)
+                    if (named.OriginalDefinition.SpecialType
+                            == SpecialType.System_Collections_Generic_IEnumerable_T
+                        && named.TypeArguments.Length == 1)
                     {
                         return named.TypeArguments[0];
                     }
