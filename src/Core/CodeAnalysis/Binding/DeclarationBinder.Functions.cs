@@ -3248,10 +3248,9 @@ internal sealed partial class DeclarationBinder
             // rather than by its erased `object` CLR projection.
             if (pa.OpenDefinition != null
                 && pb.OpenDefinition != null
-                && pa.OpenDefinition == pb.OpenDefinition
-                && TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap))
+                && pa.OpenDefinition == pb.OpenDefinition)
             {
-                return true;
+                return TypeArgumentsEquivalent(pa.TypeArguments, pb.TypeArguments, typeParamMap);
             }
 
             // Otherwise (one or both sides expressed as a plain closed CLR

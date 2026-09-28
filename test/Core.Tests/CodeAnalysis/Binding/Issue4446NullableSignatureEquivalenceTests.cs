@@ -70,6 +70,15 @@ public sealed class Issue4446NullableSignatureEquivalenceTests
         Assert.False(DeclarationBinder.TypeSignaturesEquivalent(
             NullableTypeSymbol.Get(userStruct),
             userStruct));
+        Assert.False(DeclarationBinder.TypeSignaturesEquivalent(
+            ImportedTypeSymbol.GetConstructed(
+                typeof(List<object>),
+                typeof(List<>),
+                ImmutableArray.Create<TypeSymbol>(NullableTypeSymbol.Get(userStruct))),
+            ImportedTypeSymbol.GetConstructed(
+                typeof(List<object>),
+                typeof(List<>),
+                ImmutableArray.Create<TypeSymbol>(userStruct))));
 
         Assert.True(DeclarationBinder.TypeSignaturesEquivalent(
             NullableTypeSymbol.Get(TypeSymbol.String),
