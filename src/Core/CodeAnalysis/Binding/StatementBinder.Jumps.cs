@@ -26,13 +26,14 @@ internal sealed partial class StatementBinder
     private BoundStatement BindGotoStatement(GotoStatementSyntax syntax)
     {
         var labelName = syntax.LabelIdentifier.ValueText;
-        if (!binderCtx.DefinedUserLabels.Contains(labelName)
+        var labelDefined = binderCtx.DefinedUserLabels.Contains(labelName);
+        if (!labelDefined
             && !binderCtx.PendingGotoAssignmentInvalidations.ContainsKey(labelName))
         {
             binderCtx.PendingGotoAssignmentInvalidations[labelName] = new HashSet<VariableSymbol>();
         }
 
-        if (!binderCtx.DefinedUserLabels.Contains(labelName))
+        if (!labelDefined)
         {
             if (!binderCtx.PendingGotoNarrowingSnapshots.TryGetValue(labelName, out var snapshots))
             {
@@ -141,6 +142,7 @@ internal sealed partial class StatementBinder
         binderCtx.PendingGotoAssignmentInvalidations.Clear();
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
         boundFinallyBlocks.Clear();
+        finallyMutationSummaries.Clear();
         userGotoHandlerRegions.Clear();
         userLabelHandlerRegions.Clear();
     }

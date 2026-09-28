@@ -4,6 +4,7 @@
 
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Collections.ObjectModel;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 
@@ -18,10 +19,11 @@ internal sealed class GotoNarrowingSnapshot
         ImmutableArray<FinallyClauseSyntax> activeFinallyClauses)
     {
         this.narrowedVariables = new Dictionary<VariableSymbol, TypeSymbol>(narrowedVariables);
+        NarrowedVariables = new ReadOnlyDictionary<VariableSymbol, TypeSymbol>(this.narrowedVariables);
         ActiveFinallyClauses = activeFinallyClauses;
     }
 
-    public IReadOnlyDictionary<VariableSymbol, TypeSymbol> NarrowedVariables => narrowedVariables;
+    public IReadOnlyDictionary<VariableSymbol, TypeSymbol> NarrowedVariables { get; }
 
     public ImmutableArray<FinallyClauseSyntax> ActiveFinallyClauses { get; }
 

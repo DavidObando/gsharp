@@ -533,9 +533,10 @@ internal sealed partial class StatementBinder
         binderCtx.PendingGotoNarrowingSnapshots.Remove(labelName, out var incomingSnapshots);
         if (incomingSnapshots != null)
         {
+            var activeFinallySet = activeFinallyClauses.ToHashSet();
             foreach (var snapshot in incomingSnapshots)
             {
-                ApplyExitedFinallyEffects(snapshot);
+                ApplyExitedFinallyEffects(snapshot, activeFinallySet);
             }
         }
 
@@ -561,18 +562,25 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private void ApplyExitedFinallyEffects(GotoNarrowingSnapshot snapshot)
+    private void ApplyExitedFinallyEffects(
+        GotoNarrowingSnapshot snapshot,
+        HashSet<FinallyClauseSyntax> activeFinallySet)
     {
         foreach (var finallyClause in snapshot.ActiveFinallyClauses)
         {
-            if (activeFinallyClauses.Contains(finallyClause)
+            if (activeFinallySet.Contains(finallyClause)
                 || !boundFinallyBlocks.TryGetValue(finallyClause, out var finallyBlock))
             {
                 continue;
             }
 
-            var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
-            mutations.Visit(finallyBlock);
+            if (!finallyMutationSummaries.TryGetValue(finallyBlock, out var mutations))
+            {
+                mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
+                mutations.Visit(finallyBlock);
+                finallyMutationSummaries.Add(finallyBlock, mutations);
+            }
+
             foreach (var entry in snapshot.NarrowedVariables.ToArray())
             {
                 if (mutations.InvalidatesNarrowing(entry.Key, entry.Value))
