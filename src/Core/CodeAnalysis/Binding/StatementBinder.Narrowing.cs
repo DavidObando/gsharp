@@ -541,7 +541,7 @@ internal sealed partial class StatementBinder
         binderCtx.PendingGotoNarrowingSnapshots.Remove(labelName, out var incomingSnapshots);
         if (incomingSnapshots != null)
         {
-            var activeFinallySet = activeFinallyClauses.ToHashSet();
+            var activeFinallySet = new HashSet<FinallyClauseSyntax>(activeFinallyClauses);
             foreach (var snapshot in incomingSnapshots)
             {
                 ApplyExitedFinallyEffects(snapshot, activeFinallySet);

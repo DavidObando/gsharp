@@ -377,7 +377,7 @@ internal sealed partial class StatementBinder
         {
             binderCtx.PendingGotoNarrowingSnapshots.Add(
                 entry.Key,
-                entry.Value.Select(snapshot => snapshot.Clone()).ToList());
+                entry.Value);
         }
 
         userGotoHandlerRegions.Clear();
