@@ -2555,7 +2555,17 @@ public sealed partial class CSharpToGSharpTranslator
         {
             ITypeSymbol sourceType = this.context.GetTypeInfo(source).Type
                 ?? this.context.GetTypeInfo(source).ConvertedType;
-            return GetEnumerableElementType(sourceType);
+            ITypeSymbol enumerableElement = GetEnumerableElementType(sourceType);
+            if (enumerableElement != null)
+            {
+                return enumerableElement;
+            }
+
+            return sourceType is INamedTypeSymbol queryProvider
+                && queryProvider.IsGenericType
+                && queryProvider.TypeArguments.Length == 1
+                ? queryProvider.TypeArguments[0]
+                : null;
         }
 
         private GExpression LowerQueryBody(

@@ -2309,10 +2309,78 @@ public sealed partial class CSharpToGSharpTranslator
             out bool changed)
         {
             changed = false;
-            if (!method.IsGenericMethod
-                || method.Parameters.Length != invoke.Parameters.Length)
+            if (method.Parameters.Length != invoke.Parameters.Length)
             {
                 return method;
+            }
+
+            IMethodSymbol projectedMethod = method;
+            if (method.ContainingType is { IsGenericType: true } containingType)
+            {
+                ITypeSymbol[] containingArguments =
+                    containingType.TypeArguments.ToArray();
+                ImmutableArray<ITypeParameterSymbol> containingParameters =
+                    containingType.OriginalDefinition.TypeParameters;
+                for (int typeIndex = 0;
+                    typeIndex < containingParameters.Length;
+                    typeIndex++)
+                {
+                    ITypeParameterSymbol typeParameter =
+                        containingParameters[typeIndex];
+                    for (int parameterIndex = 0;
+                        parameterIndex < method.Parameters.Length;
+                        parameterIndex++)
+                    {
+                        if (!TryGetProjectedTypeArgument(
+                                method.OriginalDefinition.Parameters[parameterIndex].Type,
+                                invoke.Parameters[parameterIndex].Type,
+                                typeParameter,
+                                this.context.Compilation,
+                                out ITypeSymbol projectedArgument)
+                            || SymbolEqualityComparer.IncludeNullability.Equals(
+                                containingArguments[typeIndex],
+                                projectedArgument))
+                        {
+                            continue;
+                        }
+
+                        if (projectedArgument.NullableAnnotation
+                                == NullableAnnotation.Annotated
+                            && NullableTypeArgumentViolatesTranslatedConstraints(
+                                typeParameter))
+                        {
+                            this.context.ReportUnsupported(
+                                argument,
+                                $"projected delegate adaptation requires nullable type parameter '{typeParameter.Name}', but its translated constraints do not admit nullable type arguments.");
+                            return null;
+                        }
+
+                        containingArguments[typeIndex] = projectedArgument;
+                        changed = true;
+                        break;
+                    }
+                }
+
+                if (changed)
+                {
+                    INamedTypeSymbol projectedContainingType =
+                        containingType.ConstructedFrom.Construct(containingArguments);
+                    projectedMethod =
+                        this.GetProjectedMember(projectedContainingType, method)
+                            as IMethodSymbol;
+                    if (projectedMethod == null)
+                    {
+                        this.context.ReportUnsupported(
+                            argument,
+                            $"could not project method group '{method.Name}' through translated containing type '{projectedContainingType}'.");
+                        return null;
+                    }
+                }
+            }
+
+            if (!method.IsGenericMethod)
+            {
+                return projectedMethod;
             }
 
             ITypeSymbol[] typeArguments = method.TypeArguments.ToArray();
@@ -2321,13 +2389,13 @@ public sealed partial class CSharpToGSharpTranslator
                 typeIndex++)
             {
                 ITypeParameterSymbol typeParameter =
-                    method.ConstructedFrom.TypeParameters[typeIndex];
+                    projectedMethod.ConstructedFrom.TypeParameters[typeIndex];
                 for (int parameterIndex = 0;
                     parameterIndex < method.Parameters.Length;
                     parameterIndex++)
                 {
                     if (!TryGetProjectedTypeArgument(
-                            method.ConstructedFrom.Parameters[parameterIndex].Type,
+                            projectedMethod.ConstructedFrom.Parameters[parameterIndex].Type,
                             invoke.Parameters[parameterIndex].Type,
                             typeParameter,
                             this.context.Compilation,
@@ -2357,7 +2425,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return changed
-                ? method.ConstructedFrom.Construct(typeArguments)
+                ? projectedMethod.ConstructedFrom.Construct(typeArguments)
                 : method;
         }
 
@@ -4790,7 +4858,9 @@ public sealed partial class CSharpToGSharpTranslator
                         out _,
                         out _))
                 {
-                    requiresExactMatch = !methodGroup.IsGenericMethod;
+                    requiresExactMatch =
+                        !methodGroup.IsGenericMethod
+                        && methodGroup.ContainingType?.IsGenericType != true;
                 }
 
                 ITypeSymbol argumentType =
@@ -4862,14 +4932,20 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    if (!hasProjectedArgument
-                        || (nullableArrayArgument
-                            && SymbolEqualityComparer.IncludeNullability.Equals(
+                    if (!hasProjectedArgument)
+                    {
+                        projectedArgument = typeArguments[i];
+                    }
+
+                    if (projectedArgument is not IArrayTypeSymbol
+                        && nullableArrayArgument
+                        && (!hasProjectedArgument
+                            || SymbolEqualityComparer.IncludeNullability.Equals(
                                 typeArguments[i],
                                 projectedArgument)))
                     {
                         projectedArgument =
-                            typeArguments[i].WithNullableAnnotation(
+                            projectedArgument.WithNullableAnnotation(
                                 NullableAnnotation.Annotated);
                     }
 
