@@ -285,6 +285,28 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref breakLeft, replacement);
                 Fill(ref breakRight, replacement);
 
+                var capturedLambdaPair = (replacement, replacement);
+                System.Action capturedLambda = () =>
+                {
+                    capturedLambdaPair = (default(T), default(T));
+                    var (capturedLambdaLeft, capturedLambdaRight) =
+                        capturedLambdaPair;
+                    Fill(ref capturedLambdaLeft, replacement);
+                    Fill(ref capturedLambdaRight, replacement);
+                };
+                capturedLambda();
+
+                var capturedLocalPair = (replacement, replacement);
+                void CapturedLocal()
+                {
+                    capturedLocalPair = (default(T), default(T));
+                    var (capturedLocalLeft, capturedLocalRight) =
+                        capturedLocalPair;
+                    Fill(ref capturedLocalLeft, replacement);
+                    Fill(ref capturedLocalRight, replacement);
+                }
+                CapturedLocal();
+
                 return 8;
             }
 
@@ -516,6 +538,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "initializerlessAlias",
             "sharedPathLeft", "sharedPathRight",
             "repeatedAlias",
+            "capturedLambdaLeft", "capturedLambdaRight",
+            "capturedLocalLeft", "capturedLocalRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
         })

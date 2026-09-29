@@ -1034,7 +1034,8 @@ public sealed partial class CSharpToGSharpTranslator
         private IReadOnlyList<ExpressionSyntax> GetReachingLocalValues(
             ILocalSymbol local,
             int usePosition,
-            HashSet<ISymbol> visited = null)
+            HashSet<ISymbol> visited = null,
+            SyntaxNode executableOverride = null)
         {
             SyntaxNode declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
             ExpressionSyntax initializer = null;
@@ -1054,17 +1055,50 @@ public sealed partial class CSharpToGSharpTranslator
                     visited);
             }
 
-            SyntaxNode executable = declaration.AncestorsAndSelf().FirstOrDefault(node =>
+            SyntaxNode declarationExecutable =
+                declaration.AncestorsAndSelf().FirstOrDefault(node =>
                 node is BaseMethodDeclarationSyntax
                     or AccessorDeclarationSyntax
                     or LocalFunctionStatementSyntax
                     or AnonymousFunctionExpressionSyntax);
-            executable ??= declaration.AncestorsAndSelf()
+            declarationExecutable ??= declaration.AncestorsAndSelf()
                 .OfType<CompilationUnitSyntax>()
                 .FirstOrDefault();
+            SyntaxNode executable = executableOverride ?? declarationExecutable;
             if (executable == null)
             {
                 return Array.Empty<ExpressionSyntax>();
+            }
+
+            IReadOnlyList<ExpressionSyntax> initialValues =
+                Array.Empty<ExpressionSyntax>();
+            if (executableOverride == null
+                && declarationExecutable != null
+                && declaration.SyntaxTree.GetRoot().FindToken(usePosition).Parent
+                    is { } useNode)
+            {
+                SyntaxNode useExecutable =
+                    useNode.AncestorsAndSelf().FirstOrDefault(node =>
+                        node is BaseMethodDeclarationSyntax
+                            or AccessorDeclarationSyntax
+                            or LocalFunctionStatementSyntax
+                            or AnonymousFunctionExpressionSyntax);
+                if (useExecutable != null
+                    && useExecutable.Span != declarationExecutable.Span
+                    && declarationExecutable.Span.Contains(useExecutable.Span))
+                {
+                    HashSet<ISymbol> enclosingVisited = visited == null
+                        ? null
+                        : new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default);
+                    initialValues = this.GetReachingLocalValues(
+                        local,
+                        useExecutable.SpanStart,
+                        enclosingVisited,
+                        declarationExecutable);
+                    executable = useExecutable;
+                }
             }
 
             Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph graph;
@@ -1132,6 +1166,12 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     var values = new HashSet<ExpressionSyntax>();
+                    if (block.Kind
+                        == Microsoft.CodeAnalysis.FlowAnalysis.BasicBlockKind.Entry)
+                    {
+                        values.UnionWith(initialValues);
+                    }
+
                     foreach (Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowBranch predecessor
                         in block.Predecessors)
                     {
