@@ -715,6 +715,43 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_OverriddenPropertyWriteUsesDeclaredSlot()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                open prop Name string { get; set; }
+            }
+            class Dog : Animal {
+                override prop Name string { get; set; }
+            }
+            class Cat : Animal {
+                override prop Name string { get; set; }
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    x.Name = "updated"
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return x.Name
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("updated", result.Value);
+    }
+
+    [Fact]
     public void BackwardGoto_InheritedFieldWriteDoesNotRequireNarrowedType()
     {
         var result = Evaluate("""
@@ -4052,6 +4089,31 @@ public class Issue4519GotoAssignmentNarrowingTests
             }
 
             Run(func() { })
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardReachabilityActivatesOutgoingGotoFromEarlierLabel()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                goto After
+            Enter:
+                x = nil
+                goto Use
+            After:
+                goto Enter
+            Use:
+                return x.Length
+            }
+
+            Run()
             """);
 
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");

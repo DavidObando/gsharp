@@ -27,6 +27,7 @@ internal sealed partial class StatementBinder
     {
         var labelName = syntax.LabelIdentifier.ValueText;
         var labelDefined = binderCtx.DefinedUserLabels.Contains(labelName);
+        var snapshot = CaptureGotoNarrowingSnapshot();
         if (currentStatementListFallsThrough
             && !labelDefined
             && !binderCtx.PendingGotoAssignmentStarts.ContainsKey(labelName))
@@ -42,14 +43,23 @@ internal sealed partial class StatementBinder
                 binderCtx.PendingGotoNarrowingSnapshots[labelName] = snapshots;
             }
 
-            snapshots.Add(CaptureGotoNarrowingSnapshot());
+            snapshots.Add(snapshot);
         }
         else if (currentStatementListFallsThrough
             && binderCtx.BackwardGotoNarrowingStates.TryGetValue(labelName, out var backwardState))
         {
             backwardState.Edges.Add(new BackwardGotoNarrowingEdge(
-                CaptureGotoNarrowingSnapshot(),
+                snapshot,
                 backwardState.Accesses));
+        }
+        else if (!currentStatementListFallsThrough && potentialReachabilityLabel is { } sourceLabel)
+        {
+            deferredUnreachableGotoEdges.Add((sourceLabel, labelName, snapshot));
+        }
+
+        if (currentStatementListFallsThrough)
+        {
+            reachableUserLabels.Add(labelName);
         }
 
         var label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location);
@@ -104,6 +114,12 @@ internal sealed partial class StatementBinder
             currentStatementListFallsThrough);
         currentStatementListFallsThrough =
             currentStatementListFallsThrough || incomingSnapshots is { Count: > 0 };
+        potentialReachabilityLabel = labelName;
+        if (currentStatementListFallsThrough)
+        {
+            reachableUserLabels.Add(labelName);
+        }
+
         if (!wasReachable && currentStatementListFallsThrough)
         {
             internalReachabilityGeneration++;
@@ -131,6 +147,7 @@ internal sealed partial class StatementBinder
     /// </summary>
     internal void FinalizeUserLabels()
     {
+        ActivateDeferredReachableGotoEdges();
         ReportUnsafeBackwardGotoNarrowings();
 
         foreach (var entry in binderCtx.UnresolvedGotoLabels)
@@ -159,6 +176,36 @@ internal sealed partial class StatementBinder
         activeCleanupRegions.Clear();
         userGotoHandlerRegions.Clear();
         userLabelHandlerRegions.Clear();
+        reachableUserLabels.Clear();
+        deferredUnreachableGotoEdges.Clear();
+        potentialReachabilityLabel = null;
+    }
+
+    private void ActivateDeferredReachableGotoEdges()
+    {
+        var remaining = new List<(string SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)>(
+            deferredUnreachableGotoEdges);
+        var changed = true;
+        while (changed)
+        {
+            changed = false;
+            for (var i = remaining.Count - 1; i >= 0; i--)
+            {
+                var edge = remaining[i];
+                if (!reachableUserLabels.Contains(edge.SourceLabel))
+                {
+                    continue;
+                }
+
+                if (binderCtx.BackwardGotoNarrowingStates.TryGetValue(edge.TargetLabel, out var targetState))
+                {
+                    targetState.Edges.Add(new BackwardGotoNarrowingEdge(edge.Snapshot, targetState.Accesses));
+                }
+
+                changed |= reachableUserLabels.Add(edge.TargetLabel);
+                remaining.RemoveAt(i);
+            }
+        }
     }
 
     private GotoNarrowingSnapshot CaptureGotoNarrowingSnapshot()
@@ -410,6 +457,9 @@ internal sealed partial class StatementBinder
         var backwardGotoNarrowingStates = binderCtx.BackwardGotoNarrowingStates.ToDictionary(
             entry => entry.Key,
             entry => entry.Value.Clone());
+        var reachableUserLabelsSnapshot = reachableUserLabels.ToArray();
+        var deferredUnreachableGotoEdgesSnapshot = deferredUnreachableGotoEdges.ToArray();
+        var potentialReachabilityLabelSnapshot = potentialReachabilityLabel;
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
         var boundFinallyBlocksSnapshot = boundFinallyBlocks.ToArray();
         var finallyFlowSummariesSnapshot = finallyFlowSummaries.ToArray();
@@ -496,6 +546,11 @@ internal sealed partial class StatementBinder
         {
             binderCtx.BackwardGotoNarrowingStates.Add(entry.Key, entry.Value);
         }
+
+        RestoreSet(reachableUserLabels, reachableUserLabelsSnapshot);
+        deferredUnreachableGotoEdges.Clear();
+        deferredUnreachableGotoEdges.AddRange(deferredUnreachableGotoEdgesSnapshot);
+        potentialReachabilityLabel = potentialReachabilityLabelSnapshot;
 
         userGotoHandlerRegions.Clear();
         foreach (var region in userGotoHandlerSnapshot)

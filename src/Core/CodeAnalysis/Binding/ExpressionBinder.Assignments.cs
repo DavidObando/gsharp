@@ -4179,13 +4179,13 @@ internal sealed partial class ExpressionBinder
                 selectedProperty.Name,
                 out var declaredProperty,
                 out _)
-                && SameSelectedProperty(selectedProperty, declaredProperty),
+                && SamePropertySlot(selectedProperty, declaredProperty),
             InterfaceSymbol interfaceType => TypeMemberModel.TryGetProperty(
                 interfaceType,
                 selectedProperty.Name,
                 out var declaredProperty,
                 out _)
-                && SameSelectedProperty(selectedProperty, declaredProperty),
+                && SamePropertySlot(selectedProperty, declaredProperty),
             _ => false,
         };
         return found ? RecoverDeclaredWriteReceiver(receiver, path, location) : receiver;
@@ -4216,12 +4216,6 @@ internal sealed partial class ExpressionBinder
             ? (RecoverDeclaredWriteReceiver(receiver, path, location), declaredMember)
             : (receiver, selectedMember);
     }
-
-    private static bool SameSelectedProperty(PropertySymbol left, PropertySymbol right)
-        => ReferenceEquals(left, right)
-            || (left.Declaration != null
-                && right.Declaration != null
-                && ReferenceEquals(left.Declaration, right.Declaration));
 
     private bool TryGetDeclaredWriteReceiver(
         BoundExpression receiver,
