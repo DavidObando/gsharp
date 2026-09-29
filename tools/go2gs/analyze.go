@@ -68,6 +68,10 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		return Analysis{}, false, err
 	}
 	defer os.RemoveAll(workRoot)
+	blockedToolsRoot := filepath.Join(workRoot, "blocked-tools")
+	if err := os.Mkdir(blockedToolsRoot, 0o500); err != nil {
+		return Analysis{}, false, err
+	}
 
 	bootstrapEnv := bootstrapEnvironment(workRoot, executable)
 	versionResult, err := runProcess(ctx, 15*time.Second, profile.Limits.MaxLogBytes, sourceRoot, executable, []string{"version"}, bootstrapEnv)
@@ -167,31 +171,30 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		BuildFlags: buildFlags,
 		Tests:      profile.LoadTests,
 	}
-	preflightConfig := *config
-	preflightConfig.Mode = packages.NeedName | packages.NeedFiles
-	preflightConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
-	preflight, _ := packages.Load(&preflightConfig, profile.EntryPatterns...)
-	hasPkgConfig := false
-	for _, pkg := range preflight {
-		importsC, usesPkgConfig, err := selectedPackageCgoRequirements(pkg, profile)
-		if err != nil {
-			return Analysis{}, false, err
+	if !profile.CGOEnabled {
+		preflightConfig := *config
+		preflightConfig.Mode = packages.NeedName | packages.NeedFiles
+		preflightConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
+		preflight, _ := packages.Load(&preflightConfig, profile.EntryPatterns...)
+		for _, pkg := range preflight {
+			importsC, err := selectedPackageImportsC(pkg)
+			if err != nil {
+				return Analysis{}, false, err
+			}
+			if importsC {
+				builder.block("cgo", "selected package imports C but CGO_ENABLED=0; native preprocessing is not available in this profile", nil, nil)
+			}
 		}
-		if importsC && !profile.CGOEnabled {
-			builder.block("cgo", "selected package imports C but CGO_ENABLED=0; native preprocessing is not available in this profile", nil, nil)
-		}
-		if usesPkgConfig {
-			hasPkgConfig = true
-			builder.block("pkg-config", "selected package requires #cgo pkg-config, but M0 has no approved pkg-config executable or provenance model", nil, nil)
-		}
-	}
-	if hasPkgConfig {
-		builder.finish()
-		return analysis, false, nil
 	}
 	loaded, loadErr := packages.Load(config, profile.EntryPatterns...)
+	pkgConfigPath := unavailableToolPath(workRoot, "pkg-config")
+	if sanitizeUnavailableToolFailure(loaded, pkgConfigPath) ||
+		(loadErr != nil && strings.Contains(loadErr.Error(), pkgConfigPath)) {
+		builder.block("pkg-config", "selected package requires #cgo pkg-config, but M0 has no approved pkg-config executable or provenance model", nil, nil)
+	}
 	if loadErr != nil {
-		builder.block("loader", sanitizeMessage(loadErr.Error(), sourceRoot, profile.Limits.MaxStringBytes), nil, nil)
+		message := strings.ReplaceAll(loadErr.Error(), pkgConfigPath, "<disabled-pkg-config>")
+		builder.block("loader", sanitizeMessage(message, sourceRoot, profile.Limits.MaxStringBytes), nil, nil)
 	}
 	if len(loaded) == 0 {
 		builder.block("loader", "the requested entry patterns selected no loadable packages under the pinned profile", nil, nil)
@@ -465,9 +468,13 @@ func packedGitReference(path, ref string) (string, bool, error) {
 		}
 		return "", false, fmt.Errorf("read repository packed refs: %w", err)
 	}
+	if len(data) > 0 && data[len(data)-1] != '\n' {
+		return "", false, errors.New("repository packed-refs metadata is missing its terminating newline")
+	}
 	var match, previousRef, lastRef string
 	previousPeeled := false
 	sortedFile := false
+	objectIDWidth := 0
 	seen := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
 		if line == "" {
@@ -488,8 +495,8 @@ func packedGitReference(path, ref string) (string, bool, error) {
 			continue
 		}
 		if strings.HasPrefix(line, "^") {
-			if previousRef == "" || previousPeeled || !strings.HasPrefix(previousRef, "refs/tags/") ||
-				!validCommitID(strings.TrimPrefix(line, "^")) {
+			hash := strings.TrimPrefix(line, "^")
+			if previousRef == "" || previousPeeled || !validCommitID(hash) || len(hash) != objectIDWidth {
 				return "", false, errors.New("repository packed-refs metadata has malformed peeled content")
 			}
 			previousPeeled = true
@@ -498,6 +505,11 @@ func packedGitReference(path, ref string) (string, bool, error) {
 		hash, name, found := strings.Cut(line, " ")
 		if !found || strings.ContainsAny(name, " \t\r") || !validCommitID(hash) || !validGitRef(name) || seen[name] {
 			return "", false, errors.New("repository packed-refs metadata is malformed")
+		}
+		if objectIDWidth == 0 {
+			objectIDWidth = len(hash)
+		} else if len(hash) != objectIDWidth {
+			return "", false, errors.New("repository packed-refs metadata mixes object ID widths")
 		}
 		if sortedFile && lastRef != "" && name <= lastRef {
 			return "", false, errors.New("repository packed-refs metadata violates sorted ordering")
@@ -514,11 +526,25 @@ func packedGitReference(path, ref string) (string, bool, error) {
 }
 
 func readBoundedRegularFile(path string, limit int64) ([]byte, error) {
-	return readBoundedRegularFileAfterOpen(path, limit, nil)
+	return readBoundedRegularFileWithHooks(path, limit, nil, nil)
 }
 
 func readBoundedRegularFileAfterOpen(path string, limit int64, afterOpen func()) (data []byte, err error) {
-	file, err := os.Open(path)
+	return readBoundedRegularFileWithHooks(path, limit, nil, afterOpen)
+}
+
+func readBoundedRegularFileWithHooks(path string, limit int64, beforeOpen, afterOpen func()) (data []byte, err error) {
+	initialInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !initialInfo.Mode().IsRegular() {
+		return nil, errors.New("metadata path is not a regular file")
+	}
+	if beforeOpen != nil {
+		beforeOpen()
+	}
+	file, err := openMetadataFile(path)
 	if err != nil {
 		return nil, err
 	}
@@ -550,6 +576,19 @@ func readBoundedRegularFileAfterOpen(path string, limit int64, afterOpen func())
 		return nil, errors.New("metadata file exceeds size limit")
 	}
 	return data, nil
+}
+
+func sanitizeUnavailableToolFailure(packages []*packages.Package, path string) bool {
+	found := false
+	for _, pkg := range packages {
+		for i := range pkg.Errors {
+			if strings.Contains(pkg.Errors[i].Msg, path) {
+				found = true
+				pkg.Errors[i].Msg = strings.ReplaceAll(pkg.Errors[i].Msg, path, "<disabled-pkg-config>")
+			}
+		}
+	}
+	return found
 }
 
 func validGitRef(value string) bool {
