@@ -41,7 +41,9 @@ Outputs:
 Exit zero means `inventoryComplete: true`; it does not mean
 `migrationReady: true`. Loader, toolchain, checksum, source-identity, CGo,
 native-input, and resource-limit failures are nonzero while preserving any
-diagnostics that were available.
+diagnostics that were available. Profile, output, and toolchain bootstrap
+failures—including a missing `go` executable or unusable GOROOT—exit 2 and
+may produce no artifact.
 
 M0 also records migration blockers without making a complete inventory fail.
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
@@ -103,6 +105,7 @@ artifacts/go2gs/go2gs analyze \
   --out artifacts/go2gs/cliamp
 ```
 
-If the exact source and Go executable are not present, the command writes a
-deterministic actionable blocker and exits nonzero. It never downloads or
-substitutes a newer toolchain.
+After bootstrap succeeds, an exact-version or source-commit mismatch writes a
+deterministic actionable blocker and exits 1. A missing or unusable Go
+executable is a bootstrap failure: it exits 2 and may produce no artifact.
+The helper never downloads or substitutes a newer toolchain.

@@ -44,6 +44,13 @@ func validateAnalysis(a Analysis) error {
 	if a.MigrationReady && !a.InventoryComplete {
 		return errors.New("migrationReady cannot be true when inventory is incomplete")
 	}
+	if a.InventoryComplete {
+		for _, pkg := range a.Packages {
+			if !pkg.InventoryComplete {
+				return fmt.Errorf("complete analysis contains incomplete package %q", pkg.ID)
+			}
+		}
+	}
 
 	ids := map[string]string{}
 	add := func(id, kind string) error {
@@ -416,7 +423,8 @@ func validateAnalysisHeader(a Analysis) error {
 	if err := validateGODEBUG(p.GODEBUG); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
-	if p.VendorMode != (p.ModuleMode == "vendor") || p.WorkspaceMode != "off" {
+	if (p.ModuleMode != "readonly" && p.ModuleMode != "vendor") ||
+		p.VendorMode != (p.ModuleMode == "vendor") || p.WorkspaceMode != "off" {
 		return errors.New("analysis profile has inconsistent module or workspace mode")
 	}
 	t := a.Toolchain
@@ -424,6 +432,13 @@ func validateAnalysisHeader(a Analysis) error {
 		t.ExecutableName == "" || t.GOROOTIdentity == "" || !validSHA256(t.GOROOTVersionSHA256) ||
 		t.GOROOTSource == "" || t.AutoDownload {
 		return errors.New("analysis toolchain provenance is missing mandatory or fail-closed fields")
+	}
+	if t.RequestedVersion != t.ActualVersion {
+		if a.InventoryComplete || !slices.ContainsFunc(a.Blockers, func(blocker BlockerRecord) bool {
+			return blocker.Blocks == "inventory" && blocker.Category == "toolchain"
+		}) {
+			return errors.New("analysis toolchain version mismatch requires an incomplete inventory and toolchain blocker")
+		}
 	}
 	if p.CGOEnabled {
 		if t.CCompilerName == "" || !validSHA256(t.CCompilerSHA256) {
@@ -461,7 +476,7 @@ func validateAnalysisCollections(a Analysis) error {
 
 func validateRecordFields(a Analysis) error {
 	for _, value := range a.Manifests {
-		if value.Kind == "" || value.Path == "" || !validSHA256(value.SHA256) || value.Bytes < 0 {
+		if value.Kind == "" || !validPortableLocation(value.Path) || !validSHA256(value.SHA256) || value.Bytes < 0 {
 			return fmt.Errorf("manifest %q has invalid required fields", value.Path)
 		}
 	}

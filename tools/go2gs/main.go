@@ -110,7 +110,7 @@ func runAnalyze(parent context.Context, args []string) error {
 
 	analysis, complete, err := analyze(ctx, sourceRoot, outRoot, profile)
 	if err != nil {
-		return err
+		return &exitError{2, err}
 	}
 	analysisBytes, err := writeAnalysis(filepath.Join(outRoot, "analysis.json"), analysis, profile.Limits.MaxOutputBytes)
 	if err != nil {

@@ -11,6 +11,7 @@ import (
 	"go/ast"
 	"go/parser"
 	"go/token"
+	"go/types"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -22,6 +23,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/tools/go/packages"
 )
 
 func testProfile() Profile {
@@ -183,7 +186,8 @@ func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
 			t.Fatalf("declared constant %s was not recorded exactly: %#v", name, value)
 		}
 	}
-	if !declaredConstants["IotaOne"].Iota || declaredConstants["ExactComplex"].ImaginaryExact == "" {
+	if !declaredConstants["IotaOne"].Iota || !declaredConstants["MixedIota"].Iota ||
+		declaredConstants["MixedZero"].Iota || declaredConstants["ExactComplex"].ImaginaryExact == "" {
 		t.Fatalf("inherited iota or complex declaration provenance missing: %#v", declaredConstants)
 	}
 	nodes := map[string]NodeRecord{}
@@ -975,6 +979,183 @@ func TestAnalysisJSONRoundTripRejectsUnknownFields(t *testing.T) {
 	}
 }
 
+func TestProfileRejectsTrailingJSONValues(t *testing.T) {
+	profile, err := json.Marshal(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, suffix := range []string{` {}`, ` 1`, "\nnull"} {
+		path := filepath.Join(t.TempDir(), "profile.json")
+		if err := os.WriteFile(path, append(profile, suffix...), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "trailing") {
+			t.Fatalf("trailing JSON %q was accepted: %v", suffix, err)
+		}
+	}
+}
+
+func TestMissingGoBootstrapProducesNoArtifact(t *testing.T) {
+	root := copyFixture(t, "complete")
+	profilePath := filepath.Join(t.TempDir(), "profile.json")
+	data, err := json.Marshal(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", "")
+	err = runAnalyze(t.Context(), []string{"--source", root, "--profile", profilePath, "--out", out})
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("missing Go bootstrap should exit 2, got %v", err)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, statErr := os.Stat(filepath.Join(out, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("bootstrap failure unexpectedly wrote %s: %v", name, statErr)
+		}
+	}
+}
+
+func TestAtomicWriteDoesNotFollowPredictableSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled symlink fixture")
+	}
+	dir := t.TempDir()
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("safe"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "analysis.json")
+	for _, attacker := range []string{
+		filepath.Join(dir, ".analysis.json.staged"),
+		filepath.Join(dir, ".analysis.json.staged-attacker"),
+		path,
+	} {
+		if err := os.Symlink(outside, attacker); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := atomicWrite(path, []byte("inventory"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if data, err := os.ReadFile(outside); err != nil || string(data) != "safe" {
+		t.Fatalf("outside symlink target changed: %q, %v", data, err)
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "inventory" {
+		t.Fatalf("atomic output mismatch: %q, %v", data, err)
+	}
+}
+
+func TestImmutableSourceSnapshotPreventsSemanticContentDrift(t *testing.T) {
+	firstRoot := copyFixture(t, "complete")
+	first, complete, err := analyze(t.Context(), firstRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("baseline analysis failed: complete=%v err=%v", complete, err)
+	}
+	secondRoot := copyFixture(t, "complete")
+	path := filepath.Join(secondRoot, "main.go")
+	second, complete, err := analyzeWithSnapshotHook(t.Context(), secondRoot, t.TempDir(), testProfile(), func() {
+		data, readErr := os.ReadFile(path)
+		if readErr != nil {
+			t.Fatal(readErr)
+		}
+		data = bytes.Replace(data, []byte("ContextualInt int64 = 7"), []byte("ContextualInt int64 = 8"), 1)
+		if writeErr := os.WriteFile(path, data, 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	})
+	if err != nil || !complete {
+		t.Fatalf("snapshot analysis failed: complete=%v err=%v", complete, err)
+	}
+	left, err := marshalCanonical(first)
+	if err != nil {
+		t.Fatal(err)
+	}
+	right, err := marshalCanonical(second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(left, right) {
+		t.Fatalf("source mutation escaped immutable snapshot near: %s", firstDifference(string(left), string(right)))
+	}
+}
+
+func TestScopedTypeAndMemberIdentitiesAreDistinct(t *testing.T) {
+	analyzeRoot := func(root string) Analysis {
+		t.Helper()
+		path := filepath.Join(root, "main.go")
+		file, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, err = file.WriteString(`
+func GenericInt[T ~int](value T) { type Local int; var _ Local }
+func GenericString[T ~string](value T) { type Local int; var _ Local }
+`)
+		if closeErr := file.Close(); err == nil {
+			err = closeErr
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if err != nil || !complete {
+			t.Fatalf("identity fixture failed: complete=%v err=%v", complete, err)
+		}
+		return analysis
+	}
+	first := analyzeRoot(copyFixture(t, "complete"))
+	second := analyzeRoot(copyFixture(t, "complete"))
+	left, _ := marshalCanonical(first)
+	right, _ := marshalCanonical(second)
+	if !bytes.Equal(left, right) {
+		t.Fatalf("scoped type identities differ by root near: %s", firstDifference(string(left), string(right)))
+	}
+	typeParameters, locals := map[string]bool{}, map[string]bool{}
+	for _, record := range first.Types {
+		if record.Display == "T" && (record.Constraint == "~int" || record.Constraint == "~string") {
+			typeParameters[record.ID] = true
+		}
+		if record.Name == "Local" {
+			locals[record.ID] = true
+		}
+	}
+	if len(typeParameters) != 2 || len(locals) != 2 {
+		t.Fatalf("scoped type identities collided: typeParameters=%v locals=%v", typeParameters, locals)
+	}
+
+	dependency := types.NewPackage("example.com/dependency", "dependency")
+	consumer := &packages.Package{PkgPath: "example.com/consumer", Fset: token.NewFileSet()}
+	identityAnalysis := validIncompleteAnalysis()
+	builder := newInventoryBuilder(&identityAnalysis, "", "", testProfile())
+	builder.packageIDs[consumer] = "package:consumer"
+	builder.packagePathIDs[dependency.Path()] = "package:dependency"
+	fieldA := types.NewField(token.NoPos, dependency, "X", types.Typ[types.Int], false)
+	fieldB := types.NewField(token.NoPos, dependency, "X", types.Typ[types.Int], false)
+	fieldIDA := builder.addObjectWithFallback(consumer, fieldA, SourceSpan{}, "selection\x00example.com/dependency.A\x000")
+	fieldIDB := builder.addObjectWithFallback(consumer, fieldB, SourceSpan{}, "selection\x00example.com/dependency.B\x000")
+	if fieldIDA == fieldIDB {
+		t.Fatal("same-name imported fields collided")
+	}
+	namedA := types.NewNamed(types.NewTypeName(token.NoPos, dependency, "A", nil), types.NewStruct(nil, nil), nil)
+	namedB := types.NewNamed(types.NewTypeName(token.NoPos, dependency, "B", nil), types.NewStruct(nil, nil), nil)
+	method := func(receiver types.Type) *types.Func {
+		signature := types.NewSignatureType(types.NewVar(token.NoPos, dependency, "", receiver), nil, nil, types.NewTuple(), types.NewTuple(), false)
+		return types.NewFunc(token.NoPos, dependency, "M", signature)
+	}
+	methodIDA := builder.addObject(consumer, method(namedA), SourceSpan{})
+	methodIDB := builder.addObject(consumer, method(namedB), SourceSpan{})
+	if methodIDA == methodIDB {
+		t.Fatal("same-name imported methods collided")
+	}
+}
+
 func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "analysis.json")
 	if err := os.WriteFile(path, []byte(`{"schema":{"name":"go2gs.analysis","version":1}}`), 0o644); err != nil {
@@ -990,6 +1171,15 @@ func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing
 	}
 	if err := runValidate([]string{"--analysis", path}); err != nil {
 		t.Fatalf("valid incomplete inventory was rejected: %v", err)
+	}
+	mismatch := validIncompleteAnalysis()
+	mismatch.Toolchain.ActualVersion = "different"
+	mismatch.Blockers[0].Category = "toolchain"
+	if err := writeJSON(path, mismatch, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := runValidate([]string{"--analysis", path}); err != nil {
+		t.Fatalf("valid incomplete toolchain mismatch was rejected: %v", err)
 	}
 	invalid := validIncompleteAnalysis()
 	invalid.RecordCounts.Total = 0
@@ -1229,6 +1419,48 @@ func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
 				}
 			}
 			return false
+		}},
+		{"complete-with-incomplete-package", func(root map[string]any) bool {
+			root["packages"].([]any)[0].(map[string]any)["inventoryComplete"] = false
+			return true
+		}},
+		{"module-mode-invalid", func(root map[string]any) bool {
+			root["profile"].(map[string]any)["moduleMode"] = "mod"
+			return true
+		}},
+		{"module-mode-empty", func(root map[string]any) bool {
+			root["profile"].(map[string]any)["moduleMode"] = ""
+			return true
+		}},
+		{"module-mode-vendor-mismatch", func(root map[string]any) bool {
+			profile := root["profile"].(map[string]any)
+			profile["moduleMode"] = "readonly"
+			profile["vendorMode"] = true
+			return true
+		}},
+		{"complete-toolchain-version-mismatch", func(root map[string]any) bool {
+			root["toolchain"].(map[string]any)["actualVersion"] = "different"
+			return true
+		}},
+		{"manifest-absolute-path", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = "/etc/passwd"
+			return true
+		}},
+		{"manifest-traversal-path", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = "source://../go.mod"
+			return true
+		}},
+		{"manifest-drive-path", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = "source://C:/go.mod"
+			return true
+		}},
+		{"manifest-unc-path", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = `source://server\share`
+			return true
+		}},
+		{"manifest-scheme-abuse", func(root map[string]any) bool {
+			root["manifests"].([]any)[0].(map[string]any)["path"] = "unknown://go.mod"
+			return true
 		}},
 	}
 	for _, test := range tests {
