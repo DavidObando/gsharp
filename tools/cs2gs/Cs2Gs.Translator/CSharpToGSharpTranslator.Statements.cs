@@ -433,6 +433,13 @@ public sealed partial class CSharpToGSharpTranslator
                         cast.Expression,
                         visited);
 
+                case AssignmentExpressionSyntax assignment
+                    when assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                        || assignment.IsKind(SyntaxKind.CoalesceAssignmentExpression):
+                    return this.InferredInitializerOriginatesFromDefault(
+                        assignment.Right,
+                        visited);
+
                 case ConditionalExpressionSyntax conditional:
                     return this.InferredInitializerOriginatesFromDefault(
                             conditional.WhenTrue,
@@ -1161,9 +1168,15 @@ public sealed partial class CSharpToGSharpTranslator
                     .GetAnonymousFunctionControlFlowGraphInScope(parent, operation);
             }
 
-            if (executable is EqualsValueClauseSyntax initializer)
+            if (executable is EqualsValueClauseSyntax or ArrowExpressionClauseSyntax)
             {
-                IOperation operation = this.context.SemanticModel.GetOperation(initializer.Value);
+                ExpressionSyntax expression = executable switch
+                {
+                    EqualsValueClauseSyntax initializer => initializer.Value,
+                    ArrowExpressionClauseSyntax arrow => arrow.Expression,
+                    _ => throw new InvalidOperationException(),
+                };
+                IOperation operation = this.context.SemanticModel.GetOperation(expression);
                 while (operation?.Parent != null)
                 {
                     operation = operation.Parent;
@@ -1171,12 +1184,16 @@ public sealed partial class CSharpToGSharpTranslator
 
                 return operation switch
                 {
+                    IBlockOperation block =>
+                        Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(block),
                     IFieldInitializerOperation field =>
                         Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(field),
                     IPropertyInitializerOperation property =>
                         Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(property),
+                    IMethodBodyOperation body =>
+                        Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(body),
                     _ => throw new ArgumentException(
-                        "The initializer does not have a control-flow root.",
+                        "The expression does not have a control-flow root.",
                         nameof(executable)),
                 };
             }
@@ -1193,6 +1210,9 @@ public sealed partial class CSharpToGSharpTranslator
                         or LocalFunctionStatementSyntax
                         or AnonymousFunctionExpressionSyntax
                         or CompilationUnitSyntax)
+                    || (node is ArrowExpressionClauseSyntax arrow
+                        && arrow.Parent is PropertyDeclarationSyntax
+                            or IndexerDeclarationSyntax)
                     || (node is EqualsValueClauseSyntax initializer
                         && (initializer.Parent is PropertyDeclarationSyntax
                             || initializer.Parent?.Parent?.Parent

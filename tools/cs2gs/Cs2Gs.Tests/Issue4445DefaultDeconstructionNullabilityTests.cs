@@ -137,6 +137,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var assignmentExpressionPair = (replacement, replacement);
                 (var assignmentExpressionLeft, var assignmentExpressionRight) =
                     (assignmentExpressionPair = (default(T), default(T)));
+                T assignmentSource = replacement;
+                var assignmentAlias = (assignmentSource = default(T));
+                T? coalesceAssignmentSource = default;
+                var coalesceAssignmentAlias =
+                    (coalesceAssignmentSource ??= default(T));
                 T initializerless;
                 initializerless = default;
                 var initializerlessAlias = initializerless;
@@ -203,6 +208,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref methodRight, replacement);
                 Fill(ref assignmentExpressionLeft, replacement);
                 Fill(ref assignmentExpressionRight, replacement);
+                Fill(ref assignmentAlias, replacement);
+                Fill(ref coalesceAssignmentAlias, replacement);
                 Fill(ref initializerlessAlias, replacement);
                 Fill(ref sharedPathLeft, replacement);
                 Fill(ref sharedPathRight, replacement);
@@ -490,6 +497,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "nestedLoopLeft", "nestedLoopRight",
             "backedgeLeft", "backedgeRight", "breakLeft", "breakRight",
             "assignmentExpressionLeft", "assignmentExpressionRight",
+            "assignmentAlias", "coalesceAssignmentAlias",
             "initializerlessAlias",
             "sharedPathLeft", "sharedPathRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
@@ -616,6 +624,45 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) fieldRight string\? =", printed);
         Assert.Matches(@"\b(let|var) propertyLeft string\? =", printed);
         Assert.Matches(@"\b(let|var) propertyRight string\? =", printed);
+    }
+
+    [Fact]
+    public void Translation_TracksAliasesInExpressionBodiedMembers()
+    {
+        const string source = """
+            #nullable enable
+
+            public class ExpressionBodiedMembers<T>
+            {
+                private static void Fill(ref T? value, T replacement) =>
+                    value = replacement;
+
+                public System.Func<int> Property => () =>
+                {
+                    var pair = (default(T), default(T));
+                    var (propertyBodyLeft, propertyBodyRight) = pair;
+                    Fill(ref propertyBodyLeft, default!);
+                    Fill(ref propertyBodyRight, default!);
+                    return 1;
+                };
+
+                public System.Func<int> this[int index] => () =>
+                {
+                    var pair = (default(T), default(T));
+                    var (indexerBodyLeft, indexerBodyRight) = pair;
+                    Fill(ref indexerBodyLeft, default!);
+                    Fill(ref indexerBodyRight, default!);
+                    return index;
+                };
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) propertyBodyLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) propertyBodyRight T\? =", printed);
+        Assert.Matches(@"\b(let|var) indexerBodyLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) indexerBodyRight T\? =", printed);
     }
 
     [Fact]
