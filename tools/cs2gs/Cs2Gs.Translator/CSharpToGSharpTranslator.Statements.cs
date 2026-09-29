@@ -475,16 +475,12 @@ public sealed partial class CSharpToGSharpTranslator
 
                 case MemberAccessExpressionSyntax member
                     when member.SyntaxTree == this.context.SemanticModel.SyntaxTree
-                        && this.context.GetSymbolInfo(member.Name).Symbol
-                        is IFieldSymbol { ContainingType.IsTupleType: true } field
-                        && this.context.GetTypeInfo(member.Expression).Type
-                            is INamedTypeSymbol { IsTupleType: true } tupleType:
+                        && this.TryGetTupleElementAccess(
+                            member,
+                            out ILocalSymbol receiver,
+                            out IReadOnlyList<int> path):
                 {
-                    int index = TupleElementIndex(tupleType, field);
-                    if (index < 0
-                        || this.context.GetSymbolInfo(member.Expression).Symbol
-                            is not ILocalSymbol receiver
-                        || !visited.Add(receiver))
+                    if (!visited.Add(receiver))
                     {
                         return false;
                     }
@@ -494,7 +490,7 @@ public sealed partial class CSharpToGSharpTranslator
                             member.SpanStart,
                             visited)
                         .Any(value => this.InferredInitializerOriginatesFromDefault(
-                            ProjectTupleElement(value, new[] { index }),
+                            ProjectTupleElement(value, path),
                             new HashSet<ISymbol>(
                                 visited,
                                 SymbolEqualityComparer.Default)));
@@ -516,6 +512,40 @@ public sealed partial class CSharpToGSharpTranslator
                 this.InferredInitializerOriginatesFromDefault(
                     value,
                     new HashSet<ISymbol>(visited, SymbolEqualityComparer.Default)));
+        }
+
+        private bool TryGetTupleElementAccess(
+            MemberAccessExpressionSyntax member,
+            out ILocalSymbol receiver,
+            out IReadOnlyList<int> path)
+        {
+            var indices = new List<int>();
+            ExpressionSyntax expression = member;
+            while (expression is MemberAccessExpressionSyntax access
+                && this.context.GetSymbolInfo(access.Name).Symbol
+                    is IFieldSymbol { ContainingType.IsTupleType: true } field
+                && this.context.GetTypeInfo(access.Expression).Type
+                    is INamedTypeSymbol { IsTupleType: true } tupleType)
+            {
+                int index = TupleElementIndex(tupleType, field);
+                if (index < 0)
+                {
+                    receiver = null;
+                    path = null;
+                    return false;
+                }
+
+                indices.Insert(0, index);
+                expression = access.Expression;
+                while (expression is ParenthesizedExpressionSyntax parenthesized)
+                {
+                    expression = parenthesized.Expression;
+                }
+            }
+
+            receiver = this.context.GetSymbolInfo(expression).Symbol as ILocalSymbol;
+            path = indices;
+            return receiver != null && indices.Count > 0;
         }
 
         private static bool IsNullForgiven(ExpressionSyntax expression)
@@ -1045,7 +1075,8 @@ public sealed partial class CSharpToGSharpTranslator
             ILocalSymbol local,
             int usePosition,
             HashSet<ISymbol> visited = null,
-            SyntaxNode executableOverride = null)
+            SyntaxNode executableOverride = null,
+            IReadOnlyList<ExpressionSyntax> entryValues = null)
         {
             SyntaxNode declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
             ExpressionSyntax initializer = null;
@@ -1081,21 +1112,22 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             IReadOnlyList<ExpressionSyntax> initialValues =
-                Array.Empty<ExpressionSyntax>();
+                entryValues ?? Array.Empty<ExpressionSyntax>();
             if (executableOverride == null
                 && declarationExecutable != null
                 && declaration.SyntaxTree.GetRoot().FindToken(usePosition).Parent
                     is { } useNode)
             {
-                SyntaxNode useExecutable =
-                    useNode.AncestorsAndSelf().FirstOrDefault(node =>
+                List<SyntaxNode> nestedExecutables = useNode.AncestorsAndSelf()
+                    .TakeWhile(node => node.Span != declarationExecutable.Span)
+                    .Where(node =>
                         node is BaseMethodDeclarationSyntax
                             or AccessorDeclarationSyntax
                             or LocalFunctionStatementSyntax
-                            or AnonymousFunctionExpressionSyntax);
-                if (useExecutable != null
-                    && useExecutable.Span != declarationExecutable.Span
-                    && declarationExecutable.Span.Contains(useExecutable.Span))
+                            or AnonymousFunctionExpressionSyntax)
+                    .Reverse()
+                    .ToList();
+                foreach (SyntaxNode nestedExecutable in nestedExecutables)
                 {
                     HashSet<ISymbol> enclosingVisited = visited == null
                         ? null
@@ -1104,10 +1136,11 @@ public sealed partial class CSharpToGSharpTranslator
                             SymbolEqualityComparer.Default);
                     initialValues = this.GetReachingLocalValues(
                         local,
-                        useExecutable.SpanStart,
+                        nestedExecutable.SpanStart,
                         enclosingVisited,
-                        declarationExecutable);
-                    executable = useExecutable;
+                        executable,
+                        initialValues);
+                    executable = nestedExecutable;
                 }
             }
 

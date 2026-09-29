@@ -176,6 +176,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     { } => switchCycleAlias,
                     _ => switchCycleSource,
                 };
+                var nestedReadPair =
+                    ((default(T), replacement), replacement);
+                var nestedRead = nestedReadPair.Item1.Item1;
                 var deadPair = NullablePair<T>();
                 goto afterDeadAssignment;
                 deadPair = (default(T), default(T));
@@ -321,6 +324,21 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     Fill(ref capturedLocalRight, replacement);
                 }
                 CapturedLocal();
+
+                var nestedCapturePair = (replacement, replacement);
+                System.Action outerCapture = () =>
+                {
+                    nestedCapturePair = (default(T), default(T));
+                    System.Action innerCapture = () =>
+                    {
+                        var (nestedCaptureLeft, nestedCaptureRight) =
+                            nestedCapturePair;
+                        Fill(ref nestedCaptureLeft, replacement);
+                        Fill(ref nestedCaptureRight, replacement);
+                    };
+                    innerCapture();
+                };
+                outerCapture();
 
                 return 8;
             }
@@ -554,8 +572,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "sharedPathLeft", "sharedPathRight",
             "repeatedAlias",
             "conditionalCycle", "switchCycle",
+            "nestedRead",
             "capturedLambdaLeft", "capturedLambdaRight",
             "capturedLocalLeft", "capturedLocalRight",
+            "nestedCaptureLeft", "nestedCaptureRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
         })
