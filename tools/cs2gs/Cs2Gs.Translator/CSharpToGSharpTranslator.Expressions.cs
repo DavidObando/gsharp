@@ -1229,7 +1229,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol common = projectedTypes.FirstOrDefault(candidate =>
                 effectiveTypes.All(type =>
-                    ProjectionTypeFitsDestination(type, candidate)));
+                    this.ProjectionTypeFitsCompositeDestination(type, candidate)));
             if (common == null && projectedTypes.Count > 0)
             {
                 var originalCompositeType =
@@ -3826,6 +3826,17 @@ public sealed partial class CSharpToGSharpTranslator
                     this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod,
                 _ => null,
             };
+
+            if (target == null
+                && isBranchArm
+                && current.Parent is AssignmentExpressionSyntax assignment
+                && assignment.Right == current
+                && assignment.Left is ElementAccessExpressionSyntax elementAccess
+                && this.GetMappedArrayElementType(elementAccess.Expression)
+                    is { NullableAnnotation: NullableAnnotation.Annotated } projectedElement)
+            {
+                return (projectedElement, null);
+            }
 
             if (target == null
                 && current.Parent is ArgumentSyntax { Parent: TupleExpressionSyntax }

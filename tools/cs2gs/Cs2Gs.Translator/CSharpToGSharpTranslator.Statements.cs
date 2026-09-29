@@ -851,7 +851,8 @@ public sealed partial class CSharpToGSharpTranslator
             AssignmentExpressionSyntax assignment)
         {
             if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
-                || assignment.Left is not ElementAccessExpressionSyntax)
+                || assignment.Left is not ElementAccessExpressionSyntax
+                || this.IsNullableArrayElementAccess(assignment.Left))
             {
                 return false;
             }

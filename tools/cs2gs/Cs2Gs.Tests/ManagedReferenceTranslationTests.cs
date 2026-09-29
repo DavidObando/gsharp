@@ -4418,6 +4418,93 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ConditionalLocalsUseConvertibleProjectedCommonBase()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedCompositeBase;
+            public class Base<T> {
+                public T Value;
+            }
+            public sealed class Derived<T> : Base<T> {
+            }
+            public class Probe {
+                private static Base<T> WrapBase<T>(T[] source) =>
+                    new Base<T> { Value = source[0] };
+                private static Derived<T> WrapDerived<T>(T[] source) =>
+                    new Derived<T> { Value = source[0] };
+
+                public static int Run(bool flag) {
+                    var source = new ManagedRef<int>[1];
+                    var value = flag
+                        ? WrapDerived(source)
+                        : WrapBase(source);
+                    return value.Value == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedCompositeBase.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("value.Value!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run(true)",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ConditionalAndSwitchAssignmentsToProjectedArrayElementsStayNullable()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedCompositeElementWrites;
+            public class Probe {
+                public static int Run(bool flag) {
+                    var source = new ManagedRef<int>[1];
+                    var target = new ManagedRef<int>[2];
+                    target[0] = flag ? source[0] : source[0];
+                    target[1] = flag switch {
+                        true => source[0],
+                        false => source[0],
+                    };
+                    return target[0] == null && target[1] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedCompositeElementWrites.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run(true)",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionUpdatesMethodGroupTarget()
     {
         const string source = """

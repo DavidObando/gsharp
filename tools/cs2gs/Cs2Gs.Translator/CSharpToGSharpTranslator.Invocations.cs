@@ -5998,6 +5998,11 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
                 }
 
+                if (IsConditionalOrSwitchArm(value))
+                {
+                    return true;
+                }
+
                 return this.InferredLocalAssignmentsMatch(local, value, projectedType);
             }
 
@@ -6017,6 +6022,20 @@ public sealed partial class CSharpToGSharpTranslator
                     _ => null,
                 };
             return ProjectionTypeFitsDestination(projectedType, destinationType);
+        }
+
+        private static bool IsConditionalOrSwitchArm(ExpressionSyntax value)
+        {
+            SyntaxNode node = value;
+            while (node.Parent is ParenthesizedExpressionSyntax or CastExpressionSyntax)
+            {
+                node = node.Parent;
+            }
+
+            return (node.Parent is ConditionalExpressionSyntax conditional
+                    && (conditional.WhenTrue == node || conditional.WhenFalse == node))
+                || (node.Parent is SwitchExpressionArmSyntax arm
+                    && arm.Expression == node);
         }
 
         private bool TryGetFixedExpressionLambdaReturnType(
