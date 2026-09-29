@@ -418,11 +418,18 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
+        var typeParameterMap = candidate.TypeParameters
+            .Zip(selected.TypeParameters)
+            .ToDictionary(pair => pair.First, pair => (TypeSymbol)pair.Second);
+        if (!Equals(
+                StructSymbol.SubstituteTypeParameters(candidate.Type, typeParameterMap),
+                selected.Type))
+        {
+            return false;
+        }
+
         for (var i = 0; i < candidate.Parameters.Length; i++)
         {
-            var typeParameterMap = candidate.TypeParameters
-                .Zip(selected.TypeParameters)
-                .ToDictionary(pair => pair.First, pair => (TypeSymbol)pair.Second);
             if (candidate.Parameters[i].RefKind != selected.Parameters[i].RefKind
                 || !Equals(
                     StructSymbol.SubstituteTypeParameters(candidate.Parameters[i].Type, typeParameterMap),
@@ -2200,7 +2207,9 @@ internal sealed partial class ExpressionBinder
         PropertySymbol selected,
         Dictionary<TypeParameterSymbol, TypeSymbol>? substitution)
     {
-        if (candidate.Parameters.Length != selected.Parameters.Length)
+        if (candidate.Parameters.Length != selected.Parameters.Length
+            || candidate.ReturnRefKind != selected.ReturnRefKind
+            || !Equals(SubstituteIndexerType(candidate.Type, substitution), selected.Type))
         {
             return false;
         }

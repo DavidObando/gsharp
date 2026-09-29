@@ -1771,6 +1771,18 @@ internal sealed partial class StatementBinder
             base.VisitIndirectCallExpression(node);
         }
 
+        protected override void VisitBaseClassCallExpression(BoundBaseClassCallExpression node)
+        {
+            AnalyzeCallableArguments(node.Arguments);
+            base.VisitBaseClassCallExpression(node);
+        }
+
+        protected override void VisitFunctionPointerInvocationExpression(BoundFunctionPointerInvocationExpression node)
+        {
+            AnalyzeCallableArguments(node.Arguments);
+            base.VisitFunctionPointerInvocationExpression(node);
+        }
+
         protected override void VisitConstructorCallExpression(BoundConstructorCallExpression node)
         {
             AnalyzeCallableArguments(node.Arguments);
