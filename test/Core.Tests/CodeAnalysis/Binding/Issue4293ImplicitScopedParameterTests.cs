@@ -207,6 +207,71 @@ public sealed class Issue4293ImplicitScopedParameterTests
         Assert.Empty(diagnostics);
     }
 
+    [Theory]
+    [InlineData("ScopedSource", "IPlainContract")]
+    [InlineData("PlainSource", "IScopedContract")]
+    public void ImportedAdapter_AcceptsEquivalentEffectiveOutContracts(
+        string sourceType,
+        string targetType)
+    {
+        using var contracts = new Issue4563RefSafetyRulesContracts();
+        var assembly = contracts.LoadEquivalent();
+        var sourceParameter = assembly.GetType($"Issue4563.Equivalent.{sourceType}")!
+            .GetMethod("Pick")!
+            .GetParameters()[0];
+        var targetParameter = assembly.GetType($"Issue4563.Equivalent.{targetType}")!
+            .GetMethod("Pick")!
+            .GetParameters()[0];
+        var sourceSymbol = RefCapabilities.CreateParameterSymbol(
+            sourceParameter,
+            TypeSymbol.Int32,
+            "source");
+        var targetSymbol = RefCapabilities.CreateParameterSymbol(
+            targetParameter,
+            TypeSymbol.Int32,
+            "target");
+        Assert.Equal(RefKind.Out, sourceSymbol.RefKind);
+        Assert.Equal(RefKind.Out, targetSymbol.RefKind);
+        Assert.Equal(ParameterRefScope.FunctionLocal, sourceSymbol.GetEffectiveRefScope());
+        Assert.Equal(ParameterRefScope.FunctionLocal, targetSymbol.GetEffectiveRefScope());
+        Assert.NotEqual(sourceSymbol.GetEffectiveValueScope(), targetSymbol.GetEffectiveValueScope());
+        Assert.True(targetSymbol.HasSameRefContract(sourceSymbol));
+        Assert.True(RefCapabilities.ImportedParameterContractsMatch(
+            targetParameter,
+            TypeSymbol.Int32,
+            sourceParameter,
+            TypeSymbol.Int32));
+        var diagnostics = BindWithReferences($$"""
+            package P
+            import Issue4563.Equivalent
+            func Good(value {{sourceType}}) {{targetType}} {
+                return adapt[{{targetType}}](value)
+            }
+            """, contracts.EquivalentPath);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void LookalikeRefSafetyRulesMarker_DoesNotEnableUpdatedRules()
+    {
+        using var contracts = new Issue4563RefSafetyRulesContracts();
+        var parameter = contracts.LoadLookalike()
+            .GetType("Issue4563.Lookalike.Contract")!
+            .GetMethod("Pick")!
+            .GetParameters()[0];
+
+        Assert.Contains(
+            parameter.Member.Module.GetCustomAttributesData(),
+            attribute => attribute.AttributeType.FullName
+                == "System.Runtime.CompilerServices.RefSafetyRulesAttribute");
+        Assert.False(RefCapabilities.UsesUpdatedEscapeRules(parameter));
+        Assert.Equal(
+            ParameterRefScope.Caller,
+            RefCapabilities.CreateParameterSymbol(parameter, TypeSymbol.Int32, "value")
+                .GetEffectiveRefScope());
+    }
+
     [Fact]
     public void UnscopedRefOutArgument_ConstrainsRefReturningCall()
     {

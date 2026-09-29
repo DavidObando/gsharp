@@ -396,8 +396,7 @@ internal static class RefCapabilities
         try
         {
             return parameter.Member.Module.GetCustomAttributesData().Any(attribute =>
-                attribute.AttributeType.FullName
-                    == "System.Runtime.CompilerServices.RefSafetyRulesAttribute"
+                KnownAttributes.IsRefSafetyRules(attribute.AttributeType)
                 && attribute.ConstructorArguments.Count == 1
                 && attribute.ConstructorArguments[0].Value is 11);
         }

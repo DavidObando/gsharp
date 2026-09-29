@@ -7750,9 +7750,7 @@ public sealed class Binder
                 source.GetRequiredCustomModifiers())
             && AdapterModifierSequenceMatches(
                 target.GetOptionalCustomModifiers(),
-                source.GetOptionalCustomModifiers())
-            && IsAdapterScoped(target) == IsAdapterScoped(source)
-            && HasAdapterUnscopedRef(target) == HasAdapterUnscopedRef(source);
+                source.GetOptionalCustomModifiers());
 
     private static bool ImportedMethodMetadataSupported(MethodInfo method)
         => AdapterParameterMetadataSupported(method.ReturnParameter)

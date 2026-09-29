@@ -455,10 +455,27 @@ internal static class KnownAttributes
             typeof(System.Runtime.CompilerServices.ScopedRefAttribute));
     }
 
-    private static bool IsKnownRuntimeAttribute(Type? candidate, Type expected)
+    /// <summary>Returns whether <paramref name="clrType"/> is the runtime <c>RefSafetyRulesAttribute</c>.</summary>
+    /// <param name="clrType">The resolved attribute CLR type, or <c>null</c>.</param>
+    /// <returns><c>true</c> when the attribute has the runtime type identity.</returns>
+    public static bool IsRefSafetyRules(Type? clrType)
+    {
+        return IsKnownRuntimeAttribute(
+            clrType,
+            typeof(System.Runtime.CompilerServices.ScopedRefAttribute),
+            "System.Runtime.CompilerServices.RefSafetyRulesAttribute");
+    }
+
+    private static bool IsKnownRuntimeAttribute(
+        Type? candidate,
+        Type expected,
+        string? expectedFullName = null)
     {
         if (candidate == null
-            || !string.Equals(candidate.FullName, expected.FullName, StringComparison.Ordinal))
+            || !string.Equals(
+                candidate.FullName,
+                expectedFullName ?? expected.FullName,
+                StringComparison.Ordinal))
         {
             return false;
         }

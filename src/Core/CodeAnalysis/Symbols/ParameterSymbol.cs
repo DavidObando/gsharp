@@ -295,9 +295,10 @@ public sealed class ParameterSymbol : LocalVariableSymbol
 
     /// <summary>Returns whether another parameter has the same effective ref-safety contract.</summary>
     /// <param name="other">The parameter to compare.</param>
-    /// <returns><see langword="true"/> when ref kind and effective ref/value scopes match.</returns>
+    /// <returns><see langword="true"/> when ref kind and applicable effective ref/value scopes match.</returns>
     internal bool HasSameRefContract(ParameterSymbol other)
         => RefKind == other.RefKind
             && GetEffectiveRefScope() == other.GetEffectiveRefScope()
-            && GetEffectiveValueScope() == other.GetEffectiveValueScope();
+            && ((!TypeSymbol.IsByRefLike(Type) && !TypeSymbol.IsByRefLike(other.Type))
+                || GetEffectiveValueScope() == other.GetEffectiveValueScope());
 }
