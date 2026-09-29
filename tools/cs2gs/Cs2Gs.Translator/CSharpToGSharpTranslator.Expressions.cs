@@ -1118,14 +1118,18 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (expression is InvocationExpressionSyntax invocation)
             {
-                return this.TryGetManagedReferenceArrayProjectedMethod(
+                if (this.TryGetManagedReferenceArrayProjectedMethod(
                     invocation,
-                    out IMethodSymbol projectedMethod)
-                        ? projectedMethod.ReturnType
-                        : this.GetProjectedDelegateInvocationReturnType(
-                            invocation.Expression)
-                            ?? this.GetManagedReferenceArrayProjectedExpressionType(
-                                invocation.Expression);
+                    out IMethodSymbol projectedMethod))
+                {
+                    return projectedMethod.ReturnType;
+                }
+
+                return this.GetProjectedDelegateInvocationReturnType(
+                        invocation.Expression)
+                    ?? GetDelegateInvokeMethod(
+                        this.GetManagedReferenceArrayProjectedExpressionType(
+                            invocation.Expression))?.ReturnType;
             }
 
             if (expression is BaseObjectCreationExpressionSyntax creation

@@ -2823,14 +2823,7 @@ public sealed partial class CSharpToGSharpTranslator
             // either case re-uses an already-declared range variable's type, whose
             // Index/Range loud gap (if any) was already reported at its own `from`/
             // `let`/`join` site.
-            ITypeSymbol resultTypeSymbol =
-                scope.Count == 1
-                && scope[0].Symbol != null
-                && this.state.ProjectedQueryBindingType.TryGetValue(
-                    scope[0].Symbol,
-                    out ITypeSymbol identityResultType)
-                    ? identityResultType
-                    : null;
+            ITypeSymbol resultTypeSymbol = null;
 
             switch (body.SelectOrGroup)
             {
@@ -2840,6 +2833,13 @@ public sealed partial class CSharpToGSharpTranslator
                     if (scope.Count == 1 && select.Expression is IdentifierNameSyntax id
                         && id.Identifier.ValueText == scope[0].Name && body.Clauses.Count > 0)
                     {
+                        if (scope[0].Symbol != null)
+                        {
+                            this.state.ProjectedQueryBindingType.TryGetValue(
+                                scope[0].Symbol,
+                                out resultTypeSymbol);
+                        }
+
                         break;
                     }
 
@@ -2857,7 +2857,12 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
 
                 case GroupClauseSyntax group:
-                    current = this.LowerGroupClause(group, scope, current, out resultType);
+                    current = this.LowerGroupClause(
+                        group,
+                        scope,
+                        current,
+                        out resultType,
+                        out resultTypeSymbol);
                     break;
 
                 default:
@@ -3037,11 +3042,15 @@ public sealed partial class CSharpToGSharpTranslator
             GroupClauseSyntax group,
             List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             GExpression current,
-            out GTypeReference resultType)
+            out GTypeReference resultType,
+            out ITypeSymbol resultTypeSymbol)
         {
-            LambdaExpression keySelector = this.BuildScopeLambda(scope, group.ByExpression);
-            GTypeReference keyType = this.context.GetTypeInfo(group.ByExpression).Type is { } k
-                ? this.typeMapper.Map(k, this.context, group.GetLocation())
+            LambdaExpression keySelector =
+                this.BuildScopeLambda(scope, group.ByExpression, out ITypeSymbol effectiveKeyType);
+            ITypeSymbol keyTypeSymbol =
+                effectiveKeyType ?? this.context.GetTypeInfo(group.ByExpression).Type;
+            GTypeReference keyType = keyTypeSymbol is { } key
+                ? this.typeMapper.Map(key, this.context, group.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
             bool isIdentity = scope.Count == 1
@@ -3050,20 +3059,41 @@ public sealed partial class CSharpToGSharpTranslator
 
             var args = new List<GExpression> { keySelector };
             GTypeReference elementType;
+            ITypeSymbol elementTypeSymbol;
             if (isIdentity)
             {
                 elementType = scope[0].Type;
+                elementTypeSymbol =
+                    scope[0].Symbol != null
+                    && this.state.ProjectedQueryBindingType.TryGetValue(
+                        scope[0].Symbol,
+                        out ITypeSymbol projectedElement)
+                        ? projectedElement
+                        : this.context.GetTypeInfo(group.GroupExpression).Type;
             }
             else
             {
-                args.Add(this.BuildScopeLambda(scope, group.GroupExpression));
-                elementType = this.context.GetTypeInfo(group.GroupExpression).Type is { } e
-                    ? this.typeMapper.Map(e, this.context, group.GetLocation())
+                args.Add(this.BuildScopeLambda(
+                    scope,
+                    group.GroupExpression,
+                    out ITypeSymbol effectiveElementType));
+                elementTypeSymbol =
+                    effectiveElementType
+                    ?? this.context.GetTypeInfo(group.GroupExpression).Type;
+                elementType = elementTypeSymbol is { } element
+                    ? this.typeMapper.Map(element, this.context, group.GetLocation())
                     : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
             }
 
             current = new InvocationExpression(new MemberAccessExpression(current, "GroupBy"), args);
             resultType = new NamedTypeReference("IGrouping", new List<GTypeReference> { keyType, elementType });
+            resultTypeSymbol =
+                keyTypeSymbol != null
+                && elementTypeSymbol != null
+                && this.context.Compilation.GetTypeByMetadataName("System.Linq.IGrouping`2")
+                    is { } groupingType
+                    ? groupingType.Construct(keyTypeSymbol, elementTypeSymbol)
+                    : null;
             return current;
         }
 
