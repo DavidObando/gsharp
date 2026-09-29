@@ -48,6 +48,13 @@ func readProfile(path string) (Profile, error) {
 	if profile.WorkspaceMode != "off" {
 		return profile, errors.New("M0 requires workspaceMode=off")
 	}
+	if profile.CGOEnabled {
+		if profile.CCompiler == "" || !filepath.IsAbs(profile.CCompiler) {
+			return profile, errors.New("cgoEnabled requires an absolute cCompiler path")
+		}
+	} else if profile.CCompiler != "" {
+		return profile, errors.New("cCompiler is only valid when cgoEnabled is true")
+	}
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
 		return profile, err
 	}

@@ -187,6 +187,10 @@ func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
 		t.Fatalf("inherited iota or complex declaration provenance missing: %#v", declaredConstants)
 	}
 	nodes := map[string]NodeRecord{}
+	typesByID := map[string]string{}
+	for _, value := range a1.Types {
+		typesByID[value.ID] = value.Canonical
+	}
 	for _, node := range a1.Nodes {
 		nodes[node.ID] = node
 	}
@@ -197,6 +201,13 @@ func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
 			node.ConversionTypeID == node.EffectiveTypeID && value.ContextTypeID == node.EffectiveTypeID
 	}) {
 		t.Fatal("untyped contextual conversion facts missing")
+	}
+	if !slices.ContainsFunc(a1.Calls, func(call CallRecord) bool {
+		node := nodes[call.NodeID]
+		return call.Kind == "conversion" && typesByID[node.OriginalTypeID] == "untyped int" &&
+			typesByID[node.EffectiveTypeID] == "int64" && node.ConversionTypeID == node.EffectiveTypeID
+	}) {
+		t.Fatal("explicit conversion did not preserve its untyped operand type")
 	}
 	if !hasLineDirective(a1) {
 		t.Fatal("//line display provenance missing")
@@ -269,6 +280,50 @@ func TestCgoRequirementIsIncomplete(t *testing.T) {
 	}
 }
 
+func TestCgoEnabledUsesOnlyApprovedCompiler(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
+	}
+	compiler := approvedCompiler(t)
+	fakeDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ambient-cc-ran")
+	fakeCC := filepath.Join(fakeDir, "cc")
+	if err := os.WriteFile(fakeCC, []byte("#!/bin/sh\n: > "+strconv.Quote(marker)+"\nexit 99\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.CCompiler = compiler
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "cgo"), t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete || !analysis.InventoryComplete {
+		t.Fatalf("approved C compiler did not complete inventory: %#v", analysis.Blockers)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatal(err)
+	}
+	hash, _, err := hashFile(compiler)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.Toolchain.CCompilerName != filepath.Base(compiler) || analysis.Toolchain.CCompilerSHA256 != hash {
+		t.Fatalf("C compiler provenance mismatch: %#v", analysis.Toolchain)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("ambient C compiler ran or marker check failed: %v", err)
+	}
+	data, err := marshalCanonical(analysis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(compiler)) || bytes.Contains(data, []byte(fakeDir)) {
+		t.Fatal("analysis leaked an absolute compiler path")
+	}
+}
+
 func TestUnselectedAndBuildIgnoredCgoOrNativeDoNotBlock(t *testing.T) {
 	root := copyFixture(t, "complete")
 	if err := os.MkdirAll(filepath.Join(root, "unselected"), 0o755); err != nil {
@@ -291,6 +346,38 @@ func TestUnselectedAndBuildIgnoredCgoOrNativeDoNotBlock(t *testing.T) {
 	}
 	if !complete || hasBlockerCategory(analysis, "cgo") || hasBlockerCategory(analysis, "native") {
 		t.Fatalf("unselected or build-ignored CGo/native input blocked selected package: %#v", analysis.Blockers)
+	}
+}
+
+func TestAnalyzeDoesNotExecuteAmbientGit(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled shell executable fixture")
+	}
+	root := copyFixture(t, "complete")
+	commit := strings.Repeat("a", 40)
+	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte(commit+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fakeDir := t.TempDir()
+	marker := filepath.Join(t.TempDir(), "ambient-git-ran")
+	if err := os.WriteFile(filepath.Join(fakeDir, "git"), []byte("#!/bin/sh\n: > "+strconv.Quote(marker)+"\necho "+strings.Repeat("b", 40)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	profile := testProfile()
+	profile.ExpectedSourceCommit = commit
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil || !complete {
+		t.Fatalf("analysis failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	if analysis.Profile.ActualSourceCommit != commit {
+		t.Fatalf("repository provenance was not read from .git metadata: %q", analysis.Profile.ActualSourceCommit)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("ambient git ran or marker check failed: %v", err)
 	}
 }
 
@@ -372,10 +459,46 @@ func TestProfileValidationAndResourceLimit(t *testing.T) {
 		t.Fatalf("expected unsupported workspace rejection, got %v", err)
 	}
 	profile.WorkspaceMode = "off"
+	profile.CGOEnabled = true
+	data, err = json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "cCompiler") {
+		t.Fatalf("expected missing C compiler rejection, got %v", err)
+	}
+	profile.CCompiler = "cc"
+	data, err = json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "absolute cCompiler") {
+		t.Fatalf("expected relative C compiler rejection, got %v", err)
+	}
+	profile.CGOEnabled = false
+	profile.CCompiler = ""
 	profile.Limits.MaxPackages = 1
 	if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile); err == nil || !strings.Contains(err.Error(), "package count") {
 		t.Fatalf("expected package limit rejection, got %v", err)
 	}
+}
+
+func approvedCompiler(t *testing.T) string {
+	t.Helper()
+	for _, candidate := range []string{"/usr/bin/cc", "/usr/bin/clang", "/usr/bin/gcc"} {
+		path, _, err := resolveCCompiler(Profile{CGOEnabled: true, CCompiler: candidate})
+		if err == nil {
+			return path
+		}
+	}
+	t.Skip("no approved compiler found in fixed system locations")
+	return ""
 }
 
 func TestAnalysisJSONRoundTripRejectsUnknownFields(t *testing.T) {
@@ -709,6 +832,38 @@ func TestGeneratedFileUsesGoPlacementRules(t *testing.T) {
 	}
 }
 
+func TestEmbedInventoryMatchesGoRuntime(t *testing.T) {
+	root := copyFixture(t, "complete")
+	goExecutable := filepath.Join(runtime.GOROOT(), "bin", "go")
+	env, err := sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), goExecutable, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runProcess(t.Context(), 60*time.Second, 1<<20, root, goExecutable, []string{"test", "."}, env)
+	if err != nil || result.ExitCode != 0 {
+		t.Fatalf("runtime embed fixture failed: err=%v result=%#v", err, result)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("embed inventory failed: complete=%v err=%v", complete, err)
+	}
+	assertEmbedMatches(t, analysis)
+	for _, test := range []struct {
+		pattern string
+		path    string
+		want    bool
+	}{
+		{"assets/*", "other/file.txt", false},
+		{"[", "assets/visible.txt", false},
+		{"assets/sub", "assets/sub/.nestedhidden.txt", false},
+		{"all:assets/sub", "assets/sub/.nestedhidden.txt", true},
+	} {
+		if got := embedPatternMatches(test.pattern, test.path); got != test.want {
+			t.Errorf("embedPatternMatches(%q, %q)=%v, want %v", test.pattern, test.path, got, test.want)
+		}
+	}
+}
+
 func TestLocalReplacementInventoryIsRootIndependent(t *testing.T) {
 	firstRoot := copyFixture(t, "replacement")
 	secondRoot := filepath.Join(t.TempDir(), "other-root")
@@ -1031,9 +1186,14 @@ func assertEmbedMatches(t *testing.T, analysis Analysis) {
 		sort.Strings(matches[pattern])
 	}
 	want := map[string][]string{
-		"asset.bin":    {"asset.bin"},
-		"assets/a.txt": {"assets/a.txt"},
-		"assets/*.txt": {"assets/a.txt", "assets/b.txt"},
+		"assets/*": {
+			"assets/.hidden.txt", "assets/_hidden.txt", "assets/sub/nested.txt", "assets/visible.txt",
+		},
+		"all:assets/*": {
+			"assets/.hidden.txt", "assets/_hidden.txt", "assets/sub/.nestedhidden.txt",
+			"assets/sub/nested.txt", "assets/visible.txt",
+		},
+		"assets/sub": {"assets/sub/nested.txt"},
 	}
 	if !reflect.DeepEqual(matches, want) {
 		t.Fatalf("embed pattern matches are incorrect: got %#v want %#v", matches, want)
@@ -1093,7 +1253,7 @@ func TestSanitizedEnvironmentDoesNotExposeAmbientPATH(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", maliciousDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	env, err := sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), executable)
+	env, err := sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), executable, "")
 	if err != nil {
 		t.Fatal(err)
 	}

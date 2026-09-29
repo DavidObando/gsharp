@@ -441,7 +441,13 @@ func expressionTypeFacts(pkg *packages.Package, expr ast.Expr, tv types.TypeAndV
 	effective = tv.Type
 	if call, ok := expr.(*ast.CallExpr); ok && len(call.Args) == 1 {
 		if fun, exists := pkg.TypesInfo.Types[call.Fun]; exists && fun.IsType() {
-			return pkg.TypesInfo.TypeOf(call.Args[0]), tv.Type, tv.Type
+			argumentType := pkg.TypesInfo.TypeOf(call.Args[0])
+			if argument, exists := pkg.TypesInfo.Types[call.Args[0]]; exists && argument.Value != nil {
+				if untyped := untypedConstantType(pkg, call.Args[0], argument.Value); untyped != nil {
+					argumentType = untyped
+				}
+			}
+			return argumentType, tv.Type, tv.Type
 		}
 	}
 	contextType := contextualType(pkg, expr, parents)
@@ -1008,6 +1014,7 @@ func (b *inventoryBuilder) addEmbeds(pkg *packages.Package) {
 }
 
 func embedPatternMatches(pattern, logical string) bool {
+	all := strings.HasPrefix(pattern, "all:")
 	pattern = strings.TrimPrefix(pattern, "all:")
 	logical = slash(logical)
 	matched, err := pathpkg.Match(pattern, logical)
@@ -1017,7 +1024,27 @@ func embedPatternMatches(pattern, logical string) bool {
 	if matched {
 		return true
 	}
-	return !strings.ContainsAny(pattern, "*?[") && strings.HasPrefix(logical, strings.TrimSuffix(pattern, "/")+"/")
+	for directory := pathpkg.Dir(logical); directory != "." && directory != "/"; directory = pathpkg.Dir(directory) {
+		matched, err := pathpkg.Match(pattern, directory)
+		if err != nil {
+			return false
+		}
+		if !matched {
+			continue
+		}
+		relative := strings.TrimPrefix(logical, directory+"/")
+		return all || embedWalkVisible(relative)
+	}
+	return false
+}
+
+func embedWalkVisible(relative string) bool {
+	for _, element := range strings.Split(relative, "/") {
+		if strings.HasPrefix(element, ".") || strings.HasPrefix(element, "_") {
+			return false
+		}
+	}
+	return true
 }
 
 func (b *inventoryBuilder) embedPattern(pkg *packages.Package, pattern string) string {

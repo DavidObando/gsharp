@@ -50,6 +50,10 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("hash helper: %w", err)
 	}
+	cCompiler, cCompilerHash, err := resolveCCompiler(profile)
+	if err != nil {
+		return Analysis{}, false, err
+	}
 
 	workRoot := filepath.Join(outRoot, ".go2gs-work")
 	if err := os.RemoveAll(workRoot); err != nil {
@@ -81,12 +85,24 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("hash selected Go GOROOT VERSION: %w", err)
 	}
-	env, err := sanitizedEnvironment(profile, workRoot, targetGOROOT, executable)
+	env, err := sanitizedEnvironment(profile, workRoot, targetGOROOT, executable, cCompiler)
 	if err != nil {
 		return Analysis{}, false, err
 	}
 
-	actualCommit := sourceCommit(ctx, sourceRoot, profile.Limits.MaxLogBytes)
+	actualCommit := sourceCommit(sourceRoot)
+	toolchain := ToolchainProvenance{
+		RequestedVersion: profile.RequestedGoVersion, ActualVersion: actualVersion,
+		ExecutableSHA256: goHash, ExecutableName: filepath.Base(executable),
+		GOROOTIdentity:      stableID("goroot", actualVersion+"\x00"+goHash+"\x00"+gorootVersionHash),
+		GOROOTVersionSHA256: gorootVersionHash,
+		GOROOTSource:        "selected executable: go env GOROOT (path intentionally omitted)",
+		AutoDownload:        false,
+	}
+	if cCompiler != "" {
+		toolchain.CCompilerName = filepath.Base(cCompiler)
+		toolchain.CCompilerSHA256 = cCompilerHash
+	}
 	analysis := Analysis{
 		Schema: SchemaHandshake{Name: schemaName, Version: schemaVersion, RequiredRecordKinds: append([]string{}, requiredRecordKinds...)},
 		Tool:   VersionIdentity{Version: toolVersion, SHA256: helperHash},
@@ -106,14 +122,7 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 			TrustBoundary: "go/packages may execute the selected Go command, compiler, assembler, linker metadata tools, and CGo toolchain; target binaries, tests, init functions, generators, and scripts are never executed",
 			Limits:        profile.Limits,
 		},
-		Toolchain: ToolchainProvenance{
-			RequestedVersion: profile.RequestedGoVersion, ActualVersion: actualVersion,
-			ExecutableSHA256: goHash, ExecutableName: filepath.Base(executable),
-			GOROOTIdentity:      stableID("goroot", actualVersion+"\x00"+goHash+"\x00"+gorootVersionHash),
-			GOROOTVersionSHA256: gorootVersionHash,
-			GOROOTSource:        "selected executable: go env GOROOT (path intentionally omitted)",
-			AutoDownload:        false,
-		},
+		Toolchain: toolchain,
 	}
 
 	builder := newInventoryBuilder(&analysis, sourceRoot, targetGOROOT, profile)
@@ -190,6 +199,35 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 	}
 	builder.finish()
 	return analysis, analysis.InventoryComplete, nil
+}
+
+func resolveCCompiler(profile Profile) (string, string, error) {
+	if !profile.CGOEnabled {
+		if profile.CCompiler != "" {
+			return "", "", errors.New("cCompiler is only valid when cgoEnabled is true")
+		}
+		return "", "", nil
+	}
+	if profile.CCompiler == "" || !filepath.IsAbs(profile.CCompiler) {
+		return "", "", errors.New("cgoEnabled requires an absolute cCompiler path")
+	}
+	path, err := filepath.EvalSymlinks(profile.CCompiler)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve C compiler: %w", err)
+	}
+	path, err = filepath.Abs(path)
+	if err != nil {
+		return "", "", fmt.Errorf("resolve C compiler: %w", err)
+	}
+	info, err := os.Stat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0o111 == 0 {
+		return "", "", fmt.Errorf("C compiler is not a regular executable: %s", filepath.Base(path))
+	}
+	hash, _, err := hashFile(path)
+	if err != nil {
+		return "", "", fmt.Errorf("hash C compiler: %w", err)
+	}
+	return path, hash, nil
 }
 
 func replaceEnvironment(env []string, key, value string) []string {
@@ -275,20 +313,115 @@ func parseGoVersion(output string) string {
 	return strings.TrimSpace(output)
 }
 
-func sourceCommit(ctx context.Context, root string, maxOutput int) string {
-	git, err := exec.LookPath("git")
+func sourceCommit(root string) string {
+	gitDir := filepath.Join(root, ".git")
+	info, err := os.Lstat(gitDir)
 	if err != nil {
 		return ""
 	}
-	git, err = filepath.Abs(git)
+	if !info.IsDir() {
+		data, err := readBoundedRegularFile(gitDir, 4096)
+		if err != nil {
+			return ""
+		}
+		value := strings.TrimSpace(string(data))
+		if !strings.HasPrefix(value, "gitdir: ") {
+			return ""
+		}
+		gitDir = strings.TrimSpace(strings.TrimPrefix(value, "gitdir: "))
+		if !filepath.IsAbs(gitDir) {
+			gitDir = filepath.Join(root, gitDir)
+		}
+		gitDir, err = filepath.Abs(gitDir)
+		if err != nil {
+			return ""
+		}
+	}
+	head, err := readBoundedRegularFile(filepath.Join(gitDir, "HEAD"), 4096)
 	if err != nil {
 		return ""
 	}
-	result, err := runProcess(ctx, 10*time.Second, maxOutput, root, git, []string{"-C", root, "rev-parse", "HEAD"}, []string{"PATH=" + selectedPath(git)})
-	if err != nil || result.ExitCode != 0 {
+	value := strings.TrimSpace(string(head))
+	if validCommitID(value) {
+		return value
+	}
+	if !strings.HasPrefix(value, "ref: ") {
 		return ""
 	}
-	return strings.TrimSpace(result.Stdout)
+	ref := strings.TrimSpace(strings.TrimPrefix(value, "ref: "))
+	if !validGitRef(ref) {
+		return ""
+	}
+	for _, root := range gitReferenceRoots(gitDir) {
+		if data, err := readBoundedRegularFile(filepath.Join(root, filepath.FromSlash(ref)), 4096); err == nil {
+			if commit := strings.TrimSpace(string(data)); validCommitID(commit) {
+				return commit
+			}
+		}
+		if commit := packedGitReference(filepath.Join(root, "packed-refs"), ref); commit != "" {
+			return commit
+		}
+	}
+	return ""
+}
+
+func gitReferenceRoots(gitDir string) []string {
+	roots := []string{gitDir}
+	data, err := readBoundedRegularFile(filepath.Join(gitDir, "commondir"), 4096)
+	if err != nil {
+		return roots
+	}
+	common := strings.TrimSpace(string(data))
+	if !filepath.IsAbs(common) {
+		common = filepath.Join(gitDir, common)
+	}
+	if absolute, err := filepath.Abs(common); err == nil && absolute != gitDir {
+		roots = append(roots, absolute)
+	}
+	return roots
+}
+
+func packedGitReference(path, ref string) string {
+	data, err := readBoundedRegularFile(path, 16<<20)
+	if err != nil {
+		return ""
+	}
+	for _, line := range strings.Split(string(data), "\n") {
+		fields := strings.Fields(line)
+		if len(fields) == 2 && fields[1] == ref && validCommitID(fields[0]) {
+			return fields[0]
+		}
+	}
+	return ""
+}
+
+func readBoundedRegularFile(path string, limit int64) ([]byte, error) {
+	info, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() > limit {
+		return nil, errors.New("not a bounded regular file")
+	}
+	return os.ReadFile(path)
+}
+
+func validGitRef(value string) bool {
+	clean := filepath.ToSlash(filepath.Clean(value))
+	return strings.HasPrefix(clean, "refs/") && clean == value &&
+		!strings.Contains(clean, "..") && !strings.ContainsAny(clean, "\\\x00")
+}
+
+func validCommitID(value string) bool {
+	if len(value) != 40 && len(value) != 64 {
+		return false
+	}
+	for _, char := range value {
+		if !((char >= '0' && char <= '9') || (char >= 'a' && char <= 'f')) {
+			return false
+		}
+	}
+	return true
 }
 
 func sourceIdentity(commit string, manifests []ManifestRecord) string {

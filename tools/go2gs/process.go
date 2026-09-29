@@ -10,6 +10,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
+	"strings"
 	"time"
 )
 
@@ -112,7 +114,7 @@ func bootstrapEnvironment(cacheRoot, executable string) []string {
 	})
 }
 
-func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable string) ([]string, error) {
+func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompiler string) ([]string, error) {
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
 		return nil, err
 	}
@@ -120,7 +122,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable string)
 		return nil, err
 	}
 	values := map[string]string{
-		"PATH":             selectedPath(executable),
+		"PATH":             selectedPath(executable, cCompiler),
 		"HOME":             cacheRoot,
 		"TMPDIR":           cacheRoot,
 		"GOCACHE":          cacheRoot + string(os.PathSeparator) + "build-cache",
@@ -139,6 +141,9 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable string)
 		"GOEXPERIMENT":     profile.GOEXPERIMENT,
 		"GOROOT":           goroot,
 	}
+	if cCompiler != "" {
+		values["CC"] = cCompiler
+	}
 	flags := append([]string{}, profile.GOFLAGS...)
 	flags = append(flags, "-mod="+profile.ModuleMode)
 	values["GOFLAGS"] = joinArgs(flags)
@@ -149,8 +154,18 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable string)
 	return canonicalEnv(values), nil
 }
 
-func selectedPath(executable string) string {
-	return filepath.Dir(executable)
+func selectedPath(executables ...string) string {
+	var directories []string
+	for _, executable := range executables {
+		if executable == "" {
+			continue
+		}
+		directory := filepath.Dir(executable)
+		if !slices.Contains(directories, directory) {
+			directories = append(directories, directory)
+		}
+	}
+	return strings.Join(directories, string(os.PathListSeparator))
 }
 
 func boolString(value bool) string {
