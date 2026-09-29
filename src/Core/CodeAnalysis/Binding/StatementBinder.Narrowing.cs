@@ -683,10 +683,16 @@ internal sealed partial class StatementBinder
             }
         }
 
-        foreach (var frame in binderCtx.NarrowedVariables)
+        foreach (var path in targetNarrowings.Keys)
         {
-            foreach (var path in frame.Keys.ToArray())
+            for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
             {
+                var frame = binderCtx.NarrowedVariables[i];
+                if (!frame.ContainsKey(path))
+                {
+                    continue;
+                }
+
                 if (joinedTypes.TryGetValue(path, out var joinedType))
                 {
                     frame[path] = joinedType;
@@ -695,6 +701,8 @@ internal sealed partial class StatementBinder
                 {
                     frame.Remove(path);
                 }
+
+                break;
             }
         }
 
@@ -1685,7 +1693,8 @@ internal sealed partial class StatementBinder
                                 VisitFunctionLiteralBody(literal);
                             }
                         }
-                        else if (!IsExternalCallable(arguments[i]))
+                        else if (IsUnknownCallable(arguments[i])
+                            || !IsExternalCallable(arguments[i]))
                         {
                             MayMutateAnyRoot = true;
                         }
@@ -1741,10 +1750,10 @@ internal sealed partial class StatementBinder
 
                 // A read-only callable parameter originates outside this
                 // function and cannot capture this function's local slots.
-                MayMutateAnyRoot |= variable.Variable is not ParameterSymbol { IsReadOnly: true }
-                    && !externalFunctionValues.Contains(variable.Variable)
-                    && (!functionLiterals.ContainsKey(variable.Variable)
-                        || unknownFunctionValues.Contains(variable.Variable));
+                MayMutateAnyRoot |= unknownFunctionValues.Contains(variable.Variable)
+                    || (variable.Variable is not ParameterSymbol { IsReadOnly: true }
+                        && !externalFunctionValues.Contains(variable.Variable)
+                        && !functionLiterals.ContainsKey(variable.Variable));
             }
             else
             {
@@ -1986,6 +1995,10 @@ internal sealed partial class StatementBinder
                 && (variable.Variable is ParameterSymbol { IsReadOnly: true }
                     || externalFunctionValues.Contains(variable.Variable));
         }
+
+        private bool IsUnknownCallable(BoundExpression expression)
+            => UnwrapCallable(expression) is BoundVariableExpression variable
+                && unknownFunctionValues.Contains(variable.Variable);
 
         private bool TryGetFunctionLiterals(
             BoundExpression expression,

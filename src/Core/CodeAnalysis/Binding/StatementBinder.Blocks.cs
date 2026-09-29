@@ -712,6 +712,7 @@ internal sealed partial class StatementBinder
     internal BoundStatement BindNestedFunctionBody(BlockStatementSyntax syntax)
     {
         var inheritedFallthrough = currentStatementListFallsThrough;
+        var inheritedReachabilityGeneration = internalReachabilityGeneration;
         currentStatementListFallsThrough = true;
         try
         {
@@ -720,6 +721,7 @@ internal sealed partial class StatementBinder
         finally
         {
             currentStatementListFallsThrough = inheritedFallthrough;
+            internalReachabilityGeneration = inheritedReachabilityGeneration;
         }
     }
 

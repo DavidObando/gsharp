@@ -460,7 +460,7 @@ public class Issue4519GotoAssignmentNarrowingTests
                 if x is Dog {
                 Again:
                     let sound = x.Bark()
-                    x = Cat{}
+                    x = Animal{}
                     goto Again
                 }
                 return ""
@@ -1832,6 +1832,39 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_JoinDoesNotOverwriteShadowedOuterFrame()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                prop Sound string -> "woof"
+            }
+            class Cat : Animal {
+            }
+
+            func GetAnimal() Animal -> Cat{}
+
+            func Run() string {
+                var x Animal? = nil
+                x = GetAnimal()
+                if x is Dog {
+                    goto Join
+                Join:
+                    var marker = 0
+                }
+                return x.Sound
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Sound", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_BypassesConditionFrame_ReportsMemberAccess()
     {
         var result = Evaluate("""
@@ -2003,6 +2036,40 @@ public class Issue4519GotoAssignmentNarrowingTests
             }
 
             Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyTreatsMixedExternalAndUnknownCallableAsUnsafe()
+    {
+        var result = Evaluate("""
+            data class Holder(Callback (() -> void)) {
+            }
+
+            func Run(external (() -> void), chooseLocal bool) int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                let holder = Holder{Callback: clear}
+                try {
+                    goto Done
+                }
+                finally {
+                    var action = external
+                    if chooseLocal {
+                        action = holder.Callback
+                    }
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run(func() { }, true)
             """);
 
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
@@ -2882,6 +2949,36 @@ public class Issue4519GotoAssignmentNarrowingTests
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
         Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void NestedFunctionLabelDoesNotMakeOuterFinallyReachable()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                goto Assign
+                try {
+                    let nested = func() {
+                        goto Inner
+                    Inner:
+                        return
+                    }
+                }
+                finally {
+                    goto Done
+                }
+            Assign:
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(4, result.Value);
     }
 
     [Fact]
