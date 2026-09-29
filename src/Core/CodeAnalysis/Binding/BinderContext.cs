@@ -758,11 +758,24 @@ internal sealed class BinderContext
         string memberName,
         BackwardGotoNarrowingUseKind kind,
         TypeSymbol? targetType = null)
+        => TrackBackwardGotoNarrowingUse(
+            AccessPath.ForVariable(variable),
+            location,
+            memberName,
+            kind,
+            targetType);
+
+    public void TrackBackwardGotoNarrowingUse(
+        AccessPath path,
+        TextLocation location,
+        string memberName,
+        BackwardGotoNarrowingUseKind kind,
+        TypeSymbol? targetType = null)
     {
         var frameIndex = -1;
         for (var i = NarrowedVariables.Count - 1; i >= 0; i--)
         {
-            if (NarrowedVariables[i].ContainsKey(variable))
+            if (NarrowedVariables[i].ContainsKey(path))
             {
                 frameIndex = i;
                 break;
@@ -774,9 +787,10 @@ internal sealed class BinderContext
             return;
         }
 
-        var narrowedType = NarrowedVariables[frameIndex][AccessPath.ForVariable(variable)];
+        var variable = path.Root;
+        var narrowedType = NarrowedVariables[frameIndex][path];
         var access = new BackwardGotoNarrowingAccess(
-            variable,
+            path,
             location,
             memberName,
             kind,
@@ -786,10 +800,11 @@ internal sealed class BinderContext
         {
             var state = entry.Value;
             if (!state.TargetSnapshot.NarrowingFrameIndices.TryGetValue(
-                    variable,
+                    path,
                     out var targetFrameIndex)
                 || frameIndex != targetFrameIndex
-                || (AssignmentNarrowingGenerations.TryGetValue(
+                || (!path.HasMembers
+                    && AssignmentNarrowingGenerations.TryGetValue(
                         variable,
                         out var assignmentGeneration)
                     && (!state.TargetSnapshot.AssignmentGenerations.TryGetValue(
@@ -806,7 +821,7 @@ internal sealed class BinderContext
                 edge.Accesses.Add(access);
             }
 
-            if (state.UpstreamLabels.TryGetValue(variable, out var upstreamLabels))
+            if (state.UpstreamLabels.TryGetValue(path, out var upstreamLabels))
             {
                 foreach (var upstreamLabel in upstreamLabels)
                 {

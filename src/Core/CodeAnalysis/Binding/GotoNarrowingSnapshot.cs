@@ -32,48 +32,58 @@ internal enum BackwardGotoNarrowingUseKind
 
 internal sealed class GotoNarrowingSnapshot
 {
-    private readonly Dictionary<VariableSymbol, TypeSymbol> narrowedVariables;
-    private readonly Dictionary<VariableSymbol, int> narrowingFrameIndices;
+    private readonly Dictionary<AccessPath, TypeSymbol> narrowedVariables;
+    private readonly Dictionary<AccessPath, int> narrowingFrameIndices;
     private readonly Dictionary<VariableSymbol, int> assignmentGenerations;
 
     public GotoNarrowingSnapshot(
-        IReadOnlyDictionary<VariableSymbol, TypeSymbol> narrowedVariables,
-        IReadOnlyDictionary<VariableSymbol, int> narrowingFrameIndices,
+        IReadOnlyDictionary<AccessPath, TypeSymbol> narrowedVariables,
+        IReadOnlyDictionary<AccessPath, int> narrowingFrameIndices,
         IReadOnlyDictionary<VariableSymbol, int> assignmentGenerations,
-        ImmutableArray<FinallyClauseSyntax> activeFinallyClauses)
+        ImmutableArray<FinallyClauseSyntax> activeFinallyClauses,
+        ImmutableHashSet<string> definedLabels)
     {
-        this.narrowedVariables = new Dictionary<VariableSymbol, TypeSymbol>(narrowedVariables);
-        this.narrowingFrameIndices = new Dictionary<VariableSymbol, int>(narrowingFrameIndices);
+        this.narrowedVariables = new Dictionary<AccessPath, TypeSymbol>(narrowedVariables);
+        this.narrowingFrameIndices = new Dictionary<AccessPath, int>(narrowingFrameIndices);
         this.assignmentGenerations = new Dictionary<VariableSymbol, int>(assignmentGenerations);
-        NarrowedVariables = new ReadOnlyDictionary<VariableSymbol, TypeSymbol>(this.narrowedVariables);
-        NarrowingFrameIndices = new ReadOnlyDictionary<VariableSymbol, int>(this.narrowingFrameIndices);
+        NarrowedVariables = new ReadOnlyDictionary<AccessPath, TypeSymbol>(this.narrowedVariables);
+        NarrowingFrameIndices = new ReadOnlyDictionary<AccessPath, int>(this.narrowingFrameIndices);
         AssignmentGenerations = new ReadOnlyDictionary<VariableSymbol, int>(this.assignmentGenerations);
         ActiveFinallyClauses = activeFinallyClauses;
+        DefinedLabels = definedLabels;
     }
 
-    public IReadOnlyDictionary<VariableSymbol, TypeSymbol> NarrowedVariables { get; }
+    public IReadOnlyDictionary<AccessPath, TypeSymbol> NarrowedVariables { get; }
 
-    public IReadOnlyDictionary<VariableSymbol, int> NarrowingFrameIndices { get; }
+    public IReadOnlyDictionary<AccessPath, int> NarrowingFrameIndices { get; }
 
     public IReadOnlyDictionary<VariableSymbol, int> AssignmentGenerations { get; }
 
     public ImmutableArray<FinallyClauseSyntax> ActiveFinallyClauses { get; }
 
-    public GotoNarrowingSnapshot Clone()
-        => new(narrowedVariables, NarrowingFrameIndices, AssignmentGenerations, ActiveFinallyClauses);
+    public ImmutableHashSet<string> DefinedLabels { get; }
 
-    public void RemoveNarrowing(VariableSymbol variable)
+    public GotoNarrowingSnapshot Clone()
+        => new(narrowedVariables, NarrowingFrameIndices, AssignmentGenerations, ActiveFinallyClauses, DefinedLabels);
+
+    public void RemoveNarrowing(AccessPath path)
     {
-        narrowedVariables.Remove(variable);
-        narrowingFrameIndices.Remove(variable);
-        assignmentGenerations.Remove(variable);
+        narrowedVariables.Remove(path);
+        narrowingFrameIndices.Remove(path);
+        if (!path.HasMembers)
+        {
+            assignmentGenerations.Remove(path.Root);
+        }
     }
 
-    public void SetNarrowing(VariableSymbol variable, TypeSymbol type)
+    public void SetNarrowing(AccessPath path, TypeSymbol type)
     {
-        narrowedVariables[variable] = type;
-        narrowingFrameIndices.Remove(variable);
-        assignmentGenerations.Remove(variable);
+        narrowedVariables[path] = type;
+        narrowingFrameIndices.Remove(path);
+        if (!path.HasMembers)
+        {
+            assignmentGenerations.Remove(path.Root);
+        }
     }
 }
 
@@ -90,7 +100,7 @@ internal sealed class BackwardGotoNarrowingState
 
     public List<BackwardGotoNarrowingEdge> Edges { get; } = new();
 
-    public Dictionary<VariableSymbol, HashSet<string>> UpstreamLabels { get; } = new();
+    public Dictionary<AccessPath, HashSet<string>> UpstreamLabels { get; } = new();
 
     public BackwardGotoNarrowingState Clone()
     {
@@ -111,12 +121,15 @@ internal sealed class BackwardGotoNarrowingState
 }
 
 internal sealed record BackwardGotoNarrowingAccess(
-    VariableSymbol Variable,
+    AccessPath Path,
     TextLocation Location,
     string MemberName,
     BackwardGotoNarrowingUseKind Kind,
     TypeSymbol RequiredType,
-    TypeSymbol? TargetType = null);
+    TypeSymbol? TargetType = null)
+{
+    public VariableSymbol Variable => Path.Root;
+}
 
 internal sealed class BackwardGotoNarrowingEdge
 {

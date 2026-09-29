@@ -149,8 +149,8 @@ internal sealed partial class StatementBinder
 
     private GotoNarrowingSnapshot CaptureGotoNarrowingSnapshot()
     {
-        var narrowedAtSource = new Dictionary<VariableSymbol, TypeSymbol>();
-        var narrowingFrameIndices = new Dictionary<VariableSymbol, int>();
+        var narrowedAtSource = new Dictionary<AccessPath, TypeSymbol>();
+        var narrowingFrameIndices = new Dictionary<AccessPath, int>();
 
         // Frames are ordered outermost to innermost, so overwriting records
         // the currently effective narrowing for a repeated root.
@@ -159,11 +159,8 @@ internal sealed partial class StatementBinder
             var frame = binderCtx.NarrowedVariables[i];
             foreach (var entry in frame)
             {
-                if (!entry.Key.HasMembers)
-                {
-                    narrowedAtSource[entry.Key.Root] = entry.Value;
-                    narrowingFrameIndices[entry.Key.Root] = i;
-                }
+                narrowedAtSource[entry.Key] = entry.Value;
+                narrowingFrameIndices[entry.Key] = i;
             }
         }
 
@@ -171,7 +168,8 @@ internal sealed partial class StatementBinder
             narrowedAtSource,
             narrowingFrameIndices,
             binderCtx.AssignmentNarrowingGenerations,
-            activeFinallyClauses.ToImmutableArray());
+            activeFinallyClauses.ToImmutableArray(),
+            binderCtx.DefinedUserLabels.ToImmutableHashSet());
     }
 
     private void AddUpstreamLabelDependencies(
@@ -183,25 +181,26 @@ internal sealed partial class StatementBinder
             return;
         }
 
-        foreach (var variable in targetState.TargetSnapshot.NarrowedVariables.Keys)
+        foreach (var path in targetState.TargetSnapshot.NarrowedVariables.Keys)
         {
             foreach (var snapshot in incomingSnapshots)
             {
                 foreach (var priorState in binderCtx.BackwardGotoNarrowingStates)
                 {
-                    if (!NarrowingProofDependsOn(snapshot, priorState.Value.TargetSnapshot, variable))
+                    if (!snapshot.DefinedLabels.Contains(priorState.Key)
+                        || !NarrowingProofDependsOn(snapshot, priorState.Value.TargetSnapshot, path))
                     {
                         continue;
                     }
 
-                    if (!targetState.UpstreamLabels.TryGetValue(variable, out var labels))
+                    if (!targetState.UpstreamLabels.TryGetValue(path, out var labels))
                     {
                         labels = new HashSet<string>();
-                        targetState.UpstreamLabels.Add(variable, labels);
+                        targetState.UpstreamLabels.Add(path, labels);
                     }
 
                     labels.Add(priorState.Key);
-                    if (priorState.Value.UpstreamLabels.TryGetValue(variable, out var upstream))
+                    if (priorState.Value.UpstreamLabels.TryGetValue(path, out var upstream))
                     {
                         labels.UnionWith(upstream);
                     }
@@ -213,13 +212,14 @@ internal sealed partial class StatementBinder
     private static bool NarrowingProofDependsOn(
         GotoNarrowingSnapshot source,
         GotoNarrowingSnapshot target,
-        VariableSymbol variable)
-        => source.NarrowedVariables.ContainsKey(variable)
-            && source.NarrowingFrameIndices.TryGetValue(variable, out var sourceFrame)
-            && target.NarrowingFrameIndices.TryGetValue(variable, out var targetFrame)
+        AccessPath path)
+        => source.NarrowedVariables.ContainsKey(path)
+            && source.NarrowingFrameIndices.TryGetValue(path, out var sourceFrame)
+            && target.NarrowingFrameIndices.TryGetValue(path, out var targetFrame)
             && sourceFrame == targetFrame
-            && (!source.AssignmentGenerations.TryGetValue(variable, out var sourceGeneration)
-                || (target.AssignmentGenerations.TryGetValue(variable, out var targetGeneration)
+            && (path.HasMembers
+                || !source.AssignmentGenerations.TryGetValue(path.Root, out var sourceGeneration)
+                || (target.AssignmentGenerations.TryGetValue(path.Root, out var targetGeneration)
                     && sourceGeneration <= targetGeneration));
 
     /// <summary>

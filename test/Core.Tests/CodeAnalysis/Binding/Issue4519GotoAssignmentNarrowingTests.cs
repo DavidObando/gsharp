@@ -609,6 +609,94 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_InvalidatesNarrowedMemberPath()
+    {
+        var result = Evaluate("""
+            data class Box(Value string?) {
+            }
+
+            func Run() int32 {
+                var box = Box("safe")
+                if box.Value != nil {
+                Again:
+                    let length = box.Value.Length
+                    box = Box(nil)
+                    goto Again
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_IncompatibleSubtypeDoesNotPreserveTargetNarrowing()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                func Bark() string { return "woof" }
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Cat{}
+                if x is Cat {
+                    goto Use
+                }
+            Guard:
+                if x !is Dog {
+                    return ""
+                }
+            Use:
+                return x.Bark()
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("Bark()", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void UnrelatedEarlierGotoDoesNotLinkLaterBackwardLabel()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(skip bool) int32 {
+                var x string? = nil
+                x = "safe"
+                if skip {
+                    goto Use
+                }
+                var first = true
+            Again:
+                if first {
+                    first = false
+                    x = nil
+                    goto Again
+                }
+                x = "safe"
+            Use:
+                return x.Length
+            }
+
+            Console.WriteLine(Run(true))
+            Console.WriteLine(Run(false))
+            """, "4", "4");
+    }
+
+    [Fact]
     public void ForwardGoto_BypassesLabeledSwitchGuard_ReportsMemberAccess()
     {
         var result = Evaluate("""

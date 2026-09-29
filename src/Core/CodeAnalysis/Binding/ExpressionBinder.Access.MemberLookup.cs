@@ -190,17 +190,28 @@ internal sealed partial class ExpressionBinder
                 return;
         }
 
-        if (receiver is not BoundVariableExpression variableRead
-            || variableRead.NarrowedType == null)
+        AccessPath path;
+        if (receiver is BoundVariableExpression { NarrowedType: not null } variableRead)
+        {
+            path = AccessPath.ForVariable(variableRead.Variable);
+        }
+        else if (receiver == null
+            || !SmartCastStability.TryGetStableMemberPath(receiver, out var stablePath, out _))
         {
             return;
+        }
+        else
+        {
+            path = Invariant.Required(
+                stablePath,
+                "a narrowed stable member receiver has an access path");
         }
 
         var kind = isInvocation
             ? BackwardGotoNarrowingUseKind.Function
             : BackwardGotoNarrowingUseKind.Member;
         binderCtx.TrackBackwardGotoNarrowingUse(
-            variableRead.Variable,
+            path,
             location,
             memberName,
             kind);

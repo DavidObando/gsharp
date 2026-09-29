@@ -567,14 +567,26 @@ internal sealed partial class StatementBinder
         var variablesToInvalidate = new HashSet<VariableSymbol>(variables);
         if (incomingSnapshots is { Count: > 0 })
         {
-            var preservedByEveryJump = new HashSet<VariableSymbol>(
-                incomingSnapshots[0].NarrowedVariables.Keys);
-            for (var i = 1; i < incomingSnapshots.Count; i++)
+            foreach (var variable in variables)
             {
-                preservedByEveryJump.IntersectWith(incomingSnapshots[i].NarrowedVariables.Keys);
-            }
+                var path = AccessPath.ForVariable(variable);
+                TypeSymbol? targetType = null;
+                for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
+                {
+                    if (binderCtx.NarrowedVariables[i].TryGetValue(path, out targetType))
+                    {
+                        break;
+                    }
+                }
 
-            variablesToInvalidate.ExceptWith(preservedByEveryJump);
+                if (targetType != null
+                    && incomingSnapshots.All(snapshot =>
+                        snapshot.NarrowedVariables.TryGetValue(path, out var sourceType)
+                        && Conversion.Classify(sourceType, targetType).IsImplicit))
+                {
+                    variablesToInvalidate.Remove(variable);
+                }
+            }
         }
 
         if (variablesToInvalidate.Count == 0)
@@ -608,7 +620,7 @@ internal sealed partial class StatementBinder
                 foreach (var access in edge.Accesses)
                 {
                     if ((!sourceSnapshot.NarrowedVariables.TryGetValue(
-                            access.Variable,
+                            access.Path,
                             out var sourceType)
                             || !Conversion.Classify(sourceType, access.RequiredType).IsImplicit)
                         && reported.Add(access))
@@ -675,7 +687,7 @@ internal sealed partial class StatementBinder
 
             foreach (var entry in snapshot.NarrowedVariables.ToArray())
             {
-                if (summary.Mutations.InvalidatesNarrowing(entry.Key, entry.Value))
+                if (summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
                 {
                     snapshot.RemoveNarrowing(entry.Key);
                 }
@@ -685,7 +697,7 @@ internal sealed partial class StatementBinder
             {
                 if (!entry.Key.HasMembers)
                 {
-                    snapshot.SetNarrowing(entry.Key.Root, entry.Value);
+                    snapshot.SetNarrowing(entry.Key, entry.Value);
                 }
             }
         }
