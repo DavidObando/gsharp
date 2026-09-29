@@ -757,7 +757,8 @@ internal sealed partial class StatementBinder
 
             foreach (var entry in snapshot.NarrowedVariables.ToArray())
             {
-                if (summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
+                if ((entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
+                    || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
                 {
                     snapshot.RemoveNarrowing(entry.Key);
                 }
@@ -1431,6 +1432,39 @@ internal sealed partial class StatementBinder
 
         public HashSet<VariableSymbol> Roots { get; } = new HashSet<VariableSymbol>();
 
+        public bool MayMutateMemberPaths { get; private set; }
+
+        public override void VisitExpression(BoundExpression? node)
+        {
+            if (node == null)
+            {
+                return;
+            }
+
+            if (IsPotentiallyMutatingMemberPathExpression(node.Kind))
+            {
+                MayMutateMemberPaths = true;
+            }
+
+            if (node is BoundCallOperationExpression
+                {
+                    CalledFunction: FunctionSymbol function,
+                    Arguments: var arguments,
+                })
+            {
+                var count = Math.Min(arguments.Length, function.Parameters.Length);
+                for (var i = 0; i < count; i++)
+                {
+                    if (function.Parameters[i].RefKind is RefKind.Ref or RefKind.Out)
+                    {
+                        RecordWritableReference(arguments[i]);
+                    }
+                }
+            }
+
+            base.VisitExpression(node);
+        }
+
         public bool AssignsRoot(VariableSymbol root)
         {
             return Roots.Contains(root)
@@ -1479,12 +1513,34 @@ internal sealed partial class StatementBinder
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
             if (node.Initializer != null
-                && UnwrapCallable(node.Initializer) is BoundFunctionLiteralExpression literal)
+                && TryGetFunctionLiteral(node.Initializer, out var literal))
             {
                 functionLiterals[node.Variable] = literal;
             }
 
             base.VisitVariableDeclaration(node);
+        }
+
+        private bool TryGetFunctionLiteral(
+            BoundExpression expression,
+            [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundFunctionLiteralExpression? literal)
+        {
+            var callable = UnwrapCallable(expression);
+            if (callable is BoundFunctionLiteralExpression direct)
+            {
+                literal = direct;
+                return true;
+            }
+
+            if (callable is BoundVariableExpression variable
+                && functionLiterals.TryGetValue(variable.Variable, out var stored))
+            {
+                literal = stored;
+                return true;
+            }
+
+            literal = null;
+            return false;
         }
 
         private static BoundExpression UnwrapCallable(BoundExpression expression)
@@ -1506,6 +1562,15 @@ internal sealed partial class StatementBinder
         {
             if (node.Variable != null)
             {
+                if (TryGetFunctionLiteral(node.Expression, out var literal))
+                {
+                    functionLiterals[node.Variable] = literal;
+                }
+                else
+                {
+                    functionLiterals.Remove(node.Variable);
+                }
+
                 Roots.Add(node.Variable);
                 if (!assignments.TryGetValue(node.Variable, out var rootAssignments))
                 {
@@ -1517,6 +1582,57 @@ internal sealed partial class StatementBinder
             }
 
             base.VisitAssignmentExpression(node);
+        }
+
+        protected override void VisitAddressOfExpression(BoundAddressOfExpression node)
+        {
+            if (!node.IsReadOnly)
+            {
+                RecordWritableReference(node.Operand);
+            }
+
+            base.VisitAddressOfExpression(node);
+        }
+
+        private void RecordWritableReference(BoundExpression expression)
+        {
+            while (true)
+            {
+                expression = expression switch
+                {
+                    BoundAddressOfExpression address => address.Operand,
+                    BoundConversionExpression conversion => conversion.Expression,
+                    BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion => assertion.Operand,
+                    _ => expression,
+                };
+
+                if (expression is not BoundAddressOfExpression
+                    and not BoundConversionExpression
+                    and not BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion })
+                {
+                    break;
+                }
+            }
+
+            if (expression is BoundVariableExpression variable)
+            {
+                Roots.Add(variable.Variable);
+                return;
+            }
+
+            if (!SmartCastStability.TryGetStableMemberPath(expression, out var path, out _))
+            {
+                return;
+            }
+
+            if (path.HasMembers)
+            {
+                MayMutateMemberPaths = true;
+            }
+            else
+            {
+                Roots.Add(path.Root);
+            }
         }
 
         protected override void VisitFieldAssignmentExpression(BoundFieldAssignmentExpression node)
@@ -1554,23 +1670,6 @@ internal sealed partial class StatementBinder
         public LoopBackEdgeMutationCollector(Func<BoundAssignmentExpression, TypeSymbol, bool> assignmentPreservesNarrowing)
             : base(assignmentPreservesNarrowing)
         {
-        }
-
-        public bool MayMutateMemberPaths { get; private set; }
-
-        public override void VisitExpression(BoundExpression? node)
-        {
-            if (node == null)
-            {
-                return;
-            }
-
-            if (IsPotentiallyMutatingMemberPathExpression(node.Kind))
-            {
-                MayMutateMemberPaths = true;
-            }
-
-            base.VisitExpression(node);
         }
     }
 

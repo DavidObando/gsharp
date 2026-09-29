@@ -3461,12 +3461,29 @@ internal sealed class ConversionClassifier
                     && parameterArgumentLocations[paramIndex] is { } mappedLocation
                         ? mappedLocation
                         : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
-                if (TryRejectClrPlatformContainerArgument(
-                    arguments[i],
-                    parameters[paramIndex],
-                    parameterType,
-                    location,
-                    out var rejectedArgument))
+                if (binderCtx.TryGetBackwardGotoNarrowingPath(arguments[i], out var path, out var narrowedType)
+                    && (Invariant.Required(path, "a narrowed constrained-call argument has an access path").HasMembers
+                        || !BinderContext.NarrowedReadChangesRuntimeType(
+                            path.Root.Type,
+                            Invariant.Required(narrowedType, "a narrowed constrained-call argument has a narrowed type")))
+                    && parameterType is not NullableTypeSymbol
+                    && parameterType is not PlatformTypeSymbol)
+                {
+                    binderCtx.TrackBackwardGotoNarrowingUse(
+                        path,
+                        location,
+                        string.Empty,
+                        BackwardGotoNarrowingUseKind.Conversion,
+                        parameterType);
+                }
+
+                if (Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
+                    && TryRejectClrPlatformContainerArgument(
+                        arguments[i],
+                        parameters[paramIndex],
+                        parameterType,
+                        location,
+                        out var rejectedArgument))
                 {
                     builder ??= arguments.ToBuilder();
                     builder[i] = rejectedArgument;

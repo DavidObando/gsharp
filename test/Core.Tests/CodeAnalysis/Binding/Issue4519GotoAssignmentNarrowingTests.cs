@@ -1091,6 +1091,161 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyIncludesInvokedCallableAliasMutation()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let alias (() -> void) = mutate
+                    var assigned (() -> void) = func() { }
+                    assigned = alias
+                    assigned()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyIncludesWritableRefMutation()
+    {
+        var result = Evaluate("""
+            func Clear(out value string?) {
+                value = nil
+            }
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    Clear(&x)
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = result.Diagnostics.Single(d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyReadonlyRefPreservesUnrelatedNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Observe(in value string) {
+            }
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var observed = "read"
+                try {
+                    goto Done
+                }
+                finally {
+                    Observe(&observed)
+                }
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void BackwardGoto_FinallyIncludesMemberPathMutation()
+    {
+        var result = Evaluate("""
+            class Box {
+                var Value string?
+
+                init(value string?) {
+                    Value = value
+                }
+            }
+
+            func Clear(box Box) {
+                box.Value = nil
+            }
+
+            func Run() int32 {
+                let box = Box("safe")
+                if box.Value != nil {
+                Again:
+                    let length = box.Value.Length
+                    try {
+                        if box.Value != nil {
+                            goto Again
+                        }
+                    }
+                    finally {
+                        Clear(box)
+                    }
+                    return length
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_ConstrainedCallArgumentTracksNarrowing()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Run[T IConvertible](convertible T) object? {
+                var x Type? = nil
+                x = "".GetType()
+                var count = 0
+            Again:
+                let converted = convertible.ToType(x, nil)
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return converted
+            }
+
+            Run(1)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_IntoNestedScopePreservesOuterNarrowingFrame()
     {
         AssertRuns("""
