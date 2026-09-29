@@ -25,25 +25,30 @@ import (
 var overlayDiagnosticPath = regexp.MustCompile(`[^\s\n]*gocommand-[0-9]+[/\\][0-9]+-([^:\s\n]+)`)
 
 type inventoryBuilder struct {
-	analysis       *Analysis
-	sourceRoot     string
-	goroot         string
-	profile        Profile
-	packageIDs     map[*packages.Package]string
-	packagePathIDs map[string]string
-	typeIDs        map[types.Type]string
-	objectIDs      map[objectRef]string
-	fileIDs        map[string]string
-	moduleIDs      map[string]string
-	seenModules    map[string]bool
-	seenFiles      map[string]bool
-	seenTypes      map[string]bool
-	seenSymbols    map[string]bool
-	seenMethodSets map[string]bool
-	scopeIDs       map[*types.Scope]string
-	scopeRanges    []scopeRange
-	diagnosticSeq  int
-	sourceSnapshot map[string][]byte
+	analysis         *Analysis
+	sourceRoot       string
+	goroot           string
+	profile          Profile
+	packageIDs       map[*packages.Package]string
+	packagePathIDs   map[string]string
+	typeIDs          map[types.Type]string
+	objectIDs        map[objectRef]string
+	fileIDs          map[string]string
+	moduleIDs        map[string]string
+	seenModules      map[string]bool
+	seenFiles        map[string]bool
+	seenTypes        map[string]bool
+	seenSymbols      map[string]bool
+	seenMethodSets   map[string]bool
+	scopeIDs         map[*types.Scope]string
+	scopeRanges      []scopeRange
+	diagnosticSeq    int
+	sourceSnapshot   map[string][]byte
+	snapshotPortable map[string]string
+	inputDrift       map[string]bool
+	snapshotFiles    map[string][]string
+	snapshotRoles    map[string]map[string]string
+	memberIdentity   map[types.Object]string
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
@@ -54,6 +59,8 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		moduleIDs: map[string]string{}, seenModules: map[string]bool{},
 		seenFiles: map[string]bool{}, seenTypes: map[string]bool{}, seenSymbols: map[string]bool{},
 		seenMethodSets: map[string]bool{}, scopeIDs: map[*types.Scope]string{},
+		inputDrift: map[string]bool{}, snapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
+		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
 	}
 }
 
@@ -99,6 +106,7 @@ func (b *inventoryBuilder) indexPackages(packages []*packages.Package) {
 			b.packagePathIDs[pkg.PkgPath] = id
 		}
 	}
+	b.indexDeclaredMembers(packages)
 }
 
 func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
@@ -111,6 +119,10 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 		ID: pkgID, ImportPath: pkg.PkgPath, Name: pkg.Name, Variant: packageVariant(pkg),
 		ModuleID: moduleID, LanguageVersion: moduleGoVersion(pkg.Module),
 		InventoryComplete: !pkg.IllTyped && len(pkg.Errors) == 0,
+	}
+	if b.inputDrift[packageInputKey(pkg)] {
+		record.InventoryComplete = false
+		b.block("input-drift", "selected package inputs changed while loading", []string{pkgID}, nil)
 	}
 
 	importKeys := make([]string, 0, len(pkg.Imports))
@@ -231,10 +243,11 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	all = append(all, pkg.IgnoredFiles...)
 	all = append(all, pkg.OtherFiles...)
 	all = append(all, pkg.EmbedFiles...)
+	all = append(all, b.snapshotFiles[packageInputKey(pkg)]...)
 	all = uniqueSorted(all)
 	newFiles := 0
 	for _, path := range all {
-		if b.fileIDs[b.fileKey(pkg, path)] == "" {
+		if _, captured := b.sourceSnapshot[path]; captured && b.fileIDs[b.fileKey(pkg, path)] == "" {
 			newFiles++
 		}
 	}
@@ -246,6 +259,11 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		record.InventoryComplete = false
 	}
 	for _, path := range all {
+		if _, captured := b.sourceSnapshot[path]; !captured {
+			b.block("input-snapshot", "selected package input was not captured before loading", []string{record.ID}, nil)
+			record.InventoryComplete = false
+			continue
+		}
 		role, reason := "active", ""
 		switch {
 		case embed[path]:
@@ -262,6 +280,12 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			role = "active"
 		default:
 			role, reason = "input", "reported by go/packages"
+		}
+		if snapshotRole := b.snapshotRoles[packageInputKey(pkg)][path]; snapshotRole != "" &&
+			!contains(pkg.GoFiles, path) && !contains(pkg.CompiledGoFiles, path) &&
+			!contains(pkg.IgnoredFiles, path) && !contains(pkg.OtherFiles, path) && !contains(pkg.EmbedFiles, path) {
+			role = snapshotRole
+			reason = "captured before package loading"
 		}
 		fileID, err := b.addFile(pkg, path, role, reason)
 		if err != nil {
@@ -303,20 +327,17 @@ func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason str
 	if id := b.fileIDs[key]; id != "" {
 		return id, nil
 	}
-	portable, err := b.portablePath(pkg, path)
-	if err != nil {
-		return "", err
-	}
-	data := b.sourceSnapshot[path]
-	if data == nil {
-		if _, sourceErr := pathWithin(b.sourceRoot, path); sourceErr == nil && filepath.Ext(path) == ".go" {
-			return "", fmt.Errorf("selected source file was not captured in the immutable loader snapshot: %s", filepath.Base(path))
-		}
+	portable := b.snapshotPortable[path]
+	if portable == "" {
 		var err error
-		data, err = os.ReadFile(path)
+		portable, err = b.portablePath(pkg, path)
 		if err != nil {
 			return "", err
 		}
+	}
+	data, captured := b.sourceSnapshot[path]
+	if !captured {
+		return "", fmt.Errorf("selected package input was not captured in the immutable loader snapshot: %s", filepath.Base(path))
 	}
 	id := stableID("file", b.packageIDs[pkg]+"\x00"+portable+"\x00"+hashBytes(data))
 	record := FileRecord{
@@ -1185,6 +1206,10 @@ func (b *inventoryBuilder) addObjectWithFallback(pkg *packages.Package, object t
 	if object == nil {
 		return ""
 	}
+	object = objectOrigin(object)
+	if identity := b.memberIdentity[object]; identity != "" {
+		fallback = identity
+	}
 	pkgID := b.packageIDs[pkg]
 	if object.Pkg() != nil && object.Pkg().Path() != pkg.PkgPath {
 		pkgID = b.packagePathIDs[object.Pkg().Path()]
@@ -1208,7 +1233,9 @@ func (b *inventoryBuilder) addObjectWithFallback(pkg *packages.Package, object t
 		return id
 	}
 	declarationKey := ""
-	if declaration.Path != "" {
+	if identity := b.memberIdentity[object]; identity != "" {
+		declarationKey = identity
+	} else if declaration.Path != "" {
 		declarationKey = declaration.Path + "\x00" + strconv.Itoa(declaration.StartByte)
 	} else if fallback != "" {
 		declarationKey = fallback
@@ -1228,6 +1255,69 @@ func (b *inventoryBuilder) addObjectWithFallback(pkg *packages.Package, object t
 	}
 	b.analysis.Symbols = append(b.analysis.Symbols, record)
 	return id
+}
+
+func objectOrigin(object types.Object) types.Object {
+	switch value := object.(type) {
+	case *types.Var:
+		return value.Origin()
+	case *types.Func:
+		return value.Origin()
+	default:
+		return object
+	}
+}
+
+func (b *inventoryBuilder) indexDeclaredMembers(loaded []*packages.Package) {
+	seen := map[types.Type]bool{}
+	var indexType func(*packages.Package, types.Type)
+	indexType = func(pkg *packages.Package, current types.Type) {
+		switch value := current.(type) {
+		case *types.Pointer:
+			indexType(pkg, value.Elem())
+		case *types.Alias:
+			indexType(pkg, value.Rhs())
+		case *types.Named:
+			if seen[value] {
+				return
+			}
+			seen[value] = true
+			owner := b.typeIdentity(pkg, value)
+			for i := 0; i < value.NumMethods(); i++ {
+				method := value.Method(i).Origin()
+				b.memberIdentity[method] = owner + "\x00method\x00" + strconv.Itoa(i)
+			}
+			switch underlying := value.Underlying().(type) {
+			case *types.Struct:
+				for i := 0; i < underlying.NumFields(); i++ {
+					field := underlying.Field(i).Origin()
+					b.memberIdentity[field] = owner + "\x00field\x00" + strconv.Itoa(i)
+					if field.Embedded() {
+						indexType(pkg, field.Type())
+					}
+				}
+			case *types.Interface:
+				underlying.Complete()
+				for i := 0; i < underlying.NumExplicitMethods(); i++ {
+					method := underlying.ExplicitMethod(i).Origin()
+					b.memberIdentity[method] = owner + "\x00interface-method\x00" + strconv.Itoa(i)
+				}
+				for i := 0; i < underlying.NumEmbeddeds(); i++ {
+					indexType(pkg, underlying.EmbeddedType(i))
+				}
+			}
+		}
+	}
+	for _, pkg := range loaded {
+		if pkg.Types == nil {
+			continue
+		}
+		for _, name := range pkg.Types.Scope().Names() {
+			if object, ok := pkg.Types.Scope().Lookup(name).(*types.TypeName); ok {
+				indexType(pkg, object.Type())
+			}
+		}
+	}
 }
 
 func (b *inventoryBuilder) addModule(module *packages.Module) (string, error) {
@@ -1399,6 +1489,7 @@ func (b *inventoryBuilder) addInitialization(pkg *packages.Package, record *Pack
 }
 
 func (b *inventoryBuilder) addObjectForPackageID(pkgID string, object types.Object) string {
+	object = objectOrigin(object)
 	key := objectRef{object: object, packageID: pkgID}
 	if id := b.objectIDs[key]; id != "" {
 		return id
