@@ -760,10 +760,10 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         var parameterBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(reflectedParameters.Length);
         foreach (var parameter in reflectedParameters)
         {
-            parameterBuilder.Add(new ParameterSymbol(
-                parameter.Name ?? "arg",
+            parameterBuilder.Add(RefCapabilities.CreateParameterSymbol(
+                parameter,
                 ClrNullability.GetParameterTypeSymbol(parameter),
-                refKind: GetRefKind(parameter)));
+                "arg"));
         }
 
         var parameters = parameterBuilder.MoveToImmutable();
@@ -779,21 +779,6 @@ public sealed class ImportedTypeSymbol : TypeSymbol
         {
             ReturnRefKind = RefCapabilities.GetReturnRefKind(method),
         };
-    }
-
-    private static RefKind GetRefKind(ParameterInfo parameter)
-    {
-        if (!parameter.ParameterType.IsByRef)
-        {
-            return RefKind.None;
-        }
-
-        if (parameter.IsOut)
-        {
-            return RefKind.Out;
-        }
-
-        return IsInParameter(parameter) ? RefKind.In : RefKind.Ref;
     }
 
     private static bool IsVisible(FieldInfo field, bool includeInternal)
@@ -843,28 +828,5 @@ public sealed class ImportedTypeSymbol : TypeSymbol
     {
         var accessor = property.GetMethod ?? property.SetMethod;
         return accessor == null ? Accessibility.Private : MapAccessibility(accessor);
-    }
-
-    private static bool IsInParameter(ParameterInfo parameter)
-    {
-        try
-        {
-            foreach (var modifier in parameter.GetRequiredCustomModifiers())
-            {
-                if (string.Equals(
-                    modifier.FullName,
-                    "System.Runtime.InteropServices.InAttribute",
-                    StringComparison.Ordinal))
-                {
-                    return true;
-                }
-            }
-
-            return parameter.IsIn;
-        }
-        catch
-        {
-            return parameter.IsIn;
-        }
     }
 }

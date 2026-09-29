@@ -282,7 +282,7 @@ internal static class RefCapabilities
     internal static RefKind GetParameterRefKind(ParameterInfo parameter)
         => !parameter.ParameterType.IsByRef ? RefKind.None
             : parameter.IsOut && !parameter.IsIn ? RefKind.Out
-            : parameter.IsIn && !parameter.IsOut ? RefKind.In
+            : IsInParameter(parameter) && !parameter.IsOut ? RefKind.In
             : RefKind.Ref;
 
     /// <summary>Returns whether an imported parameter carries <c>[ScopedRef]</c>.</summary>
@@ -291,6 +291,35 @@ internal static class RefCapabilities
     internal static bool IsScoped(ParameterInfo parameter)
         => parameter.GetCustomAttributesData().Any(attribute =>
             KnownAttributes.IsScopedRef(attribute.AttributeType));
+
+    /// <summary>Returns whether an imported parameter carries <c>[UnscopedRef]</c>.</summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <returns><see langword="true"/> when the parameter is explicitly unscoped.</returns>
+    internal static bool HasUnscopedRef(ParameterInfo parameter)
+        => HasUnscopedRefAttribute(parameter.GetCustomAttributesData());
+
+    /// <summary>Creates a parameter symbol that preserves imported ref-safety metadata.</summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <param name="type">The already-projected parameter type.</param>
+    /// <param name="fallbackName">The name to use when metadata has no parameter name.</param>
+    /// <returns>The imported parameter symbol.</returns>
+    internal static ParameterSymbol CreateParameterSymbol(
+        ParameterInfo parameter,
+        TypeSymbol type,
+        string fallbackName)
+    {
+        var symbol = new ParameterSymbol(
+            parameter.Name ?? fallbackName,
+            type,
+            isScoped: IsScoped(parameter),
+            refKind: GetParameterRefKind(parameter));
+        if (HasUnscopedRef(parameter))
+        {
+            symbol.MarkUnscopedRef();
+        }
+
+        return symbol;
+    }
 
     /// <summary>
     /// Issue #4265 soundness guard: true when <paramref name="indexer"/> (or
@@ -481,8 +510,9 @@ internal static class RefCapabilities
     /// <see cref="TryGetRefReturnEscapeSources"/> needs, keeping them in
     /// SEPARATE lists (issue #4265) because the caller checks them with
     /// different scope semantics: <paramref name="byRefArguments"/> holds
-    /// the operand each non-<c>scoped</c> <c>ref</c>/<c>in</c>/<c>out</c>
-    /// argument's address was taken of (checked against its own storage
+    /// the operand each <c>ref</c>/<c>in</c>/<c>out</c> parameter whose
+    /// effective ref scope can contribute to a return had its address taken
+    /// of (checked against its own storage
     /// scope), and <paramref name="byValueByRefLikeArguments"/> holds each
     /// non-<c>scoped</c> by-value byref-like (e.g. <c>Span[T]</c>) argument
     /// unchanged (checked against its ENCAPSULATED REFERENT's scope
@@ -515,7 +545,7 @@ internal static class RefCapabilities
         for (int i = 0; i < count; i++)
         {
             var parameter = parameters[i];
-            if (parameter.IsScoped)
+            if (parameter.GetEffectiveRefScope() == ParameterRefScope.FunctionLocal)
             {
                 continue;
             }
@@ -537,4 +567,18 @@ internal static class RefCapabilities
     private static bool HasUnscopedRefAttribute(IEnumerable<CustomAttributeData>? attributes)
         => attributes?.Any(
             attribute => KnownAttributes.IsUnscopedRef(attribute.AttributeType)) == true;
+
+    private static bool IsInParameter(ParameterInfo parameter)
+    {
+        try
+        {
+            return parameter.IsIn
+                || parameter.GetRequiredCustomModifiers().Any(modifier =>
+                    modifier.FullName == "System.Runtime.InteropServices.InAttribute");
+        }
+        catch
+        {
+            return parameter.IsIn;
+        }
+    }
 }

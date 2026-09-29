@@ -269,9 +269,8 @@ internal sealed partial class ExpressionBinder
             foreach (var parameter in candidate.Parameters)
             {
                 var syntheticParameter = new ParameterSymbol(
-                    parameter.Name,
-                    SubstituteIndexerType(parameter.Type, candidateSubstitution),
-                    refKind: parameter.RefKind);
+                    parameter,
+                    SubstituteIndexerType(parameter.Type, candidateSubstitution));
                 if (parameter.HasExplicitDefaultValue)
                 {
                     syntheticParameter.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);

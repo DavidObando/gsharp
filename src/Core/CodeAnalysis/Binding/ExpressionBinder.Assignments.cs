@@ -3419,7 +3419,7 @@ internal sealed partial class ExpressionBinder
 
         var rebindParameter = ReferenceEquals(substitutedPointeeType, resolvedParameter.Type)
             ? resolvedParameter
-            : new ParameterSymbol(resolvedParameter.Name, substitutedPointeeType, refKind: RefKind.Out);
+            : new ParameterSymbol(resolvedParameter, substitutedPointeeType);
         return BindRefArgumentExpression(inlineOutRefArg, rebindParameter);
     }
 

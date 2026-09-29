@@ -1111,6 +1111,7 @@ internal sealed partial class DeclarationBinder
         if (!paramAttrs.IsDefaultOrEmpty)
         {
             parameterSymbol.SetAttributes(paramAttrs);
+            ValidateUnscopedRefParameter(parameterSymbol);
         }
     }
 

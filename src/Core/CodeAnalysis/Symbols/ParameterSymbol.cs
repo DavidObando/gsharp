@@ -7,11 +7,25 @@ using GSharp.Core.CodeAnalysis.Syntax;
 
 namespace GSharp.Core.CodeAnalysis.Symbols;
 
+internal enum ParameterRefScope
+{
+    /// <summary>The reference may flow to the caller.</summary>
+    Caller,
+
+    /// <summary>The reference may flow only through the current return.</summary>
+    ReturnOnly,
+
+    /// <summary>The reference cannot leave the current function.</summary>
+    FunctionLocal,
+}
+
 /// <summary>
 /// Represents a function declaration parameter symbol in the language.
 /// </summary>
 public sealed class ParameterSymbol : LocalVariableSymbol
 {
+    private bool hasUnscopedRef;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="ParameterSymbol"/> class.
     /// </summary>
@@ -41,6 +55,25 @@ public sealed class ParameterSymbol : LocalVariableSymbol
         IsVariadic = isVariadic;
         IsScoped = isScoped;
         RefKind = refKind;
+    }
+
+    /// <summary>
+    /// Initializes a new instance of the <see cref="ParameterSymbol"/> class
+    /// with a substituted type and the same ref-safety contract as <paramref name="source"/>.
+    /// </summary>
+    /// <param name="source">The parameter whose contract is copied.</param>
+    /// <param name="type">The substituted parameter type.</param>
+    /// <param name="declaringSyntax">The syntax to associate with the clone, if any.</param>
+    internal ParameterSymbol(ParameterSymbol source, TypeSymbol type, SyntaxNode? declaringSyntax = null)
+        : this(
+            source.Name,
+            type,
+            source.IsVariadic,
+            declaringSyntax,
+            source.IsScoped,
+            source.RefKind)
+    {
+        hasUnscopedRef = source.HasUnscopedRef;
     }
 
     /// <inheritdoc/>
@@ -145,6 +178,13 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     public MarshalAsMetadata? MarshalAsMetadata { get; private set; }
 
     /// <summary>
+    /// Gets a value indicating whether this parameter carries the
+    /// <c>@UnscopedRef</c> contract, including on a source parameter clone
+    /// whose attributes are intentionally not re-emitted.
+    /// </summary>
+    internal bool HasUnscopedRef => hasUnscopedRef;
+
+    /// <summary>
     /// Records the constant default value for this parameter (ADR-0063). Called exactly
     /// once by the binder when the parameter syntax includes a <c>= constant</c> clause
     /// and the constant has passed all ADR-0063 §3 restrictions.
@@ -168,4 +208,44 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     {
         MarshalAsMetadata = metadata;
     }
+
+    /// <summary>Records an imported <c>[UnscopedRef]</c> parameter contract.</summary>
+    internal void MarkUnscopedRef()
+    {
+        hasUnscopedRef = true;
+    }
+
+    /// <summary>
+    /// Gets the parameter's effective ref-safe-context. Under C#'s updated
+    /// escape rules, <c>ref</c>/<c>in</c> parameters are return-only,
+    /// <c>out</c> parameters are function-local, and <c>@UnscopedRef</c>
+    /// widens the applicable default.
+    /// </summary>
+    /// <returns>The effective ref-safe-context.</returns>
+    internal ParameterRefScope GetEffectiveRefScope()
+    {
+        if (IsScoped)
+        {
+            return ParameterRefScope.FunctionLocal;
+        }
+
+        if (RefKind == RefKind.Out)
+        {
+            return HasUnscopedRef ? ParameterRefScope.ReturnOnly : ParameterRefScope.FunctionLocal;
+        }
+
+        if (RefKind is RefKind.Ref or RefKind.In or RefKind.RefReadOnly)
+        {
+            return HasUnscopedRef ? ParameterRefScope.Caller : ParameterRefScope.ReturnOnly;
+        }
+
+        return ParameterRefScope.Caller;
+    }
+
+    /// <summary>Returns whether another parameter has the same effective ref contract.</summary>
+    /// <param name="other">The parameter to compare.</param>
+    /// <returns><see langword="true"/> when ref kind and effective ref scope match.</returns>
+    internal bool HasSameRefContract(ParameterSymbol other)
+        => RefKind == other.RefKind
+            && GetEffectiveRefScope() == other.GetEffectiveRefScope();
 }

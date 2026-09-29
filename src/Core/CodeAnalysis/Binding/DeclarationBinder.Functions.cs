@@ -571,12 +571,9 @@ internal sealed partial class DeclarationBinder
         foreach (var parameter in function.Parameters)
         {
             var clone = new ParameterSymbol(
-                parameter.Name,
+                parameter,
                 Binder.SubstituteType(parameter.Type, substitution),
-                parameter.IsVariadic,
-                parameter.DeclaringSyntax,
-                parameter.IsScoped,
-                parameter.RefKind);
+                parameter.DeclaringSyntax);
             if (parameter.HasExplicitDefaultValue)
             {
                 clone.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);
@@ -1038,6 +1035,7 @@ internal sealed partial class DeclarationBinder
         }
 
         parameterSymbol.SetAttributes(paramAttrs);
+        ValidateUnscopedRefParameter(parameterSymbol);
 
         // Issue #180 / ADR-0040: validate @EnumeratorCancellation.
         // The attribute marks the cancellation-token parameter that

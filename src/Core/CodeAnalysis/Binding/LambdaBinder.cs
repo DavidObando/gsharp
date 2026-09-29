@@ -1657,11 +1657,9 @@ internal sealed class LambdaBinder
                 ? targetSlot
                 : GetAdapterSlotType(original.Type, targetSlot);
             var adapterParameter = new ParameterSymbol(
-                original.Name,
+                original,
                 adapterParameterType,
-                declaringSyntax: original.DeclaringSyntax,
-                isScoped: original.IsScoped,
-                refKind: original.RefKind);
+                original.DeclaringSyntax);
             adapterParameter.SetAttributes(original.Attributes);
             adapterParameters.Add(adapterParameter);
             var adapterRead = new BoundVariableExpression(null, adapterParameter);
@@ -2205,6 +2203,18 @@ internal sealed class LambdaBinder
         if (!attributes.IsDefaultOrEmpty)
         {
             parameter.SetAttributes(attributes);
+            var annotation = attributes.FirstOrDefault(KnownAttributes.IsUnscopedRef);
+            if (annotation == null)
+            {
+                return;
+            }
+
+            parameter.MarkUnscopedRef();
+            var reason = DeclarationBinder.GetUnscopedRefParameterRejection(parameter);
+            if (reason != null)
+            {
+                Diagnostics.ReportUnscopedRefInvalidTarget(annotation.Syntax.Location, reason);
+            }
         }
     }
 

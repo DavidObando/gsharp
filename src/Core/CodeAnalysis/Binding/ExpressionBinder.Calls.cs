@@ -2600,10 +2600,10 @@ internal sealed partial class ExpressionBinder
                 openGenericDefinition,
                 symbolicTypeArguments)
                 ?? ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
-            var resolvedParameter = new ParameterSymbol(
-                parameter.Name ?? "value",
+            var resolvedParameter = RefCapabilities.CreateParameterSymbol(
+                parameter,
                 pointeeType,
-                refKind: RefKind.Out);
+                "value");
             _ = BindRefArgumentExpression(inlineOut, resolvedParameter);
         }
     }
@@ -2690,10 +2690,10 @@ internal sealed partial class ExpressionBinder
                 openGenericDefinition,
                 symbolicTypeArguments)
                 ?? ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape();
-            var syntheticParameter = new ParameterSymbol(
-                parameter.Name ?? "value",
+            var syntheticParameter = RefCapabilities.CreateParameterSymbol(
+                parameter,
                 pointeeType,
-                refKind: RefKind.Out);
+                "value");
             rebuilt ??= arguments.ToBuilder();
             rebuilt[i] = BindRefArgumentExpression(refArgument, syntheticParameter);
         }

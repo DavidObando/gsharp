@@ -1635,9 +1635,8 @@ internal sealed partial class OverloadResolver
 
             var parameter = constructor.Parameters[parameterIndex];
             var reboundParameter = new ParameterSymbol(
-                parameter.Name,
-                parameterTypes[parameterIndex],
-                refKind: RefKind.Out);
+                parameter,
+                parameterTypes[parameterIndex]);
             boundArguments[argumentIndex] = bindRefArgumentExpression(inlineOut, reboundParameter);
         }
     }
@@ -1652,12 +1651,9 @@ internal sealed partial class OverloadResolver
         {
             var parameter = constructor.Parameters[i];
             var candidateParameter = new ParameterSymbol(
-                parameter.Name,
+                parameter,
                 effectiveTypes[i],
-                parameter.IsVariadic,
-                parameter.DeclaringSyntax,
-                parameter.IsScoped,
-                parameter.RefKind);
+                parameter.DeclaringSyntax);
             if (parameter.HasExplicitDefaultValue)
             {
                 candidateParameter.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);

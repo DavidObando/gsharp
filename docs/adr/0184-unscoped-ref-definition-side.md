@@ -173,9 +173,8 @@ with GS0253 whether the member is annotated or not.
 
 `return ref <expr>` whose reference is rooted at the enclosing member's own
 receiver, from a member that is not annotated, reports a dedicated diagnostic
-naming the remedy, rather than GS0254's "function-local storage" — which is
-actively misleading here, since the storage in question belongs to the *caller*.
-A reference rooted at a local still gets GS0254.
+naming the remedy, rather than the generic GS0254 — the storage in question
+belongs to the *caller*. A reference rooted at a local still gets GS0254.
 
 The design brief specified ordering this *before* the lvalue/readonly check so
 the generic GS0253 could not mask it. That ordering is unnecessary once decision
@@ -208,16 +207,20 @@ ref-safety relevance predicate, including ordinary by-value methods and
 property accessors. The reverse is legal: an implementation may omit
 `@UnscopedRef` from an annotated slot and keep its own receiver scoped.
 
-Overrides use C#'s narrower ref-safety relevance gate. A mismatch is immediately
-relevant for an unscoped `ref` byref-like parameter or an explicitly scoped
-`out` byref-like parameter. Otherwise it is relevant only when the signature
-has both a potential ref-safety source and enough additional parameters: one
-`ref`/`in`/`out` parameter (or one by-value byref-like parameter) when the
-receiver or return is byref-like or the return is by reference; two such
-by-reference parameters when the trigger is a `ref`/`out` byref-like parameter.
-Thus an ordinary value-returning struct override such as `ToString`, and a
-ref-returning override with no additional parameter, may carry the otherwise
-inert attribute.
+Overrides use G#'s implementation of C#'s narrower ref-safety relevance gate.
+A mismatch is immediately relevant for a byref-like `ref` parameter whose
+effective ref scope is not function-local, or a byref-like `out` parameter
+whose effective ref scope is function-local. The latter includes an ordinary
+`out` parameter under the updated rules; it is not limited to an explicitly
+`scoped out` spelling. Otherwise relevance requires both a potential
+ref-safety source and enough additional parameters: one `ref`/`in`/`out`
+parameter (or one by-value byref-like parameter) when the receiver or return is
+byref-like or the return is by reference; two such by-reference parameters
+when the trigger is a `ref`/`out` byref-like parameter. This reproduces the
+observed `CheckValidScopedOverride` outcomes without claiming that G# exposes
+Roslyn's internal `ScopedKind` model directly. Thus an ordinary value-returning
+struct override such as `ToString`, and a ref-returning override with no
+additional parameter, may carry the otherwise inert attribute.
 
 Override checks reuse the base slot already selected by override resolution.
 Source generic property and indexer contracts are evaluated after substituting
@@ -380,9 +383,8 @@ no copy at all, is how this got in; one shared predicate is what keeps it out.
 **GS0591** is reported in place of the generic GS0254 whenever a `return ref`
 forwards through such a receiver. It gets its own identity for the same reason
 GS0589 did earlier in this ADR: the defensive copy has no spelling in the
-source, so GS0254's "function-local storage" would point the author at storage
-they never wrote. GS0591 names the copy and the remedy — take the receiver by
-`ref` rather than `in`, or return the value.
+source, so generic GS0254 would not identify it. GS0591 names the copy and the
+remedy — take the receiver by `ref` rather than `in`, or return the value.
 
 One consequence is correct but non-obvious, and is pinned by a test on purpose —
 with the reason spelled out, because the obvious reason is the wrong one:
@@ -430,6 +432,33 @@ the by-value spelling) with the same root cause, closed here by the same hook.
 It reports GS0254 rather than GS0591, which is accurate: by the time the
 `return` is bound, the operand really is a scoped local.
 
+## Amendment: implicit parameter ref scopes (issue #4293)
+
+Parameter ref scope is now computed once on `ParameterSymbol`, separately from
+the existing value-scope `IsScoped` bit:
+
+- an `out` parameter has function-local ref scope by default;
+- every `ref` or `in` parameter has return-only ref scope by default, matching
+  Roslyn's `GetParameterRefEscape` rule rather than making that ref scope depend
+  on whether the pointee type is a `ref struct`;
+- `@UnscopedRef` widens those defaults to return-only for `out` and caller
+  scope for `ref`/`in`; and
+- an explicit `scoped` modifier remains function-local and cannot be combined
+  with `@UnscopedRef`.
+
+The distinction is required for C# ref-escape parity. In particular, a `ref`
+parameter may still be returned directly by reference; its default ref escape
+is the return-only boundary, not caller scope. Conversely, an ordinary `out T`
+cannot be returned by reference unless its parameter carries `@UnscopedRef`.
+At call sites, an implicitly scoped `out` argument does not constrain a
+ref-returning call, while an `@UnscopedRef out` argument does.
+
+Roslyn separately gives `ref` parameters of `ref struct` type a scoped
+*value* contract used by its mixing analysis. G# does not yet expose that full
+`ScopedKind`/mixing model, so this amendment does not claim parity for every
+ref-struct assignment shape; it records the ref-escape behavior implemented by
+this issue.
+
 ## Consequences
 
 **What this unlocks**
@@ -460,12 +489,11 @@ It reports GS0254 rather than GS0591, which is accurate: by the time the
 
 **What it does NOT address**
 
-- **`out` parameters and `ref`-to-`ref struct` parameters are not implicitly
-  scoped.** C# scopes both by default; G# does not, which makes G# *less* safe
-  than C# in that corner today. It is a separate, pre-existing gap with its own
-  soundness argument to make and is deliberately untouched here — widening
-  scoping rules and adding an escape hatch in the same change would make neither
-  reviewable.
+- **Ref-struct value mixing remains less precise than Roslyn's.** Issue #4293
+  closes the ref-escape half: `out` is function-local, `ref`/`in` is
+  return-only, and parameter-level `@UnscopedRef` widens those defaults.
+  Roslyn's separate scoped-value analysis for a `ref`-to-`ref struct`
+  parameter is not represented by G#'s existing `IsScoped` value bit.
 - **Parameter-level scoped-contract mismatches remain unchecked.** This
   amendment governs the member-level `UnscopedRefAttribute` contract only; it
   does not yet compare `scoped`/unscoped parameter contracts across override or

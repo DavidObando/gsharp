@@ -194,7 +194,7 @@ internal static class DiagnosticDescriptors
     internal static readonly DiagnosticDescriptor RefReturnInNonRefReturningFunction = new("GS0251", DiagnosticSeverity.Error, "'return ref' is not allowed in '{0}' because its declaration does not specify a 'ref' return type.");
     internal static readonly DiagnosticDescriptor RefReturnRequiredOnRefReturningFunction = new("GS0252", DiagnosticSeverity.Error, "Function '{0}' returns by reference; use 'return ref <lvalue>' instead of a plain 'return'.");
     internal static readonly DiagnosticDescriptor RefReturnRequiresLvalue = new("GS0253", DiagnosticSeverity.Error, "The operand of 'return ref' must be an lvalue (variable, field, array element, or '*p').");
-    internal static readonly DiagnosticDescriptor RefReturnEscapesLocalScope = new("GS0254", DiagnosticSeverity.Error, "Cannot return a managed pointer to function-local storage; the reference would dangle once the function returns.");
+    internal static readonly DiagnosticDescriptor RefReturnEscapesLocalScope = new("GS0254", DiagnosticSeverity.Error, "Cannot return a managed pointer to function-local storage or through a scoped parameter; the reference would escape its permitted scope.");
     internal static readonly DiagnosticDescriptor OverrideReturnRefKindMismatch = new("GS0255", DiagnosticSeverity.Error, "Override of '{0}' must match the base return ref-kind: base returns {1}, this declaration returns {2}.");
     internal static readonly DiagnosticDescriptor RefLocalRhsMustBeLvalue = new("GS0256", DiagnosticSeverity.Error, "The right-hand side of a ref-aliasing local must be an lvalue (a variable, field/property, indexer access, or '*p' dereference); '{0}' is not assignable.");
     internal static readonly DiagnosticDescriptor RefLocalRhsHasNarrowerEscapeScope = new("GS0257", DiagnosticSeverity.Error, "Cannot bind ref-aliasing local '{0}' to a value whose ref-safe-to-escape scope is narrower than the local's scope; the alias would outlive its referent.");
@@ -556,8 +556,7 @@ internal static class DiagnosticDescriptors
     // body), so a reference into the receiver's own instance state would
     // dangle once the caller's copy dies. `@UnscopedRef` is the opt-out.
     // Reported instead of the generic GS0254 whenever the returned reference
-    // is rooted at the receiver, because the remedy is specific and GS0254's
-    // "function-local storage" wording actively misleads here.
+    // is rooted at the receiver, because the remedy is receiver-specific.
     internal static readonly DiagnosticDescriptor UnscopedRefRequiredForInstanceState = new("GS0589", DiagnosticSeverity.Error, "A struct member cannot return a reference to its own instance state; 'this' is implicitly 'scoped'. Mark the member '@UnscopedRef' (import System.Diagnostics.CodeAnalysis) to allow it.");
 
     // ADR-0184 / issue #376: `@UnscopedRef` only means something on a struct
@@ -573,9 +572,8 @@ internal static class DiagnosticDescriptors
     // is every native G# member. A reference the member returns into its own
     // receiver storage therefore aliases that temp, not the caller's storage.
     // Reported instead of the generic GS0254 because the copy is invisible in
-    // the user's source: GS0254 would point at "function-local storage" the
-    // author never wrote, while GS0591 names the copy and the actual remedy —
-    // the same reasoning that gave GS0589 its own identity in this ADR.
+    // the user's source and needs a receiver-specific remedy — the same
+    // reasoning that gave GS0589 its own identity in this ADR.
     internal static readonly DiagnosticDescriptor RefReturnThroughDefensivelyCopiedReceiver = new("GS0591", DiagnosticSeverity.Error, "Cannot return a reference obtained through a read-only receiver (an 'in' parameter, a 'ref readonly' alias, or a 'ref readonly' result): the receiver is defensively copied into function-local storage before the call, so the returned reference would point into that copy. Use a 'ref' parameter or alias, or return the value instead.");
 
     // ADR-0185: a tuple-destructuring arrow-lambda parameter's pattern
