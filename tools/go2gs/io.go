@@ -219,7 +219,7 @@ func validateAnalysisJSONShape(data []byte) error {
 			"importPackageIds", "initializationOrder", "diagnosticIds", "inventoryComplete",
 		}},
 		{"files", []string{
-			"id", "path", "role", "sha256", "bytes", "contentBase64", "validUtf8",
+			"id", "packageId", "path", "role", "sha256", "bytes", "contentBase64", "validUtf8",
 			"generated", "native", "embed", "provenance",
 		}},
 		{"types", []string{

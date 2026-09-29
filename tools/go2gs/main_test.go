@@ -424,6 +424,79 @@ func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
 			}
 			return false
 		}},
+		{"node-span-outside-file", func(root map[string]any) bool {
+			root["nodes"].([]any)[0].(map[string]any)["span"].(map[string]any)["endByte"] = 1_000_000_000
+			return true
+		}},
+		{"node-span-wrong-file", func(root map[string]any) bool {
+			node := root["nodes"].([]any)[0].(map[string]any)
+			fileID := node["fileId"].(string)
+			current := node["span"].(map[string]any)["path"].(string)
+			for _, raw := range root["files"].([]any) {
+				file := raw.(map[string]any)
+				if file["id"] != fileID && strings.HasPrefix(file["path"].(string), "source://") &&
+					file["path"].(string) != current {
+					node["span"].(map[string]any)["path"] = file["path"]
+					return true
+				}
+			}
+			return false
+		}},
+		{"file-package-owner", func(root map[string]any) bool {
+			file := root["files"].([]any)[0].(map[string]any)
+			owner := file["packageId"].(string)
+			for _, raw := range root["packages"].([]any) {
+				pkg := raw.(map[string]any)
+				if pkg["id"].(string) != owner {
+					file["packageId"] = pkg["id"]
+					return true
+				}
+			}
+			return false
+		}},
+		{"absolute-scheme-payload", func(root map[string]any) bool {
+			root["nodes"].([]any)[0].(map[string]any)["span"].(map[string]any)["path"] = "source:///etc/passwd"
+			return true
+		}},
+		{"initialization-package-owner", func(root map[string]any) bool {
+			files := root["files"].([]any)
+			for _, packageValue := range root["packages"].([]any) {
+				pkg := packageValue.(map[string]any)
+				for _, raw := range pkg["initializationOrder"].([]any) {
+					initialization := raw.(map[string]any)
+					if initialization["kind"] != "init-function" {
+						continue
+					}
+					for _, fileValue := range files {
+						file := fileValue.(map[string]any)
+						if file["packageId"] != pkg["id"] {
+							initialization["fileId"] = file["id"]
+							return true
+						}
+					}
+				}
+			}
+			return false
+		}},
+		{"package-lists-foreign-file", func(root map[string]any) bool {
+			packages := root["packages"].([]any)
+			for _, leftValue := range packages {
+				left := leftValue.(map[string]any)
+				leftFiles := left["fileIds"].([]any)
+				if len(leftFiles) == 0 {
+					continue
+				}
+				for _, rightValue := range packages {
+					right := rightValue.(map[string]any)
+					rightFiles := right["fileIds"].([]any)
+					if right["id"] != left["id"] && len(rightFiles) > 0 {
+						left["fileIds"] = append(leftFiles, rightFiles[0])
+						return true
+					}
+				}
+			}
+			return false
+		}},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -448,6 +521,23 @@ func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
 				t.Fatalf("malformed nested artifact should exit 2, got %v", err)
 			}
 		})
+	}
+}
+
+func TestPortableLocationsRejectEscapesAndMalformedPaths(t *testing.T) {
+	for _, value := range []string{
+		"source://", "source://.", "source://../escape", "source://a/../escape",
+		"source:///etc/passwd", `source://C:/Windows/system.ini`, `source://server\share`,
+		"unknown://file.go",
+	} {
+		if validPortableLocation(value) {
+			t.Errorf("unsafe portable location accepted: %q", value)
+		}
+	}
+	for _, value := range []string{"source://dir/file.go", "goroot://src/fmt/print.go", "module://example.com/m@v1.0.0/file.go"} {
+		if !validPortableLocation(value) {
+			t.Errorf("valid portable location rejected: %q", value)
+		}
 	}
 }
 

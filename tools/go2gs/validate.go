@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	pathpkg "path"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -145,7 +146,6 @@ func validateAnalysis(a Analysis) error {
 			return err
 		}
 	}
-
 	require := func(owner, field, id, kind string) error {
 		if id == "" {
 			return nil
@@ -370,6 +370,9 @@ func validateAnalysis(a Analysis) error {
 			return err
 		}
 	}
+	if err := validateOwnership(a); err != nil {
+		return err
+	}
 	expectedCounts := RecordCounts{
 		Packages: len(a.Packages), Files: len(a.Files), Types: len(a.Types), Symbols: len(a.Symbols),
 		Nodes: len(a.Nodes), Constants: len(a.Constants), Scopes: len(a.Scopes), Selections: len(a.Selections),
@@ -481,7 +484,8 @@ func validateRecordFields(a Analysis) error {
 	}
 	for _, value := range a.Files {
 		data, err := base64.StdEncoding.DecodeString(value.ContentBase64)
-		if value.ID == "" || value.Path == "" || value.Role == "" || value.Provenance == "" ||
+		if value.ID == "" || value.PackageID == "" || !validPortableLocation(value.Path) ||
+			value.Role == "" || value.Provenance == "" ||
 			!validSHA256(value.SHA256) || value.Bytes < 0 || err != nil ||
 			int64(len(data)) != value.Bytes || hashBytes(data) != value.SHA256 {
 			return fmt.Errorf("file %q has invalid required fields or content identity", value.ID)
@@ -625,6 +629,214 @@ func validateSourceSpan(span SourceSpan, owner string) error {
 	return nil
 }
 
+func validateOwnership(a Analysis) error {
+	packages := make(map[string]PackageRecord, len(a.Packages))
+	files := make(map[string]FileRecord, len(a.Files))
+	nodes := make(map[string]NodeRecord, len(a.Nodes))
+	symbols := make(map[string]SymbolRecord, len(a.Symbols))
+	packagePaths := make(map[string]bool, len(a.Packages))
+	fileListings := map[string]map[string]int{}
+	for _, pkg := range a.Packages {
+		packages[pkg.ID] = pkg
+		packagePaths[pkg.ImportPath] = true
+		listings := map[string]int{}
+		for _, fileID := range pkg.FileIDs {
+			listings[fileID]++
+			if listings[fileID] != 1 {
+				return fmt.Errorf("package %q lists file %q more than once", pkg.ID, fileID)
+			}
+		}
+		fileListings[pkg.ID] = listings
+		compiled := map[string]bool{}
+		for _, fileID := range pkg.CompiledFileIDs {
+			if compiled[fileID] {
+				return fmt.Errorf("package %q lists compiled file %q more than once", pkg.ID, fileID)
+			}
+			compiled[fileID] = true
+			if listings[fileID] != 1 {
+				return fmt.Errorf("package %q compiled file %q is not listed exactly once", pkg.ID, fileID)
+			}
+		}
+	}
+	for _, file := range a.Files {
+		if _, ok := packages[file.PackageID]; !ok {
+			return fmt.Errorf("file %q has unknown package %q", file.ID, file.PackageID)
+		}
+		if fileListings[file.PackageID][file.ID] != 1 {
+			return fmt.Errorf("file %q is not listed exactly once by package %q", file.ID, file.PackageID)
+		}
+		files[file.ID] = file
+	}
+	for _, pkg := range a.Packages {
+		for _, fileID := range pkg.FileIDs {
+			if file, ok := files[fileID]; !ok || file.PackageID != pkg.ID {
+				return fmt.Errorf("package %q lists file %q owned by another package", pkg.ID, fileID)
+			}
+		}
+	}
+	for _, node := range a.Nodes {
+		file, ok := files[node.FileID]
+		if !ok || file.PackageID != node.PackageID {
+			return fmt.Errorf("node %q package/file ownership is inconsistent", node.ID)
+		}
+		if err := validateSpanForFile(node.Span, file, node.ID+".span"); err != nil {
+			return err
+		}
+		nodes[node.ID] = node
+	}
+	for _, node := range a.Nodes {
+		if node.ParentID == "" {
+			continue
+		}
+		parent, ok := nodes[node.ParentID]
+		if !ok || parent.PackageID != node.PackageID || parent.FileID != node.FileID {
+			return fmt.Errorf("node %q parent %q ownership is inconsistent", node.ID, node.ParentID)
+		}
+	}
+	for _, symbol := range a.Symbols {
+		if _, ok := packages[symbol.PackageID]; !ok {
+			return fmt.Errorf("symbol %q has unknown package %q", symbol.ID, symbol.PackageID)
+		}
+		if symbol.Declaration != nil {
+			if err := validateSpanInPackage(*symbol.Declaration, symbol.PackageID, fileListings, files, symbol.ID+".declaration"); err != nil {
+				return err
+			}
+		}
+		symbols[symbol.ID] = symbol
+	}
+	for _, node := range a.Nodes {
+		if node.DeclarationID == "" {
+			continue
+		}
+		symbol := symbols[node.DeclarationID]
+		if symbol.PackageID != node.PackageID || symbol.Declaration == nil || *symbol.Declaration != node.Span {
+			return fmt.Errorf("node %q (%s) declaration %q ownership or span is inconsistent: node=%#v declaration=%#v", node.ID, node.Kind, node.DeclarationID, node.Span, symbol.Declaration)
+		}
+	}
+	diagnostics := make(map[string]DiagnosticRecord, len(a.Diagnostics))
+	for _, diagnostic := range a.Diagnostics {
+		diagnostics[diagnostic.ID] = diagnostic
+	}
+	for _, pkg := range a.Packages {
+		diagnosticListings := map[string]bool{}
+		for _, diagnosticID := range pkg.DiagnosticIDs {
+			diagnostic := diagnostics[diagnosticID]
+			if diagnosticListings[diagnosticID] || diagnostic.PackageID != pkg.ID {
+				return fmt.Errorf("package %q diagnostic %q ownership is inconsistent", pkg.ID, diagnosticID)
+			}
+			diagnosticListings[diagnosticID] = true
+		}
+		for _, initialization := range pkg.InitializationOrder {
+			if initialization.FileID != "" {
+				file, ok := files[initialization.FileID]
+				if !ok || file.PackageID != pkg.ID || fileListings[pkg.ID][file.ID] != 1 {
+					return fmt.Errorf("package %q initialization file ownership is inconsistent", pkg.ID)
+				}
+				node, ok := nodes[initialization.NodeID]
+				if !ok || node.PackageID != pkg.ID || node.FileID != file.ID {
+					return fmt.Errorf("package %q initialization node ownership is inconsistent", pkg.ID)
+				}
+				if initialization.Kind == "init-function" && node.Kind != "*ast.FuncDecl" {
+					return fmt.Errorf("package %q init-function does not reference a function declaration", pkg.ID)
+				}
+			}
+			for _, symbolID := range initialization.SymbolIDs {
+				if symbol, ok := symbols[symbolID]; !ok || symbol.PackageID != pkg.ID {
+					return fmt.Errorf("package %q initialization symbol ownership is inconsistent", pkg.ID)
+				}
+			}
+		}
+	}
+	for _, scope := range a.Scopes {
+		if scope.ParentID != "" {
+			parent := findScope(a.Scopes, scope.ParentID)
+			if parent == nil || parent.PackageID != scope.PackageID {
+				return fmt.Errorf("scope %q parent ownership is inconsistent", scope.ID)
+			}
+		}
+		if err := validateSpanInPackage(scope.Span, scope.PackageID, fileListings, files, scope.ID+".span"); err != nil {
+			return err
+		}
+		for _, symbolID := range scope.SymbolIDs {
+			if symbol, ok := symbols[symbolID]; !ok || symbol.PackageID != scope.PackageID {
+				return fmt.Errorf("scope %q symbol ownership is inconsistent", scope.ID)
+			}
+		}
+	}
+	for _, constant := range a.Constants {
+		node := nodes[constant.NodeID]
+		if constant.Span != node.Span {
+			return fmt.Errorf("constant %q span does not match node %q", constant.ID, constant.NodeID)
+		}
+	}
+	for _, embed := range a.Embeds {
+		if file := files[embed.FileID]; file.PackageID != embed.PackageID ||
+			!file.Embed || file.SHA256 != embed.ContentSHA256 {
+			return fmt.Errorf("embed %q package/file ownership is inconsistent", embed.ID)
+		}
+	}
+
+	for _, generate := range a.GenerateDirectives {
+		if err := validateSpanForFile(generate.Span, files[generate.FileID], generate.ID+".span"); err != nil {
+			return err
+		}
+	}
+	for _, feature := range a.FeatureSites {
+		node := nodes[feature.NodeID]
+		if node.PackageID != feature.PackageID || node.FileID != feature.FileID || node.Span != feature.Span {
+			return fmt.Errorf("feature %q node/package/file/span ownership is inconsistent", feature.ID)
+		}
+	}
+	for _, diagnostic := range a.Diagnostics {
+		if diagnostic.PackageID != "" {
+			pkg, ok := packages[diagnostic.PackageID]
+			if !ok {
+				return fmt.Errorf("diagnostic %q has unknown package %q", diagnostic.ID, diagnostic.PackageID)
+			}
+			if !slices.Contains(pkg.DiagnosticIDs, diagnostic.ID) {
+				return fmt.Errorf("diagnostic %q is not listed by package %q", diagnostic.ID, diagnostic.PackageID)
+			}
+			if diagnostic.Span != nil {
+				if err := validateSpanInPackage(*diagnostic.Span, diagnostic.PackageID, fileListings, files, diagnostic.ID+".span"); err != nil {
+					return err
+				}
+			}
+		}
+	}
+	for _, value := range a.Types {
+		if value.Package != "" && !packagePaths[value.Package] {
+			return fmt.Errorf("type %q has unknown package path %q", value.ID, value.Package)
+		}
+	}
+	return nil
+}
+
+func findScope(scopes []ScopeRecord, id string) *ScopeRecord {
+	for i := range scopes {
+		if scopes[i].ID == id {
+			return &scopes[i]
+		}
+	}
+	return nil
+}
+
+func validateSpanInPackage(span SourceSpan, packageID string, listings map[string]map[string]int, files map[string]FileRecord, owner string) error {
+	for fileID := range listings[packageID] {
+		file := files[fileID]
+		if file.Path == span.Path {
+			return validateSpanForFile(span, file, owner)
+		}
+	}
+	return fmt.Errorf("%s path %q does not belong to package %q", owner, span.Path, packageID)
+}
+
+func validateSpanForFile(span SourceSpan, file FileRecord, owner string) error {
+	if span.Path != file.Path || int64(span.StartByte) > file.Bytes || int64(span.EndByte) > file.Bytes {
+		return fmt.Errorf("%s does not match file %q or exceeds its byte bounds", owner, file.ID)
+	}
+	return nil
+}
+
 func validPortableLocation(value string) bool {
 	if value == "" || filepath.IsAbs(value) {
 		return false
@@ -641,8 +853,17 @@ func validPortableLocation(value string) bool {
 		return false
 	}
 	path := strings.TrimPrefix(value, prefix)
-	clean := filepath.Clean(filepath.FromSlash(path))
-	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
+	if path == "" || path == "." || strings.Contains(path, "\\") || isDrivePath(path) ||
+		strings.HasPrefix(path, "/") || filepath.IsAbs(path) || filepath.VolumeName(path) != "" {
+		return false
+	}
+	clean := pathpkg.Clean(path)
+	return clean == path && clean != ".." && !strings.HasPrefix(clean, "../")
+}
+
+func isDrivePath(value string) bool {
+	return len(value) >= 2 && ((value[0] >= 'a' && value[0] <= 'z') ||
+		(value[0] >= 'A' && value[0] <= 'Z')) && value[1] == ':'
 }
 
 func validSHA256(value string) bool {
