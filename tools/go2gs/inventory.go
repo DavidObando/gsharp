@@ -43,7 +43,7 @@ type inventoryBuilder struct {
 	seenSymbols           map[string]bool
 	seenMethodSets        map[string]bool
 	scopeIDs              map[*types.Scope]string
-	scopeRanges           []scopeRange
+	scopeIndexes          map[string]*scopeIndex
 	diagnosticSeq         int
 	sourceSnapshot        map[string][]byte
 	snapshotPortable      map[string]string
@@ -63,7 +63,8 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		moduleIDs: map[string]string{}, seenModules: map[string]bool{},
 		seenFiles: map[string]bool{}, seenTypes: map[string]bool{}, seenSymbols: map[string]bool{},
 		seenMethodSets: map[string]bool{}, scopeIDs: map[*types.Scope]string{},
-		inputDrift: map[string]bool{}, snapshotFiles: map[string][]string{},
+		scopeIndexes: map[string]*scopeIndex{},
+		inputDrift:   map[string]bool{}, snapshotFiles: map[string][]string{},
 		selectedSnapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
 		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
 		skipSemantics: map[*packages.Package]bool{},
@@ -1247,16 +1248,22 @@ func (b *inventoryBuilder) addScopes(pkg *packages.Package) {
 	}
 	var scopes []pair
 	for node, scope := range pkg.TypesInfo.Scopes {
-		scopes = append(scopes, pair{node, scope})
+		scopes = append(scopes, pair{node: node, scope: scope})
 	}
 	sort.Slice(scopes, func(i, j int) bool {
-		return scopes[i].node.Pos() < scopes[j].node.Pos()
+		if scopes[i].node.Pos() != scopes[j].node.Pos() {
+			return scopes[i].node.Pos() < scopes[j].node.Pos()
+		}
+		return scopes[i].node.End() > scopes[j].node.End()
 	})
-	for _, entry := range scopes {
+	ranges := make([]scopeRange, 0, len(scopes))
+	recordStart := len(b.analysis.Scopes)
+	for index := range scopes {
+		entry := &scopes[index]
 		span := b.span(pkg, entry.node.Pos(), entry.node.End())
 		id := stableID("scope", b.packageIDs[pkg]+"\x00"+fmt.Sprintf("%d:%d", span.StartByte, span.EndByte))
 		b.scopeIDs[entry.scope] = id
-		b.scopeRanges = append(b.scopeRanges, scopeRange{packageID: b.packageIDs[pkg], start: entry.node.Pos(), end: entry.node.End(), id: id})
+		ranges = append(ranges, scopeRange{start: entry.node.Pos(), end: entry.node.End(), id: id})
 		names := entry.scope.Names()
 		sort.Strings(names)
 		record := ScopeRecord{ID: id, PackageID: b.packageIDs[pkg], Span: span}
@@ -1270,36 +1277,160 @@ func (b *inventoryBuilder) addScopes(pkg *packages.Package) {
 		}
 		b.analysis.Scopes = append(b.analysis.Scopes, record)
 	}
-	for i := range b.analysis.Scopes {
-		for scope, id := range b.scopeIDs {
-			if id == b.analysis.Scopes[i].ID && scope.Parent() != nil {
-				b.analysis.Scopes[i].ParentID = b.scopeIDs[scope.Parent()]
-			}
+	for index, entry := range scopes {
+		if entry.scope.Parent() != nil {
+			b.analysis.Scopes[recordStart+index].ParentID = b.scopeIDs[entry.scope.Parent()]
 		}
 	}
+	b.scopeIndexes[b.packageIDs[pkg]] = newScopeIndex(ranges)
 }
 
 type scopeRange struct {
-	packageID string
-	start     token.Pos
-	end       token.Pos
-	id        string
+	start token.Pos
+	end   token.Pos
+	id    string
+}
+
+type scopeIndex struct {
+	center      token.Pos
+	left        *scopeIndex
+	right       *scopeIndex
+	byStart     []scopeRange
+	bestByStart []scopeRange
+	byEnd       []scopeRange
+	bestByEnd   []scopeRange
+	centerBest  scopeRange
+}
+
+func newScopeIndex(ranges []scopeRange) *scopeIndex {
+	ranges = append([]scopeRange{}, ranges...)
+	sort.Slice(ranges, func(i, j int) bool {
+		if ranges[i].start != ranges[j].start {
+			return ranges[i].start < ranges[j].start
+		}
+		if ranges[i].end != ranges[j].end {
+			return ranges[i].end > ranges[j].end
+		}
+		return ranges[i].id < ranges[j].id
+	})
+	return buildScopeIndex(ranges)
+}
+
+func buildScopeIndex(ranges []scopeRange) *scopeIndex {
+	if len(ranges) == 0 {
+		return nil
+	}
+	index := &scopeIndex{center: ranges[len(ranges)/2].start}
+	var left, right []scopeRange
+	for _, candidate := range ranges {
+		switch {
+		case candidate.end < index.center:
+			left = append(left, candidate)
+		case candidate.start > index.center:
+			right = append(right, candidate)
+		default:
+			index.byStart = append(index.byStart, candidate)
+			index.centerBest = narrowerScope(index.centerBest, candidate)
+		}
+	}
+	index.bestByStart = scopePrefixBest(index.byStart)
+	index.byEnd = append([]scopeRange{}, index.byStart...)
+	sort.Slice(index.byEnd, func(i, j int) bool {
+		if index.byEnd[i].end != index.byEnd[j].end {
+			return index.byEnd[i].end > index.byEnd[j].end
+		}
+		if index.byEnd[i].start != index.byEnd[j].start {
+			return index.byEnd[i].start < index.byEnd[j].start
+		}
+		return index.byEnd[i].id < index.byEnd[j].id
+	})
+	index.bestByEnd = scopePrefixBest(index.byEnd)
+	index.left = buildScopeIndex(left)
+	index.right = buildScopeIndex(right)
+	return index
+}
+
+func scopePrefixBest(ranges []scopeRange) []scopeRange {
+	best := make([]scopeRange, len(ranges))
+	var current scopeRange
+	for index, candidate := range ranges {
+		current = narrowerScope(current, candidate)
+		best[index] = current
+	}
+	return best
+}
+
+func narrowerScope(left, right scopeRange) scopeRange {
+	if left.id == "" {
+		return right
+	}
+	if right.id == "" {
+		return left
+	}
+	leftWidth, rightWidth := left.end-left.start, right.end-right.start
+	if leftWidth != rightWidth {
+		if leftWidth < rightWidth {
+			return left
+		}
+		return right
+	}
+	if left.start != right.start {
+		if left.start < right.start {
+			return left
+		}
+		return right
+	}
+	if left.end != right.end {
+		if left.end < right.end {
+			return left
+		}
+		return right
+	}
+	if left.id < right.id {
+		return left
+	}
+	return right
+}
+
+func (index *scopeIndex) lookup(pos token.Pos, steps *int) scopeRange {
+	if index == nil {
+		return scopeRange{}
+	}
+	if steps != nil {
+		(*steps)++
+	}
+	var best scopeRange
+	switch {
+	case pos < index.center:
+		count := sort.Search(len(index.byStart), func(i int) bool {
+			if steps != nil {
+				(*steps)++
+			}
+			return index.byStart[i].start > pos
+		})
+		if count > 0 {
+			best = index.bestByStart[count-1]
+		}
+		best = narrowerScope(best, index.left.lookup(pos, steps))
+	case pos > index.center:
+		count := sort.Search(len(index.byEnd), func(i int) bool {
+			if steps != nil {
+				(*steps)++
+			}
+			return index.byEnd[i].end < pos
+		})
+		if count > 0 {
+			best = index.bestByEnd[count-1]
+		}
+		best = narrowerScope(best, index.right.lookup(pos, steps))
+	default:
+		best = index.centerBest
+	}
+	return best
 }
 
 func (b *inventoryBuilder) scopeFor(packageID string, pos token.Pos) string {
-	best := ""
-	var bestWidth token.Pos
-	for _, candidate := range b.scopeRanges {
-		if candidate.packageID != packageID || pos < candidate.start || pos > candidate.end {
-			continue
-		}
-		width := candidate.end - candidate.start
-		if best == "" || width < bestWidth {
-			best = candidate.id
-			bestWidth = width
-		}
-	}
-	return best
+	return b.scopeIndexes[packageID].lookup(pos, nil).id
 }
 
 func (b *inventoryBuilder) addSelections(pkg *packages.Package) {

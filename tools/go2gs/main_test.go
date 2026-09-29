@@ -59,6 +59,7 @@ func validIncompleteAnalysis() Analysis {
 		Helper: VersionIdentity{Version: helperVersion, SHA256: hash},
 		Profile: ProfileSnapshot{
 			ID: "test", SHA256: hash, SourceRootIdentity: "source:test",
+			ExpectedSourceCommit: strings.Repeat("a", 40), ActualSourceCommit: strings.Repeat("a", 40),
 			EntryPatterns: []string{"./..."}, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
 			ArchitectureFeatures: []string{}, BuildTags: []string{}, GOFLAGS: []string{},
 			GODEBUG: map[string]string{}, ModuleMode: "readonly", WorkspaceMode: "off",
@@ -543,13 +544,18 @@ func TestAnalyzeMalformedGitMetadataFailsClosed(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/bad name\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	profile := testProfile()
+	profile.ExpectedSourceCommit = strings.Repeat("a", 40)
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if complete || analysis.InventoryComplete || analysis.Profile.ActualSourceCommit != "" ||
 		!hasBlockerCategory(analysis, "source-metadata") || len(analysis.Packages) != 0 {
 		t.Fatalf("malformed Git metadata did not fail closed: %#v", analysis)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("pinned source-metadata failure produced an invalid artifact: %v", err)
 	}
 }
 
@@ -2515,6 +2521,162 @@ func TestSchemaV1RejectsMigrationReady(t *testing.T) {
 	analysis.MigrationReady = true
 	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "migrationReady") {
 		t.Fatalf("schema v1 accepted migrationReady=true: %v", err)
+	}
+}
+
+func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
+	const expected = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+	const actual = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+	blocker := func(category, blocks string) BlockerRecord {
+		return BlockerRecord{
+			ID: "blocker:" + category + ":" + blocks, Blocks: blocks, Category: category,
+			Message: "test", AffectedUnits: []string{}, DiagnosticIDs: []string{},
+		}
+	}
+	withBlockers := func(analysis Analysis, blockers ...BlockerRecord) Analysis {
+		if blockers == nil {
+			blockers = []BlockerRecord{}
+		}
+		analysis.RecordCounts.Total += len(blockers) - len(analysis.Blockers)
+		analysis.RecordCounts.Blockers = len(blockers)
+		analysis.Blockers = blockers
+		return analysis
+	}
+	complete := withBlockers(validIncompleteAnalysis())
+	complete.InventoryComplete = true
+	if err := validateAnalysis(complete); err != nil {
+		t.Fatalf("matching complete provenance was rejected: %v", err)
+	}
+
+	tests := []struct {
+		name     string
+		analysis Analysis
+		want     string
+	}{
+		{
+			name: "complete mismatch without blocker",
+			analysis: func() Analysis {
+				value := complete
+				value.Profile.ExpectedSourceCommit = expected
+				value.Profile.ActualSourceCommit = actual
+				return value
+			}(),
+			want: "source commit mismatch",
+		},
+		{
+			name: "incomplete mismatch missing source blocker",
+			analysis: func() Analysis {
+				value := validIncompleteAnalysis()
+				value.Profile.ExpectedSourceCommit = expected
+				value.Profile.ActualSourceCommit = actual
+				return value
+			}(),
+			want: "source commit mismatch",
+		},
+		{
+			name: "matching provenance with unexpected source blocker",
+			analysis: withBlockers(
+				validIncompleteAnalysis(),
+				blocker("source", "inventory"),
+			),
+			want: "source commit mismatch",
+		},
+		{
+			name: "mismatch with migration-only source blocker",
+			analysis: func() Analysis {
+				value := withBlockers(validIncompleteAnalysis(), blocker("source", "migration"))
+				value.Profile.ExpectedSourceCommit = expected
+				value.Profile.ActualSourceCommit = actual
+				return value
+			}(),
+			want: "source commit mismatch",
+		},
+		{
+			name: "missing actual commit without source blocker",
+			analysis: func() Analysis {
+				value := validIncompleteAnalysis()
+				value.Profile.ExpectedSourceCommit = expected
+				value.Profile.ActualSourceCommit = ""
+				return value
+			}(),
+			want: "missing actual source commit",
+		},
+		{
+			name: "present actual commit with unexpected metadata blocker",
+			analysis: withBlockers(
+				validIncompleteAnalysis(),
+				blocker("source-metadata", "inventory"),
+			),
+			want: "source-metadata blocker",
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateAnalysis(test.analysis); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("contradictory source provenance was accepted: %v", err)
+			}
+		})
+	}
+
+	mismatch := withBlockers(validIncompleteAnalysis(), blocker("source", "inventory"))
+	mismatch.Profile.ExpectedSourceCommit = expected
+	mismatch.Profile.ActualSourceCommit = actual
+	if err := validateAnalysis(mismatch); err != nil {
+		t.Fatalf("consistent source mismatch was rejected: %v", err)
+	}
+	missing := withBlockers(validIncompleteAnalysis(), blocker("source-metadata", "inventory"))
+	missing.Profile.ExpectedSourceCommit = expected
+	missing.Profile.ActualSourceCommit = ""
+	if err := validateAnalysis(missing); err != nil {
+		t.Fatalf("consistent missing actual source commit was rejected: %v", err)
+	}
+}
+
+func TestScopeIndexReturnsInnermostContainingScope(t *testing.T) {
+	index := newScopeIndex([]scopeRange{
+		{start: 1, end: 100, id: "outer"},
+		{start: 10, end: 90, id: "middle"},
+		{start: 20, end: 30, id: "inner"},
+		{start: 25, end: 60, id: "overlap"},
+		{start: 110, end: 120, id: "separate"},
+	})
+	for _, test := range []struct {
+		pos  token.Pos
+		want string
+	}{
+		{0, ""},
+		{1, "outer"},
+		{15, "middle"},
+		{20, "inner"},
+		{25, "inner"},
+		{45, "overlap"},
+		{95, "outer"},
+		{110, "separate"},
+		{120, "separate"},
+		{121, ""},
+	} {
+		if got := index.lookup(test.pos, nil).id; got != test.want {
+			t.Errorf("scope at %d = %q, want %q", test.pos, got, test.want)
+		}
+	}
+}
+
+func TestScopeIndexLookupWorkIsSublinear(t *testing.T) {
+	const count = 16_384
+	ranges := make([]scopeRange, count)
+	for index := range ranges {
+		start := token.Pos(index*4 + 1)
+		ranges[index] = scopeRange{start: start, end: start + 1, id: strconv.Itoa(index)}
+	}
+	index := newScopeIndex(ranges)
+	steps := 0
+	for expected, candidate := range ranges {
+		if got := index.lookup(candidate.start, &steps).id; got != strconv.Itoa(expected) {
+			t.Fatalf("scope lookup %d returned %q", expected, got)
+		}
+	}
+	if steps >= count*40 {
+		t.Fatalf("scope lookup performed %d indexed comparisons for %d scopes", steps, count)
 	}
 }
 

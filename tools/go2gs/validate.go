@@ -440,6 +440,23 @@ func validateAnalysisHeader(a Analysis) error {
 			return errors.New("analysis toolchain version mismatch requires an incomplete inventory and toolchain blocker")
 		}
 	}
+	hasSourceBlocker := slices.ContainsFunc(a.Blockers, func(blocker BlockerRecord) bool {
+		return blocker.Blocks == "inventory" && blocker.Category == "source"
+	})
+	hasSourceMetadataBlocker := slices.ContainsFunc(a.Blockers, func(blocker BlockerRecord) bool {
+		return blocker.Blocks == "inventory" && blocker.Category == "source-metadata"
+	})
+	if p.ExpectedSourceCommit != "" && p.ActualSourceCommit == "" && !hasSourceMetadataBlocker {
+		return errors.New("missing actual source commit requires a source-metadata blocker")
+	}
+	if p.ActualSourceCommit != "" && hasSourceMetadataBlocker {
+		return errors.New("source-metadata blocker requires a missing actual source commit")
+	}
+	sourceMismatch := p.ExpectedSourceCommit != "" && p.ActualSourceCommit != "" &&
+		p.ExpectedSourceCommit != p.ActualSourceCommit
+	if sourceMismatch != hasSourceBlocker {
+		return errors.New("analysis source commit mismatch and source blocker must agree")
+	}
 	if p.CGOEnabled {
 		if t.CCompilerName == "" || !validSHA256(t.CCompilerSHA256) {
 			return errors.New("CGo analysis requires C compiler provenance")
