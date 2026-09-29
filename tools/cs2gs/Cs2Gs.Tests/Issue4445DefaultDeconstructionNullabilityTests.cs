@@ -137,6 +137,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var assignmentExpressionPair = (replacement, replacement);
                 (var assignmentExpressionLeft, var assignmentExpressionRight) =
                     (assignmentExpressionPair = (default(T), default(T)));
+                var operationPair = (replacement, replacement);
+                var (_, operationSnapshot) =
+                    (operationPair = (default(T), default(T)), operationPair);
+                var (operationLeft, operationRight) = operationSnapshot;
                 T assignmentSource = replacement;
                 var assignmentAlias = (assignmentSource = default(T));
                 T? coalesceAssignmentSource = default;
@@ -208,6 +212,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref methodRight, replacement);
                 Fill(ref assignmentExpressionLeft, replacement);
                 Fill(ref assignmentExpressionRight, replacement);
+                Fill(ref operationLeft, replacement);
+                Fill(ref operationRight, replacement);
                 Fill(ref assignmentAlias, replacement);
                 Fill(ref coalesceAssignmentAlias, replacement);
                 Fill(ref initializerlessAlias, replacement);
@@ -497,6 +503,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "nestedLoopLeft", "nestedLoopRight",
             "backedgeLeft", "backedgeRight", "breakLeft", "breakRight",
             "assignmentExpressionLeft", "assignmentExpressionRight",
+            "operationLeft", "operationRight",
             "assignmentAlias", "coalesceAssignmentAlias",
             "initializerlessAlias",
             "sharedPathLeft", "sharedPathRight",
@@ -566,6 +573,12 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static (T First, T Second) Pair<T>(T replacement) =>
                     (replacement, replacement);
 
+                private static int Reset<T>(out (T First, T Second) pair)
+                {
+                    pair = default;
+                    return 0;
+                }
+
                 private static void M<T>(T replacement)
                 {
                     (T First, T Second) pair = (replacement, replacement);
@@ -607,6 +620,19 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     Observe(in inPair);
                     var (inLeft, inRight) = inPair;
                     Fill(ref inLeft, replacement);
+
+                    var unknownPair = (First: replacement, Second: replacement);
+                    Reset(out unknownPair);
+                    unknownPair.First = default;
+                    var (unknownLeft, unknownRight) = unknownPair;
+                    Fill(ref unknownLeft, replacement);
+
+                    var combinedPair = (First: replacement, Second: replacement);
+                    var (_, _, (combinedLeft, combinedRight)) =
+                        (Reset(out combinedPair),
+                            combinedPair.First = default(T),
+                            combinedPair);
+                    Fill(ref combinedLeft, replacement);
                 }
 
                 private static void Observe<T>(in (T, T) pair)
@@ -623,11 +649,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) deconstructionWriteLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) untouchedDefaultRight T\? =", printed);
         Assert.Matches(@"\b(let|var) inLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) unknownLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) combinedLeft T\? =", printed);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("callRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("deconstructionWriteRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("inRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("combinedRight T? =", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -709,6 +738,67 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         string printed = Translate(source);
 
         Assert.Contains("for ", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Translation_IgnoresAssignmentsInsideForInitializerQuery()
+    {
+        const string source = """
+            using System.Linq;
+
+            public static class QueryFor
+            {
+                private static void M((int, int)[] values)
+                {
+                    var left = 0;
+                    var right = 0;
+                    var query = values.AsEnumerable();
+                    for (query = from value in values
+                                 select ((left, right) = value);
+                        left < 1;
+                        left++)
+                    {
+                        continue;
+                    }
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Contains("for ", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Translation_IgnoresDeferredQueryAssignmentsInReachingValues()
+    {
+        const string source = """
+            #nullable enable
+            using System.Collections.Generic;
+            using System.Linq;
+
+            public static class QueryReaching
+            {
+                private static (T, T) Snapshot<T>(
+                    IEnumerable<(T, T)> deferred,
+                    (T, T) current) => current;
+
+                private static void M<T>(T replacement, (T, T)[] values)
+                {
+                    var pair = (replacement, replacement);
+                    var snapshot = Snapshot(
+                        from value in values
+                        select pair = (default(T), default(T)),
+                        pair);
+                    var (queryLeft, queryRight) = snapshot;
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.DoesNotContain("queryLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("queryRight T? =", printed, StringComparison.Ordinal);
     }
 
     [Fact]

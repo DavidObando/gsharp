@@ -1115,6 +1115,7 @@ public sealed partial class CSharpToGSharpTranslator
                     ExpressionSyntax>();
             var appliedElementWrites =
                 new Dictionary<ExpressionSyntax, HashSet<string>>();
+            ExpressionSyntax unknownTuple = CreateUnknownTuple(local.Type);
             bool changed;
             do
             {
@@ -1142,7 +1143,8 @@ public sealed partial class CSharpToGSharpTranslator
                             assignedValues,
                             elementAssignedValues,
                             appliedElementWrites,
-                            visited);
+                            visited,
+                            unknownTuple);
                     }
 
                     if (block.BranchValue is { } branchValue)
@@ -1156,7 +1158,8 @@ public sealed partial class CSharpToGSharpTranslator
                             assignedValues,
                             elementAssignedValues,
                             appliedElementWrites,
-                            visited);
+                            visited,
+                            unknownTuple);
                     }
 
                     if (!outputs.TryGetValue(block, out var previous)
@@ -1190,7 +1193,39 @@ public sealed partial class CSharpToGSharpTranslator
                     assignedValues,
                     elementAssignedValues,
                     appliedElementWrites,
-                    visited);
+                    visited,
+                    unknownTuple);
+            }
+
+            if (useOperationIndex < useBlock.Operations.Length)
+            {
+                this.ApplyReachingOperation(
+                    useBlock.Operations[useOperationIndex],
+                    declaration,
+                    initializer,
+                    local,
+                    reaching,
+                    assignedValues,
+                    elementAssignedValues,
+                    appliedElementWrites,
+                    visited,
+                    unknownTuple,
+                    usePosition);
+            }
+            else if (useBlock.BranchValue is { } branchValue)
+            {
+                this.ApplyReachingOperation(
+                    branchValue,
+                    declaration,
+                    initializer,
+                    local,
+                    reaching,
+                    assignedValues,
+                    elementAssignedValues,
+                    appliedElementWrites,
+                    visited,
+                    unknownTuple,
+                    usePosition);
             }
 
             return reaching.ToList();
@@ -1314,27 +1349,34 @@ public sealed partial class CSharpToGSharpTranslator
                 elementAssignedValues,
             Dictionary<ExpressionSyntax, HashSet<string>>
                 appliedElementWrites,
-            HashSet<ISymbol> visited)
+            HashSet<ISymbol> visited,
+            ExpressionSyntax unknownTuple,
+            int beforePosition = int.MaxValue)
         {
-            bool hasKnownValue = false;
-            if (operation.Syntax.FullSpan.Contains(declaration.Span))
+            if (declaration.SpanStart < beforePosition
+                && operation.Syntax.FullSpan.Contains(declaration.Span))
             {
                 values.Clear();
                 if (initializer != null)
                 {
                     values.Add(initializer);
                 }
-
-                hasKnownValue = true;
             }
 
-            foreach (AssignmentExpressionSyntax assignment in operation.Syntax
-                .DescendantNodesAndSelf(
-                    node => node is not AnonymousFunctionExpressionSyntax
-                        && node is not LocalFunctionStatementSyntax)
-                .OfType<AssignmentExpressionSyntax>()
-                .OrderBy(assignment => assignment.SpanStart))
+            foreach (SyntaxNode writeNode in EagerExecutionNodes(operation.Syntax)
+                .Where(node => node.Span.End <= beforePosition)
+                .Where(node => node is AssignmentExpressionSyntax
+                    || (node is not ArgumentSyntax
+                        { RefOrOutKeyword.RawKind: (int)SyntaxKind.InKeyword }
+                        && this.SyntaxNodeWritesSymbol(node, local)))
+                .OrderBy(node => node.Span.End))
             {
+                if (writeNode is not AssignmentExpressionSyntax assignment)
+                {
+                    values.Clear();
+                    continue;
+                }
+
                 var elementWrites =
                     new List<(IReadOnlyList<int> Path, ExpressionSyntax Value)>();
                 this.CollectTupleElementWrites(
@@ -1359,6 +1401,11 @@ public sealed partial class CSharpToGSharpTranslator
                             writtenValue,
                             aliasPath);
                         ExpressionSyntax[] previousValues = values.ToArray();
+                        if (previousValues.Length == 0)
+                        {
+                            previousValues = new[] { unknownTuple };
+                        }
+
                         values.Clear();
                         foreach (ExpressionSyntax previous in previousValues)
                         {
@@ -1394,7 +1441,6 @@ public sealed partial class CSharpToGSharpTranslator
                         }
                     }
 
-                    hasKnownValue = true;
                     continue;
                 }
 
@@ -1420,20 +1466,19 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 values.Add(value);
-                hasKnownValue = true;
+            }
+        }
+
+        private static ExpressionSyntax CreateUnknownTuple(ITypeSymbol type)
+        {
+            if (type is not INamedTypeSymbol { IsTupleType: true } tuple)
+            {
+                return SyntaxFactory.IdentifierName("__unknown");
             }
 
-            if (!hasKnownValue
-                && operation.Syntax.DescendantNodesAndSelf(
-                    node => node is not AnonymousFunctionExpressionSyntax
-                        && node is not LocalFunctionStatementSyntax)
-                    .Any(node =>
-                        node is not ArgumentSyntax
-                            { RefOrOutKeyword.RawKind: (int)SyntaxKind.InKeyword }
-                        && this.SyntaxNodeWritesSymbol(node, local)))
-            {
-                values.Clear();
-            }
+            return SyntaxFactory.TupleExpression(SyntaxFactory.SeparatedList(
+                tuple.TupleElements.Select(element => SyntaxFactory.Argument(
+                    CreateUnknownTuple(element.Type)))));
         }
 
         private void CollectTupleElementWrites(

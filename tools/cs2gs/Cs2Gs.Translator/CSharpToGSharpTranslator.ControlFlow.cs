@@ -292,11 +292,31 @@ public sealed partial class CSharpToGSharpTranslator
         // Cheap presence check used only to decide whether a clause needs the
         // hoist path at all; the short-circuit/`?:` safety analysis and the
         // actual hoisting happen once, in HoistLoopConditionClause.
-        private static bool ClauseContainsAssignment(ExpressionSyntax clause) =>
-            clause.DescendantNodesAndSelf(descendIntoChildren: node =>
-                    node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax))
+        private static bool ClauseContainsAssignment(ExpressionSyntax clause)
+            => EagerExecutionNodes(clause)
                 .OfType<AssignmentExpressionSyntax>()
                 .Any(AssignmentRequiresStatementLowering);
+
+        private static IEnumerable<SyntaxNode> EagerExecutionNodes(SyntaxNode node)
+        {
+            if (node is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+            {
+                yield break;
+            }
+
+            IEnumerable<SyntaxNode> children = node is QueryExpressionSyntax query
+                ? EagerQuerySources(query)
+                : node.ChildNodes();
+            foreach (SyntaxNode child in children)
+            {
+                foreach (SyntaxNode descendant in EagerExecutionNodes(child))
+                {
+                    yield return descendant;
+                }
+            }
+
+            yield return node;
+        }
 
         private static bool PatternIntroducesBinding(PatternSyntax pattern) =>
             pattern.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>().Any();
