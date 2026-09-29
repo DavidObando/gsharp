@@ -1352,6 +1352,36 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_JoinsSiblingAssignmentsToDeclaredSupertype()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                prop Name string -> "animal"
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run(jump bool) string {
+                var x Animal? = nil
+                if jump {
+                    x = Cat{}
+                    goto Use
+                }
+                x = Dog{}
+            Use:
+                return x.Name
+            }
+
+            Run(true)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("animal", result.Value);
+    }
+
+    [Fact]
     public void ForwardGoto_BypassesConditionFrame_ReportsMemberAccess()
     {
         var result = Evaluate("""
@@ -1684,6 +1714,41 @@ public class Issue4519GotoAssignmentNarrowingTests
                         action = noop
                     }
                     action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyIncludesLoopCarriedCallableTarget()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var a (() -> void) = noop
+                    var b (() -> void) = noop
+                    var c (() -> void) = mutate
+                    for _ in []int32{0, 1} {
+                        a = b
+                        b = c
+                        c = noop
+                    }
+                    a()
                 }
             Done:
                 return x.Length

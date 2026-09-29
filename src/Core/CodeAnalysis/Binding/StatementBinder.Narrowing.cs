@@ -604,8 +604,7 @@ internal sealed partial class StatementBinder
                     incomingTypes.Add(incomingType);
                 }
 
-                var commonType = incomingTypes.FirstOrDefault(candidate =>
-                    incomingTypes.All(source => Conversion.Classify(source, candidate).IsImplicit));
+                var commonType = FindCommonImplicitSupertype(entry.Key, incomingTypes);
                 if (commonType != null)
                 {
                     commonIncoming.Add(entry.Key, commonType);
@@ -673,8 +672,7 @@ internal sealed partial class StatementBinder
                 types.Add(sourceType);
             }
 
-            var commonType = types.FirstOrDefault(candidate =>
-                types.All(source => Conversion.Classify(source, candidate).IsImplicit));
+            var commonType = FindCommonImplicitSupertype(entry.Key, types);
             if (commonType != null)
             {
                 joinedTypes.Add(entry.Key, commonType);
@@ -697,6 +695,35 @@ internal sealed partial class StatementBinder
         }
 
         return incomingSnapshots;
+    }
+
+    private static TypeSymbol? FindCommonImplicitSupertype(
+        AccessPath path,
+        IReadOnlyList<TypeSymbol> sourceTypes)
+    {
+        if (sourceTypes.Count == 0)
+        {
+            return null;
+        }
+
+        var commonType = sourceTypes.FirstOrDefault(candidate =>
+            sourceTypes.All(source => Conversion.Classify(source, candidate).IsImplicit));
+        if (commonType != null)
+        {
+            return commonType;
+        }
+
+        if (path.HasMembers)
+        {
+            return null;
+        }
+
+        var declaredType = path.Root.Type is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : path.Root.Type;
+        return sourceTypes.All(source => Conversion.Classify(source, declaredType).IsImplicit)
+            ? declaredType
+            : null;
     }
 
     internal void ReportUnsafeBackwardGotoNarrowings()
@@ -1786,8 +1813,32 @@ internal sealed partial class StatementBinder
         private void VisitPossiblySkippedBody(BoundStatement body)
         {
             var entry = CaptureCallableState();
-            VisitStatement(body);
-            MergeCallableState(entry);
+            var previous = entry;
+            while (true)
+            {
+                RestoreCallableState(previous);
+                VisitStatement(body);
+                MergeCallableState(previous);
+                var joined = CaptureCallableState();
+                if (CallableStatesEqual(previous, joined))
+                {
+                    RestoreCallableState(joined);
+                    return;
+                }
+
+                previous = joined;
+            }
+        }
+
+        private static bool CallableStatesEqual(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) left,
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) right)
+        {
+            return left.Unknown.SetEquals(right.Unknown)
+                && left.Literals.Count == right.Literals.Count
+                && left.Literals.All(entry =>
+                    right.Literals.TryGetValue(entry.Key, out var literals)
+                    && entry.Value.SetEquals(literals));
         }
 
         private (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) CaptureCallableState()
