@@ -47,6 +47,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GPattern native = this.BuildNativePattern(pattern, binders);
+            ITypeSymbol effectiveReceiverType =
+                this.GetManagedReferenceArrayProjectedExpressionType(
+                    isPattern.Expression)
+                ?? this.context.GetTypeInfo(isPattern.Expression).Type;
+            this.RegisterProjectedNativePatternBindings(
+                pattern,
+                effectiveReceiverType,
+                this.GetMappedArrayElementType(isPattern.Expression));
             foreach (ILocalSymbol binder in binders)
             {
                 this.state.PatternBindings[binder] =
@@ -58,6 +66,78 @@ public sealed partial class CSharpToGSharpTranslator
             return lowerNegation
                 ? new UnaryExpression("!", new ParenthesizedExpression(test))
                 : test;
+        }
+
+        private void RegisterProjectedNativePatternBindings(
+            PatternSyntax pattern,
+            ITypeSymbol receiverType,
+            ITypeSymbol mappedListElementType = null)
+        {
+            switch (pattern)
+            {
+                case VarPatternSyntax
+                {
+                    Designation: SingleVariableDesignationSyntax variable,
+                }:
+                    if (this.context.GetDeclaredSymbol(variable)
+                            is ILocalSymbol local
+                        && TypeContainsRecognizedManagedReferenceConsumer(
+                            receiverType,
+                            this.context.Compilation))
+                    {
+                        this.state.ManagedReferenceArrayProjectedLocalType[local] =
+                            receiverType;
+                    }
+
+                    break;
+
+                case ListPatternSyntax list:
+                    ITypeSymbol elementType = mappedListElementType
+                        ?? (receiverType is IArrayTypeSymbol array
+                        ? array.ElementType
+                        : this.GetListPatternElementType(list, receiverType));
+                    foreach (PatternSyntax element in list.Patterns)
+                    {
+                        if (element is not SlicePatternSyntax)
+                        {
+                            this.RegisterProjectedNativePatternBindings(
+                                element,
+                                elementType);
+                        }
+                    }
+
+                    break;
+
+                case RecursivePatternSyntax
+                    { PositionalPatternClause.Subpatterns: var subpatterns }
+                    when receiverType is INamedTypeSymbol
+                    { IsTupleType: true } tuple:
+                    for (int i = 0;
+                        i < subpatterns.Count && i < tuple.TupleElements.Length;
+                        i++)
+                    {
+                        this.RegisterProjectedNativePatternBindings(
+                            subpatterns[i].Pattern,
+                            tuple.TupleElements[i].Type);
+                    }
+
+                    break;
+
+                case ParenthesizedPatternSyntax parenthesized:
+                    this.RegisterProjectedNativePatternBindings(
+                        parenthesized.Pattern,
+                        receiverType);
+                    break;
+
+                case BinaryPatternSyntax binary:
+                    this.RegisterProjectedNativePatternBindings(
+                        binary.Left,
+                        receiverType);
+                    this.RegisterProjectedNativePatternBindings(
+                        binary.Right,
+                        receiverType);
+                    break;
+            }
         }
 
         private static bool HasUnsupportedBindingUnderTopLevelNot(PatternSyntax pattern)
