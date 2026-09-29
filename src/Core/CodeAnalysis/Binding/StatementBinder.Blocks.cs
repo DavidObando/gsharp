@@ -722,8 +722,10 @@ internal sealed partial class StatementBinder
     {
         var saved = exceptionHandlerRegions.ToArray();
         var savedFinallyClauses = activeFinallyClauses.ToArray();
+        var savedCleanupStatements = activeCleanupStatements.ToArray();
         exceptionHandlerRegions.Clear();
         activeFinallyClauses.Clear();
+        activeCleanupStatements.Clear();
         try
         {
             return bind();
@@ -732,6 +734,7 @@ internal sealed partial class StatementBinder
         {
             exceptionHandlerRegions.Clear();
             activeFinallyClauses.Clear();
+            activeCleanupStatements.Clear();
 
             // Stack.ToArray() yields top-first; push back in reverse to restore.
             for (var i = saved.Length - 1; i >= 0; i--)
@@ -742,6 +745,11 @@ internal sealed partial class StatementBinder
             for (var i = savedFinallyClauses.Length - 1; i >= 0; i--)
             {
                 activeFinallyClauses.Push(savedFinallyClauses[i]);
+            }
+
+            for (var i = savedCleanupStatements.Length - 1; i >= 0; i--)
+            {
+                activeCleanupStatements.Push(savedCleanupStatements[i]);
             }
         }
     }

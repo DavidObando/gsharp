@@ -164,35 +164,106 @@ internal sealed partial class ExpressionBinder
             rightPart,
             receiverSyntax,
             receiverStart);
-        if (receiver is BoundVariableExpression { NarrowedType: not null } variable
+        if (receiver != null
+            && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var receiverPath, out _)
+            && !receiverPath.HasMembers
             && rightPart is CallExpressionSyntax callSyntax
             && result is BoundUserInstanceCallExpression call
-            && variable.Variable.Type is StructSymbol declaredStruct)
+            && FindDeclaredMethod(
+                receiverPath.Root.Type,
+                callSyntax.Identifier.ValueText,
+                call.Method) is { } declaredMethod)
         {
-            var declaredMethod = declaredStruct
-                .GetMethodsIncludingInherited(callSyntax.Identifier.ValueText)
-                .FirstOrDefault(candidate => ReferenceEquals(
-                    candidate.Declaration,
-                    call.Method.Declaration));
-            if (declaredMethod != null)
+            binderCtx.UntrackBackwardGotoNarrowingConversion(
+                receiverPath,
+                receiverSyntax?.Location ?? rightPart.Location);
+            receiver = DeclaredReceiver(receiverPath.Root, receiver.Syntax);
+            result = new BoundUserInstanceCallExpression(
+                call.Syntax,
+                receiver,
+                declaredMethod,
+                call.Arguments,
+                call.Type,
+                call.ConstrainedReceiverTypeParameter,
+                call.ConstrainedInterfaceType)
             {
-                receiver = new BoundVariableExpression(variable.Syntax, variable.Variable);
-                result = new BoundUserInstanceCallExpression(
-                    call.Syntax,
-                    receiver,
-                    declaredMethod,
-                    call.Arguments,
-                    call.Type,
-                    call.ConstrainedReceiverTypeParameter,
-                    call.ConstrainedInterfaceType)
-                {
-                    MethodTypeArguments = call.MethodTypeArguments,
-                };
-            }
+                MethodTypeArguments = call.MethodTypeArguments,
+            };
         }
 
         TrackBackwardGotoNarrowingAccess(receiver, rightPart, result);
         return result;
+    }
+
+    private static BoundExpression DeclaredReceiver(VariableSymbol variable, SyntaxNode? syntax)
+    {
+        return variable.Type is NullableTypeSymbol nullable
+            ? new BoundVariableExpression(syntax, variable, nullable.UnderlyingType)
+            : new BoundVariableExpression(syntax, variable);
+    }
+
+    private static FunctionSymbol? FindDeclaredMethod(
+        TypeSymbol declaredType,
+        string name,
+        FunctionSymbol selected)
+    {
+        declaredType = declaredType is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : declaredType;
+        IEnumerable<FunctionSymbol> candidates = declaredType switch
+        {
+            StructSymbol type => type.GetMethodsIncludingInherited(name),
+            InterfaceSymbol type => type.SelfAndAllBaseInterfaces().SelectMany(current => current.GetMethods(name)),
+            _ => Enumerable.Empty<FunctionSymbol>(),
+        };
+
+        var candidateArray = candidates.ToArray();
+        var overridden = selected;
+        while (overridden != null)
+        {
+            var exact = candidateArray.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate, overridden)
+                || (overridden.Declaration != null
+                    && ReferenceEquals(candidate.Declaration, overridden.Declaration)));
+            if (exact != null)
+            {
+                return exact;
+            }
+
+            overridden = overridden.OverriddenMethod;
+        }
+
+        if (declaredType is not InterfaceSymbol)
+        {
+            return null;
+        }
+
+        var interfaceMatches = candidateArray
+            .Where(candidate => HasSameCallableSignature(candidate, selected))
+            .Take(2)
+            .ToArray();
+        return interfaceMatches.Length == 1 ? interfaceMatches[0] : null;
+    }
+
+    private static bool HasSameCallableSignature(FunctionSymbol candidate, FunctionSymbol selected)
+    {
+        if (candidate.Parameters.Length != selected.Parameters.Length
+            || candidate.TypeParameters.Length != selected.TypeParameters.Length
+            || candidate.ReturnRefKind != selected.ReturnRefKind)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < candidate.Parameters.Length; i++)
+        {
+            if (candidate.Parameters[i].RefKind != selected.Parameters[i].RefKind
+                || !Equals(candidate.Parameters[i].Type, selected.Parameters[i].Type))
+            {
+                return false;
+            }
+        }
+
+        return true;
     }
 
     private void TrackBackwardGotoNarrowingAccess(
@@ -1879,13 +1950,14 @@ internal sealed partial class ExpressionBinder
                 out var readReported,
                 out var readView))
             {
-                if (target is BoundVariableExpression { NarrowedType: not null } variable
-                    && variable.Variable.Type is StructSymbol declaredStruct
-                    && DeclaresIndexer(declaredStruct, readIndexer))
+                if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var targetPath, out _)
+                    && !targetPath.HasMembers
+                    && FindDeclaredIndexer(targetPath.Root.Type, readIndexer) is { } declaredIndexer)
                 {
-                    binderCtx.UntrackBackwardGotoNarrowingIndex(variable.Variable, targetLocation);
-                    target = new BoundVariableExpression(variable.Syntax, variable.Variable);
-                    readView = declaredStruct;
+                    binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath.Root, targetLocation);
+                    target = DeclaredReceiver(targetPath.Root, target.Syntax);
+                    readIndexer = declaredIndexer;
+                    readView = target.Type;
                 }
 
                 return BindUserIndexerRead(
@@ -1914,20 +1986,63 @@ internal sealed partial class ExpressionBinder
         return new BoundErrorExpression(null);
     }
 
-    private static bool DeclaresIndexer(StructSymbol type, PropertySymbol indexer)
+    private static PropertySymbol? FindDeclaredIndexer(TypeSymbol declaredType, PropertySymbol indexer)
     {
-        foreach (var current in type.GetHierarchy())
+        declaredType = declaredType is NullableTypeSymbol nullable
+            ? nullable.UnderlyingType
+            : declaredType;
+        IEnumerable<PropertySymbol> candidates = declaredType switch
         {
-            foreach (var candidate in current.Properties)
+            StructSymbol type => type.GetHierarchy().SelectMany(current => current.Properties),
+            InterfaceSymbol type => type.SelfAndAllBaseInterfaces().SelectMany(current => current.Properties),
+            _ => Enumerable.Empty<PropertySymbol>(),
+        };
+
+        var candidateArray = candidates.ToArray();
+        var overridden = indexer;
+        while (overridden != null)
+        {
+            var exact = candidateArray.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate, overridden)
+                || (overridden.Declaration != null
+                    && ReferenceEquals(candidate.Declaration, overridden.Declaration)));
+            if (exact != null)
             {
-                if (ReferenceEquals(candidate.Declaration, indexer.Declaration))
-                {
-                    return true;
-                }
+                return exact;
+            }
+
+            overridden = overridden.OverriddenProperty;
+        }
+
+        if (declaredType is not InterfaceSymbol)
+        {
+            return null;
+        }
+
+        var interfaceMatches = candidateArray
+            .Where(candidate => HasSameIndexerSignature(candidate, indexer))
+            .Take(2)
+            .ToArray();
+        return interfaceMatches.Length == 1 ? interfaceMatches[0] : null;
+    }
+
+    private static bool HasSameIndexerSignature(PropertySymbol candidate, PropertySymbol selected)
+    {
+        if (candidate.Parameters.Length != selected.Parameters.Length)
+        {
+            return false;
+        }
+
+        for (var i = 0; i < candidate.Parameters.Length; i++)
+        {
+            if (candidate.Parameters[i].RefKind != selected.Parameters[i].RefKind
+                || !Equals(candidate.Parameters[i].Type, selected.Parameters[i].Type))
+            {
+                return false;
             }
         }
 
-        return false;
+        return true;
     }
 
     /// <summary>

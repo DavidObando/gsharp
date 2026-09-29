@@ -111,6 +111,7 @@ internal sealed partial class StatementBinder
     private readonly Action<IReadOnlyList<BoundFunctionLiteralExpression>>? reconcileGenericLocalFunctionGroupCaptures;
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
     private readonly Stack<FinallyClauseSyntax> activeFinallyClauses = new();
+    private readonly Stack<BoundStatement> activeCleanupStatements = new();
     private readonly Dictionary<FinallyClauseSyntax, BoundStatement> boundFinallyBlocks = new();
     private readonly Dictionary<BoundStatement, FinallyFlowSummary> finallyFlowSummaries = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
@@ -672,12 +673,15 @@ internal sealed partial class StatementBinder
 
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    var fallsThrough = BindBlockStatements(
-                        statementSyntaxes,
-                        i + 1,
-                        innerStatements,
-                        beforeBind,
-                        trailingStatement);
+                    var cleanupEffect = new BoundExpressionStatement(null, defer.Cleanup);
+                    var fallsThrough = BindWithinSynthesizedCleanup(
+                        cleanupEffect,
+                        () => BindBlockStatements(
+                            statementSyntaxes,
+                            i + 1,
+                            innerStatements,
+                            beforeBind,
+                            trailingStatement));
                     statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), defer.Cleanup, shieldCleanup: true));
                     return fallsThrough;
                 }
@@ -712,12 +716,15 @@ internal sealed partial class StatementBinder
                         Invariant.Required(usingLowering.Initialized, "a valid using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    var fallsThrough = BindBlockStatements(
-                        statementSyntaxes,
-                        i + 1,
-                        innerStatements,
-                        beforeBind,
-                        trailingStatement);
+                    var cleanupEffect = new BoundExpressionStatement(null, usingLowering.Cleanup);
+                    var fallsThrough = BindWithinSynthesizedCleanup(
+                        cleanupEffect,
+                        () => BindBlockStatements(
+                            statementSyntaxes,
+                            i + 1,
+                            innerStatements,
+                            beforeBind,
+                            trailingStatement));
                     statements.Add(BuildCleanupTryStatement(
                         innerStatements.ToImmutable(),
                         usingLowering.Cleanup,
@@ -755,12 +762,15 @@ internal sealed partial class StatementBinder
                         Invariant.Required(awaitUsingLowering.Initialized, "a valid await using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    var fallsThrough = BindBlockStatements(
-                        statementSyntaxes,
-                        i + 1,
-                        innerStatements,
-                        beforeBind,
-                        trailingStatement);
+                    var cleanupEffect = new BoundExpressionStatement(null, awaitUsingLowering.Cleanup);
+                    var fallsThrough = BindWithinSynthesizedCleanup(
+                        cleanupEffect,
+                        () => BindBlockStatements(
+                            statementSyntaxes,
+                            i + 1,
+                            innerStatements,
+                            beforeBind,
+                            trailingStatement));
                     statements.Add(BuildCleanupTryStatement(
                         innerStatements.ToImmutable(),
                         awaitUsingLowering.Cleanup,
@@ -828,6 +838,7 @@ internal sealed partial class StatementBinder
                 // type. Runs after invalidation for the same reason as the
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame);
+                ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame);
                 currentStatementListFallsThrough =
                     (currentStatementListFallsThrough || HasInternallyReachableFallthrough(statement))
                     && !EndsInUnconditionalExit(statement);
@@ -919,6 +930,19 @@ internal sealed partial class StatementBinder
                         null,
                         ImmutableArray.Create<BoundStatement>(
                             new BoundExpressionStatement(null, runtime.BindContextDispose(shield)))))));
+    }
+
+    private T BindWithinSynthesizedCleanup<T>(BoundStatement cleanup, Func<T> bind)
+    {
+        activeCleanupStatements.Push(cleanup);
+        try
+        {
+            return bind();
+        }
+        finally
+        {
+            activeCleanupStatements.Pop();
+        }
     }
 
     private BoundTryStatement BuildCleanupTryStatement(

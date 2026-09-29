@@ -881,24 +881,42 @@ internal sealed class BinderContext
     }
 
     public void UntrackBackwardGotoNarrowingIndex(VariableSymbol variable, TextLocation location)
+        => UntrackBackwardGotoNarrowingUse(
+            AccessPath.ForVariable(variable),
+            location,
+            BackwardGotoNarrowingUseKind.Conversion,
+            BackwardGotoNarrowingUseKind.Index);
+
+    public void UntrackBackwardGotoNarrowingConversion(AccessPath path, TextLocation location)
+        => UntrackBackwardGotoNarrowingUse(
+            path,
+            location,
+            BackwardGotoNarrowingUseKind.Conversion);
+
+    public void UntrackBackwardGotoNarrowingUse(
+        AccessPath path,
+        TextLocation location,
+        params BackwardGotoNarrowingUseKind[] kinds)
     {
-        var path = AccessPath.ForVariable(variable);
         foreach (var state in BackwardGotoNarrowingStates.Values)
         {
             state.Accesses.RemoveAll(access =>
                 access.Path.Equals(path)
-                && access.Location.Equals(location)
-                && access.Kind is BackwardGotoNarrowingUseKind.Conversion
-                    or BackwardGotoNarrowingUseKind.Index);
+                && IsWithin(access.Location, location)
+                && kinds.Contains(access.Kind));
             foreach (var edge in state.Edges)
             {
                 edge.Accesses.RemoveAll(access =>
                     access.Path.Equals(path)
-                    && access.Location.Equals(location)
-                    && access.Kind is BackwardGotoNarrowingUseKind.Conversion
-                        or BackwardGotoNarrowingUseKind.Index);
+                    && IsWithin(access.Location, location)
+                    && kinds.Contains(access.Kind));
             }
         }
+
+        static bool IsWithin(TextLocation candidate, TextLocation container)
+            => ReferenceEquals(candidate.Text, container.Text)
+                && candidate.Span.Start >= container.Span.Start
+                && candidate.Span.End <= container.Span.End;
     }
 
     public static bool NarrowedReadChangesRuntimeType(TypeSymbol declaredType, TypeSymbol narrowedType)

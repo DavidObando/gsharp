@@ -266,7 +266,8 @@ internal sealed partial class StatementBinder
         {
             foreach (var path in frames[i].Keys)
             {
-                if (mutations.InvalidatesNarrowing(path.Root, frames[i][path])
+                if (mutations.MayMutateAnyRoot
+                    || mutations.InvalidatesNarrowing(path.Root, frames[i][path])
                     || (path.HasMembers && mayMutateMemberPaths))
                 {
                     invalidations.Add((i, path));
@@ -557,9 +558,13 @@ internal sealed partial class StatementBinder
         if (incomingSnapshots != null)
         {
             var activeFinallySet = new HashSet<FinallyClauseSyntax>(activeFinallyClauses);
+            var activeCleanupSet = new HashSet<BoundStatement>(activeCleanupStatements);
             for (var i = incomingSnapshots.Count - 1; i >= 0; i--)
             {
-                if (!ApplyExitedFinallyEffects(incomingSnapshots[i], activeFinallySet))
+                if (!ApplyExitedFinallyEffects(
+                        incomingSnapshots[i],
+                        activeFinallySet,
+                        activeCleanupSet))
                 {
                     incomingSnapshots.RemoveAt(i);
                 }
@@ -679,10 +684,15 @@ internal sealed partial class StatementBinder
         {
             var targetFinallySet = new HashSet<FinallyClauseSyntax>(
                 state.TargetSnapshot.ActiveFinallyClauses);
+            var targetCleanupSet = new HashSet<BoundStatement>(
+                state.TargetSnapshot.ActiveCleanupStatements);
             foreach (var edge in state.Edges)
             {
                 var sourceSnapshot = edge.SourceSnapshot.Clone();
-                if (!ApplyExitedFinallyEffects(sourceSnapshot, targetFinallySet))
+                if (!ApplyExitedFinallyEffects(
+                        sourceSnapshot,
+                        targetFinallySet,
+                        targetCleanupSet))
                 {
                     continue;
                 }
@@ -727,7 +737,8 @@ internal sealed partial class StatementBinder
 
     private bool ApplyExitedFinallyEffects(
         GotoNarrowingSnapshot snapshot,
-        HashSet<FinallyClauseSyntax> activeFinallySet)
+        HashSet<FinallyClauseSyntax> activeFinallySet,
+        HashSet<BoundStatement> activeCleanupSet)
     {
         foreach (var finallyClause in snapshot.ActiveFinallyClauses)
         {
@@ -737,17 +748,31 @@ internal sealed partial class StatementBinder
                 continue;
             }
 
-            if (!finallyFlowSummaries.TryGetValue(finallyBlock, out var summary))
+            var summary = GetFinallyFlowSummary(finallyClause, finallyBlock);
+
+            if (summary.NonNullOnNormalExit == null)
+            {
+                return false;
+            }
+
+            ApplyFlowSummary(snapshot, summary);
+        }
+
+        foreach (var cleanup in snapshot.ActiveCleanupStatements)
+        {
+            if (activeCleanupSet.Contains(cleanup))
+            {
+                continue;
+            }
+
+            if (!finallyFlowSummaries.TryGetValue(cleanup, out var summary))
             {
                 var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
-                mutations.Visit(finallyBlock);
-                var nonNullOnNormalExit = ContainsUserGotoOrLabel(finallyClause.Body)
-                    ? EndsInUnconditionalExit(finallyBlock)
-                        ? null
-                        : new Dictionary<AccessPath, TypeSymbol>()
-                    : ComputeBranchFallthroughNonNull(finallyBlock, entry: null);
-                summary = new FinallyFlowSummary(mutations, nonNullOnNormalExit);
-                finallyFlowSummaries.Add(finallyBlock, summary);
+                mutations.Visit(cleanup);
+                summary = new FinallyFlowSummary(
+                    mutations,
+                    ComputeBranchFallthroughNonNull(cleanup, entry: null));
+                finallyFlowSummaries.Add(cleanup, summary);
             }
 
             if (summary.NonNullOnNormalExit == null)
@@ -755,25 +780,94 @@ internal sealed partial class StatementBinder
                 return false;
             }
 
-            foreach (var entry in snapshot.NarrowedVariables.ToArray())
+            ApplyFlowSummary(snapshot, summary);
+        }
+
+        return true;
+    }
+
+    private FinallyFlowSummary GetFinallyFlowSummary(
+        FinallyClauseSyntax finallyClause,
+        BoundStatement finallyBlock)
+    {
+        if (finallyFlowSummaries.TryGetValue(finallyBlock, out var summary))
+        {
+            return summary;
+        }
+
+        var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
+        mutations.Visit(finallyBlock);
+        var nonNullOnNormalExit = ContainsUserGotoOrLabel(finallyClause.Body)
+            ? EndsInUnconditionalExit(finallyBlock)
+                ? null
+                : new Dictionary<AccessPath, TypeSymbol>()
+            : ComputeBranchFallthroughNonNull(finallyBlock, entry: null);
+        summary = new FinallyFlowSummary(mutations, nonNullOnNormalExit);
+        finallyFlowSummaries.Add(finallyBlock, summary);
+        return summary;
+    }
+
+    private void ApplyTryFinallyFallthroughNarrowings(
+        BoundStatement statement,
+        Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    {
+        if (statement is not BoundTryStatement { FinallyBlock: { } finallyBlock }
+            || statement.Syntax is not TryStatementSyntax { FinallyClause: { } finallyClause })
+        {
+            return;
+        }
+
+        var summary = GetFinallyFlowSummary(finallyClause, finallyBlock);
+        if (summary.NonNullOnNormalExit == null)
+        {
+            return;
+        }
+
+        foreach (var frame in binderCtx.NarrowedVariables)
+        {
+            foreach (var entry in frame.ToArray())
             {
-                if ((entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
+                if (summary.Mutations.MayMutateAnyRoot
+                    || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
                     || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
                 {
-                    snapshot.RemoveNarrowing(entry.Key);
-                }
-            }
-
-            foreach (var entry in summary.NonNullOnNormalExit)
-            {
-                if (!entry.Key.HasMembers)
-                {
-                    snapshot.SetNarrowing(entry.Key, entry.Value);
+                    frame.Remove(entry.Key);
                 }
             }
         }
 
-        return true;
+        foreach (var entry in summary.NonNullOnNormalExit)
+        {
+            if (!entry.Key.HasMembers)
+            {
+                SetPersistentNarrowing(persistentFrame, entry.Key, entry.Value);
+            }
+        }
+    }
+
+    private static void ApplyFlowSummary(
+        GotoNarrowingSnapshot snapshot,
+        FinallyFlowSummary summary)
+    {
+        foreach (var entry in snapshot.NarrowedVariables.ToArray())
+        {
+            if (summary.Mutations.MayMutateAnyRoot
+                || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
+                || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
+            {
+                snapshot.RemoveNarrowing(entry.Key);
+            }
+        }
+
+        foreach (var entry in Invariant.Required(
+                     summary.NonNullOnNormalExit,
+                     "a completing cleanup summary has normal-exit facts"))
+        {
+            if (!entry.Key.HasMembers)
+            {
+                snapshot.SetNarrowing(entry.Key, entry.Value);
+            }
+        }
     }
 
     /// <summary>
@@ -1405,6 +1499,12 @@ internal sealed partial class StatementBinder
 
         var collector = new AssignedRootsCollector(null);
         collector.Visit(node);
+        if (collector.MayMutateAnyRoot)
+        {
+            state.Clear();
+            return;
+        }
+
         foreach (var root in collector.Roots)
         {
             RemoveByRoot(state, root);
@@ -1422,7 +1522,8 @@ internal sealed partial class StatementBinder
         private readonly HashSet<AssignedField> assignedFields = new();
         private readonly HashSet<AssignedProperty> assignedProperties = new();
         private readonly Dictionary<VariableSymbol, List<BoundAssignmentExpression>> assignments = new();
-        private readonly Dictionary<VariableSymbol, BoundFunctionLiteralExpression> functionLiterals = new();
+        private readonly Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> functionLiterals = new();
+        private readonly HashSet<VariableSymbol> unknownFunctionValues = new();
         private readonly HashSet<BoundFunctionLiteralExpression> visitedFunctionLiterals = new();
 
         public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing)
@@ -1433,6 +1534,8 @@ internal sealed partial class StatementBinder
         public HashSet<VariableSymbol> Roots { get; } = new HashSet<VariableSymbol>();
 
         public bool MayMutateMemberPaths { get; private set; }
+
+        public bool MayMutateAnyRoot { get; private set; }
 
         public override void VisitExpression(BoundExpression? node)
         {
@@ -1494,17 +1597,23 @@ internal sealed partial class StatementBinder
         protected override void VisitIndirectCallExpression(BoundIndirectCallExpression node)
         {
             var target = UnwrapCallable(node.Target);
-            var literal = target as BoundFunctionLiteralExpression;
-            if (literal == null
-                && target is BoundVariableExpression variable)
+            if (target is BoundFunctionLiteralExpression direct)
             {
-                functionLiterals.TryGetValue(variable.Variable, out literal);
+                VisitFunctionLiteralBody(direct);
             }
-
-            if (literal is { Body: { } body }
-                && visitedFunctionLiterals.Add(literal))
+            else if (target is BoundVariableExpression variable
+                && functionLiterals.TryGetValue(variable.Variable, out var literals))
             {
-                VisitStatement(body);
+                foreach (var literal in literals)
+                {
+                    VisitFunctionLiteralBody(literal);
+                }
+
+                MayMutateAnyRoot |= unknownFunctionValues.Contains(variable.Variable);
+            }
+            else
+            {
+                MayMutateAnyRoot = true;
             }
 
             base.VisitIndirectCallExpression(node);
@@ -1513,34 +1622,98 @@ internal sealed partial class StatementBinder
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
             if (node.Initializer != null
-                && TryGetFunctionLiteral(node.Initializer, out var literal))
+                && TryGetFunctionLiterals(node.Initializer, out var literals))
             {
-                functionLiterals[node.Variable] = literal;
+                functionLiterals[node.Variable] = new HashSet<BoundFunctionLiteralExpression>(literals);
+            }
+            else if (node.Initializer != null)
+            {
+                unknownFunctionValues.Add(node.Variable);
             }
 
             base.VisitVariableDeclaration(node);
         }
 
-        private bool TryGetFunctionLiteral(
+        protected override void VisitIfStatement(BoundIfStatement node)
+        {
+            VisitExpression(node.Condition);
+            var branchStart = CloneFunctionLiterals();
+            var unknownAtBranchStart = new HashSet<VariableSymbol>(unknownFunctionValues);
+
+            VisitStatement(node.ThenStatement);
+            var thenLiterals = CloneFunctionLiterals();
+            var thenUnknown = new HashSet<VariableSymbol>(unknownFunctionValues);
+
+            RestoreFunctionLiterals(branchStart);
+            RestoreUnknownFunctionValues(unknownAtBranchStart);
+            VisitStatement(node.ElseStatement);
+
+            foreach (var entry in thenLiterals)
+            {
+                if (!functionLiterals.TryGetValue(entry.Key, out var literals))
+                {
+                    literals = new HashSet<BoundFunctionLiteralExpression>();
+                    functionLiterals.Add(entry.Key, literals);
+                }
+
+                literals.UnionWith(entry.Value);
+            }
+
+            unknownFunctionValues.UnionWith(thenUnknown);
+        }
+
+        private Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> CloneFunctionLiterals()
+            => functionLiterals.ToDictionary(
+                entry => entry.Key,
+                entry => new HashSet<BoundFunctionLiteralExpression>(entry.Value));
+
+        private void RestoreFunctionLiterals(
+            Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> snapshot)
+        {
+            functionLiterals.Clear();
+            foreach (var entry in snapshot)
+            {
+                functionLiterals.Add(
+                    entry.Key,
+                    new HashSet<BoundFunctionLiteralExpression>(entry.Value));
+            }
+        }
+
+        private void RestoreUnknownFunctionValues(HashSet<VariableSymbol> snapshot)
+        {
+            unknownFunctionValues.Clear();
+            unknownFunctionValues.UnionWith(snapshot);
+        }
+
+        private bool TryGetFunctionLiterals(
             BoundExpression expression,
-            [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out BoundFunctionLiteralExpression? literal)
+            [System.Diagnostics.CodeAnalysis.NotNullWhen(true)] out IReadOnlyCollection<BoundFunctionLiteralExpression>? literals)
         {
             var callable = UnwrapCallable(expression);
             if (callable is BoundFunctionLiteralExpression direct)
             {
-                literal = direct;
+                literals = new[] { direct };
                 return true;
             }
 
             if (callable is BoundVariableExpression variable
                 && functionLiterals.TryGetValue(variable.Variable, out var stored))
             {
-                literal = stored;
+                literals = stored;
                 return true;
             }
 
-            literal = null;
+            literals = null;
             return false;
+        }
+
+        private void VisitFunctionLiteralBody(BoundFunctionLiteralExpression literal)
+        {
+            if (literal.Body is { } body
+                && visitedFunctionLiterals.Add(literal))
+            {
+                VisitStatement(body);
+            }
         }
 
         private static BoundExpression UnwrapCallable(BoundExpression expression)
@@ -1562,13 +1735,24 @@ internal sealed partial class StatementBinder
         {
             if (node.Variable != null)
             {
-                if (TryGetFunctionLiteral(node.Expression, out var literal))
+                if (TryGetFunctionLiterals(node.Expression, out var literals))
                 {
-                    functionLiterals[node.Variable] = literal;
+                    functionLiterals[node.Variable] =
+                        new HashSet<BoundFunctionLiteralExpression>(literals);
+                    if (UnwrapCallable(node.Expression) is BoundVariableExpression source
+                        && unknownFunctionValues.Contains(source.Variable))
+                    {
+                        unknownFunctionValues.Add(node.Variable);
+                    }
+                    else
+                    {
+                        unknownFunctionValues.Remove(node.Variable);
+                    }
                 }
                 else
                 {
                     functionLiterals.Remove(node.Variable);
+                    unknownFunctionValues.Add(node.Variable);
                 }
 
                 Roots.Add(node.Variable);

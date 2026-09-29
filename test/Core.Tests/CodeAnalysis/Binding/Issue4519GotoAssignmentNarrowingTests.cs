@@ -448,6 +448,80 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_ParenthesizedOverrideDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                open func Name() string { return "animal" }
+            }
+            class Dog : Animal {
+                override func Name() string { return "dog" }
+            }
+            class Cat : Animal {
+                override func Name() string { return "cat" }
+            }
+
+            func Run() int32 {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let name = (x).Name()
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return name.Length
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_InterfaceMemberDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            interface Named {
+                func Name() string;
+            }
+            class Dog : Named {
+                func Name() string { return "dog" }
+            }
+            class Cat : Named {
+                func Name() string { return "cat" }
+            }
+
+            func Run() int32 {
+                var x Named = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let name = x.Name()
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return name.Length
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(3, result.Value);
+    }
+
+    [Fact]
     public void BackwardGoto_SubtypeOnlyOverloadStillRequiresNarrowedType()
     {
         var result = Evaluate("""
@@ -496,7 +570,7 @@ public class Issue4519GotoAssignmentNarrowingTests
                 var count = 0
                 if x is Dog {
                 Again:
-                    let value = x[0]
+                    let value = (x)[0]
                     if count == 0 {
                         count++
                         x = Cat{}
@@ -512,6 +586,43 @@ public class Issue4519GotoAssignmentNarrowingTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_InterfaceIndexerDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            interface Values {
+                prop this[index int32] int32 { get; }
+            }
+            class Dog : Values {
+                prop this[index int32] int32 -> 1
+            }
+            class Cat : Values {
+                prop this[index int32] int32 -> 2
+            }
+
+            func Run() int32 {
+                var x Values = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x[0]
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return value
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(2, result.Value);
     }
 
     [Fact]
@@ -1106,6 +1217,115 @@ public class Issue4519GotoAssignmentNarrowingTests
                     var assigned (() -> void) = func() { }
                     assigned = alias
                     assigned()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyIncludesAliasDeclaredOutsideFinally()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                let mutate = func() { x = nil }
+                try {
+                    goto Done
+                }
+                finally {
+                    let alias (() -> void) = mutate
+                    alias()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyIncludesConditionalCallableTarget()
+    {
+        var result = Evaluate("""
+            func Run(useNoop bool) int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action (() -> void) = mutate
+                    if useNoop {
+                        action = noop
+                    }
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run(false)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyUsesLastUnconditionalCallableTarget()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action (() -> void) = mutate
+                    action = noop
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_LeavingDeferScopeAppliesCleanupMutation()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                let mutate = func() { x = nil }
+                {
+                    defer mutate()
+                    goto Done
                 }
             Done:
                 return x.Length
@@ -1994,6 +2214,28 @@ public class Issue4519GotoAssignmentNarrowingTests
 
             Run(true)
             """, "5");
+    }
+
+    [Fact]
+    public void GotoLeavingTry_AndFallthroughUseNarrowingEstablishedByFinally()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(jump bool) {
+                var x string? = nil
+                try {
+                    if jump { goto Done }
+                } finally {
+                    x = "final"
+                }
+            Done:
+                Console.WriteLine(x.Length)
+            }
+
+            Run(false)
+            Run(true)
+            """, "5", "5");
     }
 
     [Fact]
