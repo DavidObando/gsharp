@@ -955,6 +955,24 @@ func TestNativeIncludeGraphHandlesNestedCycle(t *testing.T) {
 	}
 }
 
+func TestLocalQuotedIncludesUsesPreprocessorLexing(t *testing.T) {
+	source := []byte("#include /* gap */ \"constants.h\"\n" +
+		"#inc\\\nlude \"spliced.h\"\n" +
+		"#inc\\\r\nlude \"crlf.h\"\r\n" +
+		"# /* before */ include/* after */\"comments.h\"\n" +
+		"// #include \"line-comment.h\"\n" +
+		"/* #include \"block-comment.h\" */\n" +
+		"/* multiline\n#include \"multiline-comment.h\"\n*/\n" +
+		"\"#include \\\"string.h\\\"\"\n" +
+		"'#'; #include \"character.h\"\n" +
+		"#include <system.h>\n" +
+		"#include_next \"next.h\"\n")
+	want := []string{"comments.h", "constants.h", "crlf.h", "spliced.h"}
+	if got := localQuotedIncludes(source); !slices.Equal(got, want) {
+		t.Fatalf("quoted include tokens mismatch:\ngot  %q\nwant %q", got, want)
+	}
+}
+
 func TestSelectedNativeHeaderMutationCreatesDrift(t *testing.T) {
 	root := copyFixture(t, "native")
 	path := filepath.Join(root, "constants.h")
