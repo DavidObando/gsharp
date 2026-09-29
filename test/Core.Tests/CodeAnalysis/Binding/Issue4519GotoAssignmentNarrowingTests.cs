@@ -362,6 +362,38 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void LocalGotoInFinally_RemainsInMultipleGotoJoin()
+    {
+        var result = Evaluate("""
+            func Run(throughFinally bool, direct bool, skip bool) int32 {
+                var x string? = nil
+                if throughFinally {
+                    try {
+                        goto Done
+                    } finally {
+                        if skip {
+                            x = nil
+                            goto EndFinally
+                        }
+                        x = "safe"
+                    EndFinally:
+                    }
+                }
+                x = "safe"
+                if direct { goto Done }
+            Done:
+                return x.Length
+            }
+
+            Run(true, false, true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void NestedFunctionBetweenFinallyAndTarget_DoesNotLoseOuterFinallyEffects()
     {
         var result = Evaluate("""
