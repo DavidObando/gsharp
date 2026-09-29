@@ -407,9 +407,6 @@ public sealed partial class CSharpToGSharpTranslator
             return list?.IndexOf(parameter) ?? 0;
         }
 
-        // The <paramref name="index"/>th arrow-parameter type of a delegate-typed
-        // (or `Expression<TDelegate>`-typed) callee parameter, or null when the
-        // shape is not a delegate at all.
         private static IMethodSymbol GetDelegateInvokeMethod(ITypeSymbol targetType)
         {
             if (targetType is INamedTypeSymbol expression
@@ -425,6 +422,9 @@ public sealed partial class CSharpToGSharpTranslator
             return (targetType as INamedTypeSymbol)?.DelegateInvokeMethod;
         }
 
+        // The <paramref name="index"/>th arrow-parameter type of a delegate-typed
+        // (or `Expression<TDelegate>`-typed) callee parameter, or null when the
+        // shape is not a delegate at all.
         private static ITypeSymbol DelegateParameterTypeAt(ITypeSymbol parameterType, int index)
         {
             IMethodSymbol invoke = GetDelegateInvokeMethod(parameterType);
