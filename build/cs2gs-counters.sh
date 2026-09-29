@@ -39,7 +39,6 @@
 # discovery; they must stay 0.
 cs2gs_synthetic_families=(
   # live
-  '__cs2gs_|translator-reserved prefix'
   '__anon|anonymous-type temporary'
   '__arg|argument spill (evaluation order)'
   '__decon|deconstruction temporary'
@@ -48,7 +47,7 @@ cs2gs_synthetic_families=(
   '__scrutinee|switch scrutinee temporary'
   '__spill|expression spill temporary'
   '__underscore|discard rename'
-  # retired: these must stay 0
+  # retired or never emitted: these must stay 0
   '__switchExit|switch lowering label (GATED: syntheticLabelCeiling)'
   '__iteratorExit|iterator lowering label (GATED: syntheticLabelCeiling)'
   '__gotoCase|goto-case label (GATED: syntheticLabelCeiling)'
@@ -65,6 +64,7 @@ cs2gs_synthetic_families=(
   '__init|retired (object-initializer temporary)'
   '__spread|retired (collection-spread temporary)'
   '__using|retired (using-statement temporary)'
+  '__cs2gs_|never emitted; reserved alias prefix was not implemented (#4299)'
 )
 
 # How many distinct unknown identifiers to name in the table before truncating.

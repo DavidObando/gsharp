@@ -1100,6 +1100,7 @@ public sealed partial class CSharpToGSharpTranslator
                     member,
                     promoteNullability: false);
                 string name = MethodGroupWrapperParameterName(
+                    this.nameAllocator,
                     helperNameParameters,
                     i,
                     wrapperParameterNames);
@@ -2397,8 +2398,9 @@ public sealed partial class CSharpToGSharpTranslator
         // Issue #3468: a synthesized method-group wrapper parameter takes its
         // name from the TARGET method's corresponding parameter (`path`,
         // `value`) so the wrapper reads like the surrounding arrow lambdas;
-        // `__arg{i}` remains only the fallback for missing, discard, reserved,
-        // or colliding names. For extension-method groups the delegate's
+        // the established underscore suffix resolves reserved spellings and
+        // collisions; `__arg{i}` remains only the fallback when no usable
+        // source name exists. For extension-method groups the delegate's
         // parameters align to the ORIGINAL method's parameters AFTER the
         // receiver, so callers pass the receiver-stripped list, and the
         // captured receiver identifier is pre-seeded into
@@ -2424,18 +2426,36 @@ public sealed partial class CSharpToGSharpTranslator
             HashSet<string> usedNames)
         {
             GExpression current = receiver;
-            while (current is MemberAccessExpression memberAccess)
+            while (true)
             {
-                current = memberAccess.Target;
-            }
-
-            if (current is IdentifierExpression identifier)
-            {
-                usedNames.Add(identifier.Name);
+                switch (current)
+                {
+                    case ConversionExpression conversion:
+                        current = conversion.Operand;
+                        break;
+                    case NonNullAssertionExpression assertion:
+                        current = assertion.Operand;
+                        break;
+                    case ParenthesizedExpression parenthesized:
+                        current = parenthesized.Inner;
+                        break;
+                    case MemberAccessExpression memberAccess:
+                        current = memberAccess.Target;
+                        break;
+                    case ConditionalAccessExpression conditionalAccess:
+                        current = conditionalAccess.Target;
+                        break;
+                    case IdentifierExpression identifier:
+                        usedNames.Add(identifier.Name);
+                        return;
+                    default:
+                        return;
+                }
             }
         }
 
         private static string MethodGroupWrapperParameterName(
+            EmittedNameAllocator nameAllocator,
             ImmutableArray<IParameterSymbol> targetParameters,
             int index,
             HashSet<string> usedNames)
@@ -2443,15 +2463,32 @@ public sealed partial class CSharpToGSharpTranslator
             string candidate = index < targetParameters.Length
                 ? targetParameters[index].Name
                 : null;
-            if (string.IsNullOrEmpty(candidate)
-                || candidate == "_"
-                || GSharp.Core.CodeAnalysis.Syntax.SyntaxFacts.IsReservedIdentifier(
-                    candidate,
-                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Parameter)
-                || !usedNames.Add(candidate))
+            var occupied = new HashSet<string>(usedNames, StringComparer.Ordinal);
+            for (int parameterIndex = 0; parameterIndex < targetParameters.Length; parameterIndex++)
             {
+                if (parameterIndex != index)
+                {
+                    occupied.Add(targetParameters[parameterIndex].Name);
+                }
+            }
+
+            if (string.IsNullOrEmpty(candidate) || candidate == "_")
+            {
+                // Missing metadata has no source spelling to suffix, and `_`
+                // is a discard that cannot name the forwarded argument.
                 candidate = $"__arg{index}";
-                usedNames.Add(candidate);
+            }
+            else
+            {
+                candidate = nameAllocator.GetName(
+                    candidate,
+                    GSharp.Core.CodeAnalysis.Syntax.IdentifierNameContext.Parameter,
+                    occupied);
+            }
+
+            while (occupied.Contains(candidate) || !usedNames.Add(candidate))
+            {
+                candidate += "_";
             }
 
             return candidate;
@@ -2551,6 +2588,7 @@ public sealed partial class CSharpToGSharpTranslator
                     expression,
                     promoteNullability: false);
                 string name = MethodGroupWrapperParameterName(
+                    this.nameAllocator,
                     wrapperNameParameters,
                     index,
                     wrapperParameterNames);
