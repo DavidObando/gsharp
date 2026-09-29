@@ -104,10 +104,14 @@ Before moving an application to a different compiler version, pin the intended S
   their later G# representation. Profile flags are allowlisted against tool
   execution/path overrides, the selected Go executable supplies its own
   verified GOROOT, and CGo compiler helpers require an explicit hashed profile
-  manifest; only bounded no-follow captured helper bytes are staged into the
-  private child PATH, with their hashes, sizes, and modes validated in the
-  artifact. Diagnostics are path-stable, initialization order is explicit,
-  and schema validation rejects missing fields and count mismatches. The pinned
+  manifest. The selected Go executable is also captured, and child PATH never
+  exposes source executable directories. On Linux, Go, the C compiler, and
+  helpers execute from a read-only private tmpfs addressed through a held
+  directory descriptor; CGo fails closed where that binding is unavailable.
+  Helper names use a portable grammar that rejects Windows aliases and device
+  names. Hashes, sizes, and modes remain validated in the artifact. Diagnostics
+  are path-stable, initialization order is explicit, and schema validation
+  rejects missing fields and count mismatches. The pinned
   cliamp profile reports an actionable mismatch rather than substituting the
   installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged

@@ -48,11 +48,28 @@ func processGroupModeFor(ctx context.Context) processGroupMode {
 }
 
 func runProcessWithMode(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string, groupMode processGroupMode) (processResult, error) {
+	return runProcessConfigured(parent, timeout, maxOutput, dir, executable, args, env, groupMode, nil)
+}
+
+func runProcessConfigured(
+	parent context.Context,
+	timeout time.Duration,
+	maxOutput int,
+	dir, executable string,
+	args, env []string,
+	groupMode processGroupMode,
+	configure func(*exec.Cmd) error,
+) (processResult, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.Command(executable, args...)
 	if err := configureProcessTree(cmd, groupMode); err != nil {
 		return processResult{}, fmt.Errorf("secure process isolation for %q: %w", executable, err)
+	}
+	if configure != nil {
+		if err := configure(cmd); err != nil {
+			return processResult{}, fmt.Errorf("configure process %q: %w", executable, err)
+		}
 	}
 	cmd.Dir = dir
 	cmd.Env = env
@@ -139,9 +156,9 @@ func (b *boundedBuffer) Write(data []byte) (int, error) {
 
 func (b *boundedBuffer) String() string { return b.buf.String() }
 
-func bootstrapEnvironment(cacheRoot, executable string) []string {
+func bootstrapEnvironment(cacheRoot string, pathDirectories ...string) []string {
 	return canonicalEnv(map[string]string{
-		"PATH":        selectedPath(executable),
+		"PATH":        selectedPath(pathDirectories...),
 		"HOME":        cacheRoot,
 		"TMPDIR":      cacheRoot,
 		"GOTOOLCHAIN": "local",
@@ -155,7 +172,27 @@ func bootstrapEnvironment(cacheRoot, executable string) []string {
 	})
 }
 
-func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompiler, compilerHelperDir string) ([]string, error) {
+func analysisWorkerEnvironment(cacheRoot, selectedGo, selectedGoHash string, secureExecutableNamespace bool) []string {
+	values := map[string]string{
+		"PATH":                     unavailableToolPath(cacheRoot, "path"),
+		"HOME":                     cacheRoot,
+		"TMPDIR":                   cacheRoot,
+		"GOTOOLCHAIN":              "local",
+		"GOPROXY":                  "off",
+		"GOSUMDB":                  "off",
+		"GONOSUMDB":                "*",
+		"GOPRIVATE":                "",
+		"GONOPROXY":                "*",
+		"GOWORK":                   "off",
+		"PKG_CONFIG":               unavailableToolPath(cacheRoot, "pkg-config"),
+		"GO2GS_SELECTED_GO":        selectedGo,
+		"GO2GS_SELECTED_GO_SHA256": selectedGoHash,
+		"GO2GS_EXEC_NAMESPACE":     boolString(secureExecutableNamespace),
+	}
+	return canonicalEnv(values)
+}
+
+func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory, cCompiler, compilerTarget, compilerArgv0 string) ([]string, error) {
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
 		return nil, err
 	}
@@ -163,7 +200,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 		return nil, err
 	}
 	values := map[string]string{
-		"PATH":             selectedPath(executable, compilerHelperDir),
+		"PATH":             selectedPath(pathDirectory),
 		"HOME":             cacheRoot,
 		"TMPDIR":           cacheRoot,
 		"GOCACHE":          cacheRoot + string(os.PathSeparator) + "build-cache",
@@ -185,6 +222,9 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 	}
 	if cCompiler != "" {
 		values["CC"] = cCompiler
+		values[compilerTargetEnvironment] = compilerTarget
+		values[compilerArgv0Environment] = compilerArgv0
+		values[compilerPrefixEnvironment] = pathDirectory
 	}
 	flags := append([]string{}, profile.GOFLAGS...)
 	flags = append(flags, "-mod="+profile.ModuleMode)
@@ -200,10 +240,10 @@ func unavailableToolPath(cacheRoot, name string) string {
 	return filepath.Join(cacheRoot, "blocked-tools", name)
 }
 
-func selectedPath(executable string, directories ...string) string {
+func selectedPath(directories ...string) string {
 	seen := map[string]bool{}
-	paths := make([]string, 0, len(directories)+1)
-	for _, directory := range append(directories, filepath.Dir(executable)) {
+	paths := make([]string, 0, len(directories))
+	for _, directory := range directories {
 		if directory == "" {
 			continue
 		}

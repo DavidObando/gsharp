@@ -51,6 +51,7 @@ type inventoryBuilder struct {
 	snapshotFiles         map[string][]string
 	selectedSnapshotFiles map[string][]string
 	snapshotRoles         map[string]map[string]string
+	diagnosticRedactions  []string
 	memberIdentity        map[types.Object]string
 	skipSemantics         map[*packages.Package]bool
 }
@@ -165,6 +166,9 @@ func (b *inventoryBuilder) sanitizeDiagnosticMessage(pkg *packages.Package, mess
 	message = overlayDiagnosticPath.ReplaceAllString(message, "<overlay>/$1")
 	message = strings.ReplaceAll(message, b.sourceRoot, "<source>")
 	message = strings.ReplaceAll(message, b.goroot, "<goroot>")
+	for _, redaction := range b.diagnosticRedactions {
+		message = strings.ReplaceAll(message, redaction, "<private-path>")
+	}
 	if pkg.Module != nil && pkg.Module.Dir != "" {
 		message = strings.ReplaceAll(message, pkg.Module.Dir, "<module>")
 		if pkg.Module.Replace != nil && pkg.Module.Replace.Dir != "" {

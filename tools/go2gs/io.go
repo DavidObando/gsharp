@@ -124,22 +124,43 @@ func validateCompilerHelpers(helpers []CompilerHelper) error {
 }
 
 func validCompilerHelperName(value string) bool {
-	if value == "" || value == "." || value == ".." || filepath.Base(value) != value {
+	if value == "" || value == "." || value == ".." ||
+		strings.TrimRight(value, ". ") != value ||
+		strings.ContainsAny(value, `<>:"/\|?*`) {
 		return false
 	}
-	return strings.IndexFunc(value, func(char rune) bool {
-		return unicode.IsSpace(char) || unicode.IsControl(char) || char == '/' || char == '\\'
-	}) < 0
+	if strings.IndexFunc(value, func(char rune) bool {
+		return unicode.IsSpace(char) || unicode.IsControl(char)
+	}) >= 0 {
+		return false
+	}
+	base := strings.ToLower(strings.SplitN(value, ".", 2)[0])
+	switch base {
+	case "con", "prn", "aux", "nul", "clock$", "conin$", "conout$":
+		return false
+	}
+	for _, prefix := range []string{"com", "lpt"} {
+		suffix := strings.TrimPrefix(base, prefix)
+		if suffix == base {
+			continue
+		}
+		switch suffix {
+		case "1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³":
+			return false
+		}
+	}
+	return true
 }
 
 func compilerHelperNameKey(value string) string {
-	value = strings.ToLower(value)
+	value = strings.ToLower(strings.TrimRight(value, ". "))
 	for _, suffix := range []string{".exe", ".com", ".bat", ".cmd"} {
 		if strings.HasSuffix(value, suffix) {
-			return strings.TrimSuffix(value, suffix)
+			value = strings.TrimSuffix(value, suffix)
+			break
 		}
 	}
-	return value
+	return strings.TrimRight(value, ". ")
 }
 
 func forbiddenCompilerHelperName(value string) bool {
