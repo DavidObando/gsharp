@@ -1108,7 +1108,8 @@ internal sealed partial class ExpressionBinder
         // receiver view used by reads. The symbol retains its declared nullable
         // storage type, while the bound receiver carries the effective type
         // proven by the active if-let/null-guard frame.
-        var assignmentReceiver = implicitFieldReceiverExpr ?? BuildNarrowedVariableRead(variable);
+        var assignmentReceiver = implicitFieldReceiverExpr
+            ?? BuildNarrowedVariableRead(variable, syntax.FieldIdentifier.Location);
         if (assignmentReceiver is BoundVariableExpression variableRead
             && variableRead.NarrowedType != null)
         {
@@ -3632,7 +3633,7 @@ internal sealed partial class ExpressionBinder
                 break;
 
             default:
-                target = BuildNarrowedVariableRead(variable);
+                target = BuildNarrowedVariableRead(variable, diagnosticLocation);
                 break;
         }
 

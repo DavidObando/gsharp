@@ -821,6 +821,50 @@ internal sealed class BinderContext
         }
     }
 
+    public void TrackBackwardGotoNarrowingRead(VariableSymbol variable, TextLocation location)
+    {
+        TypeSymbol? narrowedType = null;
+        for (var i = NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (NarrowedVariables[i].TryGetValue(variable, out narrowedType))
+            {
+                break;
+            }
+        }
+
+        if (narrowedType == null
+            || !NarrowedReadChangesRuntimeType(variable.Type, narrowedType))
+        {
+            return;
+        }
+
+        TrackBackwardGotoNarrowingUse(
+            variable,
+            location,
+            string.Empty,
+            BackwardGotoNarrowingUseKind.Conversion,
+            narrowedType);
+    }
+
+    public static bool NarrowedReadChangesRuntimeType(TypeSymbol declaredType, TypeSymbol narrowedType)
+    {
+        if (declaredType == narrowedType)
+        {
+            return false;
+        }
+
+        if (declaredType is NullableTypeSymbol nullable
+            && nullable.UnderlyingType == narrowedType)
+        {
+            return NullableLifting.IsValueTypeNullable(nullable)
+                || NullableLifting.IsUserValueTypeNullable(nullable);
+        }
+
+        return declaredType.ClrType == null
+            || narrowedType.ClrType == null
+            || declaredType.ClrType != narrowedType.ClrType;
+    }
+
     /// <summary>
     /// Records a narrowed variable consumed at a non-null boundary, then
     /// applies the ordinary platform-type coercion.
@@ -838,7 +882,8 @@ internal sealed class BinderContext
     {
         if (location is { } useLocation
             && expression is BoundVariableExpression variableRead
-            && variableRead.NarrowedType != null)
+            && variableRead.NarrowedType is { } narrowedType
+            && !NarrowedReadChangesRuntimeType(variableRead.Variable.Type, narrowedType))
         {
             TrackBackwardGotoNarrowingUse(
                 variableRead.Variable,

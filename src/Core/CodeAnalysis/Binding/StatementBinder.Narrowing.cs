@@ -416,7 +416,7 @@ internal sealed partial class StatementBinder
     private void ApplyEarlyExitNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
         var isLabeledStatement = false;
-        if (statement is BoundBlockStatement labeledBlock
+        while (statement is BoundBlockStatement labeledBlock
             && labeledBlock.Syntax is LabeledStatementSyntax
             && labeledBlock.Statements.Length == 2
             && labeledBlock.Statements[0] is BoundLabelStatement)
@@ -503,7 +503,7 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyAssignmentNarrowing(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
-        if (statement is BoundBlockStatement labeledBlock
+        while (statement is BoundBlockStatement labeledBlock
             && labeledBlock.Syntax is LabeledStatementSyntax
             && labeledBlock.Statements.Length == 2
             && labeledBlock.Statements[0] is BoundLabelStatement)

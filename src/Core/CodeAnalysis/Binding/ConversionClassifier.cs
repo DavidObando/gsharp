@@ -401,7 +401,8 @@ internal sealed class ConversionClassifier
         ParameterSymbol? callParameter = null)
     {
         if (expression is BoundVariableExpression variableRead
-            && variableRead.NarrowedType != null
+            && variableRead.NarrowedType is { } narrowedType
+            && !BinderContext.NarrowedReadChangesRuntimeType(variableRead.Variable.Type, narrowedType)
             && type is not NullableTypeSymbol
             && type is not PlatformTypeSymbol)
         {

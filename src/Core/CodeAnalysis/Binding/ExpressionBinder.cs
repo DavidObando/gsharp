@@ -872,11 +872,18 @@ internal sealed partial class ExpressionBinder
                 implicitProp.Property);
         }
 
-        return BuildNarrowedVariableRead(variable);
+        return BuildNarrowedVariableRead(variable, syntax.IdentifierToken.Location);
     }
 
-    private BoundExpression BuildNarrowedVariableRead(VariableSymbol variable)
+    private BoundExpression BuildNarrowedVariableRead(
+        VariableSymbol variable,
+        TextLocation? location = null)
     {
+        if (location is { } useLocation)
+        {
+            binderCtx.TrackBackwardGotoNarrowingRead(variable, useLocation);
+        }
+
         Func<TypeSymbol, BoundExpression> makeNarrowedVariable =
             narrowedType => new BoundVariableExpression(null, variable, narrowedType);
         return BuildNarrowedRead(

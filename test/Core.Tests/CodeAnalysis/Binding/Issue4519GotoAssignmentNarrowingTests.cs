@@ -492,6 +492,94 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_TypeTestNarrowingThroughNullableUpcast_ReportsConversion()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() object? {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    let result object? = x
+                    x = Cat{}
+                    goto Again
+                }
+                return x
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_TypeTestNarrowingThroughNullSafeCall_ReportsConversion()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                func Bark() string { return "woof" }
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string? {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    let result = x?.Bark()
+                    x = Cat{}
+                    goto Again
+                }
+                return nil
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_StackedLabeledGuardReestablishesNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = "safe"
+                var count = 0
+            First:
+            Second:
+                if x == nil {
+                    return 0
+                }
+                let length = x.Length
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto First
+                }
+                return length
+            }
+
+            Console.WriteLine(Run())
+            """, "0");
+    }
+
+    [Fact]
     public void ForwardGoto_BypassesLabeledSwitchGuard_ReportsMemberAccess()
     {
         var result = Evaluate("""
