@@ -868,7 +868,8 @@ public sealed partial class CSharpToGSharpTranslator
             int usePosition)
         {
             if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                    is not VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                    is not VariableDeclaratorSyntax
+                    { Initializer.Value: { } initializer } declarator)
             {
                 return Array.Empty<ExpressionSyntax>();
             }
@@ -876,6 +877,26 @@ public sealed partial class CSharpToGSharpTranslator
             if (!this.IsLocalReassigned(local))
             {
                 return new[] { initializer };
+            }
+
+            if (initializer.Ancestors().OfType<ForStatementSyntax>().FirstOrDefault(
+                    loop => loop.Declaration?.Variables.Contains(declarator) == true)
+                    is { Statement: { } body } forStatement
+                && body.FullSpan.Contains(usePosition))
+            {
+                var loopReaching = new List<ExpressionSyntax> { initializer };
+                if (body is BlockSyntax loopBody
+                    && !this.ApplyBlockPrefixesBeforeUse(
+                        loopBody,
+                        usePosition,
+                        0,
+                        local,
+                        loopReaching))
+                {
+                    return Array.Empty<ExpressionSyntax>();
+                }
+
+                return loopReaching;
             }
 
             if (initializer.Ancestors().OfType<StatementSyntax>()
@@ -890,45 +911,196 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             int declarationIndex = block.Statements.IndexOf(declarationStatement);
-            int useIndex = block.Statements.IndexOf(useStatement);
-            if (declarationIndex < 0 || useIndex <= declarationIndex)
+            if (declarationIndex < 0)
             {
                 return Array.Empty<ExpressionSyntax>();
             }
 
             var reaching = new List<ExpressionSyntax> { initializer };
-            if (useIndex == declarationIndex + 1)
+            if (!this.ApplyBlockPrefixesBeforeUse(
+                block,
+                usePosition,
+                declarationIndex + 1,
+                local,
+                reaching))
             {
-                return reaching;
+                return Array.Empty<ExpressionSyntax>();
             }
 
-            for (int i = declarationIndex + 1; i < useIndex; i++)
+            return reaching;
+        }
+
+        private bool ApplyBlockPrefixesBeforeUse(
+            BlockSyntax outerBlock,
+            int usePosition,
+            int firstStatement,
+            ILocalSymbol local,
+            List<ExpressionSyntax> reaching)
+        {
+            SyntaxToken useToken = outerBlock.FindToken(usePosition);
+            var blocks = useToken.Parent?.AncestorsAndSelf()
+                .OfType<BlockSyntax>()
+                .TakeWhile(block => block != outerBlock)
+                .Reverse()
+                .Append(outerBlock)
+                .Reverse()
+                .ToList();
+            if (blocks is not [BlockSyntax first, ..] || first != outerBlock)
             {
-                StatementSyntax statement = block.Statements[i];
-                if (!statement.DescendantNodesAndSelf()
-                    .Any(node => this.SyntaxNodeWritesSymbol(node, local)))
+                return false;
+            }
+
+            foreach (BlockSyntax block in blocks)
+            {
+                StatementSyntax useStatement = useToken.Parent?.AncestorsAndSelf()
+                    .OfType<StatementSyntax>()
+                    .FirstOrDefault(statement => statement.Parent == block);
+                int useIndex = block.Statements.IndexOf(useStatement);
+                if (useIndex < firstStatement)
+                {
+                    return false;
+                }
+
+                for (int i = firstStatement; i < useIndex; i++)
+                {
+                    if (!this.ApplyReachingStatement(block.Statements[i], local, reaching))
+                    {
+                        return false;
+                    }
+                }
+
+                firstStatement = 0;
+            }
+
+            return true;
+        }
+
+        private bool ApplyReachingStatement(
+            StatementSyntax statement,
+            ILocalSymbol local,
+            List<ExpressionSyntax> reaching)
+        {
+            IReadOnlyList<SyntaxNode> nodes = statement.DescendantNodesAndSelf(
+                node => node is not AnonymousFunctionExpressionSyntax
+                    && node is not LocalFunctionStatementSyntax).ToList();
+            if (!nodes.Any(node => this.SyntaxNodeWritesSymbol(node, local)))
+            {
+                return true;
+            }
+
+            DataFlowAnalysis flow = this.context.SemanticModel.AnalyzeDataFlow(statement);
+            if (!flow.Succeeded)
+            {
+                return false;
+            }
+
+            if (flow.AlwaysAssigned.Contains(local, SymbolEqualityComparer.Default))
+            {
+                reaching.Clear();
+            }
+
+            this.AddAssignedValues(statement, local, reaching);
+
+            return true;
+        }
+
+        private void AddAssignedValues(
+            SyntaxNode node,
+            ILocalSymbol local,
+            List<ExpressionSyntax> values)
+        {
+            foreach (AssignmentExpressionSyntax assignment in node.DescendantNodesAndSelf(
+                child => child is not AnonymousFunctionExpressionSyntax
+                    && child is not LocalFunctionStatementSyntax)
+                .OfType<AssignmentExpressionSyntax>())
+            {
+                if (node is StatementSyntax statement
+                    && !this.AssignmentCanReachStatementEnd(assignment, statement))
                 {
                     continue;
                 }
 
-                DataFlowAnalysis flow = this.context.SemanticModel.AnalyzeDataFlow(statement);
-                if (!flow.Succeeded)
+                if (TryFindAssignedValuePath(
+                    assignment.Left,
+                    local,
+                    new List<int>(),
+                    out IReadOnlyList<int> path))
                 {
-                    return Array.Empty<ExpressionSyntax>();
+                    ExpressionSyntax source = this.ResolveStableTupleAlias(assignment.Right);
+                    ExpressionSyntax value = ProjectTupleElement(source, path);
+                    if (value.SyntaxTree == this.context.SemanticModel.SyntaxTree)
+                    {
+                        values.Add(value);
+                    }
+                }
+            }
+        }
+
+        private bool AssignmentCanReachStatementEnd(
+            AssignmentExpressionSyntax assignment,
+            StatementSyntax outerStatement)
+        {
+            StatementSyntax current = assignment.AncestorsAndSelf()
+                .OfType<StatementSyntax>()
+                .FirstOrDefault(statement => statement.Parent is BlockSyntax);
+            while (current?.Parent is BlockSyntax block
+                && outerStatement.FullSpan.Contains(block.FullSpan))
+            {
+                int index = block.Statements.IndexOf(current);
+                if (index < 0)
+                {
+                    return false;
                 }
 
-                if (flow.AlwaysAssigned.Contains(local, SymbolEqualityComparer.Default))
+                ControlFlowAnalysis flow = this.context.SemanticModel.AnalyzeControlFlow(
+                    block.Statements[index],
+                    block.Statements[^1]);
+                if (!flow.Succeeded || !flow.EndPointIsReachable)
                 {
-                    reaching.Clear();
+                    return false;
                 }
 
-                reaching.AddRange(statement.DescendantNodesAndSelf()
-                    .OfType<AssignmentExpressionSyntax>()
-                    .Where(assignment => this.BindsTo(assignment.Left, local))
-                    .Select(assignment => assignment.Right));
+                current = block.Ancestors()
+                    .OfType<StatementSyntax>()
+                    .FirstOrDefault(statement => statement.Parent is BlockSyntax);
             }
 
-            return reaching;
+            return true;
+        }
+
+        private bool TryFindAssignedValuePath(
+            ExpressionSyntax left,
+            ILocalSymbol local,
+            List<int> path,
+            out IReadOnlyList<int> found)
+        {
+            left = Unwrap(left);
+            if (this.BindsTo(left, local))
+            {
+                found = path;
+                return true;
+            }
+
+            if (left is TupleExpressionSyntax leftTuple)
+            {
+                for (int i = leftTuple.Arguments.Count - 1; i >= 0; i--)
+                {
+                    path.Add(i);
+                    if (this.TryFindAssignedValuePath(
+                        leftTuple.Arguments[i].Expression,
+                        local,
+                        path,
+                        out found))
+                    {
+                        return true;
+                    }
+
+                    path.RemoveAt(path.Count - 1);
+                }
+            }
+
+            found = null;
+            return false;
         }
 
         private ExpressionSyntax UnwrapTuplePreservingCasts(ExpressionSyntax expression)

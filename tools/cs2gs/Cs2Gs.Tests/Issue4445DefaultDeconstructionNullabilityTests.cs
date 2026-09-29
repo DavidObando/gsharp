@@ -73,6 +73,33 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 }
                 var (conditionallyAssignedLeft, conditionallyAssignedRight) =
                     conditionallyAssignedPair;
+                var tupleAssignedPair = (replacement, replacement);
+                var tupleAssignmentOther = replacement;
+                var incomingTupleAssignment =
+                    ((default(T), default(T)), replacement);
+                (tupleAssignedPair, tupleAssignmentOther) =
+                    incomingTupleAssignment;
+                var (tupleAssignedLeft, tupleAssignedRight) = tupleAssignedPair;
+                var duplicatePair = (replacement, replacement);
+                (duplicatePair, duplicatePair) =
+                    ((replacement, replacement), (default(T), default(T)));
+                var (duplicateLeft, duplicateRight) = duplicatePair;
+                var finalReplacementPair = (default(T), default(T));
+                (finalReplacementPair, finalReplacementPair) =
+                    ((default(T), default(T)), (replacement, replacement));
+                var (finalReplacementLeft, finalReplacementRight) =
+                    finalReplacementPair;
+                var closurePair = (replacement, replacement);
+                System.Action deferredDefault = () =>
+                    closurePair = (default(T), default(T));
+                var (closureLeft, closureRight) = closurePair;
+                var exitingPair = (replacement, replacement);
+                if (!choose)
+                {
+                    exitingPair = (default(T), default(T));
+                    return 0;
+                }
+                var (exitingLeft, exitingRight) = exitingPair;
                 var reassignedPair = (default(T), default(T));
                 reassignedPair = (replacement, replacement);
                 var (reassignedLeft, reassignedRight) = reassignedPair;
@@ -121,6 +148,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref assignedRight, replacement);
                 Fill(ref conditionallyAssignedLeft, replacement);
                 Fill(ref conditionallyAssignedRight, replacement);
+                Fill(ref tupleAssignedLeft, replacement);
+                Fill(ref tupleAssignedRight, replacement);
+                Fill(ref duplicateLeft, replacement);
+                Fill(ref duplicateRight, replacement);
                 Fill(ref conditionalLeft, replacement);
                 Fill(ref conditionalRight, replacement);
                 Fill(ref switchLeft, replacement);
@@ -140,6 +171,39 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 {
                     Fill(ref loopLeft, replacement);
                     Fill(ref loopRight, replacement);
+                    break;
+                }
+
+                for (var loopPair = (default(T), default(T));
+                    choose;
+                    loopPair = (replacement, replacement))
+                {
+                    var (forAliasLeft, forAliasRight) = loopPair;
+                    Fill(ref forAliasLeft, replacement);
+                    Fill(ref forAliasRight, replacement);
+                    break;
+                }
+
+                for (var nestedLoopPair = (replacement, replacement); choose;)
+                {
+                    if (choose)
+                    {
+                        nestedLoopPair = (default(T), default(T));
+                        var (nestedLoopLeft, nestedLoopRight) = nestedLoopPair;
+                        Fill(ref nestedLoopLeft, replacement);
+                        Fill(ref nestedLoopRight, replacement);
+                    }
+
+                    break;
+                }
+
+                for (var exitingLoopPair = (replacement, replacement);
+                    choose;
+                    exitingLoopPair = (default(T), default(T)))
+                {
+                    var (exitingLoopLeft, exitingLoopRight) = exitingLoopPair;
+                    _ = exitingLoopLeft;
+                    _ = exitingLoopRight;
                     break;
                 }
 
@@ -333,9 +397,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "conditionalAliasLeft", "conditionalAliasRight",
             "assignedLeft", "assignedRight",
             "conditionallyAssignedLeft", "conditionallyAssignedRight",
+            "tupleAssignedLeft", "tupleAssignedRight",
+            "duplicateLeft", "duplicateRight",
             "conditionalLeft", "conditionalRight", "switchLeft", "switchRight",
             "coalesceLeft", "coalesceRight",
-            "loopLeft", "loopRight", "coalesced", "left", "right",
+            "loopLeft", "loopRight", "forAliasLeft", "forAliasRight",
+            "nestedLoopLeft", "nestedLoopRight",
+            "coalesced", "left", "right",
         })
         {
             Assert.Matches($@"\b(let|var) {name} T\? =", printed);
@@ -358,6 +426,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("narrowedWholeAlias T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("reassignedLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("reassignedRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("closureLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("closureRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("finalReplacementLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("finalReplacementRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("exitingLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("exitingRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("exitingLoopLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("exitingLoopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("conditionalNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("switchNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("coalescePairNarrowed T? =", printed, StringComparison.Ordinal);
