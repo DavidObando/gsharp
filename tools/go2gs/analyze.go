@@ -177,16 +177,20 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 		BuildFlags: buildFlags,
 		Tests:      profile.LoadTests,
 	}
-	preflightConfig := *config
-	preflightConfig.Mode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
+	selectedConfig := *config
+	selectedConfig.Mode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 		packages.NeedEmbedFiles | packages.NeedEmbedPatterns | packages.NeedImports |
 		packages.NeedDeps | packages.NeedModule | packages.NeedForTest
+	selectedPreflight, _ := packages.Load(&selectedConfig, profile.EntryPatterns...)
+	selectedPreflight = collectPackages(selectedPreflight)
+	capturePreflight := selectedPreflight
 	if !profile.CGOEnabled {
-		preflightConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
+		defensiveConfig := selectedConfig
+		defensiveConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
+		defensive, _ := packages.Load(&defensiveConfig, profile.EntryPatterns...)
+		capturePreflight = collectPackages(append(selectedPreflight, defensive...))
 	}
-	preflight, _ := packages.Load(&preflightConfig, profile.EntryPatterns...)
-	preflight = collectPackages(preflight)
-	sourceSnapshot, err := snapshotPackageInputs(preflight, sourceRoot, profile.Limits)
+	sourceSnapshot, err := snapshotPackageInputs(selectedPreflight, capturePreflight, sourceRoot, profile.Limits)
 	if err != nil {
 		return Analysis{}, false, err
 	}
@@ -213,6 +217,7 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 	all := collectPackages(loaded)
 	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, sourceRoot)
 	builder.snapshotFiles = sourceSnapshot.packageFiles
+	builder.selectedSnapshotFiles = sourceSnapshot.selectedFiles
 	builder.snapshotRoles = sourceSnapshot.packageRoles
 	if len(builder.inputDrift) > 0 {
 		builder.block("input-drift", "selected package inputs changed while loading", nil, nil)
@@ -242,29 +247,38 @@ type snapshottedInput struct {
 }
 
 type packageInputSnapshot struct {
-	data         map[string][]byte
-	overlay      map[string][]byte
-	files        map[string]snapshottedInput
-	packageFiles map[string][]string
-	packageRoles map[string]map[string]string
-	fileOwners   map[string]map[string]bool
-	portable     map[string]string
+	data           map[string][]byte
+	overlay        map[string][]byte
+	files          map[string]snapshottedInput
+	packageFiles   map[string][]string
+	selectedFiles  map[string][]string
+	packageRoles   map[string]map[string]string
+	fileOwners     map[string]map[string]bool
+	selectedOwners map[string]map[string]bool
+	packageDirs    map[string]string
+	portable       map[string]string
 }
 
-func snapshotPackageInputs(loaded []*packages.Package, sourceRoot string, limits Limits) (packageInputSnapshot, error) {
+func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot string, limits Limits) (packageInputSnapshot, error) {
 	result := packageInputSnapshot{
-		data:         map[string][]byte{},
-		overlay:      map[string][]byte{},
-		files:        map[string]snapshottedInput{},
-		packageFiles: map[string][]string{},
-		packageRoles: map[string]map[string]string{},
-		fileOwners:   map[string]map[string]bool{},
-		portable:     map[string]string{},
+		data:           map[string][]byte{},
+		overlay:        map[string][]byte{},
+		files:          map[string]snapshottedInput{},
+		packageFiles:   map[string][]string{},
+		selectedFiles:  map[string][]string{},
+		packageRoles:   map[string]map[string]string{},
+		fileOwners:     map[string]map[string]bool{},
+		selectedOwners: map[string]map[string]bool{},
+		packageDirs:    map[string]string{},
+		portable:       map[string]string{},
 	}
 	directories := map[string]map[string]bool{}
-	for _, pkg := range loaded {
+	for _, pkg := range captured {
 		key := packageInputKey(pkg)
 		result.packageRoles[key] = packageInputRoles(pkg)
+		if pkg.Dir != "" {
+			result.packageDirs[key] = pkg.Dir
+		}
 		for _, path := range packageInputPaths(pkg, sourceRoot) {
 			result.packageFiles[key] = append(result.packageFiles[key], path)
 			if result.fileOwners[path] == nil {
@@ -280,6 +294,14 @@ func snapshotPackageInputs(loaded []*packages.Package, sourceRoot string, limits
 			}
 		}
 		result.packageFiles[key] = uniqueSorted(result.packageFiles[key])
+	}
+	for _, pkg := range selected {
+		key := packageInputKey(pkg)
+		result.packageRoles[key] = packageInputRoles(pkg)
+		if pkg.Dir != "" {
+			result.packageDirs[key] = pkg.Dir
+		}
+		result.selectedFiles[key] = packageInputPaths(pkg, sourceRoot)
 	}
 	sortedDirectories := make([]string, 0, len(directories))
 	for directory := range directories {
@@ -304,13 +326,22 @@ func snapshotPackageInputs(loaded []*packages.Package, sourceRoot string, limits
 			}
 		}
 	}
-	paths := make([]string, 0, len(result.fileOwners))
-	for path := range result.fileOwners {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
 	var total int64
-	for _, path := range paths {
+	pending := map[string]bool{}
+	for path := range result.fileOwners {
+		pending[path] = true
+	}
+	for len(pending) > 0 {
+		paths := make([]string, 0, len(pending))
+		for path := range pending {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		path := paths[0]
+		delete(pending, path)
+		if _, captured := result.files[path]; captured {
+			continue
+		}
 		if len(result.files) >= limits.MaxFiles || total >= limits.MaxLocalHashBytes {
 			return packageInputSnapshot{}, fmt.Errorf("input snapshot exceeds configured limits")
 		}
@@ -334,6 +365,60 @@ func snapshotPackageInputs(loaded []*packages.Package, sourceRoot string, limits
 		if filepath.Ext(path) == ".go" {
 			result.overlay[path] = data
 		}
+		if !nativeIncludeCarrier(path) {
+			continue
+		}
+		for _, include := range localQuotedIncludes(data) {
+			for owner := range result.fileOwners[path] {
+				target, ok := resolveLocalInclude(result.packageDirs[owner], path, include)
+				if !ok {
+					continue
+				}
+				if _, err := pathWithin(result.packageDirs[owner], target); err != nil {
+					continue
+				}
+				if result.fileOwners[target] == nil {
+					result.fileOwners[target] = map[string]bool{}
+				}
+				result.fileOwners[target][owner] = true
+				result.packageFiles[owner] = append(result.packageFiles[owner], target)
+				result.packageRoles[owner][target] = "native"
+				pending[target] = true
+			}
+		}
+	}
+	for key := range result.packageFiles {
+		result.packageFiles[key] = uniqueSorted(result.packageFiles[key])
+	}
+	selectedByKey := map[string]*packages.Package{}
+	for _, pkg := range selected {
+		selectedByKey[packageInputKey(pkg)] = pkg
+	}
+	for key, files := range result.selectedFiles {
+		pkg := selectedByKey[key]
+		activeCgo := pathsImportC(pkg.GoFiles, result.data)
+		reachable, _ := selectedNativeIncludes(pkg, result.data)
+		refined := make([]string, 0, len(files))
+		for _, path := range files {
+			if nativeHeader(path) && !activeCgo && !reachable[path] {
+				continue
+			}
+			refined = append(refined, path)
+			if result.selectedOwners[path] == nil {
+				result.selectedOwners[path] = map[string]bool{}
+			}
+			result.selectedOwners[path][key] = true
+		}
+		for path := range reachable {
+			if !contains(refined, path) {
+				refined = append(refined, path)
+			}
+			if result.selectedOwners[path] == nil {
+				result.selectedOwners[path] = map[string]bool{}
+			}
+			result.selectedOwners[path][key] = true
+		}
+		result.selectedFiles[key] = uniqueSorted(refined)
 	}
 	return result, nil
 }
@@ -386,31 +471,46 @@ func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Packa
 	drift := map[string]bool{}
 	actual := map[string][]string{}
 	for _, pkg := range loaded {
-		actual[packageInputKey(pkg)] = packageInputPaths(pkg, sourceRoot)
+		files := packageInputPaths(pkg, sourceRoot)
+		activeCgo := pathsImportC(pkg.GoFiles, snapshot.data)
+		reachable, _ := selectedNativeIncludes(pkg, snapshot.data)
+		for _, path := range files {
+			if nativeHeader(path) && !activeCgo && !reachable[path] {
+				continue
+			}
+			actual[packageInputKey(pkg)] = append(actual[packageInputKey(pkg)], path)
+		}
+		for path := range reachable {
+			if !contains(actual[packageInputKey(pkg)], path) {
+				actual[packageInputKey(pkg)] = append(actual[packageInputKey(pkg)], path)
+			}
+		}
+		actual[packageInputKey(pkg)] = uniqueSorted(actual[packageInputKey(pkg)])
 	}
 	keys := map[string]bool{}
-	for key := range snapshot.packageFiles {
+	for key := range snapshot.selectedFiles {
 		keys[key] = true
 	}
 	for key := range actual {
 		keys[key] = true
 	}
 	for key := range keys {
-		if !slices.Equal(snapshot.packageFiles[key], actual[key]) {
+		if !slices.Equal(snapshot.selectedFiles[key], actual[key]) {
 			drift[key] = true
 		}
 	}
-	for path, captured := range snapshot.files {
+	for path, owners := range snapshot.selectedOwners {
+		captured := snapshot.files[path]
 		info, err := os.Lstat(path)
 		if err != nil || !info.Mode().IsRegular() || !os.SameFile(captured.info, info) {
-			for owner := range snapshot.fileOwners[path] {
+			for owner := range owners {
 				drift[owner] = true
 			}
 			continue
 		}
 		data, err := readBoundedRegularFile(path, int64(len(captured.data))+1)
 		if err != nil || !bytes.Equal(data, captured.data) {
-			for owner := range snapshot.fileOwners[path] {
+			for owner := range owners {
 				drift[owner] = true
 			}
 		}

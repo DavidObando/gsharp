@@ -287,12 +287,38 @@ func TestCgoDisabledIgnoresDefensivelyDiscoveredInputs(t *testing.T) {
 		"source://cgo.go":         "ignored",
 		"source://cgo_tagged.go":  "ignored",
 		"source://cgo_windows.go": "ignored",
+		"source://native.c":       "ignored",
 		"source://native.h":       "ignored",
 	} {
 		index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == path })
 		if index < 0 || analysis.Files[index].Role != role {
 			t.Fatalf("%s role: got %#v, want %s", path, analysis.Files, role)
 		}
+	}
+}
+
+func TestDefensiveNativeMutationDoesNotCreateDrift(t *testing.T) {
+	root := copyFixture(t, "cgo")
+	path := filepath.Join(root, "native.c")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+		if writeErr := os.WriteFile(path, []byte("changed defensive input"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	})
+	if err != nil || !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "input-drift") {
+		t.Fatalf("defensive-only mutation affected completeness: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == "source://native.c" })
+	if index < 0 || analysis.Files[index].Role != "ignored" {
+		t.Fatalf("defensive C input was not retained as ignored: %#v", analysis.Files)
+	}
+	data, err := base64.StdEncoding.DecodeString(analysis.Files[index].ContentBase64)
+	if err != nil || !bytes.Equal(data, original) {
+		t.Fatalf("defensive input did not use captured bytes: %q, %v", data, err)
 	}
 }
 
@@ -871,13 +897,74 @@ func TestNativeRequirementIsIncomplete(t *testing.T) {
 	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "native") {
 		t.Fatalf("native requirement was not reported as incomplete: %#v", analysis.Blockers)
 	}
-	for _, name := range []string{"native.s", "constants.h", platformAssembly} {
+	for _, name := range []string{"native.s", "constants.h", "cycle.h", platformAssembly} {
 		path := "source://" + name
 		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
 			return file.Path == path && file.Native && file.Role == "native"
 		}) {
 			t.Fatalf("selected native input %s was not recorded as native: %#v", path, analysis.Files)
 		}
+	}
+	unused := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == "source://unused.h" })
+	if unused < 0 || analysis.Files[unused].Role != "ignored" || analysis.Files[unused].Native {
+		t.Fatalf("unreachable header was not ignored: %#v", analysis.Files)
+	}
+}
+
+func TestUnsafeNativeIncludeFailsClosed(t *testing.T) {
+	root := copyFixture(t, "native")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(root), "outside.h"), []byte("#define OUTSIDE 1\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "native.s"), []byte("#include \"../outside.h\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "native-include") {
+		t.Fatalf("unsafe native include did not fail closed: %#v", analysis.Blockers)
+	}
+}
+
+func TestNativeIncludeGraphHandlesNestedCycle(t *testing.T) {
+	root := t.TempDir()
+	paths := map[string][]byte{
+		"native.s":               []byte("#include \"include/constants.h\"\n"),
+		"include/constants.h":    []byte("#include \"nested/cycle.h\"\n"),
+		"include/nested/cycle.h": []byte("#include \"../constants.h\"\n"),
+	}
+	snapshot := map[string][]byte{}
+	var otherFiles []string
+	for name, data := range paths {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		snapshot[path] = data
+		otherFiles = append(otherFiles, path)
+	}
+	pkg := &packages.Package{Dir: root, OtherFiles: otherFiles}
+	reachable, unsafe := selectedNativeIncludes(pkg, snapshot)
+	if unsafe || len(reachable) != 2 {
+		t.Fatalf("nested cyclic include graph mismatch: reachable=%v unsafe=%v", reachable, unsafe)
+	}
+}
+
+func TestSelectedNativeHeaderMutationCreatesDrift(t *testing.T) {
+	root := copyFixture(t, "native")
+	path := filepath.Join(root, "constants.h")
+	analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+		if writeErr := os.WriteFile(path, []byte("#define NATIVE_VALUE 8\n"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	})
+	if err != nil || complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+		t.Fatalf("selected native header mutation was not detected: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
 	}
 }
 

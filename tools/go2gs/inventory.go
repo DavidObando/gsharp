@@ -23,34 +23,38 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-var overlayDiagnosticPath = regexp.MustCompile(`[^\s\n]*gocommand-[0-9]+[/\\][0-9]+-([^:\s\n]+)`)
+var (
+	overlayDiagnosticPath = regexp.MustCompile(`[^\s\n]*gocommand-[0-9]+[/\\][0-9]+-([^:\s\n]+)`)
+	quotedIncludePattern  = regexp.MustCompile(`(?m)^[\t ]*#[\t ]*include[\t ]*"([^"\r\n]+)"`)
+)
 
 type inventoryBuilder struct {
-	analysis         *Analysis
-	sourceRoot       string
-	goroot           string
-	profile          Profile
-	packageIDs       map[*packages.Package]string
-	packagePathIDs   map[string]string
-	typeIDs          map[types.Type]string
-	objectIDs        map[objectRef]string
-	fileIDs          map[string]string
-	moduleIDs        map[string]string
-	seenModules      map[string]bool
-	seenFiles        map[string]bool
-	seenTypes        map[string]bool
-	seenSymbols      map[string]bool
-	seenMethodSets   map[string]bool
-	scopeIDs         map[*types.Scope]string
-	scopeRanges      []scopeRange
-	diagnosticSeq    int
-	sourceSnapshot   map[string][]byte
-	snapshotPortable map[string]string
-	inputDrift       map[string]bool
-	snapshotFiles    map[string][]string
-	snapshotRoles    map[string]map[string]string
-	memberIdentity   map[types.Object]string
-	skipSemantics    map[*packages.Package]bool
+	analysis              *Analysis
+	sourceRoot            string
+	goroot                string
+	profile               Profile
+	packageIDs            map[*packages.Package]string
+	packagePathIDs        map[string]string
+	typeIDs               map[types.Type]string
+	objectIDs             map[objectRef]string
+	fileIDs               map[string]string
+	moduleIDs             map[string]string
+	seenModules           map[string]bool
+	seenFiles             map[string]bool
+	seenTypes             map[string]bool
+	seenSymbols           map[string]bool
+	seenMethodSets        map[string]bool
+	scopeIDs              map[*types.Scope]string
+	scopeRanges           []scopeRange
+	diagnosticSeq         int
+	sourceSnapshot        map[string][]byte
+	snapshotPortable      map[string]string
+	inputDrift            map[string]bool
+	snapshotFiles         map[string][]string
+	selectedSnapshotFiles map[string][]string
+	snapshotRoles         map[string]map[string]string
+	memberIdentity        map[types.Object]string
+	skipSemantics         map[*packages.Package]bool
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
@@ -61,7 +65,8 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		moduleIDs: map[string]string{}, seenModules: map[string]bool{},
 		seenFiles: map[string]bool{}, seenTypes: map[string]bool{}, seenSymbols: map[string]bool{},
 		seenMethodSets: map[string]bool{}, scopeIDs: map[*types.Scope]string{},
-		inputDrift: map[string]bool{}, snapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
+		inputDrift: map[string]bool{}, snapshotFiles: map[string][]string{},
+		selectedSnapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
 		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
 		skipSemantics: map[*packages.Package]bool{},
 	}
@@ -235,6 +240,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	active := stringSet(pkg.GoFiles)
 	embed := stringSet(pkg.EmbedFiles)
 	activeCgo := b.packageImportsC(pkg)
+	reachableHeaders, unsafeIncludes := selectedNativeIncludes(pkg, b.sourceSnapshot)
 	nativeConsumer := hasSelectedNativeConsumer(pkg, activeCgo)
 	all := append([]string{}, pkg.CompiledGoFiles...)
 	all = append(all, pkg.GoFiles...)
@@ -254,6 +260,10 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	}
 	if nativeConsumer {
 		b.block("native", "selected package requires native, assembly, or CGo build inputs; M0 records them but does not authorize the native toolchain", []string{record.ID}, nil)
+		record.InventoryComplete = false
+	}
+	if unsafeIncludes {
+		b.block("native-include", "selected native source has an unsafe or unavailable local quoted include", []string{record.ID}, nil)
 		record.InventoryComplete = false
 	}
 	unmappedCgo := activeCgo
@@ -276,7 +286,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		case embed[path]:
 			role, reason = "embed", "selected by go:embed"
 		case contains(pkg.OtherFiles, path):
-			if activeCgo || !nativeHeader(path) || nativeConsumer {
+			if activeCgo || !nativeHeader(path) || reachableHeaders[path] {
 				role, reason = "native", "selected non-Go build input"
 			} else {
 				role, reason = "ignored", "no selected native source can consume this header"
@@ -292,14 +302,22 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		default:
 			role, reason = "input", "reported by go/packages"
 		}
-		if snapshotRole := b.snapshotRoles[packageInputKey(pkg)][path]; snapshotRole != "" &&
-			!contains(pkg.GoFiles, path) && !contains(pkg.CompiledGoFiles, path) &&
+		key := packageInputKey(pkg)
+		if !contains(pkg.GoFiles, path) && !contains(pkg.CompiledGoFiles, path) &&
 			!contains(pkg.IgnoredFiles, path) && !contains(pkg.OtherFiles, path) && !contains(pkg.EmbedFiles, path) {
-			role = snapshotRole
-			reason = "captured before package loading"
-			if !activeCgo && !nativeConsumer && (snapshotRole == "native" || b.snapshotFileImportsC(path)) {
+			snapshotRole := b.snapshotRoles[key][path]
+			if contains(b.selectedSnapshotFiles[key], path) {
+				if snapshotRole != "" {
+					role = snapshotRole
+				}
+				reason = "captured before package loading"
+			} else {
 				role = "ignored"
 				reason = "discovered defensively but inactive in the selected profile"
+			}
+			if reachableHeaders[path] {
+				role = "native"
+				reason = "included by selected native source"
 			}
 		}
 		fileID, err := b.addFile(pkg, path, role, reason)
@@ -342,12 +360,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 }
 
 func (b *inventoryBuilder) packageImportsC(pkg *packages.Package) bool {
-	for _, path := range pkg.GoFiles {
-		if b.snapshotFileImportsC(path) {
-			return true
-		}
-	}
-	return false
+	return pathsImportC(pkg.GoFiles, b.sourceSnapshot)
 }
 
 func (b *inventoryBuilder) snapshotFileImportsC(path string) bool {
@@ -379,9 +392,104 @@ func hasSelectedNativeConsumer(pkg *packages.Package, activeCgo bool) bool {
 	return false
 }
 
+func pathsImportC(paths []string, snapshot map[string][]byte) bool {
+	for _, path := range paths {
+		if filepath.Ext(path) != ".go" {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, snapshot[path], parser.ImportsOnly)
+		if err != nil {
+			continue
+		}
+		for _, imported := range file.Imports {
+			if imported.Path.Value == `"C"` {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func selectedNativeIncludes(pkg *packages.Package, snapshot map[string][]byte) (map[string]bool, bool) {
+	reachable := map[string]bool{}
+	pending := []string{}
+	for _, path := range pkg.OtherFiles {
+		if !nativeHeader(path) {
+			pending = append(pending, path)
+		}
+	}
+	sort.Strings(pending)
+	visited := map[string]bool{}
+	unsafe := false
+	for len(pending) > 0 {
+		path := pending[0]
+		pending = pending[1:]
+		if visited[path] {
+			continue
+		}
+		visited[path] = true
+		data, captured := snapshot[path]
+		if !captured {
+			unsafe = true
+			continue
+		}
+		for _, include := range localQuotedIncludes(data) {
+			target, ok := resolveLocalInclude(pkg.Dir, path, include)
+			if !ok {
+				unsafe = true
+				continue
+			}
+			if _, captured := snapshot[target]; !captured {
+				unsafe = true
+				continue
+			}
+			if !reachable[target] {
+				reachable[target] = true
+				pending = append(pending, target)
+				sort.Strings(pending)
+			}
+		}
+	}
+	return reachable, unsafe
+}
+
+func localQuotedIncludes(data []byte) []string {
+	matches := quotedIncludePattern.FindAllSubmatch(data, -1)
+	result := make([]string, 0, len(matches))
+	for _, match := range matches {
+		result = append(result, string(match[1]))
+	}
+	sort.Strings(result)
+	return result
+}
+
+func resolveLocalInclude(packageDir, includingPath, include string) (string, bool) {
+	if packageDir == "" || include == "" || filepath.IsAbs(include) ||
+		filepath.VolumeName(include) != "" || strings.ContainsRune(include, '\\') {
+		return "", false
+	}
+	target := filepath.Clean(filepath.Join(filepath.Dir(includingPath), filepath.FromSlash(include)))
+	if _, err := pathWithin(packageDir, target); err != nil {
+		return "", false
+	}
+	return target, true
+}
+
 func nativeHeader(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
 	case ".h", ".hh", ".hpp":
+		return true
+	default:
+		return false
+	}
+}
+
+func nativeIncludeCarrier(path string) bool {
+	if nativeHeader(path) {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".c", ".cc", ".cpp", ".cxx", ".f", ".f90", ".for", ".m", ".mm", ".s", ".swig", ".swigcxx":
 		return true
 	default:
 		return false
