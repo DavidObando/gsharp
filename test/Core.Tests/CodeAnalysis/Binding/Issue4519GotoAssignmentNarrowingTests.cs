@@ -4122,6 +4122,31 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void NestedFunctionActivatesDeferredReachableGotoEdges()
+    {
+        var result = Evaluate("""
+            let run = func() int32 {
+                var x string? = nil
+                x = "safe"
+                goto After
+            Enter:
+                x = nil
+                goto Use
+            After:
+                goto Enter
+            Use:
+                return x.Length
+            }
+
+            run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void CallableArgumentWithKnownAndUnknownTargetsRemainsUnsafe()
     {
         var result = Evaluate("""

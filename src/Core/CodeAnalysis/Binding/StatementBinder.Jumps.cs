@@ -147,8 +147,7 @@ internal sealed partial class StatementBinder
     /// </summary>
     internal void FinalizeUserLabels()
     {
-        ActivateDeferredReachableGotoEdges();
-        ReportUnsafeBackwardGotoNarrowings();
+        FinalizeNestedUserLabelNarrowings();
 
         foreach (var entry in binderCtx.UnresolvedGotoLabels)
         {
@@ -179,6 +178,12 @@ internal sealed partial class StatementBinder
         binderCtx.ReachableUserLabels.Clear();
         binderCtx.DeferredUnreachableGotoEdges.Clear();
         binderCtx.PotentialReachabilityLabel = null;
+    }
+
+    internal void FinalizeNestedUserLabelNarrowings()
+    {
+        ActivateDeferredReachableGotoEdges();
+        ReportUnsafeBackwardGotoNarrowings();
     }
 
     private void ActivateDeferredReachableGotoEdges()

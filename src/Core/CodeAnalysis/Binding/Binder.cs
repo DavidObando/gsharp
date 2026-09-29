@@ -317,7 +317,7 @@ public sealed class Binder
                 ParameterAllowedTargets,
                 "a parameter declaration",
                 System.AttributeTargets.Parameter),
-            reportUnsafeBackwardGotoNarrowings: () => Statements.ReportUnsafeBackwardGotoNarrowings(),
+            reportUnsafeBackwardGotoNarrowings: () => Statements.FinalizeNestedUserLabelNarrowings(),
             bindLocalVariable: (identifier, isReadOnly, type) =>
             {
                 return Declarations.BindVariableDeclaration(identifier, isReadOnly, type);
