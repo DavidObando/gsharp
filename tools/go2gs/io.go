@@ -194,7 +194,7 @@ func validateAnalysisJSONShape(data []byte) error {
 			"gorootIdentity", "gorootVersionSha256", "gorootSource", "autoDownload",
 		}},
 		{"recordCounts", []string{
-			"packages", "files", "types", "symbols", "nodes", "constants", "scopes", "selections",
+			"modules", "packages", "files", "types", "symbols", "nodes", "constants", "scopes", "selections",
 			"calls", "methodSets", "instances", "embeds", "generateDirectives", "dependencies",
 			"featureSites", "diagnostics", "blockers", "total",
 		}},

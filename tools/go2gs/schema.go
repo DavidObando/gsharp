@@ -250,6 +250,7 @@ type SourceSpan struct {
 type ConstantRecord struct {
 	ID             string     `json:"id"`
 	NodeID         string     `json:"nodeId"`
+	SymbolID       string     `json:"symbolId,omitempty"`
 	TypeID         string     `json:"typeId,omitempty"`
 	Category       string     `json:"category"`
 	Exact          string     `json:"exact"`
@@ -365,6 +366,7 @@ type BlockerRecord struct {
 }
 
 type RecordCounts struct {
+	Modules            int `json:"modules"`
 	Packages           int `json:"packages"`
 	Files              int `json:"files"`
 	Types              int `json:"types"`

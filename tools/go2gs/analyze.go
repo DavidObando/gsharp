@@ -131,14 +131,6 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		builder.finish()
 		return analysis, false, nil
 	}
-	if !profile.CGOEnabled {
-		if sites, err := findCgoImports(sourceRoot, profile.Limits.MaxFiles); err != nil {
-			return Analysis{}, false, err
-		} else if len(sites) > 0 {
-			builder.block("cgo", "source imports C but CGO_ENABLED=0; native preprocessing is not available in this profile", nil, nil)
-		}
-	}
-
 	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 		packages.NeedEmbedFiles | packages.NeedEmbedPatterns | packages.NeedImports | packages.NeedDeps |
 		packages.NeedExportFile | packages.NeedTypes | packages.NeedSyntax |
@@ -160,9 +152,26 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 	if loadErr != nil {
 		builder.block("loader", sanitizeMessage(loadErr.Error(), sourceRoot, profile.Limits.MaxStringBytes), nil, nil)
 	}
+	if !profile.CGOEnabled {
+		cgoConfig := *config
+		cgoConfig.Mode = packages.NeedName | packages.NeedFiles
+		cgoConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
+		cgoPackages, _ := packages.Load(&cgoConfig, profile.EntryPatterns...)
+		for _, pkg := range cgoPackages {
+			cgo, err := selectedPackageImportsC(pkg)
+			if err != nil {
+				return Analysis{}, false, err
+			}
+			if cgo {
+				builder.block("cgo", "selected package imports C but CGO_ENABLED=0; native preprocessing is not available in this profile", nil, nil)
+				break
+			}
+		}
+	}
 	if len(loaded) == 0 {
 		builder.block("loader", "the requested entry patterns selected no loadable packages under the pinned profile", nil, nil)
 	}
+
 	all := collectPackages(loaded)
 	if len(all) > profile.Limits.MaxPackages {
 		return Analysis{}, false, fmt.Errorf("loaded package count %d exceeds limit %d", len(all), profile.Limits.MaxPackages)
@@ -181,6 +190,18 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 	}
 	builder.finish()
 	return analysis, analysis.InventoryComplete, nil
+}
+
+func replaceEnvironment(env []string, key, value string) []string {
+	prefix := key + "="
+	result := append([]string{}, env...)
+	for i, entry := range result {
+		if strings.HasPrefix(entry, prefix) {
+			result[i] = prefix + value
+			return result
+		}
+	}
+	return append(result, prefix+value)
 }
 
 func collectPackages(roots []*packages.Package) []*packages.Package {
@@ -221,7 +242,11 @@ func packageCanonical(pkg *packages.Package) string {
 	if pkg.Module != nil {
 		module = pkg.Module.Path + "@" + pkg.Module.Version
 		if pkg.Module.Replace != nil {
-			module += "=>" + pkg.Module.Replace.Path + "@" + pkg.Module.Replace.Version
+			if pkg.Module.Replace.Version == "" {
+				module += "=>local"
+			} else {
+				module += "=>" + pkg.Module.Replace.Path + "@" + pkg.Module.Replace.Version
+			}
 		}
 	}
 	return module + "\x00" + pkg.PkgPath + "\x00" + packageVariant(pkg) + "\x00" + strings.Join(files, "\x00")
@@ -255,7 +280,11 @@ func sourceCommit(ctx context.Context, root string, maxOutput int) string {
 	if err != nil {
 		return ""
 	}
-	result, err := runProcess(ctx, 10*time.Second, maxOutput, root, git, []string{"-C", root, "rev-parse", "HEAD"}, []string{"PATH=" + os.Getenv("PATH")})
+	git, err = filepath.Abs(git)
+	if err != nil {
+		return ""
+	}
+	result, err := runProcess(ctx, 10*time.Second, maxOutput, root, git, []string{"-C", root, "rev-parse", "HEAD"}, []string{"PATH=" + selectedPath(git)})
 	if err != nil || result.ExitCode != 0 {
 		return ""
 	}
@@ -295,14 +324,7 @@ func displayMissing(value string) string {
 }
 
 func generatedFile(file *ast.File) bool {
-	for _, group := range file.Comments {
-		for _, comment := range group.List {
-			if strings.Contains(comment.Text, "Code generated") && strings.Contains(comment.Text, "DO NOT EDIT.") {
-				return true
-			}
-		}
-	}
-	return false
+	return ast.IsGenerated(file)
 }
 
 func tokenPositionFor(fset *token.FileSet, pos token.Pos, adjusted bool) token.Position {
