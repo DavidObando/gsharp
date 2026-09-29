@@ -1447,21 +1447,45 @@ func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 }
 
 func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
-	t.Run("ordinary", func(t *testing.T) {
-		directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-worker-*")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := os.WriteFile(filepath.Join(directory.path, "artifact"), []byte("owned"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := directory.cleanup(); err != nil {
-			t.Fatal(err)
-		}
-		if _, err := os.Lstat(directory.path); !os.IsNotExist(err) {
-			t.Fatalf("ordinary owned directory remains: %v", err)
-		}
-	})
+	for _, pattern := range []string{".go2gs-bootstrap-*", ".go2gs-worker-*", ".go2gs-work-*"} {
+		t.Run("ordinary-"+pattern, func(t *testing.T) {
+			directory, err := createOwnedTempDir(t.TempDir(), pattern)
+			if err != nil {
+				t.Fatal(err)
+			}
+			nested := filepath.Join(directory.path, "nested")
+			if err := os.Mkdir(nested, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(nested, "artifact"), []byte("owned"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("safe"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if secureTempCleanupSupported() {
+				if err := os.Symlink(outside, filepath.Join(directory.path, "link")); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := directory.cleanup(); err != nil {
+				t.Fatal(err)
+			}
+			if !secureTempCleanupSupported() {
+				if _, err := os.Lstat(directory.path); err != nil {
+					t.Fatalf("fallback cleanup removed private directory: %v", err)
+				}
+				return
+			}
+			if _, err := os.Lstat(directory.path); !os.IsNotExist(err) {
+				t.Fatalf("ordinary owned directory remains: %v", err)
+			}
+			if data, err := os.ReadFile(outside); err != nil || string(data) != "safe" {
+				t.Fatalf("symlink target was changed: %q, %v", data, err)
+			}
+		})
+	}
 
 	t.Run("pathname replacement", func(t *testing.T) {
 		parent := t.TempDir()
@@ -1490,6 +1514,43 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 		}
 		if _, err := os.Lstat(displaced); err != nil {
 			t.Fatalf("displaced owned directory was unexpectedly removed: %v", err)
+		}
+	})
+
+	t.Run("post-tombstone identity replacement", func(t *testing.T) {
+		if !secureTempCleanupSupported() {
+			t.Skip("descriptor-relative cleanup is unavailable")
+		}
+		parent := t.TempDir()
+		directory, err := createOwnedTempDir(parent, ".go2gs-worker-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory.path, "owned.txt"), []byte("owned"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		var tombstone, displaced string
+		err = directory.cleanupWithHooks(nil, func(path string) {
+			tombstone = path
+			displaced = path + ".displaced"
+			if renameErr := os.Rename(path, displaced); renameErr != nil {
+				t.Fatal(renameErr)
+			}
+			if mkdirErr := os.Mkdir(path, 0o700); mkdirErr != nil {
+				t.Fatal(mkdirErr)
+			}
+			if writeErr := os.WriteFile(filepath.Join(path, "valuable.txt"), []byte("valuable"), 0o600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data, err := os.ReadFile(filepath.Join(tombstone, "valuable.txt")); err != nil || string(data) != "valuable" {
+			t.Fatalf("post-check replacement was deleted: %q, %v", data, err)
+		}
+		if _, err := os.Lstat(displaced); err != nil {
+			t.Fatalf("descriptor-owned directory was unexpectedly removed by pathname: %v", err)
 		}
 	})
 }

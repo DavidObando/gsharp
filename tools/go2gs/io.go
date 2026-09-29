@@ -275,10 +275,14 @@ func createOwnedTempDir(parent, pattern string) (ownedTempDir, error) {
 }
 
 func (directory ownedTempDir) cleanup() error {
-	return directory.cleanupWithHook(nil)
+	return directory.cleanupWithHooks(nil, nil)
 }
 
 func (directory ownedTempDir) cleanupWithHook(beforeRename func()) error {
+	return directory.cleanupWithHooks(beforeRename, nil)
+}
+
+func (directory ownedTempDir) cleanupWithHooks(beforeRename func(), afterTombstoneIdentity func(string)) error {
 	current, err := os.Lstat(directory.path)
 	if os.IsNotExist(err) {
 		return nil
@@ -289,36 +293,7 @@ func (directory ownedTempDir) cleanupWithHook(beforeRename func()) error {
 	if !current.IsDir() || !os.SameFile(directory.info, current) {
 		return nil
 	}
-	parent := filepath.Dir(directory.path)
-	reservation, err := os.CreateTemp(parent, ".go2gs-cleanup-*")
-	if err != nil {
-		return err
-	}
-	tombstone := reservation.Name()
-	if err := reservation.Close(); err != nil {
-		_ = os.Remove(tombstone)
-		return err
-	}
-	if err := os.Remove(tombstone); err != nil {
-		return err
-	}
-	if beforeRename != nil {
-		beforeRename()
-	}
-	if err := os.Rename(directory.path, tombstone); err != nil {
-		return err
-	}
-	renamed, err := os.Lstat(tombstone)
-	if err != nil {
-		return err
-	}
-	if !renamed.IsDir() || !os.SameFile(directory.info, renamed) {
-		if _, pathErr := os.Lstat(directory.path); os.IsNotExist(pathErr) {
-			_ = os.Rename(tombstone, directory.path)
-		}
-		return nil
-	}
-	return os.RemoveAll(tombstone)
+	return cleanupOwnedTempDir(directory, beforeRename, afterTombstoneIdentity)
 }
 
 func lockAndInvalidateOutput(outRoot string) (func(), error) {
