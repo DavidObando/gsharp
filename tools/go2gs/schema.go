@@ -204,6 +204,7 @@ type SymbolRecord struct {
 
 type NodeRecord struct {
 	ID               string     `json:"id"`
+	ParentID         string     `json:"parentId,omitempty"`
 	PackageID        string     `json:"packageId"`
 	FileID           string     `json:"fileId"`
 	Kind             string     `json:"kind"`
@@ -325,6 +326,7 @@ type DependencyRecord struct {
 
 type FeatureSite struct {
 	ID          string     `json:"id"`
+	NodeID      string     `json:"nodeId"`
 	PackageID   string     `json:"packageId"`
 	FileID      string     `json:"fileId"`
 	Feature     string     `json:"feature"`
@@ -344,6 +346,7 @@ type DiagnosticRecord struct {
 
 type BlockerRecord struct {
 	ID            string   `json:"id"`
+	Blocks        string   `json:"blocks"`
 	Category      string   `json:"category"`
 	Message       string   `json:"message"`
 	AffectedUnits []string `json:"affectedUnits"`

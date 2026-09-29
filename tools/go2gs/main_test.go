@@ -132,6 +132,30 @@ func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
 	if !slices.ContainsFunc(a1.Calls, func(call CallRecord) bool { return call.Kind == "conversion" }) {
 		t.Fatal("conversion call fact missing")
 	}
+	for _, want := range []string{
+		"nil-value", "interface-value", "byte-string", "map-value",
+		"panic", "defer", "recover", "fixed-value-array",
+		"goroutine", "channel-type", "channel-send", "channel-receive", "channel-close",
+	} {
+		if !slices.ContainsFunc(a1.FeatureSites, func(site FeatureSite) bool {
+			return site.Feature == want && site.NodeID != "" && site.Disposition == "m1-prerequisite"
+		}) {
+			t.Fatalf("missing M1 prerequisite feature %q", want)
+		}
+	}
+	for _, category := range []string{
+		"m1-typed-nil-interface", "m1-byte-strings-maps",
+		"m1-panic-defer-recover", "m1-fixed-value-arrays", "m1-concurrency",
+	} {
+		if !slices.ContainsFunc(a1.Blockers, func(blocker BlockerRecord) bool {
+			return blocker.Category == category && blocker.Blocks == "migration"
+		}) {
+			t.Fatalf("missing migration blocker %q", category)
+		}
+	}
+	if !slices.ContainsFunc(a1.Nodes, func(node NodeRecord) bool { return node.ParentID != "" }) {
+		t.Fatal("typed syntax parent relationships missing")
+	}
 }
 
 func TestOfflineMissingDependencyIsIncomplete(t *testing.T) {

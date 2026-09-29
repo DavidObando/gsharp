@@ -43,6 +43,12 @@ Exit zero means `inventoryComplete: true`; it does not mean
 native-input, and resource-limit failures are nonzero while preserving any
 diagnostics that were available.
 
+M0 also records migration blockers without making a complete inventory fail.
+Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
+value arrays, and concurrency sites are linked to typed syntax nodes and
+marked as explicit M1 prerequisites. M0 chooses no G# representation or
+runtime API for them.
+
 The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,
 `GOSUMDB=off`, `GOWORK=off` unless a later version adds an explicit workspace,

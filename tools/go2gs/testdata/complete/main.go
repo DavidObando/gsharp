@@ -37,6 +37,21 @@ var asset string
 
 //go:generate echo never-executed
 
+var InterfaceValue any = (*Inner)(nil)
+var ByteString = string([]byte{0xff, 0})
+var MapValue = map[string]int{"answer": 42}
+var ArrayValue Triple
+
+func Prerequisites(ch chan int) {
+	defer recover()
+	if false {
+		go func() { ch <- 1 }()
+		<-ch
+		close(ch)
+		panic(ByteString)
+	}
+}
+
 //line logical/generated.go:200
 func Use() int {
 	outer := Outer{Inner: Inner{Number: 2}}
