@@ -103,9 +103,11 @@ Before moving an application to a different compiler version, pin the intended S
   panic/defer/recover, fixed-array, and concurrency sites without choosing
   their later G# representation. Profile flags are allowlisted against tool
   execution/path overrides, the selected Go executable supplies its own
-  verified GOROOT, diagnostics are path-stable, initialization order is
-  explicit, and schema validation rejects missing fields and count
-  mismatches. The pinned
+  verified GOROOT, and CGo compiler helpers require an explicit hashed profile
+  manifest; only bounded no-follow captured helper bytes are staged into the
+  private child PATH, with their hashes, sizes, and modes validated in the
+  artifact. Diagnostics are path-stable, initialization order is explicit,
+  and schema validation rejects missing fields and count mismatches. The pinned
   cliamp profile reports an actionable mismatch rather than substituting the
   installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged

@@ -36,6 +36,7 @@ func testProfile() Profile {
 		LoadTests:          true,
 		GOOS:               runtime.GOOS,
 		GOARCH:             runtime.GOARCH,
+		CCompilerHelpers:   []CompilerHelper{},
 		CGOEnabled:         false,
 		ModuleMode:         "readonly",
 		WorkspaceMode:      "off",
@@ -61,6 +62,7 @@ func validIncompleteAnalysis() Analysis {
 			ID: "test", SHA256: hash, SourceRootIdentity: "source:test",
 			ExpectedSourceCommit: strings.Repeat("a", 40), ActualSourceCommit: strings.Repeat("a", 40),
 			EntryPatterns: []string{"./..."}, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+			CCompilerHelpers:     []CompilerHelperIdentity{},
 			ArchitectureFeatures: []string{}, BuildTags: []string{}, GOFLAGS: []string{},
 			GODEBUG: map[string]string{}, ModuleMode: "readonly", WorkspaceMode: "off",
 			Offline: true, TrustBoundary: "test", Limits: testProfile().Limits,
@@ -68,6 +70,7 @@ func validIncompleteAnalysis() Analysis {
 		Toolchain: ToolchainProvenance{
 			RequestedVersion: "1.0", ActualVersion: "1.0", ExecutableSHA256: hash,
 			ExecutableName: "go", GOROOTIdentity: "goroot:test", GOROOTVersionSHA256: hash, GOROOTSource: "test",
+			CCompilerHelpers: []CompilerHelperIdentity{},
 		},
 		Manifests: []ManifestRecord{}, Modules: []ModuleRecord{}, Packages: []PackageRecord{},
 		Files: []FileRecord{}, Types: []TypeRecord{}, Symbols: []SymbolRecord{}, Nodes: []NodeRecord{},
@@ -336,8 +339,7 @@ func TestCgoEnabledUsesOnlyApprovedCompiler(t *testing.T) {
 	}
 	t.Setenv("PATH", fakeDir+string(os.PathListSeparator)+os.Getenv("PATH"))
 	profile := testProfile()
-	profile.CGOEnabled = true
-	profile.CCompiler = compiler
+	enableCgo(t, &profile, compiler)
 	analysis, complete, err := analyze(t.Context(), copyFixture(t, "cgo"), t.TempDir(), profile)
 	if err != nil {
 		t.Fatal(err)
@@ -395,8 +397,7 @@ func TestPkgConfigDirectiveFailsClosedWithoutExecutingSibling(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := testProfile()
-	profile.CGOEnabled = true
-	profile.CCompiler = compiler
+	enableCgo(t, &profile, compiler)
 	analysis, complete, err := analyze(t.Context(), copyFixture(t, "pkgconfig"), t.TempDir(), profile)
 	if err != nil {
 		t.Fatal(err)
@@ -421,7 +422,7 @@ func TestPkgConfigDirectiveFailsClosedWithoutExecutingSibling(t *testing.T) {
 	}
 }
 
-func TestCCompilerHelperDirectoryIsAvailableWithoutExecutingPkgConfigSibling(t *testing.T) {
+func TestManifestedCCompilerHelperIsAvailableWithoutExecutingPkgConfigSibling(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("controlled shell compiler fixture")
 	}
@@ -434,14 +435,14 @@ func TestCCompilerHelperDirectoryIsAvailableWithoutExecutingPkgConfigSibling(t *
 	if err := os.WriteFile(filepath.Join(dir, "pkg-config"), []byte("#!/bin/sh\n: > "+strconv.Quote(pkgConfigMarker)+"\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	helperPath := filepath.Join(dir, "go2gs-compiler-helper")
 	compiler := filepath.Join(dir, "cc")
 	body := "#!/bin/sh\ngo2gs-compiler-helper || exit 91\nPATH=/usr/bin:/bin exec " + strconv.Quote(approvedCompiler(t)) + " \"$@\"\n"
 	if err := os.WriteFile(compiler, []byte(body), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	profile := testProfile()
-	profile.CGOEnabled = true
-	profile.CCompiler = compiler
+	enableCgo(t, &profile, compiler, compilerHelper(t, "go2gs-compiler-helper", helperPath))
 	analysis, complete, err := analyze(t.Context(), copyFixture(t, "cgo"), t.TempDir(), profile)
 	if err != nil {
 		t.Fatal(err)
@@ -469,6 +470,239 @@ func TestCCompilerHelperDirectoryIsAvailableWithoutExecutingPkgConfigSibling(t *
 			}
 		}
 	}
+	if len(analysis.Toolchain.CCompilerHelpers) != 1 ||
+		analysis.Toolchain.CCompilerHelpers[0].SHA256 != profile.CCompilerHelpers[0].SHA256 ||
+		!slices.Equal(analysis.Profile.CCompilerHelpers, analysis.Toolchain.CCompilerHelpers) {
+		t.Fatalf("compiler helper provenance mismatch: profile=%#v toolchain=%#v", analysis.Profile.CCompilerHelpers, analysis.Toolchain.CCompilerHelpers)
+	}
+	data, err := marshalCanonical(analysis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatal(err)
+	}
+	delete(raw["toolchain"].(map[string]any)["cCompilerHelpers"].([]any)[0].(map[string]any), "bytes")
+	data, err = json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "analysis.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readAnalysis(path); err == nil || !strings.Contains(err.Error(), `missing required field "bytes"`) {
+		t.Fatalf("compiler helper provenance with a missing field was accepted: %v", err)
+	}
+	missing := analysis
+	missing.Toolchain.CCompilerHelpers = nil
+	if err := validateAnalysis(missing); err == nil || !strings.Contains(err.Error(), "provenance") {
+		t.Fatalf("missing compiler helper provenance was accepted: %v", err)
+	}
+	contradictory := analysis
+	contradictory.Toolchain.CCompilerHelpers = append([]CompilerHelperIdentity{}, analysis.Toolchain.CCompilerHelpers...)
+	contradictory.Toolchain.CCompilerHelpers[0].SHA256 = strings.Repeat("0", 64)
+	if err := validateAnalysis(contradictory); err == nil || !strings.Contains(err.Error(), "provenance differ") {
+		t.Fatalf("contradictory compiler helper provenance was accepted: %v", err)
+	}
+	if err := os.WriteFile(helperPath, []byte("#!/bin/sh\nexit 91\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := analyze(t.Context(), copyFixture(t, "cgo"), t.TempDir(), profile); err == nil ||
+		!strings.Contains(err.Error(), "SHA-256 mismatch") {
+		t.Fatalf("changed helper bytes under identical profile were accepted: %v", err)
+	}
+}
+
+func TestCompilerHelperManifestFailsClosed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable mode and symlink fixture")
+	}
+	root, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	helperPath := filepath.Join(root, "helper")
+	if err := os.WriteFile(helperPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	valid := compilerHelper(t, "helper", helperPath)
+	newProfile := func(helper CompilerHelper) Profile {
+		profile := testProfile()
+		enableCgo(t, &profile, approvedCompiler(t), helper)
+		return profile
+	}
+	tests := []struct {
+		name   string
+		helper CompilerHelper
+		limit  int64
+		want   string
+	}{
+		{"missing", CompilerHelper{Name: "helper", Path: filepath.Join(root, "missing"), SHA256: valid.SHA256}, 0, "inspect helper"},
+		{"directory", CompilerHelper{Name: "helper", Path: root, SHA256: valid.SHA256}, 0, "regular executable"},
+		{"hash", CompilerHelper{Name: "helper", Path: helperPath, SHA256: strings.Repeat("0", 64)}, 0, "SHA-256 mismatch"},
+		{"oversized", valid, 4, "bounded regular file"},
+	}
+	target := filepath.Join(root, "target")
+	if err := os.WriteFile(target, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	link := filepath.Join(root, "link")
+	if err := os.Symlink(target, link); err != nil {
+		t.Fatal(err)
+	}
+	tests = append(tests, struct {
+		name   string
+		helper CompilerHelper
+		limit  int64
+		want   string
+	}{"symlink", CompilerHelper{Name: "helper", Path: link, SHA256: hashBytes([]byte("#!/bin/sh\nexit 0\n"))}, 0, "regular executable"})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			profile := newProfile(test.helper)
+			if test.limit != 0 {
+				profile.Limits.MaxLocalHashBytes = test.limit
+			}
+			workRoot, err := secureRoot(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, _, err := captureCompilerHelpers(profile, workRoot); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("invalid helper manifest was accepted: %v", err)
+			}
+		})
+	}
+	for _, helpers := range [][]CompilerHelper{
+		{valid, {Name: valid.Name, Path: target, SHA256: hashBytes([]byte("#!/bin/sh\nexit 0\n"))}},
+		{valid, {Name: strings.ToUpper(valid.Name), Path: target, SHA256: hashBytes([]byte("#!/bin/sh\nexit 0\n"))}},
+		{valid, {Name: valid.Name + ".exe", Path: target, SHA256: hashBytes([]byte("#!/bin/sh\nexit 0\n"))}},
+		{valid, {Name: "other", Path: valid.Path, SHA256: valid.SHA256}},
+		{{Name: "pkg-config", Path: valid.Path, SHA256: valid.SHA256}},
+		{{Name: "PKG-CONFIG.EXE", Path: valid.Path, SHA256: valid.SHA256}},
+		{{Name: "go.exe", Path: valid.Path, SHA256: valid.SHA256}},
+	} {
+		if err := validateCompilerHelpers(helpers); err == nil {
+			t.Fatalf("colliding or forbidden helper manifest was accepted: %#v", helpers)
+		}
+	}
+	extra := filepath.Join(root, "ambient-helper")
+	if err := os.WriteFile(extra, []byte("#!/bin/sh\nexit 91\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	workRoot, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured, staged, err := captureCompilerHelpers(newProfile(valid), workRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(captured) != 1 {
+		t.Fatalf("unexpected helper count: %d", len(captured))
+	}
+	entries, err := os.ReadDir(staged)
+	if err != nil || len(entries) != 1 || entries[0].Name() != valid.Name {
+		t.Fatalf("undeclared helper entered staged PATH: %#v, %v", entries, err)
+	}
+	if err := os.WriteFile(filepath.Join(staged, "intruder"), []byte("hostile"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := verifyCompilerHelpers(captured, staged); err == nil ||
+		!strings.Contains(err.Error(), "unexpected entries") {
+		t.Fatalf("staged helper injection was accepted: %v", err)
+	}
+}
+
+func TestCompilerHelperProvenanceRejectsImpossibleCaptureResults(t *testing.T) {
+	limits := testProfile().Limits
+	valid := CompilerHelperIdentity{
+		Name: "helper", SHA256: strings.Repeat("a", 64), Bytes: 1, ExecutableMode: 0o500,
+	}
+	tests := []struct {
+		name    string
+		helpers []CompilerHelperIdentity
+	}{
+		{"not-executable", []CompilerHelperIdentity{{Name: "helper", SHA256: valid.SHA256, Bytes: 1, ExecutableMode: 0o400}}},
+		{"oversized", []CompilerHelperIdentity{{Name: "helper", SHA256: valid.SHA256, Bytes: maxCompilerHelperBytes + 1, ExecutableMode: 0o500}}},
+		{"reserved-alias", []CompilerHelperIdentity{{Name: "PKG-CONFIG.EXE", SHA256: valid.SHA256, Bytes: 1, ExecutableMode: 0o500}}},
+		{"name-collision", []CompilerHelperIdentity{
+			valid,
+			{Name: "helper.exe", SHA256: valid.SHA256, Bytes: 1, ExecutableMode: 0o500},
+		}},
+	}
+	tooMany := make([]CompilerHelperIdentity, 65)
+	for index := range tooMany {
+		tooMany[index] = CompilerHelperIdentity{
+			Name: fmt.Sprintf("helper-%02d", index), SHA256: valid.SHA256, Bytes: 1, ExecutableMode: 0o500,
+		}
+	}
+	tests = append(tests, struct {
+		name    string
+		helpers []CompilerHelperIdentity
+	}{"too-many", tooMany})
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if err := validateCompilerHelperIdentities(test.helpers, limits); err == nil {
+				t.Fatalf("impossible compiler helper provenance was accepted: %#v", test.helpers)
+			}
+		})
+	}
+	budget := limits
+	budget.MaxLocalHashBytes = 1
+	if err := validateCompilerHelperIdentities([]CompilerHelperIdentity{
+		valid,
+		{Name: "other", SHA256: valid.SHA256, Bytes: 1, ExecutableMode: 0o500},
+	}, budget); err == nil {
+		t.Fatal("compiler helper provenance over the aggregate byte budget was accepted")
+	}
+}
+
+func TestSelectedPathPrioritizesStagedCompilerHelpers(t *testing.T) {
+	goPath := filepath.Join(string(filepath.Separator), "go-bin", "go")
+	helperDir := filepath.Join(string(filepath.Separator), "private-helpers")
+	paths := filepath.SplitList(selectedPath(goPath, helperDir))
+	if len(paths) != 2 || paths[0] != helperDir || paths[1] != filepath.Dir(goPath) {
+		t.Fatalf("staged compiler helpers are not first in PATH: %v", paths)
+	}
+}
+
+func TestCompilerHelperDriftFailsClosed(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("executable identity fixture")
+	}
+	for _, replace := range []bool{false, true} {
+		name := "content"
+		if replace {
+			name = "path-swap"
+		}
+		t.Run(name, func(t *testing.T) {
+			root, err := secureRoot(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			helperPath := filepath.Join(root, "helper")
+			if err := os.WriteFile(helperPath, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			profile := testProfile()
+			enableCgo(t, &profile, approvedCompiler(t), compilerHelper(t, "helper", helperPath))
+			_, _, err = analyzeWithSnapshotHook(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile, func() {
+				if replace {
+					if renameErr := os.Rename(helperPath, helperPath+".original"); renameErr != nil {
+						t.Fatal(renameErr)
+					}
+				}
+				if writeErr := os.WriteFile(helperPath, []byte("#!/bin/sh\nexit 91\n"), 0o755); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			})
+			if err == nil || !strings.Contains(err.Error(), "compiler helper") ||
+				(!strings.Contains(err.Error(), "identity changed") && !strings.Contains(err.Error(), "content changed")) {
+				t.Fatalf("compiler helper drift was accepted: %v", err)
+			}
+		})
+	}
 }
 
 func TestInactivePkgConfigDirectiveDoesNotBlock(t *testing.T) {
@@ -486,8 +720,7 @@ func TestInactivePkgConfigDirectiveDoesNotBlock(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := testProfile()
-	profile.CGOEnabled = true
-	profile.CCompiler = approvedCompiler(t)
+	enableCgo(t, &profile, approvedCompiler(t))
 	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
 	if err != nil {
 		t.Fatal(err)
@@ -866,8 +1099,7 @@ func analyzePkgConfigConstraint(t *testing.T, constraint string) (Analysis, bool
 		t.Fatal(err)
 	}
 	profile := testProfile()
-	profile.CGOEnabled = true
-	profile.CCompiler = approvedCompiler(t)
+	enableCgo(t, &profile, approvedCompiler(t))
 	profile.BuildTags = []string{"go2gs_selected"}
 	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
 	if err != nil {
@@ -1224,6 +1456,50 @@ func approvedCompiler(t *testing.T) string {
 	}
 	t.Skip("no approved compiler found in fixed system locations")
 	return ""
+}
+
+func compilerHelper(t *testing.T, name, path string) CompilerHelper {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parent, err := secureRoot(filepath.Dir(resolved))
+	if err != nil {
+		t.Fatal(err)
+	}
+	resolved = filepath.Join(parent, filepath.Base(resolved))
+	data, err := readBoundedRegularFile(resolved, maxCompilerHelperBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return CompilerHelper{Name: name, Path: resolved, SHA256: hashBytes(data)}
+}
+
+func platformCompilerHelpers(t *testing.T) []CompilerHelper {
+	t.Helper()
+	if runtime.GOOS != "linux" {
+		return []CompilerHelper{}
+	}
+	var helpers []CompilerHelper
+	for _, name := range []string{"as", "ld"} {
+		path, err := exec.LookPath(name)
+		if err != nil {
+			t.Fatalf("required compiler helper %s is unavailable: %v", name, err)
+		}
+		helpers = append(helpers, compilerHelper(t, name, path))
+	}
+	return helpers
+}
+
+func enableCgo(t *testing.T, profile *Profile, compiler string, helpers ...CompilerHelper) {
+	t.Helper()
+	profile.CGOEnabled = true
+	profile.CCompiler = compiler
+	if helpers == nil {
+		helpers = platformCompilerHelpers(t)
+	}
+	profile.CCompilerHelpers = append([]CompilerHelper{}, helpers...)
 }
 
 func TestAnalysisJSONRoundTripRejectsUnknownFields(t *testing.T) {
@@ -1898,8 +2174,7 @@ func TestLoadFailureReplacesStaleSuccessfulArtifacts(t *testing.T) {
 	}
 	profilePath := filepath.Join(t.TempDir(), "profile.json")
 	profile := testProfile()
-	profile.CGOEnabled = true
-	profile.CCompiler = approvedCompiler(t)
+	enableCgo(t, &profile, approvedCompiler(t))
 	profileBytes, err := marshalCanonical(profile)
 	if err != nil {
 		t.Fatal(err)
@@ -2019,8 +2294,7 @@ func TestImmutableInputSnapshotDetectsLoadTimeDrift(t *testing.T) {
 		t.Fatal(err)
 	}
 	profile := testProfile()
-	profile.CGOEnabled = true
-	profile.CCompiler = approvedCompiler(t)
+	enableCgo(t, &profile, approvedCompiler(t))
 	analysis, _, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), profile, func() {
 		if writeErr := os.WriteFile(nativePath, []byte("changed"), 0o644); writeErr != nil {
 			t.Fatal(writeErr)
@@ -2577,6 +2851,24 @@ func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing
 	if !errors.As(err, &exitErr) || exitErr.code != 2 {
 		t.Fatalf("missing record field should exit 2, got %v", err)
 	}
+	for _, owner := range []string{"profile", "toolchain"} {
+		var helperRaw map[string]any
+		if err := json.Unmarshal(validData, &helperRaw); err != nil {
+			t.Fatal(err)
+		}
+		delete(helperRaw[owner].(map[string]any), "cCompilerHelpers")
+		missingHelpers, err := json.Marshal(helperRaw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, missingHelpers, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err = runValidate([]string{"--analysis", path})
+		if !errors.As(err, &exitErr) || exitErr.code != 2 {
+			t.Fatalf("missing %s compiler helper provenance should exit 2, got %v", owner, err)
+		}
+	}
 }
 
 func TestSchemaV1RejectsMigrationReady(t *testing.T) {
@@ -3066,7 +3358,7 @@ func TestGeneratedFileUsesGoPlacementRules(t *testing.T) {
 func TestEmbedInventoryMatchesGoRuntime(t *testing.T) {
 	root := copyFixture(t, "complete")
 	goExecutable := filepath.Join(runtime.GOROOT(), "bin", "go")
-	env, err := sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), goExecutable, "")
+	env, err := sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), goExecutable, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3213,12 +3505,18 @@ func TestCompilerLocationDoesNotAffectSemanticArtifact(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	firstHelper := filepath.Join(filepath.Dir(firstCompiler), "as")
+	secondHelper := filepath.Join(filepath.Dir(secondCompiler), "as")
+	for _, path := range []string{firstHelper, secondHelper} {
+		if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
 	root := copyFixture(t, "complete")
 	firstProfile := testProfile()
-	firstProfile.CGOEnabled = true
-	firstProfile.CCompiler = firstCompiler
-	secondProfile := firstProfile
-	secondProfile.CCompiler = secondCompiler
+	enableCgo(t, &firstProfile, firstCompiler, compilerHelper(t, "as", firstHelper))
+	secondProfile := testProfile()
+	enableCgo(t, &secondProfile, secondCompiler, compilerHelper(t, "as", secondHelper))
 	first, complete, err := analyze(t.Context(), root, t.TempDir(), firstProfile)
 	if err != nil || !complete {
 		t.Fatalf("first compiler-location analysis failed: complete=%v err=%v", complete, err)
@@ -3650,7 +3948,7 @@ func TestSanitizedEnvironmentDoesNotExposeAmbientPATH(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", maliciousDir+string(os.PathListSeparator)+os.Getenv("PATH"))
-	env, err := sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), executable, "")
+	env, err := sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), executable, "", "")
 	if err != nil {
 		t.Fatal(err)
 	}

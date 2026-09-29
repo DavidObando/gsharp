@@ -71,13 +71,20 @@ deleting a path that another process replaced.
 
 Profiles with `cgoEnabled: true` must set `cCompiler` to an absolute,
 explicitly approved compiler executable. The helper resolves and hashes that
-compiler, records its name and hash, and passes it by absolute `CC`. Child
-`PATH` contains only the selected Go directory and the resolved compiler's
-directory, allowing compiler-owned helper tools without inheriting ambient
-search paths. `PKG_CONFIG` remains pinned to an unavailable private path, so
-`#cgo pkg-config:` directives fail closed because pkg-config provenance is not
-modeled in M0; directives whose build constraints are inactive for the
-selected profile are ignored.
+compiler, records its name and hash, and passes it by absolute `CC`. Any
+PATH-resolved executable required by that compiler must be declared in the
+profile's `cCompilerHelpers` array with a safe logical name, canonical absolute
+path, and SHA-256 hash. go2gs captures each bounded, no-follow regular
+executable, stages the captured bytes under that logical name in a private
+directory, records its hash, byte count, and executable mode in both profile
+and toolchain provenance, and checks the source and staged copies again after
+loading. Missing, changed, oversized, non-regular, symlinked, colliding, or
+unmanifested helpers fail closed; the compiler's source directory and ambient
+PATH are never exposed. `PKG_CONFIG` remains pinned to an unavailable private
+path and `pkg-config` is forbidden as a helper name, so `#cgo pkg-config:`
+directives fail closed because pkg-config provenance is not modeled in M0;
+directives whose build constraints are inactive for the selected profile are
+ignored.
 Source commit provenance is read directly from bounded `.git` metadata; the
 analyzer never discovers or executes an ambient `git` command.
 

@@ -15,6 +15,7 @@
   "architectureFeatures": [],
   "buildTags": [],
   "cgoEnabled": false,
+  "cCompilerHelpers": [],
   "goFlags": [],
   "goExperiment": "",
   "goDebug": {},
