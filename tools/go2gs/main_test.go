@@ -22,6 +22,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"golang.org/x/tools/go/packages"
 )
 
 func testProfile() Profile {
@@ -347,8 +349,78 @@ func TestPkgConfigDirectiveFailsClosedWithoutExecutingSibling(t *testing.T) {
 	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "pkg-config") {
 		t.Fatalf("pkg-config requirement did not fail closed: %#v", analysis.Blockers)
 	}
+	if len(analysis.Packages) != 0 {
+		t.Fatal("pkg-config blocker must stop before typed package loading")
+	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("unapproved sibling pkg-config ran or marker check failed: %v", err)
+	}
+}
+
+func TestInactivePkgConfigDirectiveDoesNotBlock(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
+	}
+	root := copyFixture(t, "pkgconfig")
+	path := filepath.Join(root, "pkgconfig.go")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("#cgo pkg-config:"), []byte("#cgo windows pkg-config:"), 1)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.CCompiler = approvedCompiler(t)
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "pkg-config") {
+		t.Fatalf("inactive pkg-config directive blocked inventory: %#v", analysis.Blockers)
+	}
+}
+
+func TestCgoPkgConfigConstraints(t *testing.T) {
+	profile := testProfile()
+	profile.GOOS = "darwin"
+	profile.GOARCH = "arm64"
+	profile.CGOEnabled = true
+	profile.BuildTags = []string{"selected"}
+	profile.GOFLAGS = []string{"-tags=flagged"}
+	scan := func(source string) (bool, bool, error) {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "cgo.go")
+		if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		return selectedPackageCgoRequirements(&packages.Package{GoFiles: []string{path}}, profile)
+	}
+	inactive := `package fixture
+/*
+#cgo windows pkg-config: ignored-windows
+#cgo !darwin pkg-config: ignored-negation
+#cgo darwin,!arm64 pkg-config: ignored-combination
+#cgo missing pkg-config: ignored-build-tag
+#cgo gccgo pkg-config: ignored-compiler
+*/
+import "C"
+`
+	importsC, usesPkgConfig, err := scan(inactive)
+	if err != nil || !importsC || usesPkgConfig {
+		t.Fatalf("inactive directives: importsC=%v pkg-config=%v err=%v", importsC, usesPkgConfig, err)
+	}
+	active := strings.Replace(inactive, "*/", `
+#cgo darwin,arm64 pkg-config: selected-platform
+#cgo selected pkg-config: selected-build-tag
+#cgo flagged pkg-config: selected-goflags-tag
+#cgo gc pkg-config: selected-compiler
+*/`, 1)
+	importsC, usesPkgConfig, err = scan(active)
+	if err != nil || !importsC || !usesPkgConfig {
+		t.Fatalf("active directives: importsC=%v pkg-config=%v err=%v", importsC, usesPkgConfig, err)
 	}
 }
 
@@ -614,6 +686,89 @@ func TestGitRefValidationMatchesSecuritySubset(t *testing.T) {
 		if validGitRef(value) {
 			t.Errorf("invalid Git ref accepted: %q", value)
 		}
+	}
+}
+
+func TestPackedGitReferenceValidatesWholeFile(t *testing.T) {
+	a := strings.Repeat("a", 40)
+	b := strings.Repeat("b", 40)
+	c := strings.Repeat("c", 40)
+	tests := []struct {
+		name      string
+		content   string
+		ref       string
+		want      string
+		wantError bool
+	}{
+		{"ordinary", a + " refs/heads/main\n", "refs/heads/main", a, false},
+		{"annotated-tag-peel", a + " refs/tags/v1\n^" + b + "\n", "refs/tags/v1", a, false},
+		{"orphan-peel", "^" + b + "\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"consecutive-peel", a + " refs/tags/v1\n^" + b + "\n^" + c + "\n", "refs/tags/v1", "", true},
+		{"branch-peel", a + " refs/heads/main\n^" + b + "\n", "refs/heads/main", "", true},
+		{"malformed-before-match", "bad\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"malformed-after-match", a + " refs/heads/main\nbad\n", "refs/heads/main", "", true},
+		{"duplicate-ref", a + " refs/heads/main\n" + b + " refs/heads/main\n", "refs/heads/main", "", true},
+		{"declared-sorted-order", "# pack-refs with: sorted\n" + b + " refs/heads/z\n" + a + " refs/heads/a\n", "refs/heads/a", "", true},
+		{"undeclared-unsorted-order", b + " refs/heads/z\n" + a + " refs/heads/a\n", "refs/heads/a", a, false},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "packed-refs")
+			if err := os.WriteFile(path, []byte(test.content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			got, found, err := packedGitReference(path, test.ref)
+			if test.wantError {
+				if err == nil || found || got != "" {
+					t.Fatalf("malformed packed refs accepted: got=%q found=%v err=%v", got, found, err)
+				}
+				return
+			}
+			if err != nil || !found || got != test.want {
+				t.Fatalf("packed ref mismatch: got=%q found=%v err=%v", got, found, err)
+			}
+		})
+	}
+}
+
+func TestReadBoundedRegularFileRejectsGrowthAndReplacement(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "HEAD")
+	if err := os.WriteFile(path, []byte("ok"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readBoundedRegularFileAfterOpen(path, 2, func() {
+		file, openErr := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+		if openErr != nil {
+			t.Fatal(openErr)
+		}
+		if _, writeErr := file.WriteString("overflow"); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+		if closeErr := file.Close(); closeErr != nil {
+			t.Fatal(closeErr)
+		}
+	}); err == nil {
+		t.Fatal("file growth beyond the bound was accepted")
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	outside := filepath.Join(t.TempDir(), "outside")
+	if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte("inside"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readBoundedRegularFileAfterOpen(path, 64, func() {
+		if removeErr := os.Remove(path); removeErr != nil {
+			t.Fatal(removeErr)
+		}
+		if symlinkErr := os.Symlink(outside, path); symlinkErr != nil {
+			t.Fatal(symlinkErr)
+		}
+	}); err == nil {
+		t.Fatal("path replacement with an outside symlink was accepted")
 	}
 }
 
