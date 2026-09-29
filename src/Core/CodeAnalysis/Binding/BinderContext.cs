@@ -801,6 +801,11 @@ internal sealed class BinderContext
             }
 
             state.Accesses.Add(access);
+            foreach (var edge in state.Edges)
+            {
+                edge.Accesses.Add(access);
+            }
+
             if (state.UpstreamLabels.TryGetValue(variable, out var upstreamLabels))
             {
                 foreach (var upstreamLabel in upstreamLabels)
@@ -833,7 +838,6 @@ internal sealed class BinderContext
     {
         if (location is { } useLocation
             && expression is BoundVariableExpression variableRead
-            && variableRead.Variable.Type is NullableTypeSymbol
             && variableRead.NarrowedType != null)
         {
             TrackBackwardGotoNarrowingUse(

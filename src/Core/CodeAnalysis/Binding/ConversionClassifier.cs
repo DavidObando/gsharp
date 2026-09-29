@@ -403,8 +403,7 @@ internal sealed class ConversionClassifier
         if (expression is BoundVariableExpression variableRead
             && variableRead.NarrowedType != null
             && type is not NullableTypeSymbol
-            && type is not PlatformTypeSymbol
-            && !Conversion.Classify(variableRead.Variable.Type, type).IsImplicit)
+            && type is not PlatformTypeSymbol)
         {
             binderCtx.TrackBackwardGotoNarrowingUse(
                 variableRead.Variable,

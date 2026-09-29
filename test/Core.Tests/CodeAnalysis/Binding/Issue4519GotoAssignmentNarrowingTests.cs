@@ -413,6 +413,120 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_ExistingEdgeReceivesLaterMemberAccess()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = "safe"
+                var first = true
+            Again:
+                if first {
+                    first = false
+                    x = nil
+                    goto Again
+                }
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_TypeTestNarrowingAtForSource_ReportsConversion()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x object = "safe"
+                if x is string {
+                Again: {
+                        for ch in x {
+                        }
+                        x = 42
+                        goto Again
+                    }
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_TypeTestNarrowingThroughUpcast_ReportsConversion()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() object {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    let result object = x
+                    x = Cat{}
+                    goto Again
+                }
+                return x
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_BypassesLabeledSwitchGuard_ReportsMemberAccess()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                func Bark() string { return "woof" }
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var a Animal = Cat{}
+                goto Use
+            Guard:
+                switch a {
+                    case d is Dog {
+                    }
+                    default {
+                        return ""
+                    }
+                }
+            Use:
+                return a.Bark()
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("Bark()", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_InvalidationPropagatesThroughForwardLabel()
     {
         var result = Evaluate("""

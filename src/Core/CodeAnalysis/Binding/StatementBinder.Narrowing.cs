@@ -429,7 +429,8 @@ internal sealed partial class StatementBinder
         // attached directly to its target label is different: every entry
         // executes the guard. Limit that exception to bare variables, whose
         // proof generations the goto join can track.
-        if (binderCtx.FunctionContainsUserGotoOrLabel && !isLabeledStatement)
+        if (binderCtx.FunctionContainsUserGotoOrLabel
+            && !(isLabeledStatement && statement is BoundIfStatement))
         {
             return;
         }
