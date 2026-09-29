@@ -522,11 +522,11 @@ internal sealed partial class StatementBinder
     /// created after such a jump are removed; narrowings established before
     /// every jump, unrelated variables, and assignments after the label remain.
     /// </summary>
-    private void InvalidateAssignmentNarrowingsBypassedByGoto(string labelName)
+    private IReadOnlyList<GotoNarrowingSnapshot>? InvalidateAssignmentNarrowingsBypassedByGoto(string labelName)
     {
         if (!binderCtx.PendingGotoAssignmentStarts.Remove(labelName, out var startGeneration))
         {
-            return;
+            return null;
         }
 
         var variables = new HashSet<VariableSymbol>();
@@ -552,7 +552,7 @@ internal sealed partial class StatementBinder
 
             if (incomingSnapshots.Count == 0)
             {
-                return;
+                return incomingSnapshots;
             }
         }
 
@@ -571,13 +571,15 @@ internal sealed partial class StatementBinder
 
         if (variablesToInvalidate.Count == 0)
         {
-            return;
+            return incomingSnapshots;
         }
 
         foreach (var frame in binderCtx.NarrowedVariables)
         {
             RemoveByRoots(frame, variablesToInvalidate);
         }
+
+        return incomingSnapshots;
     }
 
     internal void ReportUnsafeBackwardGotoNarrowings()

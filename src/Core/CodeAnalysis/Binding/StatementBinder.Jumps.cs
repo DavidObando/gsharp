@@ -96,10 +96,10 @@ internal sealed partial class StatementBinder
         }
 
         userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray();
-        InvalidateAssignmentNarrowingsBypassedByGoto(labelName);
-        binderCtx.BackwardGotoNarrowingStates[labelName] = new BackwardGotoNarrowingState(
-            CaptureGotoNarrowingSnapshot(),
-            binderCtx.AssignmentNarrowingGeneration);
+        var incomingSnapshots = InvalidateAssignmentNarrowingsBypassedByGoto(labelName);
+        var backwardState = new BackwardGotoNarrowingState(CaptureGotoNarrowingSnapshot());
+        AddUpstreamLabelDependencies(backwardState, incomingSnapshots);
+        binderCtx.BackwardGotoNarrowingStates[labelName] = backwardState;
         binderCtx.UnresolvedGotoLabels.Remove(labelName);
         if (!binderCtx.UserLabels.TryGetValue(labelName, out var label))
         {
@@ -150,6 +150,7 @@ internal sealed partial class StatementBinder
     private GotoNarrowingSnapshot CaptureGotoNarrowingSnapshot()
     {
         var narrowedAtSource = new Dictionary<VariableSymbol, TypeSymbol>();
+        var narrowingFrameIndices = new Dictionary<VariableSymbol, int>();
 
         // Frames are ordered outermost to innermost, so overwriting records
         // the currently effective narrowing for a repeated root.
@@ -161,14 +162,65 @@ internal sealed partial class StatementBinder
                 if (!entry.Key.HasMembers)
                 {
                     narrowedAtSource[entry.Key.Root] = entry.Value;
+                    narrowingFrameIndices[entry.Key.Root] = i;
                 }
             }
         }
 
         return new GotoNarrowingSnapshot(
             narrowedAtSource,
+            narrowingFrameIndices,
+            binderCtx.AssignmentNarrowingGenerations,
             activeFinallyClauses.ToImmutableArray());
     }
+
+    private void AddUpstreamLabelDependencies(
+        BackwardGotoNarrowingState targetState,
+        IReadOnlyList<GotoNarrowingSnapshot>? incomingSnapshots)
+    {
+        if (incomingSnapshots == null)
+        {
+            return;
+        }
+
+        foreach (var variable in targetState.TargetSnapshot.NarrowedVariables.Keys)
+        {
+            foreach (var snapshot in incomingSnapshots)
+            {
+                foreach (var priorState in binderCtx.BackwardGotoNarrowingStates)
+                {
+                    if (!NarrowingProofDependsOn(snapshot, priorState.Value.TargetSnapshot, variable))
+                    {
+                        continue;
+                    }
+
+                    if (!targetState.UpstreamLabels.TryGetValue(variable, out var labels))
+                    {
+                        labels = new HashSet<string>();
+                        targetState.UpstreamLabels.Add(variable, labels);
+                    }
+
+                    labels.Add(priorState.Key);
+                    if (priorState.Value.UpstreamLabels.TryGetValue(variable, out var upstream))
+                    {
+                        labels.UnionWith(upstream);
+                    }
+                }
+            }
+        }
+    }
+
+    private static bool NarrowingProofDependsOn(
+        GotoNarrowingSnapshot source,
+        GotoNarrowingSnapshot target,
+        VariableSymbol variable)
+        => source.NarrowedVariables.ContainsKey(variable)
+            && source.NarrowingFrameIndices.TryGetValue(variable, out var sourceFrame)
+            && target.NarrowingFrameIndices.TryGetValue(variable, out var targetFrame)
+            && sourceFrame == targetFrame
+            && (!source.AssignmentGenerations.TryGetValue(variable, out var sourceGeneration)
+                || !target.AssignmentGenerations.TryGetValue(variable, out var targetGeneration)
+                || sourceGeneration <= targetGeneration);
 
     /// <summary>
     /// Issue #4285: syntactic (pre-binding) check for whether

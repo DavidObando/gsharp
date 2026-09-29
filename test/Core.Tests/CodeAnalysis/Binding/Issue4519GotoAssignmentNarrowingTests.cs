@@ -128,6 +128,63 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_InvalidationPropagatesThroughForwardLabel()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again:
+                if count == 0 {
+                    count++
+                    goto Use
+                }
+                x = "safe"
+            Use:
+                let length = x.Length
+                if count == 1 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_RepeatedGuardReestablishesNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = "safe"
+                var count = 0
+            Again:
+                if x != nil {
+                    Console.WriteLine(x.Length)
+                }
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return count
+            }
+
+            Console.WriteLine(Run())
+            """, "4", "1");
+    }
+
+    [Fact]
     public void BackwardGoto_AfterPostLabelNonNullAssignment_RemainsNarrowed()
     {
         AssertRuns("""

@@ -193,25 +193,58 @@ internal sealed partial class ExpressionBinder
         if (receiver is not BoundVariableExpression variableRead
             || variableRead.Variable.Type is not NullableTypeSymbol
             || variableRead.NarrowedType == null
-            || !binderCtx.AssignmentNarrowingGenerations.TryGetValue(
-                variableRead.Variable,
-                out var assignmentGeneration))
+            || !TryGetEffectiveNarrowingFrameIndex(variableRead.Variable, out var frameIndex))
         {
             return;
         }
 
-        foreach (var state in binderCtx.BackwardGotoNarrowingStates.Values)
+        var access = new BackwardGotoNarrowingAccess(
+            variableRead.Variable,
+            location,
+            memberName,
+            isInvocation);
+        foreach (var entry in binderCtx.BackwardGotoNarrowingStates)
         {
-            if (assignmentGeneration <= state.TargetAssignmentGeneration
-                && state.TargetSnapshot.NarrowedVariables.ContainsKey(variableRead.Variable))
-            {
-                state.Accesses.Add(new BackwardGotoNarrowingAccess(
+            var state = entry.Value;
+            if (!state.TargetSnapshot.NarrowingFrameIndices.TryGetValue(
                     variableRead.Variable,
-                    location,
-                    memberName,
-                    isInvocation));
+                    out var targetFrameIndex)
+                || frameIndex != targetFrameIndex
+                || (binderCtx.AssignmentNarrowingGenerations.TryGetValue(
+                        variableRead.Variable,
+                        out var assignmentGeneration)
+                    && state.TargetSnapshot.AssignmentGenerations.TryGetValue(
+                        variableRead.Variable,
+                        out var targetAssignmentGeneration)
+                    && assignmentGeneration > targetAssignmentGeneration))
+            {
+                continue;
+            }
+
+            state.Accesses.Add(access);
+            if (state.UpstreamLabels.TryGetValue(variableRead.Variable, out var upstreamLabels))
+            {
+                foreach (var upstreamLabel in upstreamLabels)
+                {
+                    binderCtx.BackwardGotoNarrowingStates[upstreamLabel].Accesses.Add(access);
+                }
             }
         }
+    }
+
+    private bool TryGetEffectiveNarrowingFrameIndex(VariableSymbol variable, out int frameIndex)
+    {
+        for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (binderCtx.NarrowedVariables[i].ContainsKey(variable))
+            {
+                frameIndex = i;
+                return true;
+            }
+        }
+
+        frameIndex = -1;
+        return false;
     }
 
     /// <summary>

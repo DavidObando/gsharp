@@ -14,57 +14,77 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 internal sealed class GotoNarrowingSnapshot
 {
     private readonly Dictionary<VariableSymbol, TypeSymbol> narrowedVariables;
+    private readonly Dictionary<VariableSymbol, int> narrowingFrameIndices;
+    private readonly Dictionary<VariableSymbol, int> assignmentGenerations;
 
     public GotoNarrowingSnapshot(
         IReadOnlyDictionary<VariableSymbol, TypeSymbol> narrowedVariables,
+        IReadOnlyDictionary<VariableSymbol, int> narrowingFrameIndices,
+        IReadOnlyDictionary<VariableSymbol, int> assignmentGenerations,
         ImmutableArray<FinallyClauseSyntax> activeFinallyClauses)
     {
         this.narrowedVariables = new Dictionary<VariableSymbol, TypeSymbol>(narrowedVariables);
+        this.narrowingFrameIndices = new Dictionary<VariableSymbol, int>(narrowingFrameIndices);
+        this.assignmentGenerations = new Dictionary<VariableSymbol, int>(assignmentGenerations);
         NarrowedVariables = new ReadOnlyDictionary<VariableSymbol, TypeSymbol>(this.narrowedVariables);
+        NarrowingFrameIndices = new ReadOnlyDictionary<VariableSymbol, int>(this.narrowingFrameIndices);
+        AssignmentGenerations = new ReadOnlyDictionary<VariableSymbol, int>(this.assignmentGenerations);
         ActiveFinallyClauses = activeFinallyClauses;
     }
 
     public IReadOnlyDictionary<VariableSymbol, TypeSymbol> NarrowedVariables { get; }
 
+    public IReadOnlyDictionary<VariableSymbol, int> NarrowingFrameIndices { get; }
+
+    public IReadOnlyDictionary<VariableSymbol, int> AssignmentGenerations { get; }
+
     public ImmutableArray<FinallyClauseSyntax> ActiveFinallyClauses { get; }
 
     public GotoNarrowingSnapshot Clone()
-        => new(narrowedVariables, ActiveFinallyClauses);
+        => new(narrowedVariables, NarrowingFrameIndices, AssignmentGenerations, ActiveFinallyClauses);
 
     public void RemoveNarrowing(VariableSymbol variable)
-        => narrowedVariables.Remove(variable);
+    {
+        narrowedVariables.Remove(variable);
+        narrowingFrameIndices.Remove(variable);
+        assignmentGenerations.Remove(variable);
+    }
 
     public void SetNarrowing(VariableSymbol variable, TypeSymbol type)
-        => narrowedVariables[variable] = type;
+    {
+        narrowedVariables[variable] = type;
+        narrowingFrameIndices.Remove(variable);
+        assignmentGenerations.Remove(variable);
+    }
 }
 
 internal sealed class BackwardGotoNarrowingState
 {
-    public BackwardGotoNarrowingState(
-        GotoNarrowingSnapshot targetSnapshot,
-        int targetAssignmentGeneration)
+    public BackwardGotoNarrowingState(GotoNarrowingSnapshot targetSnapshot)
     {
         TargetSnapshot = targetSnapshot;
-        TargetAssignmentGeneration = targetAssignmentGeneration;
     }
 
     public GotoNarrowingSnapshot TargetSnapshot { get; }
-
-    public int TargetAssignmentGeneration { get; }
 
     public List<BackwardGotoNarrowingAccess> Accesses { get; } = new();
 
     public List<BackwardGotoNarrowingEdge> Edges { get; } = new();
 
+    public Dictionary<VariableSymbol, HashSet<string>> UpstreamLabels { get; } = new();
+
     public BackwardGotoNarrowingState Clone()
     {
-        var clone = new BackwardGotoNarrowingState(
-            TargetSnapshot.Clone(),
-            TargetAssignmentGeneration);
+        var clone = new BackwardGotoNarrowingState(TargetSnapshot.Clone());
         clone.Accesses.AddRange(Accesses);
         foreach (var edge in Edges)
         {
             clone.Edges.Add(edge.Copy());
+        }
+
+        foreach (var entry in UpstreamLabels)
+        {
+            clone.UpstreamLabels.Add(entry.Key, new HashSet<string>(entry.Value));
         }
 
         return clone;
