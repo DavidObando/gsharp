@@ -165,12 +165,14 @@ internal sealed partial class StatementBinder
         // syntax-name fallback.
         HashSet<VariableSymbol> assignedRoots;
         var dropAllRoots = false;
+        var dropGlobalRoots = false;
         if (boundStatement != null)
         {
             var collector = new AssignedRootsCollector(null, externalReadOnlyCallableAliases);
             collector.Visit(boundStatement);
             assignedRoots = collector.Roots;
             dropAllRoots = collector.MayMutateAnyRoot;
+            dropGlobalRoots = collector.MayMutateGlobalRoots;
             foreach (var frame in binderCtx.NarrowedVariables)
             {
                 foreach (var path in frame.Keys)
@@ -194,7 +196,7 @@ internal sealed partial class StatementBinder
             }
         }
 
-        if (assignedRoots.Count == 0 && !dropAllMemberPaths && !dropAllRoots)
+        if (assignedRoots.Count == 0 && !dropAllMemberPaths && !dropAllRoots && !dropGlobalRoots)
         {
             return;
         }
@@ -214,6 +216,7 @@ internal sealed partial class StatementBinder
             foreach (var key in frame.Keys)
             {
                 var drop = (dropAllRoots && MayBeMutatedByUnknownCallable(key))
+                    || (dropGlobalRoots && key.Root is GlobalVariableSymbol)
                     || assignedRoots.Contains(key.Root)
                     || (key.HasMembers && dropAllMemberPaths);
                 if (drop)
@@ -272,6 +275,7 @@ internal sealed partial class StatementBinder
             foreach (var path in frames[i].Keys)
             {
                 if ((mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path))
+                    || (mutations.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol)
                     || mutations.InvalidatesNarrowing(path.Root, frames[i][path])
                     || (path.HasMembers && mayMutateMemberPaths))
                 {
@@ -924,6 +928,7 @@ internal sealed partial class StatementBinder
             foreach (var entry in frame.ToArray())
             {
                 if ((summary.Mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
+                    || (summary.Mutations.MayMutateGlobalRoots && entry.Key.Root is GlobalVariableSymbol)
                     || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
                     || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
                 {
@@ -948,6 +953,7 @@ internal sealed partial class StatementBinder
         foreach (var entry in snapshot.NarrowedVariables.ToArray())
         {
             if ((summary.Mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
+                || (summary.Mutations.MayMutateGlobalRoots && entry.Key.Root is GlobalVariableSymbol)
                 || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
                 || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
             {
@@ -1611,6 +1617,14 @@ internal sealed partial class StatementBinder
             }
         }
 
+        if (collector.MayMutateGlobalRoots)
+        {
+            foreach (var path in state.Keys.Where(path => path.Root is GlobalVariableSymbol).ToArray())
+            {
+                state.Remove(path);
+            }
+        }
+
         foreach (var root in collector.Roots)
         {
             RemoveByRoot(state, root);
@@ -1652,6 +1666,8 @@ internal sealed partial class StatementBinder
         public bool MayMutateMemberPaths { get; private set; }
 
         public bool MayMutateAnyRoot { get; private set; }
+
+        public bool MayMutateGlobalRoots { get; private set; }
 
         public override void VisitStatement(BoundStatement? node)
         {
@@ -1761,6 +1777,8 @@ internal sealed partial class StatementBinder
                     || (variable.Variable is not ParameterSymbol { IsReadOnly: true }
                         && !externalFunctionValues.Contains(variable.Variable)
                         && !functionLiterals.ContainsKey(variable.Variable));
+                MayMutateGlobalRoots |= variable.Variable is ParameterSymbol { IsReadOnly: true }
+                    || externalFunctionValues.Contains(variable.Variable);
             }
             else
             {
@@ -1813,8 +1831,12 @@ internal sealed partial class StatementBinder
                     }
                 }
 
-                if (IsUnknownCallable(argument)
-                    || (!hasKnownTargets && !IsExternalCallable(argument)))
+                var isExternal = IsExternalCallable(argument);
+                if (isExternal)
+                {
+                    MayMutateGlobalRoots = true;
+                }
+                else if (IsUnknownCallable(argument) || !hasKnownTargets)
                 {
                     MayMutateAnyRoot = true;
                 }
