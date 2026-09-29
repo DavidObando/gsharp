@@ -122,6 +122,7 @@ internal sealed partial class StatementBinder
     private readonly HashSet<BoundStatement> internallyReachableFallthroughStatements = new();
     private readonly HashSet<BoundLabel> internallyReachableLoopExits = new();
     private readonly HashSet<BoundLabel> internallyReachableLoopBacks = new();
+    private int internalReachabilityGeneration;
     private bool currentStatementListFallsThrough = true;
     private int usingInitializationFlagCount;
 

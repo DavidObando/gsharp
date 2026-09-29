@@ -308,9 +308,12 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
     {
+        var reachabilityGeneration = internalReachabilityGeneration;
         var tryBlock = BindWithinFinallyScope(
             syntax.FinallyClause,
             () => BindBlockStatement(syntax.TryBlock));
+        var handlersReachable = currentStatementListFallsThrough
+            || internalReachabilityGeneration != reachabilityGeneration;
 
         var exceptionType = ResolveExceptionType();
         if (exceptionType == null)
@@ -330,6 +333,9 @@ internal sealed partial class StatementBinder
 
         foreach (var catchSyntax in syntax.CatchClauses)
         {
+            var inheritedReachability = currentStatementListFallsThrough;
+            currentStatementListFallsThrough = handlersReachable;
+
             // ADR-0177 A: a bare `catch { … }` carries no type clause and means
             // `catch (System.Exception)`, exactly as in C#.
             var catchType = exceptionType;
@@ -383,6 +389,7 @@ internal sealed partial class StatementBinder
             finally
             {
                 exceptionHandlerRegions.Pop();
+                currentStatementListFallsThrough = inheritedReachability;
             }
 
             scope = scope.Pop();
@@ -398,6 +405,8 @@ internal sealed partial class StatementBinder
         BoundStatement? finallyBlock = null;
         if (syntax.FinallyClause != null)
         {
+            var inheritedReachability = currentStatementListFallsThrough;
+            currentStatementListFallsThrough = handlersReachable;
             exceptionHandlerRegions.Push(syntax.FinallyClause);
             try
             {
@@ -407,6 +416,7 @@ internal sealed partial class StatementBinder
             finally
             {
                 exceptionHandlerRegions.Pop();
+                currentStatementListFallsThrough = inheritedReachability;
             }
         }
 

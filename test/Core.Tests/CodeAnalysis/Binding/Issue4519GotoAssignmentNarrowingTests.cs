@@ -2825,6 +2825,66 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_EnteringTryPropagatesReachabilityIntoFinally()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+            Again:
+                let length = x.Length
+                goto Enter
+                try {
+                Enter:
+                    var marker = 0
+                }
+                finally {
+                    x = nil
+                    goto Again
+                }
+                return length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_EnteringTryPropagatesReachabilityIntoCatch()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+            Again:
+                let length = x.Length
+                goto Enter
+                try {
+                Enter:
+                    throw InvalidOperationException()
+                }
+                catch {
+                    x = nil
+                    goto Again
+                }
+                return length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_InvalidatesNarrowedCallableMemberPath()
     {
         var result = Evaluate("""

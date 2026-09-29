@@ -98,11 +98,17 @@ internal sealed partial class StatementBinder
         }
 
         userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray();
+        var wasReachable = currentStatementListFallsThrough;
         var incomingSnapshots = InvalidateAssignmentNarrowingsBypassedByGoto(
             labelName,
             currentStatementListFallsThrough);
         currentStatementListFallsThrough =
             currentStatementListFallsThrough || incomingSnapshots is { Count: > 0 };
+        if (!wasReachable && currentStatementListFallsThrough)
+        {
+            internalReachabilityGeneration++;
+        }
+
         var backwardState = new BackwardGotoNarrowingState(CaptureGotoNarrowingSnapshot());
         AddUpstreamLabelDependencies(backwardState, incomingSnapshots);
         binderCtx.BackwardGotoNarrowingStates[labelName] = backwardState;
