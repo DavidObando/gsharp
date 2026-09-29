@@ -63,9 +63,9 @@ accepted `goDebug` key is `gotypesalias`, with value `0` or `1`.
 Before loading, source inputs and authorized local replacements are copied
 with bounded, no-follow reads into a private mirror. The loader sees only
 those captured bytes; emitted manifest hashes remain those of the originals.
-On supported Unix systems, private temporary trees are removed recursively
-through verified directory descriptors without following links. Platforms
-without those primitives leave the private tree behind rather than risk
+On Linux and macOS, private temporary trees are removed recursively through
+verified directory descriptors and atomic name exchanges without following
+links. Other platforms leave non-empty private trees behind rather than risk
 deleting a path that another process replaced.
 
 Profiles with `cgoEnabled: true` must set `cCompiler` to an absolute,

@@ -1,10 +1,12 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 
-//go:build linux || darwin || freebsd || netbsd || openbsd || dragonfly || solaris
+//go:build linux || darwin
 
 package main
 
 import (
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"io"
 	"os"
@@ -89,6 +91,11 @@ func removeDirectoryContents(directory *os.File) error {
 		return err
 	}
 	fd := int(directory.Fd())
+	type capturedEntry struct {
+		name string
+		stat unix.Stat_t
+	}
+	captured := make([]capturedEntry, 0, len(entries))
 	for _, entry := range entries {
 		name := entry.Name()
 		if name == "." || name == ".." || filepath.Base(name) != name {
@@ -101,8 +108,12 @@ func removeDirectoryContents(directory *os.File) error {
 			}
 			return err
 		}
+		captured = append(captured, capturedEntry{name: name, stat: before})
+	}
+	for _, entry := range captured {
+		name, before := entry.name, entry.stat
 		if before.Mode&unix.S_IFMT != unix.S_IFDIR {
-			if err := unix.Unlinkat(fd, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+			if err := quarantineAndRemoveFile(fd, name, before); err != nil {
 				return err
 			}
 			continue
@@ -139,6 +150,68 @@ func removeDirectoryContents(directory *os.File) error {
 		}
 	}
 	return nil
+}
+
+func quarantineAndRemoveFile(parentFD int, name string, before unix.Stat_t) error {
+	if before.Mode&unix.S_IFMT != unix.S_IFREG {
+		return nil
+	}
+	originalFD, err := unix.Openat(parentFD, name, unix.O_RDONLY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	if err != nil {
+		return nil
+	}
+	defer unix.Close(originalFD)
+	var opened unix.Stat_t
+	if err := unix.Fstat(originalFD, &opened); err != nil || !sameUnixFile(before, opened) {
+		return nil
+	}
+	placeholder, err := uniquePlaceholderName()
+	if err != nil {
+		return err
+	}
+	placeholderFD, err := unix.Openat(parentFD, placeholder, unix.O_WRONLY|unix.O_CREAT|unix.O_EXCL|unix.O_CLOEXEC, 0o600)
+	if err != nil {
+		return err
+	}
+	var placeholderStat unix.Stat_t
+	if err := unix.Fstat(placeholderFD, &placeholderStat); err != nil {
+		_ = unix.Close(placeholderFD)
+		return err
+	}
+	if err := unix.Close(placeholderFD); err != nil {
+		return err
+	}
+	if err := atomicExchange(parentFD, name, placeholder); err != nil {
+		return nil
+	}
+	var quarantined unix.Stat_t
+	if err := unix.Fstatat(parentFD, placeholder, &quarantined, unix.AT_SYMLINK_NOFOLLOW); err != nil ||
+		!sameUnixFile(opened, quarantined) {
+		_ = atomicExchange(parentFD, name, placeholder)
+		removeKnownPlaceholder(parentFD, placeholder, placeholderStat)
+		return nil
+	}
+	if err := unix.Unlinkat(parentFD, placeholder, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	removeKnownPlaceholder(parentFD, name, placeholderStat)
+	return nil
+}
+
+func removeKnownPlaceholder(parentFD int, name string, expected unix.Stat_t) {
+	var current unix.Stat_t
+	if err := unix.Fstatat(parentFD, name, &current, unix.AT_SYMLINK_NOFOLLOW); err == nil &&
+		sameUnixFile(current, expected) {
+		_ = unix.Unlinkat(parentFD, name, 0)
+	}
+}
+
+func uniquePlaceholderName() (string, error) {
+	var value [16]byte
+	if _, err := rand.Read(value[:]); err != nil {
+		return "", err
+	}
+	return ".go2gs-entry-" + hex.EncodeToString(value[:]), nil
 }
 
 func restoreRenamedDirectory(parentFD int, tombstone, original string) {
