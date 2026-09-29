@@ -211,7 +211,7 @@ internal sealed partial class StatementBinder
             List<AccessPath>? toRemove = null;
             foreach (var key in frame.Keys)
             {
-                var drop = dropAllRoots
+                var drop = (dropAllRoots && MayBeMutatedByUnknownCallable(key))
                     || assignedRoots.Contains(key.Root)
                     || (key.HasMembers && dropAllMemberPaths);
                 if (drop)
@@ -269,7 +269,7 @@ internal sealed partial class StatementBinder
         {
             foreach (var path in frames[i].Keys)
             {
-                if (mutations.MayMutateAnyRoot
+                if ((mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path))
                     || mutations.InvalidatesNarrowing(path.Root, frames[i][path])
                     || (path.HasMembers && mayMutateMemberPaths))
                 {
@@ -880,7 +880,7 @@ internal sealed partial class StatementBinder
         {
             foreach (var entry in frame.ToArray())
             {
-                if (summary.Mutations.MayMutateAnyRoot
+                if ((summary.Mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
                     || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
                     || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
                 {
@@ -904,7 +904,7 @@ internal sealed partial class StatementBinder
     {
         foreach (var entry in snapshot.NarrowedVariables.ToArray())
         {
-            if (summary.Mutations.MayMutateAnyRoot
+            if ((summary.Mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
                 || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
                 || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
             {
@@ -1539,6 +1539,9 @@ internal sealed partial class StatementBinder
         }
     }
 
+    private static bool MayBeMutatedByUnknownCallable(AccessPath path)
+        => path.HasMembers || !path.Root.IsReadOnly;
+
     /// <summary>
     /// Issue #2159: conservatively drops every narrowing on a local that
     /// <paramref name="node"/>'s bound subtree assigns anywhere.
@@ -1554,8 +1557,10 @@ internal sealed partial class StatementBinder
         collector.Visit(node);
         if (collector.MayMutateAnyRoot)
         {
-            state.Clear();
-            return;
+            foreach (var path in state.Keys.Where(MayBeMutatedByUnknownCallable).ToArray())
+            {
+                state.Remove(path);
+            }
         }
 
         foreach (var root in collector.Roots)

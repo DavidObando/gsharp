@@ -1966,6 +1966,28 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void CapturedFunctionCall_PreservesReadonlyLocalNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(present bool) int32 {
+                let text string? = if present { "safe" } else { nil }
+                if text == nil {
+                    return 0
+                }
+                var calls = 0
+                let count = func() { calls++ }
+                count()
+                return text.Length
+            }
+
+            Run(true)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(4, result.Value);
+    }
+
+    [Fact]
     public void ForwardGoto_FinallyIncludesWritableRefMutation()
     {
         var result = Evaluate("""
