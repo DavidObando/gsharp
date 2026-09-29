@@ -322,6 +322,66 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsDeconstructionSource()
+    {
+        var result = Evaluate("""
+            data class Pair(A int32, B int32) {
+            }
+
+            func Run() int32 {
+                var x Pair? = nil
+                x = Pair(1, 2)
+                var count = 0
+            Again:
+                let (a, b) = x
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return a + b
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_AfterTypeTestNarrowing_ReportsMemberAccess()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                func Bark() string { return "woof" }
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    let sound = x.Bark()
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("Bark", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_InvalidationPropagatesThroughForwardLabel()
     {
         var result = Evaluate("""
@@ -343,6 +403,35 @@ public class Issue4519GotoAssignmentNarrowingTests
                     goto Again
                 }
                 return length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_LateForwardLabelDependencyUpdatesExistingEdge()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = "safe"
+                var retry = true
+            Again:
+                goto Use
+            Back:
+                if retry {
+                    retry = false
+                    x = nil
+                    goto Again
+                }
+                x = "safe"
+            Use:
+                let length = x.Length
+                goto Back
             }
 
             Run()

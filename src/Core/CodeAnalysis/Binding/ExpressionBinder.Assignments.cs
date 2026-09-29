@@ -1110,7 +1110,6 @@ internal sealed partial class ExpressionBinder
         // proven by the active if-let/null-guard frame.
         var assignmentReceiver = implicitFieldReceiverExpr ?? BuildNarrowedVariableRead(variable);
         if (assignmentReceiver is BoundVariableExpression variableRead
-            && variableRead.Variable.Type is NullableTypeSymbol
             && variableRead.NarrowedType != null)
         {
             binderCtx.TrackBackwardGotoNarrowingUse(

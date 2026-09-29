@@ -401,10 +401,10 @@ internal sealed class ConversionClassifier
         ParameterSymbol? callParameter = null)
     {
         if (expression is BoundVariableExpression variableRead
-            && variableRead.Variable.Type is NullableTypeSymbol
             && variableRead.NarrowedType != null
             && type is not NullableTypeSymbol
-            && type is not PlatformTypeSymbol)
+            && type is not PlatformTypeSymbol
+            && !Conversion.Classify(variableRead.Variable.Type, type).IsImplicit)
         {
             binderCtx.TrackBackwardGotoNarrowingUse(
                 variableRead.Variable,

@@ -117,10 +117,20 @@ internal sealed record BackwardGotoNarrowingAccess(
     BackwardGotoNarrowingUseKind Kind,
     TypeSymbol? TargetType = null);
 
-internal sealed record BackwardGotoNarrowingEdge(
-    GotoNarrowingSnapshot SourceSnapshot,
-    ImmutableArray<BackwardGotoNarrowingAccess> Accesses)
+internal sealed class BackwardGotoNarrowingEdge
 {
+    public BackwardGotoNarrowingEdge(
+        GotoNarrowingSnapshot sourceSnapshot,
+        IEnumerable<BackwardGotoNarrowingAccess> accesses)
+    {
+        SourceSnapshot = sourceSnapshot;
+        Accesses = new List<BackwardGotoNarrowingAccess>(accesses);
+    }
+
+    public GotoNarrowingSnapshot SourceSnapshot { get; }
+
+    public List<BackwardGotoNarrowingAccess> Accesses { get; }
+
     public BackwardGotoNarrowingEdge Copy()
         => new(SourceSnapshot.Clone(), Accesses);
 }

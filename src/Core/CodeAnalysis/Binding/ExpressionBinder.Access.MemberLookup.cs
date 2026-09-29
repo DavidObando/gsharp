@@ -191,7 +191,6 @@ internal sealed partial class ExpressionBinder
         }
 
         if (receiver is not BoundVariableExpression variableRead
-            || variableRead.Variable.Type is not NullableTypeSymbol
             || variableRead.NarrowedType == null)
         {
             return;
@@ -1869,7 +1868,6 @@ internal sealed partial class ExpressionBinder
     private void TrackBackwardGotoIndexUse(BoundExpression target, TextLocation location)
     {
         if (target is BoundVariableExpression variableRead
-            && variableRead.Variable.Type is NullableTypeSymbol
             && variableRead.NarrowedType != null)
         {
             binderCtx.TrackBackwardGotoNarrowingUse(

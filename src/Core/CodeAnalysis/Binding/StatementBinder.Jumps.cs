@@ -47,7 +47,7 @@ internal sealed partial class StatementBinder
         {
             backwardState.Edges.Add(new BackwardGotoNarrowingEdge(
                 CaptureGotoNarrowingSnapshot(),
-                backwardState.Accesses.ToImmutableArray()));
+                backwardState.Accesses));
         }
 
         var label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location);

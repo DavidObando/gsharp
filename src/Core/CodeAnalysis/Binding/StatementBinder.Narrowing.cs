@@ -2336,7 +2336,7 @@ internal sealed partial class StatementBinder
         // `initializer.Type is TupleTypeSymbol` / `is StructSymbol` and then
         // probes for an imported `Deconstruct`, none of which a platform
         // wrapper matches.
-        initializer = PlatformCoercion.InsertCheck(
+        initializer = binderCtx.InsertPlatformCheck(
             initializer,
             syntax.Initializer.Location,
             "a deconstruction source");
@@ -2835,7 +2835,7 @@ internal sealed partial class StatementBinder
         // the symbol-kind test below needs: a platform wrapper is not a
         // StructSymbol, so `let { X = x } = obliviousCall()` reported GS0164
         // where `DPt` compiled.
-        initializer = PlatformCoercion.InsertCheck(
+        initializer = binderCtx.InsertPlatformCheck(
             initializer,
             syntax.Initializer.Location,
             "a deconstruction source");

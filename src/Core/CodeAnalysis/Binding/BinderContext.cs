@@ -803,7 +803,12 @@ internal sealed class BinderContext
             {
                 foreach (var upstreamLabel in upstreamLabels)
                 {
-                    BackwardGotoNarrowingStates[upstreamLabel].Accesses.Add(access);
+                    var upstreamState = BackwardGotoNarrowingStates[upstreamLabel];
+                    upstreamState.Accesses.Add(access);
+                    foreach (var edge in upstreamState.Edges)
+                    {
+                        edge.Accesses.Add(access);
+                    }
                 }
             }
         }

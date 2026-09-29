@@ -1166,7 +1166,6 @@ internal sealed partial class OverloadResolver
             : null;
         if (syntax.NullableQuestionToken == null
             && symbol is VariableSymbol narrowedCallTarget
-            && narrowedCallTarget.Type is NullableTypeSymbol
             && narrowedCallTargetType != null)
         {
             binderCtx.TrackBackwardGotoNarrowingUse(
