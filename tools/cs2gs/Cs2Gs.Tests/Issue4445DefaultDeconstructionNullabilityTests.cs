@@ -761,6 +761,21 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     var (_, mixedWriteRight) = mixedWritePair;
                     Fill(ref mixedWriteRight, replacement);
 
+                    var mixedJoinPair =
+                        (First: replacement, Second: replacement);
+                    if (replacement is null)
+                    {
+                        mixedJoinPair = (replacement, replacement);
+                    }
+                    else
+                    {
+                        mixedJoinPair = (replacement, replacement);
+                    }
+                    (mixedJoinPair, mixedJoinPair.First) =
+                        (default((T, T)), replacement);
+                    var (_, joinedMixedRight) = mixedJoinPair;
+                    Fill(ref joinedMixedRight, replacement);
+
                     var outElementPair = (default(T), replacement);
                     Replace(out outElementPair.Item1, replacement);
                     var (outElementLeft, outElementRight) = outElementPair;
@@ -798,6 +813,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) combinedLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) duplicateWriteLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) mixedWriteRight T\? =", printed);
+        Assert.Matches(@"\b(let|var) joinedMixedRight T\? =", printed);
         Assert.DoesNotContain("outElementLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("outElementRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("refElementRight T? =", printed, StringComparison.Ordinal);

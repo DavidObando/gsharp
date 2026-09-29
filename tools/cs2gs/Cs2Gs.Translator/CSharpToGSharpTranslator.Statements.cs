@@ -1548,8 +1548,9 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     if (elementWrites.Count > 0)
                     {
+                        // Roslyn yields concrete nodes; self-migration imports LINQ elements as platform-typed.
                         this.ApplyTupleElementWrites(
-                            writeNode,
+                            writeNode!,
                             elementWrites,
                             local,
                             values,
@@ -1588,8 +1589,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (elementWrites.Count > 0)
                 {
+                    // Roslyn yields concrete nodes; self-migration imports LINQ elements as platform-typed.
                     this.ApplyTupleElementWrites(
-                        writeNode,
+                        writeNode!,
                         elementWrites,
                         local,
                         values,
@@ -1683,6 +1685,14 @@ public sealed partial class CSharpToGSharpTranslator
                 ExpressionSyntax source = this.ResolveStableTupleAlias(
                     writtenValue,
                     aliasPath);
+                if (elementPath.Count == 0)
+                {
+                    values.Clear();
+                    values.Add(source);
+                    appliedElementWrites.Remove(source);
+                    continue;
+                }
+
                 ExpressionSyntax[] previousValues = values.ToArray();
                 if (previousValues.Length == 0)
                 {
