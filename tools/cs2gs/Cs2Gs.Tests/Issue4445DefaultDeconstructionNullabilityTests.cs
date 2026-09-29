@@ -121,6 +121,12 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     return 2;
                 }
                 var (narrowedAlias, _) = narrowedPair;
+                var narrowedWholePair = default((T, T));
+                if (narrowedWholePair.Item1 is null)
+                {
+                    return 2;
+                }
+                var (narrowedWholeAlias, _) = narrowedWholePair;
                 T? branchValue = default;
                 var (conditionalNarrowed, _) = branchValue is null
                     ? (replacement, 0)
@@ -216,6 +222,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         ILocalSymbol switchLeft = Local(root, model, "switchLeft");
         ILocalSymbol switchRight = Local(root, model, "switchRight");
         ILocalSymbol narrowedAlias = Local(root, model, "narrowedAlias");
+        ILocalSymbol narrowedWholeAlias = Local(root, model, "narrowedWholeAlias");
         ILocalSymbol conditionalNarrowed = Local(root, model, "conditionalNarrowed");
         ILocalSymbol switchNarrowed = Local(root, model, "switchNarrowed");
         VariableDeclaratorSyntax suppressedSyntax = root.DescendantNodes()
@@ -240,6 +247,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Equal(NullableAnnotation.Annotated, switchLeft.NullableAnnotation);
         Assert.Equal(NullableAnnotation.Annotated, switchRight.NullableAnnotation);
         Assert.Equal(NullableAnnotation.Annotated, narrowedAlias.NullableAnnotation);
+        Assert.Equal(NullableAnnotation.Annotated, narrowedWholeAlias.NullableAnnotation);
         Assert.Equal(NullableAnnotation.Annotated, conditionalNarrowed.NullableAnnotation);
         Assert.Equal(NullableAnnotation.Annotated, switchNarrowed.NullableAnnotation);
         Assert.Equal(
@@ -291,6 +299,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("narrowedLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowedRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowedAlias T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("narrowedWholeAlias T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("conditionalNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("switchNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("coalesceNarrowed T? =", printed, StringComparison.Ordinal);

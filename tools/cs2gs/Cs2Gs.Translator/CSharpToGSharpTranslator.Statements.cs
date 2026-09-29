@@ -354,14 +354,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             TypeInfo typeInfo = this.context.GetTypeInfo(initializer);
-            if (IsNullOrDefaultLiteral(initializer)
-                && typeInfo.Type is { IsTupleType: true })
-            {
-                // `default((T, T))` is a non-null ValueTuple as a whole, so
-                // Roslyn reports NotNull for the expression even though each
-                // reference-capable element has its default (maybe-null) value.
-                return true;
-            }
+            bool isWholeTupleDefault = IsNullOrDefaultLiteral(initializer)
+                && typeInfo.Type is { IsTupleType: true };
 
             NullableFlowState flowState = flowExpression == initializer
                 ? typeInfo.Nullability.FlowState
@@ -382,6 +376,14 @@ public sealed partial class CSharpToGSharpTranslator
             if (flowState != NullableFlowState.None)
             {
                 return flowState == NullableFlowState.MaybeNull;
+            }
+
+            if (isWholeTupleDefault)
+            {
+                // `default((T, T))` is a non-null ValueTuple as a whole. Use
+                // this fallback only when Roslyn has no projected element flow;
+                // a stable alias may have narrowed that element at the use site.
+                return true;
             }
 
             if (IsNullForgiven(initializer))
