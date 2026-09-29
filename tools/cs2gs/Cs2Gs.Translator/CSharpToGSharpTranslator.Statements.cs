@@ -1126,6 +1126,11 @@ public sealed partial class CSharpToGSharpTranslator
                 changed = false;
                 foreach (Microsoft.CodeAnalysis.FlowAnalysis.BasicBlock block in graph.Blocks)
                 {
+                    if (!block.IsReachable)
+                    {
+                        continue;
+                    }
+
                     var values = new HashSet<ExpressionSyntax>();
                     foreach (Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowBranch predecessor
                         in block.Predecessors)
@@ -1370,19 +1375,43 @@ public sealed partial class CSharpToGSharpTranslator
             foreach (SyntaxNode writeNode in EagerExecutionNodes(operation.Syntax)
                 .Where(node => node.Span.End <= beforePosition)
                 .Where(node => node is AssignmentExpressionSyntax
-                    || (node is not ArgumentSyntax
-                        { RefOrOutKeyword.RawKind: (int)SyntaxKind.InKeyword }
-                        && this.SyntaxNodeWritesSymbol(node, local)))
+                    || this.ReachingWriteTargetsLocal(node, local))
                 .OrderBy(node => node.Span.End))
             {
+                var elementWrites =
+                    new List<(IReadOnlyList<int> Path, ExpressionSyntax Value)>();
+                if (writeNode is ArgumentSyntax argument
+                    && this.TryFindTupleElementWritePath(
+                        argument.Expression,
+                        local,
+                        new List<int>(),
+                        out IReadOnlyList<int> argumentPath))
+                {
+                    elementWrites.Add((
+                        argumentPath,
+                        SyntaxFactory.IdentifierName("__unknown")));
+                }
+
                 if (writeNode is not AssignmentExpressionSyntax assignment)
                 {
+                    if (elementWrites.Count > 0)
+                    {
+                        this.ApplyTupleElementWrites(
+                            writeNode,
+                            elementWrites,
+                            local,
+                            values,
+                            elementAssignedValues,
+                            appliedElementWrites,
+                            visited,
+                            unknownTuple);
+                        continue;
+                    }
+
                     values.Clear();
                     continue;
                 }
 
-                var elementWrites =
-                    new List<(IReadOnlyList<int> Path, ExpressionSyntax Value)>();
                 this.CollectTupleElementWrites(
                     assignment.Left,
                     assignment.Right,
@@ -1395,65 +1424,15 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (elementWrites.Count > 0)
                 {
-                    for (int writeOrdinal = 0;
-                        writeOrdinal < elementWrites.Count;
-                        writeOrdinal++)
-                    {
-                        (IReadOnlyList<int> elementPath, ExpressionSyntax writtenValue) =
-                            elementWrites[writeOrdinal];
-                        string write = assignment.SpanStart
-                            + ":"
-                            + string.Join(".", elementPath)
-                            + ":"
-                            + writeOrdinal;
-                        var aliasPath = visited == null
-                            ? null
-                            : new HashSet<ISymbol>(
-                                visited,
-                                SymbolEqualityComparer.Default);
-                        ExpressionSyntax source = this.ResolveStableTupleAlias(
-                            writtenValue,
-                            aliasPath);
-                        ExpressionSyntax[] previousValues = values.ToArray();
-                        if (previousValues.Length == 0)
-                        {
-                            previousValues = new[] { unknownTuple };
-                        }
-
-                        values.Clear();
-                        foreach (ExpressionSyntax previous in previousValues)
-                        {
-                            if (appliedElementWrites.TryGetValue(
-                                previous,
-                                out HashSet<string> previousWrites)
-                                && previousWrites.Contains(write))
-                            {
-                                values.Add(previous);
-                                continue;
-                            }
-
-                            var key = (write, previous);
-                            if (!elementAssignedValues.TryGetValue(
-                                key,
-                                out ExpressionSyntax updated))
-                            {
-                                updated = ReplaceTupleElement(
-                                    previous,
-                                    local.Type,
-                                    elementPath,
-                                    0,
-                                    source);
-                                elementAssignedValues.Add(key, updated);
-                                var updatedWrites = previousWrites == null
-                                    ? new HashSet<string>()
-                                    : new HashSet<string>(previousWrites);
-                                updatedWrites.Add(write);
-                                appliedElementWrites.Add(updated, updatedWrites);
-                            }
-
-                            values.Add(updated);
-                        }
-                    }
+                    this.ApplyTupleElementWrites(
+                        writeNode,
+                        elementWrites,
+                        local,
+                        values,
+                        elementAssignedValues,
+                        appliedElementWrites,
+                        visited,
+                        unknownTuple);
 
                     continue;
                 }
@@ -1480,6 +1459,98 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 values.Add(value);
+            }
+        }
+
+        private bool ReachingWriteTargetsLocal(SyntaxNode node, ILocalSymbol local)
+        {
+            if (node is ArgumentSyntax
+                { RefOrOutKeyword.RawKind: (int)SyntaxKind.InKeyword })
+            {
+                return false;
+            }
+
+            if (this.SyntaxNodeWritesSymbol(node, local))
+            {
+                return true;
+            }
+
+            return node is ArgumentSyntax
+                { RefOrOutKeyword.RawKind: not (int)SyntaxKind.None } argument
+                && this.TryFindTupleElementWritePath(
+                    argument.Expression,
+                    local,
+                    new List<int>(),
+                    out _);
+        }
+
+        private void ApplyTupleElementWrites(
+            SyntaxNode writeNode,
+            IReadOnlyList<(IReadOnlyList<int> Path, ExpressionSyntax Value)> writes,
+            ILocalSymbol local,
+            HashSet<ExpressionSyntax> values,
+            Dictionary<(string Write, ExpressionSyntax Previous), ExpressionSyntax>
+                elementAssignedValues,
+            Dictionary<ExpressionSyntax, HashSet<string>> appliedElementWrites,
+            HashSet<ISymbol> visited,
+            ExpressionSyntax unknownTuple)
+        {
+            for (int writeOrdinal = 0; writeOrdinal < writes.Count; writeOrdinal++)
+            {
+                (IReadOnlyList<int> elementPath, ExpressionSyntax writtenValue) =
+                    writes[writeOrdinal];
+                string write = writeNode.SpanStart
+                    + ":"
+                    + string.Join(".", elementPath)
+                    + ":"
+                    + writeOrdinal;
+                var aliasPath = visited == null
+                    ? null
+                    : new HashSet<ISymbol>(
+                        visited,
+                        SymbolEqualityComparer.Default);
+                ExpressionSyntax source = this.ResolveStableTupleAlias(
+                    writtenValue,
+                    aliasPath);
+                ExpressionSyntax[] previousValues = values.ToArray();
+                if (previousValues.Length == 0)
+                {
+                    previousValues = new[] { unknownTuple };
+                }
+
+                values.Clear();
+                foreach (ExpressionSyntax previous in previousValues)
+                {
+                    if (appliedElementWrites.TryGetValue(
+                        previous,
+                        out HashSet<string> previousWrites)
+                        && previousWrites.Contains(write))
+                    {
+                        values.Add(previous);
+                        continue;
+                    }
+
+                    var key = (write, previous);
+                    if (!elementAssignedValues.TryGetValue(
+                        key,
+                        out ExpressionSyntax updated))
+                    {
+                        updated = ReplaceTupleElement(
+                            previous,
+                            local.Type,
+                            elementPath,
+                            0,
+                            source);
+                        elementAssignedValues.Add(key, updated);
+                        var updatedWrites = previousWrites == null
+                            ? new HashSet<string>()
+                            : new HashSet<string>(previousWrites);
+                        updatedWrites.Add(write);
+                        appliedElementWrites.Add(updated, updatedWrites);
+                    }
+
+                    values.Add(updated);
+                }
             }
         }
 

@@ -163,6 +163,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var (sharedPathLeft, sharedPathRight) = sharedPathChoice;
                 T repeatedSource = default;
                 var (_, repeatedAlias) = (repeatedSource, repeatedSource);
+                var deadPair = NullablePair<T>();
+                goto afterDeadAssignment;
+                deadPair = (default(T), default(T));
+            afterDeadAssignment:
+                var (deadLeft, deadRight) = deadPair;
 
                 Fill(ref direct, replacement);
                 Fill(ref alias, replacement);
@@ -541,6 +546,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("cycleRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("finalReplacementLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("finalReplacementRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("deadLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("deadRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("conditionalNarrowed T? =", printed, StringComparison.Ordinal);
@@ -582,6 +589,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     pair = default;
                     return 0;
                 }
+
+                private static void Replace<T>(out T value, T replacement) =>
+                    value = replacement;
 
                 private static void M<T>(T replacement)
                 {
@@ -652,6 +662,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                         (default((T, T)), replacement);
                     var (_, mixedWriteRight) = mixedWritePair;
                     Fill(ref mixedWriteRight, replacement);
+
+                    var outElementPair = (default(T), replacement);
+                    Replace(out outElementPair.Item1, replacement);
+                    var (outElementLeft, outElementRight) = outElementPair;
                 }
 
                 private static void Observe<T>(in (T, T) pair)
@@ -672,6 +686,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) combinedLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) duplicateWriteLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) mixedWriteRight T\? =", printed);
+        Assert.DoesNotContain("outElementLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("outElementRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("callRight T? =", printed, StringComparison.Ordinal);
