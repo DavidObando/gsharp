@@ -2474,6 +2474,7 @@ internal sealed partial class ExpressionBinder
         // Member/indexer lookup sees the effective type while loads still refer
         // to the original variable slot.
         var target = BuildNarrowedVariableRead(variable);
+        TrackBackwardGotoIndexUse(target, diagnosticLocation);
 
         // ADR-0186 §4/§5, issue #4323: the indexer WRITE path needs the same
         // receiver check and unwrap the READ path gets in

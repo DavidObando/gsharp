@@ -208,6 +208,64 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsMemberWriteReceiver()
+    {
+        var result = Evaluate("""
+            import System.Text
+
+            func Run() int32 {
+                var x StringBuilder? = nil
+                x = StringBuilder()
+                var count = 0
+            Again:
+                x.Length = 0
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return count
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsLockSubject()
+    {
+        var result = Evaluate("""
+            class Gate {
+            }
+
+            func Run() int32 {
+                var x Gate? = nil
+                x = Gate{}
+                var count = 0
+            Again:
+                lock x {
+                    count++
+                }
+                if count == 1 {
+                    x = nil
+                    goto Again
+                }
+                return count
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_InvalidationPropagatesThroughForwardLabel()
     {
         var result = Evaluate("""

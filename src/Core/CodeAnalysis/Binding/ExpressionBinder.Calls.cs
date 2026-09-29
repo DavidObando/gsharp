@@ -52,7 +52,7 @@ internal sealed partial class ExpressionBinder
 
         // ADR-0186 §4: copying reads every member of the receiver, so a
         // platform receiver is a coercion to non-null (checked and unwrapped).
-        receiver = PlatformCoercion.InsertCheck(receiver, diagnosticLocation, "a copy/with receiver");
+        receiver = binderCtx.InsertPlatformCheck(receiver, diagnosticLocation, "a copy/with receiver");
 
         // Issue #2228: G# unifies `class` and `struct` into one StructSymbol
         // (IsClass distinguishes reference vs. value semantics), so this check

@@ -809,6 +809,37 @@ internal sealed class BinderContext
         }
     }
 
+    /// <summary>
+    /// Records a narrowed variable consumed at a non-null boundary, then
+    /// applies the ordinary platform-type coercion.
+    /// </summary>
+    /// <param name="expression">The value crossing the boundary.</param>
+    /// <param name="location">The source location of the use.</param>
+    /// <param name="boundary">The platform-check boundary description.</param>
+    /// <param name="suppressible">Whether platform-check suppression applies.</param>
+    /// <returns>The checked or unchanged expression.</returns>
+    public BoundExpression InsertPlatformCheck(
+        BoundExpression expression,
+        TextLocation? location,
+        string boundary,
+        bool suppressible = true)
+    {
+        if (location is { } useLocation
+            && expression is BoundVariableExpression variableRead
+            && variableRead.Variable.Type is NullableTypeSymbol
+            && variableRead.NarrowedType != null)
+        {
+            TrackBackwardGotoNarrowingUse(
+                variableRead.Variable,
+                useLocation,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.NonNullUse,
+                expression.Type);
+        }
+
+        return PlatformCoercion.InsertCheck(expression, location, boundary, suppressible);
+    }
+
     /// <summary>Enters a base or delegating-constructor argument context.</summary>
     /// <returns>A token that leaves the context when disposed.</returns>
     public ConstructorInitializerContextScope PushConstructorInitializerContext()

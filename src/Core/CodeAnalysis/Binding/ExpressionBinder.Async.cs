@@ -661,7 +661,7 @@ internal sealed partial class ExpressionBinder
             // receiver produced an unattributed failure instead of §4's
             // message. This is the same one-line call the read, write and
             // indexer paths make.
-            boundReceiver = PlatformCoercion.InsertCheck(
+            boundReceiver = binderCtx.InsertPlatformCheck(
                 boundReceiver,
                 accessor.LeftPart.Location,
                 "a compound member assignment receiver");
@@ -1338,7 +1338,7 @@ internal sealed partial class ExpressionBinder
         // suspending-call test, not before: that call's result is the
         // function's logical result, which may itself be `T!`, and checking it
         // would both hide the call from the test and assert a legitimate nil.
-        operand = PlatformCoercion.InsertCheck(operand, syntax.Expression.Location, "an awaited operand");
+        operand = binderCtx.InsertPlatformCheck(operand, syntax.Expression.Location, "an awaited operand");
 
         if (!TryGetTaskElementType(operand.Type, out var element))
         {

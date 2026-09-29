@@ -25,6 +25,9 @@ internal enum BackwardGotoNarrowingUseKind
 
     /// <summary>An index operation.</summary>
     Index,
+
+    /// <summary>Another operation that requires a non-null value.</summary>
+    NonNullUse,
 }
 
 internal sealed class GotoNarrowingSnapshot

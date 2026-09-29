@@ -1109,6 +1109,17 @@ internal sealed partial class ExpressionBinder
         // storage type, while the bound receiver carries the effective type
         // proven by the active if-let/null-guard frame.
         var assignmentReceiver = implicitFieldReceiverExpr ?? BuildNarrowedVariableRead(variable);
+        if (assignmentReceiver is BoundVariableExpression variableRead
+            && variableRead.Variable.Type is NullableTypeSymbol
+            && variableRead.NarrowedType != null)
+        {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                variableRead.Variable,
+                syntax.FieldIdentifier.Location,
+                syntax.FieldIdentifier.ValueText,
+                BackwardGotoNarrowingUseKind.Member);
+        }
+
         var assignmentReceiverType = assignmentReceiver.Type;
 
         // Stream B: instance-CLR receiver → property/field write via reflection.
@@ -3626,6 +3637,7 @@ internal sealed partial class ExpressionBinder
                 break;
         }
 
+        TrackBackwardGotoIndexUse(target, diagnosticLocation);
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
 
         // ADR-0187 / issue #4350: a multi-parameter user indexer write.

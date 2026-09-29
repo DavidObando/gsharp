@@ -228,7 +228,7 @@ internal sealed partial class StatementBinder
         // so a platform wrapper matched no arm at all and
         // `for v in obliviousList()` reported GS0116 "not indexable" — the
         // receiver's platform-ness changing what the binder found.
-        collection = PlatformCoercion.InsertCheck(
+        collection = binderCtx.InsertPlatformCheck(
             collection,
             syntax.Collection.Location,
             "a 'for … in' source");
@@ -1000,7 +1000,7 @@ internal sealed partial class StatementBinder
         // than passing through `BindConversion`. It also needs the unwrap for
         // §5's reason: `IsLockableReferenceType` below dispatches on the
         // target's symbol KIND, which a platform wrapper is not.
-        target = PlatformCoercion.InsertCheck(
+        target = binderCtx.InsertPlatformCheck(
             target,
             syntax.Expression.Location,
             "a 'lock' subject");

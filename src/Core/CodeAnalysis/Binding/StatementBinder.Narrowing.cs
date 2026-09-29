@@ -616,6 +616,12 @@ internal sealed partial class StatementBinder
                             case BackwardGotoNarrowingUseKind.Index:
                                 Diagnostics.ReportTypeNotIndexable(access.Location, access.Variable.Type);
                                 break;
+                            case BackwardGotoNarrowingUseKind.NonNullUse:
+                                Diagnostics.ReportCannotConvert(
+                                    access.Location,
+                                    access.Variable.Type,
+                                    Invariant.Required(access.TargetType, "a deferred non-null use has a target type"));
+                                break;
                             default:
                                 Diagnostics.ReportUnableToFindMember(access.Location, access.MemberName);
                                 break;

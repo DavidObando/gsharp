@@ -593,7 +593,7 @@ internal sealed partial class StatementBinder
         // not inherit the check from the value seam; without this it still
         // fails fast (the CLR's own `throw` on a nil), but unattributed,
         // which is the entire thing §4 buys over the CLR's check.
-        expression = PlatformCoercion.InsertCheck(
+        expression = binderCtx.InsertPlatformCheck(
             expression,
             syntax.Expression.Location,
             "a 'throw' operand");
@@ -1095,7 +1095,7 @@ internal sealed partial class StatementBinder
         }
 
         // ADR-0186 §4: a send requires a non-null channel.
-        channel = PlatformCoercion.InsertCheck(channel, syntax.Channel.Location, "a channel send target");
+        channel = binderCtx.InsertPlatformCheck(channel, syntax.Channel.Location, "a channel send target");
 
         if (!ChannelTypeSymbol.TryGetChannelShape(channel.Type, out var elementType, out var direction, out _))
         {
@@ -1194,7 +1194,7 @@ internal sealed partial class StatementBinder
             var channelExpr = bindExpression(channelSyntax);
 
             // ADR-0186 §4: a select case operates on a non-null channel.
-            channelExpr = PlatformCoercion.InsertCheck(channelExpr, channelSyntax.Location, "a select case channel");
+            channelExpr = binderCtx.InsertPlatformCheck(channelExpr, channelSyntax.Location, "a select case channel");
             ChannelTypeSymbol? chan = null;
             TypeSymbol? selectableElement = null;
             if (channelExpr is not BoundErrorExpression
@@ -1350,7 +1350,7 @@ internal sealed partial class StatementBinder
 
         // ADR-0186 §4: awaiting a task in a select arm requires a non-null
         // task, exactly as a plain `await` does (ExpressionBinder.BindAwaitExpression).
-        task = PlatformCoercion.InsertCheck(task, taskSyntax.Location, "an awaited select case task");
+        task = binderCtx.InsertPlatformCheck(task, taskSyntax.Location, "an awaited select case task");
         var guard = BindSelectArmGuard(caseSyntax);
         TypeSymbol? result = null;
         var recognized = task is BoundErrorExpression;
@@ -2206,7 +2206,7 @@ internal sealed partial class StatementBinder
         // ADR-0186 §4: the asynchronous twin of the `for … in` source check
         // (StatementBinder.Loops). A nil oblivious stream otherwise fails
         // inside the lowered `GetAsyncEnumerator` call, unattributed.
-        stream = PlatformCoercion.InsertCheck(
+        stream = binderCtx.InsertPlatformCheck(
             stream,
             syntax.Stream.Location,
             "an 'await for' source");
