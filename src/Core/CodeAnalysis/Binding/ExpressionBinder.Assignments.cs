@@ -3811,6 +3811,15 @@ internal sealed partial class ExpressionBinder
             return receiver;
         }
 
+        if (receiver is BoundVariableExpression variableReceiver)
+        {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                variableReceiver.Variable,
+                syntax.FieldIdentifier.Location,
+                syntax.FieldIdentifier.ValueText,
+                BackwardGotoNarrowingUseKind.Member);
+        }
+
         // ADR-0186 §4/§5: the WRITE side of a member access has its own
         // receiver path, and failure mode 1 of ADR-0186's catalogue is
         // literally "the read and call paths drifted". Checking and

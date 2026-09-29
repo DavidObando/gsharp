@@ -199,33 +199,47 @@ internal static class SmartCastStability
         underlying = null;
         nonNilWhenTrue = false;
 
-        if (condition is not BoundBinaryExpression be)
+        static BoundExpression UnwrapFlowTransparentConversions(BoundExpression expression)
+        {
+            while (expression is BoundConversionExpression conversion
+                && StatementBinder.IsFlowTransparentConversion(conversion))
+            {
+                expression = conversion.Expression;
+            }
+
+            return expression;
+        }
+
+        if (condition is not BoundBinaryOperationExpression be)
         {
             return false;
         }
 
-        if (be.Op.Kind is not (BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals))
+        if (be.BinaryOperatorKind is not (BoundBinaryOperatorKind.Equals or BoundBinaryOperatorKind.NotEquals))
         {
             return false;
         }
+
+        var left = UnwrapFlowTransparentConversions(be.Left);
+        var right = UnwrapFlowTransparentConversions(be.Right);
 
         TypeSymbol? targetType = null;
-        if (be.Left is BoundVariableExpression lv && IsAcceptableBareVariable(lv.Variable, restrictBareVariableToLocalsAndParams) && StatementBinder.IsNilLiteral(be.Right))
+        if (left is BoundVariableExpression lv && IsAcceptableBareVariable(lv.Variable, restrictBareVariableToLocalsAndParams) && StatementBinder.IsNilLiteral(right))
         {
             target = lv.Variable;
             targetType = lv.Variable.Type;
         }
-        else if (be.Right is BoundVariableExpression rv && IsAcceptableBareVariable(rv.Variable, restrictBareVariableToLocalsAndParams) && StatementBinder.IsNilLiteral(be.Left))
+        else if (right is BoundVariableExpression rv && IsAcceptableBareVariable(rv.Variable, restrictBareVariableToLocalsAndParams) && StatementBinder.IsNilLiteral(left))
         {
             target = rv.Variable;
             targetType = rv.Variable.Type;
         }
-        else if (StatementBinder.IsNilLiteral(be.Right) && TryGetStableMemberPath(be.Left, out var leftPath, out var leftType))
+        else if (StatementBinder.IsNilLiteral(right) && TryGetStableMemberPath(left, out var leftPath, out var leftType))
         {
             target = leftPath;
             targetType = leftType;
         }
-        else if (StatementBinder.IsNilLiteral(be.Left) && TryGetStableMemberPath(be.Right, out var rightPath, out var rightType))
+        else if (StatementBinder.IsNilLiteral(left) && TryGetStableMemberPath(right, out var rightPath, out var rightType))
         {
             target = rightPath;
             targetType = rightType;
@@ -255,6 +269,15 @@ internal static class SmartCastStability
             return false;
         }
 
+        // User-defined equality may report true or false independently of
+        // reference nullness. String equality is the only CLR-operator shape
+        // whose nil comparison is a language-level null guard.
+        if (be is BoundClrBinaryOperatorExpression && narrowedUnderlying != TypeSymbol.String)
+        {
+            target = null;
+            return false;
+        }
+
         // Issue #1545: narrowing a nullable VALUE type (`int32?` → `int32`)
         // requires an unwrap the variable-load path does not currently emit, so
         // the narrowed static type and the `System.Nullable<T>` storage diverge
@@ -277,7 +300,7 @@ internal static class SmartCastStability
         }
 
         underlying = narrowedUnderlying;
-        nonNilWhenTrue = be.Op.Kind == BoundBinaryOperatorKind.NotEquals;
+        nonNilWhenTrue = be.BinaryOperatorKind == BoundBinaryOperatorKind.NotEquals;
         return true;
     }
 

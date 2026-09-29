@@ -1120,7 +1120,7 @@ internal sealed partial class StatementBinder
         return true;
     }
 
-    private static bool IsFlowTransparentConversion(BoundConversionExpression conversion)
+    internal static bool IsFlowTransparentConversion(BoundConversionExpression conversion)
     {
         if (ReferenceEquals(conversion.Type, conversion.Expression.Type))
         {

@@ -208,6 +208,34 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsParenthesizedIndirectInvocation()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Run() int32 {
+                var f Func[int32]? = nil
+                f = () -> 1
+                var count = 0
+            Again:
+                let value = (f)()
+                if count == 0 {
+                    count++
+                    f = nil
+                    goto Again
+                }
+                return value
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("(f)", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_AfterNullableAssignment_ReportsMemberWriteReceiver()
     {
         var result = Evaluate("""
@@ -219,6 +247,34 @@ public class Issue4519GotoAssignmentNarrowingTests
                 var count = 0
             Again:
                 x.Length = 0
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return count
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsParenthesizedMemberWriteReceiver()
+    {
+        var result = Evaluate("""
+            import System.Text
+
+            func Run() int32 {
+                var x StringBuilder? = nil
+                x = StringBuilder()
+                var count = 0
+            Again:
+                (x).Length = 0
                 if count == 0 {
                     count++
                     x = nil
@@ -320,6 +376,31 @@ public class Issue4519GotoAssignmentNarrowingTests
 
             Console.WriteLine(Run())
             """, "4", "1");
+    }
+
+    [Fact]
+    public void BackwardGoto_EarlyExitGuardReestablishesNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again:
+                if x == nil { return count }
+                let length = x.Length
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return length
+            }
+
+            Console.WriteLine(Run())
+            """, "1");
     }
 
     [Fact]
@@ -816,6 +897,32 @@ public class Issue4519GotoAssignmentNarrowingTests
                     try {
                         goto Done
                     } finally {
+                        return 0
+                    }
+                }
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run(false))
+            """, "4");
+    }
+
+    [Fact]
+    public void LocalGotoInNonCompletingFinally_DoesNotInvalidateFallthroughNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(jump bool) int32 {
+                var x string? = nil
+                if jump {
+                    try {
+                        goto Done
+                    } finally {
+                        goto Exit
+                    Exit:
                         return 0
                     }
                 }

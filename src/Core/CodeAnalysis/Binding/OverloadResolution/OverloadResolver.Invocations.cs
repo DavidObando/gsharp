@@ -1042,6 +1042,15 @@ internal sealed partial class OverloadResolver
             return callee;
         }
 
+        if (nullSafeInvocation != null && callee is BoundVariableExpression variableCallee)
+        {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                variableCallee.Variable,
+                calleeLocation,
+                calleeName,
+                BackwardGotoNarrowingUseKind.Function);
+        }
+
         BoundNullConditionalAccessExpression? nullConditionalCallee = null;
         var assertions = new Stack<BoundUnaryExpression>();
         var assertedCallee = callee;
