@@ -1206,7 +1206,8 @@ public sealed partial class CSharpToGSharpTranslator
             this.state.ManagedReferenceArrayNullable
                 .ManagedReferenceArrayProjectedCompositeType[expression] =
                 null;
-            var effectiveTypes = new List<ITypeSymbol>();
+            var effectiveTypes =
+                new List<(ExpressionSyntax Arm, ITypeSymbol Type)>();
             var projectedTypes = new List<ITypeSymbol>();
             foreach (ExpressionSyntax arm in arms)
             {
@@ -1217,7 +1218,7 @@ public sealed partial class CSharpToGSharpTranslator
                     ?? this.context.GetTypeInfo(arm).ConvertedType;
                 if (effective != null)
                 {
-                    effectiveTypes.Add(effective);
+                    effectiveTypes.Add((arm, effective));
                 }
 
                 if (projected != null)
@@ -1227,18 +1228,38 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ITypeSymbol common = projectedTypes.FirstOrDefault(candidate =>
-                effectiveTypes.All(type =>
-                    this.ProjectionTypeFitsCompositeDestination(type, candidate)));
+                effectiveTypes.All(item =>
+                    this.ProjectionTypeFitsCompositeDestination(
+                        item.Type,
+                        candidate)));
             if (common == null && projectedTypes.Count > 0)
             {
                 var originalCompositeType =
                     this.context.GetTypeInfo(expression).Type
                     ?? this.context.GetTypeInfo(expression).ConvertedType;
-                if (originalCompositeType == null
-                    || !effectiveTypes.All(type =>
+                if (originalCompositeType != null
+                    && (originalCompositeType.NullableAnnotation
+                            == NullableAnnotation.Annotated
+                        || effectiveTypes.Any(item =>
+                            this.IsNullCompositeArm(item.Arm))))
+                {
+                    common = projectedTypes
+                        .Select(candidate => candidate.WithNullableAnnotation(
+                            NullableAnnotation.Annotated))
+                        .FirstOrDefault(candidate =>
+                            effectiveTypes.All(item =>
+                                this.CompositeArmFitsProjectedDestination(
+                                    item.Arm,
+                                    item.Type,
+                                    candidate)));
+                }
+
+                if (common == null
+                    && (originalCompositeType == null
+                    || !effectiveTypes.All(item =>
                         this.ProjectionTypeFitsCompositeDestination(
-                            type,
-                            originalCompositeType)))
+                            item.Type,
+                            originalCompositeType))))
                 {
                     this.context.ReportUnsupported(
                         expression,
@@ -1250,6 +1271,30 @@ public sealed partial class CSharpToGSharpTranslator
                 .ManagedReferenceArrayProjectedCompositeType[expression] =
                 common;
             return common;
+        }
+
+        private bool CompositeArmFitsProjectedDestination(
+            ExpressionSyntax arm,
+            ITypeSymbol effectiveType,
+            ITypeSymbol destinationType)
+        {
+            if (this.IsNullCompositeArm(arm))
+            {
+                return destinationType.NullableAnnotation
+                        == NullableAnnotation.Annotated
+                    && this.IsReferenceLikeOrManagedReference(destinationType);
+            }
+
+            return this.ProjectionTypeFitsCompositeDestination(
+                effectiveType,
+                destinationType);
+        }
+
+        private bool IsNullCompositeArm(ExpressionSyntax arm)
+        {
+            Optional<object> constant =
+                this.context.SemanticModel.GetConstantValue(arm);
+            return constant.HasValue && constant.Value == null;
         }
 
         private bool ProjectionTypeFitsCompositeDestination(

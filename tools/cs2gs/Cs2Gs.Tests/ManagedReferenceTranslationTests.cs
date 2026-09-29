@@ -4679,6 +4679,49 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ConditionalNullArmPreservesProjectedArrayElementType()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedConditionalNull;
+            public class Probe {
+                private static T[] Project<T>(T[] source) => source;
+                private static int Accept<T>(T[]? value) =>
+                    value == null ? 42 : value[0] == null ? 21 : 0;
+
+                public static int Run(bool flag) {
+                    var source = new ManagedRef<int>[1];
+                    var local = flag ? Project(source) : null;
+                    return Accept(local);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedConditionalNull.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "let local []?managed[int32]?",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("return Accept(local)", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run(false) + Probe.Run(true)",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(63, result.Value);
+    }
+
+    [Fact]
     public void ConditionalLocalsUseConvertibleProjectedCommonBase()
     {
         const string source = """
