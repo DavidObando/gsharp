@@ -2639,7 +2639,21 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            return this.LambdaResultNeedsExactTarget(lambda, invoke);
+            if (!this.IsExpressionTreeLambda(lambda))
+            {
+                return this.LambdaResultNeedsExactTarget(lambda, invoke);
+            }
+
+            return GetLambdaResultExpressions(lambda).Any(result =>
+            {
+                ITypeSymbol projected =
+                    this.GetManagedReferenceArrayProjectedExpressionType(result);
+                ITypeSymbol original = this.context.GetTypeInfo(result).Type;
+                return projected != null
+                    && !SymbolEqualityComparer.IncludeNullability.Equals(
+                        projected,
+                        original);
+            });
         }
 
         private static bool MethodGroupNeedsExactTarget(
@@ -6453,6 +6467,18 @@ public sealed partial class CSharpToGSharpTranslator
             bool ValueMatches(ExpressionSyntax candidate)
             {
                 candidate = Unparenthesize(candidate);
+                if (candidate is ConditionalExpressionSyntax conditional)
+                {
+                    return ValueMatches(conditional.WhenTrue)
+                        && ValueMatches(conditional.WhenFalse);
+                }
+
+                if (candidate is SwitchExpressionSyntax switchExpression)
+                {
+                    return switchExpression.Arms.All(
+                        arm => ValueMatches(arm.Expression));
+                }
+
                 ITypeSymbol candidateType = candidate == projectedValue
                     ? projectedType
                     : this.GetManagedReferenceArrayProjectedArgumentType(candidate);

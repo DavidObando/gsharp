@@ -80,6 +80,13 @@ internal sealed class DocumentTranslationState
     public Dictionary<ISymbol, ITypeSymbol> ProjectedQueryBindingType { get; } =
         new Dictionary<ISymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
 
+    // Effective type of conditional/switch expressions whose arms carry
+    // managed-reference projection. Null values cache no common safe type.
+    public Dictionary<ExpressionSyntax, ITypeSymbol>
+        ManagedReferenceArrayProjectedCompositeType { get; } =
+            new Dictionary<ExpressionSyntax, ITypeSymbol>(
+                ReferenceEqualityComparer.Instance);
+
     // Keyed by the Roslyn element type; outer array nullability does not affect
     // CSharpTypeMapper's recursively projected element shape.
     public Dictionary<ITypeSymbol, GTypeReference> MappedArrayElementByElementType { get; } =

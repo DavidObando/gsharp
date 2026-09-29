@@ -4187,6 +4187,57 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ConditionalAndSwitchLocalsPreserveCommonProjectedType()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedCompositeLocals;
+            public sealed class Holder<T> {
+                public T Value;
+            }
+            public class Probe {
+                private static Holder<T> Wrap<T>(T[] source) =>
+                    new Holder<T> { Value = source[0] };
+
+                public static int Run(bool flag) {
+                    int[] values = { 21 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    var conditional =
+                        flag ? Wrap(source) : Wrap(source);
+                    var switched =
+                        flag switch {
+                            true => Wrap(source),
+                            false => Wrap(source),
+                        };
+                    return conditional.Value.Borrow()
+                        + switched.Value.Borrow();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedCompositeLocals.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("conditional.Value!!.Borrow()", text, StringComparison.Ordinal);
+        Assert.Contains("switched.Value!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run(true)",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionUpdatesMethodGroupTarget()
     {
         const string source = """

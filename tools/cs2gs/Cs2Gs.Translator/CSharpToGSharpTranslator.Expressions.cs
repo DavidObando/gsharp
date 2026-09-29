@@ -1105,6 +1105,20 @@ public sealed partial class CSharpToGSharpTranslator
                     tupleArray.NullableAnnotation);
             }
 
+            if (expression is ConditionalExpressionSyntax conditional)
+            {
+                return this.GetManagedReferenceArrayProjectedCompositeType(
+                    conditional,
+                    new[] { conditional.WhenTrue, conditional.WhenFalse });
+            }
+
+            if (expression is SwitchExpressionSyntax switchExpression)
+            {
+                return this.GetManagedReferenceArrayProjectedCompositeType(
+                    switchExpression,
+                    switchExpression.Arms.Select(arm => arm.Expression));
+            }
+
             if (expression is ElementAccessExpressionSyntax arrayElement
                 && this.GetMappedArrayElementType(arrayElement.Expression)
                     is { } projectedElement
@@ -1170,6 +1184,54 @@ public sealed partial class CSharpToGSharpTranslator
                 IMethodSymbol method => method.ReturnType,
                 _ => null,
             };
+        }
+
+        private ITypeSymbol GetManagedReferenceArrayProjectedCompositeType(
+            ExpressionSyntax expression,
+            IEnumerable<ExpressionSyntax> arms)
+        {
+            if (this.state.ManagedReferenceArrayProjectedCompositeType.TryGetValue(
+                    expression,
+                    out ITypeSymbol cached))
+            {
+                return cached;
+            }
+
+            this.state.ManagedReferenceArrayProjectedCompositeType[expression] =
+                null;
+            var effectiveTypes = new List<ITypeSymbol>();
+            var projectedTypes = new List<ITypeSymbol>();
+            foreach (ExpressionSyntax arm in arms)
+            {
+                ITypeSymbol projected =
+                    this.GetManagedReferenceArrayProjectedExpressionType(arm);
+                ITypeSymbol effective = projected
+                    ?? this.context.GetTypeInfo(arm).Type
+                    ?? this.context.GetTypeInfo(arm).ConvertedType;
+                if (effective != null)
+                {
+                    effectiveTypes.Add(effective);
+                }
+
+                if (projected != null)
+                {
+                    projectedTypes.Add(projected);
+                }
+            }
+
+            ITypeSymbol common = projectedTypes.FirstOrDefault(candidate =>
+                effectiveTypes.All(type =>
+                    ProjectionTypeFitsDestination(type, candidate)));
+            if (common == null && projectedTypes.Count > 0)
+            {
+                this.context.ReportUnsupported(
+                    expression,
+                    "conditional/switch result arms have incompatible managed-reference projections.");
+            }
+
+            this.state.ManagedReferenceArrayProjectedCompositeType[expression] =
+                common;
+            return common;
         }
 
         private ITypeSymbol GetProjectedDelegateInvocationReturnType(
