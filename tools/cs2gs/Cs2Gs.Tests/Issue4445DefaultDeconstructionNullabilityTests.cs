@@ -38,6 +38,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var direct = default(T);
                 var alias = direct;
                 var branch = choose ? default(T) : alias;
+                var switched = choose switch { true => default(T), _ => replacement };
                 var (a, _) = (default(T), 0);
                 (var b, var c) = (default(T), default(T));
                 var ((d, e), f) = ((default(T), default(T)), default(T));
@@ -47,11 +48,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var ((wholeNestedA, wholeNestedB), wholeNestedC) =
                     default(((T, T), T));
                 var (castLeft, castRight) = ((T, T))(default(T), default(T));
+                var defaultPair = (default(T), default(T));
+                var (aliasLeft, aliasRight) = defaultPair;
                 var (methodLeft, methodRight) = NullablePair<T>();
 
                 Fill(ref direct, replacement);
                 Fill(ref alias, replacement);
                 Fill(ref branch, replacement);
+                Fill(ref switched, replacement);
                 Fill(ref a, replacement);
                 Fill(ref b, replacement);
                 Fill(ref c, replacement);
@@ -68,6 +72,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref wholeNestedC, replacement);
                 Fill(ref castLeft, replacement);
                 Fill(ref castRight, replacement);
+                Fill(ref aliasLeft, replacement);
+                Fill(ref aliasRight, replacement);
                 Fill(ref methodLeft, replacement);
                 Fill(ref methodRight, replacement);
 
@@ -219,10 +225,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
         foreach (string name in new[]
         {
-            "direct", "alias", "branch", "a", "b", "c", "d", "e", "f", "loop",
+            "direct", "alias", "branch", "switched", "a", "b", "c", "d", "e", "f", "loop",
             "nestedA", "nestedB", "nestedC", "wholeLeft", "wholeRight",
             "wholeNestedA", "wholeNestedB", "wholeNestedC",
-            "castLeft", "castRight", "loopLeft", "loopRight", "coalesced", "left", "right",
+            "castLeft", "castRight", "aliasLeft", "aliasRight",
+            "loopLeft", "loopRight", "coalesced", "left", "right",
         })
         {
             Assert.Matches($@"\b(let|var) {name} T\? =", printed);

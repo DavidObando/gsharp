@@ -493,7 +493,7 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax right)
         {
             left = Unwrap(left);
-            right = this.UnwrapTuplePreservingCasts(right);
+            right = this.ResolveStableTupleAlias(right);
 
             if (left.SyntaxTree == target.SyntaxTree
                 && left.Span.Contains(target.Span)
@@ -540,7 +540,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return right;
             }
 
-            right = this.UnwrapTuplePreservingCasts(right);
+            right = this.ResolveStableTupleAlias(right);
             if (designation.SyntaxTree == target.SyntaxTree
                 && designation.Span.Contains(target.Span)
                 && IsNullOrDefaultLiteral(right))
@@ -570,13 +570,41 @@ public sealed partial class CSharpToGSharpTranslator
             return null;
         }
 
+        private ExpressionSyntax ResolveStableTupleAlias(ExpressionSyntax expression)
+        {
+            var visited = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            expression = this.UnwrapTuplePreservingCasts(expression);
+            while (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
+                && visited.Add(local)
+                && !this.IsLocalReassigned(local)
+                && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+            {
+                expression = this.UnwrapTuplePreservingCasts(initializer);
+            }
+
+            return expression;
+        }
+
         private ExpressionSyntax UnwrapTuplePreservingCasts(ExpressionSyntax expression)
         {
             expression = Unwrap(expression);
-            while (expression is CastExpressionSyntax cast
-                && this.context.GetTypeInfo(cast).Type is { IsTupleType: true })
+            while (this.context.GetTypeInfo(expression).Type is { IsTupleType: true })
             {
-                expression = Unwrap(cast.Expression);
+                if (expression is CastExpressionSyntax cast)
+                {
+                    expression = Unwrap(cast.Expression);
+                    continue;
+                }
+
+                if (expression is PostfixUnaryExpressionSyntax suppression
+                    && suppression.IsKind(SyntaxKind.SuppressNullableWarningExpression))
+                {
+                    expression = Unwrap(suppression.Operand);
+                    continue;
+                }
+
+                break;
             }
 
             return expression;
