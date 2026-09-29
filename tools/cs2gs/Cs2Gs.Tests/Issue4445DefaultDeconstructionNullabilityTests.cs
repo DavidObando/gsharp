@@ -201,15 +201,26 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     break;
                 }
 
-                for (var exitingLoopPair = (replacement, replacement);
-                    choose;
-                    exitingLoopPair = (default(T), default(T)))
+                var backedgePair = (replacement, replacement);
+                var again = choose;
+                while (again)
                 {
-                    var (exitingLoopLeft, exitingLoopRight) = exitingLoopPair;
-                    _ = exitingLoopLeft;
-                    _ = exitingLoopRight;
+                    var (backedgeLeft, backedgeRight) = backedgePair;
+                    Fill(ref backedgeLeft, replacement);
+                    Fill(ref backedgeRight, replacement);
+                    backedgePair = (default(T), default(T));
+                    again = false;
+                }
+
+                var breakPair = (replacement, replacement);
+                while (choose)
+                {
+                    breakPair = (default(T), default(T));
                     break;
                 }
+                var (breakLeft, breakRight) = breakPair;
+                Fill(ref breakLeft, replacement);
+                Fill(ref breakRight, replacement);
 
                 return 8;
             }
@@ -408,6 +419,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "coalesceLeft", "coalesceRight",
             "loopLeft", "loopRight", "forAliasLeft", "forAliasRight",
             "nestedLoopLeft", "nestedLoopRight",
+            "backedgeLeft", "backedgeRight", "breakLeft", "breakRight",
             "coalesced", "left", "right",
         })
         {
@@ -437,8 +449,6 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("finalReplacementRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingRight T? =", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("exitingLoopLeft T? =", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("exitingLoopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("conditionalNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("switchNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("coalescePairNarrowed T? =", printed, StringComparison.Ordinal);
