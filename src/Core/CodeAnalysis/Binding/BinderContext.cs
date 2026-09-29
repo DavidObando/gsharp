@@ -774,11 +774,13 @@ internal sealed class BinderContext
             return;
         }
 
+        var narrowedType = NarrowedVariables[frameIndex][AccessPath.ForVariable(variable)];
         var access = new BackwardGotoNarrowingAccess(
             variable,
             location,
             memberName,
             kind,
+            narrowedType,
             targetType);
         foreach (var entry in BackwardGotoNarrowingStates)
         {
@@ -790,10 +792,10 @@ internal sealed class BinderContext
                 || (AssignmentNarrowingGenerations.TryGetValue(
                         variable,
                         out var assignmentGeneration)
-                    && state.TargetSnapshot.AssignmentGenerations.TryGetValue(
-                        variable,
-                        out var targetAssignmentGeneration)
-                    && assignmentGeneration > targetAssignmentGeneration))
+                    && (!state.TargetSnapshot.AssignmentGenerations.TryGetValue(
+                            variable,
+                            out var targetAssignmentGeneration)
+                        || assignmentGeneration > targetAssignmentGeneration)))
             {
                 continue;
             }

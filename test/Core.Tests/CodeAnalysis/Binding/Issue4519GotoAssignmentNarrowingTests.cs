@@ -382,6 +382,37 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_IncompatibleTypeTestNarrowing_ReportsMemberAccess()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                func Bark() string { return "woof" }
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    let sound = x.Bark()
+                    x = Cat{}
+                    if x is Cat { goto Again }
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("Bark", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_InvalidationPropagatesThroughForwardLabel()
     {
         var result = Evaluate("""
@@ -512,6 +543,30 @@ public class Issue4519GotoAssignmentNarrowingTests
                     }
                     return length
                 }
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void BackwardGoto_PostLabelAssignmentWithoutTargetGeneration_RemainsNarrowed()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = "safe"
+                var count = 0
+            Again:
+                x = "safe"
+                let length = x.Length
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return length
             }
 
             Console.WriteLine(Run())

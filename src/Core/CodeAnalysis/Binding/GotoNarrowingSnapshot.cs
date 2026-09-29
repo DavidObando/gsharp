@@ -115,6 +115,7 @@ internal sealed record BackwardGotoNarrowingAccess(
     TextLocation Location,
     string MemberName,
     BackwardGotoNarrowingUseKind Kind,
+    TypeSymbol RequiredType,
     TypeSymbol? TargetType = null);
 
 internal sealed class BackwardGotoNarrowingEdge

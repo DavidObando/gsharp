@@ -219,8 +219,8 @@ internal sealed partial class StatementBinder
             && target.NarrowingFrameIndices.TryGetValue(variable, out var targetFrame)
             && sourceFrame == targetFrame
             && (!source.AssignmentGenerations.TryGetValue(variable, out var sourceGeneration)
-                || !target.AssignmentGenerations.TryGetValue(variable, out var targetGeneration)
-                || sourceGeneration <= targetGeneration);
+                || (target.AssignmentGenerations.TryGetValue(variable, out var targetGeneration)
+                    && sourceGeneration <= targetGeneration));
 
     /// <summary>
     /// Issue #4285: syntactic (pre-binding) check for whether

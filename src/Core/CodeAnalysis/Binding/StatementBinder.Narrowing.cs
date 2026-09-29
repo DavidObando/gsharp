@@ -502,6 +502,14 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyAssignmentNarrowing(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
+        if (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
         if (statement is BoundExpressionStatement { Expression: BoundAssignmentExpression assign }
             && TryClassifyNonNullAssignment(assign, out var variable, out var underlying))
         {
@@ -598,7 +606,10 @@ internal sealed partial class StatementBinder
 
                 foreach (var access in edge.Accesses)
                 {
-                    if (!sourceSnapshot.NarrowedVariables.ContainsKey(access.Variable)
+                    if ((!sourceSnapshot.NarrowedVariables.TryGetValue(
+                            access.Variable,
+                            out var sourceType)
+                            || !Conversion.Classify(sourceType, access.RequiredType).IsImplicit)
                         && reported.Add(access))
                     {
                         switch (access.Kind)
