@@ -1421,6 +1421,8 @@ internal sealed partial class StatementBinder
         private readonly HashSet<AssignedField> assignedFields = new();
         private readonly HashSet<AssignedProperty> assignedProperties = new();
         private readonly Dictionary<VariableSymbol, List<BoundAssignmentExpression>> assignments = new();
+        private readonly Dictionary<VariableSymbol, BoundFunctionLiteralExpression> functionLiterals = new();
+        private readonly HashSet<BoundFunctionLiteralExpression> visitedFunctionLiterals = new();
 
         public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing)
         {
@@ -1457,23 +1459,47 @@ internal sealed partial class StatementBinder
 
         protected override void VisitIndirectCallExpression(BoundIndirectCallExpression node)
         {
-            var target = node.Target;
-            while (target is BoundConversionExpression conversion)
+            var target = UnwrapCallable(node.Target);
+            var literal = target as BoundFunctionLiteralExpression;
+            if (literal == null
+                && target is BoundVariableExpression variable)
             {
-                target = conversion.Expression;
+                functionLiterals.TryGetValue(variable.Variable, out literal);
             }
 
-            while (target is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
-            {
-                target = assertion.Operand;
-            }
-
-            if (target is BoundFunctionLiteralExpression { Body: { } body })
+            if (literal is { Body: { } body }
+                && visitedFunctionLiterals.Add(literal))
             {
                 VisitStatement(body);
             }
 
             base.VisitIndirectCallExpression(node);
+        }
+
+        protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
+        {
+            if (node.Initializer != null
+                && UnwrapCallable(node.Initializer) is BoundFunctionLiteralExpression literal)
+            {
+                functionLiterals[node.Variable] = literal;
+            }
+
+            base.VisitVariableDeclaration(node);
+        }
+
+        private static BoundExpression UnwrapCallable(BoundExpression expression)
+        {
+            while (expression is BoundConversionExpression conversion)
+            {
+                expression = conversion.Expression;
+            }
+
+            while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+            {
+                expression = assertion.Operand;
+            }
+
+            return expression;
         }
 
         protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
