@@ -2245,14 +2245,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ITypeSymbol candidateElementType = parameter.Type switch
-            {
-                IArrayTypeSymbol arrayType => arrayType.ElementType,
-                INamedTypeSymbol { TypeArguments: [ITypeSymbol element] } collection
-                    when IsSupportedParamsCollectionType(collection)
-                    => element,
-                _ => null,
-            };
+            ITypeSymbol candidateElementType = GetParamsElementType(parameter);
             if (candidateElementType == null
                 || argumentList.Arguments.IndexOf(argument) < parameter.Ordinal)
             {
@@ -2276,6 +2269,58 @@ public sealed partial class CSharpToGSharpTranslator
 
             elementType = candidateElementType;
             paramsParameter = parameter;
+            return true;
+        }
+
+        private static ITypeSymbol GetParamsElementType(IParameterSymbol parameter) =>
+            parameter?.IsParams == true
+                ? parameter.Type switch
+                {
+                    IArrayTypeSymbol arrayType => arrayType.ElementType,
+                    INamedTypeSymbol { TypeArguments: [ITypeSymbol element] } collection
+                        when IsSupportedParamsCollectionType(collection)
+                        => element,
+                    _ => null,
+                }
+                : null;
+
+        private bool TryGetCollectionInitializerArgumentTarget(
+            ExpressionSyntax value,
+            int index,
+            IMethodSymbol projectedMethod,
+            IMethodSymbol boundMethod,
+            out ITypeSymbol targetType,
+            out IParameterSymbol targetParameter)
+        {
+            targetType = null;
+            targetParameter = index < projectedMethod.Parameters.Length
+                ? projectedMethod.Parameters[index]
+                : projectedMethod.Parameters.LastOrDefault();
+            if (targetParameter == null
+                || (index >= projectedMethod.Parameters.Length
+                    && !targetParameter.IsParams))
+            {
+                return false;
+            }
+
+            targetType = targetParameter.Type;
+            IParameterSymbol boundParameter = index < boundMethod.Parameters.Length
+                ? boundMethod.Parameters[index]
+                : boundMethod.Parameters.LastOrDefault();
+            ITypeSymbol paramsElementType = GetParamsElementType(targetParameter);
+            ITypeSymbol sourceType = this.context.GetTypeInfo(value).Type;
+            bool directCollectionForm = sourceType != null
+                && boundParameter != null
+                && this.context.Compilation.ClassifyConversion(
+                    sourceType,
+                    boundParameter.Type).IsImplicit;
+            if (paramsElementType != null
+                && (index >= boundMethod.Parameters.Length
+                    || !directCollectionForm))
+            {
+                targetType = paramsElementType;
+            }
+
             return true;
         }
 
@@ -4104,8 +4149,9 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (ExpressionSyntax element in initializer.Expressions)
             {
-                IMethodSymbol addMethod =
+                IMethodSymbol boundAddMethod =
                     this.context.SemanticModel.GetCollectionInitializerSymbolInfo(element).Symbol as IMethodSymbol;
+                IMethodSymbol addMethod = boundAddMethod;
                 addMethod = constructedType == null || addMethod == null
                     ? addMethod
                     : this.GetProjectedMember(constructedType, addMethod)
@@ -4120,10 +4166,17 @@ public sealed partial class CSharpToGSharpTranslator
                 for (int i = 0; i < valueSyntaxes.Count; i++)
                 {
                     GExpression value = this.TranslateExpression(valueSyntaxes[i]);
-                    if (addMethod != null && addMethod.Parameters.Length == valueSyntaxes.Count)
+                    if (addMethod != null
+                        && this.TryGetCollectionInitializerArgumentTarget(
+                            valueSyntaxes[i],
+                            i,
+                            addMethod,
+                            boundAddMethod,
+                            out ITypeSymbol targetType,
+                            out IParameterSymbol targetParameter))
                     {
                         value = this.ForgiveInitializerElementValue(
-                            valueSyntaxes[i], value, addMethod.Parameters[i].Type, addMethod.Parameters[i]);
+                            valueSyntaxes[i], value, targetType, targetParameter);
                     }
 
                     addArguments.Add(value);
@@ -4236,20 +4289,35 @@ public sealed partial class CSharpToGSharpTranslator
                     // promotion is honored while an imported parameter's
                     // already-emitted contract cannot be widened by consumer
                     // taint.
-                    IMethodSymbol addMethod =
+                    IMethodSymbol boundAddMethod =
                         this.context.SemanticModel.GetCollectionInitializerSymbolInfo(complex).Symbol as IMethodSymbol;
+                    IMethodSymbol addMethod = boundAddMethod;
                     addMethod = constructedType == null || addMethod == null
                         ? addMethod
                         : this.GetProjectedMember(constructedType, addMethod) as IMethodSymbol
                             ?? addMethod;
                     GExpression keyValue = this.TranslateExpression(complex.Expressions[0]);
                     GExpression pairValue = this.TranslateExpression(complex.Expressions[1]);
-                    if (addMethod is { Parameters.Length: 2 })
+                    if (addMethod != null
+                        && this.TryGetCollectionInitializerArgumentTarget(
+                            complex.Expressions[0],
+                            0,
+                            addMethod,
+                            boundAddMethod,
+                            out ITypeSymbol keyTargetType,
+                            out IParameterSymbol keyTargetParameter)
+                        && this.TryGetCollectionInitializerArgumentTarget(
+                            complex.Expressions[1],
+                            1,
+                            addMethod,
+                            boundAddMethod,
+                            out ITypeSymbol valueTargetType,
+                            out IParameterSymbol valueTargetParameter))
                     {
                         keyValue = this.ForgiveInitializerElementValue(
-                            complex.Expressions[0], keyValue, addMethod.Parameters[0].Type, addMethod.Parameters[0]);
+                            complex.Expressions[0], keyValue, keyTargetType, keyTargetParameter);
                         pairValue = this.ForgiveInitializerElementValue(
-                            complex.Expressions[1], pairValue, addMethod.Parameters[1].Type, addMethod.Parameters[1]);
+                            complex.Expressions[1], pairValue, valueTargetType, valueTargetParameter);
                     }
 
                     elements.Add(new CollectionInitializerElement(keyValue, pairValue, indexed: false));
@@ -4259,17 +4327,25 @@ public sealed partial class CSharpToGSharpTranslator
                     // Bare element `e` → `Add(e)`. Same `Add`-overload resolution
                     // as the keyed shape above, keyed to the single value
                     // parameter.
-                    IMethodSymbol addMethod =
+                    IMethodSymbol boundAddMethod =
                         this.context.SemanticModel.GetCollectionInitializerSymbolInfo(element).Symbol as IMethodSymbol;
+                    IMethodSymbol addMethod = boundAddMethod;
                     addMethod = constructedType == null || addMethod == null
                         ? addMethod
                         : this.GetProjectedMember(constructedType, addMethod) as IMethodSymbol
                             ?? addMethod;
                     GExpression bareValue = this.TranslateExpression(element);
-                    if (addMethod is { Parameters.Length: 1 })
+                    if (addMethod != null
+                        && this.TryGetCollectionInitializerArgumentTarget(
+                            element,
+                            0,
+                            addMethod,
+                            boundAddMethod,
+                            out ITypeSymbol targetType,
+                            out IParameterSymbol targetParameter))
                     {
                         bareValue = this.ForgiveInitializerElementValue(
-                            element, bareValue, addMethod.Parameters[0].Type, addMethod.Parameters[0]);
+                            element, bareValue, targetType, targetParameter);
                     }
 
                     elements.Add(new CollectionInitializerElement(bareValue));
@@ -5232,30 +5308,15 @@ public sealed partial class CSharpToGSharpTranslator
                             : new[] { element };
                         for (int i = 0; addMethod != null && i < values.Count; i++)
                         {
-                            IParameterSymbol parameter =
-                                i < addMethod.Parameters.Length
-                                    ? addMethod.Parameters[i]
-                                    : addMethod.Parameters.LastOrDefault();
-                            if (parameter == null
-                                || (i >= addMethod.Parameters.Length
-                                    && !parameter.IsParams))
+                            if (!this.TryGetCollectionInitializerArgumentTarget(
+                                    values[i],
+                                    i,
+                                    addMethod,
+                                    boundAddMethod,
+                                    out ITypeSymbol parameterType,
+                                    out _))
                             {
                                 break;
-                            }
-
-                            ITypeSymbol parameterType = parameter.Type;
-                            IParameterSymbol boundParameter =
-                                i < boundAddMethod.Parameters.Length
-                                    ? boundAddMethod.Parameters[i]
-                                    : boundAddMethod.Parameters.LastOrDefault();
-                            if (parameter.IsParams
-                                && parameterType is IArrayTypeSymbol paramsArray
-                                && (i >= boundAddMethod.Parameters.Length
-                                    || !SymbolEqualityComparer.Default.Equals(
-                                        this.context.GetTypeInfo(values[i]).Type,
-                                        boundParameter?.Type)))
-                            {
-                                parameterType = paramsArray.ElementType;
                             }
 
                             RecordWidenedArguments(values[i], parameterType);
