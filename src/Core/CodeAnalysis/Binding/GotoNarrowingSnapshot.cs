@@ -42,6 +42,7 @@ internal sealed class GotoNarrowingSnapshot
         IReadOnlyDictionary<VariableSymbol, int> assignmentGenerations,
         ImmutableArray<FinallyClauseSyntax> activeFinallyClauses,
         ImmutableArray<BoundStatement> activeCleanupStatements,
+        ImmutableArray<GotoCleanupRegion> activeCleanupRegions,
         ImmutableHashSet<string> definedLabels)
     {
         this.narrowedVariables = new Dictionary<AccessPath, TypeSymbol>(narrowedVariables);
@@ -52,6 +53,7 @@ internal sealed class GotoNarrowingSnapshot
         AssignmentGenerations = new ReadOnlyDictionary<VariableSymbol, int>(this.assignmentGenerations);
         ActiveFinallyClauses = activeFinallyClauses;
         ActiveCleanupStatements = activeCleanupStatements;
+        ActiveCleanupRegions = activeCleanupRegions;
         DefinedLabels = definedLabels;
     }
 
@@ -65,6 +67,8 @@ internal sealed class GotoNarrowingSnapshot
 
     public ImmutableArray<BoundStatement> ActiveCleanupStatements { get; }
 
+    public ImmutableArray<GotoCleanupRegion> ActiveCleanupRegions { get; }
+
     public ImmutableHashSet<string> DefinedLabels { get; }
 
     public GotoNarrowingSnapshot Clone()
@@ -74,6 +78,7 @@ internal sealed class GotoNarrowingSnapshot
             AssignmentGenerations,
             ActiveFinallyClauses,
             ActiveCleanupStatements,
+            ActiveCleanupRegions,
             DefinedLabels);
 
     public void RemoveNarrowing(AccessPath path)

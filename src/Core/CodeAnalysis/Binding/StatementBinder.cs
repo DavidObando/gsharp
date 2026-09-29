@@ -112,6 +112,7 @@ internal sealed partial class StatementBinder
     private readonly Stack<SyntaxNode> exceptionHandlerRegions = new();
     private readonly Stack<FinallyClauseSyntax> activeFinallyClauses = new();
     private readonly Stack<BoundStatement> activeCleanupStatements = new();
+    private readonly Stack<GotoCleanupRegion> activeCleanupRegions = new();
     private readonly Dictionary<FinallyClauseSyntax, BoundStatement> boundFinallyBlocks = new();
     private readonly Dictionary<BoundStatement, FinallyFlowSummary> finallyFlowSummaries = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
@@ -935,12 +936,14 @@ internal sealed partial class StatementBinder
     private T BindWithinSynthesizedCleanup<T>(BoundStatement cleanup, Func<T> bind)
     {
         activeCleanupStatements.Push(cleanup);
+        activeCleanupRegions.Push(new GotoCleanupRegion(null, cleanup));
         try
         {
             return bind();
         }
         finally
         {
+            activeCleanupRegions.Pop();
             activeCleanupStatements.Pop();
         }
     }

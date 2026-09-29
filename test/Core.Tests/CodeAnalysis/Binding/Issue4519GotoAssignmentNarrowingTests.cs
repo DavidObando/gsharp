@@ -38,6 +38,99 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_GenericInterfaceMethodDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            interface Mapper {
+                func Map[T](value T) T;
+            }
+            class First : Mapper {
+                func Map[U](value U) U -> value
+            }
+            class Second : Mapper {
+                func Map[V](value V) V -> value
+            }
+
+            func Run() string {
+                var x Mapper = First{}
+                var count = 0
+                if x is First {
+                Again:
+                    let value = x.Map("safe")
+                    if count == 0 {
+                        count++
+                        x = Second{}
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("safe", result.Value);
+    }
+
+    [Fact]
+    public void ForwardGoto_NestedDeferRunsBeforeOuterFinally()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                try {
+                    {
+                        defer clear()
+                        goto Done
+                    }
+                }
+                finally {
+                    x = "safe"
+                }
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_OuterFinallyRunsAfterNestedDefer()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                let restore = func() { x = "safe" }
+                try {
+                    {
+                        defer restore()
+                        goto Done
+                    }
+                }
+                finally {
+                    x = nil
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void DirectFallthroughAssignment_RemainsNarrowed()
     {
         AssertRuns("""
@@ -623,6 +716,43 @@ public class Issue4519GotoAssignmentNarrowingTests
 
         Assert.Empty(result.Diagnostics);
         Assert.Equal(2, result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_ConstructedGenericInterfaceIndexerDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            interface Values[T] {
+                prop this[index int32] T { get; }
+            }
+            class Dog : Values[string] {
+                prop this[index int32] string -> "dog"
+            }
+            class Cat : Values[string] {
+                prop this[index int32] string -> "cat"
+            }
+
+            func Run() string {
+                var x Values[string] = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x[0]
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("cat", result.Value);
     }
 
     [Fact]

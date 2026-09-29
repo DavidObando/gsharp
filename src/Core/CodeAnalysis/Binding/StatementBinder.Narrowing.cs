@@ -740,39 +740,43 @@ internal sealed partial class StatementBinder
         HashSet<FinallyClauseSyntax> activeFinallySet,
         HashSet<BoundStatement> activeCleanupSet)
     {
-        foreach (var finallyClause in snapshot.ActiveFinallyClauses)
+        foreach (var region in snapshot.ActiveCleanupRegions)
         {
-            if (activeFinallySet.Contains(finallyClause)
-                || !boundFinallyBlocks.TryGetValue(finallyClause, out var finallyBlock))
+            FinallyFlowSummary summary;
+            if (region.FinallyClause is { } finallyClause)
+            {
+                if (activeFinallySet.Contains(finallyClause)
+                    || !boundFinallyBlocks.TryGetValue(finallyClause, out var finallyBlock))
+                {
+                    continue;
+                }
+
+                summary = GetFinallyFlowSummary(finallyClause, finallyBlock);
+            }
+            else if (region.CleanupStatement is { } cleanup)
+            {
+                if (activeCleanupSet.Contains(cleanup))
+                {
+                    continue;
+                }
+
+                if (finallyFlowSummaries.TryGetValue(cleanup, out var cachedSummary))
+                {
+                    summary = cachedSummary;
+                }
+                else
+                {
+                    var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
+                    mutations.Visit(cleanup);
+                    summary = new FinallyFlowSummary(
+                        mutations,
+                        ComputeBranchFallthroughNonNull(cleanup, entry: null));
+                    finallyFlowSummaries.Add(cleanup, summary);
+                }
+            }
+            else
             {
                 continue;
-            }
-
-            var summary = GetFinallyFlowSummary(finallyClause, finallyBlock);
-
-            if (summary.NonNullOnNormalExit == null)
-            {
-                return false;
-            }
-
-            ApplyFlowSummary(snapshot, summary);
-        }
-
-        foreach (var cleanup in snapshot.ActiveCleanupStatements)
-        {
-            if (activeCleanupSet.Contains(cleanup))
-            {
-                continue;
-            }
-
-            if (!finallyFlowSummaries.TryGetValue(cleanup, out var summary))
-            {
-                var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
-                mutations.Visit(cleanup);
-                summary = new FinallyFlowSummary(
-                    mutations,
-                    ComputeBranchFallthroughNonNull(cleanup, entry: null));
-                finallyFlowSummaries.Add(cleanup, summary);
             }
 
             if (summary.NonNullOnNormalExit == null)

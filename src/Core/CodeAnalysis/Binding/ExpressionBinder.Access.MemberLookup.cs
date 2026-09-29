@@ -256,8 +256,13 @@ internal sealed partial class ExpressionBinder
 
         for (var i = 0; i < candidate.Parameters.Length; i++)
         {
+            var typeParameterMap = candidate.TypeParameters
+                .Zip(selected.TypeParameters)
+                .ToDictionary(pair => pair.First, pair => (TypeSymbol)pair.Second);
             if (candidate.Parameters[i].RefKind != selected.Parameters[i].RefKind
-                || !Equals(candidate.Parameters[i].Type, selected.Parameters[i].Type))
+                || !Equals(
+                    StructSymbol.SubstituteTypeParameters(candidate.Parameters[i].Type, typeParameterMap),
+                    selected.Parameters[i].Type))
             {
                 return false;
             }
@@ -1956,8 +1961,9 @@ internal sealed partial class ExpressionBinder
                 {
                     binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath.Root, targetLocation);
                     target = DeclaredReceiver(targetPath.Root, target.Syntax);
-                    readIndexer = declaredIndexer;
-                    readView = target.Type;
+                    readIndexer = declaredIndexer.Indexer;
+                    readSubstitution = declaredIndexer.Substitution;
+                    readView = declaredIndexer.View ?? target.Type;
                     TrackBackwardGotoIndexUse(target, targetLocation);
                 }
 
@@ -1987,29 +1993,23 @@ internal sealed partial class ExpressionBinder
         return new BoundErrorExpression(null);
     }
 
-    private static PropertySymbol? FindDeclaredIndexer(TypeSymbol declaredType, PropertySymbol indexer)
+    private VisibleUserIndexer? FindDeclaredIndexer(TypeSymbol declaredType, PropertySymbol indexer)
     {
         declaredType = declaredType is NullableTypeSymbol nullable
             ? nullable.UnderlyingType
             : declaredType;
-        IEnumerable<PropertySymbol> candidates = declaredType switch
-        {
-            StructSymbol type => type.GetHierarchy().SelectMany(current => current.Properties),
-            InterfaceSymbol type => type.SelfAndAllBaseInterfaces().SelectMany(current => current.Properties),
-            _ => Enumerable.Empty<PropertySymbol>(),
-        };
-
-        var candidateArray = candidates.ToArray();
+        var candidates = GetVisibleUserIndexers(declaredType);
         var overridden = indexer;
         while (overridden != null)
         {
-            var exact = candidateArray.FirstOrDefault(candidate =>
-                ReferenceEquals(candidate, overridden)
-                || (overridden.Declaration != null
-                    && ReferenceEquals(candidate.Declaration, overridden.Declaration)));
-            if (exact != null)
+            foreach (var candidate in candidates)
             {
-                return exact;
+                if (ReferenceEquals(candidate.Indexer, overridden)
+                || (overridden.Declaration != null
+                    && ReferenceEquals(candidate.Indexer.Declaration, overridden.Declaration)))
+                {
+                return candidate;
+                }
             }
 
             overridden = overridden.OverriddenProperty;
@@ -2020,14 +2020,17 @@ internal sealed partial class ExpressionBinder
             return null;
         }
 
-        var interfaceMatches = candidateArray
-            .Where(candidate => HasSameIndexerSignature(candidate, indexer))
+        var interfaceMatches = candidates
+            .Where(candidate => HasSameIndexerSignature(candidate.Indexer, indexer, candidate.Substitution))
             .Take(2)
             .ToArray();
         return interfaceMatches.Length == 1 ? interfaceMatches[0] : null;
     }
 
-    private static bool HasSameIndexerSignature(PropertySymbol candidate, PropertySymbol selected)
+    private bool HasSameIndexerSignature(
+        PropertySymbol candidate,
+        PropertySymbol selected,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? substitution)
     {
         if (candidate.Parameters.Length != selected.Parameters.Length)
         {
@@ -2037,7 +2040,9 @@ internal sealed partial class ExpressionBinder
         for (var i = 0; i < candidate.Parameters.Length; i++)
         {
             if (candidate.Parameters[i].RefKind != selected.Parameters[i].RefKind
-                || !Equals(candidate.Parameters[i].Type, selected.Parameters[i].Type))
+                || !Equals(
+                    SubstituteIndexerType(candidate.Parameters[i].Type, substitution),
+                    selected.Parameters[i].Type))
             {
                 return false;
             }

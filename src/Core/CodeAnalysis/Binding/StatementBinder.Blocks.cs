@@ -446,12 +446,14 @@ internal sealed partial class StatementBinder
         }
 
         activeFinallyClauses.Push(finallyClause);
+        activeCleanupRegions.Push(new GotoCleanupRegion(finallyClause, null));
         try
         {
             return bind();
         }
         finally
         {
+            activeCleanupRegions.Pop();
             activeFinallyClauses.Pop();
         }
     }
@@ -723,9 +725,11 @@ internal sealed partial class StatementBinder
         var saved = exceptionHandlerRegions.ToArray();
         var savedFinallyClauses = activeFinallyClauses.ToArray();
         var savedCleanupStatements = activeCleanupStatements.ToArray();
+        var savedCleanupRegions = activeCleanupRegions.ToArray();
         exceptionHandlerRegions.Clear();
         activeFinallyClauses.Clear();
         activeCleanupStatements.Clear();
+        activeCleanupRegions.Clear();
         try
         {
             return bind();
@@ -735,6 +739,7 @@ internal sealed partial class StatementBinder
             exceptionHandlerRegions.Clear();
             activeFinallyClauses.Clear();
             activeCleanupStatements.Clear();
+            activeCleanupRegions.Clear();
 
             // Stack.ToArray() yields top-first; push back in reverse to restore.
             for (var i = saved.Length - 1; i >= 0; i--)
@@ -750,6 +755,11 @@ internal sealed partial class StatementBinder
             for (var i = savedCleanupStatements.Length - 1; i >= 0; i--)
             {
                 activeCleanupStatements.Push(savedCleanupStatements[i]);
+            }
+
+            for (var i = savedCleanupRegions.Length - 1; i >= 0; i--)
+            {
+                activeCleanupRegions.Push(savedCleanupRegions[i]);
             }
         }
     }

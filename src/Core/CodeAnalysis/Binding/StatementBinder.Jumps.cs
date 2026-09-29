@@ -150,6 +150,7 @@ internal sealed partial class StatementBinder
         boundFinallyBlocks.Clear();
         finallyFlowSummaries.Clear();
         activeCleanupStatements.Clear();
+        activeCleanupRegions.Clear();
         userGotoHandlerRegions.Clear();
         userLabelHandlerRegions.Clear();
     }
@@ -177,6 +178,7 @@ internal sealed partial class StatementBinder
             binderCtx.AssignmentNarrowingGenerations,
             activeFinallyClauses.ToImmutableArray(),
             activeCleanupStatements.ToImmutableArray(),
+            activeCleanupRegions.ToImmutableArray(),
             binderCtx.DefinedUserLabels.ToImmutableHashSet());
     }
 
@@ -389,6 +391,7 @@ internal sealed partial class StatementBinder
         var finallyFlowSummariesSnapshot = finallyFlowSummaries.ToArray();
         var activeFinallyClausesSnapshot = activeFinallyClauses.ToArray();
         var activeCleanupStatementsSnapshot = activeCleanupStatements.ToArray();
+        var activeCleanupRegionsSnapshot = activeCleanupRegions.ToArray();
         var syntheticLocalCounter = binderCtx.SyntheticLocalCounter;
 
         static void RestoreDictionary<TKey, TValue>(
@@ -488,6 +491,12 @@ internal sealed partial class StatementBinder
         for (var i = activeCleanupStatementsSnapshot.Length - 1; i >= 0; i--)
         {
             activeCleanupStatements.Push(activeCleanupStatementsSnapshot[i]);
+        }
+
+        activeCleanupRegions.Clear();
+        for (var i = activeCleanupRegionsSnapshot.Length - 1; i >= 0; i--)
+        {
+            activeCleanupRegions.Push(activeCleanupRegionsSnapshot[i]);
         }
 
         binderCtx.SyntheticLocalCounter = syntheticLocalCounter;
