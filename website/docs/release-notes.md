@@ -273,6 +273,19 @@ Before moving an application to a different compiler version, pin the intended S
   - **What:** nullable-oblivious C# can pass a possible null to `list.Add(x)`, `items.Append(x)`, a delegate `Invoke(x)`, `dict[k] = v`, a lambda returning into `Func<..., TResult>`, an array element (`new[] { a, b }`, `arr[i] = v`), a collection initializer or expression element, or an iterator `yield`, and the null is stored. cs2gs keeps its fail-fast policy and asserts the value, so the migrated code throws where the C# ran.
   - **Where:** each such site produces a `CS2GS-GENERIC-STORE-BRIDGE` line in the app's `translate.log`. The line gives the location, the kind of slot (inferred or explicit method type argument, constructed generic member, delegate argument or result, type-parameter variable assignment or tuple element, array element, collection element, iterator element), the target, the destination slot's nullability, whether the result depends on that slot (using the containing type for constructor results), and the value. Embedded analyzer-test snippets retain this diagnostic identity and each distinct inner source span, including identical messages across namespace units. Nested tuple paths retain declared type-parameter classification and the actual leaf destination type, including nullable tuple envelopes at every nesting level, expanded `params` elements, block-bodied/async lambda delegate return contracts, and substituted method type arguments. Synthesized tuple-key leaf suffixes survive value truncation. Whole-array or whole-collection writes to `params` parameter variables and direct carriers passed to `params` indexers are not expanded element stores. stderr gets one count per app.
   - **Effect:** generated code is unchanged. Explicit C# `value!` assertions are also reported through null-preserving `as`, `??`, `?.`, checked/unchecked wrappers, and value-producing `=`/`??=` assignments feeding generic arguments, elements, declarations, or method/delegate results, even when the destination accepts null, including nullable span and builder collection expressions. Ordinary assignment bridges also resolve the outer generic store even when their immediate target is concrete. Distinct store metadata and synthesized tuple-key member paths remain separate at a shared source span; exact speculative repeats of the same store and leaf still report once. A bridge whose target cannot be resolved is reported as `unknown-target`, so the list over-approximates rather than missing a site.
+- **`go2gs analyze` now provides the M0 typed Go inventory** (ADR-0191,
+  issue [#4333](https://github.com/DavidObando/gsharp/issues/4333)). The
+  separately versioned Go helper pins `golang.org/x/tools/go/packages` and
+  records schema-v1 package/test variants, module and build provenance,
+  source bytes/spans, stable typed identities, exact constants, scopes,
+  selections, calls, method sets, generic instances, embeds, generators,
+  dependencies, diagnostics, and blockers. Analysis is offline and
+  fail-closed: automatic toolchain downloads, ambient workspaces,
+  `GOPACKAGESDRIVER`, generators, target binaries, and network module
+  resolution are disabled. Exit zero means the requested inventory completed,
+  while `migrationReady` remains independent and false in M0. The pinned
+  cliamp profile reports an actionable mismatch rather than substituting the
+  installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values
