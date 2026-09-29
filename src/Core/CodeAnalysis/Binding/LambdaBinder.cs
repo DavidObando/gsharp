@@ -81,6 +81,7 @@ internal sealed class LambdaBinder
     private readonly Func<FunctionSymbol?> getCurrentFunction;
     private readonly Action<FunctionSymbol?> setCurrentFunction;
     private readonly Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes;
+    private readonly Action reportUnsafeBackwardGotoNarrowings;
     private readonly Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression;
     private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList;
 
@@ -172,6 +173,9 @@ internal sealed class LambdaBinder
     /// <param name="bindParameterAttributes">Callback that binds user
     /// annotations on a lambda parameter using the declaration binder's
     /// standard parameter-target validation.</param>
+    /// <param name="reportUnsafeBackwardGotoNarrowings">Callback that reports
+    /// deferred backward-goto narrowing diagnostics before nested-frame state
+    /// is restored.</param>
     /// <param name="bindLambdaBodyExpression">ADR-0074 / issue #714:
     /// optional callback that binds an arrow-lambda body expression, with the
     /// contextual return type available for nested lambda bodies.
@@ -205,6 +209,7 @@ internal sealed class LambdaBinder
         Func<FunctionSymbol?> getCurrentFunction,
         Action<FunctionSymbol?> setCurrentFunction,
         Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes,
+        Action reportUnsafeBackwardGotoNarrowings,
         Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable,
         Func<SeparatedSyntaxList<SyntaxToken>, TextLocation, TextLocation, VariableSymbol, ImmutableArray<BoundStatement>> bindTupleDestructuringPrelude,
         Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression = null,
@@ -223,6 +228,8 @@ internal sealed class LambdaBinder
         this.getCurrentFunction = getCurrentFunction ?? throw new ArgumentNullException(nameof(getCurrentFunction));
         this.setCurrentFunction = setCurrentFunction ?? throw new ArgumentNullException(nameof(setCurrentFunction));
         this.bindParameterAttributes = bindParameterAttributes ?? throw new ArgumentNullException(nameof(bindParameterAttributes));
+        this.reportUnsafeBackwardGotoNarrowings = reportUnsafeBackwardGotoNarrowings
+            ?? throw new ArgumentNullException(nameof(reportUnsafeBackwardGotoNarrowings));
         this.bindLambdaBodyExpression = bindLambdaBodyExpression;
         this.bindTypeParameterList = bindTypeParameterList;
     }
@@ -2325,6 +2332,7 @@ internal sealed class LambdaBinder
         binderCtx.AssignmentNarrowingGenerations.Clear();
         binderCtx.AssignmentNarrowingGeneration = 0;
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
+        binderCtx.BackwardGotoNarrowingStates.Clear();
         binderCtx.LoopStack.Clear();
         binderCtx.CurrentFallthroughTarget = null;
         binderCtx.CurrentFallthroughAnchor = null;
@@ -2344,6 +2352,8 @@ internal sealed class LambdaBinder
     /// </summary>
     private void FinalizeNestedFrameLabels()
     {
+        reportUnsafeBackwardGotoNarrowings();
+
         foreach (var entry in binderCtx.UnresolvedGotoLabels)
         {
             Diagnostics.ReportUndefinedGotoLabel(entry.Value, entry.Key);
@@ -2397,6 +2407,12 @@ internal sealed class LambdaBinder
         {
             binderCtx.PendingGotoNarrowingSnapshots[kvp.Key] =
                 kvp.Value.Select(snapshot => snapshot.Clone()).ToList();
+        }
+
+        binderCtx.BackwardGotoNarrowingStates.Clear();
+        foreach (var kvp in saved.BackwardGotoNarrowingStates)
+        {
+            binderCtx.BackwardGotoNarrowingStates[kvp.Key] = kvp.Value.Clone();
         }
 
         // BinderContext.LoopStack.ToArray() orders elements top-of-stack
@@ -3046,6 +3062,9 @@ internal sealed class LambdaBinder
             PendingGotoNarrowingSnapshots = ctx.PendingGotoNarrowingSnapshots.ToDictionary(
                 entry => entry.Key,
                 entry => entry.Value.Select(snapshot => snapshot.Clone()).ToList());
+            BackwardGotoNarrowingStates = ctx.BackwardGotoNarrowingStates.ToDictionary(
+                entry => entry.Key,
+                entry => entry.Value.Clone());
             LoopStack = ctx.LoopStack.ToArray();
             FallthroughTarget = ctx.CurrentFallthroughTarget;
             FallthroughAnchor = ctx.CurrentFallthroughAnchor;
@@ -3065,6 +3084,8 @@ internal sealed class LambdaBinder
         public int AssignmentNarrowingGeneration { get; }
 
         public Dictionary<string, List<GotoNarrowingSnapshot>> PendingGotoNarrowingSnapshots { get; }
+
+        public Dictionary<string, BackwardGotoNarrowingState> BackwardGotoNarrowingStates { get; }
 
         public (string? LabelName, BoundLabel BreakLabel, BoundLabel? ContinueLabel)[] LoopStack { get; }
 

@@ -76,6 +76,197 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsNullableReceiver()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again:
+                let length = x.Length
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsNullableMethodReceiver()
+    {
+        var result = Evaluate("""
+            func Run() string {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again:
+                let value = x.ToString()
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return value
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("ToString", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_AfterPostLabelNonNullAssignment_RemainsNarrowed()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again: {
+                    x = "safe"
+                    let length = x.Length
+                    if count == 0 {
+                        count++
+                        x = nil
+                        goto Again
+                    }
+                    return length
+                }
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void BackwardGoto_ThroughFinallyMutation_ReportsNullableReceiver()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again:
+                let length = x.Length
+                if count == 0 {
+                    count++
+                    try {
+                        goto Again
+                    } finally {
+                        x = nil
+                    }
+                }
+                return length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_ThroughNonNullFinallyAssignment_RemainsNarrowed()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again:
+                let length = x.Length
+                if count == 0 {
+                    count++
+                    try {
+                        x = nil
+                        goto Again
+                    } finally {
+                        x = "safe"
+                    }
+                }
+                return length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void BackwardGoto_ThroughNonCompletingFinally_DoesNotInvalidate()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again:
+                let length = x.Length
+                if count == 0 {
+                    count++
+                    try {
+                        goto Again
+                    } finally {
+                        return 0
+                    }
+                }
+                return length
+            }
+
+            Console.WriteLine(Run())
+            """, "0");
+    }
+
+    [Fact]
+    public void NestedFunction_BackwardGotoUsesIndependentJoinState()
+    {
+        var result = Evaluate("""
+            func Outer() int32 {
+                var inner = func() int32 {
+                    var x string? = nil
+                    x = "safe"
+                    var count = 0
+                Again:
+                    let length = x.Length
+                    if count == 0 {
+                        count++
+                        x = nil
+                        goto Again
+                    }
+                    return length
+                }
+                return inner()
+            }
+
+            Outer()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void MultipleForwardBranches_BypassingDifferentAssignments_RejectBothReads()
     {
         const string source = """

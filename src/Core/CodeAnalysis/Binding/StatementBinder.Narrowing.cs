@@ -580,6 +580,40 @@ internal sealed partial class StatementBinder
         }
     }
 
+    internal void ReportUnsafeBackwardGotoNarrowings()
+    {
+        var reported = new HashSet<BackwardGotoNarrowingAccess>();
+        foreach (var state in binderCtx.BackwardGotoNarrowingStates.Values)
+        {
+            var targetFinallySet = new HashSet<FinallyClauseSyntax>(
+                state.TargetSnapshot.ActiveFinallyClauses);
+            foreach (var edge in state.Edges)
+            {
+                var sourceSnapshot = edge.SourceSnapshot.Clone();
+                if (!ApplyExitedFinallyEffects(sourceSnapshot, targetFinallySet))
+                {
+                    continue;
+                }
+
+                foreach (var access in edge.Accesses)
+                {
+                    if (!sourceSnapshot.NarrowedVariables.ContainsKey(access.Variable)
+                        && reported.Add(access))
+                    {
+                        if (access.IsInvocation)
+                        {
+                            Diagnostics.ReportUnableToFindFunction(access.Location, access.MemberName);
+                        }
+                        else
+                        {
+                            Diagnostics.ReportUnableToFindMember(access.Location, access.MemberName);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     private bool ApplyExitedFinallyEffects(
         GotoNarrowingSnapshot snapshot,
         HashSet<FinallyClauseSyntax> activeFinallySet)

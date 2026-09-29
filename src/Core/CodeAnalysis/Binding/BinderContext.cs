@@ -312,6 +312,13 @@ internal sealed class BinderContext
         = new Dictionary<string, List<GotoNarrowingSnapshot>>();
 
     /// <summary>
+    /// Gets the label-entry narrowing state, narrowing-dependent member reads,
+    /// and incoming snapshots for backward user gotos.
+    /// </summary>
+    public Dictionary<string, BackwardGotoNarrowingState> BackwardGotoNarrowingStates { get; }
+        = new Dictionary<string, BackwardGotoNarrowingState>();
+
+    /// <summary>
     /// Gets or sets a value indicating whether the CURRENT function/lambda/
     /// local-function body contains any user-written <c>goto</c> statement or non-loop
     /// <c>label:</c> declaration (issue #4285), computed syntactically,

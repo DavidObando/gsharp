@@ -41,25 +41,13 @@ internal sealed partial class StatementBinder
                 binderCtx.PendingGotoNarrowingSnapshots[labelName] = snapshots;
             }
 
-            var narrowedAtSource = new Dictionary<VariableSymbol, TypeSymbol>();
-
-            // Frames are ordered outermost to innermost, so overwriting records
-            // the currently effective narrowing for a repeated root.
-            for (var i = 0; i < binderCtx.NarrowedVariables.Count; i++)
-            {
-                var frame = binderCtx.NarrowedVariables[i];
-                foreach (var entry in frame)
-                {
-                    if (!entry.Key.HasMembers)
-                    {
-                        narrowedAtSource[entry.Key.Root] = entry.Value;
-                    }
-                }
-            }
-
-            snapshots.Add(new GotoNarrowingSnapshot(
-                narrowedAtSource,
-                activeFinallyClauses.ToImmutableArray()));
+            snapshots.Add(CaptureGotoNarrowingSnapshot());
+        }
+        else if (binderCtx.BackwardGotoNarrowingStates.TryGetValue(labelName, out var backwardState))
+        {
+            backwardState.Edges.Add(new BackwardGotoNarrowingEdge(
+                CaptureGotoNarrowingSnapshot(),
+                backwardState.Accesses.ToImmutableArray()));
         }
 
         var label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location);
@@ -109,6 +97,9 @@ internal sealed partial class StatementBinder
 
         userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray();
         InvalidateAssignmentNarrowingsBypassedByGoto(labelName);
+        binderCtx.BackwardGotoNarrowingStates[labelName] = new BackwardGotoNarrowingState(
+            CaptureGotoNarrowingSnapshot(),
+            binderCtx.AssignmentNarrowingGeneration);
         binderCtx.UnresolvedGotoLabels.Remove(labelName);
         if (!binderCtx.UserLabels.TryGetValue(labelName, out var label))
         {
@@ -128,6 +119,8 @@ internal sealed partial class StatementBinder
     /// </summary>
     internal void FinalizeUserLabels()
     {
+        ReportUnsafeBackwardGotoNarrowings();
+
         foreach (var entry in binderCtx.UnresolvedGotoLabels)
         {
             Diagnostics.ReportUndefinedGotoLabel(entry.Value, entry.Key);
@@ -147,10 +140,34 @@ internal sealed partial class StatementBinder
         binderCtx.AssignmentNarrowingGenerations.Clear();
         binderCtx.AssignmentNarrowingGeneration = 0;
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
+        binderCtx.BackwardGotoNarrowingStates.Clear();
         boundFinallyBlocks.Clear();
         finallyFlowSummaries.Clear();
         userGotoHandlerRegions.Clear();
         userLabelHandlerRegions.Clear();
+    }
+
+    private GotoNarrowingSnapshot CaptureGotoNarrowingSnapshot()
+    {
+        var narrowedAtSource = new Dictionary<VariableSymbol, TypeSymbol>();
+
+        // Frames are ordered outermost to innermost, so overwriting records
+        // the currently effective narrowing for a repeated root.
+        for (var i = 0; i < binderCtx.NarrowedVariables.Count; i++)
+        {
+            var frame = binderCtx.NarrowedVariables[i];
+            foreach (var entry in frame)
+            {
+                if (!entry.Key.HasMembers)
+                {
+                    narrowedAtSource[entry.Key.Root] = entry.Value;
+                }
+            }
+        }
+
+        return new GotoNarrowingSnapshot(
+            narrowedAtSource,
+            activeFinallyClauses.ToImmutableArray());
     }
 
     /// <summary>
@@ -304,6 +321,9 @@ internal sealed partial class StatementBinder
         var pendingGotoNarrowingSnapshots = binderCtx.PendingGotoNarrowingSnapshots.ToDictionary(
             entry => entry.Key,
             entry => entry.Value.Select(snapshot => snapshot.Clone()).ToList());
+        var backwardGotoNarrowingStates = binderCtx.BackwardGotoNarrowingStates.ToDictionary(
+            entry => entry.Key,
+            entry => entry.Value.Clone());
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
         var boundFinallyBlocksSnapshot = boundFinallyBlocks.ToArray();
         var finallyFlowSummariesSnapshot = finallyFlowSummaries.ToArray();
@@ -381,6 +401,12 @@ internal sealed partial class StatementBinder
             binderCtx.PendingGotoNarrowingSnapshots.Add(
                 entry.Key,
                 entry.Value);
+        }
+
+        binderCtx.BackwardGotoNarrowingStates.Clear();
+        foreach (var entry in backwardGotoNarrowingStates)
+        {
+            binderCtx.BackwardGotoNarrowingStates.Add(entry.Key, entry.Value);
         }
 
         userGotoHandlerRegions.Clear();

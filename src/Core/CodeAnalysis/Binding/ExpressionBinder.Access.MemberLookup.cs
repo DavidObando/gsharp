@@ -157,12 +157,62 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax rightPart,
         ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
-        => BindAccessorStepAfterPlatformReceiverCheck(
+    {
+        TrackBackwardGotoNarrowingAccess(receiver, rightPart);
+        return BindAccessorStepAfterPlatformReceiverCheck(
             CheckPlatformReceiver(receiver, receiverSyntax?.Location ?? rightPart.Location),
             classSymbol == null ? null : WithFamilyAccess(classSymbol),
             rightPart,
             receiverSyntax,
             receiverStart);
+    }
+
+    private void TrackBackwardGotoNarrowingAccess(
+        BoundExpression? receiver,
+        ExpressionSyntax rightPart)
+    {
+        TextLocation location;
+        string? memberName;
+        bool isInvocation;
+        switch (rightPart)
+        {
+            case NameExpressionSyntax name:
+                location = name.Location;
+                memberName = name.IdentifierToken.ValueText;
+                isInvocation = false;
+                break;
+            case CallExpressionSyntax call:
+                location = call.Identifier.Location;
+                memberName = call.Identifier.ValueText;
+                isInvocation = true;
+                break;
+            default:
+                return;
+        }
+
+        if (receiver is not BoundVariableExpression variableRead
+            || variableRead.Variable.Type is not NullableTypeSymbol
+            || variableRead.NarrowedType == null
+            || !binderCtx.AssignmentNarrowingGenerations.TryGetValue(
+                variableRead.Variable,
+                out var assignmentGeneration))
+        {
+            return;
+        }
+
+        foreach (var state in binderCtx.BackwardGotoNarrowingStates.Values)
+        {
+            if (assignmentGeneration <= state.TargetAssignmentGeneration
+                && state.TargetSnapshot.NarrowedVariables.ContainsKey(variableRead.Variable))
+            {
+                state.Accesses.Add(new BackwardGotoNarrowingAccess(
+                    variableRead.Variable,
+                    location,
+                    memberName,
+                    isInvocation));
+            }
+        }
+    }
 
     /// <summary>
     /// ADR-0186 §4 and §5, in one move: replaces a platform-typed receiver

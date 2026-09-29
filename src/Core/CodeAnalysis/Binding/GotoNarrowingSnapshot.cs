@@ -7,6 +7,7 @@ using System.Collections.Immutable;
 using System.Collections.ObjectModel;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
@@ -35,4 +36,51 @@ internal sealed class GotoNarrowingSnapshot
 
     public void SetNarrowing(VariableSymbol variable, TypeSymbol type)
         => narrowedVariables[variable] = type;
+}
+
+internal sealed class BackwardGotoNarrowingState
+{
+    public BackwardGotoNarrowingState(
+        GotoNarrowingSnapshot targetSnapshot,
+        int targetAssignmentGeneration)
+    {
+        TargetSnapshot = targetSnapshot;
+        TargetAssignmentGeneration = targetAssignmentGeneration;
+    }
+
+    public GotoNarrowingSnapshot TargetSnapshot { get; }
+
+    public int TargetAssignmentGeneration { get; }
+
+    public List<BackwardGotoNarrowingAccess> Accesses { get; } = new();
+
+    public List<BackwardGotoNarrowingEdge> Edges { get; } = new();
+
+    public BackwardGotoNarrowingState Clone()
+    {
+        var clone = new BackwardGotoNarrowingState(
+            TargetSnapshot.Clone(),
+            TargetAssignmentGeneration);
+        clone.Accesses.AddRange(Accesses);
+        foreach (var edge in Edges)
+        {
+            clone.Edges.Add(edge.Copy());
+        }
+
+        return clone;
+    }
+}
+
+internal sealed record BackwardGotoNarrowingAccess(
+    VariableSymbol Variable,
+    TextLocation Location,
+    string MemberName,
+    bool IsInvocation);
+
+internal sealed record BackwardGotoNarrowingEdge(
+    GotoNarrowingSnapshot SourceSnapshot,
+    ImmutableArray<BackwardGotoNarrowingAccess> Accesses)
+{
+    public BackwardGotoNarrowingEdge Copy()
+        => new(SourceSnapshot.Clone(), Accesses);
 }
