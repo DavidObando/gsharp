@@ -34,6 +34,7 @@ internal enum ParameterValueScope
 public sealed class ParameterSymbol : LocalVariableSymbol
 {
     private bool hasUnscopedRef;
+    private bool usesUpdatedEscapeRules = true;
 
     /// <summary>
     /// Initializes a new instance of the <see cref="ParameterSymbol"/> class.
@@ -88,6 +89,7 @@ public sealed class ParameterSymbol : LocalVariableSymbol
             source.RefKind)
     {
         hasUnscopedRef = source.HasUnscopedRef;
+        usesUpdatedEscapeRules = source.UsesUpdatedEscapeRules;
         IsReceiverParameter = source.IsReceiverParameter;
         IsUnscopedRefReceiver = source.IsUnscopedRefReceiver;
     }
@@ -201,6 +203,13 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     internal bool HasUnscopedRef => hasUnscopedRef;
 
     /// <summary>
+    /// Gets a value indicating whether this parameter's declaring module uses
+    /// the version-11 ref-safety rules. Source parameters always do; imported
+    /// parameters require the module marker.
+    /// </summary>
+    internal bool UsesUpdatedEscapeRules => usesUpdatedEscapeRules;
+
+    /// <summary>
     /// Records the constant default value for this parameter (ADR-0063). Called exactly
     /// once by the binder when the parameter syntax includes a <c>= constant</c> clause
     /// and the constant has passed all ADR-0063 §3 restrictions.
@@ -231,6 +240,12 @@ public sealed class ParameterSymbol : LocalVariableSymbol
         hasUnscopedRef = true;
     }
 
+    /// <summary>Records that an imported parameter comes from a legacy module.</summary>
+    internal void MarkLegacyRefSafetyRules()
+    {
+        usesUpdatedEscapeRules = false;
+    }
+
     /// <summary>
     /// Gets the parameter's effective ref-safe-context. Under C#'s updated
     /// escape rules, <c>ref</c>/<c>in</c> parameters are return-only,
@@ -243,6 +258,11 @@ public sealed class ParameterSymbol : LocalVariableSymbol
         if (IsScoped)
         {
             return ParameterRefScope.FunctionLocal;
+        }
+
+        if (!UsesUpdatedEscapeRules)
+        {
+            return ParameterRefScope.Caller;
         }
 
         if (RefKind == RefKind.Out)
@@ -266,7 +286,8 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// <returns>The effective value safe-to-escape scope.</returns>
     internal ParameterValueScope GetEffectiveValueScope()
         => IsScoped
-            || (RefKind == RefKind.Ref
+            || (UsesUpdatedEscapeRules
+                && RefKind == RefKind.Ref
                 && TypeSymbol.IsByRefLike(Type)
                 && !HasUnscopedRef)
             ? ParameterValueScope.FunctionLocal

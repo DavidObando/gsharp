@@ -116,6 +116,33 @@ internal static class RefCapabilities
                     out byRefArguments,
                     out byValueByRefLikeArguments);
                 return true;
+            case BoundImportedCallExpression imported
+                when GetReturnRefKind(imported.Function.Method) != RefKind.None:
+                receiver = null;
+                SelectEscapeArguments(
+                    ImportParameters(imported.Function.Method.GetParameters()),
+                    imported.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundImportedInstanceCallExpression imported
+                when GetReturnRefKind(imported.Method) != RefKind.None:
+                receiver = imported.Receiver;
+                SelectEscapeArguments(
+                    ImportParameters(imported.Method.GetParameters()),
+                    imported.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundClrStaticCallExpression imported
+                when GetReturnRefKind(imported.Method) != RefKind.None:
+                receiver = null;
+                SelectEscapeArguments(
+                    ImportParameters(imported.Method.GetParameters()),
+                    imported.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
             default:
                 receiver = null;
                 byRefArguments = ImmutableArray<BoundExpression>.Empty;
@@ -313,12 +340,39 @@ internal static class RefCapabilities
             type,
             isScoped: IsScoped(parameter),
             refKind: GetParameterRefKind(parameter));
+        if (!UsesUpdatedEscapeRules(parameter))
+        {
+            symbol.MarkLegacyRefSafetyRules();
+        }
+
         if (HasUnscopedRef(parameter))
         {
             symbol.MarkUnscopedRef();
         }
 
         return symbol;
+    }
+
+    /// <summary>
+    /// Returns whether the imported parameter's module opts into C# 11's
+    /// updated ref-safety defaults.
+    /// </summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <returns><see langword="true"/> only for marker version 11.</returns>
+    internal static bool UsesUpdatedEscapeRules(ParameterInfo parameter)
+    {
+        try
+        {
+            return parameter.Member.Module.GetCustomAttributesData().Any(attribute =>
+                attribute.AttributeType.FullName
+                    == "System.Runtime.CompilerServices.RefSafetyRulesAttribute"
+                && attribute.ConstructorArguments.Count == 1
+                && attribute.ConstructorArguments[0].Value is 11);
+        }
+        catch
+        {
+            return false;
+        }
     }
 
     /// <summary>
@@ -563,6 +617,12 @@ internal static class RefCapabilities
         byRefArguments = refBuilder.ToImmutable();
         byValueByRefLikeArguments = byValueBuilder.ToImmutable();
     }
+
+    private static ImmutableArray<ParameterSymbol> ImportParameters(ParameterInfo[] parameters)
+        => parameters.Select(parameter => CreateParameterSymbol(
+            parameter,
+            ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape(),
+            $"arg{parameter.Position}")).ToImmutableArray();
 
     private static bool HasUnscopedRefAttribute(IEnumerable<CustomAttributeData>? attributes)
         => attributes?.Any(

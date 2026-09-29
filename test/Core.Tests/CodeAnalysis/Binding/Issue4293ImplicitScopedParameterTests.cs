@@ -11,6 +11,7 @@ using GSharp.Core.CodeAnalysis.Compilation;
 using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
+using GSharp.Core.Tests.Fixtures;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -400,10 +401,105 @@ public sealed class Issue4293ImplicitScopedParameterTests
             implementationReceiver: null));
     }
 
+    [Fact]
+    public void ImportedRefSafetyRulesFixture_PreservesMarkerAndExplicitContracts()
+    {
+        using var contracts = new Issue4563RefSafetyRulesContracts();
+        Assert.False(contracts.LegacyHasVersion11Marker);
+        Assert.True(contracts.UpdatedHasVersion11Marker);
+        Assert.False(RefCapabilities.UsesUpdatedEscapeRules(
+            contracts.LoadLegacy().GetType("Issue4563.Legacy.Contract")!.GetMethod("Pick")!.GetParameters()[0]));
+        Assert.True(RefCapabilities.UsesUpdatedEscapeRules(
+            contracts.LoadUpdated().GetType("Issue4563.Updated.Contract")!.GetMethod("Pick")!.GetParameters()[0]));
+        AssertImportedScope(
+            contracts.LoadLegacy(),
+            "Issue4563.Legacy.Contract",
+            "Pick",
+            ParameterRefScope.Caller);
+        AssertImportedScope(
+            contracts.LoadLegacy(),
+            "Issue4563.Legacy.Contract",
+            "PickUnscoped",
+            ParameterRefScope.Caller);
+        AssertImportedScope(
+            contracts.LoadLegacy(),
+            "Issue4563.Legacy.Contract",
+            "PickScoped",
+            ParameterRefScope.FunctionLocal);
+        AssertImportedScope(
+            contracts.LoadUpdated(),
+            "Issue4563.Updated.Contract",
+            "Pick",
+            ParameterRefScope.FunctionLocal);
+        AssertImportedScope(
+            contracts.LoadUpdated(),
+            "Issue4563.Updated.Contract",
+            "PickUnscoped",
+            ParameterRefScope.ReturnOnly);
+        AssertImportedScope(
+            contracts.LoadUpdated(),
+            "Issue4563.Updated.Contract",
+            "PickScoped",
+            ParameterRefScope.FunctionLocal);
+    }
+
+    [Fact]
+    public void ImportedOutParameter_UsesDeclaringModulesRefSafetyRules()
+    {
+        using var contracts = new Issue4563RefSafetyRulesContracts();
+        const string legacySource = """
+            package P
+            import Issue4563.Legacy
+            func Bad(contract Contract) ref int32 {
+                var scratch int32
+                return ref contract.Pick(out scratch)
+            }
+            """;
+        var legacyDiagnostic = Assert.Single(
+            BindWithReferences(legacySource, contracts.LegacyPath),
+            diagnostic => diagnostic.Id == "GS0254");
+        Assert.Equal(
+            legacySource.LastIndexOf("contract.Pick", StringComparison.Ordinal),
+            legacyDiagnostic.Location.Span.Start);
+
+        var updatedDiagnostics = BindWithReferences("""
+            package P
+            import Issue4563.Updated
+            func Good(contract Contract) ref int32 {
+                var scratch int32
+                return ref contract.Pick(out scratch)
+            }
+            """, contracts.UpdatedPath);
+        Assert.Empty(updatedDiagnostics);
+
+        const string updatedUnscopedSource = """
+            package P
+            import Issue4563.Updated
+            func Bad(contract Contract) ref int32 {
+                var scratch int32
+                return ref contract.PickUnscoped(out scratch)
+            }
+            """;
+        var updatedUnscopedDiagnostic = Assert.Single(
+            BindWithReferences(updatedUnscopedSource, contracts.UpdatedPath),
+            diagnostic => diagnostic.Id == "GS0254");
+        Assert.Equal(
+            updatedUnscopedSource.LastIndexOf("contract.PickUnscoped", StringComparison.Ordinal),
+            updatedUnscopedDiagnostic.Location.Span.Start);
+    }
+
     private static ImmutableArray<Diagnostic> Bind(string source)
+        => BindWithReferences(source);
+
+    private static ImmutableArray<Diagnostic> BindWithReferences(
+        string source,
+        params string[] references)
     {
         var tree = SyntaxTree.Parse(SourceText.From(source));
-        var compilation = new Compilation(tree);
+        using var resolver = references.Length == 0
+            ? ReferenceResolver.Default()
+            : ReferenceResolver.WithReferences(references);
+        var compilation = new Compilation(resolver, tree);
         var program = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(
             compilation.GlobalScope,
             compilation.References);
@@ -427,5 +523,16 @@ public sealed class Issue4293ImplicitScopedParameterTests
             IsIndexer = true,
             Parameters = ImmutableArray.Create(parameter),
         };
+
+    private static void AssertImportedScope(
+        System.Reflection.Assembly assembly,
+        string typeName,
+        string methodName,
+        ParameterRefScope expected)
+    {
+        var parameter = assembly.GetType(typeName)!.GetMethod(methodName)!.GetParameters()[0];
+        var symbol = RefCapabilities.CreateParameterSymbol(parameter, TypeSymbol.Int32, "value");
+        Assert.Equal(expected, symbol.GetEffectiveRefScope());
+    }
 
 }

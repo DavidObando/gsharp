@@ -468,6 +468,16 @@ boundary. G# still does not expose Roslyn's full `ScopedKind`/MAMM assignment
 model, so this amendment does not claim parity for every multi-argument
 ref-struct mixing shape.
 
+Imported parameters use these implicit defaults only when their declaring
+module carries `RefSafetyRulesAttribute(11)`. A module with no marker, or an
+unrecognized marker version, uses the legacy contract: an otherwise
+unannotated by-reference parameter is caller-scoped. Explicit `ScopedRef`
+remains function-local in either mode. Explicit `UnscopedRef` remains
+unscoped; for an updated-rules `out` parameter that means return-only, while a
+legacy `out` parameter retains caller scope. The decision is made once when
+the imported `ParameterSymbol` is created and is preserved by every clone and
+substitution.
+
 ## Consequences
 
 **What this unlocks**
