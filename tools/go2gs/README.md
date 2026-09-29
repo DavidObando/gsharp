@@ -69,22 +69,34 @@ links; an exchange failure or retained entry makes the command fail. Other
 platforms intentionally leave non-empty private trees behind rather than risk
 deleting a path that another process replaced.
 
+The selected Go executable is captured with a bounded no-follow read and
+staged under the canonical `go` or `go.exe` name. Child `PATH` contains only
+private staged directories; the selected Go executable's original parent
+directory and its siblings are never exposed.
+
 Profiles with `cgoEnabled: true` must set `cCompiler` to an absolute,
 explicitly approved compiler executable. The helper resolves and hashes that
 compiler, records its name and hash, and passes it by absolute `CC`. Any
-PATH-resolved executable required by that compiler must be declared in the
+executable required by that compiler, including internal drivers such as GCC's
+`cc1` and PATH-resolved assembler/linker tools, must be declared in the
 profile's `cCompilerHelpers` array with a safe logical name, canonical absolute
 path, and SHA-256 hash. go2gs captures each bounded, no-follow regular
 executable, stages the captured bytes under that logical name in a private
 directory, records its hash, byte count, and executable mode in both profile
-and toolchain provenance, and checks the source and staged copies again after
-loading. Missing, changed, oversized, non-regular, symlinked, colliding, or
-unmanifested helpers fail closed; the compiler's source directory and ambient
-PATH are never exposed. `PKG_CONFIG` remains pinned to an unavailable private
-path and `pkg-config` is forbidden as a helper name, so `#cgo pkg-config:`
-directives fail closed because pkg-config provenance is not modeled in M0;
-directives whose build constraints are inactive for the selected profile are
-ignored.
+and toolchain provenance, pins `PATH` and GCC's `-B` executable prefix to that
+directory, and checks the source and staged copies again after loading. On
+Linux, the selected Go executable, C compiler, and helpers are
+copied into a private tmpfs inside a private user/mount namespace, remounted
+read-only, and addressed through a held directory descriptor. Host-visible
+pathname replacement therefore cannot change the bytes executed during
+loading. M0 fails closed for CGo on platforms without that identity-binding
+mechanism. Missing, changed, oversized, non-regular, symlinked, colliding,
+nonportable, or unmanifested helpers fail closed; source executable directories
+and ambient PATH are never exposed. `PKG_CONFIG` remains pinned to an
+unavailable private path and every portable alias of `pkg-config` is forbidden
+as a helper name, so `#cgo pkg-config:` directives fail closed because
+pkg-config provenance is not modeled in M0; directives whose build constraints
+are inactive for the selected profile are ignored.
 Source commit provenance is read directly from bounded `.git` metadata; the
 analyzer never discovers or executes an ambient `git` command.
 

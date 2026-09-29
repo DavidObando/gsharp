@@ -26,6 +26,13 @@ const (
 )
 
 func main() {
+	if launched, err := maybeRunCompilerLauncher(); launched {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, "go2gs:", err)
+			os.Exit(127)
+		}
+		return
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 
@@ -137,8 +144,30 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 		}
 	}()
 	bootstrapRoot := bootstrapDirectory.path
+	goExecutableCapture, goExecutableHash, err := captureSelectedExecutable(
+		selectedGoName(), goExecutable, "", maxToolExecutableBytes, true,
+	)
+	if err != nil {
+		return &exitError{2, fmt.Errorf("capture Go executable: %w", err)}
+	}
+	bootstrapCapsule, err := createExecutableCapsule(
+		bootstrapRoot, []capturedExecutable{goExecutableCapture}, false,
+	)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	defer func() {
+		if cleanupErr := bootstrapCapsule.close(); cleanupErr != nil {
+			err = errors.Join(err, &exitError{2, cleanupErr})
+		}
+	}()
+	stagedGo := bootstrapCapsule.path(goExecutableCapture.name)
+	bootstrapEnv := bootstrapEnvironment(bootstrapRoot, bootstrapCapsule.directory.executionPath())
+	if inferredGOROOT := inferSelectedGOROOT(goExecutableCapture.sourcePath); inferredGOROOT != "" {
+		bootstrapEnv = replaceEnvironment(bootstrapEnv, "GOROOT", inferredGOROOT)
+	}
 	versionResult, err := runProcess(parent, min(timeout, 15*time.Second), profile.Limits.MaxLogBytes,
-		sourceRoot, goExecutable, []string{"version"}, bootstrapEnvironment(bootstrapRoot, goExecutable))
+		sourceRoot, stagedGo, []string{"version"}, bootstrapEnv)
 	if err != nil {
 		return &exitError{2, err}
 	}
@@ -172,7 +201,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	}
 	result, err := runAnalysisWorkerProcess(parent, timeout, profile.Limits.MaxLogBytes, sourceRoot, self, []string{
 		"internal-analyze-worker", "--source", sourceRoot, "--profile", workerProfile, "--out", workerRoot,
-	}, bootstrapEnvironment(workerRoot, goExecutable))
+	}, analysisWorkerEnvironment(bootstrapRoot, goExecutable, goExecutableHash, profile.CGOEnabled), profile.CGOEnabled)
 	if err != nil {
 		return &exitError{2, err}
 	}
@@ -198,8 +227,13 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	return nil
 }
 
-func runAnalysisWorkerProcess(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string) (processResult, error) {
-	return runProcessWithMode(parent, timeout, maxOutput, dir, executable, args, env, processGroupOwn)
+func runAnalysisWorkerProcess(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string, secureExecutableNamespace bool) (processResult, error) {
+	return runProcessConfigured(
+		parent, timeout, maxOutput, dir, executable, args, env, processGroupOwn,
+		func(cmd *exec.Cmd) error {
+			return configureAnalysisWorkerNamespace(cmd, secureExecutableNamespace)
+		},
+	)
 }
 
 func runAnalyzeWorker(parent context.Context, args []string) error {
