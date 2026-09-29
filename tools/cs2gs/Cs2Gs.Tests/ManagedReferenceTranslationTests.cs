@@ -134,14 +134,28 @@ public sealed class ManagedReferenceTranslationTests
             using Gsharp.Values;
             namespace ManagedTupleArrayForEachTranslation;
             public class Probe {
-                public static int Run() {
-                    int[] values = { 42 };
-                    var pairs = new (ManagedRef<int> Reference, int Value)[1];
-                    pairs[0] = (ManagedRef<int>.FromArray(values, 0), 1);
-                    foreach (var (reference, _) in pairs) {
-                        return reference.Borrow();
+                private static int ReadPair(
+                    ((ManagedRef<int> Reference, int NestedValue) Pair, int Value)[] pairs) {
+                    foreach (var item in pairs) {
+                        return item.Pair.Reference.Borrow();
                     }
                     return 0;
+                }
+
+                private static int ReadDeconstructed(
+                    ((ManagedRef<int> Reference, int NestedValue) Pair, int Value)[] pairs) {
+                    foreach (var (pair, _) in pairs) {
+                        return pair.Reference.Borrow();
+                    }
+                    return 0;
+                }
+
+                public static int Run() {
+                    int[] values = { 42 };
+                    var pairs =
+                        new ((ManagedRef<int> Reference, int NestedValue) Pair, int Value)[1];
+                    pairs[0] = ((ManagedRef<int>.FromArray(values, 0), 1), 2);
+                    return ReadPair(pairs) + ReadDeconstructed(pairs);
                 }
             }
             """;
@@ -157,13 +171,14 @@ public sealed class ManagedReferenceTranslationTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Empty(context.Diagnostics);
-        Assert.Contains("reference!!.Borrow()", text, StringComparison.Ordinal);
+        Assert.Contains("item.Pair.Reference!!.Borrow()", text, StringComparison.Ordinal);
+        Assert.Contains("pair.Reference!!.Borrow()", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
-        Assert.Equal(42, result.Value);
+        Assert.Equal(84, result.Value);
     }
 
     [Fact]
@@ -3867,6 +3882,55 @@ public sealed class ManagedReferenceTranslationTests
             text,
             StringComparison.Ordinal);
         Assert.Contains("item!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void TupleArrayQueryPreservesProjectedManagedReferenceLeaves()
+    {
+        const string source = """
+            using System;
+            using Gsharp.Values;
+            namespace ManagedTupleArrayProjectedQueryRange;
+            public static class TupleQueries {
+                public static TResult[] Select<TSource, TResult>(
+                    this TSource[] source,
+                    Func<TSource, TResult> selector) =>
+                    new[] { selector(source[0]) };
+
+                public static T First<T>(this T[] source) => source[0];
+            }
+            public class Probe {
+                public static int Run() {
+                    int[] values = { 42 };
+                    var source = new (ManagedRef<int> Reference, int Value)[1];
+                    source[0] = (ManagedRef<int>.FromArray(values, 0), 1);
+                    return (from pair in source
+                            select pair.Reference.Borrow()).First();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedTupleArrayProjectedQueryRange.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity != TranslationSeverity.Info);
+        Assert.Contains("Reference managed[int32]?", text, StringComparison.Ordinal);
+        Assert.Contains("pair.Reference!!.Borrow()", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });

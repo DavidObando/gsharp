@@ -2648,6 +2648,11 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax source,
             SyntaxNode anchor)
         {
+            if (this.GetMappedArrayElementType(source) is { } mappedArrayElement)
+            {
+                return mappedArrayElement;
+            }
+
             ITypeSymbol projectedSource =
                 this.GetManagedReferenceArrayProjectedExpressionType(source);
             ITypeSymbol projectedElement = GetEnumerableElementType(projectedSource);
