@@ -2701,6 +2701,20 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax source,
             SyntaxNode anchor)
         {
+            if (anchor is FromClauseSyntax { Parent: QueryBodySyntax } additionalFrom
+                && this.context.SemanticModel.GetQueryClauseInfo(additionalFrom)
+                    .OperationInfo.Symbol is IMethodSymbol selectMany)
+            {
+                foreach (IParameterSymbol parameter in selectMany.Parameters.Reverse())
+                {
+                    if (GetDelegateInvokeMethod(parameter.Type)
+                            is { Parameters.Length: >= 2 } resultSelector)
+                    {
+                        return resultSelector.Parameters[1].Type;
+                    }
+                }
+            }
+
             if (this.GetMappedArrayElementType(source) is { } mappedArrayElement)
             {
                 return mappedArrayElement;

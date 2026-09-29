@@ -38,6 +38,44 @@ namespace Cs2Gs.Tests;
 public class Issue1902LinqQueryTranslationTests
 {
     [Fact]
+    public void SecondFromClauseUsesSelectManyResultSelectorParameterType()
+    {
+        string rendered = Render(@"
+using System;
+using System.Linq;
+
+namespace Corpus.Issue1902
+{
+    public class QuerySource<T>
+    {
+        public TResult[] SelectMany<TCollection, TResult>(
+            Func<T, TCollection[]> collectionSelector,
+            Func<T, long, TResult> resultSelector) =>
+            new[] { resultSelector(default(T), 42L) };
+    }
+
+    public class Holder
+    {
+        public long[] Values(QuerySource<int> source)
+        {
+            return (from x in source
+                    from y in new[] { x }
+                    select y);
+        }
+    }
+}
+");
+
+        Assert.Contains(
+            "(x int32, y int64)",
+            rendered,
+            StringComparison.Ordinal);
+        AssertRoundTripParses(
+            rendered,
+            "The custom SelectMany result selector still requires explicit generic arguments in G#.");
+    }
+
+    [Fact]
     public void SecondFromClause_LowersToSelectManyWithTupleResultSelector()
     {
         string rendered = Render(@"
