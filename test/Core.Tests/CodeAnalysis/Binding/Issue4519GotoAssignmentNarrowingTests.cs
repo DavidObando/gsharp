@@ -4022,6 +4022,44 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_ChangedCallableTargetAlreadyInvalidatesCapturedRoot()
+    {
+        var result = Evaluate("""
+            data class Holder(Callback (() -> void)) {
+            }
+
+            func Run(external (() -> void)) int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                let holder = Holder{Callback: clear}
+                try {
+                    goto Done
+                }
+                finally {
+                    var action = external
+                    var retry = true
+                Again:
+                    action()
+                    if retry {
+                        retry = false
+                        action = holder.Callback
+                        goto Again
+                    }
+                }
+            Done:
+                return x.Length
+            }
+
+            Run(func() { })
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void CallableArgumentWithKnownAndUnknownTargetsRemainsUnsafe()
     {
         var result = Evaluate("""
