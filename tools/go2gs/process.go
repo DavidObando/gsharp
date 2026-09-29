@@ -109,6 +109,7 @@ func bootstrapEnvironment(cacheRoot, executable string) []string {
 		"GOPRIVATE":   "",
 		"GONOPROXY":   "*",
 		"GOWORK":      "off",
+		"PKG_CONFIG":  unavailableToolPath(cacheRoot, "pkg-config"),
 	})
 }
 
@@ -133,6 +134,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 		"GONOPROXY":        "*",
 		"GOWORK":           "off",
 		"GOPACKAGESDRIVER": "off",
+		"PKG_CONFIG":       unavailableToolPath(cacheRoot, "pkg-config"),
 		"GOOS":             profile.GOOS,
 		"GOARCH":           profile.GOARCH,
 		"CGO_ENABLED":      boolString(profile.CGOEnabled),
@@ -141,7 +143,6 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 	}
 	if cCompiler != "" {
 		values["CC"] = cCompiler
-		values["PKG_CONFIG"] = filepath.Join(cacheRoot, "unavailable-pkg-config")
 	}
 	flags := append([]string{}, profile.GOFLAGS...)
 	flags = append(flags, "-mod="+profile.ModuleMode)
@@ -151,6 +152,10 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 		values[architectureVariable(profile.GOARCH)] = appendCSV(values[architectureVariable(profile.GOARCH)], feature)
 	}
 	return canonicalEnv(values), nil
+}
+
+func unavailableToolPath(cacheRoot, name string) string {
+	return filepath.Join(cacheRoot, "blocked-tools", name)
 }
 
 func selectedPath(executable string) string {

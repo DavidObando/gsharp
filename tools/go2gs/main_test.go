@@ -22,8 +22,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"golang.org/x/tools/go/packages"
 )
 
 func testProfile() Profile {
@@ -349,11 +347,20 @@ func TestPkgConfigDirectiveFailsClosedWithoutExecutingSibling(t *testing.T) {
 	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "pkg-config") {
 		t.Fatalf("pkg-config requirement did not fail closed: %#v", analysis.Blockers)
 	}
-	if len(analysis.Packages) != 0 {
-		t.Fatal("pkg-config blocker must stop before typed package loading")
+	if !slices.ContainsFunc(analysis.Diagnostics, func(diagnostic DiagnosticRecord) bool {
+		return strings.Contains(diagnostic.Message, "<disabled-pkg-config>")
+	}) {
+		t.Fatalf("pkg-config loader failure was not recorded safely: %#v", analysis.Diagnostics)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("unapproved sibling pkg-config ran or marker check failed: %v", err)
+	}
+	data, err := marshalCanonical(analysis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(data, []byte(".go2gs-work")) || bytes.Contains(data, []byte("blocked-tools")) {
+		t.Fatal("pkg-config sentinel path leaked into the semantic artifact")
 	}
 }
 
@@ -383,44 +390,32 @@ func TestInactivePkgConfigDirectiveDoesNotBlock(t *testing.T) {
 	}
 }
 
-func TestCgoPkgConfigConstraints(t *testing.T) {
-	profile := testProfile()
-	profile.GOOS = "darwin"
-	profile.GOARCH = "arm64"
-	profile.CGOEnabled = true
-	profile.BuildTags = []string{"selected"}
-	profile.GOFLAGS = []string{"-tags=flagged"}
-	scan := func(source string) (bool, bool, error) {
-		t.Helper()
-		path := filepath.Join(t.TempDir(), "cgo.go")
-		if err := os.WriteFile(path, []byte(source), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		return selectedPackageCgoRequirements(&packages.Package{GoFiles: []string{path}}, profile)
+func TestCgoPkgConfigConstraintsUseSelectedGo(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
 	}
-	inactive := `package fixture
-/*
-#cgo windows pkg-config: ignored-windows
-#cgo !darwin pkg-config: ignored-negation
-#cgo darwin,!arm64 pkg-config: ignored-combination
-#cgo missing pkg-config: ignored-build-tag
-#cgo gccgo pkg-config: ignored-compiler
-*/
-import "C"
-`
-	importsC, usesPkgConfig, err := scan(inactive)
-	if err != nil || !importsC || usesPkgConfig {
-		t.Fatalf("inactive directives: importsC=%v pkg-config=%v err=%v", importsC, usesPkgConfig, err)
+	active := []string{"unix", runtime.GOOS, runtime.GOARCH, "gc", "go2gs_selected", currentReleaseTag()}
+	switch runtime.GOARCH {
+	case "amd64":
+		active = append(active, "amd64.v1")
+	case "arm64":
+		active = append(active, "arm64.v8.0")
 	}
-	active := strings.Replace(inactive, "*/", `
-#cgo darwin,arm64 pkg-config: selected-platform
-#cgo selected pkg-config: selected-build-tag
-#cgo flagged pkg-config: selected-goflags-tag
-#cgo gc pkg-config: selected-compiler
-*/`, 1)
-	importsC, usesPkgConfig, err = scan(active)
-	if err != nil || !importsC || !usesPkgConfig {
-		t.Fatalf("active directives: importsC=%v pkg-config=%v err=%v", importsC, usesPkgConfig, err)
+	for _, constraint := range active {
+		t.Run("active-"+constraint, func(t *testing.T) {
+			analysis, complete := analyzePkgConfigConstraint(t, constraint)
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "pkg-config") {
+				t.Fatalf("selected Go did not activate %q: %#v", constraint, analysis.Blockers)
+			}
+		})
+	}
+	for _, constraint := range []string{"!unix", "gccgo", "go2gs_unselected"} {
+		t.Run("inactive-"+constraint, func(t *testing.T) {
+			analysis, complete := analyzePkgConfigConstraint(t, constraint)
+			if !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "pkg-config") {
+				t.Fatalf("selected Go unexpectedly activated %q: %#v", constraint, analysis.Blockers)
+			}
+		})
 	}
 }
 
@@ -693,6 +688,7 @@ func TestPackedGitReferenceValidatesWholeFile(t *testing.T) {
 	a := strings.Repeat("a", 40)
 	b := strings.Repeat("b", 40)
 	c := strings.Repeat("c", 40)
+	long := strings.Repeat("d", 64)
 	tests := []struct {
 		name      string
 		content   string
@@ -702,9 +698,13 @@ func TestPackedGitReferenceValidatesWholeFile(t *testing.T) {
 	}{
 		{"ordinary", a + " refs/heads/main\n", "refs/heads/main", a, false},
 		{"annotated-tag-peel", a + " refs/tags/v1\n^" + b + "\n", "refs/tags/v1", a, false},
+		{"custom-namespace-peel", a + " refs/custom/release\n^" + b + "\n", "refs/custom/release", a, false},
 		{"orphan-peel", "^" + b + "\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
 		{"consecutive-peel", a + " refs/tags/v1\n^" + b + "\n^" + c + "\n", "refs/tags/v1", "", true},
-		{"branch-peel", a + " refs/heads/main\n^" + b + "\n", "refs/heads/main", "", true},
+		{"unterminated-record", a + " refs/heads/main", "refs/heads/main", "", true},
+		{"mixed-ref-width", a + " refs/heads/main\n" + long + " refs/heads/other\n", "refs/heads/main", "", true},
+		{"mixed-peel-width", a + " refs/tags/v1\n^" + long + "\n", "refs/tags/v1", "", true},
+		{"crlf-record", a + " refs/heads/main\r\n", "refs/heads/main", "", true},
 		{"malformed-before-match", "bad\n" + a + " refs/heads/main\n", "refs/heads/main", "", true},
 		{"malformed-after-match", a + " refs/heads/main\nbad\n", "refs/heads/main", "", true},
 		{"duplicate-ref", a + " refs/heads/main\n" + b + " refs/heads/main\n", "refs/heads/main", "", true},
@@ -729,6 +729,38 @@ func TestPackedGitReferenceValidatesWholeFile(t *testing.T) {
 			}
 		})
 	}
+}
+
+func analyzePkgConfigConstraint(t *testing.T, constraint string) (Analysis, bool) {
+	t.Helper()
+	root := copyFixture(t, "pkgconfig")
+	path := filepath.Join(root, "pkgconfig.go")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("#cgo pkg-config:"), []byte("#cgo "+constraint+" pkg-config:"), 1)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.CCompiler = approvedCompiler(t)
+	profile.BuildTags = []string{"go2gs_selected"}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return analysis, complete
+}
+
+func currentReleaseTag() string {
+	version := strings.TrimPrefix(runtime.Version(), "go")
+	parts := strings.Split(version, ".")
+	if len(parts) < 2 {
+		return "go1"
+	}
+	return "go" + parts[0] + "." + parts[1]
 }
 
 func TestReadBoundedRegularFileRejectsGrowthAndReplacement(t *testing.T) {
