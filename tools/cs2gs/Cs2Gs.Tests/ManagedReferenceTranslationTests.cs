@@ -3770,6 +3770,44 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceArrayProjectionAllowsNaturalLambdaDelegateTarget()
+    {
+        const string source = """
+            using System;
+            using Gsharp.Values;
+            namespace ManagedArrayNaturalLambdaDelegate;
+            public class Probe {
+                private static bool IsNil<T>(T[] items, Delegate callback) =>
+                    items[0] is null;
+
+                public static bool Run() {
+                    var source = new ManagedRef<int>[1];
+                    return IsNil(source, () => 1);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayNaturalLambdaDelegate.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(true, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionUpdatesLambdaParameterType()
     {
         const string source = """

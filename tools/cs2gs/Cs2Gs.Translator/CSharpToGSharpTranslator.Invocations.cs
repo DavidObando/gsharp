@@ -5623,9 +5623,13 @@ public sealed partial class CSharpToGSharpTranslator
                     targetType = paramsElementType;
                 }
 
-                ITypeSymbol targetResult = GetLambdaResultTargetType(
-                    lambda,
-                    GetDelegateInvokeMethod(targetType));
+                IMethodSymbol invoke = GetDelegateInvokeMethod(targetType);
+                if (invoke == null)
+                {
+                    continue;
+                }
+
+                ITypeSymbol targetResult = GetLambdaResultTargetType(lambda, invoke);
                 if (targetResult == null)
                 {
                     continue;
