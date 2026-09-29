@@ -471,18 +471,23 @@ func packedGitReference(path, ref string) (string, bool, error) {
 	if len(data) > 0 && data[len(data)-1] != '\n' {
 		return "", false, errors.New("repository packed-refs metadata is missing its terminating newline")
 	}
+	if len(data) == 0 {
+		return "", false, nil
+	}
 	var match, previousRef, lastRef string
 	previousPeeled := false
 	sortedFile := false
 	objectIDWidth := 0
 	seen := map[string]bool{}
-	for _, line := range strings.Split(string(data), "\n") {
+	headerRegion := true
+	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
 		if line == "" {
-			previousRef = ""
-			previousPeeled = false
-			continue
+			return "", false, errors.New("repository packed-refs metadata contains an empty record")
 		}
 		if strings.HasPrefix(line, "#") {
+			if !headerRegion {
+				return "", false, errors.New("repository packed-refs metadata has a comment after its first ref")
+			}
 			if strings.HasPrefix(line, "# pack-refs with:") {
 				for _, trait := range strings.Fields(strings.TrimPrefix(line, "# pack-refs with:")) {
 					if trait == "sorted" {
@@ -494,6 +499,7 @@ func packedGitReference(path, ref string) (string, bool, error) {
 			previousPeeled = false
 			continue
 		}
+		headerRegion = false
 		if strings.HasPrefix(line, "^") {
 			hash := strings.TrimPrefix(line, "^")
 			if previousRef == "" || previousPeeled || !validCommitID(hash) || len(hash) != objectIDWidth {
@@ -565,7 +571,8 @@ func readBoundedRegularFileWithHooks(path string, limit int64, beforeOpen, after
 		return nil, fmt.Errorf("inspect metadata path: %w", err)
 	}
 	if !openedInfo.Mode().IsRegular() || !pathInfo.Mode().IsRegular() ||
-		!os.SameFile(openedInfo, pathInfo) || openedInfo.Size() > limit {
+		!os.SameFile(initialInfo, openedInfo) || !os.SameFile(openedInfo, pathInfo) ||
+		openedInfo.Size() > limit {
 		return nil, errors.New("not a bounded regular file")
 	}
 	data, err = io.ReadAll(io.LimitReader(file, limit+1))
