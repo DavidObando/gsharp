@@ -588,6 +588,29 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     callPair.First = default;
                     var (callLeft, callRight) = callPair;
                     Fill(ref callLeft, replacement);
+
+                    var deconstructionWritePair =
+                        (First: replacement, Second: replacement);
+                    var other = replacement;
+                    (deconstructionWritePair.First, other) =
+                        (default(T), replacement);
+                    var (deconstructionWriteLeft, deconstructionWriteRight) =
+                        deconstructionWritePair;
+                    Fill(ref deconstructionWriteLeft, replacement);
+
+                    var wholeDefault = default((T, T));
+                    wholeDefault.Item1 = replacement;
+                    var (_, untouchedDefaultRight) = wholeDefault;
+                    Fill(ref untouchedDefaultRight, replacement);
+
+                    var inPair = (default(T), replacement);
+                    Observe(in inPair);
+                    var (inLeft, inRight) = inPair;
+                    Fill(ref inLeft, replacement);
+                }
+
+                private static void Observe<T>(in (T, T) pair)
+                {
                 }
             }
             """;
@@ -597,9 +620,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) left T\? =", printed);
         Assert.Matches(@"\b(let|var) loopLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) callLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) deconstructionWriteLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) untouchedDefaultRight T\? =", printed);
+        Assert.Matches(@"\b(let|var) inLeft T\? =", printed);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("callRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("deconstructionWriteRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("inRight T? =", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -754,6 +782,37 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) propertyBodyRight T\? =", printed);
         Assert.Matches(@"\b(let|var) indexerBodyLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) indexerBodyRight T\? =", printed);
+    }
+
+    [Fact]
+    public void Translation_TracksAliasesInPrimaryConstructorBaseArguments()
+    {
+        const string source = """
+            #nullable enable
+
+            public class Base
+            {
+                public Base(System.Func<int> action)
+                {
+                }
+            }
+
+            public class Derived<T>(T replacement)
+                : Base(() =>
+                {
+                    var pair = (default(T), default(T));
+                    var (baseLeft, baseRight) = pair;
+                    return (baseLeft is null ? 0 : 1)
+                        + (baseRight is null ? 0 : 1);
+                })
+            {
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) baseLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) baseRight T\? =", printed);
     }
 
     [Fact]

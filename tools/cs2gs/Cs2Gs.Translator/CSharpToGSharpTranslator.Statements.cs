@@ -639,6 +639,12 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             expression = Unwrap(expression);
+            if (IsNullOrDefaultLiteral(expression))
+            {
+                return SyntaxFactory.LiteralExpression(
+                    SyntaxKind.DefaultLiteralExpression);
+            }
+
             int index = path[depth];
             if (expression is TupleExpressionSyntax tuple
                 && index < tuple.Arguments.Count)
@@ -744,24 +750,39 @@ public sealed partial class CSharpToGSharpTranslator
                         target,
                         left,
                         conditional.WhenTrue,
-                        visited);
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
                 return this.InitializerOriginatesFromDefault(found)
                     ? found
                     : FindDeconstructionInitializer(
                         target,
                         left,
                         conditional.WhenFalse,
-                        visited);
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
             }
 
             if (right is BinaryExpressionSyntax coalesce
                 && coalesce.IsKind(SyntaxKind.CoalesceExpression))
             {
-                ExpressionSyntax found =
-                    FindDeconstructionInitializer(target, left, coalesce.Left, visited);
+                ExpressionSyntax found = FindDeconstructionInitializer(
+                    target,
+                    left,
+                    coalesce.Left,
+                    new HashSet<ISymbol>(
+                        visited,
+                        SymbolEqualityComparer.Default));
                 return this.InitializerOriginatesFromDefault(found)
                     ? found
-                    : FindDeconstructionInitializer(target, left, coalesce.Right, visited);
+                    : FindDeconstructionInitializer(
+                        target,
+                        left,
+                        coalesce.Right,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
             }
 
             if (right is SwitchExpressionSyntax switchExpression)
@@ -773,7 +794,9 @@ public sealed partial class CSharpToGSharpTranslator
                             target,
                             left,
                             arm.Expression,
-                            visited);
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default));
                     if (this.InitializerOriginatesFromDefault(found))
                     {
                         return found;
@@ -876,14 +899,18 @@ public sealed partial class CSharpToGSharpTranslator
                         target,
                         designation,
                         conditional.WhenTrue,
-                        visited);
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
                 return this.InitializerOriginatesFromDefault(found)
                     ? found
                     : FindDeconstructionInitializer(
                         target,
                         designation,
                         conditional.WhenFalse,
-                        visited);
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
             }
 
             if (right is BinaryExpressionSyntax coalesce
@@ -894,14 +921,18 @@ public sealed partial class CSharpToGSharpTranslator
                         target,
                         designation,
                         coalesce.Left,
-                        visited);
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
                 return this.InitializerOriginatesFromDefault(found)
                     ? found
                     : FindDeconstructionInitializer(
                         target,
                         designation,
                         coalesce.Right,
-                        visited);
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
             }
 
             if (right is SwitchExpressionSyntax switchExpression)
@@ -913,7 +944,9 @@ public sealed partial class CSharpToGSharpTranslator
                             target,
                             designation,
                             arm.Expression,
-                            visited);
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default));
                     if (this.InitializerOriginatesFromDefault(found))
                     {
                         return found;
@@ -1078,10 +1111,10 @@ public sealed partial class CSharpToGSharpTranslator
             var assignedValues = new Dictionary<AssignmentExpressionSyntax, ExpressionSyntax>();
             var elementAssignedValues =
                 new Dictionary<
-                    (AssignmentExpressionSyntax Assignment, ExpressionSyntax Previous),
+                    (string Write, ExpressionSyntax Previous),
                     ExpressionSyntax>();
             var appliedElementWrites =
-                new Dictionary<ExpressionSyntax, HashSet<AssignmentExpressionSyntax>>();
+                new Dictionary<ExpressionSyntax, HashSet<string>>();
             bool changed;
             do
             {
@@ -1225,6 +1258,28 @@ public sealed partial class CSharpToGSharpTranslator
                 };
             }
 
+            if (executable is PrimaryConstructorBaseTypeSyntax primaryBase)
+            {
+                ExpressionSyntax expression =
+                    primaryBase.ArgumentList.Arguments.First().Expression;
+                IOperation operation = this.context.SemanticModel.GetOperation(expression);
+                while (operation?.Parent != null)
+                {
+                    operation = operation.Parent;
+                }
+
+                return operation switch
+                {
+                    IConstructorBodyOperation body =>
+                        Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(body),
+                    IBlockOperation block =>
+                        Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(block),
+                    _ => throw new ArgumentException(
+                        "The base initializer does not have a control-flow root.",
+                        nameof(executable)),
+                };
+            }
+
             return Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(
                 executable,
                 this.context.SemanticModel);
@@ -1237,6 +1292,7 @@ public sealed partial class CSharpToGSharpTranslator
                         or LocalFunctionStatementSyntax
                         or AnonymousFunctionExpressionSyntax
                         or CompilationUnitSyntax)
+                    || node is PrimaryConstructorBaseTypeSyntax
                     || (node is ArrowExpressionClauseSyntax arrow
                         && arrow.Parent is PropertyDeclarationSyntax
                             or IndexerDeclarationSyntax)
@@ -1253,10 +1309,10 @@ public sealed partial class CSharpToGSharpTranslator
             HashSet<ExpressionSyntax> values,
             Dictionary<AssignmentExpressionSyntax, ExpressionSyntax> assignedValues,
             Dictionary<
-                (AssignmentExpressionSyntax Assignment, ExpressionSyntax Previous),
+                (string Write, ExpressionSyntax Previous),
                 ExpressionSyntax>
                 elementAssignedValues,
-            Dictionary<ExpressionSyntax, HashSet<AssignmentExpressionSyntax>>
+            Dictionary<ExpressionSyntax, HashSet<string>>
                 appliedElementWrites,
             HashSet<ISymbol> visited)
         {
@@ -1279,53 +1335,63 @@ public sealed partial class CSharpToGSharpTranslator
                 .OfType<AssignmentExpressionSyntax>()
                 .OrderBy(assignment => assignment.SpanStart))
             {
-                if (this.TryFindTupleElementWritePath(
+                var elementWrites =
+                    new List<(IReadOnlyList<int> Path, ExpressionSyntax Value)>();
+                this.CollectTupleElementWrites(
                     assignment.Left,
+                    assignment.Right,
                     local,
-                    new List<int>(),
-                    out IReadOnlyList<int> elementPath))
+                    elementWrites);
+                if (elementWrites.Count > 0)
                 {
-                    var aliasPath = visited == null
-                        ? null
-                        : new HashSet<ISymbol>(
-                            visited,
-                            SymbolEqualityComparer.Default);
-                    ExpressionSyntax source = this.ResolveStableTupleAlias(
-                        assignment.Right,
-                        aliasPath);
-                    ExpressionSyntax[] previousValues = values.ToArray();
-                    values.Clear();
-                    foreach (ExpressionSyntax previous in previousValues)
+                    foreach ((IReadOnlyList<int> elementPath, ExpressionSyntax writtenValue)
+                        in elementWrites)
                     {
-                        if (appliedElementWrites.TryGetValue(
-                            previous,
-                            out HashSet<AssignmentExpressionSyntax> previousWrites)
-                            && previousWrites.Contains(assignment))
+                        string write = assignment.SpanStart
+                            + ":"
+                            + string.Join(".", elementPath);
+                        var aliasPath = visited == null
+                            ? null
+                            : new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default);
+                        ExpressionSyntax source = this.ResolveStableTupleAlias(
+                            writtenValue,
+                            aliasPath);
+                        ExpressionSyntax[] previousValues = values.ToArray();
+                        values.Clear();
+                        foreach (ExpressionSyntax previous in previousValues)
                         {
-                            values.Add(previous);
-                            continue;
-                        }
-
-                        var key = (assignment, previous);
-                        if (!elementAssignedValues.TryGetValue(
-                            key,
-                            out ExpressionSyntax updated))
-                        {
-                            updated = ReplaceTupleElement(
+                            if (appliedElementWrites.TryGetValue(
                                 previous,
-                                local.Type,
-                                elementPath,
-                                0,
-                                source);
-                            elementAssignedValues.Add(key, updated);
-                            var updatedWrites = previousWrites == null
-                                ? new HashSet<AssignmentExpressionSyntax>()
-                                : new HashSet<AssignmentExpressionSyntax>(previousWrites);
-                            updatedWrites.Add(assignment);
-                            appliedElementWrites.Add(updated, updatedWrites);
-                        }
+                                out HashSet<string> previousWrites)
+                                && previousWrites.Contains(write))
+                            {
+                                values.Add(previous);
+                                continue;
+                            }
 
-                        values.Add(updated);
+                            var key = (write, previous);
+                            if (!elementAssignedValues.TryGetValue(
+                                key,
+                                out ExpressionSyntax updated))
+                            {
+                                updated = ReplaceTupleElement(
+                                    previous,
+                                    local.Type,
+                                    elementPath,
+                                    0,
+                                    source);
+                                elementAssignedValues.Add(key, updated);
+                                var updatedWrites = previousWrites == null
+                                    ? new HashSet<string>()
+                                    : new HashSet<string>(previousWrites);
+                                updatedWrites.Add(write);
+                                appliedElementWrites.Add(updated, updatedWrites);
+                            }
+
+                            values.Add(updated);
+                        }
                     }
 
                     hasKnownValue = true;
@@ -1361,9 +1427,44 @@ public sealed partial class CSharpToGSharpTranslator
                 && operation.Syntax.DescendantNodesAndSelf(
                     node => node is not AnonymousFunctionExpressionSyntax
                         && node is not LocalFunctionStatementSyntax)
-                    .Any(node => this.SyntaxNodeWritesSymbol(node, local)))
+                    .Any(node =>
+                        node is not ArgumentSyntax
+                            { RefOrOutKeyword.RawKind: (int)SyntaxKind.InKeyword }
+                        && this.SyntaxNodeWritesSymbol(node, local)))
             {
                 values.Clear();
+            }
+        }
+
+        private void CollectTupleElementWrites(
+            ExpressionSyntax left,
+            ExpressionSyntax right,
+            ILocalSymbol local,
+            List<(IReadOnlyList<int> Path, ExpressionSyntax Value)> writes)
+        {
+            left = Unwrap(left);
+            if (this.TryFindTupleElementWritePath(
+                left,
+                local,
+                new List<int>(),
+                out IReadOnlyList<int> path))
+            {
+                writes.Add((path, right));
+                return;
+            }
+
+            if (left is not TupleExpressionSyntax tuple)
+            {
+                return;
+            }
+
+            for (int i = 0; i < tuple.Arguments.Count; i++)
+            {
+                this.CollectTupleElementWrites(
+                    tuple.Arguments[i].Expression,
+                    ProjectTupleElement(right, new[] { i }),
+                    local,
+                    writes);
             }
         }
 
