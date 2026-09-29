@@ -137,6 +137,21 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var assignmentExpressionPair = (replacement, replacement);
                 (var assignmentExpressionLeft, var assignmentExpressionRight) =
                     (assignmentExpressionPair = (default(T), default(T)));
+                T initializerless;
+                initializerless = default;
+                var initializerlessAlias = initializerless;
+                var sharedPathSource = (replacement, replacement);
+                var sharedPathChoice = sharedPathSource;
+                if (choose)
+                {
+                    sharedPathChoice = sharedPathSource;
+                }
+                else
+                {
+                    sharedPathSource = (default(T), default(T));
+                    sharedPathChoice = sharedPathSource;
+                }
+                var (sharedPathLeft, sharedPathRight) = sharedPathChoice;
 
                 Fill(ref direct, replacement);
                 Fill(ref alias, replacement);
@@ -188,6 +203,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref methodRight, replacement);
                 Fill(ref assignmentExpressionLeft, replacement);
                 Fill(ref assignmentExpressionRight, replacement);
+                Fill(ref initializerlessAlias, replacement);
+                Fill(ref sharedPathLeft, replacement);
+                Fill(ref sharedPathRight, replacement);
 
                 for (var loop = default(T); choose;)
                 {
@@ -472,6 +490,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "nestedLoopLeft", "nestedLoopRight",
             "backedgeLeft", "backedgeRight", "breakLeft", "breakRight",
             "assignmentExpressionLeft", "assignmentExpressionRight",
+            "initializerlessAlias",
+            "sharedPathLeft", "sharedPathRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
         })
@@ -522,6 +542,33 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0612");
         Assert.Null(result.UnhandledException);
         Assert.Equal(20, result.Value);
+    }
+
+    [Fact]
+    public void Translation_TracksTupleElementWrites()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class TupleElementWrite
+            {
+                private static void Fill<T>(ref T? value, T replacement) =>
+                    value = replacement;
+
+                private static void M<T>(T replacement)
+                {
+                    (T First, T Second) pair = (replacement, replacement);
+                    pair.First = default;
+                    var (left, right) = pair;
+                    Fill(ref left, replacement);
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) left T\? =", printed);
+        Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
     }
 
     [Fact]

@@ -659,7 +659,13 @@ public sealed partial class CSharpToGSharpTranslator
                     foreach (ExpressionSyntax value in reaching)
                     {
                         ExpressionSyntax found =
-                            FindDeconstructionInitializer(target, left, value, visited);
+                            FindDeconstructionInitializer(
+                                target,
+                                left,
+                                value,
+                                new HashSet<ISymbol>(
+                                    visited,
+                                    SymbolEqualityComparer.Default));
                         if (this.InitializerOriginatesFromDefault(found))
                         {
                             return found;
@@ -798,7 +804,9 @@ public sealed partial class CSharpToGSharpTranslator
                                 target,
                                 designation,
                                 value,
-                                visited);
+                                new HashSet<ISymbol>(
+                                    visited,
+                                    SymbolEqualityComparer.Default));
                         if (this.InitializerOriginatesFromDefault(found))
                         {
                             return found;
@@ -958,7 +966,7 @@ public sealed partial class CSharpToGSharpTranslator
             HashSet<ISymbol> visited = null)
         {
             SyntaxNode declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
-            ExpressionSyntax initializer;
+            ExpressionSyntax initializer = null;
             VariableDeclaratorSyntax declarator = declaration as VariableDeclaratorSyntax;
             if (declarator?.Initializer?.Value is { } declaratorInitializer)
             {
@@ -973,20 +981,6 @@ public sealed partial class CSharpToGSharpTranslator
                     left,
                     right,
                     visited);
-            }
-            else
-            {
-                return Array.Empty<ExpressionSyntax>();
-            }
-
-            if (initializer == null)
-            {
-                return Array.Empty<ExpressionSyntax>();
-            }
-
-            if (!this.IsLocalReassigned(local))
-            {
-                return new[] { initializer };
             }
 
             SyntaxNode executable = declaration.AncestorsAndSelf().FirstOrDefault(node =>
@@ -1048,6 +1042,10 @@ public sealed partial class CSharpToGSharpTranslator
                 new Dictionary<Microsoft.CodeAnalysis.FlowAnalysis.BasicBlock,
                     HashSet<ExpressionSyntax>>();
             var assignedValues = new Dictionary<AssignmentExpressionSyntax, ExpressionSyntax>();
+            var elementAssignedValues =
+                new Dictionary<
+                    (AssignmentExpressionSyntax Assignment, ExpressionSyntax Previous),
+                    ExpressionSyntax>();
             bool changed;
             do
             {
@@ -1073,6 +1071,7 @@ public sealed partial class CSharpToGSharpTranslator
                             local,
                             values,
                             assignedValues,
+                            elementAssignedValues,
                             visited);
                     }
 
@@ -1085,6 +1084,7 @@ public sealed partial class CSharpToGSharpTranslator
                             local,
                             values,
                             assignedValues,
+                            elementAssignedValues,
                             visited);
                     }
 
@@ -1117,6 +1117,7 @@ public sealed partial class CSharpToGSharpTranslator
                     local,
                     reaching,
                     assignedValues,
+                    elementAssignedValues,
                     visited);
             }
 
@@ -1175,13 +1176,21 @@ public sealed partial class CSharpToGSharpTranslator
             ILocalSymbol local,
             HashSet<ExpressionSyntax> values,
             Dictionary<AssignmentExpressionSyntax, ExpressionSyntax> assignedValues,
+            Dictionary<
+                (AssignmentExpressionSyntax Assignment, ExpressionSyntax Previous),
+                ExpressionSyntax>
+                elementAssignedValues,
             HashSet<ISymbol> visited)
         {
             bool hasKnownValue = false;
             if (operation.Syntax.FullSpan.Contains(declaration.Span))
             {
                 values.Clear();
-                values.Add(initializer);
+                if (initializer != null)
+                {
+                    values.Add(initializer);
+                }
+
                 hasKnownValue = true;
             }
 
@@ -1192,6 +1201,45 @@ public sealed partial class CSharpToGSharpTranslator
                 .OfType<AssignmentExpressionSyntax>()
                 .OrderBy(assignment => assignment.SpanStart))
             {
+                if (this.TryFindTupleElementWritePath(
+                    assignment.Left,
+                    local,
+                    new List<int>(),
+                    out IReadOnlyList<int> elementPath))
+                {
+                    var aliasPath = visited == null
+                        ? null
+                        : new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default);
+                    ExpressionSyntax source = this.ResolveStableTupleAlias(
+                        assignment.Right,
+                        aliasPath);
+                    ExpressionSyntax[] previousValues = values.ToArray();
+                    values.Clear();
+                    foreach (ExpressionSyntax previous in previousValues)
+                    {
+                        var key = (assignment, previous);
+                        if (!elementAssignedValues.TryGetValue(
+                            key,
+                            out ExpressionSyntax updated))
+                        {
+                            updated = ReplaceTupleElement(
+                                previous,
+                                local.Type,
+                                elementPath,
+                                0,
+                                source);
+                            elementAssignedValues.Add(key, updated);
+                        }
+
+                        values.Add(updated);
+                    }
+
+                    hasKnownValue = true;
+                    continue;
+                }
+
                 if (!TryFindAssignedValuePath(
                     assignment.Left,
                     local,
@@ -1225,6 +1273,80 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 values.Clear();
             }
+        }
+
+        private bool TryFindTupleElementWritePath(
+            ExpressionSyntax expression,
+            ILocalSymbol local,
+            List<int> path,
+            out IReadOnlyList<int> found)
+        {
+            expression = Unwrap(expression);
+            if (this.BindsTo(expression, local))
+            {
+                found = new List<int>(path);
+                return path.Count > 0;
+            }
+
+            if (expression is MemberAccessExpressionSyntax member
+                && this.context.GetTypeInfo(member.Expression).Type
+                    is INamedTypeSymbol { IsTupleType: true } tupleType
+                && this.context.GetSymbolInfo(member.Name).Symbol is IFieldSymbol field)
+            {
+                int index = tupleType.TupleElements.IndexOf(field);
+                if (index >= 0)
+                {
+                    path.Insert(0, index);
+                    if (this.TryFindTupleElementWritePath(
+                        member.Expression,
+                        local,
+                        path,
+                        out found))
+                    {
+                        return true;
+                    }
+
+                    path.RemoveAt(0);
+                }
+            }
+
+            found = null;
+            return false;
+        }
+
+        private static ExpressionSyntax ReplaceTupleElement(
+            ExpressionSyntax expression,
+            ITypeSymbol type,
+            IReadOnlyList<int> path,
+            int depth,
+            ExpressionSyntax replacement)
+        {
+            if (depth == path.Count)
+            {
+                return replacement;
+            }
+
+            if (type is not INamedTypeSymbol { IsTupleType: true } tupleType)
+            {
+                return expression;
+            }
+
+            int replacedIndex = path[depth];
+            return SyntaxFactory.TupleExpression(SyntaxFactory.SeparatedList(
+                tupleType.TupleElements.Select((element, index) =>
+                {
+                    ExpressionSyntax projected = ProjectTupleElement(
+                        expression,
+                        new[] { index });
+                    return SyntaxFactory.Argument(index == replacedIndex
+                        ? ReplaceTupleElement(
+                            projected,
+                            element.Type,
+                            path,
+                            depth + 1,
+                            replacement)
+                        : projected);
+                })));
         }
 
         private bool TryFindAssignedValuePath(
