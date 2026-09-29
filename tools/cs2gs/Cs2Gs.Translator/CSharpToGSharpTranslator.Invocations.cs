@@ -2248,9 +2248,9 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol candidateElementType = parameter.Type switch
             {
                 IArrayTypeSymbol arrayType => arrayType.ElementType,
-                INamedTypeSymbol { TypeArguments.Length: 1 } spanLike
-                    when IsSpanParamsCollectionType(spanLike)
-                    => spanLike.TypeArguments[0],
+                INamedTypeSymbol { TypeArguments: [ITypeSymbol element] } collection
+                    when IsSupportedParamsCollectionType(collection)
+                    => element,
                 _ => null,
             };
             if (candidateElementType == null
@@ -6338,9 +6338,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (matches && this.state.CurrentBodyScope is { } scope)
                 {
-                    foreach (SyntaxNode write in scope.DescendantNodes(node =>
-                        node is not (LocalFunctionStatementSyntax
-                            or AnonymousFunctionExpressionSyntax)))
+                    foreach (SyntaxNode write in scope.DescendantNodes())
                     {
                         if (!this.SyntaxNodeWritesSymbol(write, local))
                         {

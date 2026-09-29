@@ -229,6 +229,31 @@ namespace Demo
         Assert.DoesNotContain("root!!", printed);
     }
 
+    [Fact]
+    public void ExpandedParamsCollectionNullableElementStaysBare()
+    {
+        string printed = TranslateOblivious(@"
+#nullable enable
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public static class Values
+    {
+        public static bool HasNil(params IEnumerable<string?> values) => true;
+
+        public static bool Run()
+        {
+            string? value = null;
+            return HasNil(value);
+        }
+    }
+}");
+
+        Assert.Contains("HasNil(value)", printed);
+        Assert.DoesNotContain("HasNil(value!!)", printed);
+    }
+
     /// <summary>
     /// Regression guard for the already-working sibling shape: a LOCAL
     /// initialized from an annotated-BCL `string?` value renders the promoted

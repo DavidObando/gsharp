@@ -3355,6 +3355,51 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void CapturedWriteConstrainsInferredProjectedLocalStorage()
+    {
+        const string source = """
+            using System;
+            using Gsharp.Values;
+            namespace ManagedArrayCapturedLocalWrite;
+            public sealed class Holder<T> {
+                public Holder(T value) { }
+            }
+            public class Probe {
+                public static bool Run() {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    var fixedValue = ManagedRef<int>.FromArray(values, 0);
+                    var holder = new Holder<ManagedRef<int>>(source[0]);
+                    Action reset = () => holder = new Holder<ManagedRef<int>>(fixedValue);
+                    reset();
+                    return holder != null;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayCapturedLocalWrite.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "fixed destination storage",
+                    StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            "Holder[managed[int32]?](source[0])",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionRejectsFixedMethodGroup()
     {
         const string source = """
