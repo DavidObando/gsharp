@@ -6968,14 +6968,17 @@ public sealed class Binder
 
         for (var i = 0; i < targetParameters.Length; i++)
         {
-            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
-                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
+            var targetType = GetImportedAdapterMethodType(targetOwner, target, i, methodTypeParameters);
+            var sourceType = GetImportedAdapterMethodType(sourceOwner, source, i, methodTypeParameters);
+            if (!RefCapabilities.ImportedParameterContractsMatch(
+                    targetParameters[i],
+                    targetType,
+                    sourceParameters[i],
+                    sourceType)
                 || !AdapterParameterMetadataSupported(targetParameters[i])
                 || !AdapterParameterMetadataSupported(sourceParameters[i])
                 || !AdapterParameterMetadataMatches(targetParameters[i], sourceParameters[i])
-                || !AdapterTypesMatch(
-                    GetImportedAdapterMethodType(targetOwner, target, i, methodTypeParameters),
-                    GetImportedAdapterMethodType(sourceOwner, source, i, methodTypeParameters)))
+                || !AdapterTypesMatch(targetType, sourceType))
             {
                 return false;
             }
@@ -7008,14 +7011,17 @@ public sealed class Binder
 
         for (var i = 0; i < targetParameters.Length; i++)
         {
-            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
-                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
+            var targetType = ClrNullability.GetParameterTypeSymbol(targetParameters[i]);
+            var sourceType = ClrNullability.GetParameterTypeSymbol(sourceParameters[i]);
+            if (!RefCapabilities.ImportedParameterContractsMatch(
+                    targetParameters[i],
+                    targetType,
+                    sourceParameters[i],
+                    sourceType)
                 || !AdapterParameterMetadataSupported(targetParameters[i])
                 || !AdapterParameterMetadataSupported(sourceParameters[i])
                 || !AdapterParameterMetadataMatches(targetParameters[i], sourceParameters[i])
-                || !ImportedAdapterTypesMatch(
-                    targetParameters[i].ParameterType,
-                    sourceParameters[i].ParameterType))
+                || !ImportedAdapterTypesMatch(targetParameters[i].ParameterType, sourceParameters[i].ParameterType))
             {
                 return false;
             }
@@ -7607,11 +7613,14 @@ public sealed class Binder
 
         for (var i = 0; i < targetParameters.Length; i++)
         {
-            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
-                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
-                || !AdapterTypesMatch(
-                    MemberLookup.GetIndexerParameterTypeSymbol(targetOwner, target, i),
-                    MemberLookup.GetIndexerParameterTypeSymbol(sourceOwner, source, i)))
+            var targetType = MemberLookup.GetIndexerParameterTypeSymbol(targetOwner, target, i);
+            var sourceType = MemberLookup.GetIndexerParameterTypeSymbol(sourceOwner, source, i);
+            if (!RefCapabilities.ImportedParameterContractsMatch(
+                    targetParameters[i],
+                    targetType,
+                    sourceParameters[i],
+                    sourceType)
+                || !AdapterTypesMatch(targetType, sourceType))
             {
                 return false;
             }
@@ -7644,11 +7653,14 @@ public sealed class Binder
 
         for (var i = 0; i < targetParameters.Length; i++)
         {
-            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
-                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
-                || !AdapterTypesMatch(
-                    ClrNullability.GetParameterTypeSymbol(targetParameters[i]),
-                    ClrNullability.GetParameterTypeSymbol(sourceParameters[i])))
+            var targetType = ClrNullability.GetParameterTypeSymbol(targetParameters[i]);
+            var sourceType = ClrNullability.GetParameterTypeSymbol(sourceParameters[i]);
+            if (!RefCapabilities.ImportedParameterContractsMatch(
+                    targetParameters[i],
+                    targetType,
+                    sourceParameters[i],
+                    sourceType)
+                || !AdapterTypesMatch(targetType, sourceType))
             {
                 return false;
             }

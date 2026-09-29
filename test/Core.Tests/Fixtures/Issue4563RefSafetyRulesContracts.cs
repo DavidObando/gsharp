@@ -84,6 +84,11 @@ internal sealed class Issue4563RefSafetyRulesContracts : IDisposable
 
             public abstract ref int PickScoped(scoped ref int value);
         }
+
+        public abstract class LegacySource
+        {
+            public abstract ref int Pick(out int value);
+        }
         """;
 
     private const string UpdatedSource = """
@@ -103,6 +108,16 @@ internal sealed class Issue4563RefSafetyRulesContracts : IDisposable
         public interface IStaticContract
         {
             static abstract ref int Pick(out int scratch);
+        }
+
+        public interface IUpdatedContract
+        {
+            ref int Pick(out int value);
+        }
+
+        public abstract class UpdatedSource
+        {
+            public abstract ref int Pick(out int value);
         }
         """;
 }

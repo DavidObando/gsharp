@@ -13,6 +13,7 @@ using GSharp.Core.CodeAnalysis.Symbols;
 using GSharp.Core.CodeAnalysis.Syntax;
 using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Core.Tests.Fixtures;
+using GSharp.Tests;
 using Xunit;
 
 namespace GSharp.Core.Tests.CodeAnalysis.Binding;
@@ -90,20 +91,37 @@ public sealed class Issue4293ImplicitScopedParameterTests
     [Fact]
     public void ConstrainedSourceStaticOutArgument_DoesNotConstrainRefReturningCall()
     {
-        var diagnostics = Bind("""
+        var result = EmittedOracle.Evaluate("""
             package P
             interface IPick {
                 shared {
                     func Pick(out scratch int32) ref int32;
                 }
             }
+            class Picker : IPick {
+                shared {
+                    var stored int32 = 41
+                    func Pick(out scratch int32) ref int32 {
+                        scratch = 0
+                        return ref stored
+                    }
+                    func Read() int32 -> stored
+                }
+            }
             func Forward[T IPick]() ref int32 {
                 var scratch int32
                 return ref T.Pick(&scratch)
             }
+            func Run() int32 {
+                var ref value = Forward[Picker]()
+                value = 42
+                return Picker.Read()
+            }
+            Run()
             """);
 
-        Assert.Empty(diagnostics);
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(42, result.Value);
     }
 
     [Fact]
@@ -153,6 +171,40 @@ public sealed class Issue4293ImplicitScopedParameterTests
 
         Assert.NotEmpty(legacyDirectory);
         Assert.False(Directory.Exists(legacyDirectory));
+    }
+
+    [Fact]
+    public void ImportedAdapter_RejectsLegacySourceForUpdatedContract()
+    {
+        using var contracts = new Issue4563RefSafetyRulesContracts();
+        const string source = """
+            package P
+            import Issue4563.Legacy
+            import Issue4563.Updated
+            func Bad(value LegacySource) IUpdatedContract {
+                return adapt[IUpdatedContract](value)
+            }
+            """;
+
+        var diagnostic = Assert.Single(
+            BindWithReferences(source, contracts.LegacyPath, contracts.UpdatedPath),
+            candidate => candidate.Id == "GS0606");
+        Assert.Equal(source.IndexOf("adapt", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Fact]
+    public void ImportedAdapter_AcceptsUpdatedSourceForUpdatedContract()
+    {
+        using var contracts = new Issue4563RefSafetyRulesContracts();
+        var diagnostics = BindWithReferences("""
+            package P
+            import Issue4563.Updated
+            func Good(value UpdatedSource) IUpdatedContract {
+                return adapt[IUpdatedContract](value)
+            }
+            """, contracts.UpdatedPath);
+
+        Assert.Empty(diagnostics);
     }
 
     [Fact]

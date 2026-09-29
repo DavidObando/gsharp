@@ -371,6 +371,20 @@ internal static class RefCapabilities
         return symbol;
     }
 
+    /// <summary>Returns whether two imported parameters expose the same effective ref/value-safety contract.</summary>
+    /// <param name="target">The target contract parameter.</param>
+    /// <param name="targetType">The projected target parameter type.</param>
+    /// <param name="source">The source implementation parameter.</param>
+    /// <param name="sourceType">The projected source parameter type.</param>
+    /// <returns><see langword="true"/> when both effective contracts match.</returns>
+    internal static bool ImportedParameterContractsMatch(
+        ParameterInfo target,
+        TypeSymbol targetType,
+        ParameterInfo source,
+        TypeSymbol sourceType)
+        => CreateParameterSymbol(target, targetType, "target")
+            .HasSameRefContract(CreateParameterSymbol(source, sourceType, "source"));
+
     /// <summary>
     /// Returns whether the imported parameter's module opts into C# 11's
     /// updated ref-safety defaults.
