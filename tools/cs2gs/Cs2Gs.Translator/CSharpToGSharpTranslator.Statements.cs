@@ -867,9 +867,25 @@ public sealed partial class CSharpToGSharpTranslator
             ILocalSymbol local,
             int usePosition)
         {
-            if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                    is not VariableDeclaratorSyntax
-                    { Initializer.Value: { } initializer } declarator)
+            SyntaxNode declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
+            ExpressionSyntax initializer;
+            VariableDeclaratorSyntax declarator = declaration as VariableDeclaratorSyntax;
+            if (declarator?.Initializer?.Value is { } declaratorInitializer)
+            {
+                initializer = declaratorInitializer;
+            }
+            else if (declaration is SingleVariableDesignationSyntax designation
+                && designation.Ancestors().OfType<AssignmentExpressionSyntax>().FirstOrDefault()
+                    is { Left: { } left, Right: { } right })
+            {
+                initializer = FindDeconstructionInitializer(designation, left, right);
+            }
+            else
+            {
+                return Array.Empty<ExpressionSyntax>();
+            }
+
+            if (initializer == null)
             {
                 return Array.Empty<ExpressionSyntax>();
             }
@@ -879,8 +895,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return new[] { initializer };
             }
 
-            if (initializer.Ancestors().OfType<ForStatementSyntax>().FirstOrDefault(
-                    loop => loop.Declaration?.Variables.Contains(declarator) == true)
+            if (declaration.Ancestors().OfType<ForStatementSyntax>().FirstOrDefault(
+                    loop => (declarator != null
+                            && loop.Declaration?.Variables.Contains(declarator) == true)
+                        || loop.Initializers.Any(
+                            expression => expression.Span.Contains(declaration.Span)))
                     is { Statement: { } body } forStatement
                 && body.FullSpan.Contains(usePosition))
             {

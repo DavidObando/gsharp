@@ -50,6 +50,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var (castLeft, castRight) = ((T, T))(default(T), default(T));
                 var defaultPair = (default(T), default(T));
                 var (aliasLeft, aliasRight) = defaultPair;
+                var (designationPair, _) = ((default(T), default(T)), 0);
+                var (designationAliasLeft, designationAliasRight) = designationPair;
                 var mutablePair = (default(T), default(T));
                 var (mutableAliasLeft, mutableAliasRight) = mutablePair;
                 mutablePair = (replacement, replacement);
@@ -138,6 +140,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref castRight, replacement);
                 Fill(ref aliasLeft, replacement);
                 Fill(ref aliasRight, replacement);
+                Fill(ref designationAliasLeft, replacement);
+                Fill(ref designationAliasRight, replacement);
                 Fill(ref mutableAliasLeft, replacement);
                 Fill(ref mutableAliasRight, replacement);
                 Fill(ref capturedAliasLeft, replacement);
@@ -392,6 +396,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "nestedA", "nestedB", "nestedC", "wholeLeft", "wholeRight",
             "wholeNestedA", "wholeNestedB", "wholeNestedC",
             "castLeft", "castRight", "aliasLeft", "aliasRight",
+            "designationAliasLeft", "designationAliasRight",
             "mutableAliasLeft", "mutableAliasRight",
             "capturedAliasLeft", "capturedAliasRight",
             "conditionalAliasLeft", "conditionalAliasRight",
