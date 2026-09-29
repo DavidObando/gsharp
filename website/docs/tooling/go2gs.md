@@ -36,8 +36,9 @@ are allowlisted; tool execution and path overrides are rejected.
 Profiles enabling CGo must set `cCompiler` to an absolute, explicitly approved
 compiler executable. go2gs hashes that compiler and records its name and hash;
 the compiler is passed as absolute `CC`, while child `PATH` contains only the
-selected Go directory. `#cgo pkg-config:` directives fail closed because M0
-does not yet model or approve a pkg-config executable.
+selected Go directory. Active `#cgo pkg-config:` directives fail closed
+because M0 does not yet model or approve a pkg-config executable; directives
+inactive under the selected build constraints are ignored.
 Commit provenance is read directly from bounded repository metadata rather
 than by discovering or executing an ambient `git` command.
 

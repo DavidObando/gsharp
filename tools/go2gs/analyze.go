@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/token"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -166,19 +167,13 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		BuildFlags: buildFlags,
 		Tests:      profile.LoadTests,
 	}
-	loaded, loadErr := packages.Load(config, profile.EntryPatterns...)
-	if loadErr != nil {
-		builder.block("loader", sanitizeMessage(loadErr.Error(), sourceRoot, profile.Limits.MaxStringBytes), nil, nil)
-	}
-	cgoPackages := loaded
-	if !profile.CGOEnabled {
-		cgoConfig := *config
-		cgoConfig.Mode = packages.NeedName | packages.NeedFiles
-		cgoConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
-		cgoPackages, _ = packages.Load(&cgoConfig, profile.EntryPatterns...)
-	}
-	for _, pkg := range cgoPackages {
-		importsC, usesPkgConfig, err := selectedPackageCgoRequirements(pkg)
+	preflightConfig := *config
+	preflightConfig.Mode = packages.NeedName | packages.NeedFiles
+	preflightConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
+	preflight, _ := packages.Load(&preflightConfig, profile.EntryPatterns...)
+	hasPkgConfig := false
+	for _, pkg := range preflight {
+		importsC, usesPkgConfig, err := selectedPackageCgoRequirements(pkg, profile)
 		if err != nil {
 			return Analysis{}, false, err
 		}
@@ -186,8 +181,17 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 			builder.block("cgo", "selected package imports C but CGO_ENABLED=0; native preprocessing is not available in this profile", nil, nil)
 		}
 		if usesPkgConfig {
+			hasPkgConfig = true
 			builder.block("pkg-config", "selected package requires #cgo pkg-config, but M0 has no approved pkg-config executable or provenance model", nil, nil)
 		}
+	}
+	if hasPkgConfig {
+		builder.finish()
+		return analysis, false, nil
+	}
+	loaded, loadErr := packages.Load(config, profile.EntryPatterns...)
+	if loadErr != nil {
+		builder.block("loader", sanitizeMessage(loadErr.Error(), sourceRoot, profile.Limits.MaxStringBytes), nil, nil)
 	}
 	if len(loaded) == 0 {
 		builder.block("loader", "the requested entry patterns selected no loadable packages under the pinned profile", nil, nil)
@@ -461,36 +465,91 @@ func packedGitReference(path, ref string) (string, bool, error) {
 		}
 		return "", false, fmt.Errorf("read repository packed refs: %w", err)
 	}
+	var match, previousRef, lastRef string
+	previousPeeled := false
+	sortedFile := false
+	seen := map[string]bool{}
 	for _, line := range strings.Split(string(data), "\n") {
-		if line == "" || strings.HasPrefix(line, "#") {
+		if line == "" {
+			previousRef = ""
+			previousPeeled = false
+			continue
+		}
+		if strings.HasPrefix(line, "#") {
+			if strings.HasPrefix(line, "# pack-refs with:") {
+				for _, trait := range strings.Fields(strings.TrimPrefix(line, "# pack-refs with:")) {
+					if trait == "sorted" {
+						sortedFile = true
+					}
+				}
+			}
+			previousRef = ""
+			previousPeeled = false
 			continue
 		}
 		if strings.HasPrefix(line, "^") {
-			if !validCommitID(strings.TrimPrefix(line, "^")) {
+			if previousRef == "" || previousPeeled || !strings.HasPrefix(previousRef, "refs/tags/") ||
+				!validCommitID(strings.TrimPrefix(line, "^")) {
 				return "", false, errors.New("repository packed-refs metadata has malformed peeled content")
 			}
+			previousPeeled = true
 			continue
 		}
-		fields := strings.Fields(line)
-		if len(fields) != 2 || !validCommitID(fields[0]) || !validGitRef(fields[1]) {
+		hash, name, found := strings.Cut(line, " ")
+		if !found || strings.ContainsAny(name, " \t\r") || !validCommitID(hash) || !validGitRef(name) || seen[name] {
 			return "", false, errors.New("repository packed-refs metadata is malformed")
 		}
-		if fields[1] == ref {
-			return fields[0], true, nil
+		if sortedFile && lastRef != "" && name <= lastRef {
+			return "", false, errors.New("repository packed-refs metadata violates sorted ordering")
+		}
+		seen[name] = true
+		previousRef = name
+		lastRef = name
+		previousPeeled = false
+		if name == ref {
+			match = hash
 		}
 	}
-	return "", false, nil
+	return match, match != "", nil
 }
 
 func readBoundedRegularFile(path string, limit int64) ([]byte, error) {
-	info, err := os.Lstat(path)
+	return readBoundedRegularFileAfterOpen(path, limit, nil)
+}
+
+func readBoundedRegularFileAfterOpen(path string, limit int64, afterOpen func()) (data []byte, err error) {
+	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
-	if !info.Mode().IsRegular() || info.Size() > limit {
+	defer func() {
+		if closeErr := file.Close(); err == nil && closeErr != nil {
+			err = fmt.Errorf("close metadata file: %w", closeErr)
+		}
+	}()
+	if afterOpen != nil {
+		afterOpen()
+	}
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return nil, fmt.Errorf("inspect opened metadata file: %w", err)
+	}
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, fmt.Errorf("inspect metadata path: %w", err)
+	}
+	if !openedInfo.Mode().IsRegular() || !pathInfo.Mode().IsRegular() ||
+		!os.SameFile(openedInfo, pathInfo) || openedInfo.Size() > limit {
 		return nil, errors.New("not a bounded regular file")
 	}
-	return os.ReadFile(path)
+	data, err = io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil {
+		return nil, fmt.Errorf("read metadata file: %w", err)
+	}
+	if int64(len(data)) > limit {
+		return nil, errors.New("metadata file exceeds size limit")
+	}
+	return data, nil
 }
 
 func validGitRef(value string) bool {
