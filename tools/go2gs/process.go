@@ -10,8 +10,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
-	"strings"
 	"time"
 )
 
@@ -122,7 +120,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 		return nil, err
 	}
 	values := map[string]string{
-		"PATH":             selectedPath(executable, cCompiler),
+		"PATH":             selectedPath(executable),
 		"HOME":             cacheRoot,
 		"TMPDIR":           cacheRoot,
 		"GOCACHE":          cacheRoot + string(os.PathSeparator) + "build-cache",
@@ -143,6 +141,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 	}
 	if cCompiler != "" {
 		values["CC"] = cCompiler
+		values["PKG_CONFIG"] = filepath.Join(cacheRoot, "unavailable-pkg-config")
 	}
 	flags := append([]string{}, profile.GOFLAGS...)
 	flags = append(flags, "-mod="+profile.ModuleMode)
@@ -154,18 +153,8 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 	return canonicalEnv(values), nil
 }
 
-func selectedPath(executables ...string) string {
-	var directories []string
-	for _, executable := range executables {
-		if executable == "" {
-			continue
-		}
-		directory := filepath.Dir(executable)
-		if !slices.Contains(directories, directory) {
-			directories = append(directories, directory)
-		}
-	}
-	return strings.Join(directories, string(os.PathListSeparator))
+func selectedPath(executable string) string {
+	return filepath.Dir(executable)
 }
 
 func boolString(value bool) string {

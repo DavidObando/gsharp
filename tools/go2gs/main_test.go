@@ -324,6 +324,34 @@ func TestCgoEnabledUsesOnlyApprovedCompiler(t *testing.T) {
 	}
 }
 
+func TestPkgConfigDirectiveFailsClosedWithoutExecutingSibling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled executable fixture")
+	}
+	dir := t.TempDir()
+	compiler := filepath.Join(dir, "cc")
+	if err := os.Symlink(approvedCompiler(t), compiler); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(t.TempDir(), "pkg-config-ran")
+	if err := os.WriteFile(filepath.Join(dir, "pkg-config"), []byte("#!/bin/sh\n: > "+strconv.Quote(marker)+"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.CCompiler = compiler
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "pkgconfig"), t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "pkg-config") {
+		t.Fatalf("pkg-config requirement did not fail closed: %#v", analysis.Blockers)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("unapproved sibling pkg-config ran or marker check failed: %v", err)
+	}
+}
+
 func TestUnselectedAndBuildIgnoredCgoOrNativeDoNotBlock(t *testing.T) {
 	root := copyFixture(t, "complete")
 	if err := os.MkdirAll(filepath.Join(root, "unselected"), 0o755); err != nil {
@@ -353,7 +381,10 @@ func TestAnalyzeDoesNotExecuteAmbientGit(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("controlled shell executable fixture")
 	}
-	root := copyFixture(t, "complete")
+	root, err := secureRoot(copyFixture(t, "complete"))
+	if err != nil {
+		t.Fatal(err)
+	}
 	commit := strings.Repeat("a", 40)
 	if err := os.MkdirAll(filepath.Join(root, ".git"), 0o755); err != nil {
 		t.Fatal(err)
@@ -378,6 +409,211 @@ func TestAnalyzeDoesNotExecuteAmbientGit(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("ambient git ran or marker check failed: %v", err)
+	}
+}
+
+func TestAnalyzeMalformedGitMetadataFailsClosed(t *testing.T) {
+	root := copyFixture(t, "complete")
+	if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/bad name\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || analysis.Profile.ActualSourceCommit != "" ||
+		!hasBlockerCategory(analysis, "source-metadata") || len(analysis.Packages) != 0 {
+		t.Fatalf("malformed Git metadata did not fail closed: %#v", analysis)
+	}
+}
+
+func TestGitMetadataReader(t *testing.T) {
+	hash := strings.Repeat("a", 40)
+	makeRoot := func(t *testing.T) string {
+		t.Helper()
+		root, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		return root
+	}
+	t.Run("absent", func(t *testing.T) {
+		commit, err := sourceCommit(makeRoot(t))
+		if err != nil || commit != "" {
+			t.Fatalf("absent metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	t.Run("detached", func(t *testing.T) {
+		root := makeRoot(t)
+		if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte(hash+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		commit, err := sourceCommit(root)
+		if err != nil || commit != hash {
+			t.Fatalf("detached metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	t.Run("ordinary-ref", func(t *testing.T) {
+		root := makeRoot(t)
+		if err := os.MkdirAll(filepath.Join(root, ".git", "refs", "heads"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "refs", "heads", "main"), []byte(hash+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		commit, err := sourceCommit(root)
+		if err != nil || commit != hash {
+			t.Fatalf("ordinary metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	t.Run("packed-ref", func(t *testing.T) {
+		root := makeRoot(t)
+		if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, ".git", "packed-refs"), []byte("# pack-refs\n"+hash+" refs/heads/main\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		commit, err := sourceCommit(root)
+		if err != nil || commit != hash {
+			t.Fatalf("packed metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	t.Run("linked-worktree", func(t *testing.T) {
+		container := makeRoot(t)
+		root := filepath.Join(container, "source")
+		common := filepath.Join(container, "repo.git")
+		gitDir := filepath.Join(common, "worktrees", "source")
+		if err := os.MkdirAll(filepath.Join(common, "refs", "heads"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(gitDir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(root, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		gitPath := filepath.Join(root, ".git")
+		for path, content := range map[string]string{
+			gitPath:                                        "gitdir: " + gitDir + "\n",
+			filepath.Join(gitDir, "HEAD"):                  "ref: refs/heads/main\n",
+			filepath.Join(gitDir, "commondir"):             "../..\n",
+			filepath.Join(gitDir, "gitdir"):                gitPath + "\n",
+			filepath.Join(common, "refs", "heads", "main"): hash + "\n",
+		} {
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		commit, err := sourceCommit(root)
+		if err != nil || commit != hash {
+			t.Fatalf("worktree metadata: commit=%q err=%v", commit, err)
+		}
+	})
+	for _, test := range []struct {
+		name    string
+		prepare func(*testing.T, string)
+	}{
+		{"invalid-ref", func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/bad name\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"malformed-head", func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("not-a-commit\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"malformed-packed-ref", func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "packed-refs"), []byte("not-a-hash refs/heads/main\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"oversized-head", func(t *testing.T, root string) {
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git", "HEAD"), bytes.Repeat([]byte("a"), 4097), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"escaping-gitdir", func(t *testing.T, root string) {
+			outside := filepath.Join(filepath.Dir(root), "outside.git")
+			if err := os.Mkdir(outside, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, ".git"), []byte("gitdir: "+outside+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := makeRoot(t)
+			test.prepare(t, root)
+			if commit, err := sourceCommit(root); err == nil || commit != "" {
+				t.Fatalf("malformed metadata accepted: commit=%q err=%v", commit, err)
+			}
+		})
+	}
+	if runtime.GOOS != "windows" {
+		t.Run("symlink-head", func(t *testing.T) {
+			root := makeRoot(t)
+			if err := os.Mkdir(filepath.Join(root, ".git"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(root, "head-target")
+			if err := os.WriteFile(target, []byte(hash+"\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(target, filepath.Join(root, ".git", "HEAD")); err != nil {
+				t.Fatal(err)
+			}
+			if commit, err := sourceCommit(root); err == nil || commit != "" {
+				t.Fatalf("symlinked HEAD accepted: commit=%q err=%v", commit, err)
+			}
+		})
+	}
+}
+
+func TestGitRefValidationMatchesSecuritySubset(t *testing.T) {
+	for _, value := range []string{"refs/heads/main", "refs/tags/v1.0", "refs/remotes/origin/topic"} {
+		if !validGitRef(value) {
+			t.Errorf("valid Git ref rejected: %q", value)
+		}
+	}
+	for _, value := range []string{
+		"heads/main", "/refs/heads/main", "refs/heads/main/", "refs//heads/main",
+		"refs/heads/.hidden", "refs/heads/trailing.", "refs/heads/bad.lock",
+		"refs/heads/two..dots", "refs/heads/reflog@{1}", `refs\heads\main`,
+		"refs/heads/bad name", "refs/heads/bad\tname", "refs/heads/bad\x7fname",
+	} {
+		if validGitRef(value) {
+			t.Errorf("invalid Git ref accepted: %q", value)
+		}
 	}
 }
 
@@ -480,6 +716,23 @@ func TestProfileValidationAndResourceLimit(t *testing.T) {
 	}
 	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "absolute cCompiler") {
 		t.Fatalf("expected relative C compiler rejection, got %v", err)
+	}
+	for _, compiler := range []string{
+		filepath.Join(t.TempDir(), "bad compiler"),
+		filepath.Join(t.TempDir(), `'bad'`),
+		filepath.Join(t.TempDir(), "bad\ncompiler"),
+	} {
+		profile.CCompiler = compiler
+		data, err = json.Marshal(profile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "cCompiler") {
+			t.Fatalf("expected ambiguous C compiler %q rejection, got %v", compiler, err)
+		}
 	}
 	profile.CGOEnabled = false
 	profile.CCompiler = ""
@@ -894,6 +1147,46 @@ func TestLocalReplacementInventoryIsRootIndependent(t *testing.T) {
 	if _, _, err := analyze(t.Context(), firstRoot, t.TempDir(), profile); err == nil ||
 		!strings.Contains(err.Error(), "record count") {
 		t.Fatalf("module records were not included in MaxRecords enforcement: %v", err)
+	}
+}
+
+func TestCompilerLocationDoesNotAffectSemanticArtifact(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(executable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	firstCompiler := filepath.Join(t.TempDir(), "cc")
+	secondCompiler := filepath.Join(t.TempDir(), "cc")
+	for _, path := range []string{firstCompiler, secondCompiler} {
+		if err := os.WriteFile(path, data, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	root := copyFixture(t, "complete")
+	firstProfile := testProfile()
+	firstProfile.CGOEnabled = true
+	firstProfile.CCompiler = firstCompiler
+	secondProfile := firstProfile
+	secondProfile.CCompiler = secondCompiler
+	first, complete, err := analyze(t.Context(), root, t.TempDir(), firstProfile)
+	if err != nil || !complete {
+		t.Fatalf("first compiler-location analysis failed: complete=%v err=%v", complete, err)
+	}
+	second, complete, err := analyze(t.Context(), root, t.TempDir(), secondProfile)
+	if err != nil || !complete {
+		t.Fatalf("second compiler-location analysis failed: complete=%v err=%v", complete, err)
+	}
+	left, _ := marshalCanonical(first)
+	right, _ := marshalCanonical(second)
+	if !bytes.Equal(left, right) {
+		t.Fatalf("compiler location changed semantic artifact near: %s", firstDifference(string(left), string(right)))
 	}
 }
 

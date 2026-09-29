@@ -61,8 +61,10 @@ accepted `goDebug` key is `gotypesalias`, with value `0` or `1`.
 
 Profiles with `cgoEnabled: true` must set `cCompiler` to an absolute,
 explicitly approved compiler executable. The helper resolves and hashes that
-compiler, records its name and hash, and exposes only the Go and compiler
-directories on child `PATH`; ambient compiler discovery remains disabled.
+compiler, records its name and hash, and passes it by absolute `CC`. Child
+`PATH` contains only the selected Go directory; ambient compiler discovery
+remains disabled. `#cgo pkg-config:` directives fail closed because
+pkg-config provenance is not modeled in M0.
 Source commit provenance is read directly from bounded `.git` metadata; the
 analyzer never discovers or executes an ambient `git` command.
 
