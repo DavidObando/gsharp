@@ -3831,11 +3831,16 @@ public sealed partial class CSharpToGSharpTranslator
                 && isBranchArm
                 && current.Parent is AssignmentExpressionSyntax assignment
                 && assignment.Right == current
-                && assignment.Left is ElementAccessExpressionSyntax elementAccess
-                && this.GetMappedArrayElementType(elementAccess.Expression)
-                    is { NullableAnnotation: NullableAnnotation.Annotated } projectedElement)
+                && assignment.Left is ElementAccessExpressionSyntax elementAccess)
             {
-                return (projectedElement, null);
+                ITypeSymbol projectedElement =
+                    this.GetMappedArrayElementType(elementAccess.Expression);
+                if (projectedElement != null
+                    && projectedElement.NullableAnnotation
+                        == NullableAnnotation.Annotated)
+                {
+                    return (projectedElement, null);
+                }
             }
 
             if (target == null
