@@ -988,6 +988,9 @@ const char* wide = LR"custom(
 // #include "fake-L.h"
 /* "#include fake-comment.h" */
 )custom";
+const char* preserved = R"raw(backslash\
+#include "fake-preserved.h"
+)raw";
 const char* ordinary = "R\"tag(#include fake-string.h)tag\"";
 #include "real.h"
 `)
@@ -1005,6 +1008,8 @@ func TestLocalQuotedIncludesRejectsMalformedCXXRawStrings(t *testing.T) {
 		"parenthesis":    []byte("R\"bad)(content)bad)\""),
 		"backslash":      []byte("R\"bad\\tag(content)bad\\tag\""),
 		"long-delimiter": []byte("R\"12345678901234567(content)12345678901234567\""),
+		"split-lf":       []byte("R\"tag(body)ta\\\ng\""),
+		"split-crlf":     []byte("R\"tag(body)ta\\\r\ng\""),
 	} {
 		t.Run(name, func(t *testing.T) {
 			includes, malformed := localQuotedIncludes(source)

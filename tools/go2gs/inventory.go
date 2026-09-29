@@ -498,17 +498,68 @@ func localQuotedIncludes(data []byte) ([]string, bool) {
 }
 
 func spliceCPreprocessorLines(data []byte) []byte {
+	const (
+		cNormal = iota
+		cLineComment
+		cBlockComment
+		cString
+		cCharacter
+	)
 	result := make([]byte, 0, len(data))
-	for i := 0; i < len(data); i++ {
-		if data[i] == '\\' && i+1 < len(data) && data[i+1] == '\n' {
-			i++
-			continue
+	state := cNormal
+	escaped := false
+	for i := 0; i < len(data); {
+		if state == cNormal {
+			if prefixLength := cxxRawStringPrefix(data, i); prefixLength > 0 {
+				end, ok := cxxRawStringEnd(data, i+prefixLength)
+				if !ok {
+					return append(result, data[i:]...)
+				}
+				result = append(result, data[i:end]...)
+				i = end
+				continue
+			}
 		}
-		if data[i] == '\\' && i+2 < len(data) && data[i+1] == '\r' && data[i+2] == '\n' {
+		if data[i] == '\\' && i+1 < len(data) && data[i+1] == '\n' {
 			i += 2
 			continue
 		}
-		result = append(result, data[i])
+		if data[i] == '\\' && i+2 < len(data) && data[i+1] == '\r' && data[i+2] == '\n' {
+			i += 3
+			continue
+		}
+		value := data[i]
+		previous := byte(0)
+		if len(result) > 0 {
+			previous = result[len(result)-1]
+		}
+		result = append(result, value)
+		i++
+		if state == cNormal {
+			if previous == '/' && value == '/' {
+				state = cLineComment
+			} else if previous == '/' && value == '*' {
+				state = cBlockComment
+			} else if value == '"' {
+				state = cString
+				escaped = false
+			} else if value == '\'' {
+				state = cCharacter
+				escaped = false
+			}
+		} else if state == cLineComment && value == '\n' {
+			state = cNormal
+		} else if state == cBlockComment && previous == '*' && value == '/' {
+			state = cNormal
+		} else if state == cString || state == cCharacter {
+			if escaped {
+				escaped = false
+			} else if value == '\\' {
+				escaped = true
+			} else if state == cString && value == '"' || state == cCharacter && value == '\'' {
+				state = cNormal
+			}
+		}
 	}
 	return result
 }
