@@ -561,6 +561,17 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     pair.First = default;
                     var (left, right) = pair;
                     Fill(ref left, replacement);
+
+                    var loopPair = (First: replacement, Second: replacement);
+                    var again = true;
+                    while (again)
+                    {
+                        loopPair.First = default;
+                        again = false;
+                    }
+
+                    var (loopLeft, loopRight) = loopPair;
+                    Fill(ref loopLeft, replacement);
                 }
             }
             """;
@@ -568,7 +579,43 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         string printed = Translate(source);
 
         Assert.Matches(@"\b(let|var) left T\? =", printed);
+        Assert.Matches(@"\b(let|var) loopLeft T\? =", printed);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Translation_TracksAliasesInInitializerLambdas()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class InitializerLambdas
+            {
+                public static System.Func<string?> Field = () =>
+                {
+                    var pair = ("left", "right");
+                    pair = (default(string), default(string));
+                    var (fieldLeft, fieldRight) = pair;
+                    return fieldLeft ?? fieldRight;
+                };
+
+                public static System.Func<string?> Property { get; } = () =>
+                {
+                    var pair = ("left", "right");
+                    pair = (default(string), default(string));
+                    var (propertyLeft, propertyRight) = pair;
+                    return propertyLeft ?? propertyRight;
+                };
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) fieldLeft string\? =", printed);
+        Assert.Matches(@"\b(let|var) fieldRight string\? =", printed);
+        Assert.Matches(@"\b(let|var) propertyLeft string\? =", printed);
+        Assert.Matches(@"\b(let|var) propertyRight string\? =", printed);
     }
 
     [Fact]

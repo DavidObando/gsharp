@@ -1046,6 +1046,8 @@ public sealed partial class CSharpToGSharpTranslator
                 new Dictionary<
                     (AssignmentExpressionSyntax Assignment, ExpressionSyntax Previous),
                     ExpressionSyntax>();
+            var appliedElementWrites =
+                new Dictionary<ExpressionSyntax, HashSet<AssignmentExpressionSyntax>>();
             bool changed;
             do
             {
@@ -1072,6 +1074,7 @@ public sealed partial class CSharpToGSharpTranslator
                             values,
                             assignedValues,
                             elementAssignedValues,
+                            appliedElementWrites,
                             visited);
                     }
 
@@ -1085,6 +1088,7 @@ public sealed partial class CSharpToGSharpTranslator
                             values,
                             assignedValues,
                             elementAssignedValues,
+                            appliedElementWrites,
                             visited);
                     }
 
@@ -1118,6 +1122,7 @@ public sealed partial class CSharpToGSharpTranslator
                     reaching,
                     assignedValues,
                     elementAssignedValues,
+                    appliedElementWrites,
                     visited);
             }
 
@@ -1156,6 +1161,26 @@ public sealed partial class CSharpToGSharpTranslator
                     .GetAnonymousFunctionControlFlowGraphInScope(parent, operation);
             }
 
+            if (executable is EqualsValueClauseSyntax initializer)
+            {
+                IOperation operation = this.context.SemanticModel.GetOperation(initializer.Value);
+                while (operation?.Parent != null)
+                {
+                    operation = operation.Parent;
+                }
+
+                return operation switch
+                {
+                    IFieldInitializerOperation field =>
+                        Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(field),
+                    IPropertyInitializerOperation property =>
+                        Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(property),
+                    _ => throw new ArgumentException(
+                        "The initializer does not have a control-flow root.",
+                        nameof(executable)),
+                };
+            }
+
             return Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(
                 executable,
                 this.context.SemanticModel);
@@ -1163,11 +1188,15 @@ public sealed partial class CSharpToGSharpTranslator
 
         private static SyntaxNode FindEnclosingExecutable(SyntaxNode nested) =>
             nested.Ancestors().First(node =>
-                node is BaseMethodDeclarationSyntax
-                    or AccessorDeclarationSyntax
-                    or LocalFunctionStatementSyntax
-                    or AnonymousFunctionExpressionSyntax
-                    or CompilationUnitSyntax);
+                (node is BaseMethodDeclarationSyntax
+                        or AccessorDeclarationSyntax
+                        or LocalFunctionStatementSyntax
+                        or AnonymousFunctionExpressionSyntax
+                        or CompilationUnitSyntax)
+                    || (node is EqualsValueClauseSyntax initializer
+                        && (initializer.Parent is PropertyDeclarationSyntax
+                            || initializer.Parent?.Parent?.Parent
+                                is FieldDeclarationSyntax)));
 
         private void ApplyReachingOperation(
             IOperation operation,
@@ -1180,6 +1209,8 @@ public sealed partial class CSharpToGSharpTranslator
                 (AssignmentExpressionSyntax Assignment, ExpressionSyntax Previous),
                 ExpressionSyntax>
                 elementAssignedValues,
+            Dictionary<ExpressionSyntax, HashSet<AssignmentExpressionSyntax>>
+                appliedElementWrites,
             HashSet<ISymbol> visited)
         {
             bool hasKnownValue = false;
@@ -1219,6 +1250,15 @@ public sealed partial class CSharpToGSharpTranslator
                     values.Clear();
                     foreach (ExpressionSyntax previous in previousValues)
                     {
+                        if (appliedElementWrites.TryGetValue(
+                            previous,
+                            out HashSet<AssignmentExpressionSyntax> previousWrites)
+                            && previousWrites.Contains(assignment))
+                        {
+                            values.Add(previous);
+                            continue;
+                        }
+
                         var key = (assignment, previous);
                         if (!elementAssignedValues.TryGetValue(
                             key,
@@ -1231,6 +1271,11 @@ public sealed partial class CSharpToGSharpTranslator
                                 0,
                                 source);
                             elementAssignedValues.Add(key, updated);
+                            var updatedWrites = previousWrites == null
+                                ? new HashSet<AssignmentExpressionSyntax>()
+                                : new HashSet<AssignmentExpressionSyntax>(previousWrites);
+                            updatedWrites.Add(assignment);
+                            appliedElementWrites.Add(updated, updatedWrites);
                         }
 
                         values.Add(updated);
