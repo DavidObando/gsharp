@@ -1603,6 +1603,7 @@ internal sealed partial class StatementBinder
         private readonly Dictionary<VariableSymbol, List<BoundAssignmentExpression>> assignments = new();
         private readonly Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> functionLiterals = new();
         private readonly HashSet<VariableSymbol> unknownFunctionValues = new();
+        private readonly HashSet<VariableSymbol> externalFunctionValues = new();
         private readonly HashSet<BoundFunctionLiteralExpression> visitedFunctionLiterals = new();
         private readonly HashSet<BoundLabel> pendingConditionalTargets = new();
         private HashSet<VariableSymbol>? tryAssignedVariables;
@@ -1714,6 +1715,7 @@ internal sealed partial class StatementBinder
                 // A read-only callable parameter originates outside this
                 // function and cannot capture this function's local slots.
                 MayMutateAnyRoot |= variable.Variable is not ParameterSymbol { IsReadOnly: true }
+                    && !externalFunctionValues.Contains(variable.Variable)
                     && (!functionLiterals.ContainsKey(variable.Variable)
                         || unknownFunctionValues.Contains(variable.Variable));
             }
@@ -1727,10 +1729,26 @@ internal sealed partial class StatementBinder
 
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
+            var externalCallable = node.Initializer != null
+                && IsExternalCallable(node.Initializer);
             if (node.Initializer != null
                 && TryGetFunctionLiterals(node.Initializer, out var literals))
             {
                 functionLiterals[node.Variable] = new HashSet<BoundFunctionLiteralExpression>(literals);
+                if (UnwrapCallable(node.Initializer) is BoundVariableExpression source
+                    && unknownFunctionValues.Contains(source.Variable))
+                {
+                    unknownFunctionValues.Add(node.Variable);
+                }
+
+                if (externalCallable)
+                {
+                    externalFunctionValues.Add(node.Variable);
+                }
+            }
+            else if (externalCallable)
+            {
+                externalFunctionValues.Add(node.Variable);
             }
             else if (node.Initializer != null)
             {
@@ -1785,7 +1803,7 @@ internal sealed partial class StatementBinder
         {
             VisitExpression(node.Discriminant);
             var branchStart = CaptureCallableState();
-            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown)? joined =
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined =
                 node.IsExhaustive ? null : branchStart;
 
             foreach (var arm in node.Arms)
@@ -1804,7 +1822,7 @@ internal sealed partial class StatementBinder
         {
             VisitExpression(node.Discriminant);
             var branchStart = CaptureCallableState();
-            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown)? joined = null;
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined = null;
 
             foreach (var arm in node.Arms)
             {
@@ -1864,33 +1882,36 @@ internal sealed partial class StatementBinder
         }
 
         private static bool CallableStatesEqual(
-            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) left,
-            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) right)
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) left,
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) right)
         {
             return left.Unknown.SetEquals(right.Unknown)
+                && left.External.SetEquals(right.External)
                 && left.Literals.Count == right.Literals.Count
                 && left.Literals.All(entry =>
                     right.Literals.TryGetValue(entry.Key, out var literals)
                     && entry.Value.SetEquals(literals));
         }
 
-        private (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) CaptureCallableState()
+        private (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) CaptureCallableState()
             => (
                 functionLiterals.ToDictionary(
                     entry => entry.Key,
                     entry => new HashSet<BoundFunctionLiteralExpression>(entry.Value)),
-                new HashSet<VariableSymbol>(unknownFunctionValues));
+                new HashSet<VariableSymbol>(unknownFunctionValues),
+                new HashSet<VariableSymbol>(externalFunctionValues));
 
         private void RestoreCallableState(
-            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) state)
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) state)
         {
             functionLiterals.Clear();
             unknownFunctionValues.Clear();
+            externalFunctionValues.Clear();
             MergeCallableState(state);
         }
 
         private void MergeCallableState(
-            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) state)
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) state)
         {
             foreach (var entry in state.Literals)
             {
@@ -1904,11 +1925,12 @@ internal sealed partial class StatementBinder
             }
 
             unknownFunctionValues.UnionWith(state.Unknown);
+            externalFunctionValues.UnionWith(state.External);
         }
 
-        private static (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) JoinCallableStates(
-            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown)? left,
-            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) right)
+        private static (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) JoinCallableStates(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? left,
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) right)
         {
             if (left == null)
             {
@@ -1927,7 +1949,15 @@ internal sealed partial class StatementBinder
             }
 
             left.Value.Unknown.UnionWith(right.Unknown);
+            left.Value.External.UnionWith(right.External);
             return left.Value;
+        }
+
+        private bool IsExternalCallable(BoundExpression expression)
+        {
+            return UnwrapCallable(expression) is BoundVariableExpression variable
+                && (variable.Variable is ParameterSymbol { IsReadOnly: true }
+                    || externalFunctionValues.Contains(variable.Variable));
         }
 
         private bool TryGetFunctionLiterals(
@@ -1990,6 +2020,7 @@ internal sealed partial class StatementBinder
             if (node.Variable != null)
             {
                 tryAssignedVariables?.Add(node.Variable);
+                var externalCallable = IsExternalCallable(node.Expression);
                 if (TryGetFunctionLiterals(node.Expression, out var literals))
                 {
                     if (pendingConditionalTargets.Count > 0
@@ -2012,12 +2043,32 @@ internal sealed partial class StatementBinder
                     {
                         unknownFunctionValues.Remove(node.Variable);
                     }
+
+                    if (externalCallable)
+                    {
+                        externalFunctionValues.Add(node.Variable);
+                    }
+                    else if (pendingConditionalTargets.Count == 0)
+                    {
+                        externalFunctionValues.Remove(node.Variable);
+                    }
+                }
+                else if (externalCallable)
+                {
+                    if (pendingConditionalTargets.Count == 0)
+                    {
+                        functionLiterals.Remove(node.Variable);
+                        unknownFunctionValues.Remove(node.Variable);
+                    }
+
+                    externalFunctionValues.Add(node.Variable);
                 }
                 else
                 {
                     if (pendingConditionalTargets.Count == 0)
                     {
                         functionLiterals.Remove(node.Variable);
+                        externalFunctionValues.Remove(node.Variable);
                     }
 
                     unknownFunctionValues.Add(node.Variable);

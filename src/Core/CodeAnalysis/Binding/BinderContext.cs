@@ -887,6 +887,12 @@ internal sealed class BinderContext
             BackwardGotoNarrowingUseKind.Conversion,
             BackwardGotoNarrowingUseKind.Index);
 
+    public void UntrackBackwardGotoNarrowingIndexUse(VariableSymbol variable, TextLocation location)
+        => UntrackBackwardGotoNarrowingUse(
+            AccessPath.ForVariable(variable),
+            location,
+            BackwardGotoNarrowingUseKind.Index);
+
     public void UntrackBackwardGotoNarrowingConversion(AccessPath path, TextLocation location)
         => UntrackBackwardGotoNarrowingUse(
             path,

@@ -2077,8 +2077,13 @@ internal sealed partial class ExpressionBinder
                 out var readReported,
                 out var readView))
             {
+                ReplaceBackwardGotoIndexUse(
+                    target,
+                    targetLocation,
+                    readIndexer.ContainingType ?? readView ?? target.Type);
                 if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var targetPath, out _)
                     && !targetPath.HasMembers
+                    && targetPath.Root.Type is not NullableTypeSymbol
                     && FindDeclaredIndexer(targetPath.Root.Type, readIndexer) is { } declaredIndexer)
                 {
                     binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath.Root, targetLocation);
@@ -2086,7 +2091,6 @@ internal sealed partial class ExpressionBinder
                     readIndexer = declaredIndexer.Indexer;
                     readSubstitution = declaredIndexer.Substitution;
                     readView = declaredIndexer.View ?? target.Type;
-                    TrackBackwardGotoIndexUse(target, targetLocation);
                 }
 
                 return BindUserIndexerRead(
@@ -2185,17 +2189,21 @@ internal sealed partial class ExpressionBinder
     /// members), building the type-parameter substitution for a constructed
     /// generic receiver (e.g. <c>IBox[int32]</c> over <c>interface IBox[T]</c>).
     /// </summary>
-    private void TrackBackwardGotoIndexUse(BoundExpression target, TextLocation location)
+    private void TrackBackwardGotoIndexUse(
+        BoundExpression target,
+        TextLocation location,
+        TypeSymbol? requiredType = null)
     {
         if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var path, out _))
         {
-            TypeSymbol? requiredType = null;
-            if (target.Type is StructSymbol structType
+            if (requiredType == null
+                && target.Type is StructSymbol structType
                 && TryGetUserIndexer(structType, out var structIndexer, out _))
             {
                 requiredType = structIndexer.ContainingType;
             }
-            else if (target.Type is InterfaceSymbol interfaceType
+            else if (requiredType == null
+                && target.Type is InterfaceSymbol interfaceType
                 && TryGetUserIndexer(interfaceType, out var interfaceIndexer, out _))
             {
                 requiredType = interfaceIndexer.ContainingType;
@@ -2207,6 +2215,22 @@ internal sealed partial class ExpressionBinder
                 string.Empty,
                 BackwardGotoNarrowingUseKind.Index,
                 requiredType: requiredType);
+        }
+    }
+
+    private void ReplaceBackwardGotoIndexUse(
+        BoundExpression target,
+        TextLocation location,
+        TypeSymbol requiredType)
+    {
+        if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var path, out _))
+        {
+            if (path.Root.Type is not NullableTypeSymbol)
+            {
+                binderCtx.UntrackBackwardGotoNarrowingIndexUse(path.Root, location);
+            }
+
+            TrackBackwardGotoIndexUse(target, location, requiredType);
         }
     }
 
@@ -3183,6 +3207,10 @@ internal sealed partial class ExpressionBinder
                 out var writeReported,
                 out var writeView))
             {
+                ReplaceBackwardGotoIndexUse(
+                    target,
+                    diagnosticLocation,
+                    writeIndexer.ContainingType ?? writeView ?? target.Type);
                 target = ViewIndexerReceiver(target, writeView, diagnosticLocation);
                 var selectedIndexer = writeIndexer;
                 var paramType = SubstituteIndexerType(selectedIndexer.Parameters[0].Type, writeSubstitution);

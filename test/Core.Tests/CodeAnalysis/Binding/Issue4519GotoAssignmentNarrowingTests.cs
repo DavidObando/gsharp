@@ -1019,6 +1019,92 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_TracksSelectedInheritedIndexerOverload()
+    {
+        var result = Evaluate("""
+            interface IntValues {
+                prop this[index int32] string { get; }
+            }
+            interface TextValues {
+                prop this[index string] string { get; }
+            }
+            interface BothValues : TextValues, IntValues {
+            }
+            class Dog : BothValues {
+                prop this[index int32] string -> "int"
+                prop this[index string] string -> "text"
+            }
+            class IntOnly : IntValues {
+                prop this[index int32] string -> "int"
+            }
+
+            func Run() string {
+                var x IntValues = Dog{}
+                var count = 0
+                if x is BothValues {
+                Again:
+                    let value = x["key"]
+                    if count == 0 {
+                        count++
+                        x = IntOnly{}
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0116");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_TracksSelectedInheritedIndexerWriteOverload()
+    {
+        var result = Evaluate("""
+            interface IntValues {
+                prop this[index int32] string { get; set; }
+            }
+            interface TextValues {
+                prop this[index string] string { get; set; }
+            }
+            interface BothValues : TextValues, IntValues {
+            }
+            class Dog : BothValues {
+                prop this[index int32] string { get -> "int" set { } }
+                prop this[index string] string { get -> "text" set { } }
+            }
+            class IntOnly : IntValues {
+                prop this[index int32] string { get -> "int" set { } }
+            }
+
+            func Run() {
+                var x IntValues = Dog{}
+                var count = 0
+                if x is BothValues {
+                Again:
+                    x["key"] = "value"
+                    if count == 0 {
+                        count++
+                        x = IntOnly{}
+                        goto Again
+                    }
+                }
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0116");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_ExistingEdgeReceivesLaterMemberAccess()
     {
         var result = Evaluate("""
@@ -2109,6 +2195,38 @@ public class Issue4519GotoAssignmentNarrowingTests
             }
 
             Run(true)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(4, result.Value);
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyPreservesExternalCallableAliasesAcrossJoin()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), choose bool) int32 {
+                var text string? = nil
+                text = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let alias (() -> void) = callback
+                    var action (() -> void) = alias
+                    if choose {
+                        action = callback
+                    }
+                    else {
+                        action = alias
+                    }
+                    action()
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { }, true)
             """);
 
         Assert.Empty(result.Diagnostics);
