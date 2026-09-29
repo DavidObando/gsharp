@@ -1150,6 +1150,62 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ProjectedInferredLocalRejectsFixedValueConsumers()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayFixedLocalConsumer;
+            public sealed class Holder<T> {
+                public T Value;
+            }
+            public class Probe {
+                private static Holder<ManagedRef<int>> Fixed;
+                private static void Use(Holder<ManagedRef<int>> holder) { }
+
+                public static void Pass() {
+                    var source = new ManagedRef<int>[1];
+                    var holder = new Holder<ManagedRef<int>>();
+                    Use(holder);
+                    holder.Value = source[0];
+                }
+
+                public static void Assign() {
+                    var source = new ManagedRef<int>[1];
+                    var holder = new Holder<ManagedRef<int>>();
+                    Fixed = holder;
+                    holder.Value = source[0];
+                }
+
+                public static Holder<ManagedRef<int>> Return() {
+                    var source = new ManagedRef<int>[1];
+                    var holder = new Holder<ManagedRef<int>>();
+                    holder.Value = source[0];
+                    return holder;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayFixedLocalConsumer.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Equal(
+            3,
+            context.Diagnostics.Count(
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "fixed destination storage",
+                    StringComparison.Ordinal)));
+        Assert.DoesNotContain("var holder Holder[managed[int32]?]", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ProjectedReceiverResolvesConstructedGenericBase()
     {
         const string source = """

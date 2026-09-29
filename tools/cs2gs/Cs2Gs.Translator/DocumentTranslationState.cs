@@ -103,11 +103,10 @@ internal sealed class DocumentTranslationState
             new Dictionary<ExpressionSyntax, HashSet<ExpressionSyntax>>(
                 ReferenceEqualityComparer.Instance);
 
-    // Built once per translated body. Each entry maps a receiver symbol to
-    // later member calls and writes that can determine the receiver's projected
-    // constructed type.
+    // Built once per translated body. Each entry maps a symbol to value uses,
+    // member calls, and writes that can constrain its projected constructed type.
     public Dictionary<SyntaxNode, Dictionary<ISymbol, List<SyntaxNode>>>
-        ReceiverConsumersByBody { get; } =
+        ProjectionConsumersByBody { get; } =
             new Dictionary<SyntaxNode, Dictionary<ISymbol, List<SyntaxNode>>>(
                 ReferenceEqualityComparer.Instance);
 

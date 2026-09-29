@@ -5309,7 +5309,7 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.state.CurrentBodyScope is { } body)
             {
                 foreach (SyntaxNode consumer
-                    in this.GetReceiverConsumers(body, local))
+                    in this.GetProjectionConsumers(body, local))
                 {
                     if (consumer.SpanStart <= creationSyntax.SpanStart)
                     {
@@ -5819,7 +5819,7 @@ public sealed partial class CSharpToGSharpTranslator
             BaseObjectCreationExpressionSyntax creation)
         {
             if (this.IsArgumentOfProjectedCallInProgress(creation)
-                || this.IsValueAssignedToProjectedReceiverInProgress(creation))
+                || this.IsValueAssignedToProjectableReceiver(creation))
             {
                 return true;
             }
@@ -5831,7 +5831,7 @@ public sealed partial class CSharpToGSharpTranslator
                     && IsImplicitlyTypedLocal(local)));
         }
 
-        private bool IsValueAssignedToProjectedReceiverInProgress(
+        private bool IsValueAssignedToProjectableReceiver(
             ExpressionSyntax value)
         {
             SyntaxNode current = value;
@@ -5861,8 +5861,12 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             ExpressionSyntax initializer = Unparenthesize(rawInitializer);
-            if (!this.state.ManagedReferenceArrayProjectedCallsInProgress.Contains(
-                    initializer)
+            bool projectionInProgress =
+                this.state.ManagedReferenceArrayProjectedCallsInProgress.Contains(
+                    initializer);
+            if ((!projectionInProgress
+                    && (initializer is not BaseObjectCreationExpressionSyntax creation
+                        || !this.ObjectCreationCanProjectContainingType(creation)))
                 || this.context.GetSymbolInfo(initializer).Symbol
                     is not IMethodSymbol initializerMethod)
             {
@@ -5885,7 +5889,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            this.RecordManagedReferenceArrayProjectionParent(value, initializer);
+            if (projectionInProgress)
+            {
+                this.RecordManagedReferenceArrayProjectionParent(value, initializer);
+            }
+
             return true;
         }
 
@@ -5912,7 +5920,7 @@ public sealed partial class CSharpToGSharpTranslator
             out ITypeSymbol destinationType)
         {
             destinationType = null;
-            if (this.IsValueAssignedToProjectedReceiverInProgress(value))
+            if (this.IsValueAssignedToProjectableReceiver(value))
             {
                 return true;
             }
@@ -6178,11 +6186,11 @@ public sealed partial class CSharpToGSharpTranslator
             return false;
         }
 
-        private IReadOnlyList<SyntaxNode> GetReceiverConsumers(
+        private IReadOnlyList<SyntaxNode> GetProjectionConsumers(
             SyntaxNode body,
-            ISymbol receiver)
+            ISymbol symbol)
         {
-            if (!this.state.ReceiverConsumersByBody.TryGetValue(
+            if (!this.state.ProjectionConsumersByBody.TryGetValue(
                     body,
                     out Dictionary<ISymbol, List<SyntaxNode>> index))
             {
@@ -6191,6 +6199,13 @@ public sealed partial class CSharpToGSharpTranslator
                         SymbolEqualityComparer.Default);
                 foreach (SyntaxNode candidate in body.DescendantNodes())
                 {
+                    if (candidate is IdentifierNameSyntax identifier)
+                    {
+                        AddConsumer(
+                            this.context.GetSymbolInfo(identifier).Symbol,
+                            identifier);
+                    }
+
                     ExpressionSyntax receiverExpression = candidate switch
                     {
                         InvocationExpressionSyntax
@@ -6209,31 +6224,37 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    ISymbol symbol = this.context.GetSymbolInfo(
-                        Unparenthesize(receiverExpression)).Symbol;
-                    if (symbol == null)
+                    AddConsumer(
+                        this.context.GetSymbolInfo(
+                            Unparenthesize(receiverExpression)).Symbol,
+                        candidate);
+                }
+
+                this.state.ProjectionConsumersByBody.Add(body, index);
+
+                void AddConsumer(ISymbol consumerSymbol, SyntaxNode consumer)
+                {
+                    if (consumerSymbol == null)
                     {
-                        continue;
+                        return;
                     }
 
                     if (!index.TryGetValue(
-                            symbol,
+                            consumerSymbol,
                             out List<SyntaxNode> consumers))
                     {
                         consumers = new List<SyntaxNode>();
-                        index.Add(symbol, consumers);
+                        index.Add(consumerSymbol, consumers);
                     }
 
-                    consumers.Add(candidate);
+                    consumers.Add(consumer);
                 }
-
-                this.state.ReceiverConsumersByBody.Add(body, index);
             }
 
             return index.TryGetValue(
-                    receiver,
-                    out List<SyntaxNode> receiverConsumers)
-                ? receiverConsumers
+                    symbol,
+                    out List<SyntaxNode> consumers)
+                ? consumers
                 : Array.Empty<SyntaxNode>();
         }
 
@@ -6327,35 +6348,77 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             bool matches = true;
+            ExpressionSyntax initializer = null;
+            this.state.ManagedReferenceArrayProjectedLocalType[local] = projectedType;
             try
             {
                 if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                        is not VariableDeclaratorSyntax { Initializer.Value: { } initializer }
-                    || !ValueMatches(initializer))
+                        is not VariableDeclaratorSyntax
+                        { Initializer.Value: { } declaredInitializer }
+                    || !ValueMatches(declaredInitializer))
                 {
                     matches = false;
                 }
-
-                if (matches && this.state.CurrentBodyScope is { } scope)
+                else
                 {
-                    foreach (SyntaxNode write in scope.DescendantNodes())
+                    initializer = declaredInitializer;
+                }
+
+                if (matches
+                    && initializer != null
+                    && this.state.CurrentBodyScope is { } scope)
+                {
+                    foreach (IdentifierNameSyntax use
+                        in this.GetProjectionConsumers(scope, local)
+                            .OfType<IdentifierNameSyntax>())
                     {
-                        if (!this.SyntaxNodeWritesSymbol(write, local))
+                        if (use.SpanStart <= initializer.Span.End
+                            || !this.BindsTo(use, local))
                         {
                             continue;
                         }
 
-                        if (write is not AssignmentExpressionSyntax assignment)
+                        SyntaxNode write = use.AncestorsAndSelf().FirstOrDefault(
+                            node => this.SyntaxNodeWritesSymbol(node, local));
+                        if (write != null)
                         {
+                            if (write is not AssignmentExpressionSyntax assignment)
+                            {
+                                continue;
+                            }
+
+                            if (!assignment.IsKind(
+                                    SyntaxKind.SimpleAssignmentExpression)
+                                || !this.BindsTo(assignment.Left, local)
+                                || !ValueMatches(assignment.Right))
+                            {
+                                matches = false;
+                                break;
+                            }
+
                             continue;
                         }
 
-                        if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
-                            || !this.BindsTo(assignment.Left, local)
-                            || !ValueMatches(assignment.Right))
+                        if (!this.ProjectedResultMatchesDestination(
+                                use,
+                                projectedType,
+                                out _))
                         {
                             matches = false;
                             break;
+                        }
+
+                        if (use.Parent is ArgumentSyntax
+                                { Parent.Parent: ExpressionSyntax consumer }
+                            && this.state.ManagedReferenceArrayProjectedMethodByCall
+                                .TryGetValue(
+                                    consumer,
+                                    out IMethodSymbol projectedConsumer)
+                            && projectedConsumer != null)
+                        {
+                            this.RecordManagedReferenceArrayProjectionParent(
+                                consumer,
+                                projectedValue);
                         }
                     }
                 }
