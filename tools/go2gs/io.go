@@ -176,11 +176,15 @@ func validateLimits(l Limits) error {
 }
 
 func readAnalysis(path string) (Analysis, error) {
-	var analysis Analysis
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return analysis, err
+		return Analysis{}, err
 	}
+	return decodeAnalysis(data)
+}
+
+func decodeAnalysis(data []byte) (Analysis, error) {
+	var analysis Analysis
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&analysis); err != nil {
@@ -190,6 +194,113 @@ func readAnalysis(path string) (Analysis, error) {
 		return analysis, err
 	}
 	return analysis, nil
+}
+
+func readWorkerArtifacts(root string, maxBytes int64) ([]byte, []byte, Analysis, error) {
+	analysisBytes, err := readBoundedRegularFile(filepath.Join(root, "analysis.json"), maxBytes)
+	if err != nil {
+		return nil, nil, Analysis{}, fmt.Errorf("read analysis worker result: %w", err)
+	}
+	analysis, err := decodeAnalysis(analysisBytes)
+	if err != nil {
+		return nil, nil, Analysis{}, fmt.Errorf("validate analysis worker result: %w", err)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		return nil, nil, Analysis{}, fmt.Errorf("validate analysis worker result: %w", err)
+	}
+	canonicalAnalysis, err := marshalCanonical(analysis)
+	if err != nil || !bytes.Equal(canonicalAnalysis, analysisBytes) {
+		return nil, nil, Analysis{}, errors.New("analysis worker result is not canonical schema v1 JSON")
+	}
+	runBytes, err := readBoundedRegularFile(filepath.Join(root, "run.json"), maxBytes)
+	if err != nil {
+		return nil, nil, Analysis{}, fmt.Errorf("read analysis worker metadata: %w", err)
+	}
+	var run RunMetadata
+	decoder := json.NewDecoder(bytes.NewReader(runBytes))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&run); err != nil {
+		return nil, nil, Analysis{}, fmt.Errorf("invalid analysis worker metadata: %w", err)
+	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		return nil, nil, Analysis{}, errors.New("analysis worker metadata has trailing JSON")
+	}
+	if run.SchemaVersion != schemaVersion || run.AnalysisBytes != int64(len(analysisBytes)) ||
+		run.PackageCount != len(analysis.Packages) || run.RecordCount != analysis.RecordCounts.Total {
+		return nil, nil, Analysis{}, errors.New("analysis worker metadata does not match its analysis")
+	}
+	canonicalRun, err := marshalCanonical(run)
+	if err != nil || !bytes.Equal(canonicalRun, runBytes) {
+		return nil, nil, Analysis{}, errors.New("analysis worker metadata is not canonical JSON")
+	}
+	return analysisBytes, runBytes, analysis, nil
+}
+
+func publishWorkerArtifacts(outRoot string, analysisBytes, runBytes []byte, beforeRun func()) error {
+	analysisPath := filepath.Join(outRoot, "analysis.json")
+	if err := atomicWrite(analysisPath, analysisBytes, 0o644); err != nil {
+		return err
+	}
+	analysisInfo, err := os.Lstat(analysisPath)
+	if err != nil {
+		return err
+	}
+	if beforeRun != nil {
+		beforeRun()
+	}
+	if err := atomicWrite(filepath.Join(outRoot, "run.json"), runBytes, 0o644); err != nil {
+		removeIfSameFile(analysisPath, analysisInfo)
+		return err
+	}
+	return nil
+}
+
+func lockAndInvalidateOutput(outRoot string) (func(), error) {
+	lockPath := filepath.Join(outRoot, ".go2gs-lock")
+	if err := os.Mkdir(lockPath, 0o700); err != nil {
+		return nil, fmt.Errorf("lock output directory: %w", err)
+	}
+	lockInfo, err := os.Lstat(lockPath)
+	if err != nil {
+		_ = os.Remove(lockPath)
+		return nil, err
+	}
+	release := func() {
+		if current, statErr := os.Lstat(lockPath); statErr == nil && os.SameFile(lockInfo, current) {
+			_ = os.Remove(lockPath)
+		}
+	}
+	entries, err := os.ReadDir(outRoot)
+	if err != nil {
+		release()
+		return nil, err
+	}
+	for _, entry := range entries {
+		name := entry.Name()
+		if name == "analysis.json" || name == "run.json" {
+			if entry.IsDir() {
+				release()
+				return nil, fmt.Errorf("owned output path is a directory: %s", name)
+			}
+			if err := os.Remove(filepath.Join(outRoot, name)); err != nil {
+				release()
+				return nil, fmt.Errorf("remove stale go2gs output %s: %w", name, err)
+			}
+			continue
+		}
+		if strings.HasPrefix(name, ".analysis.json.staged-") ||
+			strings.HasPrefix(name, ".run.json.staged-") ||
+			strings.HasPrefix(name, ".go2gs-worker-") ||
+			strings.HasPrefix(name, ".go2gs-bootstrap-") ||
+			name == ".go2gs-work" || strings.HasPrefix(name, ".go2gs-work-") {
+			if err := os.RemoveAll(filepath.Join(outRoot, name)); err != nil {
+				release()
+				return nil, fmt.Errorf("remove stale go2gs output %s: %w", name, err)
+			}
+		}
+	}
+	return release, nil
 }
 
 func validateAnalysisJSONShape(data []byte) error {

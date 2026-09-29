@@ -84,7 +84,13 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 	if err != nil {
 		return Analysis{}, false, err
 	}
+	if versionResult.ExitCode != 0 {
+		return Analysis{}, false, fmt.Errorf("resolve selected Go version: %s", strings.TrimSpace(versionResult.Stderr))
+	}
 	actualVersion := parseGoVersion(versionResult.Stdout)
+	if actualVersion == "" {
+		return Analysis{}, false, errors.New("selected Go executable returned an unrecognized version")
+	}
 	gorootResult, err := runProcess(ctx, 15*time.Second, profile.Limits.MaxLogBytes, sourceRoot, executable, []string{"env", "GOROOT"}, bootstrapEnv)
 	if err != nil {
 		return Analysis{}, false, err
@@ -140,10 +146,12 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 		Toolchain: toolchain,
 	}
 
-	builder := newInventoryBuilder(&analysis, sourceRoot, targetGOROOT, profile)
-	if err := builder.collectManifests(); err != nil {
+	manifests, err := snapshotManifests(sourceRoot, profile.Limits.MaxLocalHashBytes)
+	if err != nil {
 		return Analysis{}, false, err
 	}
+	builder := newInventoryBuilder(&analysis, sourceRoot, targetGOROOT, profile)
+	builder.collectManifests(manifests.records)
 	analysis.Profile.SourceRootIdentity = sourceIdentity(actualCommit, analysis.Manifests)
 	if sourceCommitErr != nil {
 		builder.block("source-metadata", sourceCommitErr.Error(), nil, nil)
@@ -216,6 +224,9 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 
 	all := collectPackages(loaded)
 	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, sourceRoot)
+	if !verifyManifestSnapshot(manifests, sourceRoot, profile.Limits.MaxLocalHashBytes) {
+		builder.block("input-drift", "module or workspace manifests changed while loading", nil, nil)
+	}
 	builder.snapshotFiles = sourceSnapshot.packageFiles
 	builder.selectedSnapshotFiles = sourceSnapshot.selectedFiles
 	builder.snapshotRoles = sourceSnapshot.packageRoles
@@ -244,6 +255,93 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 type snapshottedInput struct {
 	data []byte
 	info os.FileInfo
+}
+
+var manifestNames = []string{
+	"go.mod",
+	"go.sum",
+	"go.work",
+	"go.work.sum",
+	filepath.Join("vendor", "modules.txt"),
+}
+
+type manifestSnapshot struct {
+	records []ManifestRecord
+	files   map[string]snapshottedInput
+}
+
+func snapshotManifests(sourceRoot string, limit int64) (manifestSnapshot, error) {
+	result := manifestSnapshot{files: map[string]snapshottedInput{}}
+	var total int64
+	for _, name := range manifestNames {
+		path, err := safeJoin(sourceRoot, name)
+		if err != nil {
+			return manifestSnapshot{}, err
+		}
+		initialInfo, err := os.Lstat(path)
+		if os.IsNotExist(err) {
+			continue
+		}
+		if err != nil {
+			return manifestSnapshot{}, fmt.Errorf("inspect manifest %s: %w", name, err)
+		}
+		if !initialInfo.Mode().IsRegular() {
+			return manifestSnapshot{}, fmt.Errorf("manifest is not a regular file: %s", name)
+		}
+		if err := rejectSymlinkBelow(sourceRoot, path); err != nil {
+			return manifestSnapshot{}, fmt.Errorf("manifest path %s: %w", name, err)
+		}
+		if _, err := pathWithin(sourceRoot, path); err != nil {
+			return manifestSnapshot{}, fmt.Errorf("manifest path %s: %w", name, err)
+		}
+		data, err := readBoundedRegularFile(path, limit-total)
+		if err != nil {
+			return manifestSnapshot{}, fmt.Errorf("read manifest %s: %w", name, err)
+		}
+		finalInfo, err := os.Lstat(path)
+		if err != nil || !finalInfo.Mode().IsRegular() || !os.SameFile(initialInfo, finalInfo) {
+			return manifestSnapshot{}, fmt.Errorf("manifest changed while reading: %s", name)
+		}
+		total += int64(len(data))
+		result.files[path] = snapshottedInput{data: data, info: finalInfo}
+		result.records = append(result.records, ManifestRecord{
+			Kind: filepath.Base(name), Path: "source://" + slash(name),
+			SHA256: hashBytes(data), Bytes: int64(len(data)),
+		})
+	}
+	sort.Slice(result.records, func(i, j int) bool { return result.records[i].Path < result.records[j].Path })
+	return result, nil
+}
+
+func verifyManifestSnapshot(snapshot manifestSnapshot, sourceRoot string, limit int64) bool {
+	for _, name := range manifestNames {
+		path, err := safeJoin(sourceRoot, name)
+		if err != nil {
+			return false
+		}
+		captured, existed := snapshot.files[path]
+		info, err := os.Lstat(path)
+		if !existed {
+			if err == nil || !os.IsNotExist(err) {
+				return false
+			}
+			continue
+		}
+		if err != nil || !info.Mode().IsRegular() || !os.SameFile(captured.info, info) {
+			return false
+		}
+		if err := rejectSymlinkBelow(sourceRoot, path); err != nil {
+			return false
+		}
+		if _, err := pathWithin(sourceRoot, path); err != nil {
+			return false
+		}
+		data, err := readBoundedRegularFile(path, min(limit, int64(len(captured.data))+1))
+		if err != nil || !bytes.Equal(data, captured.data) {
+			return false
+		}
+	}
+	return true
 }
 
 type packageInputSnapshot struct {
@@ -626,12 +724,45 @@ func packageVariant(pkg *packages.Package) string {
 
 func parseGoVersion(output string) string {
 	fields := strings.Fields(output)
-	for _, field := range fields {
-		if strings.HasPrefix(field, "go1.") {
-			return strings.TrimPrefix(field, "go")
+	if len(fields) < 3 || fields[0] != "go" || fields[1] != "version" || !strings.HasPrefix(fields[2], "go1.") {
+		return ""
+	}
+	version := strings.TrimPrefix(fields[2], "go")
+	rest := version[2:]
+	minorLength := leadingDigits(rest)
+	if minorLength == 0 {
+		return ""
+	}
+	rest = rest[minorLength:]
+	if strings.HasPrefix(rest, ".") {
+		rest = rest[1:]
+		patchLength := leadingDigits(rest)
+		if patchLength == 0 {
+			return ""
+		}
+		rest = rest[patchLength:]
+	}
+	for _, prefix := range []string{"beta", "rc"} {
+		if strings.HasPrefix(rest, prefix) {
+			rest = rest[len(prefix):]
+			if leadingDigits(rest) != len(rest) || rest == "" {
+				return ""
+			}
+			return version
 		}
 	}
-	return strings.TrimSpace(output)
+	if rest != "" {
+		return ""
+	}
+	return version
+}
+
+func leadingDigits(value string) int {
+	index := 0
+	for index < len(value) && value[index] >= '0' && value[index] <= '9' {
+		index++
+	}
+	return index
 }
 
 func sourceCommit(root string) (string, error) {

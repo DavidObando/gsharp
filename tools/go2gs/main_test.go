@@ -1223,6 +1223,63 @@ func TestMissingGoBootstrapProducesNoArtifact(t *testing.T) {
 	}
 }
 
+func TestInvalidGoVersionBootstrapRemovesStaleArtifacts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled shell toolchain fixture")
+	}
+	for name, body := range map[string]string{
+		"nonzero":   "#!/bin/sh\necho broken >&2\nexit 7\n",
+		"malformed": "#!/bin/sh\necho not-a-go-version\n",
+		"empty":     "#!/bin/sh\nexit 0\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			dir := t.TempDir()
+			logPath := filepath.Join(dir, "go.log")
+			script := "#!/bin/sh\nprintf '%s\\n' \"$*\" >> " + strconv.Quote(logPath) + "\n" + strings.TrimPrefix(body, "#!/bin/sh\n")
+			if err := os.WriteFile(filepath.Join(dir, "go"), []byte(script), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			profilePath := filepath.Join(dir, "profile.json")
+			data, err := json.Marshal(testProfile())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(profilePath, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			out := filepath.Join(dir, "out")
+			if err := os.Mkdir(out, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			out, err = secureRoot(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, artifact := range []string{"analysis.json", "run.json"} {
+				if err := os.WriteFile(filepath.Join(out, artifact), []byte("stale"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Setenv("PATH", dir)
+			err = runAnalyze(t.Context(), []string{"--source", root, "--profile", profilePath, "--out", out})
+			var exitErr *exitError
+			if !errors.As(err, &exitErr) || exitErr.code != 2 {
+				t.Fatalf("invalid Go version should exit 2, got %v", err)
+			}
+			for _, artifact := range []string{"analysis.json", "run.json"} {
+				if _, statErr := os.Lstat(filepath.Join(out, artifact)); !os.IsNotExist(statErr) {
+					t.Fatalf("bootstrap failure retained stale %s: %v", artifact, statErr)
+				}
+			}
+			log, err := os.ReadFile(logPath)
+			if err != nil || strings.TrimSpace(string(log)) != "version" {
+				t.Fatalf("bootstrap continued past invalid go version: %q, %v", log, err)
+			}
+		})
+	}
+}
+
 func TestAtomicWriteDoesNotFollowPredictableSymlinks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("controlled symlink fixture")
@@ -1330,6 +1387,101 @@ func TestAtomicWriteFailurePreservesConcurrentSuccessfulOutput(t *testing.T) {
 	}
 }
 
+func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
+	out := t.TempDir()
+	unrelated := filepath.Join(out, "keep.txt")
+	for name, content := range map[string]string{
+		"analysis.json":                 "stale analysis",
+		"run.json":                      "stale run",
+		".analysis.json.staged-crashed": "staged",
+		"keep.txt":                      "keep",
+	} {
+		if err := os.WriteFile(filepath.Join(out, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.Mkdir(filepath.Join(out, ".go2gs-worker-crashed"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	release, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := lockAndInvalidateOutput(out); err == nil {
+		t.Fatal("concurrent output writer acquired the same lock")
+	}
+	for _, name := range []string{"analysis.json", "run.json", ".analysis.json.staged-crashed", ".go2gs-worker-crashed"} {
+		if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
+			t.Fatalf("owned stale output %s remains: %v", name, err)
+		}
+	}
+	if data, err := os.ReadFile(unrelated); err != nil || string(data) != "keep" {
+		t.Fatalf("unrelated output was changed: %q, %v", data, err)
+	}
+	if err := publishWorkerArtifacts(out, []byte("new analysis"), []byte("new run"), func() {
+		if mkdirErr := os.Mkdir(filepath.Join(out, "run.json"), 0o755); mkdirErr != nil {
+			t.Fatal(mkdirErr)
+		}
+	}); err == nil {
+		t.Fatal("worker publish unexpectedly succeeded")
+	}
+	if _, err := os.Lstat(filepath.Join(out, "analysis.json")); !os.IsNotExist(err) {
+		t.Fatalf("failed publish retained analysis.json: %v", err)
+	}
+	release()
+	if _, err := os.Lstat(filepath.Join(out, ".go2gs-lock")); !os.IsNotExist(err) {
+		t.Fatalf("output lock was not released: %v", err)
+	}
+}
+
+func TestLoadFailureReplacesStaleSuccessfulArtifacts(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled CGo loader failure fixture")
+	}
+	root := copyFixture(t, "pkgconfig")
+	out := t.TempDir()
+	out, err := secureRoot(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profilePath := filepath.Join(t.TempDir(), "profile.json")
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.CCompiler = approvedCompiler(t)
+	profileBytes, err := marshalCanonical(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, profileBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if err := os.WriteFile(filepath.Join(out, name), []byte("stale-success"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	release, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	err = runAnalyzeWorker(t.Context(), []string{"--source", root, "--profile", profilePath, "--out", out})
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 1 {
+		t.Fatalf("invalid package should produce an incomplete inventory, got %v", err)
+	}
+	analysis, err := readAnalysis(filepath.Join(out, "analysis.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.InventoryComplete || !hasBlockerCategory(analysis, "pkg-config") {
+		t.Fatalf("load failure did not replace stale success: %#v", analysis.Blockers)
+	}
+	if data, err := os.ReadFile(filepath.Join(out, "run.json")); err != nil || bytes.Equal(data, []byte("stale-success")) {
+		t.Fatalf("run metadata was not replaced: %q, %v", data, err)
+	}
+}
+
 func TestImmutableInputSnapshotDetectsLoadTimeDrift(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -1432,6 +1584,88 @@ func TestImmutableInputSnapshotDetectsLoadTimeDrift(t *testing.T) {
 	nativeData, err := base64.StdEncoding.DecodeString(analysis.Files[index].ContentBase64)
 	if err != nil || !bytes.Equal(nativeData, originalNative) {
 		t.Fatalf("inventory did not use captured native bytes: %q, %v", nativeData, err)
+	}
+}
+
+func TestManifestSnapshotRejectsSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled symlink fixture")
+	}
+	for _, name := range []string{"go.mod", "go.sum", filepath.Join("vendor", "modules.txt")} {
+		t.Run(filepath.ToSlash(name), func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			path := filepath.Join(root, name)
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			_ = os.Remove(path)
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("module outside\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, path); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := snapshotManifests(root, testProfile().Limits.MaxLocalHashBytes); err == nil {
+				t.Fatalf("symlinked manifest %s was accepted", name)
+			}
+		})
+	}
+}
+
+func TestManifestSnapshotDetectsLoadTimeDrift(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		path   string
+		create string
+		mutate func(*testing.T, string)
+	}{
+		{"change-go-mod", "go.mod", "", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("module example.com/changed\n\ngo 1.27.0\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"delete-go-sum", "go.sum", "example.com/module v1.0.0 h1:test\n", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"replace-vendor-manifest", filepath.Join("vendor", "modules.txt"), "# captured\n", func(t *testing.T, path string) {
+			replacement := path + ".replacement"
+			if err := os.WriteFile(replacement, []byte("# captured\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"add-go-sum", "go.sum", "", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("added\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			path := filepath.Join(root, test.path)
+			if test.create != "" {
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(test.create), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				test.mutate(t, path)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("manifest drift was not fail-closed: complete=%v blockers=%#v", complete, analysis.Blockers)
+			}
+		})
 	}
 }
 
@@ -1680,6 +1914,7 @@ func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing
 	if err := os.WriteFile(path, []byte(`{"schema":{"name":"go2gs.analysis","version":1}}`), 0o644); err != nil {
 		t.Fatal(err)
 	}
+
 	var exitErr *exitError
 	err := runValidate([]string{"--analysis", path})
 	if !errors.As(err, &exitErr) || exitErr.code != 2 {
@@ -1737,6 +1972,17 @@ func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing
 	err = runValidate([]string{"--analysis", path})
 	if !errors.As(err, &exitErr) || exitErr.code != 2 {
 		t.Fatalf("missing record field should exit 2, got %v", err)
+	}
+}
+
+func TestSchemaV1RejectsMigrationReady(t *testing.T) {
+	analysis := validIncompleteAnalysis()
+	analysis.Blockers = []BlockerRecord{}
+	analysis.RecordCounts = RecordCounts{}
+	analysis.InventoryComplete = true
+	analysis.MigrationReady = true
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "migrationReady") {
+		t.Fatalf("schema v1 accepted migrationReady=true: %v", err)
 	}
 }
 
@@ -2482,6 +2728,36 @@ func TestProcessRunnerDrainsAndBoundsBothStreams(t *testing.T) {
 	}
 }
 
+func TestAnalysisWorkerRunnerBoundsLogsAndKillsDescendants(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	result, err := runAnalysisWorkerProcess(t.Context(), 5*time.Second, 1024, "", executable,
+		[]string{"-test.run=TestProcessHelper"}, []string{"GO2GS_PROCESS_HELPER=output"})
+	if err != nil || !result.StdoutTruncated || !result.StderrTruncated {
+		t.Fatalf("worker logs were not bounded: result=%#v err=%v", result, err)
+	}
+	if runtime.GOOS == "windows" {
+		return
+	}
+	stateDir := t.TempDir()
+	marker := filepath.Join(stateDir, "descendant-survived")
+	_, err = runAnalysisWorkerProcess(t.Context(), 50*time.Millisecond, 1024, "", executable,
+		[]string{"-test.run=TestProcessHelper"}, []string{
+			"GO2GS_PROCESS_HELPER=tree",
+			"GO2GS_CHILD_MARKER=" + marker,
+			"GO2GS_CHILD_PID=" + filepath.Join(stateDir, "child.pid"),
+		})
+	if err == nil || !strings.Contains(err.Error(), "timed out") {
+		t.Fatalf("worker tree was not cancelled: %v", err)
+	}
+	time.Sleep(700 * time.Millisecond)
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("worker descendant survived cancellation: %v", err)
+	}
+}
+
 func TestProcessRunnerCancels(t *testing.T) {
 	executable, err := os.Executable()
 	if err != nil {
@@ -2559,7 +2835,7 @@ func TestProcessHelper(t *testing.T) {
 		}
 	case "tree":
 		child := exec.Command(os.Args[0], "-test.run=TestProcessHelper")
-		child.Env = []string{"GO2GS_PROCESS_HELPER=child-sleep"}
+		child.Env = []string{"GO2GS_PROCESS_HELPER=child-marker", "GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER")}
 		if err := child.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -2567,6 +2843,9 @@ func TestProcessHelper(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(10 * time.Second)
+	case "child-marker":
+		time.Sleep(500 * time.Millisecond)
+		_ = os.WriteFile(os.Getenv("GO2GS_CHILD_MARKER"), []byte("survived"), 0o600)
 	case "child-sleep":
 		time.Sleep(10 * time.Second)
 	default:
