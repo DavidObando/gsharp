@@ -82,6 +82,12 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 (tupleAssignedPair, tupleAssignmentOther) =
                     incomingTupleAssignment;
                 var (tupleAssignedLeft, tupleAssignedRight) = tupleAssignedPair;
+                var conditionalTupleAssignedPair = (replacement, replacement);
+                (conditionalTupleAssignedPair, tupleAssignmentOther) = choose
+                    ? ((default(T), default(T)), replacement)
+                    : ((replacement, replacement), replacement);
+                var (conditionalTupleAssignedLeft, conditionalTupleAssignedRight) =
+                    conditionalTupleAssignedPair;
                 var duplicatePair = (replacement, replacement);
                 (duplicatePair, duplicatePair) =
                     ((replacement, replacement), (default(T), default(T)));
@@ -95,6 +101,17 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 System.Action deferredDefault = () =>
                     closurePair = (default(T), default(T));
                 var (closureLeft, closureRight) = closurePair;
+                var cycleA = (replacement, replacement);
+                var cycleB = (replacement, replacement);
+                if (choose)
+                {
+                    cycleA = cycleB;
+                }
+                else
+                {
+                    cycleB = cycleA;
+                }
+                var (cycleLeft, cycleRight) = cycleA;
                 var exitingPair = (replacement, replacement);
                 if (!choose)
                 {
@@ -154,6 +171,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref conditionallyAssignedRight, replacement);
                 Fill(ref tupleAssignedLeft, replacement);
                 Fill(ref tupleAssignedRight, replacement);
+                Fill(ref conditionalTupleAssignedLeft, replacement);
+                Fill(ref conditionalTupleAssignedRight, replacement);
                 Fill(ref duplicateLeft, replacement);
                 Fill(ref duplicateRight, replacement);
                 Fill(ref conditionalLeft, replacement);
@@ -414,6 +433,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "assignedLeft", "assignedRight",
             "conditionallyAssignedLeft", "conditionallyAssignedRight",
             "tupleAssignedLeft", "tupleAssignedRight",
+            "conditionalTupleAssignedLeft", "conditionalTupleAssignedRight",
             "duplicateLeft", "duplicateRight",
             "conditionalLeft", "conditionalRight", "switchLeft", "switchRight",
             "coalesceLeft", "coalesceRight",
@@ -445,6 +465,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("reassignedRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("closureLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("closureRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("cycleLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("cycleRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("finalReplacementLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("finalReplacementRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingLeft T? =", printed, StringComparison.Ordinal);
@@ -467,6 +489,23 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0612");
         Assert.Null(result.UnhandledException);
         Assert.Equal(18, result.Value);
+    }
+
+    [Fact]
+    public void Translation_TopLevelAliasKeepsDefaultProvenance()
+    {
+        const string source = """
+            #nullable enable
+            var pair = (default(string), default(string));
+            var (left, right) = pair;
+            pair = ("left", "right");
+            System.Console.WriteLine(left ?? right);
+            """;
+
+        string printed = Translate(source, OutputKind.ConsoleApplication);
+
+        Assert.Matches(@"\b(let|var) left string\? =", printed);
+        Assert.Matches(@"\b(let|var) right string\? =", printed);
     }
 
     [Fact]
@@ -511,9 +550,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         return Translate(Source);
     }
 
-    private static string Translate(string source)
+    private static string Translate(
+        string source,
+        OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary)
     {
-        LoadedCSharpProject project = Load(source);
+        LoadedCSharpProject project = Load(source, outputKind);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
@@ -526,10 +567,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         return Load(Source);
     }
 
-    private static LoadedCSharpProject Load(string source)
+    private static LoadedCSharpProject Load(
+        string source,
+        OutputKind outputKind = OutputKind.DynamicallyLinkedLibrary)
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Snippet.cs", source) });
+            new[] { ("Snippet.cs", source) },
+            outputKind: outputKind);
         Assert.True(
             project.BoundWithoutErrors,
             string.Join(Environment.NewLine, project.ErrorDiagnostics));

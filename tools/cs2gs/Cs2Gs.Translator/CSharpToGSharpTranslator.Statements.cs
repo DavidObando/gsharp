@@ -457,13 +457,18 @@ public sealed partial class CSharpToGSharpTranslator
                             visited));
             }
 
+            if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+            {
+                return false;
+            }
+
             if (this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local
                 || !visited.Add(local))
             {
                 return false;
             }
 
-            return this.GetReachingLocalValues(local, expression.SpanStart).Any(value =>
+            return this.GetReachingLocalValues(local, expression.SpanStart, visited).Any(value =>
                 this.InferredInitializerOriginatesFromDefault(
                     value,
                     new HashSet<ISymbol>(visited, SymbolEqualityComparer.Default)));
@@ -634,19 +639,27 @@ public sealed partial class CSharpToGSharpTranslator
         private ExpressionSyntax FindDeconstructionInitializer(
             SingleVariableDesignationSyntax target,
             ExpressionSyntax left,
-            ExpressionSyntax right)
+            ExpressionSyntax right,
+            HashSet<ISymbol> visited = null)
         {
+            visited ??= new HashSet<ISymbol>(SymbolEqualityComparer.Default);
             left = Unwrap(left);
-            if (this.context.GetSymbolInfo(right).Symbol is ILocalSymbol alias)
+            if (right.SyntaxTree == this.context.SemanticModel.SyntaxTree
+                && this.context.GetSymbolInfo(right).Symbol is ILocalSymbol alias)
             {
+                if (!visited.Add(alias))
+                {
+                    return null;
+                }
+
                 IReadOnlyList<ExpressionSyntax> reaching =
-                    this.GetReachingLocalValues(alias, right.SpanStart);
+                    this.GetReachingLocalValues(alias, right.SpanStart, visited);
                 if (reaching.Count > 1)
                 {
                     foreach (ExpressionSyntax value in reaching)
                     {
                         ExpressionSyntax found =
-                            FindDeconstructionInitializer(target, left, value);
+                            FindDeconstructionInitializer(target, left, value, visited);
                         if (this.InitializerOriginatesFromDefault(found))
                         {
                             return found;
@@ -668,26 +681,38 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (left is DeclarationExpressionSyntax declaration)
             {
-                return FindDeconstructionInitializer(target, declaration.Designation, right);
+                return FindDeconstructionInitializer(
+                    target,
+                    declaration.Designation,
+                    right,
+                    visited);
             }
 
             if (right is ConditionalExpressionSyntax conditional)
             {
                 ExpressionSyntax found =
-                    FindDeconstructionInitializer(target, left, conditional.WhenTrue);
+                    FindDeconstructionInitializer(
+                        target,
+                        left,
+                        conditional.WhenTrue,
+                        visited);
                 return this.InitializerOriginatesFromDefault(found)
                     ? found
-                    : FindDeconstructionInitializer(target, left, conditional.WhenFalse);
+                    : FindDeconstructionInitializer(
+                        target,
+                        left,
+                        conditional.WhenFalse,
+                        visited);
             }
 
             if (right is BinaryExpressionSyntax coalesce
                 && coalesce.IsKind(SyntaxKind.CoalesceExpression))
             {
                 ExpressionSyntax found =
-                    FindDeconstructionInitializer(target, left, coalesce.Left);
+                    FindDeconstructionInitializer(target, left, coalesce.Left, visited);
                 return this.InitializerOriginatesFromDefault(found)
                     ? found
-                    : FindDeconstructionInitializer(target, left, coalesce.Right);
+                    : FindDeconstructionInitializer(target, left, coalesce.Right, visited);
             }
 
             if (right is SwitchExpressionSyntax switchExpression)
@@ -695,7 +720,11 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
                 {
                     ExpressionSyntax found =
-                        FindDeconstructionInitializer(target, left, arm.Expression);
+                        FindDeconstructionInitializer(
+                            target,
+                            left,
+                            arm.Expression,
+                            visited);
                     if (this.InitializerOriginatesFromDefault(found))
                     {
                         return found;
@@ -717,7 +746,8 @@ public sealed partial class CSharpToGSharpTranslator
                 ExpressionSyntax found = FindDeconstructionInitializer(
                     target,
                     leftTuple.Arguments[i].Expression,
-                    rightTuple.Arguments[i].Expression);
+                    rightTuple.Arguments[i].Expression,
+                    visited);
                 if (found != null)
                 {
                     return found;
@@ -730,24 +760,36 @@ public sealed partial class CSharpToGSharpTranslator
         private ExpressionSyntax FindDeconstructionInitializer(
             SingleVariableDesignationSyntax target,
             VariableDesignationSyntax designation,
-            ExpressionSyntax right)
+            ExpressionSyntax right,
+            HashSet<ISymbol> visited = null)
         {
+            visited ??= new HashSet<ISymbol>(SymbolEqualityComparer.Default);
             if (designation.SyntaxTree == target.SyntaxTree
                 && designation.Span == target.Span)
             {
                 return right;
             }
 
-            if (this.context.GetSymbolInfo(right).Symbol is ILocalSymbol alias)
+            if (right.SyntaxTree == this.context.SemanticModel.SyntaxTree
+                && this.context.GetSymbolInfo(right).Symbol is ILocalSymbol alias)
             {
+                if (!visited.Add(alias))
+                {
+                    return null;
+                }
+
                 IReadOnlyList<ExpressionSyntax> reaching =
-                    this.GetReachingLocalValues(alias, right.SpanStart);
+                    this.GetReachingLocalValues(alias, right.SpanStart, visited);
                 if (reaching.Count > 1)
                 {
                     foreach (ExpressionSyntax value in reaching)
                     {
                         ExpressionSyntax found =
-                            FindDeconstructionInitializer(target, designation, value);
+                            FindDeconstructionInitializer(
+                                target,
+                                designation,
+                                value,
+                                visited);
                         if (this.InitializerOriginatesFromDefault(found))
                         {
                             return found;
@@ -769,20 +811,36 @@ public sealed partial class CSharpToGSharpTranslator
             if (right is ConditionalExpressionSyntax conditional)
             {
                 ExpressionSyntax found =
-                    FindDeconstructionInitializer(target, designation, conditional.WhenTrue);
+                    FindDeconstructionInitializer(
+                        target,
+                        designation,
+                        conditional.WhenTrue,
+                        visited);
                 return this.InitializerOriginatesFromDefault(found)
                     ? found
-                    : FindDeconstructionInitializer(target, designation, conditional.WhenFalse);
+                    : FindDeconstructionInitializer(
+                        target,
+                        designation,
+                        conditional.WhenFalse,
+                        visited);
             }
 
             if (right is BinaryExpressionSyntax coalesce
                 && coalesce.IsKind(SyntaxKind.CoalesceExpression))
             {
                 ExpressionSyntax found =
-                    FindDeconstructionInitializer(target, designation, coalesce.Left);
+                    FindDeconstructionInitializer(
+                        target,
+                        designation,
+                        coalesce.Left,
+                        visited);
                 return this.InitializerOriginatesFromDefault(found)
                     ? found
-                    : FindDeconstructionInitializer(target, designation, coalesce.Right);
+                    : FindDeconstructionInitializer(
+                        target,
+                        designation,
+                        coalesce.Right,
+                        visited);
             }
 
             if (right is SwitchExpressionSyntax switchExpression)
@@ -790,7 +848,11 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
                 {
                     ExpressionSyntax found =
-                        FindDeconstructionInitializer(target, designation, arm.Expression);
+                        FindDeconstructionInitializer(
+                            target,
+                            designation,
+                            arm.Expression,
+                            visited);
                     if (this.InitializerOriginatesFromDefault(found))
                     {
                         return found;
@@ -812,7 +874,8 @@ public sealed partial class CSharpToGSharpTranslator
                 ExpressionSyntax found = FindDeconstructionInitializer(
                     target,
                     parenthesized.Variables[i],
-                    rightTuple.Arguments[i].Expression);
+                    rightTuple.Arguments[i].Expression,
+                    visited);
                 if (found != null)
                 {
                     return found;
@@ -830,21 +893,23 @@ public sealed partial class CSharpToGSharpTranslator
                     new HashSet<ISymbol>(SymbolEqualityComparer.Default));
         }
 
-        private ExpressionSyntax ResolveStableTupleAlias(ExpressionSyntax expression)
+        private ExpressionSyntax ResolveStableTupleAlias(
+            ExpressionSyntax expression,
+            HashSet<ISymbol> visited = null)
         {
             if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
             {
                 return expression;
             }
 
-            var visited = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            visited ??= new HashSet<ISymbol>(SymbolEqualityComparer.Default);
             int usePosition = expression.SpanStart;
             expression = this.UnwrapTuplePreservingCasts(expression);
             while (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
                 && visited.Add(local))
             {
                 IReadOnlyList<ExpressionSyntax> reaching =
-                    this.GetReachingLocalValues(local, usePosition);
+                    this.GetReachingLocalValues(local, usePosition, visited);
                 if (reaching.Count == 0)
                 {
                     break;
@@ -856,8 +921,13 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 expression = reaching[0];
-                expression = this.UnwrapTuplePreservingCasts(expression);
                 usePosition = reaching[0].SpanStart;
+                if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+                {
+                    break;
+                }
+
+                expression = this.UnwrapTuplePreservingCasts(expression);
             }
 
             return expression;
@@ -865,7 +935,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private IReadOnlyList<ExpressionSyntax> GetReachingLocalValues(
             ILocalSymbol local,
-            int usePosition)
+            int usePosition,
+            HashSet<ISymbol> visited = null)
         {
             SyntaxNode declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
             ExpressionSyntax initializer;
@@ -878,7 +949,11 @@ public sealed partial class CSharpToGSharpTranslator
                 && designation.Ancestors().OfType<AssignmentExpressionSyntax>().FirstOrDefault()
                     is { Left: { } left, Right: { } right })
             {
-                initializer = FindDeconstructionInitializer(designation, left, right);
+                initializer = FindDeconstructionInitializer(
+                    designation,
+                    left,
+                    right,
+                    visited);
             }
             else
             {
@@ -900,6 +975,9 @@ public sealed partial class CSharpToGSharpTranslator
                     or AccessorDeclarationSyntax
                     or LocalFunctionStatementSyntax
                     or AnonymousFunctionExpressionSyntax);
+            executable ??= declaration.AncestorsAndSelf()
+                .OfType<CompilationUnitSyntax>()
+                .FirstOrDefault();
             if (executable == null)
             {
                 return Array.Empty<ExpressionSyntax>();
@@ -952,6 +1030,7 @@ public sealed partial class CSharpToGSharpTranslator
             var outputs =
                 new Dictionary<Microsoft.CodeAnalysis.FlowAnalysis.BasicBlock,
                     HashSet<ExpressionSyntax>>();
+            var assignedValues = new Dictionary<AssignmentExpressionSyntax, ExpressionSyntax>();
             bool changed;
             do
             {
@@ -975,7 +1054,9 @@ public sealed partial class CSharpToGSharpTranslator
                             declaration,
                             initializer,
                             local,
-                            values);
+                            values,
+                            assignedValues,
+                            visited);
                     }
 
                     if (block.BranchValue is { } branchValue)
@@ -985,7 +1066,9 @@ public sealed partial class CSharpToGSharpTranslator
                             declaration,
                             initializer,
                             local,
-                            values);
+                            values,
+                            assignedValues,
+                            visited);
                     }
 
                     if (!outputs.TryGetValue(block, out var previous)
@@ -1015,7 +1098,9 @@ public sealed partial class CSharpToGSharpTranslator
                     declaration,
                     initializer,
                     local,
-                    reaching);
+                    reaching,
+                    assignedValues,
+                    visited);
             }
 
             return reaching.ToList();
@@ -1026,7 +1111,9 @@ public sealed partial class CSharpToGSharpTranslator
             SyntaxNode declaration,
             ExpressionSyntax initializer,
             ILocalSymbol local,
-            HashSet<ExpressionSyntax> values)
+            HashSet<ExpressionSyntax> values,
+            Dictionary<AssignmentExpressionSyntax, ExpressionSyntax> assignedValues,
+            HashSet<ISymbol> visited)
         {
             bool hasKnownValue = false;
             if (operation.Syntax.FullSpan.Contains(declaration.Span))
@@ -1053,13 +1140,18 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 values.Clear();
-                ExpressionSyntax source = this.ResolveStableTupleAlias(assignment.Right);
-                ExpressionSyntax value = ProjectTupleElement(source, path);
-                if (value.SyntaxTree == this.context.SemanticModel.SyntaxTree)
+                if (!assignedValues.TryGetValue(assignment, out ExpressionSyntax value))
                 {
-                    values.Add(value);
+                    var aliasPath = visited == null
+                        ? null
+                        : new HashSet<ISymbol>(visited, SymbolEqualityComparer.Default);
+                    ExpressionSyntax source =
+                        this.ResolveStableTupleAlias(assignment.Right, aliasPath);
+                    value = ProjectTupleElement(source, path);
+                    assignedValues.Add(assignment, value);
                 }
 
+                values.Add(value);
                 hasKnownValue = true;
             }
 
