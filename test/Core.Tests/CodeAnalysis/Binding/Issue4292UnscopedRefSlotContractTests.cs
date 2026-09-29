@@ -431,7 +431,7 @@ ref struct Buffer : IRefSlot {
     [InlineData(RefKind.Ref, false, false, true)]
     [InlineData(RefKind.Ref, true, false, false)]
     [InlineData(RefKind.Out, true, false, true)]
-    [InlineData(RefKind.Out, false, false, false)]
+    [InlineData(RefKind.Out, false, false, true)]
     [InlineData(RefKind.Out, false, true, true)]
     public void RefStructParameter_RelevanceMatchesCSharp(
         RefKind refKind,

@@ -1657,11 +1657,9 @@ internal sealed class LambdaBinder
                 ? targetSlot
                 : GetAdapterSlotType(original.Type, targetSlot);
             var adapterParameter = new ParameterSymbol(
-                original.Name,
+                original,
                 adapterParameterType,
-                declaringSyntax: original.DeclaringSyntax,
-                isScoped: original.IsScoped,
-                refKind: original.RefKind);
+                original.DeclaringSyntax);
             adapterParameter.SetAttributes(original.Attributes);
             adapterParameters.Add(adapterParameter);
             var adapterRead = new BoundVariableExpression(null, adapterParameter);
@@ -1995,10 +1993,10 @@ internal sealed class LambdaBinder
         {
             var sourceParameterIndex = i + (function.IsExtension && adapterReceiver != null ? 1 : 0);
             var parameter = new ParameterSymbol(
-                $"arg{i}",
+                function.Parameters[sourceParameterIndex],
                 functionType.ParameterTypes[i],
                 declaringSyntax: group.Syntax,
-                refKind: function.Parameters[sourceParameterIndex].RefKind);
+                name: $"arg{i}");
             adapterParameters.Add(parameter);
             BoundExpression argument = new BoundVariableExpression(null, parameter);
             if (parameter.RefKind != RefKind.None)
@@ -2205,6 +2203,18 @@ internal sealed class LambdaBinder
         if (!attributes.IsDefaultOrEmpty)
         {
             parameter.SetAttributes(attributes);
+            var annotation = attributes.FirstOrDefault(KnownAttributes.IsUnscopedRef);
+            if (annotation == null)
+            {
+                return;
+            }
+
+            parameter.MarkUnscopedRef();
+            var reason = DeclarationBinder.GetUnscopedRefParameterRejection(parameter);
+            if (reason != null)
+            {
+                Diagnostics.ReportUnscopedRefInvalidTarget(annotation.Syntax.Location, reason);
+            }
         }
     }
 

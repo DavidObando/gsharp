@@ -20,7 +20,8 @@ internal sealed class CSharpFixture : IDisposable
 {
     internal CSharpFixture(
         string source,
-        IEnumerable<MetadataReference> additionalReferences = null)
+        IEnumerable<MetadataReference> additionalReferences = null,
+        CSharpParseOptions parseOptions = null)
     {
         DirectoryPath = Path.Combine(AppContext.BaseDirectory, "csharp-fixtures", Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(DirectoryPath);
@@ -29,7 +30,7 @@ internal sealed class CSharpFixture : IDisposable
         {
             var compilation = CSharpCompilation.Create(
                 Path.GetFileNameWithoutExtension(AssemblyPath),
-                new[] { CSharpSyntaxTree.ParseText(source) },
+                new[] { CSharpSyntaxTree.ParseText(source, parseOptions) },
                 ReferenceResolver.HostTrustedPlatformAssemblyPaths()
                     .Select(path => MetadataReference.CreateFromFile(path))
                     .Concat(additionalReferences ?? Array.Empty<MetadataReference>()),

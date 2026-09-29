@@ -1091,12 +1091,9 @@ internal sealed partial class DeclarationBinder
                 // members exist. Bind the declaring part's default into a
                 // stand-in symbol there too, then compare once both are done.
                 var declaringDefault = new ParameterSymbol(
-                    implementingParameter.Name,
+                    implementingParameter,
                     implementingParameter.Type,
-                    implementingParameter.IsVariadic,
-                    declaringParameterSyntax.Identifier,
-                    implementingParameter.IsScoped,
-                    implementingParameter.RefKind);
+                    declaringParameterSyntax.Identifier);
                 DeferParameterDefaultValueBinding(declaringParameterSyntax, declaringDefault, structSymbol, package, methodTypeParameters);
                 pendingParameterDefaultValueBindings.Add(() =>
                 {

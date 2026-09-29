@@ -2193,11 +2193,8 @@ public sealed class StructSymbol : TypeSymbol
             foreach (var parameter in source)
             {
                 var substituted = new ParameterSymbol(
-                    parameter.Name,
-                    SubstituteTypeForConstruction(parameter.Type, GetSubstitutionMap(), mapClrType),
-                    isVariadic: parameter.IsVariadic,
-                    isScoped: parameter.IsScoped,
-                    refKind: parameter.RefKind);
+                    parameter,
+                    SubstituteTypeForConstruction(parameter.Type, GetSubstitutionMap(), mapClrType));
                 if (parameter.HasExplicitDefaultValue)
                 {
                     substituted.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);
@@ -2474,7 +2471,7 @@ public sealed class StructSymbol : TypeSymbol
                 {
                     var st = SubstituteTypeForConstruction(par.Type, subst, mapClrType);
                     paramsChanged |= !ReferenceEquals(st, par.Type);
-                    pb.Add(new ParameterSymbol(par.Name, st, isVariadic: par.IsVariadic, isScoped: par.IsScoped));
+                    pb.Add(new ParameterSymbol(par, st, par.DeclaringSyntax));
                 }
 
                 if (paramsChanged)

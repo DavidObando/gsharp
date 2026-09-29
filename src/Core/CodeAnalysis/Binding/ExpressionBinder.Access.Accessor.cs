@@ -4773,12 +4773,9 @@ internal sealed partial class ExpressionBinder
                 var parameterType = owner.SubstituteMemberType(parameter.Type);
                 changed |= !ReferenceEquals(parameterType, parameter.Type);
                 var constructedParameter = new ParameterSymbol(
-                    parameter.Name,
+                    parameter,
                     parameterType,
-                    parameter.IsVariadic,
-                    parameter.DeclaringSyntax,
-                    parameter.IsScoped,
-                    parameter.RefKind);
+                    parameter.DeclaringSyntax);
                 if (parameter.HasExplicitDefaultValue)
                 {
                     constructedParameter.SetExplicitDefaultValue(parameter.ExplicitDefaultValue);

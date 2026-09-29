@@ -3822,12 +3822,9 @@ public sealed class Binder
         }
 
         var parameters = method.Parameters.Select(parameter => new ParameterSymbol(
-            parameter.Name,
+            parameter,
             StructSymbol.SubstituteTypeParameters(parameter.Type, classToOuterTypeParameters),
-            parameter.IsVariadic,
-            parameter.DeclaringSyntax,
-            parameter.IsScoped,
-            parameter.RefKind)).ToImmutableArray();
+            parameter.DeclaringSyntax)).ToImmutableArray();
         var binding = new FunctionSymbol(
             method.Name,
             parameters,
@@ -5654,12 +5651,8 @@ public sealed class Binder
         InterfaceSymbol slotOwner,
         FunctionSymbol sourceMethod)
     {
-        var parameters = slot.Parameters.Select(parameter => new ParameterSymbol(
-            parameter.Name,
-            parameter.Type,
-            parameter.IsVariadic,
-            isScoped: parameter.IsScoped,
-            refKind: parameter.RefKind)).ToImmutableArray();
+        var parameters = slot.Parameters.Select(parameter =>
+            new ParameterSymbol(parameter, parameter.Type)).ToImmutableArray();
         var method = new FunctionSymbol(
             slot.Name,
             parameters,
@@ -5698,12 +5691,8 @@ public sealed class Binder
         InterfaceSymbol slotOwner,
         MethodInfo sourceMethod)
     {
-        var parameters = slot.Parameters.Select(parameter => new ParameterSymbol(
-            parameter.Name,
-            parameter.Type,
-            parameter.IsVariadic,
-            isScoped: parameter.IsScoped,
-            refKind: parameter.RefKind)).ToImmutableArray();
+        var parameters = slot.Parameters.Select(parameter =>
+            new ParameterSymbol(parameter, parameter.Type)).ToImmutableArray();
         var method = new FunctionSymbol(
             slot.Name,
             parameters,
@@ -5748,12 +5737,8 @@ public sealed class Binder
         FunctionSymbol sourceMethod)
     {
         var contract = CreateImportedAdapterContractMethod(slot, slotOwner);
-        var parameters = contract.Parameters.Select(parameter => new ParameterSymbol(
-            parameter.Name,
-            parameter.Type,
-            parameter.IsVariadic,
-            isScoped: parameter.IsScoped,
-            refKind: parameter.RefKind)).ToImmutableArray();
+        var parameters = contract.Parameters.Select(parameter =>
+            new ParameterSymbol(parameter, parameter.Type)).ToImmutableArray();
         var method = new FunctionSymbol(
             slot.Name,
             parameters,
@@ -5820,11 +5805,10 @@ public sealed class Binder
         }
 
         var parameters = slotParameters.Select((parameter, index) =>
-            new ParameterSymbol(
-                parameter.Name ?? $"arg{parameter.Position}",
+            RefCapabilities.CreateParameterSymbol(
+                parameter,
                 GetImportedAdapterMethodType(slotOwner, slot, index, typeParameters),
-                isScoped: IsAdapterScoped(parameter),
-                refKind: GetAdapterRefKind(parameter)))
+                $"arg{parameter.Position}"))
             .ToImmutableArray();
         var returnType = GetImportedAdapterMethodType(
             slotOwner,
@@ -5892,11 +5876,10 @@ public sealed class Binder
         }
 
         var parameters = method.GetParameters()
-            .Select((parameter, index) => new ParameterSymbol(
-                parameter.Name ?? $"arg{parameter.Position}",
+            .Select((parameter, index) => RefCapabilities.CreateParameterSymbol(
+                parameter,
                 GetImportedAdapterMethodType(owner, method, index, typeParameters),
-                isScoped: IsAdapterScoped(parameter),
-                refKind: GetAdapterRefKind(parameter)))
+                $"arg{parameter.Position}"))
             .ToImmutableArray();
         var contract = new FunctionSymbol(
             method.Name,
@@ -5922,11 +5905,10 @@ public sealed class Binder
         TypeSymbol owner)
     {
         var indexParameters = property.GetIndexParameters()
-            .Select((parameter, index) => new ParameterSymbol(
-                parameter.Name ?? $"arg{parameter.Position}",
+            .Select((parameter, index) => RefCapabilities.CreateParameterSymbol(
+                parameter,
                 MemberLookup.GetIndexerParameterTypeSymbol(owner, property, index),
-                isScoped: IsAdapterScoped(parameter),
-                refKind: GetAdapterRefKind(parameter)))
+                $"arg{parameter.Position}"))
             .ToImmutableArray();
         var propertyType = MemberLookup.GetClrPropertyTypeSymbol(owner, property);
         if (propertyType is ByRefTypeSymbol byRef)
@@ -6043,12 +6025,8 @@ public sealed class Binder
         PropertySymbol interfaceSlot,
         PropertySymbol sourceProperty)
     {
-        var indexParameters = slot.Parameters.Select(parameter => new ParameterSymbol(
-            parameter.Name,
-            parameter.Type,
-            parameter.IsVariadic,
-            isScoped: parameter.IsScoped,
-            refKind: parameter.RefKind)).ToImmutableArray();
+        var indexParameters = slot.Parameters.Select(parameter =>
+            new ParameterSymbol(parameter, parameter.Type)).ToImmutableArray();
         var property = new PropertySymbol(
             slot.Name,
             slot.Type,
@@ -6158,12 +6136,8 @@ public sealed class Binder
         PropertySymbol interfaceSlot,
         PropertyInfo sourceProperty)
     {
-        var indexParameters = slot.Parameters.Select(parameter => new ParameterSymbol(
-            parameter.Name,
-            parameter.Type,
-            parameter.IsVariadic,
-            isScoped: parameter.IsScoped,
-            refKind: parameter.RefKind)).ToImmutableArray();
+        var indexParameters = slot.Parameters.Select(parameter =>
+            new ParameterSymbol(parameter, parameter.Type)).ToImmutableArray();
         var property = new PropertySymbol(
             slot.Name,
             slot.Type,
@@ -6262,12 +6236,8 @@ public sealed class Binder
         PropertySymbol sourceProperty)
     {
         var contract = CreateImportedAdapterContractProperty(slot, slotOwner);
-        var indexParameters = contract.Parameters.Select(parameter => new ParameterSymbol(
-            parameter.Name,
-            parameter.Type,
-            parameter.IsVariadic,
-            isScoped: parameter.IsScoped,
-            refKind: parameter.RefKind)).ToImmutableArray();
+        var indexParameters = contract.Parameters.Select(parameter =>
+            new ParameterSymbol(parameter, parameter.Type)).ToImmutableArray();
         var property = new PropertySymbol(
             slot.Name,
             contract.Type,
@@ -6372,11 +6342,10 @@ public sealed class Binder
         PropertyInfo sourceProperty)
     {
         var slotParameters = slot.GetIndexParameters();
-        var indexParameters = slotParameters.Select((parameter, index) => new ParameterSymbol(
-            parameter.Name ?? $"arg{parameter.Position}",
+        var indexParameters = slotParameters.Select((parameter, index) => RefCapabilities.CreateParameterSymbol(
+            parameter,
             MemberLookup.GetIndexerParameterTypeSymbol(slotOwner, slot, index),
-            isScoped: IsAdapterScoped(parameter),
-            refKind: GetAdapterRefKind(parameter))).ToImmutableArray();
+            $"arg{parameter.Position}")).ToImmutableArray();
         var propertyType = MemberLookup.GetClrPropertyTypeSymbol(slotOwner, slot);
         if (propertyType is ByRefTypeSymbol byRefType)
         {
@@ -6879,8 +6848,7 @@ public sealed class Binder
 
         for (var i = 0; i < target.Parameters.Length; i++)
         {
-            if (target.Parameters[i].RefKind != source.Parameters[i].RefKind
-                || target.Parameters[i].IsScoped != source.Parameters[i].IsScoped
+            if (!target.Parameters[i].HasSameRefContract(source.Parameters[i])
                 || !AdapterTypesMatch(
                     target.Parameters[i].Type,
                     SubstituteType(source.Parameters[i].Type, substitutions, scope.References.MapClrTypeToReferences)))
@@ -7000,14 +6968,17 @@ public sealed class Binder
 
         for (var i = 0; i < targetParameters.Length; i++)
         {
-            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
-                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
+            var targetType = GetImportedAdapterMethodType(targetOwner, target, i, methodTypeParameters);
+            var sourceType = GetImportedAdapterMethodType(sourceOwner, source, i, methodTypeParameters);
+            if (!RefCapabilities.ImportedParameterContractsMatch(
+                    targetParameters[i],
+                    targetType,
+                    sourceParameters[i],
+                    sourceType)
                 || !AdapterParameterMetadataSupported(targetParameters[i])
                 || !AdapterParameterMetadataSupported(sourceParameters[i])
                 || !AdapterParameterMetadataMatches(targetParameters[i], sourceParameters[i])
-                || !AdapterTypesMatch(
-                    GetImportedAdapterMethodType(targetOwner, target, i, methodTypeParameters),
-                    GetImportedAdapterMethodType(sourceOwner, source, i, methodTypeParameters)))
+                || !AdapterTypesMatch(targetType, sourceType))
             {
                 return false;
             }
@@ -7040,14 +7011,17 @@ public sealed class Binder
 
         for (var i = 0; i < targetParameters.Length; i++)
         {
-            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
-                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
+            var targetType = ClrNullability.GetParameterTypeSymbol(targetParameters[i]);
+            var sourceType = ClrNullability.GetParameterTypeSymbol(sourceParameters[i]);
+            if (!RefCapabilities.ImportedParameterContractsMatch(
+                    targetParameters[i],
+                    targetType,
+                    sourceParameters[i],
+                    sourceType)
                 || !AdapterParameterMetadataSupported(targetParameters[i])
                 || !AdapterParameterMetadataSupported(sourceParameters[i])
                 || !AdapterParameterMetadataMatches(targetParameters[i], sourceParameters[i])
-                || !ImportedAdapterTypesMatch(
-                    targetParameters[i].ParameterType,
-                    sourceParameters[i].ParameterType))
+                || !ImportedAdapterTypesMatch(targetParameters[i].ParameterType, sourceParameters[i].ParameterType))
             {
                 return false;
             }
@@ -7445,8 +7419,7 @@ public sealed class Binder
 
         for (var i = 0; i < target.Parameters.Length; i++)
         {
-            if (target.Parameters[i].RefKind != source.Parameters[i].RefKind
-                || target.Parameters[i].IsScoped != source.Parameters[i].IsScoped
+            if (!target.Parameters[i].HasSameRefContract(source.Parameters[i])
                 || !AdapterTypesMatch(target.Parameters[i].Type, source.Parameters[i].Type))
             {
                 return false;
@@ -7467,12 +7440,7 @@ public sealed class Binder
         {
             var parameterType = owner.SubstituteMemberType(parameter.Type);
             parametersChanged |= !ReferenceEquals(parameterType, parameter.Type);
-            parameterBuilder.Add(new ParameterSymbol(
-                parameter.Name,
-                parameterType,
-                parameter.IsVariadic,
-                isScoped: parameter.IsScoped,
-                refKind: parameter.RefKind));
+            parameterBuilder.Add(new ParameterSymbol(parameter, parameterType));
         }
 
         var parameters = parameterBuilder.MoveToImmutable();
@@ -7546,12 +7514,8 @@ public sealed class Binder
         InterfaceSymbol owner,
         FunctionSymbol accessor)
     {
-        var parameters = accessor.Parameters.Select(parameter => new ParameterSymbol(
-            parameter.Name,
-            owner.SubstituteMemberType(parameter.Type),
-            parameter.IsVariadic,
-            isScoped: parameter.IsScoped,
-            refKind: parameter.RefKind)).ToImmutableArray();
+        var parameters = accessor.Parameters.Select(parameter =>
+            new ParameterSymbol(parameter, owner.SubstituteMemberType(parameter.Type))).ToImmutableArray();
         var clone = new FunctionSymbol(
             accessor.Name,
             parameters,
@@ -7649,11 +7613,14 @@ public sealed class Binder
 
         for (var i = 0; i < targetParameters.Length; i++)
         {
-            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
-                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
-                || !AdapterTypesMatch(
-                    MemberLookup.GetIndexerParameterTypeSymbol(targetOwner, target, i),
-                    MemberLookup.GetIndexerParameterTypeSymbol(sourceOwner, source, i)))
+            var targetType = MemberLookup.GetIndexerParameterTypeSymbol(targetOwner, target, i);
+            var sourceType = MemberLookup.GetIndexerParameterTypeSymbol(sourceOwner, source, i);
+            if (!RefCapabilities.ImportedParameterContractsMatch(
+                    targetParameters[i],
+                    targetType,
+                    sourceParameters[i],
+                    sourceType)
+                || !AdapterTypesMatch(targetType, sourceType))
             {
                 return false;
             }
@@ -7686,11 +7653,14 @@ public sealed class Binder
 
         for (var i = 0; i < targetParameters.Length; i++)
         {
-            if (GetAdapterRefKind(targetParameters[i]) != GetAdapterRefKind(sourceParameters[i])
-                || IsAdapterScoped(targetParameters[i]) != IsAdapterScoped(sourceParameters[i])
-                || !AdapterTypesMatch(
-                    ClrNullability.GetParameterTypeSymbol(targetParameters[i]),
-                    ClrNullability.GetParameterTypeSymbol(sourceParameters[i])))
+            var targetType = ClrNullability.GetParameterTypeSymbol(targetParameters[i]);
+            var sourceType = ClrNullability.GetParameterTypeSymbol(sourceParameters[i]);
+            if (!RefCapabilities.ImportedParameterContractsMatch(
+                    targetParameters[i],
+                    targetType,
+                    sourceParameters[i],
+                    sourceType)
+                || !AdapterTypesMatch(targetType, sourceType))
             {
                 return false;
             }
@@ -7780,9 +7750,7 @@ public sealed class Binder
                 source.GetRequiredCustomModifiers())
             && AdapterModifierSequenceMatches(
                 target.GetOptionalCustomModifiers(),
-                source.GetOptionalCustomModifiers())
-            && IsAdapterScoped(target) == IsAdapterScoped(source)
-            && HasAdapterUnscopedRef(target) == HasAdapterUnscopedRef(source);
+                source.GetOptionalCustomModifiers());
 
     private static bool ImportedMethodMetadataSupported(MethodInfo method)
         => AdapterParameterMetadataSupported(method.ReturnParameter)

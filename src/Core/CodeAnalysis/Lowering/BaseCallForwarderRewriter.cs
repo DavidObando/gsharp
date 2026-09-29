@@ -399,7 +399,7 @@ public static class BaseCallForwarderRewriter
             var paramBuilder = ImmutableArray.CreateBuilder<ParameterSymbol>(method.EmittedParameters.Length);
             foreach (var p in method.EmittedParameters)
             {
-                paramBuilder.Add(new ParameterSymbol(p.Name, Substitute(p.Type), refKind: p.RefKind));
+                paramBuilder.Add(new ParameterSymbol(p, Substitute(p.Type), p.DeclaringSyntax));
             }
 
             var parameters = paramBuilder.ToImmutable();
@@ -561,10 +561,9 @@ public static class BaseCallForwarderRewriter
                     }
                 }
 
-                parameters.Add(new ParameterSymbol(
-                    clrParameter?.Name ?? "arg" + i,
-                    parameterType,
-                    refKind: refKind));
+                parameters.Add(clrParameter != null
+                    ? RefCapabilities.CreateParameterSymbol(clrParameter, parameterType, "arg" + i)
+                    : new ParameterSymbol("arg" + i, parameterType, refKind: refKind));
             }
 
             var parameterArray = parameters.ToImmutable();

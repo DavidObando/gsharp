@@ -2180,6 +2180,10 @@ internal sealed partial class MethodBodyEmitter
                 this.EmitBaseClassCall(baseClass);
                 break;
 
+            case BoundConstrainedStaticCallExpression constrainedStatic:
+                this.EmitConstrainedStaticCall(constrainedStatic);
+                break;
+
             default:
                 throw new InvalidOperationException($"Cannot take address of expression kind '{node.Operand.GetType().Name}'.");
         }

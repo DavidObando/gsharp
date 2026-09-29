@@ -16,14 +16,11 @@ internal static class RefCapabilities
     private static readonly ConditionalWeakTable<Type, HashSet<(Module Module, int MetadataToken)>> UnscopedRefPropertyAccessors = new();
 
     /// <summary>
-    /// Issue #4224: true when <paramref name="expression"/> is a call to a
-    /// same-compilation (native) ref-returning function/method or a read of a
-    /// native ref-returning property. An imported/CLR ref-returning member is
-    /// NOT included here — <see cref="ConversionClassifier.AutoDereferenceRefReturn"/>
-    /// already wraps those in a <see cref="BoundDereferenceExpression"/> at
-    /// bind time, so they are already lvalues (see
-    /// <see cref="ExpressionBinder.IsLvalue"/>'s <c>BoundDereferenceExpression</c>
-    /// case) with no change needed here.
+    /// Issue #4224: true when <paramref name="expression"/> is a ref-returning
+    /// call/property node that retains its raw managed reference. This includes
+    /// native calls and constrained static-interface calls. Ordinary imported
+    /// calls are excluded because <see cref="ConversionClassifier.AutoDereferenceRefReturn"/>
+    /// wraps them in a <see cref="BoundDereferenceExpression"/> at bind time.
     /// </summary>
     /// <param name="expression">The bound expression to classify.</param>
     /// <returns><see langword="true"/> when the expression is such a call/property read.</returns>
@@ -39,6 +36,9 @@ internal static class RefCapabilities
                 baseInterface.Method.ReturnRefKind != RefKind.None,
             BoundBaseClassCallExpression { Method: { } method } =>
                 method.ReturnRefKind != RefKind.None,
+            BoundConstrainedStaticCallExpression constrained =>
+                (constrained.InterfaceMethod?.ReturnRefKind
+                    ?? GetReturnRefKind(constrained.ClrMethod)) != RefKind.None,
 
             // A flow-narrowed read (issue #1180) inserts a cast after the
             // getter call; the raw managed pointer from the getter would not
@@ -113,6 +113,51 @@ internal static class RefCapabilities
                 SelectEscapeArguments(
                     method.Parameters,
                     baseClass.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundConstrainedStaticCallExpression { InterfaceMethod: { } method } constrained
+                when method.ReturnRefKind != RefKind.None:
+                receiver = null;
+                SelectEscapeArguments(
+                    method.Parameters,
+                    constrained.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundConstrainedStaticCallExpression { ClrMethod: { } method } constrained
+                when GetReturnRefKind(method) != RefKind.None:
+                receiver = null;
+                SelectEscapeArguments(
+                    ImportParameters(method.GetParameters()),
+                    constrained.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundImportedCallExpression imported
+                when GetReturnRefKind(imported.Function.Method) != RefKind.None:
+                receiver = null;
+                SelectEscapeArguments(
+                    ImportParameters(imported.Function.Method.GetParameters()),
+                    imported.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundImportedInstanceCallExpression imported
+                when GetReturnRefKind(imported.Method) != RefKind.None:
+                receiver = imported.Receiver;
+                SelectEscapeArguments(
+                    ImportParameters(imported.Method.GetParameters()),
+                    imported.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundClrStaticCallExpression imported
+                when GetReturnRefKind(imported.Method) != RefKind.None:
+                receiver = null;
+                SelectEscapeArguments(
+                    ImportParameters(imported.Method.GetParameters()),
+                    imported.Arguments,
                     out byRefArguments,
                     out byValueByRefLikeArguments);
                 return true;
@@ -282,7 +327,7 @@ internal static class RefCapabilities
     internal static RefKind GetParameterRefKind(ParameterInfo parameter)
         => !parameter.ParameterType.IsByRef ? RefKind.None
             : parameter.IsOut && !parameter.IsIn ? RefKind.Out
-            : parameter.IsIn && !parameter.IsOut ? RefKind.In
+            : IsInParameter(parameter) && !parameter.IsOut ? RefKind.In
             : RefKind.Ref;
 
     /// <summary>Returns whether an imported parameter carries <c>[ScopedRef]</c>.</summary>
@@ -291,6 +336,75 @@ internal static class RefCapabilities
     internal static bool IsScoped(ParameterInfo parameter)
         => parameter.GetCustomAttributesData().Any(attribute =>
             KnownAttributes.IsScopedRef(attribute.AttributeType));
+
+    /// <summary>Returns whether an imported parameter carries <c>[UnscopedRef]</c>.</summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <returns><see langword="true"/> when the parameter is explicitly unscoped.</returns>
+    internal static bool HasUnscopedRef(ParameterInfo parameter)
+        => HasUnscopedRefAttribute(parameter.GetCustomAttributesData());
+
+    /// <summary>Creates a parameter symbol that preserves imported ref-safety metadata.</summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <param name="type">The already-projected parameter type.</param>
+    /// <param name="fallbackName">The name to use when metadata has no parameter name.</param>
+    /// <returns>The imported parameter symbol.</returns>
+    internal static ParameterSymbol CreateParameterSymbol(
+        ParameterInfo parameter,
+        TypeSymbol type,
+        string fallbackName)
+    {
+        var symbol = new ParameterSymbol(
+            parameter.Name ?? fallbackName,
+            type,
+            isScoped: IsScoped(parameter),
+            refKind: GetParameterRefKind(parameter));
+        if (!UsesUpdatedEscapeRules(parameter))
+        {
+            symbol.MarkLegacyRefSafetyRules();
+        }
+
+        if (HasUnscopedRef(parameter))
+        {
+            symbol.MarkUnscopedRef();
+        }
+
+        return symbol;
+    }
+
+    /// <summary>Returns whether two imported parameters expose the same effective ref/value-safety contract.</summary>
+    /// <param name="target">The target contract parameter.</param>
+    /// <param name="targetType">The projected target parameter type.</param>
+    /// <param name="source">The source implementation parameter.</param>
+    /// <param name="sourceType">The projected source parameter type.</param>
+    /// <returns><see langword="true"/> when both effective contracts match.</returns>
+    internal static bool ImportedParameterContractsMatch(
+        ParameterInfo target,
+        TypeSymbol targetType,
+        ParameterInfo source,
+        TypeSymbol sourceType)
+        => CreateParameterSymbol(target, targetType, "target")
+            .HasSameRefContract(CreateParameterSymbol(source, sourceType, "source"));
+
+    /// <summary>
+    /// Returns whether the imported parameter's module opts into C# 11's
+    /// updated ref-safety defaults.
+    /// </summary>
+    /// <param name="parameter">The imported parameter.</param>
+    /// <returns><see langword="true"/> only for marker version 11.</returns>
+    internal static bool UsesUpdatedEscapeRules(ParameterInfo parameter)
+    {
+        try
+        {
+            return parameter.Member.Module.GetCustomAttributesData().Any(attribute =>
+                KnownAttributes.IsRefSafetyRules(attribute.AttributeType)
+                && attribute.ConstructorArguments.Count == 1
+                && attribute.ConstructorArguments[0].Value is 11);
+        }
+        catch
+        {
+            return false;
+        }
+    }
 
     /// <summary>
     /// Issue #4265 soundness guard: true when <paramref name="indexer"/> (or
@@ -481,8 +595,9 @@ internal static class RefCapabilities
     /// <see cref="TryGetRefReturnEscapeSources"/> needs, keeping them in
     /// SEPARATE lists (issue #4265) because the caller checks them with
     /// different scope semantics: <paramref name="byRefArguments"/> holds
-    /// the operand each non-<c>scoped</c> <c>ref</c>/<c>in</c>/<c>out</c>
-    /// argument's address was taken of (checked against its own storage
+    /// the operand each <c>ref</c>/<c>in</c>/<c>out</c> parameter whose
+    /// effective ref scope can contribute to a return had its address taken
+    /// of (checked against its own storage
     /// scope), and <paramref name="byValueByRefLikeArguments"/> holds each
     /// non-<c>scoped</c> by-value byref-like (e.g. <c>Span[T]</c>) argument
     /// unchanged (checked against its ENCAPSULATED REFERENT's scope
@@ -515,7 +630,7 @@ internal static class RefCapabilities
         for (int i = 0; i < count; i++)
         {
             var parameter = parameters[i];
-            if (parameter.IsScoped)
+            if (parameter.GetEffectiveRefScope() == ParameterRefScope.FunctionLocal)
             {
                 continue;
             }
@@ -534,7 +649,27 @@ internal static class RefCapabilities
         byValueByRefLikeArguments = byValueBuilder.ToImmutable();
     }
 
+    private static ImmutableArray<ParameterSymbol> ImportParameters(ParameterInfo[] parameters)
+        => parameters.Select(parameter => CreateParameterSymbol(
+            parameter,
+            ClrNullability.GetParameterTypeSymbol(parameter).StripToBareShape(),
+            $"arg{parameter.Position}")).ToImmutableArray();
+
     private static bool HasUnscopedRefAttribute(IEnumerable<CustomAttributeData>? attributes)
         => attributes?.Any(
             attribute => KnownAttributes.IsUnscopedRef(attribute.AttributeType)) == true;
+
+    private static bool IsInParameter(ParameterInfo parameter)
+    {
+        try
+        {
+            return parameter.IsIn
+                || parameter.GetRequiredCustomModifiers().Any(modifier =>
+                    modifier.FullName == "System.Runtime.InteropServices.InAttribute");
+        }
+        catch
+        {
+            return parameter.IsIn;
+        }
+    }
 }

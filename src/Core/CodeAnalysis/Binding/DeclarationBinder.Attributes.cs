@@ -314,10 +314,8 @@ internal sealed partial class DeclarationBinder
         foreach (var parameter in parameters)
         {
             substituted.Add(new ParameterSymbol(
-                parameter.Name,
-                StructSymbol.SubstituteTypeParameters(parameter.Type, typeParameterMap),
-                isScoped: parameter.IsScoped,
-                refKind: parameter.RefKind));
+                parameter,
+                StructSymbol.SubstituteTypeParameters(parameter.Type, typeParameterMap)));
         }
 
         return substituted.MoveToImmutable();
@@ -378,11 +376,10 @@ internal sealed partial class DeclarationBinder
         var parameters = ImmutableArray.CreateBuilder<ParameterSymbol>(slotParameters.Length);
         for (var i = 0; i < slotParameters.Length && i < implementationParameters.Length; i++)
         {
-            parameters.Add(new ParameterSymbol(
-                slotParameters[i].Name ?? $"arg{i}",
+            parameters.Add(RefCapabilities.CreateParameterSymbol(
+                slotParameters[i],
                 implementationParameters[i].Type,
-                isScoped: RefCapabilities.IsScoped(slotParameters[i]),
-                refKind: RefCapabilities.GetParameterRefKind(slotParameters[i])));
+                $"arg{i}"));
         }
 
         return RequiresUnscopedRefContract(
@@ -407,8 +404,10 @@ internal sealed partial class DeclarationBinder
     {
         if (parameters.Any(parameter =>
                 TypeSymbol.IsByRefLike(parameter.Type)
-                && ((parameter.RefKind == RefKind.Ref && !parameter.IsScoped)
-                    || (parameter.RefKind == RefKind.Out && parameter.IsScoped))))
+                && ((parameter.RefKind == RefKind.Ref
+                        && parameter.GetEffectiveRefScope() != ParameterRefScope.FunctionLocal)
+                    || (parameter.RefKind == RefKind.Out
+                        && parameter.GetEffectiveRefScope() == ParameterRefScope.FunctionLocal))))
         {
             return true;
         }
@@ -449,6 +448,30 @@ internal sealed partial class DeclarationBinder
         => attributes.IsDefaultOrEmpty
             ? null
             : attributes.FirstOrDefault(attribute => KnownAttributes.IsUnscopedRef(attribute));
+
+    private void ValidateUnscopedRefParameter(ParameterSymbol parameter)
+    {
+        var annotation = FindUnscopedRefAttribute(parameter.Attributes);
+        if (annotation == null)
+        {
+            return;
+        }
+
+        parameter.MarkUnscopedRef();
+        var reason = GetUnscopedRefParameterRejection(parameter);
+        if (reason != null
+            && reportedUnscopedRefDiagnostics.Add(annotation.Syntax))
+        {
+            Diagnostics.ReportUnscopedRefInvalidTarget(annotation.Syntax.Location, reason);
+        }
+    }
+
+    internal static string? GetUnscopedRefParameterRejection(ParameterSymbol parameter)
+        => parameter.RefKind == RefKind.None
+            ? "requires a 'ref', 'out', or 'in' parameter"
+            : parameter.IsScoped
+                ? "cannot be applied to a parameter with an explicit 'scoped' modifier"
+                : null;
 
     /// <summary>
     /// ADR-0184 / issue #376: the shape rules behind GS0590, as a phrase

@@ -50,7 +50,7 @@ internal static class ManagedReferenceOrigins
     internal static bool IsScopedHandle(VariableSymbol variable)
         => variable is LocalVariableSymbol local
             && (local.HoldsScopedManagedReference
-                || (local.IsScoped && ManagedReferenceTypes.TryGetElement(
+                || (HasFunctionLocalValueScope(local) && ManagedReferenceTypes.TryGetElement(
                     local.Type is NullableTypeSymbol nullable ? nullable.UnderlyingType : local.Type, out _, out _)));
 
     // Classify the value being retained, not every input evaluated to produce
@@ -145,6 +145,11 @@ internal static class ManagedReferenceOrigins
     private static bool ExplicitlyScoped(LocalVariableSymbol local)
         => local is ParameterSymbol ? local.IsScoped
             : local.DeclaringSyntax is VariableDeclarationSyntax { ScopedModifier: not null };
+
+    private static bool HasFunctionLocalValueScope(LocalVariableSymbol local)
+        => local is ParameterSymbol parameter
+            ? parameter.GetEffectiveValueScope() == ParameterValueScope.FunctionLocal
+            : local.IsScoped;
 
     private static string? ReceiverRejection(BoundExpression receiver)
         => Binder.IsReferenceTypeForConstraint(receiver.Type) ? null : Rejection(receiver);

@@ -619,7 +619,9 @@ internal sealed partial class StatementBinder
             // cannot be returned. This covers:
             // - direct reference to a `scoped` parameter or local
             // - value derived from a scoped source through constructor, member access, etc.
-            if (TypeSymbol.IsByRefLike(expression.Type) && HasFunctionLocalEscapeScope(expression))
+            if (!isRefReturn
+                && TypeSymbol.IsByRefLike(expression.Type)
+                && HasFunctionLocalEscapeScope(expression))
             {
                 Diagnostics.ReportByRefLikeEscape(
                     Invariant.Required(syntax.Expression, "a by-ref-like return expression is present").Location,
@@ -642,10 +644,10 @@ internal sealed partial class StatementBinder
             else if (HasFunctionLocalRefScope(expression))
             {
                 // ADR-0184 (the CS8170 analogue): when the reference is rooted at
-                // the enclosing struct member's own receiver, GS0254's
-                // "function-local storage" wording is actively misleading — the
-                // storage belongs to the CALLER, the member simply has not opted
-                // out of the implicit `scoped` on `this`. Name the remedy instead.
+                // the enclosing struct member's own receiver, generic GS0254
+                // does not name the actionable receiver contract — the storage
+                // belongs to the CALLER, and the member has not opted out of
+                // the implicit `scoped` on `this`. Name the remedy instead.
                 var location = Invariant.Required(syntax.Expression, "a ref return expression is present").Location;
 
                 // GS0589 stays first: the two conditions are provably disjoint
@@ -659,9 +661,8 @@ internal sealed partial class StatementBinder
                 else if (IsDefensivelyCopiedReceiverForwarding(expression))
                 {
                     // ADR-0184 amendment: the defensive copy is invisible in
-                    // the user's source, so GS0254's "function-local storage"
-                    // would point at storage the author never wrote. GS0591
-                    // names the copy and the remedy instead.
+                    // the user's source, so generic GS0254 would not identify
+                    // the hidden copy. GS0591 names the copy and remedy.
                     Diagnostics.ReportRefReturnThroughDefensivelyCopiedReceiver(location);
                 }
                 else
@@ -700,13 +701,14 @@ internal sealed partial class StatementBinder
             case BoundBlockExpression block:
                 return IsLvalueForRefReturn(block.Expression);
 
-            // Issue #4224: `return ref At(...)` — forwarding a native
-            // ref-returning call/property read. Delegates to the same
+            // Issue #4224: `return ref At(...)` — forwarding a native or
+            // constrained-static ref-returning call/property read. Delegates to the same
             // classifier ExpressionBinder.IsLvalue uses so the two
             // classifiers do not drift (root cause #2 of issue #4224).
             case BoundCallExpression:
             case BoundUserInstanceCallExpression:
             case BoundPropertyAccessExpression:
+            case BoundConstrainedStaticCallExpression:
                 return ExpressionBinder.IsLvalue(expr);
             default:
                 return false;
@@ -838,7 +840,8 @@ internal sealed partial class StatementBinder
                     // is NOT a function-local by-value slot — the CLR passes a
                     // struct's `this` as `ref S`, so its ref-safe-context is the
                     // caller's once the member opts out of the implicit `scoped`.
-                    return p.IsScoped || (p.RefKind == RefKind.None && !p.IsUnscopedRefReceiver);
+                    return p.GetEffectiveRefScope() == ParameterRefScope.FunctionLocal
+                        || (p.RefKind == RefKind.None && !p.IsUnscopedRefReceiver);
                 }
 
                 if (v.Variable is GlobalVariableSymbol)
@@ -1043,9 +1046,13 @@ internal sealed partial class StatementBinder
     /// wrapping a heap array) with C#'s full precision.
     /// </summary>
     private static bool HasFunctionLocalReferentScope(BoundExpression expr)
-        => expr is BoundVariableExpression { Variable: ParameterSymbol p }
-            ? p.IsScoped
+    {
+        // This is the by-ref-like value's encapsulated referent scope, not
+        // the parameter reference's effective ref scope.
+        return expr is BoundVariableExpression { Variable: ParameterSymbol p }
+            ? p.GetEffectiveValueScope() == ParameterValueScope.FunctionLocal
             : HasFunctionLocalRefScope(expr);
+    }
 
     private BoundStatement BindExpressionStatement(ExpressionStatementSyntax syntax)
     {
@@ -1070,9 +1077,14 @@ internal sealed partial class StatementBinder
             // `ref struct` instance method is legal with or without `@UnscopedRef`;
             // the pre-ADR-0184 code conflated the two and reported GS0219 for it.
             case BoundVariableExpression varExpr:
-                return varExpr.Variable is LocalVariableSymbol local
-                    && local.IsScoped
-                    && local is not ParameterSymbol { IsReceiverParameter: true };
+                return varExpr.Variable switch
+                {
+                    ParameterSymbol { IsReceiverParameter: true } => false,
+                    ParameterSymbol parameter =>
+                        parameter.GetEffectiveValueScope() == ParameterValueScope.FunctionLocal,
+                    LocalVariableSymbol local => local.IsScoped,
+                    _ => false,
+                };
 
             // Conversion (implicit/explicit) preserves STE of the inner expression.
             case BoundConversionExpression conv:
