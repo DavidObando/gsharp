@@ -563,6 +563,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static void Fill<T>(ref T? value, T replacement) =>
                     value = replacement;
 
+                private static (T First, T Second) Pair<T>(T replacement) =>
+                    (replacement, replacement);
+
                 private static void M<T>(T replacement)
                 {
                     (T First, T Second) pair = (replacement, replacement);
@@ -580,6 +583,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
                     var (loopLeft, loopRight) = loopPair;
                     Fill(ref loopLeft, replacement);
+
+                    var callPair = Pair(replacement);
+                    callPair.First = default;
+                    var (callLeft, callRight) = callPair;
+                    Fill(ref callLeft, replacement);
                 }
             }
             """;
@@ -588,8 +596,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
         Assert.Matches(@"\b(let|var) left T\? =", printed);
         Assert.Matches(@"\b(let|var) loopLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) callLeft T\? =", printed);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("callRight T? =", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -644,6 +654,33 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         string printed = Translate(source);
 
         Assert.Contains("while", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Translation_IgnoresAssignmentsInsideForInitializerLambda()
+    {
+        const string source = """
+            public static class LambdaFor
+            {
+                private static void Consume(System.Action action)
+                {
+                }
+
+                private static void M()
+                {
+                    var left = 0;
+                    var right = 0;
+                    for (Consume(() => (left, right) = (1, 2)); left < 1; left++)
+                    {
+                        continue;
+                    }
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Contains("for ", printed, StringComparison.Ordinal);
     }
 
     [Fact]

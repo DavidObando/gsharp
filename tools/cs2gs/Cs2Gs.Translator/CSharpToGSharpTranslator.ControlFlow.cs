@@ -1752,10 +1752,7 @@ public sealed partial class CSharpToGSharpTranslator
                 forStatement.Incrementors.Count > 1 ||
                 forStatement.Initializers
                     .Concat(forStatement.Incrementors)
-                    .SelectMany(expression =>
-                        expression.DescendantNodesAndSelf()
-                            .OfType<AssignmentExpressionSyntax>())
-                    .Any(AssignmentRequiresStatementLowering) ||
+                    .Any(ClauseContainsAssignment) ||
                 this.ForConditionRequiresHoist(forStatement.Condition))
             {
                 return this.LowerForToWhile(forStatement);

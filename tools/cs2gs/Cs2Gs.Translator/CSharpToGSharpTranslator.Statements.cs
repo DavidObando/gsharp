@@ -464,7 +464,8 @@ public sealed partial class CSharpToGSharpTranslator
                             visited));
 
                 case MemberAccessExpressionSyntax member
-                    when this.context.GetSymbolInfo(member.Name).Symbol
+                    when member.SyntaxTree == this.context.SemanticModel.SyntaxTree
+                        && this.context.GetSymbolInfo(member.Name).Symbol
                         is IFieldSymbol { ContainingType.IsTupleType: true } field
                         && this.context.GetTypeInfo(member.Expression).Type
                             is INamedTypeSymbol { IsTupleType: true } tupleType:
