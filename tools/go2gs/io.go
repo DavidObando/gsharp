@@ -41,6 +41,9 @@ func readProfile(path string) (Profile, error) {
 	if profile.ID == "" || len(profile.EntryPatterns) == 0 || profile.RequestedGoVersion == "" {
 		return profile, errors.New("profile id, entryPatterns, and requestedGoVersion are required")
 	}
+	if profile.ExpectedSourceCommit != "" && !validCommitID(profile.ExpectedSourceCommit) {
+		return profile, errors.New("expectedSourceCommit must be a lowercase 40- or 64-character Git object ID")
+	}
 	if profile.AllowNetwork || !profile.Offline {
 		return profile, errors.New("M0 accepts offline profiles only")
 	}

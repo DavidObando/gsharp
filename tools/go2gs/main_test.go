@@ -421,6 +421,56 @@ func TestPkgConfigDirectiveFailsClosedWithoutExecutingSibling(t *testing.T) {
 	}
 }
 
+func TestCCompilerHelperDirectoryIsAvailableWithoutExecutingPkgConfigSibling(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled shell compiler fixture")
+	}
+	dir := t.TempDir()
+	helperMarker := filepath.Join(t.TempDir(), "compiler-helper-ran")
+	pkgConfigMarker := filepath.Join(t.TempDir(), "pkg-config-ran")
+	if err := os.WriteFile(filepath.Join(dir, "go2gs-compiler-helper"), []byte("#!/bin/sh\n: > "+strconv.Quote(helperMarker)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "pkg-config"), []byte("#!/bin/sh\n: > "+strconv.Quote(pkgConfigMarker)+"\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	compiler := filepath.Join(dir, "cc")
+	body := "#!/bin/sh\ngo2gs-compiler-helper || exit 91\nPATH=/usr/bin:/bin exec " + strconv.Quote(approvedCompiler(t)) + " \"$@\"\n"
+	if err := os.WriteFile(compiler, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.CCompiler = compiler
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "cgo"), t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "cgo") {
+		t.Fatalf("CGo fixture did not retain its expected blocker: %#v", analysis.Blockers)
+	}
+	if _, err := os.Stat(helperMarker); err != nil {
+		t.Fatalf("selected compiler could not execute its sibling helper: %v", err)
+	}
+	if _, err := os.Stat(pkgConfigMarker); !os.IsNotExist(err) {
+		t.Fatalf("unapproved pkg-config sibling ran or marker check failed: %v", err)
+	}
+	packagesByID := map[string]string{}
+	for _, pkg := range analysis.Packages {
+		packagesByID[pkg.ID] = pkg.ImportPath
+	}
+	for _, blocker := range analysis.Blockers {
+		if blocker.Category != "package-load" {
+			continue
+		}
+		for _, packageID := range blocker.AffectedUnits {
+			if packagesByID[packageID] == "runtime/cgo" {
+				t.Fatalf("compiler PATH failure leaked into runtime/cgo inventory: %#v", analysis.Blockers)
+			}
+		}
+	}
+}
+
 func TestInactivePkgConfigDirectiveDoesNotBlock(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process-tree isolation intentionally fails closed on Windows")
@@ -1199,6 +1249,22 @@ func TestProfileRejectsTrailingJSONValues(t *testing.T) {
 		if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "trailing") {
 			t.Fatalf("trailing JSON %q was accepted: %v", suffix, err)
 		}
+	}
+}
+
+func TestProfileRejectsMalformedExpectedSourceCommit(t *testing.T) {
+	profile := testProfile()
+	profile.ExpectedSourceCommit = "not-a-commit"
+	data, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "profile.json")
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "expectedSourceCommit") {
+		t.Fatalf("malformed expected source commit was accepted: %v", err)
 	}
 }
 
@@ -2608,6 +2674,16 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 				blocker("source-metadata", "inventory"),
 			),
 			want: "source-metadata blocker",
+		},
+		{
+			name: "matching malformed commit IDs",
+			analysis: func() Analysis {
+				value := complete
+				value.Profile.ExpectedSourceCommit = "not-a-commit"
+				value.Profile.ActualSourceCommit = "not-a-commit"
+				return value
+			}(),
+			want: "source commits",
 		},
 	}
 	for _, test := range tests {

@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -162,7 +163,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 		return nil, err
 	}
 	values := map[string]string{
-		"PATH":             selectedPath(executable),
+		"PATH":             selectedPath(executable, cCompiler),
 		"HOME":             cacheRoot,
 		"TMPDIR":           cacheRoot,
 		"GOCACHE":          cacheRoot + string(os.PathSeparator) + "build-cache",
@@ -199,8 +200,20 @@ func unavailableToolPath(cacheRoot, name string) string {
 	return filepath.Join(cacheRoot, "blocked-tools", name)
 }
 
-func selectedPath(executable string) string {
-	return filepath.Dir(executable)
+func selectedPath(executables ...string) string {
+	seen := map[string]bool{}
+	directories := make([]string, 0, len(executables))
+	for _, executable := range executables {
+		if executable == "" {
+			continue
+		}
+		directory := filepath.Dir(executable)
+		if !seen[directory] {
+			seen[directory] = true
+			directories = append(directories, directory)
+		}
+	}
+	return strings.Join(directories, string(os.PathListSeparator))
 }
 
 func boolString(value bool) string {
