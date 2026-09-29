@@ -3892,6 +3892,146 @@ public class Issue4519GotoAssignmentNarrowingTests
     private static EmittedOracleResult Evaluate(string source)
         => EmittedOracle.Evaluate(source);
 
+    [Fact]
+    public void BackwardGoto_OverriddenIndexerWriteUsesDeclaredSlot()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                open prop this[index int32] string {
+                    get { return "" }
+                    set(value) { }
+                }
+            }
+            class Dog : Animal {
+                override prop this[index int32] string {
+                    get { return "" }
+                    set(value) { }
+                }
+            }
+            class Cat : Animal {
+                override prop this[index int32] string {
+                    get { return "" }
+                    set(value) { }
+                }
+            }
+
+            func Run() int32 {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    x[0] = "safe"
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return count
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void LabeledTryFinallyPropagatesNonNullAssignment()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+            Cleanup:
+                try {
+                    var marker = 0
+                }
+                finally {
+                    x = "safe"
+                }
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void BackwardConditionalGotoDoesNotKeepOldCallableTargetPending()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action = mutate
+                    var retry = true
+                Loop:
+                    if retry {
+                        retry = false
+                        goto Loop
+                    }
+                    action = noop
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void CallableArgumentWithKnownAndUnknownTargetsRemainsUnsafe()
+    {
+        var result = Evaluate("""
+            data class Holder(Callback (() -> void)) {
+            }
+
+            func Invoke(action (() -> void)) {
+                action()
+            }
+
+            func Run(chooseUnknown bool) int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                let holder = Holder{Callback: clear}
+                try {
+                    goto Done
+                }
+                finally {
+                    let noop = func() { }
+                    var action = noop
+                    if chooseUnknown {
+                        action = holder.Callback
+                    }
+                    Invoke(action)
+                }
+            Done:
+                return x.Length
+            }
+
+            Run(true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
     private static void AssertRuns(string source, params string[] expectedLines)
     {
         var result = Evaluate(source);

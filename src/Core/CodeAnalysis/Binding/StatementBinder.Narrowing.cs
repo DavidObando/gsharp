@@ -899,6 +899,14 @@ internal sealed partial class StatementBinder
         BoundStatement statement,
         Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
         if (statement is not BoundTryStatement { FinallyBlock: { } finallyBlock }
             || statement.Syntax is not TryStatementSyntax { FinallyClause: { } finallyClause })
         {
@@ -1426,6 +1434,11 @@ internal sealed partial class StatementBinder
                 return true;
 
             case BoundTryStatement tryStatement:
+                if (EndsInUnconditionalExit(tryStatement))
+                {
+                    return false;
+                }
+
                 ClearAssignedRoots(tryStatement, state);
                 if (tryStatement.FinallyBlock == null)
                 {
@@ -1620,6 +1633,7 @@ internal sealed partial class StatementBinder
         private readonly HashSet<VariableSymbol> externalFunctionValues = new();
         private readonly HashSet<BoundFunctionLiteralExpression> visitedFunctionLiterals = new();
         private readonly HashSet<BoundLabel> pendingConditionalTargets = new();
+        private readonly HashSet<BoundLabel> visitedLabels = new();
         private HashSet<VariableSymbol>? tryAssignedVariables;
 
         public AssignedRootsCollector(
@@ -1643,11 +1657,15 @@ internal sealed partial class StatementBinder
         {
             if (node is BoundLabelStatement label)
             {
+                visitedLabels.Add(label.Label);
                 pendingConditionalTargets.Remove(label.Label);
             }
             else if (node is BoundGotoStatement gotoStatement)
             {
-                pendingConditionalTargets.Add(gotoStatement.Label);
+                if (!visitedLabels.Contains(gotoStatement.Label))
+                {
+                    pendingConditionalTargets.Add(gotoStatement.Label);
+                }
             }
 
             base.VisitStatement(node);
@@ -1686,15 +1704,17 @@ internal sealed partial class StatementBinder
 
                     if (function.Parameters[i].Type is FunctionTypeSymbol or DelegateTypeSymbol)
                     {
-                        if (TryGetFunctionLiterals(arguments[i], out var literals))
+                        var hasKnownTargets = TryGetFunctionLiterals(arguments[i], out var literals);
+                        if (literals != null)
                         {
                             foreach (var literal in literals)
                             {
                                 VisitFunctionLiteralBody(literal);
                             }
                         }
-                        else if (IsUnknownCallable(arguments[i])
-                            || !IsExternalCallable(arguments[i]))
+
+                        if (IsUnknownCallable(arguments[i])
+                            || (!hasKnownTargets && !IsExternalCallable(arguments[i])))
                         {
                             MayMutateAnyRoot = true;
                         }
@@ -1810,7 +1830,10 @@ internal sealed partial class StatementBinder
         protected override void VisitConditionalGotoStatement(BoundConditionalGotoStatement node)
         {
             VisitExpression(node.Condition);
-            pendingConditionalTargets.Add(node.Label);
+            if (!visitedLabels.Contains(node.Label))
+            {
+                pendingConditionalTargets.Add(node.Label);
+            }
         }
 
         protected override void VisitForInfiniteStatement(BoundForInfiniteStatement node)

@@ -1152,7 +1152,7 @@ internal sealed partial class ExpressionBinder
 
             _ = instWritable;
             _ = instTargetType;
-            assignmentReceiver = RecoverDeclaredClrMemberWriteReceiver(
+            (assignmentReceiver, instanceMember) = RecoverDeclaredClrMemberWriteReceiver(
                 assignmentReceiver,
                 syntax.FieldIdentifier.Location,
                 instanceMember);
@@ -1401,7 +1401,7 @@ internal sealed partial class ExpressionBinder
 
                     _ = inhWritable;
                     _ = inhTargetType;
-                    assignmentReceiver = RecoverDeclaredClrMemberWriteReceiver(
+                    (assignmentReceiver, clrMember) = RecoverDeclaredClrMemberWriteReceiver(
                         assignmentReceiver,
                         syntax.FieldIdentifier.Location,
                         clrMember);
@@ -3983,7 +3983,7 @@ internal sealed partial class ExpressionBinder
 
                     _ = inhWritable;
                     _ = inhTargetType;
-                    receiver = RecoverDeclaredClrMemberWriteReceiver(
+                    (receiver, clrMember) = RecoverDeclaredClrMemberWriteReceiver(
                         receiver,
                         syntax.FieldIdentifier.Location,
                         clrMember);
@@ -4121,7 +4121,7 @@ internal sealed partial class ExpressionBinder
 
             _ = instWritable;
             _ = instTargetType;
-            receiver = RecoverDeclaredClrMemberWriteReceiver(
+            (receiver, instanceMember) = RecoverDeclaredClrMemberWriteReceiver(
                 receiver,
                 syntax.FieldIdentifier.Location,
                 instanceMember);
@@ -4191,14 +4191,14 @@ internal sealed partial class ExpressionBinder
         return found ? RecoverDeclaredWriteReceiver(receiver, path, location) : receiver;
     }
 
-    private BoundExpression RecoverDeclaredClrMemberWriteReceiver(
+    private (BoundExpression Receiver, MemberInfo Member) RecoverDeclaredClrMemberWriteReceiver(
         BoundExpression receiver,
         TextLocation location,
         MemberInfo selectedMember)
     {
         if (!TryGetDeclaredWriteReceiver(receiver, out var path))
         {
-            return receiver;
+            return (receiver, selectedMember);
         }
 
         var declaredType = path.Root.Type;
@@ -4206,17 +4206,15 @@ internal sealed partial class ExpressionBinder
             ?? (declaredType is StructSymbol structType ? GetInheritedClrBaseType(structType) : null);
         if (clrType == null)
         {
-            return receiver;
+            return (receiver, selectedMember);
         }
 
         MemberInfo? declaredMember = selectedMember is PropertyInfo
             ? SafeGetVisibleInstanceProperty(clrType, selectedMember.Name)
             : SafeGetVisibleInstanceField(clrType, selectedMember.Name);
-        return declaredMember != null
-            && selectedMember.MetadataToken == declaredMember.MetadataToken
-            && ReferenceEquals(selectedMember.Module, declaredMember.Module)
-            ? RecoverDeclaredWriteReceiver(receiver, path, location)
-            : receiver;
+        return declaredMember != null && SameClrMemberSlot(selectedMember, declaredMember)
+            ? (RecoverDeclaredWriteReceiver(receiver, path, location), declaredMember)
+            : (receiver, selectedMember);
     }
 
     private static bool SameSelectedProperty(PropertySymbol left, PropertySymbol right)

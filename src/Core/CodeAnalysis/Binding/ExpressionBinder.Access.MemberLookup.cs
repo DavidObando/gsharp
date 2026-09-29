@@ -3239,10 +3239,25 @@ internal sealed partial class ExpressionBinder
                 out var writeReported,
                 out var writeView))
             {
-                ReplaceBackwardGotoIndexUse(
-                    target,
-                    diagnosticLocation,
-                    writeIndexer.ContainingType ?? writeView ?? target.Type);
+                if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var targetPath, out _)
+                    && !targetPath.HasMembers
+                    && targetPath.Root.Type is not NullableTypeSymbol
+                    && FindDeclaredIndexer(targetPath.Root.Type, writeIndexer) is { } declaredIndexer)
+                {
+                    binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath.Root, diagnosticLocation);
+                    target = DeclaredReceiver(targetPath.Root, target.Syntax);
+                    writeIndexer = declaredIndexer.Indexer;
+                    writeSubstitution = declaredIndexer.Substitution;
+                    writeView = declaredIndexer.View ?? target.Type;
+                }
+                else
+                {
+                    ReplaceBackwardGotoIndexUse(
+                        target,
+                        diagnosticLocation,
+                        writeIndexer.ContainingType ?? writeView ?? target.Type);
+                }
+
                 target = ViewIndexerReceiver(target, writeView, diagnosticLocation);
                 var selectedIndexer = writeIndexer;
                 var paramType = SubstituteIndexerType(selectedIndexer.Parameters[0].Type, writeSubstitution);
