@@ -8,8 +8,10 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"time"
 )
@@ -36,6 +38,8 @@ func main() {
 	switch os.Args[1] {
 	case "analyze":
 		err = runAnalyze(ctx, os.Args[2:])
+	case "internal-analyze-worker":
+		err = runAnalyzeWorker(ctx, os.Args[2:])
 	case "validate-analysis":
 		err = runValidate(os.Args[2:])
 	case "version":
@@ -71,31 +75,141 @@ type exitError struct {
 func (e *exitError) Error() string { return e.err.Error() }
 func (e *exitError) Unwrap() error { return e.err }
 
-func runAnalyze(parent context.Context, args []string) error {
+func parseAnalyzeArgs(args []string) (string, string, string, error) {
 	fs := flag.NewFlagSet("analyze", flag.ContinueOnError)
 	source := fs.String("source", "", "source or module root")
 	profilePath := fs.String("profile", "", "profile JSON")
 	out := fs.String("out", "", "artifact directory")
 	if err := fs.Parse(args); err != nil {
-		return &exitError{2, err}
+		return "", "", "", err
 	}
 	if *source == "" || *profilePath == "" || *out == "" || fs.NArg() != 0 {
-		return &exitError{2, errors.New("--source, --profile, and --out are required")}
+		return "", "", "", errors.New("--source, --profile, and --out are required")
 	}
+	return *source, *profilePath, *out, nil
+}
 
-	profile, err := readProfile(*profilePath)
+func runAnalyze(parent context.Context, args []string) error {
+	source, profilePath, out, err := parseAnalyzeArgs(args)
 	if err != nil {
 		return &exitError{2, err}
 	}
-	sourceRoot, err := secureRoot(*source)
+	outRoot, err := filepath.Abs(out)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	if err := os.MkdirAll(outRoot, 0o755); err != nil {
+		return &exitError{2, err}
+	}
+	if err := rejectSymlinkPath(outRoot); err != nil {
+		return &exitError{2, fmt.Errorf("output root: %w", err)}
+	}
+	release, err := lockAndInvalidateOutput(outRoot)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	defer release()
+
+	profile, err := readProfile(profilePath)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	sourceRoot, err := secureRoot(source)
 	if err != nil {
 		return &exitError{2, fmt.Errorf("source root: %w", err)}
 	}
-	outRoot, err := filepath.Abs(*out)
+	goExecutable, err := exec.LookPath("go")
+	if err != nil {
+		return &exitError{2, errors.New("Go executable not found")}
+	}
+	goExecutable, err = filepath.Abs(goExecutable)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	timeout := time.Duration(profile.Limits.MaxDurationSeconds) * time.Second
+	bootstrapRoot, err := os.MkdirTemp(outRoot, ".go2gs-bootstrap-*")
+	if err != nil {
+		return &exitError{2, err}
+	}
+	defer os.RemoveAll(bootstrapRoot)
+	versionResult, err := runProcess(parent, min(timeout, 15*time.Second), profile.Limits.MaxLogBytes,
+		sourceRoot, goExecutable, []string{"version"}, bootstrapEnvironment(bootstrapRoot, goExecutable))
+	if err != nil {
+		return &exitError{2, err}
+	}
+	if versionResult.ExitCode != 0 {
+		return &exitError{2, fmt.Errorf("resolve selected Go version: %s", strings.TrimSpace(versionResult.Stderr))}
+	}
+	if parseGoVersion(versionResult.Stdout) == "" {
+		return &exitError{2, errors.New("selected Go executable returned an unrecognized version")}
+	}
+	workerRoot, err := os.MkdirTemp(outRoot, ".go2gs-worker-*")
+	if err != nil {
+		return &exitError{2, err}
+	}
+	defer os.RemoveAll(workerRoot)
+	profileBytes, err := marshalCanonical(profile)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	workerProfile := filepath.Join(workerRoot, "profile.json")
+	if err := atomicWrite(workerProfile, profileBytes, 0o600); err != nil {
+		return &exitError{2, err}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		return &exitError{2, err}
+	}
+	result, err := runAnalysisWorkerProcess(parent, timeout, profile.Limits.MaxLogBytes, sourceRoot, self, []string{
+		"internal-analyze-worker", "--source", sourceRoot, "--profile", workerProfile, "--out", workerRoot,
+	}, bootstrapEnvironment(workerRoot, goExecutable))
+	if err != nil {
+		return &exitError{2, err}
+	}
+	if result.StdoutTruncated || result.StderrTruncated {
+		return &exitError{2, errors.New("analysis worker output exceeded configured log limit")}
+	}
+	if result.ExitCode != 0 && result.ExitCode != 1 {
+		return &exitError{2, fmt.Errorf("analysis worker failed: %s", strings.TrimSpace(result.Stderr))}
+	}
+	analysisBytes, runBytes, analysis, err := readWorkerArtifacts(workerRoot, profile.Limits.MaxOutputBytes)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	if (result.ExitCode == 0) != analysis.InventoryComplete {
+		return &exitError{2, errors.New("analysis worker exit status disagrees with inventory completeness")}
+	}
+	if err := publishWorkerArtifacts(outRoot, analysisBytes, runBytes, nil); err != nil {
+		return &exitError{2, err}
+	}
+	if result.ExitCode == 1 {
+		return &exitError{1, errors.New("inventory incomplete; see analysis.json diagnostics and blockers")}
+	}
+	return nil
+}
+
+func runAnalysisWorkerProcess(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string) (processResult, error) {
+	return runProcess(parent, timeout, maxOutput, dir, executable, args, env)
+}
+
+func runAnalyzeWorker(parent context.Context, args []string) error {
+	source, profilePath, out, err := parseAnalyzeArgs(args)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	profile, err := readProfile(profilePath)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	sourceRoot, err := secureRoot(source)
+	if err != nil {
+		return &exitError{2, fmt.Errorf("source root: %w", err)}
+	}
+	outRoot, err := filepath.Abs(out)
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(outRoot, 0o755); err != nil {
+	if err := os.MkdirAll(outRoot, 0o700); err != nil {
 		return err
 	}
 	if err := rejectSymlinkPath(outRoot); err != nil {

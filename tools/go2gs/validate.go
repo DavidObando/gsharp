@@ -41,8 +41,8 @@ func validateAnalysis(a Analysis) error {
 	if err := validateRecordFields(a); err != nil {
 		return err
 	}
-	if a.MigrationReady && !a.InventoryComplete {
-		return errors.New("migrationReady cannot be true when inventory is incomplete")
+	if a.MigrationReady {
+		return errors.New("migrationReady must be false for schema v1 M0 inventories")
 	}
 	if a.InventoryComplete {
 		for _, pkg := range a.Packages {

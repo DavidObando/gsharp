@@ -82,3 +82,22 @@ func safeJoin(root string, relative string) (string, error) {
 	}
 	return path, nil
 }
+
+func rejectSymlinkBelow(root, path string) error {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return errors.New("path escapes root")
+	}
+	current := root
+	for _, component := range strings.Split(relative, string(filepath.Separator)) {
+		current = filepath.Join(current, component)
+		info, err := os.Lstat(current)
+		if err != nil {
+			return err
+		}
+		if info.Mode()&os.ModeSymlink != 0 {
+			return fmt.Errorf("symlink path component is not allowed: %s", current)
+		}
+	}
+	return nil
+}

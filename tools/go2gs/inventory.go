@@ -75,33 +75,8 @@ type objectRef struct {
 	packageID string
 }
 
-func (b *inventoryBuilder) collectManifests() error {
-	names := []string{"go.mod", "go.sum", "go.work", "go.work.sum", filepath.Join("vendor", "modules.txt")}
-	for _, name := range names {
-		path, err := safeJoin(b.sourceRoot, name)
-		if err != nil {
-			return err
-		}
-		info, err := os.Stat(path)
-		if err != nil {
-			if os.IsNotExist(err) {
-				continue
-			}
-			return err
-		}
-		if !info.Mode().IsRegular() {
-			return fmt.Errorf("manifest is not a regular file: %s", name)
-		}
-		hash, size, err := hashFile(path)
-		if err != nil {
-			return err
-		}
-		b.analysis.Manifests = append(b.analysis.Manifests, ManifestRecord{
-			Kind: filepath.Base(name), Path: "source://" + slash(name), SHA256: hash, Bytes: size,
-		})
-	}
-	sort.Slice(b.analysis.Manifests, func(i, j int) bool { return b.analysis.Manifests[i].Path < b.analysis.Manifests[j].Path })
-	return nil
+func (b *inventoryBuilder) collectManifests(records []ManifestRecord) {
+	b.analysis.Manifests = append(b.analysis.Manifests, records...)
 }
 
 func (b *inventoryBuilder) indexPackages(packages []*packages.Package) {
