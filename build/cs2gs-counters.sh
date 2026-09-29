@@ -39,7 +39,6 @@
 # discovery; they must stay 0.
 cs2gs_synthetic_families=(
   # live
-  '__anon|anonymous-type temporary'
   '__arg|argument spill (evaluation order)'
   '__decon|deconstruction temporary'
   '__local_|lifted local helper (GATED: liftedLocalCeiling)'
@@ -56,6 +55,7 @@ cs2gs_synthetic_families=(
   '__caught|retired by #3899 (rethrow)'
   '__gsAsyncVoid|retired by #3921 (native async void)'
   '__asyncVoid_|retired by #3921 (native async void)'
+  '__anon|retired by #4297 (discard parameters)'
   '__foreach|retired by #3925 (typed range clauses)'
   '__q|retired by #4304/ADR-0185 (tuple-destructuring arrow-lambda parameters)'
   '__generatedRegex_|retired by #4301 (G# @GeneratedRegex declaring parts, ADR-0192)'

@@ -3,8 +3,11 @@
 // </copyright>
 
 using System;
+using System.IO;
+using System.Threading.Tasks;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
+using Cs2Gs.Pipeline;
 using Cs2Gs.Translator;
 using Cs2Gs.Translator.Loading;
 using Xunit;
@@ -107,6 +110,8 @@ namespace Corpus.Issue1898
 ");
 
         Assert.Contains("return 7", rendered, StringComparison.Ordinal);
+        Assert.Contains("(_ int32, _ int32) -> {", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__" + "anon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -137,9 +142,126 @@ namespace Corpus.Issue1898
 }
 ");
 
-        Assert.DoesNotContain("(obj string)", rendered, StringComparison.Ordinal);
+        Assert.Contains("(_ string) -> {", rendered, StringComparison.Ordinal);
         Assert.Contains("Console.WriteLine(obj)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__" + "anon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void ParameterlessDelegateBlock_DiscardParamsCannotShadowSourceGeneratedOrReservedNames()
+    {
+        string retiredName = "__" + "anon0";
+        string rendered = Render(@"
+using System;
+
+namespace Corpus.Issue1898
+{
+    public delegate void Sink(string obj, int RETIRED_NAME, bool init);
+
+    public class Holder
+    {
+        public void Describe()
+        {
+            string obj = ""captured"";
+            int RETIRED_NAME = 42;
+            bool init = true;
+            Sink sink = delegate
+            {
+                Console.WriteLine(obj + "":"" + RETIRED_NAME + "":"" + init);
+            };
+            sink(""ignored"", 0, false);
+        }
+    }
+}
+".Replace("RETIRED_NAME", retiredName, StringComparison.Ordinal));
+
+        Assert.Contains("(_ string, _ int32, _ bool) -> {", rendered, StringComparison.Ordinal);
+        Assert.Contains("Console.WriteLine", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__" + "anon1", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void ParameterlessDelegateBlock_PreservesRefInAndVariadicInvokeParameters()
+    {
+        string rendered = Render(@"
+namespace Corpus.Issue1898
+{
+    public delegate int RefSink(ref int value);
+    public delegate int InSink(in int value);
+    public delegate int VariadicSink(params int[] values);
+
+    public class Holder
+    {
+        public int Describe()
+        {
+            int captured = 7;
+            RefSink byRef = delegate { return captured; };
+            InSink readOnly = delegate { return captured + 1; };
+            VariadicSink variadic = delegate { return captured + 2; };
+            int value = 1;
+            return byRef(ref value) + readOnly(in value) + variadic(1, 2, 3);
+        }
+    }
+}
+");
+
+        // C# permits an omitted anonymous-method parameter list for ref, in,
+        // and params-array delegate slots. `out` is not a valid counterpart:
+        // the anonymous body cannot name the slot and therefore cannot perform
+        // the definite assignment required for an out parameter.
+        Assert.Contains("(ref _ int32) -> {", rendered, StringComparison.Ordinal);
+        Assert.Contains("(in _ int32) -> {", rendered, StringComparison.Ordinal);
+        Assert.Contains("(_ ...int32) -> {", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__" + "anon", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void ParameterlessDelegateBlock_WithoutTargetStillReportsTheExistingFallback()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", "class Holder { void M() { var d = delegate { }; } }") });
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains("cannot infer its parameter list", StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public async Task G09FunctionsConsole_MigratesGreen_EndToEnd()
+    {
+        string compiler = FindCompiler();
+        Assert.True(
+            compiler != null,
+            "gsc.dll must be built (dotnet build GSharp.sln) before running this test.");
+
+        string corpus = TestFixtureSource.Resolve("tools", "cs2gs", "corpus");
+        string outRoot = Path.Combine(
+            AppContext.BaseDirectory,
+            "pipeline-tests",
+            "g09-anonymous-method-e2e",
+            Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(outRoot);
+        var pipeline = new MigrationPipeline(
+            new PipelineOptions { GscPath = compiler, OutputRoot = outRoot });
+        CorpusApp g09 = CorpusDiscovery.FindById(corpus, "corpus/G09-Functions-Console");
+
+        Assert.NotNull(g09);
+        RunResult result = await pipeline.RunAsync(new[] { g09 });
+        AppResult app = Assert.Single(result.Apps);
+        Assert.True(
+            app.Succeeded,
+            "corpus/G09-Functions-Console must migrate green end-to-end (issue #4297). Failure category: " +
+                (app.FailureCategory ?? "<none>") + "; artifacts: " + string.Join(", ", app.Artifacts));
+        Assert.Empty(app.Artifacts);
+        Assert.All(app.Stages, stage => Assert.Equal("passed", stage.Status));
     }
 
     [Fact]
@@ -221,5 +343,31 @@ namespace Corpus.Issue1898
         Cs2Gs.CodeModel.Ast.CompilationUnit unit = new CSharpToGSharpTranslator().TranslateDocument(document, context);
         Assert.Empty(context.Diagnostics);
         return GSharpPrinter.Print(unit);
+    }
+
+    private static string FindCompiler()
+    {
+        var directory = new DirectoryInfo(AppContext.BaseDirectory);
+        while (directory is not null)
+        {
+            foreach (string configuration in new[] { "Release", "Debug" })
+            {
+                string candidate = Path.Combine(
+                    directory.FullName,
+                    "out",
+                    "bin",
+                    configuration,
+                    "Compiler",
+                    "gsc.dll");
+                if (File.Exists(candidate))
+                {
+                    return candidate;
+                }
+            }
+
+            directory = directory.Parent;
+        }
+
+        return null;
     }
 }

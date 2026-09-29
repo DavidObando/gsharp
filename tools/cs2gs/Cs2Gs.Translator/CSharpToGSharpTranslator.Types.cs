@@ -54,20 +54,18 @@ public sealed partial class CSharpToGSharpTranslator
                 // not reference them. G# function literals always name params
                 // explicitly, so synthesize them from the converted delegate
                 // type's Invoke signature; if that type can't be resolved, this is
-                // a genuine gap rather than a silent zero-arg guess.
+                // a genuine gap. Translation still has an empty parameter list,
+                // but the loud Unsupported diagnostic prevents silent acceptance.
                 if (this.context.GetTypeInfo(implicitParamsAnonymousMethod).ConvertedType is INamedTypeSymbol { DelegateInvokeMethod: { } invokeMethod })
                 {
                     // The body can never reference these params (C# gives them no
-                    // source names here), so reusing the delegate's DECLARED param
-                    // name (e.g. `Action<string>.Invoke`'s `obj`) would silently
-                    // shadow an outer captured local of the same name. Keep
-                    // MapParameter's type/refkind mapping but override the name
-                    // with a fresh `__anon{n}` identifier C# source can't produce.
-                    int index = 0;
+                    // source names here), so use G#'s repeatable, non-referenceable
+                    // discard parameter. This preserves every positional slot
+                    // without shadowing a captured source or generated name.
                     foreach (IParameterSymbol invokeParameter in invokeMethod.Parameters)
                     {
                         Parameter mapped = this.MapParameter(invokeParameter, implicitParamsAnonymousMethod);
-                        parameters.Add(new Parameter($"__anon{index++}", mapped.Type, mapped.IsVariadic, mapped.RefKind, mapped.DefaultValue, mapped.Attributes));
+                        parameters.Add(new Parameter("_", mapped.Type, mapped.IsVariadic, mapped.RefKind, mapped.DefaultValue, mapped.Attributes));
                     }
                 }
                 else

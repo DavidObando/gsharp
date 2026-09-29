@@ -1173,7 +1173,7 @@ public sealed class Issue3466NestedHomonymAliasTests
             printed,
             StringComparison.Ordinal);
         Assert.Contains(
-            "let handler ActionHandler = (__anon0 TextStringBuilder) -> {",
+            "let handler ActionHandler = (_ TextStringBuilder) -> {",
             printed,
             StringComparison.Ordinal);
     }
