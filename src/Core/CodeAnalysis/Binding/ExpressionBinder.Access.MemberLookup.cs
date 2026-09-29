@@ -1958,6 +1958,7 @@ internal sealed partial class ExpressionBinder
                     target = DeclaredReceiver(targetPath.Root, target.Syntax);
                     readIndexer = declaredIndexer;
                     readView = target.Type;
+                    TrackBackwardGotoIndexUse(target, targetLocation);
                 }
 
                 return BindUserIndexerRead(

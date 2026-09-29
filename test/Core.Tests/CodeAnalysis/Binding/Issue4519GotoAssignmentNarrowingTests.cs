@@ -626,6 +626,41 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_NullableInterfaceIndexerStillRequiresNonNullReceiver()
+    {
+        var result = Evaluate("""
+            interface Values {
+                prop this[index int32] int32 { get; }
+            }
+            class Dog : Values {
+                prop this[index int32] int32 -> 1
+            }
+
+            func Run() int32 {
+                var x Values? = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x[0]
+                    if count == 0 {
+                        count++
+                        x = nil
+                        goto Again
+                    }
+                    return value
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0116");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_SubtypeOnlyIndexerOverloadStillRequiresNarrowedType()
     {
         var result = Evaluate("""
@@ -1400,6 +1435,37 @@ public class Issue4519GotoAssignmentNarrowingTests
 
             Console.WriteLine(Run())
             """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyPreservesCallableTargetAcrossUnconditionalGoto()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action (() -> void) = mutate
+                    goto Invoke
+                    action = noop
+                Invoke:
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
     }
 
     [Fact]

@@ -1544,6 +1544,10 @@ internal sealed partial class StatementBinder
             {
                 pendingConditionalTargets.Remove(label.Label);
             }
+            else if (node is BoundGotoStatement gotoStatement)
+            {
+                pendingConditionalTargets.Add(gotoStatement.Label);
+            }
 
             base.VisitStatement(node);
         }
