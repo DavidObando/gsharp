@@ -1,2 +1,2 @@
 #include "textflag.h"
-#include "constants.h"
+#include /* gap */ "constants.h"

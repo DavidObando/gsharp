@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/base64"
 	"fmt"
 	"go/ast"
@@ -23,10 +24,7 @@ import (
 	"golang.org/x/tools/go/packages"
 )
 
-var (
-	overlayDiagnosticPath = regexp.MustCompile(`[^\s\n]*gocommand-[0-9]+[/\\][0-9]+-([^:\s\n]+)`)
-	quotedIncludePattern  = regexp.MustCompile(`(?m)^[\t ]*#[\t ]*include[\t ]*"([^"\r\n]+)"`)
-)
+var overlayDiagnosticPath = regexp.MustCompile(`[^\s\n]*gocommand-[0-9]+[/\\][0-9]+-([^:\s\n]+)`)
 
 type inventoryBuilder struct {
 	analysis              *Analysis
@@ -454,13 +452,118 @@ func selectedNativeIncludes(pkg *packages.Package, snapshot map[string][]byte) (
 }
 
 func localQuotedIncludes(data []byte) []string {
-	matches := quotedIncludePattern.FindAllSubmatch(data, -1)
-	result := make([]string, 0, len(matches))
-	for _, match := range matches {
-		result = append(result, string(match[1]))
+	data = stripCComments(spliceCPreprocessorLines(data))
+	var result []string
+	for len(data) > 0 {
+		line := data
+		if newline := bytes.IndexByte(data, '\n'); newline >= 0 {
+			line, data = data[:newline], data[newline+1:]
+		} else {
+			data = nil
+		}
+		i := skipHorizontalSpace(line, 0)
+		if i >= len(line) || line[i] != '#' {
+			continue
+		}
+		i = skipHorizontalSpace(line, i+1)
+		const keyword = "include"
+		if !bytes.HasPrefix(line[i:], []byte(keyword)) {
+			continue
+		}
+		i += len(keyword)
+		if i < len(line) && isIdentifierByte(line[i]) {
+			continue
+		}
+		i = skipHorizontalSpace(line, i)
+		if i >= len(line) || line[i] != '"' {
+			continue
+		}
+		start := i + 1
+		end := bytes.IndexByte(line[start:], '"')
+		if end < 0 {
+			continue
+		}
+		result = append(result, string(line[start:start+end]))
 	}
 	sort.Strings(result)
 	return result
+}
+
+func spliceCPreprocessorLines(data []byte) []byte {
+	result := make([]byte, 0, len(data))
+	for i := 0; i < len(data); i++ {
+		if data[i] == '\\' && i+1 < len(data) && data[i+1] == '\n' {
+			i++
+			continue
+		}
+		if data[i] == '\\' && i+2 < len(data) && data[i+1] == '\r' && data[i+2] == '\n' {
+			i += 2
+			continue
+		}
+		result = append(result, data[i])
+	}
+	return result
+}
+
+func stripCComments(data []byte) []byte {
+	result := make([]byte, 0, len(data))
+	for i := 0; i < len(data); {
+		if i+1 < len(data) && data[i] == '/' && data[i+1] == '/' {
+			result = append(result, ' ')
+			i += 2
+			for i < len(data) && data[i] != '\n' {
+				i++
+			}
+			continue
+		}
+		if i+1 < len(data) && data[i] == '/' && data[i+1] == '*' {
+			result = append(result, ' ')
+			i += 2
+			for i+1 < len(data) && (data[i] != '*' || data[i+1] != '/') {
+				if data[i] == '\n' {
+					result = append(result, '\n')
+				}
+				i++
+			}
+			if i+1 < len(data) {
+				i += 2
+			} else {
+				i = len(data)
+			}
+			continue
+		}
+		if data[i] == '"' || data[i] == '\'' {
+			quote := data[i]
+			result = append(result, data[i])
+			i++
+			for i < len(data) {
+				result = append(result, data[i])
+				if data[i] == '\\' && i+1 < len(data) {
+					i++
+					result = append(result, data[i])
+				} else if data[i] == quote {
+					i++
+					break
+				}
+				i++
+			}
+			continue
+		}
+		result = append(result, data[i])
+		i++
+	}
+	return result
+}
+
+func skipHorizontalSpace(data []byte, index int) int {
+	for index < len(data) && (data[index] == ' ' || data[index] == '\t' || data[index] == '\r' || data[index] == '\f' || data[index] == '\v') {
+		index++
+	}
+	return index
+}
+
+func isIdentifierByte(value byte) bool {
+	return value == '_' || value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z' || value >= '0' && value <= '9'
 }
 
 func resolveLocalInclude(packageDir, includingPath, include string) (string, bool) {
