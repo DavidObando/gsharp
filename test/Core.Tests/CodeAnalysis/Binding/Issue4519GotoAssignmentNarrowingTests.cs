@@ -673,6 +673,70 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_HiddenPropertyKeepsSelectedSubtypeSlot()
+    {
+        AssertRuns("""
+            import System
+
+            open class Animal {
+                prop Name string -> "animal"
+            }
+            class Dog : Animal {
+                prop Name string -> "dog"
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let name = x.Name
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return name
+                }
+                return ""
+            }
+
+            Console.WriteLine(Run())
+            """, "dog");
+    }
+
+    [Fact]
+    public void BackwardGoto_HiddenFieldKeepsSelectedSubtypeSlot()
+    {
+        AssertRuns("""
+            import System
+
+            open class Animal {
+                var Name string = "animal"
+            }
+            class Dog : Animal {
+                var Name string = "dog"
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let name = x.Name
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return name
+                }
+                return ""
+            }
+
+            Console.WriteLine(Run())
+            """, "dog");
+    }
+
+    [Fact]
     public void BackwardGoto_ParenthesizedOverrideDoesNotRequireNarrowedType()
     {
         var result = Evaluate("""
@@ -1807,6 +1871,43 @@ public class Issue4519GotoAssignmentNarrowingTests
                     invoke()
                     action = mutate
                     invoke()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyCatchIncludesIntermediateCallableTarget()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action (() -> void) = noop
+                    try {
+                        action = mutate
+                        throw Exception()
+                        action = noop
+                    }
+                    catch {
+                        action()
+                    }
                 }
             Done:
                 return x.Length

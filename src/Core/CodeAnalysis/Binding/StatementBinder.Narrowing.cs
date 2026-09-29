@@ -1605,6 +1605,7 @@ internal sealed partial class StatementBinder
         private readonly HashSet<VariableSymbol> unknownFunctionValues = new();
         private readonly HashSet<BoundFunctionLiteralExpression> visitedFunctionLiterals = new();
         private readonly HashSet<BoundLabel> pendingConditionalTargets = new();
+        private HashSet<VariableSymbol>? tryAssignedVariables;
 
         public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing)
         {
@@ -1820,13 +1821,19 @@ internal sealed partial class StatementBinder
         protected override void VisitTryStatement(BoundTryStatement node)
         {
             var branchStart = CaptureCallableState();
+            var outerTryAssignments = tryAssignedVariables;
+            var assignedInTry = new HashSet<VariableSymbol>();
+            tryAssignedVariables = assignedInTry;
             VisitStatement(node.TryBlock);
+            tryAssignedVariables = outerTryAssignments;
+            outerTryAssignments?.UnionWith(assignedInTry);
             var joined = CaptureCallableState();
 
             foreach (var clause in node.CatchClauses)
             {
                 RestoreCallableState(branchStart);
                 MergeCallableState(joined);
+                unknownFunctionValues.UnionWith(assignedInTry);
                 VisitExpression(clause.Filter);
                 VisitStatement(clause.Body);
                 joined = JoinCallableStates(joined, CaptureCallableState());
@@ -1982,6 +1989,7 @@ internal sealed partial class StatementBinder
         {
             if (node.Variable != null)
             {
+                tryAssignedVariables?.Add(node.Variable);
                 if (TryGetFunctionLiterals(node.Expression, out var literals))
                 {
                     if (pendingConditionalTargets.Count > 0

@@ -205,7 +205,8 @@ internal sealed partial class ExpressionBinder
                 receiverSyntax,
                 receiverStart);
             Diagnostics.TruncateTo(diagnosticCount);
-            if (declaredResult is not BoundErrorExpression)
+            if (declaredResult is not BoundErrorExpression
+                && RefersToSameMemberSlot(result, declaredResult))
             {
                 binderCtx.UntrackBackwardGotoNarrowingConversion(
                     receiverPath,
@@ -217,6 +218,103 @@ internal sealed partial class ExpressionBinder
 
         TrackBackwardGotoNarrowingAccess(receiver, rightPart, result);
         return result;
+    }
+
+    private static bool RefersToSameMemberSlot(BoundExpression selected, BoundExpression declared)
+    {
+        return (selected, declared) switch
+        {
+            (BoundFieldAccessExpression left, BoundFieldAccessExpression right) =>
+                ReferenceEquals(left.Field, right.Field)
+                || (left.Field.Declaration != null
+                    && ReferenceEquals(left.Field.Declaration, right.Field.Declaration)),
+            (BoundPropertyAccessExpression left, BoundPropertyAccessExpression right) =>
+                SamePropertySlot(left.Property, right.Property),
+            (BoundClrPropertyAccessExpression left, BoundClrPropertyAccessExpression right) =>
+                SameClrMemberSlot(left.Member, right.Member),
+            (BoundMethodGroupExpression left, BoundMethodGroupExpression right) =>
+                left.Candidates.Length == right.Candidates.Length
+                && left.Candidates.All(candidate =>
+                    right.Candidates.Any(other => SameMethodSlot(candidate, other))),
+            (BoundClrMethodGroupExpression left, BoundClrMethodGroupExpression right) =>
+                left.Candidates.Length == right.Candidates.Length
+                && left.Candidates.All(candidate =>
+                    right.Candidates.Any(other => SameClrMethodSlot(candidate, other))),
+            _ => false,
+        };
+    }
+
+    private static bool SamePropertySlot(PropertySymbol left, PropertySymbol right)
+    {
+        for (var current = left; current != null; current = current.OverriddenProperty)
+        {
+            if (ReferenceEquals(current, right)
+                || (current.Declaration != null
+                    && ReferenceEquals(current.Declaration, right.Declaration)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SameMethodSlot(FunctionSymbol left, FunctionSymbol right)
+    {
+        for (var current = left; current != null; current = current.OverriddenMethod)
+        {
+            if (ReferenceEquals(current, right)
+                || (current.Declaration != null
+                    && ReferenceEquals(current.Declaration, right.Declaration)))
+            {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private static bool SameClrMemberSlot(System.Reflection.MemberInfo left, System.Reflection.MemberInfo right)
+    {
+        return left switch
+        {
+            System.Reflection.MethodInfo leftMethod when right is System.Reflection.MethodInfo rightMethod =>
+                SameClrMethodSlot(leftMethod, rightMethod),
+            System.Reflection.PropertyInfo leftProperty when right is System.Reflection.PropertyInfo rightProperty =>
+                SameClrPropertySlot(leftProperty, rightProperty),
+            _ => left.MetadataToken == right.MetadataToken
+                && ReferenceEquals(left.Module, right.Module),
+        };
+    }
+
+    private static bool SameClrMethodSlot(
+        System.Reflection.MethodInfo left,
+        System.Reflection.MethodInfo right)
+    {
+        try
+        {
+            left = left.GetBaseDefinition();
+            right = right.GetBaseDefinition();
+        }
+        catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex))
+        {
+            // MetadataLoadContext cannot expose override chains, so only exact
+            // member identity is safe.
+        }
+
+        return left.MetadataToken == right.MetadataToken
+            && ReferenceEquals(left.Module, right.Module);
+    }
+
+    private static bool SameClrPropertySlot(
+        System.Reflection.PropertyInfo left,
+        System.Reflection.PropertyInfo right)
+    {
+        var leftAccessor = left.GetMethod ?? left.SetMethod;
+        var rightAccessor = right.GetMethod ?? right.SetMethod;
+        return leftAccessor != null
+            && rightAccessor != null
+            && SameClrMethodSlot(leftAccessor, rightAccessor);
     }
 
     private static BoundExpression DeclaredReceiver(VariableSymbol variable, SyntaxNode? syntax)
