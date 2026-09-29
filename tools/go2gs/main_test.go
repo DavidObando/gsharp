@@ -1492,8 +1492,9 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 			t.Fatal(err)
 		}
 		var tombstone string
-		if err := directory.cleanupWithHooks(nil, func(path string) { tombstone = path }); err != nil {
-			t.Fatal(err)
+		if err := directory.cleanupWithHooks(nil, func(path string) { tombstone = path }); err == nil ||
+			!strings.Contains(err.Error(), "remains non-empty") {
+			t.Fatalf("retained symlink should report incomplete cleanup, got %v", err)
 		}
 		if info, err := os.Lstat(filepath.Join(tombstone, "link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
 			t.Fatalf("unbound symlink was not safely retained: %v, %v", info, err)
@@ -1521,8 +1522,8 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 				t.Fatal(writeErr)
 			}
 		})
-		if err != nil {
-			t.Fatal(err)
+		if err == nil || !strings.Contains(err.Error(), "changed during cleanup") {
+			t.Fatalf("pathname replacement should report cleanup failure, got %v", err)
 		}
 		data, err := os.ReadFile(filepath.Join(directory.path, "valuable.txt"))
 		if err != nil || string(data) != "valuable" {
@@ -1559,8 +1560,8 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 				t.Fatal(writeErr)
 			}
 		})
-		if err != nil {
-			t.Fatal(err)
+		if err == nil || !strings.Contains(err.Error(), "tombstone was replaced") {
+			t.Fatalf("tombstone replacement should report cleanup failure, got %v", err)
 		}
 		if data, err := os.ReadFile(filepath.Join(tombstone, "valuable.txt")); err != nil || string(data) != "valuable" {
 			t.Fatalf("post-check replacement was deleted: %q, %v", data, err)
@@ -1626,8 +1627,8 @@ func TestOwnedTemporaryDirectoryLateFileReplacementSurvives(t *testing.T) {
 			if watcherErr := <-done; watcherErr != nil {
 				t.Fatal(watcherErr)
 			}
-			if err != nil {
-				t.Fatal(err)
+			if err == nil || !strings.Contains(err.Error(), "remains non-empty") {
+				t.Fatalf("retained replacement should report cleanup failure, got %v", err)
 			}
 			target := filepath.Join(tombstone, "1999")
 			if replacement == "symlink" {
@@ -1640,6 +1641,177 @@ func TestOwnedTemporaryDirectoryLateFileReplacementSurvives(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestOwnedTemporaryDirectoryExchangeFailureIsSafeAndReported(t *testing.T) {
+	if !secureTempCleanupSupported() {
+		t.Skip("atomic exchange cleanup is unavailable")
+	}
+	for _, swappedPlaceholder := range []bool{false, true} {
+		name := "placeholder-removed"
+		if swappedPlaceholder {
+			name = "placeholder-swapped"
+		}
+		t.Run(name, func(t *testing.T) {
+			directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-worker-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(directory.path, "owned"), []byte("owned"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			var hookErr error
+			var tombstone, placeholder, displaced string
+			previous := tempCleanupPlaceholderCreatedHook
+			tempCleanupPlaceholderCreatedHook = func(path, entry, created string) {
+				if entry != "owned" {
+					return
+				}
+				placeholder = filepath.Join(path, created)
+				hookErr = os.Remove(filepath.Join(path, entry))
+				if hookErr != nil || !swappedPlaceholder {
+					return
+				}
+				displaced = placeholder + ".owned"
+				if hookErr = os.Rename(placeholder, displaced); hookErr == nil {
+					hookErr = os.WriteFile(placeholder, []byte("valuable"), 0o600)
+				}
+			}
+			t.Cleanup(func() { tempCleanupPlaceholderCreatedHook = previous })
+
+			err = directory.cleanupWithHooks(nil, func(path string) { tombstone = path })
+			if hookErr != nil {
+				t.Fatal(hookErr)
+			}
+			if err == nil || !strings.Contains(err.Error(), "atomically exchange") {
+				t.Fatalf("exchange failure was not reported: %v", err)
+			}
+			if swappedPlaceholder {
+				if data, readErr := os.ReadFile(placeholder); readErr != nil || string(data) != "valuable" {
+					t.Fatalf("swapped placeholder was deleted: %q, %v", data, readErr)
+				}
+				if _, statErr := os.Lstat(displaced); statErr != nil {
+					t.Fatalf("displaced known placeholder was deleted: %v", statErr)
+				}
+				return
+			}
+			entries, readErr := os.ReadDir(tombstone)
+			if readErr != nil {
+				t.Fatal(readErr)
+			}
+			for _, entry := range entries {
+				if strings.HasPrefix(entry.Name(), ".go2gs-entry-") {
+					t.Fatalf("known placeholder leaked after exchange failure: %s", entry.Name())
+				}
+			}
+		})
+	}
+}
+
+func TestOwnedTemporaryDirectoryCleanupErrorsReachOwners(t *testing.T) {
+	if !secureTempCleanupSupported() {
+		t.Skip("atomic exchange cleanup is unavailable")
+	}
+	writeProfile := func(t *testing.T) string {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "profile.json")
+		data, err := marshalCanonical(testProfile())
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		return path
+	}
+	installFailure := func(t *testing.T, prefix, probe string, prepare func(ownedTempDir)) *error {
+		t.Helper()
+		previousCreated := tempDirectoryCreatedHook
+		previousPlaceholder := tempCleanupPlaceholderCreatedHook
+		var hookErr error
+		tempDirectoryCreatedHook = func(directory ownedTempDir) {
+			if !strings.HasPrefix(filepath.Base(directory.path), prefix) {
+				return
+			}
+			hookErr = os.WriteFile(filepath.Join(directory.path, probe), []byte("owned"), 0o600)
+			if hookErr == nil && prepare != nil {
+				prepare(directory)
+			}
+		}
+		tempCleanupPlaceholderCreatedHook = func(path, entry, _ string) {
+			if hookErr == nil && entry == probe {
+				hookErr = os.Remove(filepath.Join(path, entry))
+			}
+		}
+		t.Cleanup(func() {
+			tempDirectoryCreatedHook = previousCreated
+			tempCleanupPlaceholderCreatedHook = previousPlaceholder
+		})
+		return &hookErr
+	}
+
+	t.Run("bootstrap", func(t *testing.T) {
+		root := copyFixture(t, "complete")
+		hookErr := installFailure(t, ".go2gs-bootstrap-", "bootstrap-probe", nil)
+		bin := t.TempDir()
+		if err := os.WriteFile(filepath.Join(bin, "go"), []byte("#!/bin/sh\necho broken >&2\nexit 7\n"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		t.Setenv("PATH", bin)
+		out, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = runAnalyze(t.Context(), []string{
+			"--source", root, "--profile", writeProfile(t), "--out", out,
+		})
+		if *hookErr != nil {
+			t.Fatal(*hookErr)
+		}
+		if err == nil || !strings.Contains(err.Error(), "resolve selected Go version") ||
+			!strings.Contains(err.Error(), "cleanup bootstrap directory") {
+			t.Fatalf("bootstrap cleanup failure did not preserve both errors: %v", err)
+		}
+	})
+
+	t.Run("worker", func(t *testing.T) {
+		root := copyFixture(t, "complete")
+		var prepareErr error
+		hookErr := installFailure(t, ".go2gs-worker-", "worker-probe", func(directory ownedTempDir) {
+			prepareErr = os.Mkdir(filepath.Join(directory.path, "profile.json"), 0o700)
+		})
+		out, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = runAnalyze(t.Context(), []string{
+			"--source", root, "--profile", writeProfile(t), "--out", out,
+		})
+		if *hookErr != nil {
+			t.Fatal(*hookErr)
+		}
+		if prepareErr != nil {
+			t.Fatal(prepareErr)
+		}
+		if err == nil || !strings.Contains(err.Error(), "cleanup worker directory") {
+			t.Fatalf("worker cleanup failure was not surfaced: %v", err)
+		}
+	})
+
+	t.Run("analysis work", func(t *testing.T) {
+		root := copyFixture(t, "complete")
+		hookErr := installFailure(t, ".go2gs-work-", "work-probe", nil)
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if *hookErr != nil {
+			t.Fatal(*hookErr)
+		}
+		if !complete || !analysis.InventoryComplete {
+			t.Fatalf("fixture did not complete before cleanup: %#v", analysis.Blockers)
+		}
+		if err == nil || !strings.Contains(err.Error(), "cleanup analysis work directory") {
+			t.Fatalf("work cleanup failure was not surfaced: %v", err)
+		}
+	})
 }
 
 func TestLoadFailureReplacesStaleSuccessfulArtifacts(t *testing.T) {

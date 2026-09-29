@@ -89,7 +89,7 @@ func parseAnalyzeArgs(args []string) (string, string, string, error) {
 	return *source, *profilePath, *out, nil
 }
 
-func runAnalyze(parent context.Context, args []string) error {
+func runAnalyze(parent context.Context, args []string) (err error) {
 	source, profilePath, out, err := parseAnalyzeArgs(args)
 	if err != nil {
 		return &exitError{2, err}
@@ -131,7 +131,11 @@ func runAnalyze(parent context.Context, args []string) error {
 	if err != nil {
 		return &exitError{2, err}
 	}
-	defer bootstrapDirectory.cleanup()
+	defer func() {
+		if cleanupErr := ownedTempCleanupError(bootstrapDirectory, "bootstrap"); cleanupErr != nil {
+			err = errors.Join(err, &exitError{2, cleanupErr})
+		}
+	}()
 	bootstrapRoot := bootstrapDirectory.path
 	versionResult, err := runProcess(parent, min(timeout, 15*time.Second), profile.Limits.MaxLogBytes,
 		sourceRoot, goExecutable, []string{"version"}, bootstrapEnvironment(bootstrapRoot, goExecutable))
@@ -148,7 +152,11 @@ func runAnalyze(parent context.Context, args []string) error {
 	if err != nil {
 		return &exitError{2, err}
 	}
-	defer workerDirectory.cleanup()
+	defer func() {
+		if cleanupErr := ownedTempCleanupError(workerDirectory, "worker"); cleanupErr != nil {
+			err = errors.Join(err, &exitError{2, cleanupErr})
+		}
+	}()
 	workerRoot := workerDirectory.path
 	profileBytes, err := marshalCanonical(profile)
 	if err != nil {

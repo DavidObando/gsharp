@@ -8,6 +8,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -51,7 +52,7 @@ func cleanupOwnedTempDir(directory ownedTempDir, beforeRename func(), afterTombs
 	if err != nil || !openedInfo.IsDir() || !os.SameFile(directory.info, openedInfo) {
 		_ = file.Close()
 		restoreRenamedDirectory(parentFD, tombstone, directory.path)
-		return nil
+		return errors.New("owned temporary directory changed during cleanup")
 	}
 	var opened unix.Stat_t
 	if err := unix.Fstat(fd, &opened); err != nil {
@@ -76,11 +77,14 @@ func cleanupOwnedTempDir(directory ownedTempDir, beforeRename func(), afterTombs
 		return err
 	}
 	if !sameUnixFile(current, opened) {
-		return nil
+		return errors.New("temporary cleanup tombstone was replaced")
 	}
 	err = unix.Unlinkat(parentFD, filepath.Base(tombstone), unix.AT_REMOVEDIR)
-	if errors.Is(err, unix.ENOENT) || errors.Is(err, unix.ENOTEMPTY) {
+	if errors.Is(err, unix.ENOENT) {
 		return nil
+	}
+	if errors.Is(err, unix.ENOTEMPTY) {
+		return errors.New("owned temporary directory remains non-empty after cleanup")
 	}
 	return err
 }
@@ -113,7 +117,7 @@ func removeDirectoryContents(directory *os.File) error {
 	for _, entry := range captured {
 		name, before := entry.name, entry.stat
 		if before.Mode&unix.S_IFMT != unix.S_IFDIR {
-			if err := quarantineAndRemoveFile(fd, name, before); err != nil {
+			if err := quarantineAndRemoveFile(fd, directory.Name(), name, before); err != nil {
 				return err
 			}
 			continue
@@ -122,7 +126,7 @@ func removeDirectoryContents(directory *os.File) error {
 		if err != nil {
 			return err
 		}
-		child := os.NewFile(uintptr(childFD), name)
+		child := os.NewFile(uintptr(childFD), filepath.Join(directory.Name(), name))
 		var opened unix.Stat_t
 		if err := unix.Fstat(childFD, &opened); err != nil || !sameUnixFile(before, opened) {
 			_ = child.Close()
@@ -152,7 +156,7 @@ func removeDirectoryContents(directory *os.File) error {
 	return nil
 }
 
-func quarantineAndRemoveFile(parentFD int, name string, before unix.Stat_t) error {
+func quarantineAndRemoveFile(parentFD int, directoryPath, name string, before unix.Stat_t) error {
 	if before.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil
 	}
@@ -173,37 +177,53 @@ func quarantineAndRemoveFile(parentFD int, name string, before unix.Stat_t) erro
 	if err != nil {
 		return err
 	}
+	defer unix.Close(placeholderFD)
 	var placeholderStat unix.Stat_t
 	if err := unix.Fstat(placeholderFD, &placeholderStat); err != nil {
-		_ = unix.Close(placeholderFD)
 		return err
 	}
-	if err := unix.Close(placeholderFD); err != nil {
-		return err
+	if tempCleanupPlaceholderCreatedHook != nil {
+		tempCleanupPlaceholderCreatedHook(directoryPath, name, placeholder)
 	}
 	if err := atomicExchange(parentFD, name, placeholder); err != nil {
-		return nil
+		return errors.Join(
+			fmt.Errorf("atomically exchange temporary entry %q: %w", name, err),
+			removeKnownPlaceholder(parentFD, placeholder, placeholderStat),
+		)
 	}
 	var quarantined unix.Stat_t
 	if err := unix.Fstatat(parentFD, placeholder, &quarantined, unix.AT_SYMLINK_NOFOLLOW); err != nil ||
 		!sameUnixFile(opened, quarantined) {
-		_ = atomicExchange(parentFD, name, placeholder)
-		removeKnownPlaceholder(parentFD, placeholder, placeholderStat)
-		return nil
+		return errors.Join(
+			errors.New("temporary entry quarantine identity changed"),
+			atomicExchange(parentFD, name, placeholder),
+			removeKnownPlaceholder(parentFD, placeholder, placeholderStat),
+		)
 	}
 	if err := unix.Unlinkat(parentFD, placeholder, 0); err != nil && !errors.Is(err, unix.ENOENT) {
 		return err
 	}
-	removeKnownPlaceholder(parentFD, name, placeholderStat)
+	if err := removeKnownPlaceholder(parentFD, name, placeholderStat); err != nil {
+		return err
+	}
 	return nil
 }
 
-func removeKnownPlaceholder(parentFD int, name string, expected unix.Stat_t) {
+func removeKnownPlaceholder(parentFD int, name string, expected unix.Stat_t) error {
 	var current unix.Stat_t
-	if err := unix.Fstatat(parentFD, name, &current, unix.AT_SYMLINK_NOFOLLOW); err == nil &&
-		sameUnixFile(current, expected) {
-		_ = unix.Unlinkat(parentFD, name, 0)
+	if err := unix.Fstatat(parentFD, name, &current, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
+		return err
 	}
+	if !sameUnixFile(current, expected) {
+		return nil
+	}
+	if err := unix.Unlinkat(parentFD, name, 0); !errors.Is(err, unix.ENOENT) {
+		return err
+	}
+	return nil
 }
 
 func uniquePlaceholderName() (string, error) {

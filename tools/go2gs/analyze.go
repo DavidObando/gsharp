@@ -37,8 +37,7 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 	return analyzeWithSnapshotHooks(ctx, sourceRoot, outRoot, profile, afterSnapshot, nil)
 }
 
-func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot, afterLoad func()) (Analysis, bool, error) {
-	var err error
+func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot, afterLoad func()) (_ Analysis, _ bool, err error) {
 	sourceRoot, err = secureRoot(sourceRoot)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("source root: %w", err)
@@ -94,7 +93,9 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	defer workDirectory.cleanup()
+	defer func() {
+		err = errors.Join(err, ownedTempCleanupError(workDirectory, "analysis work"))
+	}()
 	workRoot := workDirectory.path
 	blockedToolsRoot := filepath.Join(workRoot, "blocked-tools")
 	if err := os.Mkdir(blockedToolsRoot, 0o500); err != nil {

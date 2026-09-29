@@ -261,6 +261,11 @@ type ownedTempDir struct {
 	info os.FileInfo
 }
 
+var (
+	tempDirectoryCreatedHook          func(ownedTempDir)
+	tempCleanupPlaceholderCreatedHook func(string, string, string)
+)
+
 func createOwnedTempDir(parent, pattern string) (ownedTempDir, error) {
 	path, err := os.MkdirTemp(parent, pattern)
 	if err != nil {
@@ -271,7 +276,11 @@ func createOwnedTempDir(parent, pattern string) (ownedTempDir, error) {
 		_ = os.Remove(path)
 		return ownedTempDir{}, errors.New("created temporary path is not a directory")
 	}
-	return ownedTempDir{path: path, info: info}, nil
+	directory := ownedTempDir{path: path, info: info}
+	if tempDirectoryCreatedHook != nil {
+		tempDirectoryCreatedHook(directory)
+	}
+	return directory, nil
 }
 
 func (directory ownedTempDir) cleanup() error {
@@ -291,9 +300,16 @@ func (directory ownedTempDir) cleanupWithHooks(beforeRename func(), afterTombsto
 		return err
 	}
 	if !current.IsDir() || !os.SameFile(directory.info, current) {
-		return nil
+		return errors.New("owned temporary directory path was replaced before cleanup")
 	}
 	return cleanupOwnedTempDir(directory, beforeRename, afterTombstoneIdentity)
+}
+
+func ownedTempCleanupError(directory ownedTempDir, label string) error {
+	if cleanupErr := directory.cleanup(); cleanupErr != nil {
+		return fmt.Errorf("cleanup %s directory: %w", label, cleanupErr)
+	}
+	return nil
 }
 
 func lockAndInvalidateOutput(outRoot string) (func(), error) {
