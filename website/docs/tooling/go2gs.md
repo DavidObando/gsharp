@@ -30,11 +30,16 @@ Analysis is offline and fail-closed. It disables automatic Go toolchain
 downloads, network module resolution, ambient workspaces, unapproved package
 drivers, generators, and target execution. Exit zero means only that the
 requested inventory completed. M0 always reports `migrationReady: false`.
+The selected Go executable supplies the verified GOROOT. Profile `goFlags`
+are allowlisted; tool execution and path overrides are rejected.
 
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
 value arrays, and concurrency are inventoried as typed syntax sites with
 migration blockers. Their G# lowering and runtime representations are explicit
 M1 prerequisites and are not selected by M0.
+
+Schema v1 preserves compiled-file and package-initialization order and rejects
+missing fields, null collections, count mismatches, and dangling identities.
 
 M0 does not emit G#, perform semantic lowering, run a migrated program, or
 provide a Go runtime compatibility layer. See

@@ -5,6 +5,7 @@ package main
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -35,6 +36,41 @@ func testProfile() Profile {
 			MaxOutputBytes: 64 << 20, MaxLocalHashBytes: 64 << 20,
 		},
 	}
+}
+
+func validIncompleteAnalysis() Analysis {
+	hash := strings.Repeat("0", 64)
+	analysis := Analysis{
+		Schema: SchemaHandshake{
+			Name: schemaName, Version: schemaVersion,
+			RequiredRecordKinds: append([]string{}, requiredRecordKinds...),
+		},
+		Tool:   VersionIdentity{Version: toolVersion, SHA256: hash},
+		Helper: VersionIdentity{Version: helperVersion, SHA256: hash},
+		Profile: ProfileSnapshot{
+			ID: "test", SHA256: hash, SourceRootIdentity: "source:test",
+			EntryPatterns: []string{"./..."}, GOOS: runtime.GOOS, GOARCH: runtime.GOARCH,
+			ArchitectureFeatures: []string{}, BuildTags: []string{}, GOFLAGS: []string{},
+			GODEBUG: map[string]string{}, ModuleMode: "readonly", WorkspaceMode: "off",
+			Offline: true, TrustBoundary: "test", Limits: testProfile().Limits,
+		},
+		Toolchain: ToolchainProvenance{
+			RequestedVersion: "1.0", ActualVersion: "1.0", ExecutableSHA256: hash,
+			ExecutableName: "go", GOROOTIdentity: "goroot:test", GOROOTVersionSHA256: hash, GOROOTSource: "test",
+		},
+		Manifests: []ManifestRecord{}, Modules: []ModuleRecord{}, Packages: []PackageRecord{},
+		Files: []FileRecord{}, Types: []TypeRecord{}, Symbols: []SymbolRecord{}, Nodes: []NodeRecord{},
+		Constants: []ConstantRecord{}, Scopes: []ScopeRecord{}, Selections: []SelectionRecord{},
+		Calls: []CallRecord{}, MethodSets: []MethodSetRecord{}, Instances: []InstanceRecord{},
+		Embeds: []EmbedRecord{}, GenerateDirectives: []GenerateRecord{}, Dependencies: []DependencyRecord{},
+		FeatureSites: []FeatureSite{}, Diagnostics: []DiagnosticRecord{},
+		Blockers: []BlockerRecord{{
+			ID: "blocker:test", Blocks: "inventory", Category: "test", Message: "incomplete",
+			AffectedUnits: []string{}, DiagnosticIDs: []string{},
+		}},
+		RecordCounts: RecordCounts{Blockers: 1, Total: 1},
+	}
+	return analysis
 }
 
 func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
@@ -103,6 +139,7 @@ func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
 	if !foundImports || !foundInitialization || !foundTestFile {
 		t.Fatalf("package graph facts missing: imports=%v initialization=%v test-file=%v", foundImports, foundInitialization, foundTestFile)
 	}
+	assertInitializationOrder(t, a1)
 	if len(a1.Embeds) == 0 || len(a1.GenerateDirectives) == 0 {
 		t.Fatal("embed and go:generate provenance were not recorded")
 	}
@@ -210,16 +247,33 @@ func TestToolchainMismatchFailsClosedBeforeLoading(t *testing.T) {
 }
 
 func TestSchemaValidationRejectsUnknownRequiredKindAndDanglingID(t *testing.T) {
-	analysis := Analysis{Schema: SchemaHandshake{Name: schemaName, Version: schemaVersion, RequiredRecordKinds: []string{"future-required"}}}
+	analysis := validIncompleteAnalysis()
+	analysis.Schema.RequiredRecordKinds = append(analysis.Schema.RequiredRecordKinds, "future-required")
 	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "unknown required") {
 		t.Fatalf("expected unknown required kind rejection, got %v", err)
 	}
-	analysis = Analysis{
-		Schema:   SchemaHandshake{Name: schemaName, Version: schemaVersion},
-		Packages: []PackageRecord{{ID: "package:1", ImportPackageIDs: []string{"package:missing"}}},
-	}
+	analysis = validIncompleteAnalysis()
+	analysis.Packages = []PackageRecord{{
+		ID: "package:1", ImportPath: "example.com/test", Name: "test", Variant: "ordinary",
+		FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{"package:missing"},
+		InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
+	}}
+	analysis.RecordCounts.Packages = 1
+	analysis.RecordCounts.Total++
 	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "dangling") {
 		t.Fatalf("expected dangling id rejection, got %v", err)
+	}
+	analysis = validIncompleteAnalysis()
+	analysis.Schema.RequiredRecordKinds = nil
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "handshake") {
+		t.Fatalf("expected exact handshake rejection, got %v", err)
+	}
+	analysis = validIncompleteAnalysis()
+	analysis.Blockers = append(analysis.Blockers, analysis.Blockers[0])
+	analysis.RecordCounts.Blockers++
+	analysis.RecordCounts.Total++
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "duplicate") {
+		t.Fatalf("expected duplicate id rejection, got %v", err)
 	}
 }
 
@@ -257,6 +311,201 @@ func TestAnalysisJSONRoundTripRejectsUnknownFields(t *testing.T) {
 	}
 	if _, err := readAnalysis(path); err == nil || !strings.Contains(err.Error(), "unknown field") {
 		t.Fatalf("expected unknown field rejection, got %v", err)
+	}
+}
+
+func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analysis.json")
+	if err := os.WriteFile(path, []byte(`{"schema":{"name":"go2gs.analysis","version":1}}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var exitErr *exitError
+	err := runValidate([]string{"--analysis", path})
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("schema-only artifact should exit 2, got %v", err)
+	}
+	if err := writeJSON(path, validIncompleteAnalysis(), 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	if err := runValidate([]string{"--analysis", path}); err != nil {
+		t.Fatalf("valid incomplete inventory was rejected: %v", err)
+	}
+	invalid := validIncompleteAnalysis()
+	invalid.RecordCounts.Total = 0
+	if err := writeJSON(path, invalid, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	err = runValidate([]string{"--analysis", path})
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("count mismatch should exit 2, got %v", err)
+	}
+	invalid = validIncompleteAnalysis()
+	invalid.Packages = nil
+	if err := writeJSON(path, invalid, 1<<20); err != nil {
+		t.Fatal(err)
+	}
+	err = runValidate([]string{"--analysis", path})
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("null collection should exit 2, got %v", err)
+	}
+	validData, err := marshalCanonical(validIncompleteAnalysis())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(validData, &raw); err != nil {
+		t.Fatal(err)
+	}
+	delete(raw["blockers"].([]any)[0].(map[string]any), "diagnosticIds")
+	missingField, err := json.Marshal(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, missingField, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = runValidate([]string{"--analysis", path})
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("missing record field should exit 2, got %v", err)
+	}
+}
+
+func TestGOFLAGSAllowlistRejectsExecutionAndPathOverrides(t *testing.T) {
+	accepted := [][]string{
+		{"-trimpath"}, {"-trimpath=false"}, {"-buildvcs=false"}, {"-buildvcs", "false"},
+		{"-tags=safe_tag,go1.27"}, {"-tags", "safe_tag"},
+	}
+	for _, flags := range accepted {
+		if err := validateGOFLAGS(flags); err != nil {
+			t.Errorf("safe flags %v rejected: %v", flags, err)
+		}
+	}
+	rejected := [][]string{
+		{"-toolexec=payload"}, {"-toolexec", "payload"}, {"-overlay=overlay.json"},
+		{"-overlay", "overlay.json"}, {"-modfile=other.mod"}, {"-modfile", "other.mod"},
+		{"-tags=-toolexec=payload"}, {"-ldflags=-extld=payload"}, {"-buildvcs=true"},
+	}
+	for _, flags := range rejected {
+		if err := validateGOFLAGS(flags); err == nil {
+			t.Errorf("unsafe flags %v accepted", flags)
+		}
+	}
+
+	root := copyFixture(t, "complete")
+	marker := filepath.Join(t.TempDir(), "executed")
+	payload := filepath.Join(t.TempDir(), "payload")
+	if err := os.WriteFile(payload, []byte("#!/bin/sh\n: > "+strconv.Quote(marker)+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.GOFLAGS = []string{"-toolexec=" + payload}
+	profilePath := filepath.Join(t.TempDir(), "profile.json")
+	data, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(profilePath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	err = runAnalyze(t.Context(), []string{"--source", root, "--profile", profilePath, "--out", t.TempDir()})
+	var profileErr *exitError
+	if !errors.As(err, &profileErr) || profileErr.code != 2 {
+		t.Fatalf("unsafe GOFLAGS should fail profile validation: %v", err)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("toolexec payload ran or marker check failed: %v", err)
+	}
+}
+
+func TestSelectedToolchainGOROOTIsResolvedBeforeIsolation(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled shell toolchain fixture")
+	}
+	dir := t.TempDir()
+	targetRoot := filepath.Join(dir, "target-goroot")
+	if err := os.MkdirAll(targetRoot, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(targetRoot, "VERSION"), []byte("go1.99\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	targetRoot, err := secureRoot(targetRoot)
+	if err != nil {
+		t.Fatal(err)
+	}
+	logPath := filepath.Join(dir, "go.log")
+	script := filepath.Join(dir, "go")
+	body := fmt.Sprintf(`#!/bin/sh
+printf '%%s|%%s\n' "$*" "${GOROOT-}" >> %s
+if [ "$1" = version ]; then echo 'go version go1.99 test'; exit 0; fi
+if [ "$1" = env ] && [ "$2" = GOROOT ]; then echo %s; exit 0; fi
+echo unsupported >&2
+exit 1
+`, strconv.Quote(logPath), strconv.Quote(targetRoot))
+	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+	profile := testProfile()
+	profile.RequestedGoVersion = "1.99"
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || !hasBlockerCategory(analysis, "loader") {
+		t.Fatalf("fake toolchain should reach package loading and fail closed: %#v", analysis.Blockers)
+	}
+	versionHash, _, err := hashFile(filepath.Join(targetRoot, "VERSION"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if analysis.Toolchain.GOROOTVersionSHA256 != versionHash {
+		t.Fatalf("target GOROOT provenance mismatch: %#v", analysis.Toolchain)
+	}
+	log, err := os.ReadFile(logPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	lines := strings.Split(strings.TrimSpace(string(log)), "\n")
+	if len(lines) < 3 || lines[0] != "version|" || lines[1] != "env GOROOT|" {
+		t.Fatalf("bootstrap commands inherited helper GOROOT: %q", lines)
+	}
+	foundIsolated := false
+	for _, line := range lines[2:] {
+		foundIsolated = foundIsolated || strings.HasSuffix(line, "|"+targetRoot)
+	}
+	if !foundIsolated {
+		t.Fatalf("subsequent Go commands did not use target GOROOT %q: %q", targetRoot, lines)
+	}
+}
+
+func TestIncompleteDiagnosticsAreRootIndependent(t *testing.T) {
+	firstRoot := copyFixture(t, "invalid")
+	secondRoot := filepath.Join(t.TempDir(), "other-root")
+	copyTree(t, firstRoot, secondRoot)
+	first, complete, err := analyze(t.Context(), firstRoot, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete {
+		t.Fatal("invalid fixture unexpectedly completed")
+	}
+	second, complete, err := analyze(t.Context(), secondRoot, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete {
+		t.Fatal("second invalid fixture unexpectedly completed")
+	}
+	left, _ := marshalCanonical(first)
+	right, _ := marshalCanonical(second)
+	if string(left) != string(right) {
+		t.Fatalf("incomplete inventory differs by root near: %s", firstDifference(string(left), string(right)))
+	}
+	for _, diagnostic := range first.Diagnostics {
+		if strings.Contains(diagnostic.Position, firstRoot) || strings.Contains(diagnostic.ID, firstRoot) {
+			t.Fatalf("diagnostic retained absolute root: %#v", diagnostic)
+		}
 	}
 }
 
@@ -333,6 +582,56 @@ func hasBlockerCategory(analysis Analysis, category string) bool {
 	return false
 }
 
+func assertInitializationOrder(t *testing.T, analysis Analysis) {
+	t.Helper()
+	files := map[string]string{}
+	for _, file := range analysis.Files {
+		files[file.ID] = strings.TrimPrefix(file.Path, "source://")
+	}
+	symbols := map[string]string{}
+	for _, symbol := range analysis.Symbols {
+		symbols[symbol.ID] = symbol.Name
+	}
+	for _, pkg := range analysis.Packages {
+		if pkg.ImportPath != "example.com/go2gsfixture" || pkg.Variant != "ordinary" {
+			continue
+		}
+		var compiled []string
+		for _, id := range pkg.CompiledFileIDs {
+			compiled = append(compiled, files[id])
+		}
+		a := slices.Index(compiled, "a_init.go")
+		main := slices.Index(compiled, "main.go")
+		z := slices.Index(compiled, "z_init.go")
+		if a < 0 || main < 0 || z < 0 || !(a < main && main < z) {
+			t.Fatalf("compiled file order was not preserved: %v", compiled)
+		}
+		firstVariable, lastVariable := -1, -1
+		var initFiles []string
+		for _, initialization := range pkg.InitializationOrder {
+			for _, id := range initialization.SymbolIDs {
+				switch symbols[id] {
+				case "FirstInitialized":
+					firstVariable = initialization.Order
+				case "LastInitialized":
+					lastVariable = initialization.Order
+				}
+			}
+			if initialization.Kind == "init-function" {
+				initFiles = append(initFiles, files[initialization.FileID])
+			}
+		}
+		if firstVariable < 0 || lastVariable < 0 || firstVariable >= lastVariable {
+			t.Fatalf("variable initialization order missing or wrong: %#v", pkg.InitializationOrder)
+		}
+		if !slices.Equal(initFiles, []string{"a_init.go", "z_init.go"}) {
+			t.Fatalf("init function order was not preserved: %v", initFiles)
+		}
+		return
+	}
+	t.Fatal("ordinary fixture package not found")
+}
+
 func TestCanonicalJSONUsesStringConstants(t *testing.T) {
 	value := ConstantRecord{Exact: "123456789012345678901234567890"}
 	data, err := json.Marshal(value)
@@ -372,6 +671,23 @@ func TestProcessRunnerCancels(t *testing.T) {
 	}
 }
 
+func TestProcessRunnerRepeatedShortCommands(t *testing.T) {
+	executable, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for i := 0; i < 100; i++ {
+		result, err := runProcess(t.Context(), 5*time.Second, 4096, "", executable,
+			[]string{"-test.run=TestProcessHelper"}, []string{"GO2GS_PROCESS_HELPER=short"})
+		if err != nil {
+			t.Fatalf("iteration %d: %v", i, err)
+		}
+		if result.ExitCode != 0 || !strings.HasPrefix(result.Stdout, "stdout") || result.Stderr != "stderr" {
+			t.Fatalf("iteration %d: unexpected result %#v", i, result)
+		}
+	}
+}
+
 func TestProcessHelper(t *testing.T) {
 	switch os.Getenv("GO2GS_PROCESS_HELPER") {
 	case "output":
@@ -380,6 +696,9 @@ func TestProcessHelper(t *testing.T) {
 		_, _ = os.Stderr.WriteString(chunk)
 	case "sleep":
 		time.Sleep(10 * time.Second)
+	case "short":
+		_, _ = os.Stdout.WriteString("stdout")
+		_, _ = os.Stderr.WriteString("stderr")
 	default:
 		t.Skip("helper only")
 	}

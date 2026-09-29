@@ -101,7 +101,11 @@ Before moving an application to a different compiler version, pin the intended S
   while `migrationReady` remains independent and false in M0. Migration
   blockers preserve typed nil/interface, byte-string, map,
   panic/defer/recover, fixed-array, and concurrency sites without choosing
-  their later G# representation. The pinned
+  their later G# representation. Profile flags are allowlisted against tool
+  execution/path overrides, the selected Go executable supplies its own
+  verified GOROOT, diagnostics are path-stable, initialization order is
+  explicit, and schema validation rejects missing fields and count
+  mismatches. The pinned
   cliamp profile reports an actionable mismatch rather than substituting the
   installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged

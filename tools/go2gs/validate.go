@@ -3,8 +3,11 @@
 package main
 
 import (
+	"encoding/base64"
+	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 )
 
 func validateAnalysis(a Analysis) error {
@@ -22,6 +25,18 @@ func validateAnalysis(a Analysis) error {
 		if !knownKinds[kind] {
 			return fmt.Errorf("unknown required record kind %q", kind)
 		}
+	}
+	if !slices.Equal(a.Schema.RequiredRecordKinds, requiredRecordKinds) {
+		return errors.New("analysis required-record handshake does not exactly match schema v1")
+	}
+	if err := validateAnalysisHeader(a); err != nil {
+		return err
+	}
+	if err := validateAnalysisCollections(a); err != nil {
+		return err
+	}
+	if err := validateRecordFields(a); err != nil {
+		return err
 	}
 	if a.MigrationReady && !a.InventoryComplete {
 		return errors.New("migrationReady cannot be true when inventory is incomplete")
@@ -158,11 +173,25 @@ func validateAnalysis(a Analysis) error {
 		if err := requireMany(value.ID, "fileIds", value.FileIDs, "file"); err != nil {
 			return err
 		}
+		if err := requireMany(value.ID, "compiledFileIds", value.CompiledFileIDs, "file"); err != nil {
+			return err
+		}
 		if err := requireMany(value.ID, "importPackageIds", value.ImportPackageIDs, "package"); err != nil {
 			return err
 		}
 		if err := requireMany(value.ID, "diagnosticIds", value.DiagnosticIDs, "diagnostic"); err != nil {
 			return err
+		}
+		for _, initialization := range value.InitializationOrder {
+			if err := require(value.ID, "initializationOrder.fileId", initialization.FileID, "file"); err != nil {
+				return err
+			}
+			if err := require(value.ID, "initializationOrder.nodeId", initialization.NodeID, "node"); err != nil {
+				return err
+			}
+			if err := requireMany(value.ID, "initializationOrder.symbolIds", initialization.SymbolIDs, "symbol"); err != nil {
+				return err
+			}
 		}
 	}
 	for _, value := range a.Files {
@@ -339,5 +368,202 @@ func validateAnalysis(a Analysis) error {
 			return err
 		}
 	}
+	expectedCounts := RecordCounts{
+		Packages: len(a.Packages), Files: len(a.Files), Types: len(a.Types), Symbols: len(a.Symbols),
+		Nodes: len(a.Nodes), Constants: len(a.Constants), Scopes: len(a.Scopes), Selections: len(a.Selections),
+		Calls: len(a.Calls), MethodSets: len(a.MethodSets), Instances: len(a.Instances), Embeds: len(a.Embeds),
+		GenerateDirectives: len(a.GenerateDirectives), Dependencies: len(a.Dependencies),
+		FeatureSites: len(a.FeatureSites), Diagnostics: len(a.Diagnostics), Blockers: len(a.Blockers),
+	}
+	expectedCounts.Total = expectedCounts.Packages + expectedCounts.Files + expectedCounts.Types +
+		expectedCounts.Symbols + expectedCounts.Nodes + expectedCounts.Constants + expectedCounts.Scopes +
+		expectedCounts.Selections + expectedCounts.Calls + expectedCounts.MethodSets + expectedCounts.Instances +
+		expectedCounts.Embeds + expectedCounts.GenerateDirectives + expectedCounts.Dependencies +
+		expectedCounts.FeatureSites + expectedCounts.Diagnostics + expectedCounts.Blockers
+	if a.RecordCounts != expectedCounts {
+		return fmt.Errorf("recordCounts do not match records: got %#v, expected %#v", a.RecordCounts, expectedCounts)
+	}
 	return nil
+}
+
+func validateAnalysisHeader(a Analysis) error {
+	for name, value := range map[string]VersionIdentity{"tool": a.Tool, "helper": a.Helper} {
+		if value.Version == "" || !validSHA256(value.SHA256) {
+			return fmt.Errorf("%s identity requires version and SHA-256", name)
+		}
+	}
+	p := a.Profile
+	if p.ID == "" || !validSHA256(p.SHA256) || p.SourceRootIdentity == "" ||
+		len(p.EntryPatterns) == 0 || p.GOOS == "" || p.GOARCH == "" ||
+		p.ModuleMode == "" || p.WorkspaceMode == "" || !p.Offline || p.AllowNetwork ||
+		p.GeneratorsExecuted || p.TargetBinariesExecuted || p.TrustBoundary == "" {
+		return errors.New("analysis profile snapshot is missing mandatory or fail-closed fields")
+	}
+	if err := validateLimits(p.Limits); err != nil {
+		return fmt.Errorf("analysis profile limits: %w", err)
+	}
+	if err := validateGOFLAGS(p.GOFLAGS); err != nil {
+		return fmt.Errorf("analysis profile: %w", err)
+	}
+	if err := validateGODEBUG(p.GODEBUG); err != nil {
+		return fmt.Errorf("analysis profile: %w", err)
+	}
+	if p.VendorMode != (p.ModuleMode == "vendor") || p.WorkspaceMode != "off" {
+		return errors.New("analysis profile has inconsistent module or workspace mode")
+	}
+	t := a.Toolchain
+	if t.RequestedVersion == "" || t.ActualVersion == "" || !validSHA256(t.ExecutableSHA256) ||
+		t.ExecutableName == "" || t.GOROOTIdentity == "" || !validSHA256(t.GOROOTVersionSHA256) ||
+		t.GOROOTSource == "" || t.AutoDownload {
+		return errors.New("analysis toolchain provenance is missing mandatory or fail-closed fields")
+	}
+	return nil
+}
+
+func validateAnalysisCollections(a Analysis) error {
+	switch {
+	case a.Schema.RequiredRecordKinds == nil:
+		return errors.New("schema.requiredRecordKinds must be an array")
+	case a.Profile.EntryPatterns == nil:
+		return errors.New("profile.entryPatterns must be an array")
+	case a.Profile.ArchitectureFeatures == nil:
+		return errors.New("profile.architectureFeatures must be an array")
+	case a.Profile.BuildTags == nil:
+		return errors.New("profile.buildTags must be an array")
+	case a.Profile.GOFLAGS == nil:
+		return errors.New("profile.goFlags must be an array")
+	case a.Profile.GODEBUG == nil:
+		return errors.New("profile.goDebug must be an object")
+	case a.Manifests == nil, a.Modules == nil, a.Packages == nil, a.Files == nil,
+		a.Types == nil, a.Symbols == nil, a.Nodes == nil, a.Constants == nil,
+		a.Scopes == nil, a.Selections == nil, a.Calls == nil, a.MethodSets == nil,
+		a.Instances == nil, a.Embeds == nil, a.GenerateDirectives == nil,
+		a.Dependencies == nil, a.FeatureSites == nil, a.Diagnostics == nil, a.Blockers == nil:
+		return errors.New("analysis record collections must be arrays, not null or missing")
+	}
+	return nil
+}
+
+func validateRecordFields(a Analysis) error {
+	for _, value := range a.Manifests {
+		if value.Kind == "" || value.Path == "" || !validSHA256(value.SHA256) || value.Bytes < 0 {
+			return fmt.Errorf("manifest %q has invalid required fields", value.Path)
+		}
+	}
+	for _, value := range a.Modules {
+		if value.ID == "" || value.Path == "" {
+			return fmt.Errorf("module %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Packages {
+		if value.ID == "" || value.ImportPath == "" || value.Name == "" || value.Variant == "" ||
+			value.FileIDs == nil || value.CompiledFileIDs == nil || value.ImportPackageIDs == nil ||
+			value.InitializationOrder == nil || value.DiagnosticIDs == nil {
+			return fmt.Errorf("package %q has invalid required fields", value.ID)
+		}
+		for index, initialization := range value.InitializationOrder {
+			if initialization.Order != index ||
+				(initialization.Kind != "variable" && initialization.Kind != "init-function") ||
+				initialization.SymbolIDs == nil {
+				return fmt.Errorf("package %q has invalid initialization record %d", value.ID, index)
+			}
+		}
+	}
+	for _, value := range a.Files {
+		data, err := base64.StdEncoding.DecodeString(value.ContentBase64)
+		if value.ID == "" || value.Path == "" || value.Role == "" || value.Provenance == "" ||
+			!validSHA256(value.SHA256) || value.Bytes < 0 || err != nil ||
+			int64(len(data)) != value.Bytes || hashBytes(data) != value.SHA256 {
+			return fmt.Errorf("file %q has invalid required fields or content identity", value.ID)
+		}
+	}
+	for _, value := range a.Types {
+		if value.ID == "" || value.Kind == "" || value.Canonical == "" || value.Display == "" ||
+			value.TypeArgs == nil || value.Fields == nil {
+			return fmt.Errorf("type %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Symbols {
+		if value.ID == "" || value.PackageID == "" || value.Name == "" || value.Kind == "" {
+			return fmt.Errorf("symbol %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Nodes {
+		if value.ID == "" || value.PackageID == "" || value.FileID == "" || value.Kind == "" || value.Span.Path == "" {
+			return fmt.Errorf("node %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Constants {
+		if value.ID == "" || value.NodeID == "" || value.Category == "" || value.Exact == "" || value.Span.Path == "" {
+			return fmt.Errorf("constant %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Scopes {
+		if value.ID == "" || value.PackageID == "" || value.Span.Path == "" || value.SymbolIDs == nil || value.Labels == nil {
+			return fmt.Errorf("scope %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Selections {
+		if value.ID == "" || value.NodeID == "" || value.Kind == "" || value.ObjectID == "" ||
+			value.ReceiverTypeID == "" || value.TypeID == "" || value.IndexPath == nil {
+			return fmt.Errorf("selection %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Calls {
+		if value.ID == "" || value.NodeID == "" || value.Kind == "" || value.ArgumentTypeIDs == nil {
+			return fmt.Errorf("call %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.MethodSets {
+		if value.ID == "" || value.TypeID == "" || value.MethodSymbolIDs == nil {
+			return fmt.Errorf("method set %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Instances {
+		if value.ID == "" || value.NodeID == "" || value.TypeID == "" || value.TypeArgIDs == nil {
+			return fmt.Errorf("instance %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Embeds {
+		if value.ID == "" || value.PackageID == "" || value.FileID == "" || value.Pattern == "" ||
+			value.LogicalName == "" || !validSHA256(value.ContentSHA256) {
+			return fmt.Errorf("embed %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.GenerateDirectives {
+		if value.ID == "" || value.FileID == "" || value.Directive == "" || value.Executed || value.Span.Path == "" {
+			return fmt.Errorf("generate directive %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Dependencies {
+		if value.ID == "" || value.FromPackageID == "" || value.ImportPath == "" || value.Disposition == "" {
+			return fmt.Errorf("dependency %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.FeatureSites {
+		if value.ID == "" || value.NodeID == "" || value.PackageID == "" || value.FileID == "" ||
+			value.Feature == "" || value.Disposition == "" || value.Span.Path == "" {
+			return fmt.Errorf("feature %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Diagnostics {
+		if value.ID == "" || value.Category == "" || value.Severity == "" || value.Message == "" {
+			return fmt.Errorf("diagnostic %q has invalid required fields", value.ID)
+		}
+	}
+	for _, value := range a.Blockers {
+		if value.ID == "" || value.Blocks == "" || value.Category == "" || value.Message == "" ||
+			value.AffectedUnits == nil || value.DiagnosticIDs == nil {
+			return fmt.Errorf("blocker %q has invalid required fields", value.ID)
+		}
+	}
+	return nil
+}
+
+func validSHA256(value string) bool {
+	if len(value) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(value)
+	return err == nil
 }
