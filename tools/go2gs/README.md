@@ -72,10 +72,12 @@ deleting a path that another process replaced.
 Profiles with `cgoEnabled: true` must set `cCompiler` to an absolute,
 explicitly approved compiler executable. The helper resolves and hashes that
 compiler, records its name and hash, and passes it by absolute `CC`. Child
-`PATH` contains only the selected Go directory; ambient compiler discovery
-remains disabled. `#cgo pkg-config:` directives fail closed because
-pkg-config provenance is not modeled in M0; directives whose build
-constraints are inactive for the selected profile are ignored.
+`PATH` contains only the selected Go directory and the resolved compiler's
+directory, allowing compiler-owned helper tools without inheriting ambient
+search paths. `PKG_CONFIG` remains pinned to an unavailable private path, so
+`#cgo pkg-config:` directives fail closed because pkg-config provenance is not
+modeled in M0; directives whose build constraints are inactive for the
+selected profile are ignored.
 Source commit provenance is read directly from bounded `.git` metadata; the
 analyzer never discovers or executes an ambient `git` command.
 

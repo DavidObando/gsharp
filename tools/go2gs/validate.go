@@ -423,6 +423,10 @@ func validateAnalysisHeader(a Analysis) error {
 	if err := validateGODEBUG(p.GODEBUG); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
+	if (p.ExpectedSourceCommit != "" && !validCommitID(p.ExpectedSourceCommit)) ||
+		(p.ActualSourceCommit != "" && !validCommitID(p.ActualSourceCommit)) {
+		return errors.New("analysis source commits must be lowercase 40- or 64-character Git object IDs")
+	}
 	if (p.ModuleMode != "readonly" && p.ModuleMode != "vendor") ||
 		p.VendorMode != (p.ModuleMode == "vendor") || p.WorkspaceMode != "off" {
 		return errors.New("analysis profile has inconsistent module or workspace mode")
