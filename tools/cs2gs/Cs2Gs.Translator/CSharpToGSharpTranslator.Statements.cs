@@ -671,6 +671,15 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             right = this.ResolveStableTupleAlias(right);
+            if (right is AssignmentExpressionSyntax assignment
+                && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+            {
+                return FindDeconstructionInitializer(
+                    target,
+                    left,
+                    assignment.Right,
+                    visited);
+            }
 
             if (left.SyntaxTree == target.SyntaxTree
                 && left.Span.Contains(target.Span)
@@ -801,6 +810,16 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             right = this.ResolveStableTupleAlias(right);
+            if (right is AssignmentExpressionSyntax assignment
+                && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
+            {
+                return FindDeconstructionInitializer(
+                    target,
+                    designation,
+                    assignment.Right,
+                    visited);
+            }
+
             if (designation.SyntaxTree == target.SyntaxTree
                 && designation.Span.Contains(target.Span)
                 && IsNullOrDefaultLiteral(right))
@@ -986,9 +1005,7 @@ public sealed partial class CSharpToGSharpTranslator
             Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph graph;
             try
             {
-                graph = Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(
-                    executable,
-                    this.context.SemanticModel);
+                graph = this.CreateControlFlowGraph(executable);
             }
             catch (ArgumentException)
             {
@@ -1105,6 +1122,51 @@ public sealed partial class CSharpToGSharpTranslator
 
             return reaching.ToList();
         }
+
+        private Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph CreateControlFlowGraph(
+            SyntaxNode executable)
+        {
+            if (executable is LocalFunctionStatementSyntax localFunction)
+            {
+                Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph parent =
+                    this.CreateControlFlowGraph(FindEnclosingExecutable(executable));
+                IMethodSymbol symbol =
+                    this.context.SemanticModel.GetDeclaredSymbol(localFunction);
+                return Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraphExtensions
+                    .GetLocalFunctionControlFlowGraphInScope(parent, symbol);
+            }
+
+            if (executable is AnonymousFunctionExpressionSyntax anonymousFunction)
+            {
+                Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph parent =
+                    this.CreateControlFlowGraph(FindEnclosingExecutable(executable));
+                Microsoft.CodeAnalysis.FlowAnalysis.IFlowAnonymousFunctionOperation operation =
+                    parent.Blocks
+                        .SelectMany(block => block.Operations
+                            .Append(block.BranchValue)
+                            .Where(candidate => candidate != null))
+                        .SelectMany(operation => operation.DescendantsAndSelf())
+                        .OfType<Microsoft.CodeAnalysis.FlowAnalysis
+                            .IFlowAnonymousFunctionOperation>()
+                        .First(candidate =>
+                            candidate.Syntax.SyntaxTree == anonymousFunction.SyntaxTree
+                            && candidate.Syntax.Span == anonymousFunction.Span);
+                return Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraphExtensions
+                    .GetAnonymousFunctionControlFlowGraphInScope(parent, operation);
+            }
+
+            return Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph.Create(
+                executable,
+                this.context.SemanticModel);
+        }
+
+        private static SyntaxNode FindEnclosingExecutable(SyntaxNode nested) =>
+            nested.Ancestors().First(node =>
+                node is BaseMethodDeclarationSyntax
+                    or AccessorDeclarationSyntax
+                    or LocalFunctionStatementSyntax
+                    or AnonymousFunctionExpressionSyntax
+                    or CompilationUnitSyntax);
 
         private void ApplyReachingOperation(
             IOperation operation,

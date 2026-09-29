@@ -134,6 +134,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var (coalesceLeft, coalesceRight) =
                     nullablePair ?? (default(T), default(T));
                 var (methodLeft, methodRight) = NullablePair<T>();
+                var assignmentExpressionPair = (replacement, replacement);
+                (var assignmentExpressionLeft, var assignmentExpressionRight) =
+                    (assignmentExpressionPair = (default(T), default(T)));
 
                 Fill(ref direct, replacement);
                 Fill(ref alias, replacement);
@@ -183,6 +186,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref coalesceRight, replacement);
                 Fill(ref methodLeft, replacement);
                 Fill(ref methodRight, replacement);
+                Fill(ref assignmentExpressionLeft, replacement);
+                Fill(ref assignmentExpressionRight, replacement);
 
                 for (var loop = default(T); choose;)
                 {
@@ -316,6 +321,31 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 return count + (left is null ? 0 : 1) + (right is null ? 0 : 1);
             }
 
+            private static int NestedFunctionControls<T>(T replacement)
+            {
+                System.Func<int> lambda = () =>
+                {
+                    var lambdaPair = (default(T), default(T));
+                    var (lambdaLeft, lambdaRight) = lambdaPair;
+                    lambdaPair = (replacement, replacement);
+                    Fill(ref lambdaLeft, replacement);
+                    Fill(ref lambdaRight, replacement);
+                    return 1;
+                };
+
+                int Local()
+                {
+                    var localPair = (default(T), default(T));
+                    var (localLeft, localRight) = localPair;
+                    localPair = (replacement, replacement);
+                    Fill(ref localLeft, replacement);
+                    Fill(ref localRight, replacement);
+                    return 1;
+                }
+
+                return lambda() + Local();
+            }
+
             private static async System.Threading.Tasks.Task<T> AwaitControl<T>(
                 System.Func<System.Threading.Tasks.Task<T>> body)
             {
@@ -341,7 +371,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Unconstrained<string>("u", true)
                 + ClassConstrained<string>("c")
                 + ValueTypeControl()
-                + IncrementorControl<string>("i");
+                + IncrementorControl<string>("i")
+                + NestedFunctionControls<string>("n");
         }
         """;
 
@@ -440,6 +471,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "loopLeft", "loopRight", "forAliasLeft", "forAliasRight",
             "nestedLoopLeft", "nestedLoopRight",
             "backedgeLeft", "backedgeRight", "breakLeft", "breakRight",
+            "assignmentExpressionLeft", "assignmentExpressionRight",
+            "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
         })
         {
@@ -488,7 +521,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.IsError);
         Assert.DoesNotContain(result.Diagnostics, diagnostic => diagnostic.Id == "GS0612");
         Assert.Null(result.UnhandledException);
-        Assert.Equal(18, result.Value);
+        Assert.Equal(20, result.Value);
     }
 
     [Fact]
