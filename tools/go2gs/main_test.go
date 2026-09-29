@@ -860,6 +860,10 @@ func TestReadBoundedRegularFileRejectsGrowthAndReplacement(t *testing.T) {
 
 func TestNativeRequirementIsIncomplete(t *testing.T) {
 	root := copyFixture(t, "native")
+	platformAssembly := "platform_" + runtime.GOOS + ".s"
+	if err := os.WriteFile(filepath.Join(root, platformAssembly), []byte("//go:build "+runtime.GOOS+"\n\n#include \"textflag.h\"\n#include \"constants.h\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
 	if err != nil {
 		t.Fatal(err)
@@ -867,8 +871,13 @@ func TestNativeRequirementIsIncomplete(t *testing.T) {
 	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "native") {
 		t.Fatalf("native requirement was not reported as incomplete: %#v", analysis.Blockers)
 	}
-	if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool { return file.Native && file.Role == "native" }) {
-		t.Fatal("native input provenance was not recorded")
+	for _, name := range []string{"native.s", "constants.h", platformAssembly} {
+		path := "source://" + name
+		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+			return file.Path == path && file.Native && file.Role == "native"
+		}) {
+			t.Fatalf("selected native input %s was not recorded as native: %#v", path, analysis.Files)
+		}
 	}
 }
 

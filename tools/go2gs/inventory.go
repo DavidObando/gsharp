@@ -235,6 +235,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	active := stringSet(pkg.GoFiles)
 	embed := stringSet(pkg.EmbedFiles)
 	activeCgo := b.packageImportsC(pkg)
+	nativeConsumer := hasSelectedNativeConsumer(pkg, activeCgo)
 	all := append([]string{}, pkg.CompiledGoFiles...)
 	all = append(all, pkg.GoFiles...)
 	all = append(all, pkg.IgnoredFiles...)
@@ -251,7 +252,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	if len(b.seenFiles)+newFiles > b.profile.Limits.MaxFiles {
 		return fmt.Errorf("file count exceeds limit %d", b.profile.Limits.MaxFiles)
 	}
-	if b.hasSelectedNativeInput(pkg, activeCgo) {
+	if nativeConsumer {
 		b.block("native", "selected package requires native, assembly, or CGo build inputs; M0 records them but does not authorize the native toolchain", []string{record.ID}, nil)
 		record.InventoryComplete = false
 	}
@@ -275,10 +276,10 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		case embed[path]:
 			role, reason = "embed", "selected by go:embed"
 		case contains(pkg.OtherFiles, path):
-			if activeCgo || !cgoOnlyNativeInput(path) {
+			if activeCgo || !nativeHeader(path) || nativeConsumer {
 				role, reason = "native", "selected non-Go build input"
 			} else {
-				role, reason = "ignored", "inactive because no selected Go file imports C"
+				role, reason = "ignored", "no selected native source can consume this header"
 			}
 		case contains(pkg.IgnoredFiles, path):
 			role, reason = "ignored", "excluded by current build constraints or file naming"
@@ -296,7 +297,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			!contains(pkg.IgnoredFiles, path) && !contains(pkg.OtherFiles, path) && !contains(pkg.EmbedFiles, path) {
 			role = snapshotRole
 			reason = "captured before package loading"
-			if !activeCgo && (snapshotRole == "native" || b.snapshotFileImportsC(path)) {
+			if !activeCgo && !nativeConsumer && (snapshotRole == "native" || b.snapshotFileImportsC(path)) {
 				role = "ignored"
 				reason = "discovered defensively but inactive in the selected profile"
 			}
@@ -369,18 +370,18 @@ func (b *inventoryBuilder) snapshotFileImportsC(path string) bool {
 	return false
 }
 
-func (b *inventoryBuilder) hasSelectedNativeInput(pkg *packages.Package, activeCgo bool) bool {
+func hasSelectedNativeConsumer(pkg *packages.Package, activeCgo bool) bool {
 	for _, path := range pkg.OtherFiles {
-		if activeCgo || !cgoOnlyNativeInput(path) {
+		if activeCgo || !nativeHeader(path) {
 			return true
 		}
 	}
 	return false
 }
 
-func cgoOnlyNativeInput(path string) bool {
+func nativeHeader(path string) bool {
 	switch strings.ToLower(filepath.Ext(path)) {
-	case ".c", ".cc", ".cpp", ".cxx", ".f", ".f90", ".for", ".h", ".hh", ".hpp", ".m", ".mm", ".swig", ".swigcxx":
+	case ".h", ".hh", ".hpp":
 		return true
 	default:
 		return false

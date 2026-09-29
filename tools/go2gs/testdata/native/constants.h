@@ -1,0 +1,1 @@
+#define NATIVE_VALUE 7
