@@ -179,7 +179,8 @@ public sealed partial class CSharpToGSharpTranslator
                     effectiveType,
                     this.context.Compilation))
             {
-                this.state.ManagedReferenceArrayProjectedLocalType[local] =
+                this.state.ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedLocalType[local] =
                     effectiveType;
             }
         }
