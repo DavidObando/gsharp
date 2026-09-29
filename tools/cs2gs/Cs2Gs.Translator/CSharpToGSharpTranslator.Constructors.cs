@@ -3630,7 +3630,8 @@ public sealed partial class CSharpToGSharpTranslator
                             forEachElement);
                     if (projectedBinding)
                     {
-                        this.state.ManagedReferenceArrayProjectedLocalType[
+                        this.state.ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType[
                             projectedLoopLocal] = forEachElement;
                     }
 
@@ -3653,7 +3654,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                         if (projectedBinding)
                         {
-                            this.state.ManagedReferenceArrayProjectedLocalType.Remove(
+                            this.state.ManagedReferenceArrayNullable
+                                .ManagedReferenceArrayProjectedLocalType.Remove(
                                 projectedLoopLocal);
                         }
                     }

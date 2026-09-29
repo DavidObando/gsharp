@@ -4858,7 +4858,8 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax call,
             out IMethodSymbol projected)
         {
-            if (this.state.ManagedReferenceArrayProjectedMethodByCall.TryGetValue(
+            if (this.state.ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedMethodByCall.TryGetValue(
                     call,
                     out projected))
             {
@@ -4868,7 +4869,8 @@ public sealed partial class CSharpToGSharpTranslator
             projected = null;
             if (this.context.GetSymbolInfo(call).Symbol is not IMethodSymbol method)
             {
-                this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
+                this.state.ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
                 return false;
             }
 
@@ -4876,13 +4878,15 @@ public sealed partial class CSharpToGSharpTranslator
                     method,
                     this.context.Compilation))
             {
-                this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
+                this.state.ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
                 return false;
             }
 
             // Cache an in-progress sentinel before inspecting arguments and
             // local initializer/member flows, which can refer back to this call.
-            this.state.ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
+            this.state.ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedMethodByCall.Add(call, null);
             this.state.ManagedReferenceArrayProjectedCallsInProgress.Add(call);
 
             bool Complete(bool result)
@@ -4928,9 +4932,9 @@ public sealed partial class CSharpToGSharpTranslator
                 || (call is BaseObjectCreationExpressionSyntax objectCreation
                     && this.ObjectCreationCanProjectContainingType(objectCreation));
             var projectedMethodArguments =
-                new ITypeSymbol[method.TypeArguments.Length];
+                new NullableTypeSymbolSlots(method.TypeArguments.Length);
             var observedMethodArguments =
-                new ITypeSymbol[method.TypeArguments.Length];
+                new NullableTypeSymbolSlots(method.TypeArguments.Length);
             var observedMethodArgumentsRequireExactMatch =
                 new bool[method.TypeArguments.Length];
             ImmutableArray<INamedTypeSymbol> containingTypes =
@@ -4945,14 +4949,117 @@ public sealed partial class CSharpToGSharpTranslator
                 containingTypes.SelectMany(type => type.OriginalDefinition.TypeParameters)
                     .ToImmutableArray();
             var projectedContainingArguments =
-                new ITypeSymbol[containingTypeArguments.Length];
+                new NullableTypeSymbolSlots(containingTypeArguments.Length);
             var observedContainingArguments =
-                new ITypeSymbol[containingTypeArguments.Length];
+                new NullableTypeSymbolSlots(containingTypeArguments.Length);
             var observedContainingArgumentsRequireExactMatch =
                 new bool[containingTypeArguments.Length];
             ITypeParameterSymbol blockedParameter = null;
             ITypeParameterSymbol conflictingParameter = null;
             bool fixedStorageNeedsNullableArgument = false;
+            bool RecordWidenedTypeParameters(
+                ImmutableArray<ITypeSymbol> typeArguments,
+                ImmutableArray<ITypeParameterSymbol> typeParameters,
+                NullableTypeSymbolSlots projectedArguments,
+                NullableTypeSymbolSlots observedArguments,
+                bool[] observedArgumentsRequireExactMatch,
+                ITypeSymbol parameterType,
+                ITypeSymbol argumentType,
+                bool apply,
+                bool nullableArrayArgument = false,
+                bool requiresExactMatch = false)
+            {
+                bool needsProjection = false;
+                for (int i = 0; i < projectedArguments.Length; i++)
+                {
+                    bool hasProjectedArgument = TryGetProjectedTypeArgument(
+                        parameterType,
+                        argumentType,
+                        typeParameters[i],
+                        this.context.Compilation,
+                        out ITypeSymbol projectedArgument);
+                    if (!TypeContainsRecognizedManagedReferenceConsumer(
+                            typeArguments[i],
+                            this.context.Compilation)
+                        || (!hasProjectedArgument
+                            && (!nullableArrayArgument
+                                || !TypeContainsTypeParameter(
+                                    parameterType,
+                                    typeParameters[i]))))
+                    {
+                        continue;
+                    }
+
+                    if (!hasProjectedArgument)
+                    {
+                        projectedArgument = typeArguments[i];
+                    }
+
+                    if (projectedArgument is not IArrayTypeSymbol
+                        && nullableArrayArgument
+                        && (!hasProjectedArgument
+                            || SymbolEqualityComparer.IncludeNullability.Equals(
+                                typeArguments[i],
+                                projectedArgument)))
+                    {
+                        projectedArgument =
+                            projectedArgument.WithNullableAnnotation(
+                                NullableAnnotation.Annotated);
+                    }
+
+                    if (apply
+                        && observedArguments[i] != null
+                        && !SymbolEqualityComparer.IncludeNullability.Equals(
+                            observedArguments[i],
+                            projectedArgument)
+                        && (requiresExactMatch
+                            || observedArgumentsRequireExactMatch[i]
+                            || !ProjectionTypeFitsDestination(
+                                projectedArgument,
+                                observedArguments[i])))
+                    {
+                        conflictingParameter ??= typeParameters[i];
+                        continue;
+                    }
+
+                    if (apply)
+                    {
+                        if (observedArguments[i] == null)
+                        {
+                            observedArguments[i] = projectedArgument;
+                        }
+
+                        observedArgumentsRequireExactMatch[i] |= requiresExactMatch;
+                    }
+
+                    if (SymbolEqualityComparer.IncludeNullability.Equals(
+                            typeArguments[i],
+                            projectedArgument))
+                    {
+                        continue;
+                    }
+
+                    needsProjection = true;
+                    if (!apply)
+                    {
+                        continue;
+                    }
+
+                    if (projectedArgument.NullableAnnotation
+                            == NullableAnnotation.Annotated
+                        && NullableTypeArgumentViolatesTranslatedConstraints(
+                            typeParameters[i]))
+                    {
+                        blockedParameter ??= typeParameters[i];
+                        continue;
+                    }
+
+                    projectedArguments[i] = projectedArgument;
+                }
+
+                return needsProjection;
+            }
+
             void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
             {
                 argument = Unparenthesize(argument);
@@ -5052,105 +5159,6 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            bool RecordWidenedTypeParameters(
-                ImmutableArray<ITypeSymbol> typeArguments,
-                ImmutableArray<ITypeParameterSymbol> typeParameters,
-                ITypeSymbol[] projectedArguments,
-                ITypeSymbol[] observedArguments,
-                bool[] observedArgumentsRequireExactMatch,
-                ITypeSymbol parameterType,
-                ITypeSymbol argumentType,
-                bool apply,
-                bool nullableArrayArgument = false,
-                bool requiresExactMatch = false)
-            {
-                bool needsProjection = false;
-                for (int i = 0; i < projectedArguments.Length; i++)
-                {
-                    bool hasProjectedArgument = TryGetProjectedTypeArgument(
-                        parameterType,
-                        argumentType,
-                        typeParameters[i],
-                        this.context.Compilation,
-                        out ITypeSymbol projectedArgument);
-                    if (!TypeContainsRecognizedManagedReferenceConsumer(
-                            typeArguments[i],
-                            this.context.Compilation)
-                        || (!hasProjectedArgument
-                            && (!nullableArrayArgument
-                                || !TypeContainsTypeParameter(
-                                    parameterType,
-                                    typeParameters[i]))))
-                    {
-                        continue;
-                    }
-
-                    if (!hasProjectedArgument)
-                    {
-                        projectedArgument = typeArguments[i];
-                    }
-
-                    if (projectedArgument is not IArrayTypeSymbol
-                        && nullableArrayArgument
-                        && (!hasProjectedArgument
-                            || SymbolEqualityComparer.IncludeNullability.Equals(
-                                typeArguments[i],
-                                projectedArgument)))
-                    {
-                        projectedArgument =
-                            projectedArgument.WithNullableAnnotation(
-                                NullableAnnotation.Annotated);
-                    }
-
-                    if (apply
-                        && observedArguments[i] != null
-                        && !SymbolEqualityComparer.IncludeNullability.Equals(
-                            observedArguments[i],
-                            projectedArgument)
-                        && (requiresExactMatch
-                            || observedArgumentsRequireExactMatch[i]
-                            || !ProjectionTypeFitsDestination(
-                                projectedArgument,
-                                observedArguments[i])))
-                    {
-                        conflictingParameter ??= typeParameters[i];
-                        continue;
-                    }
-
-                    if (apply)
-                    {
-                        observedArguments[i] ??= projectedArgument;
-                        observedArgumentsRequireExactMatch[i] |= requiresExactMatch;
-                    }
-
-                    if (SymbolEqualityComparer.IncludeNullability.Equals(
-                            typeArguments[i],
-                            projectedArgument))
-                    {
-                        continue;
-                    }
-
-                    needsProjection = true;
-                    if (!apply)
-                    {
-                        continue;
-                    }
-
-                    if (projectedArgument.NullableAnnotation
-                            == NullableAnnotation.Annotated
-                        && NullableTypeArgumentViolatesTranslatedConstraints(
-                            typeParameters[i]))
-                    {
-                        blockedParameter ??= typeParameters[i];
-                        continue;
-                    }
-
-                    projectedArguments[i] = projectedArgument;
-                }
-
-                return needsProjection;
-            }
-
             void RecordContainingTypeArguments(
                 IMethodSymbol consumer,
                 ImmutableArray<IArgumentOperation> consumerArguments)
@@ -5197,7 +5205,8 @@ public sealed partial class CSharpToGSharpTranslator
                     consumerType,
                     this.GetManagedReferenceArrayProjectedArgumentType(argument),
                     apply: true,
-                    this.ArrayExpressionHasNullableElement(argument));
+                    this.ArrayExpressionHasNullableElement(argument),
+                    requiresExactMatch: false);
             }
 
             void RecordInitializerConsumers(
@@ -5361,28 +5370,33 @@ public sealed partial class CSharpToGSharpTranslator
                     if (consumer is AssignmentExpressionSyntax assignment
                         && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression))
                     {
-                        ISymbol member =
-                            this.context.GetSymbolInfo(assignment.Left).Symbol
-                            ?? this.context.SemanticModel.GetOperation(assignment.Left)
-                                switch
-                                {
-                                    IFieldReferenceOperation field => field.Field,
-                                    IPropertyReferenceOperation property =>
-                                        property.Property,
-                                    _ => null,
-                                };
-                        ITypeSymbol memberType = member switch
+                        var member = this.context.GetSymbolInfo(assignment.Left).Symbol;
+                        if (member == null)
                         {
-                            IFieldSymbol field => field.OriginalDefinition.Type,
-                            IPropertySymbol property =>
-                                property.OriginalDefinition.Type,
-                            _ => null,
-                        };
-                        if (member?.ContainingType != null && memberType != null)
+                            var operation =
+                                this.context.SemanticModel.GetOperation(assignment.Left);
+                            if (operation is IFieldReferenceOperation field)
+                            {
+                                member = field.Field;
+                            }
+                            else if (operation is IPropertyReferenceOperation property)
+                            {
+                                member = property.Property;
+                            }
+                        }
+
+                        if (member is IFieldSymbol fieldMember)
                         {
                             RecordContainingTypeArgument(
-                                member.ContainingType,
-                                memberType,
+                                fieldMember.ContainingType,
+                                fieldMember.OriginalDefinition.Type,
+                                assignment.Right);
+                        }
+                        else if (member is IPropertySymbol propertyMember)
+                        {
+                            RecordContainingTypeArgument(
+                                propertyMember.ContainingType,
+                                propertyMember.OriginalDefinition.Type,
                                 assignment.Right);
                         }
                     }
@@ -5416,7 +5430,8 @@ public sealed partial class CSharpToGSharpTranslator
                         reducedMember.Expression),
                     apply: true,
                     this.ArrayExpressionHasNullableElement(
-                        reducedMember.Expression));
+                        reducedMember.Expression),
+                    requiresExactMatch: false);
             }
 
             if (conflictingParameter != null)
@@ -5439,7 +5454,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             INamedTypeSymbol projectedContainingType = projectedReceiver;
-            if (projectedContainingArguments.Any(argument => argument != null))
+            if (projectedContainingArguments.HasAnyValue)
             {
                 var replacements =
                     new Dictionary<ITypeParameterSymbol, ITypeSymbol>(
@@ -5475,7 +5490,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (method.IsGenericMethod
                 && (projectedContainingType != null
-                    || projectedMethodArguments.Any(argument => argument != null)))
+                    || projectedMethodArguments.HasAnyValue))
             {
                 ITypeSymbol[] typeArguments = method.TypeArguments.ToArray();
                 for (int i = 0; i < typeArguments.Length; i++)
@@ -5556,12 +5571,13 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (projectedContainingType != null
-                || projectedMethodArguments.Any(argument => argument != null))
+                || projectedMethodArguments.HasAnyValue)
             {
                 projected = projectedMethod;
             }
 
-            this.state.ManagedReferenceArrayProjectedMethodByCall[call] = projected;
+            this.state.ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedMethodByCall[call] = projected;
             return Complete(projected != null);
         }
 
@@ -5815,14 +5831,20 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ISymbol targetMember =
-                this.context.GetSymbolInfo(assignment.Left).Symbol
-                ?? this.context.SemanticModel.GetOperation(assignment.Left) switch
+            var targetMember = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            if (targetMember == null)
+            {
+                var operation = this.context.SemanticModel.GetOperation(assignment.Left);
+                if (operation is IFieldReferenceOperation field)
                 {
-                    IFieldReferenceOperation field => field.Field,
-                    IPropertyReferenceOperation property => property.Property,
-                    _ => null,
-                };
+                    targetMember = field.Field;
+                }
+                else if (operation is IPropertyReferenceOperation property)
+                {
+                    targetMember = property.Property;
+                }
+            }
+
             if (targetMember?.ContainingType == null
                 || !SymbolEqualityComparer.Default.Equals(
                     targetMember.ContainingType.OriginalDefinition,
@@ -6003,7 +6025,8 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    this.state.ManagedReferenceArrayProjectedMethodByCall[child] = null;
+                    this.state.ManagedReferenceArrayNullable
+                        .ManagedReferenceArrayProjectedMethodByCall[child] = null;
                     this.state.ManagedReferenceArrayProjectionParentByCall.Remove(child);
                     pending.Enqueue(child);
                 }
@@ -6275,9 +6298,10 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax projectedValue,
             ITypeSymbol projectedType)
         {
-            if (this.state.ManagedReferenceArrayProjectedLocalType.TryGetValue(
+            if (this.state.ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedLocalType.TryGetValue(
                     local,
-                    out ITypeSymbol cached))
+                    out var cached))
             {
                 return SymbolEqualityComparer.IncludeNullability.Equals(
                     cached,
@@ -6291,7 +6315,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool matches = true;
             ExpressionSyntax initializer = null;
-            this.state.ManagedReferenceArrayProjectedLocalType[local] = projectedType;
+            this.state.ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedLocalType[local] = projectedType;
             try
             {
                 if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
@@ -6352,10 +6377,11 @@ public sealed partial class CSharpToGSharpTranslator
 
                         if (use.Parent is ArgumentSyntax
                                 { Parent.Parent: ExpressionSyntax consumer }
-                            && this.state.ManagedReferenceArrayProjectedMethodByCall
+                            && this.state.ManagedReferenceArrayNullable
+                                .ManagedReferenceArrayProjectedMethodByCall
                                 .TryGetValue(
                                     consumer,
-                                    out IMethodSymbol projectedConsumer)
+                                    out var projectedConsumer)
                             && projectedConsumer != null)
                         {
                             this.RecordManagedReferenceArrayProjectionParent(
@@ -6370,7 +6396,8 @@ public sealed partial class CSharpToGSharpTranslator
                 this.state.ManagedReferenceArrayProjectedLocalTypeInProgress.Remove(local);
             }
 
-            this.state.ManagedReferenceArrayProjectedLocalType[local] =
+            this.state.ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedLocalType[local] =
                 matches ? projectedType : null;
             return matches;
 

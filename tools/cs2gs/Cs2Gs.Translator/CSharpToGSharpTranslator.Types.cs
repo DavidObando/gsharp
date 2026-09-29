@@ -1548,7 +1548,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                     foreach (ILocalSymbol binding in projectedBindings)
                     {
-                        this.state.ManagedReferenceArrayProjectedLocalType.Remove(
+                        this.state.ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType.Remove(
                             binding);
                     }
                 }
@@ -1580,7 +1581,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (ILocalSymbol binding in projectedBindings)
             {
-                this.state.ManagedReferenceArrayProjectedLocalType.Remove(binding);
+                this.state.ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedLocalType.Remove(binding);
             }
 
             this.context.ReportUnsupported(
@@ -1636,7 +1638,8 @@ public sealed partial class CSharpToGSharpTranslator
                             symbol.Type,
                             projectedType))
                     {
-                        this.state.ManagedReferenceArrayProjectedLocalType[symbol] =
+                        this.state.ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType[symbol] =
                             projectedType;
                         projectedBindings.Add(symbol);
                     }

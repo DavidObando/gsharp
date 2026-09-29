@@ -83,7 +83,8 @@ public sealed partial class CSharpToGSharpTranslator
                             initializerSyntax) is { } projectedType)
                     {
                         targetType = projectedType;
-                        this.state.ManagedReferenceArrayProjectedLocalType[localTarget] =
+                        this.state.ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType[localTarget] =
                             projectedType;
                     }
 

@@ -3150,14 +3150,15 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
-            if (!this.state.MappedArrayElementByElementType.TryGetValue(
+            if (!this.state.ManagedReferenceArrayNullable
+                .MappedArrayElementByElementType.TryGetValue(
                     array.ElementType,
-                    out GTypeReference mappedElement))
+                    out var mappedElement))
             {
                 mappedElement =
                     (this.typeMapper.Map(array, this.context, expression.GetLocation())
                         as ArrayTypeReference)?.ElementType;
-                this.state.MappedArrayElementByElementType.Add(
+                this.state.ManagedReferenceArrayNullable.MappedArrayElementByElementType.Add(
                     array.ElementType,
                     mappedElement);
             }

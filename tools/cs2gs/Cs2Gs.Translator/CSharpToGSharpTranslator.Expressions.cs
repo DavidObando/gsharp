@@ -1071,9 +1071,10 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (identifierSymbol is ILocalSymbol local)
                 {
-                    if (this.state.ManagedReferenceArrayProjectedLocalType.TryGetValue(
+                    if (this.state.ManagedReferenceArrayNullable
+                        .ManagedReferenceArrayProjectedLocalType.TryGetValue(
                             local,
-                            out ITypeSymbol projectedLocalType))
+                            out var projectedLocalType))
                     {
                         return projectedLocalType;
                     }
@@ -1084,8 +1085,13 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         projectedLocalType =
                             this.GetManagedReferenceArrayProjectedExpressionType(initializer);
-                        this.state.ManagedReferenceArrayProjectedLocalType[local] =
-                            projectedLocalType;
+                        if (projectedLocalType != null)
+                        {
+                            this.state.ManagedReferenceArrayNullable
+                                .ManagedReferenceArrayProjectedLocalType[local] =
+                                projectedLocalType;
+                        }
+
                         return projectedLocalType;
                     }
                 }
@@ -1190,14 +1196,16 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression,
             IEnumerable<ExpressionSyntax> arms)
         {
-            if (this.state.ManagedReferenceArrayProjectedCompositeType.TryGetValue(
+            if (this.state.ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedCompositeType.TryGetValue(
                     expression,
-                    out ITypeSymbol cached))
+                    out var cached))
             {
                 return cached;
             }
 
-            this.state.ManagedReferenceArrayProjectedCompositeType[expression] =
+            this.state.ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedCompositeType[expression] =
                 null;
             var effectiveTypes = new List<ITypeSymbol>();
             var projectedTypes = new List<ITypeSymbol>();
@@ -1224,14 +1232,41 @@ public sealed partial class CSharpToGSharpTranslator
                     ProjectionTypeFitsDestination(type, candidate)));
             if (common == null && projectedTypes.Count > 0)
             {
-                this.context.ReportUnsupported(
-                    expression,
-                    "conditional/switch result arms have incompatible managed-reference projections.");
+                var originalCompositeType =
+                    this.context.GetTypeInfo(expression).Type
+                    ?? this.context.GetTypeInfo(expression).ConvertedType;
+                if (originalCompositeType == null
+                    || !effectiveTypes.All(type =>
+                        this.ProjectionTypeFitsCompositeDestination(
+                            type,
+                            originalCompositeType)))
+                {
+                    this.context.ReportUnsupported(
+                        expression,
+                        "conditional/switch result arms have incompatible managed-reference projections.");
+                }
             }
 
-            this.state.ManagedReferenceArrayProjectedCompositeType[expression] =
+            this.state.ManagedReferenceArrayNullable
+                .ManagedReferenceArrayProjectedCompositeType[expression] =
                 common;
             return common;
+        }
+
+        private bool ProjectionTypeFitsCompositeDestination(
+            ITypeSymbol projectedType,
+            ITypeSymbol destinationType)
+        {
+            if (projectedType.NullableAnnotation == NullableAnnotation.Annotated
+                && destinationType.NullableAnnotation != NullableAnnotation.Annotated
+                && this.IsReferenceLikeOrManagedReference(projectedType))
+            {
+                return false;
+            }
+
+            return this.context.Compilation.ClassifyConversion(
+                projectedType,
+                destinationType).IsImplicit;
         }
 
         private ITypeSymbol GetProjectedDelegateInvocationReturnType(
