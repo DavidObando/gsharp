@@ -3131,6 +3131,122 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void InferredDelegateInvocationKeepsProjectedLambdaReturn()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayInferredDelegateReturn;
+            public class Probe {
+                public static int Run() {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    var get = () => source[0];
+                    return get().Borrow();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayInferredDelegateReturn.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("get()!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ContainingTypeProjectionIncludesGenericOuterType()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayNestedContainingType;
+            public class Outer<T> {
+                public class Inner {
+                    private readonly T value;
+                    public Inner(T[] items) { this.value = items[0]; }
+                    public T Get() => this.value;
+                }
+            }
+            public class Probe {
+                public static int Run() {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    var inner = new Outer<ManagedRef<int>>.Inner(source);
+                    return inner.Get().Borrow();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayNestedContainingType.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("let inner = Inner(source)", text, StringComparison.Ordinal);
+        Assert.Contains("inner.Get()!!.Borrow()", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void FailedOuterProjectionInvalidatesNestedCallProjection()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayFailedOuterProjection;
+            public sealed class Holder<T> {
+                public bool Accept(T value) => true;
+            }
+            public class Probe {
+                private static readonly Holder<ManagedRef<int>> Fixed = new();
+                private static T First<T>(T[] items) => items[0];
+
+                public static bool Run() {
+                    var source = new ManagedRef<int>[1];
+                    return Fixed.Accept(First(source));
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayFailedOuterProjection.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "fixed receiver storage",
+                    StringComparison.Ordinal));
+        Assert.DoesNotContain("First[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.Contains("First(source)", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionRejectsFixedMethodGroup()
     {
         const string source = """

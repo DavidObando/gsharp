@@ -1098,8 +1098,10 @@ public sealed partial class CSharpToGSharpTranslator
                     invocation,
                     out IMethodSymbol projectedMethod)
                         ? projectedMethod.ReturnType
-                        : this.GetManagedReferenceArrayProjectedExpressionType(
-                            invocation.Expression);
+                        : this.GetProjectedDelegateInvocationReturnType(
+                            invocation.Expression)
+                            ?? this.GetManagedReferenceArrayProjectedExpressionType(
+                                invocation.Expression);
             }
 
             if (expression is BaseObjectCreationExpressionSyntax creation
@@ -1140,6 +1142,54 @@ public sealed partial class CSharpToGSharpTranslator
                 IMethodSymbol method => method.ReturnType,
                 _ => null,
             };
+        }
+
+        private ITypeSymbol GetProjectedDelegateInvocationReturnType(
+            ExpressionSyntax expression)
+        {
+            expression = Unparenthesize(expression);
+            if (this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local
+                || !IsImplicitlyTypedLocal(local)
+                || local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is not VariableDeclaratorSyntax
+                    {
+                        Initializer.Value: AnonymousFunctionExpressionSyntax lambda,
+                    })
+            {
+                return null;
+            }
+
+            IMethodSymbol invoke =
+                this.GetLambdaTargetDelegateType(lambda)?.DelegateInvokeMethod;
+            ITypeSymbol targetResult = invoke == null
+                ? null
+                : GetLambdaResultTargetType(lambda, invoke);
+            ITypeSymbol projectedResult = null;
+            foreach (ExpressionSyntax result in GetLambdaResultExpressions(lambda))
+            {
+                ITypeSymbol candidate =
+                    this.GetManagedReferenceArrayProjectedExpressionType(result);
+                if (candidate == null)
+                {
+                    continue;
+                }
+
+                if (targetResult == null
+                    || !SymbolEqualityComparer.Default.Equals(
+                        targetResult,
+                        candidate)
+                    || (projectedResult != null
+                        && !SymbolEqualityComparer.IncludeNullability.Equals(
+                            projectedResult,
+                            candidate)))
+                {
+                    return null;
+                }
+
+                projectedResult = candidate;
+            }
+
+            return projectedResult;
         }
 
         private ISymbol GetProjectedMember(

@@ -4919,12 +4919,23 @@ public sealed partial class CSharpToGSharpTranslator
                 new ITypeSymbol[method.TypeArguments.Length];
             var observedMethodArgumentsRequireExactMatch =
                 new bool[method.TypeArguments.Length];
+            ImmutableArray<INamedTypeSymbol> containingTypes =
+                method.ContainingType == null
+                    ? ImmutableArray<INamedTypeSymbol>.Empty
+                    : NamedTypeAndContainingTypes(method.ContainingType)
+                        .ToImmutableArray();
+            ImmutableArray<ITypeSymbol> containingTypeArguments =
+                containingTypes.SelectMany(type => type.TypeArguments)
+                    .ToImmutableArray();
+            ImmutableArray<ITypeParameterSymbol> containingTypeParameters =
+                containingTypes.SelectMany(type => type.OriginalDefinition.TypeParameters)
+                    .ToImmutableArray();
             var projectedContainingArguments =
-                new ITypeSymbol[method.ContainingType?.TypeArguments.Length ?? 0];
+                new ITypeSymbol[containingTypeArguments.Length];
             var observedContainingArguments =
-                new ITypeSymbol[method.ContainingType?.TypeArguments.Length ?? 0];
+                new ITypeSymbol[containingTypeArguments.Length];
             var observedContainingArgumentsRequireExactMatch =
-                new bool[method.ContainingType?.TypeArguments.Length ?? 0];
+                new bool[containingTypeArguments.Length];
             ITypeParameterSymbol blockedParameter = null;
             ITypeParameterSymbol conflictingParameter = null;
             bool fixedStorageNeedsNullableArgument = false;
@@ -4993,8 +5004,8 @@ public sealed partial class CSharpToGSharpTranslator
                 if (method.ContainingType != null)
                 {
                     bool needsContainingProjection = RecordWidenedTypeParameters(
-                        method.ContainingType.TypeArguments,
-                        method.ContainingType.TypeParameters,
+                        containingTypeArguments,
+                        containingTypeParameters,
                         projectedContainingArguments,
                         observedContainingArguments,
                         observedContainingArgumentsRequireExactMatch,
@@ -5144,8 +5155,10 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 RecordWidenedTypeParameters(
-                    method.ContainingType.TypeArguments,
-                    consumerContainingType.OriginalDefinition.TypeParameters,
+                    containingTypeArguments,
+                    NamedTypeAndContainingTypes(consumerContainingType)
+                        .SelectMany(type => type.OriginalDefinition.TypeParameters)
+                        .ToImmutableArray(),
                     projectedContainingArguments,
                     observedContainingArguments,
                     observedContainingArgumentsRequireExactMatch,
@@ -5286,7 +5299,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (call is BaseObjectCreationExpressionSyntax creationSyntax
                 && canProjectContainingTypeFromArguments
-                && method.ContainingType?.TypeArguments.Any(argument =>
+                && containingTypeArguments.Any(argument =>
                     TypeContainsRecognizedManagedReferenceConsumer(
                         argument,
                         this.context.Compilation)) == true
@@ -5396,19 +5409,22 @@ public sealed partial class CSharpToGSharpTranslator
             INamedTypeSymbol projectedContainingType = projectedReceiver;
             if (projectedContainingArguments.Any(argument => argument != null))
             {
-                ITypeSymbol[] typeArguments =
-                    (projectedContainingType?.TypeArguments
-                        ?? method.ContainingType.TypeArguments).ToArray();
-                for (int i = 0; i < typeArguments.Length; i++)
+                var replacements =
+                    new Dictionary<ITypeParameterSymbol, ITypeSymbol>(
+                        SymbolEqualityComparer.Default);
+                for (int i = 0; i < projectedContainingArguments.Length; i++)
                 {
                     if (projectedContainingArguments[i] != null)
                     {
-                        typeArguments[i] = projectedContainingArguments[i];
+                        replacements.Add(
+                            containingTypeParameters[i],
+                            projectedContainingArguments[i]);
                     }
                 }
 
-                projectedContainingType =
-                    method.ContainingType.ConstructedFrom.Construct(typeArguments);
+                projectedContainingType = ProjectNamedType(
+                    projectedContainingType ?? method.ContainingType,
+                    replacements);
             }
 
             IMethodSymbol projectedMethod = method;
@@ -6046,6 +6062,7 @@ public sealed partial class CSharpToGSharpTranslator
                         outerMethod.TypeArguments[index],
                         this.context.Compilation))
                 {
+                    this.RecordManagedReferenceArrayProjectionParent(value, outerCall);
                     return true;
                 }
             }
@@ -6056,19 +6073,24 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            for (int index = 0;
-                index < containingType.TypeParameters.Length
-                    && index < containingType.TypeArguments.Length;
-                index++)
+            foreach (INamedTypeSymbol current in NamedTypeAndContainingTypes(
+                containingType))
             {
-                if (TypeContainsTypeParameter(
-                        parameterType,
-                        containingType.TypeParameters[index])
-                    && TypeContainsRecognizedManagedReferenceConsumer(
-                        containingType.TypeArguments[index],
-                        this.context.Compilation))
+                for (int index = 0;
+                    index < current.OriginalDefinition.TypeParameters.Length
+                        && index < current.TypeArguments.Length;
+                    index++)
                 {
-                    return true;
+                    if (TypeContainsTypeParameter(
+                            parameterType,
+                            current.OriginalDefinition.TypeParameters[index])
+                        && TypeContainsRecognizedManagedReferenceConsumer(
+                            current.TypeArguments[index],
+                            this.context.Compilation))
+                    {
+                        this.RecordManagedReferenceArrayProjectionParent(value, outerCall);
+                        return true;
+                    }
                 }
             }
 
@@ -6474,6 +6496,56 @@ public sealed partial class CSharpToGSharpTranslator
                             TypeContainsTypeParameter(argument, target))
                         || (named.ContainingType is { } containing
                             && TypeContainsTypeParameter(containing, target))));
+        }
+
+        private static IEnumerable<INamedTypeSymbol> NamedTypeAndContainingTypes(
+            INamedTypeSymbol type)
+        {
+            for (INamedTypeSymbol current = type;
+                current != null;
+                current = current.ContainingType)
+            {
+                yield return current;
+            }
+        }
+
+        private static INamedTypeSymbol ProjectNamedType(
+            INamedTypeSymbol type,
+            IReadOnlyDictionary<ITypeParameterSymbol, ITypeSymbol> replacements)
+        {
+            INamedTypeSymbol definition;
+            if (type.ContainingType is { } containingType)
+            {
+                INamedTypeSymbol projectedContainingType =
+                    ProjectNamedType(containingType, replacements);
+                definition = projectedContainingType.GetTypeMembers(type.Name, type.Arity)
+                    .First(candidate =>
+                        SymbolEqualityComparer.Default.Equals(
+                            candidate.OriginalDefinition,
+                            type.OriginalDefinition));
+            }
+            else
+            {
+                definition = type.ConstructedFrom;
+            }
+
+            if (type.TypeArguments.IsEmpty)
+            {
+                return definition;
+            }
+
+            ITypeSymbol[] arguments = type.TypeArguments.ToArray();
+            for (int i = 0; i < arguments.Length; i++)
+            {
+                if (replacements.TryGetValue(
+                        type.OriginalDefinition.TypeParameters[i],
+                        out ITypeSymbol replacement))
+                {
+                    arguments[i] = replacement;
+                }
+            }
+
+            return definition.Construct(arguments);
         }
 
         private static InvocationExpressionSyntax GetContainingInvocation(GenericNameSyntax generic)
