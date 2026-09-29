@@ -591,9 +591,10 @@ internal sealed partial class StatementBinder
             {
                 var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
                 mutations.Visit(finallyBlock);
-                summary = new FinallyFlowSummary(
-                    mutations,
-                    ComputeBranchFallthroughNonNull(finallyBlock, entry: null));
+                var nonNullOnNormalExit = ContainsUserGotoOrLabel(finallyClause.Body)
+                    ? null
+                    : ComputeBranchFallthroughNonNull(finallyBlock, entry: null);
+                summary = new FinallyFlowSummary(mutations, nonNullOnNormalExit);
                 finallyFlowSummaries.Add(finallyBlock, summary);
             }
 

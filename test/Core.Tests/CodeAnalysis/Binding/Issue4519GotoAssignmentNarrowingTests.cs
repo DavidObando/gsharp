@@ -333,6 +333,35 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void LocalGotoInFinally_DoesNotDropNullableExitPath()
+    {
+        var result = Evaluate("""
+            func Run(jump bool, skip bool) int32 {
+                var x string? = nil
+                try {
+                    if jump { goto Done }
+                } finally {
+                    if skip {
+                        x = nil
+                        goto EndFinally
+                    }
+                    x = "safe"
+                EndFinally:
+                }
+                x = "again"
+            Done:
+                return x.Length
+            }
+
+            Run(true, true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void NestedFunctionBetweenFinallyAndTarget_DoesNotLoseOuterFinallyEffects()
     {
         var result = Evaluate("""
