@@ -172,6 +172,45 @@ namespace Corpus.Issue1889
     }
 
     [Fact]
+    public void IsPattern_ProjectedGenericIndexerGuardsNullableElementMember()
+    {
+        string rendered = Render(@"
+#nullable enable
+namespace Corpus.Issue1889
+{
+    public sealed class Node
+    {
+        public int Value => 1;
+    }
+
+    public sealed class Buffer<T>
+    {
+        private readonly T[] values;
+        public Buffer(T[] values) { this.values = values; }
+        public int Length => this.values.Length;
+        public T this[int index] => this.values[index];
+    }
+
+    public class Holder
+    {
+        private static Buffer<T> Create<T>(T[] values) => new Buffer<T>(values);
+
+        public bool Describe()
+        {
+            var values = new Node[1];
+            var buffer = Create(values);
+            return buffer is [{ Value: 1 }];
+        }
+    }
+}
+");
+
+        Assert.Contains("buffer[0] != nil", rendered, StringComparison.Ordinal);
+        Assert.Contains("buffer[0].Value == 1", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void IsPattern_HeadAndRestBinders_BindHeadByIndexAndRestBySlice()
     {
         string rendered = Render(@"

@@ -1664,7 +1664,15 @@ public sealed partial class CSharpToGSharpTranslator
                         this.TranslatePatternTest(receiver, parenthesized.Pattern, receiverType, receiverSyntax, isNestedPatternMember));
 
                 case ListPatternSyntax listPattern:
-                    return this.TranslateListPatternTest(receiver, listPattern, receiverType, isNestedPatternMember);
+                    ITypeSymbol projectedListReceiver = receiverSyntax == null
+                        ? null
+                        : this.GetManagedReferenceArrayProjectedExpressionType(
+                            receiverSyntax);
+                    return this.TranslateListPatternTest(
+                        receiver,
+                        listPattern,
+                        projectedListReceiver ?? receiverType,
+                        isNestedPatternMember);
 
                 default:
                     this.context.ReportUnsupported(
@@ -1753,7 +1761,15 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.context.SemanticModel.GetOperation(listPattern)
                     is IListPatternOperation listOperation)
             {
-                ITypeSymbol indexedElement = listOperation.IndexerSymbol switch
+                ISymbol indexer = listOperation.IndexerSymbol;
+                if (receiverType is INamedTypeSymbol projectedReceiver
+                    && indexer != null)
+                {
+                    indexer = this.GetProjectedMember(projectedReceiver, indexer)
+                        ?? indexer;
+                }
+
+                ITypeSymbol indexedElement = indexer switch
                 {
                     IPropertySymbol property => property.Type,
                     IMethodSymbol method => method.ReturnType,

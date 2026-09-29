@@ -50,7 +50,8 @@ namespace Corpus.Issue1902
     {
         public TResult[] SelectMany<TCollection, TResult>(
             Func<T, TCollection[]> collectionSelector,
-            Func<T, long, TResult> resultSelector) =>
+            Func<T, long, TResult> resultSelector,
+            Func<int, string, int> unrelatedSelector = null) =>
             new[] { resultSelector(default(T), 42L) };
     }
 

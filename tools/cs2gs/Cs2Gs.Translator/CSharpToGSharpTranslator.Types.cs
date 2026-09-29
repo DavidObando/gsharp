@@ -2705,13 +2705,14 @@ public sealed partial class CSharpToGSharpTranslator
                 && this.context.SemanticModel.GetQueryClauseInfo(additionalFrom)
                     .OperationInfo.Symbol is IMethodSymbol selectMany)
             {
-                foreach (IParameterSymbol parameter in selectMany.Parameters.Reverse())
+                IMethodSymbol resultSelector = selectMany.Parameters
+                    .Select(parameter => GetDelegateInvokeMethod(parameter.Type))
+                    .Where(invoke => invoke != null)
+                    .Skip(1)
+                    .FirstOrDefault();
+                if (resultSelector is { Parameters.Length: >= 2 })
                 {
-                    if (GetDelegateInvokeMethod(parameter.Type)
-                            is { Parameters.Length: >= 2 } resultSelector)
-                    {
-                        return resultSelector.Parameters[1].Type;
-                    }
+                    return resultSelector.Parameters[1].Type;
                 }
             }
 
