@@ -59,6 +59,13 @@ only `-tags`, `-trimpath`, and `-buildvcs=false`; execution and path override
 flags such as `-toolexec`, `-overlay`, and `-modfile` are rejected. The only
 accepted `goDebug` key is `gotypesalias`, with value `0` or `1`.
 
+Profiles with `cgoEnabled: true` must set `cCompiler` to an absolute,
+explicitly approved compiler executable. The helper resolves and hashes that
+compiler, records its name and hash, and exposes only the Go and compiler
+directories on child `PATH`; ambient compiler discovery remains disabled.
+Source commit provenance is read directly from bounded `.git` metadata; the
+analyzer never discovers or executes an ambient `git` command.
+
 Package records preserve both the exact compiled-file order and the execution
 order of variable initializers followed by `init` functions. Diagnostic
 positions use portable source/module/GOROOT identities. Schema validation

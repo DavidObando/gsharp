@@ -13,6 +13,7 @@ type Profile struct {
 	LoadTests             bool              `json:"loadTests"`
 	GOOS                  string            `json:"goos"`
 	GOARCH                string            `json:"goarch"`
+	CCompiler             string            `json:"cCompiler,omitempty"`
 	ArchitectureFeatures  []string          `json:"architectureFeatures,omitempty"`
 	BuildTags             []string          `json:"buildTags,omitempty"`
 	CGOEnabled            bool              `json:"cgoEnabled"`
@@ -115,6 +116,8 @@ type ToolchainProvenance struct {
 	GOROOTIdentity      string `json:"gorootIdentity"`
 	GOROOTVersionSHA256 string `json:"gorootVersionSha256"`
 	GOROOTSource        string `json:"gorootSource"`
+	CCompilerName       string `json:"cCompilerName,omitempty"`
+	CCompilerSHA256     string `json:"cCompilerSha256,omitempty"`
 	AutoDownload        bool   `json:"autoDownload"`
 }
 

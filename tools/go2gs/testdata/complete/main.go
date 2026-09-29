@@ -35,19 +35,21 @@ func (outer *Outer) Add(value int) int {
 	return outer.Number + value
 }
 
-//go:embed asset.bin
-var asset string
+//go:embed assets/*
+var regularAssets embed.FS
 
-//go:embed assets/a.txt
-var assetA string
+//go:embed all:assets/*
+var allAssets embed.FS
 
-//go:embed assets/*.txt
-var assets embed.FS
+//go:embed assets/sub
+var directoryAssets embed.FS
 
 //go:generate echo never-executed
 
 var InterfaceValue any = (*Inner)(nil)
 var ContextualInt int64 = 7
+var Convert = int64(4)
+var NestedConvert = int64(int32(5))
 var PackageCall = fmt.Sprint(8)
 var MethodExpressionCall = (*Outer).Add(&Outer{}, 9)
 var MethodValueCall = (&Outer{}).Add(10)

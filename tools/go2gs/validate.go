@@ -425,6 +425,13 @@ func validateAnalysisHeader(a Analysis) error {
 		t.GOROOTSource == "" || t.AutoDownload {
 		return errors.New("analysis toolchain provenance is missing mandatory or fail-closed fields")
 	}
+	if p.CGOEnabled {
+		if t.CCompilerName == "" || !validSHA256(t.CCompilerSHA256) {
+			return errors.New("CGo analysis requires C compiler provenance")
+		}
+	} else if t.CCompilerName != "" || t.CCompilerSHA256 != "" {
+		return errors.New("non-CGo analysis must not contain C compiler provenance")
+	}
 	return nil
 }
 
