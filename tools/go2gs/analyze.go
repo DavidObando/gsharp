@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"golang.org/x/mod/modfile"
 	"golang.org/x/tools/go/packages"
 )
 
@@ -33,6 +34,29 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 }
 
 func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot func()) (Analysis, bool, error) {
+	return analyzeWithSnapshotHooks(ctx, sourceRoot, outRoot, profile, afterSnapshot, nil)
+}
+
+func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot, afterLoad func()) (Analysis, bool, error) {
+	var err error
+	sourceRoot, err = secureRoot(sourceRoot)
+	if err != nil {
+		return Analysis{}, false, fmt.Errorf("source root: %w", err)
+	}
+	outRoot, err = filepath.Abs(outRoot)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	if filepath.Clean(outRoot) == filepath.Clean(sourceRoot) {
+		return Analysis{}, false, errors.New("output root must be outside the source root")
+	}
+	if err := os.MkdirAll(outRoot, 0o700); err != nil {
+		return Analysis{}, false, err
+	}
+	outRoot, err = secureRoot(outRoot)
+	if err != nil {
+		return Analysis{}, false, fmt.Errorf("output root: %w", err)
+	}
 	executable, err := exec.LookPath("go")
 	if err != nil {
 		return Analysis{}, false, errors.New("Go executable not found")
@@ -66,11 +90,8 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 		return Analysis{}, false, err
 	}
 
-	workRoot := filepath.Join(outRoot, ".go2gs-work")
-	if err := os.RemoveAll(workRoot); err != nil {
-		return Analysis{}, false, err
-	}
-	if err := os.MkdirAll(workRoot, 0o700); err != nil {
+	workRoot, err := os.MkdirTemp(outRoot, ".go2gs-work-*")
+	if err != nil {
 		return Analysis{}, false, err
 	}
 	defer os.RemoveAll(workRoot)
@@ -146,12 +167,12 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 		Toolchain: toolchain,
 	}
 
-	manifests, err := snapshotManifests(sourceRoot, profile.Limits.MaxLocalHashBytes)
+	mirror, err := createSourceMirror(sourceRoot, outRoot, workRoot, profile.Limits)
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	builder := newInventoryBuilder(&analysis, sourceRoot, targetGOROOT, profile)
-	builder.collectManifests(manifests.records)
+	builder := newInventoryBuilder(&analysis, mirror.root, targetGOROOT, profile)
+	builder.collectManifests(mirror.manifests.records)
 	analysis.Profile.SourceRootIdentity = sourceIdentity(actualCommit, analysis.Manifests)
 	if sourceCommitErr != nil {
 		builder.block("source-metadata", sourceCommitErr.Error(), nil, nil)
@@ -180,10 +201,13 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 	config := &packages.Config{
 		Context:    ctx,
 		Mode:       mode,
-		Dir:        sourceRoot,
+		Dir:        mirror.root,
 		Env:        env,
 		BuildFlags: buildFlags,
 		Tests:      profile.LoadTests,
+	}
+	if afterSnapshot != nil {
+		afterSnapshot()
 	}
 	selectedConfig := *config
 	selectedConfig.Mode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
@@ -198,17 +222,17 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 		defensive, _ := packages.Load(&defensiveConfig, profile.EntryPatterns...)
 		capturePreflight = collectPackages(append(selectedPreflight, defensive...))
 	}
-	sourceSnapshot, err := snapshotPackageInputs(selectedPreflight, capturePreflight, sourceRoot, profile.Limits)
+	sourceSnapshot, err := snapshotPackageInputs(selectedPreflight, capturePreflight, mirror.root, profile.Limits)
 	if err != nil {
 		return Analysis{}, false, err
 	}
 	config.Overlay = sourceSnapshot.overlay
 	builder.sourceSnapshot = sourceSnapshot.data
 	builder.snapshotPortable = sourceSnapshot.portable
-	if afterSnapshot != nil {
-		afterSnapshot()
-	}
 	loaded, loadErr := packages.Load(config, profile.EntryPatterns...)
+	if afterLoad != nil {
+		afterLoad()
+	}
 	pkgConfigPath := unavailableToolPath(workRoot, "pkg-config")
 	if sanitizeUnavailableToolFailure(loaded, pkgConfigPath) ||
 		(loadErr != nil && strings.Contains(loadErr.Error(), pkgConfigPath)) {
@@ -216,15 +240,18 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 	}
 	if loadErr != nil {
 		message := strings.ReplaceAll(loadErr.Error(), pkgConfigPath, "<disabled-pkg-config>")
-		builder.block("loader", sanitizeMessage(message, sourceRoot, profile.Limits.MaxStringBytes), nil, nil)
+		builder.block("loader", sanitizeMessage(message, mirror.root, profile.Limits.MaxStringBytes), nil, nil)
 	}
 	if len(loaded) == 0 {
 		builder.block("loader", "the requested entry patterns selected no loadable packages under the pinned profile", nil, nil)
 	}
 
 	all := collectPackages(loaded)
-	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, sourceRoot)
-	if !verifyManifestSnapshot(manifests, sourceRoot, profile.Limits.MaxLocalHashBytes) {
+	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, mirror.root)
+	for key := range verifyOriginalPackageInputs(mirror, sourceSnapshot, profile) {
+		builder.inputDrift[key] = true
+	}
+	if !verifyManifestSnapshot(mirror.manifests, sourceRoot, profile.Limits.MaxLocalHashBytes) {
 		builder.block("input-drift", "module or workspace manifests changed while loading", nil, nil)
 	}
 	builder.snapshotFiles = sourceSnapshot.packageFiles
@@ -338,6 +365,331 @@ func verifyManifestSnapshot(snapshot manifestSnapshot, sourceRoot string, limit 
 		}
 		data, err := readBoundedRegularFile(path, min(limit, int64(len(captured.data))+1))
 		if err != nil || !bytes.Equal(data, captured.data) {
+			return false
+		}
+	}
+	return true
+}
+
+type mirrorBudget struct {
+	files int
+	bytes int64
+}
+
+type mirroredTree struct {
+	sourceRoot string
+	mirrorRoot string
+	files      map[string]snapshottedInput
+}
+
+type sourceMirror struct {
+	root      string
+	manifests manifestSnapshot
+	trees     []mirroredTree
+}
+
+func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (sourceMirror, error) {
+	mirrorBase := filepath.Join(workRoot, "source-mirror")
+	root := filepath.Join(mirrorBase, "source")
+	budget := &mirrorBudget{}
+	tree, err := captureTree(sourceRoot, root, []string{outRoot, workRoot}, limits, budget)
+	if err != nil {
+		return sourceMirror{}, fmt.Errorf("create immutable source mirror: %w", err)
+	}
+	result := sourceMirror{root: root, trees: []mirroredTree{tree}}
+	result.manifests = manifestsFromTree(tree)
+	goModPath := filepath.Join(sourceRoot, "go.mod")
+	capturedGoMod, ok := tree.files[goModPath]
+	if !ok {
+		return sourceMirror{}, errors.New("source root has no regular go.mod")
+	}
+	parsed, err := modfile.Parse("go.mod", capturedGoMod.data, nil)
+	if err != nil {
+		return sourceMirror{}, fmt.Errorf("parse captured go.mod: %w", err)
+	}
+	mirroredReplacements := map[string]string{}
+	rewritten := false
+	type replacementDirective struct {
+		oldPath, oldVersion string
+		newPath, newVersion string
+	}
+	replacements := make([]replacementDirective, 0, len(parsed.Replace))
+	for _, replacement := range parsed.Replace {
+		replacements = append(replacements, replacementDirective{
+			oldPath: replacement.Old.Path, oldVersion: replacement.Old.Version,
+			newPath: replacement.New.Path, newVersion: replacement.New.Version,
+		})
+	}
+	for _, replacement := range replacements {
+		if replacement.newVersion != "" {
+			continue
+		}
+		replacementRoot, err := resolveLocalReplacementRoot(sourceRoot, replacement.newPath)
+		if err != nil {
+			return sourceMirror{}, fmt.Errorf("local replacement %s: %w", replacement.oldPath, err)
+		}
+		if lexicallyWithin(sourceRoot, replacementRoot) {
+			continue
+		}
+		if lexicallyWithin(outRoot, replacementRoot) {
+			return sourceMirror{}, fmt.Errorf("local replacement %s points into the output root", replacement.oldPath)
+		}
+		destination := mirroredReplacements[replacementRoot]
+		if destination == "" {
+			destination = filepath.Join(mirrorBase, "replacements", hashBytes([]byte(replacement.oldPath + "\x00" + replacement.newPath))[:16])
+			replacementTree, captureErr := captureTree(replacementRoot, destination, nil, limits, budget)
+			if captureErr != nil {
+				return sourceMirror{}, fmt.Errorf("mirror local replacement %s: %w", replacement.oldPath, captureErr)
+			}
+			result.trees = append(result.trees, replacementTree)
+			mirroredReplacements[replacementRoot] = destination
+		}
+		if err := parsed.AddReplace(replacement.oldPath, replacement.oldVersion, filepath.ToSlash(destination), ""); err != nil {
+			return sourceMirror{}, fmt.Errorf("rewrite local replacement %s: %w", replacement.oldPath, err)
+		}
+		rewritten = true
+	}
+	if rewritten {
+		data, err := parsed.Format()
+		if err != nil {
+			return sourceMirror{}, fmt.Errorf("format operational go.mod: %w", err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "go.mod"), data, 0o600); err != nil {
+			return sourceMirror{}, fmt.Errorf("write operational go.mod: %w", err)
+		}
+	}
+	return result, nil
+}
+
+func captureTree(sourceRoot, mirrorRoot string, excluded []string, limits Limits, budget *mirrorBudget) (mirroredTree, error) {
+	if err := os.MkdirAll(mirrorRoot, 0o700); err != nil {
+		return mirroredTree{}, err
+	}
+	result := mirroredTree{sourceRoot: sourceRoot, mirrorRoot: mirrorRoot, files: map[string]snapshottedInput{}}
+	err := filepath.WalkDir(sourceRoot, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if path == sourceRoot {
+			return nil
+		}
+		relative, err := lexicalRelative(sourceRoot, path)
+		if err != nil {
+			return err
+		}
+		if relative == ".git" {
+			if entry.IsDir() {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if entry.IsDir() {
+			if excludedMirrorDirectory(path, entry.Name(), excluded) {
+				return filepath.SkipDir
+			}
+			return os.MkdirAll(filepath.Join(mirrorRoot, relative), 0o700)
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
+			if slices.Contains(manifestNames, filepath.FromSlash(slash(relative))) {
+				return fmt.Errorf("manifest is not a regular file: %s", relative)
+			}
+			return nil
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+		if !info.Mode().IsRegular() {
+			return nil
+		}
+		if budget.files >= limits.MaxFiles || budget.bytes >= limits.MaxLocalHashBytes {
+			return errors.New("source mirror exceeds configured limits")
+		}
+		data, err := readBoundedRegularFile(path, limits.MaxLocalHashBytes-budget.bytes)
+		if err != nil {
+			return fmt.Errorf("capture %s: %w", relative, err)
+		}
+		finalInfo, err := os.Lstat(path)
+		if err != nil || !finalInfo.Mode().IsRegular() || !os.SameFile(info, finalInfo) {
+			return fmt.Errorf("source changed while capturing: %s", relative)
+		}
+		budget.files++
+		budget.bytes += int64(len(data))
+		destination := filepath.Join(mirrorRoot, relative)
+		if err := os.WriteFile(destination, data, info.Mode().Perm()); err != nil {
+			return err
+		}
+		result.files[path] = snapshottedInput{data: data, info: finalInfo}
+		return nil
+	})
+	return result, err
+}
+
+func excludedMirrorDirectory(path, name string, excluded []string) bool {
+	for _, root := range excluded {
+		if root != "" && lexicallyWithin(root, path) {
+			return true
+		}
+	}
+	return name == ".git" || name == ".go2gs-work" ||
+		strings.HasPrefix(name, ".go2gs-work-") ||
+		strings.HasPrefix(name, ".go2gs-worker-") ||
+		strings.HasPrefix(name, ".go2gs-bootstrap-")
+}
+
+func lexicalRelative(root, path string) (string, error) {
+	relative, err := filepath.Rel(root, path)
+	if err != nil || relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) || filepath.IsAbs(relative) {
+		return "", errors.New("path escapes root")
+	}
+	return relative, nil
+}
+
+func lexicallyWithin(root, path string) bool {
+	relative, err := filepath.Rel(root, path)
+	return err == nil && relative != ".." &&
+		!strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
+}
+
+func manifestsFromTree(tree mirroredTree) manifestSnapshot {
+	result := manifestSnapshot{files: map[string]snapshottedInput{}}
+	for _, name := range manifestNames {
+		path := filepath.Join(tree.sourceRoot, name)
+		captured, ok := tree.files[path]
+		if !ok {
+			continue
+		}
+		result.files[path] = captured
+		result.records = append(result.records, ManifestRecord{
+			Kind: filepath.Base(name), Path: "source://" + slash(name),
+			SHA256: hashBytes(captured.data), Bytes: int64(len(captured.data)),
+		})
+	}
+	sort.Slice(result.records, func(i, j int) bool { return result.records[i].Path < result.records[j].Path })
+	return result
+}
+
+func resolveLocalReplacementRoot(sourceRoot, replacement string) (string, error) {
+	path := filepath.FromSlash(replacement)
+	if !filepath.IsAbs(path) {
+		path = filepath.Join(sourceRoot, path)
+	}
+	absolute, err := filepath.Abs(path)
+	if err != nil {
+		return "", err
+	}
+	resolved, err := filepath.EvalSymlinks(absolute)
+	if err != nil {
+		return "", err
+	}
+	if filepath.Clean(absolute) != filepath.Clean(resolved) {
+		return "", errors.New("symlinked local replacement roots are not allowed")
+	}
+	info, err := os.Lstat(resolved)
+	if err != nil || !info.IsDir() {
+		return "", errors.New("local replacement root is not a directory")
+	}
+	return resolved, nil
+}
+
+func (mirror sourceMirror) originalPath(path string) (string, snapshottedInput, bool) {
+	for _, tree := range mirror.trees {
+		relative, err := lexicalRelative(tree.mirrorRoot, path)
+		if err != nil {
+			continue
+		}
+		original := filepath.Join(tree.sourceRoot, relative)
+		captured, ok := tree.files[original]
+		return original, captured, ok
+	}
+	return "", snapshottedInput{}, false
+}
+
+func (mirror sourceMirror) originalDirectory(path string) (string, bool) {
+	for _, tree := range mirror.trees {
+		if filepath.Clean(path) == filepath.Clean(tree.mirrorRoot) {
+			return tree.sourceRoot, true
+		}
+		if relative, err := lexicalRelative(tree.mirrorRoot, path); err == nil {
+			return filepath.Join(tree.sourceRoot, relative), true
+		}
+	}
+	return "", false
+}
+
+func verifyOriginalPackageInputs(mirror sourceMirror, snapshot packageInputSnapshot, profile Profile) map[string]bool {
+	drift := map[string]bool{}
+	for path, owners := range snapshot.selectedOwners {
+		original, captured, ok := mirror.originalPath(path)
+		if !ok || !sameCapturedFile(original, captured) {
+			for owner := range owners {
+				drift[owner] = true
+			}
+		}
+	}
+	for key, directory := range snapshot.packageDirs {
+		if len(snapshot.selectedFiles[key]) == 0 {
+			continue
+		}
+		originalDirectory, ok := mirror.originalDirectory(directory)
+		if !ok || !samePackageFileSet(originalDirectory, directory, profile) {
+			drift[key] = true
+		}
+	}
+	return drift
+}
+
+func sameCapturedFile(path string, captured snapshottedInput) bool {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || !os.SameFile(captured.info, info) {
+		return false
+	}
+	data, err := readBoundedRegularFile(path, int64(len(captured.data))+1)
+	return err == nil && bytes.Equal(data, captured.data)
+}
+
+func samePackageFileSet(originalDirectory, mirrorDirectory string, profile Profile) bool {
+	originalEntries, err := os.ReadDir(originalDirectory)
+	if err != nil {
+		return false
+	}
+	mirrorEntries, err := os.ReadDir(mirrorDirectory)
+	if err != nil {
+		return false
+	}
+	actual := map[string]bool{}
+	for _, entry := range originalEntries {
+		extension := strings.ToLower(filepath.Ext(entry.Name()))
+		if extension == ".go" || (profile.CGOEnabled && nativeSourceExtension(extension)) {
+			actual[entry.Name()] = true
+		}
+	}
+	expected := map[string]bool{}
+	for _, entry := range mirrorEntries {
+		extension := strings.ToLower(filepath.Ext(entry.Name()))
+		if extension == ".go" || (profile.CGOEnabled && nativeSourceExtension(extension)) {
+			expected[entry.Name()] = true
+		}
+	}
+	return mapsEqual(actual, expected)
+}
+
+func nativeSourceExtension(extension string) bool {
+	switch extension {
+	case ".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".s", ".sx":
+		return true
+	default:
+		return false
+	}
+}
+
+func mapsEqual(left, right map[string]bool) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for key := range left {
+		if !right[key] {
 			return false
 		}
 	}
@@ -458,8 +810,9 @@ func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot st
 		total += int64(len(data))
 		result.data[path] = data
 		result.files[path] = snapshottedInput{data: data, info: finalInfo}
-		relative, _ := pathWithin(sourceRoot, path)
-		result.portable[path] = "source://" + relative
+		if relative, err := pathWithin(sourceRoot, path); err == nil {
+			result.portable[path] = "source://" + relative
+		}
 		if filepath.Ext(path) == ".go" {
 			result.overlay[path] = data
 		}
@@ -537,11 +890,22 @@ func packageInputPaths(pkg *packages.Package, sourceRoot string) []string {
 	files = append(files, pkg.EmbedFiles...)
 	var result []string
 	for _, path := range uniqueSorted(files) {
-		if _, err := pathWithin(sourceRoot, path); err == nil {
+		if packageInputPathAllowed(pkg, sourceRoot, path) {
 			result = append(result, path)
 		}
 	}
 	return result
+}
+
+func packageInputPathAllowed(pkg *packages.Package, sourceRoot, path string) bool {
+	if _, err := pathWithin(sourceRoot, path); err == nil {
+		return true
+	}
+	return pkg.Module != nil && pkg.Module.Replace != nil && pkg.Module.Replace.Version == "" &&
+		pkg.Module.Replace.Dir != "" && func() bool {
+		_, err := pathWithin(pkg.Module.Replace.Dir, path)
+		return err == nil
+	}()
 }
 
 func packageInputRoles(pkg *packages.Package) map[string]string {

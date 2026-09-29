@@ -60,6 +60,9 @@ than inherited wholesale. The selected `go` executable's own canonical
 only `-tags`, `-trimpath`, and `-buildvcs=false`; execution and path override
 flags such as `-toolexec`, `-overlay`, and `-modfile` are rejected. The only
 accepted `goDebug` key is `gotypesalias`, with value `0` or `1`.
+Before loading, source inputs and authorized local replacements are copied
+with bounded, no-follow reads into a private mirror. The loader sees only
+those captured bytes; emitted manifest hashes remain those of the originals.
 
 Profiles with `cgoEnabled: true` must set `cCompiler` to an absolute,
 explicitly approved compiler executable. The helper resolves and hashes that
