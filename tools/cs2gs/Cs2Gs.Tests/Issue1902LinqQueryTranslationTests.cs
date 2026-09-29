@@ -113,6 +113,47 @@ namespace Corpus.Issue1902
     }
 
     [Fact]
+    public void CustomOrderByProviderDoesNotReceiveEnumerableCast()
+    {
+        string rendered = Render("""
+            #nullable enable
+            using System;
+
+            namespace Corpus.Issue1902
+            {
+                public sealed class Query<T>
+                {
+                    public Query<T> OrderBy<TKey>(Func<T, TKey> selector) => this;
+
+                    public Query<T> ThenBy<TKey>(Func<T, TKey> selector) => this;
+
+                    public Query<TResult> Select<TResult>(
+                        Func<T, TResult> selector) => new();
+                }
+
+                public class Holder
+                {
+                    public Query<(string? Value, int Key)> Sort(
+                        Query<(string? Value, int Key)> source)
+                    {
+                        return from pair in source
+                               orderby pair.Value, pair.Key
+                               select pair;
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(
+            "System.Linq.Enumerable.Cast",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains(".OrderBy(", rendered, StringComparison.Ordinal);
+        Assert.Contains(".ThenBy(", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void LetClause_LowersToSelectWithWidenedTupleScope()
     {
         string rendered = Render(@"

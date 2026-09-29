@@ -3152,8 +3152,12 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference sourceType = scope.Count == 1
                 ? scope[0].Type
                 : new TupleTypeReference(scope.Select(v => v.Type).ToList());
+
+            // Casting before ThenBy would erase the IOrderedEnumerable returned
+            // by the projected OrderBy call.
             if (sourceType is TupleTypeReference
                 && ContainsNullableLeaf(sourceType)
+                && !method.StartsWith("ThenBy", System.StringComparison.Ordinal)
                 && UsesSystemLinqEnumerable(lambdaBody))
             {
                 // Query lowering has no Roslyn invocation node for the shared
@@ -3182,6 +3186,9 @@ public sealed partial class CSharpToGSharpTranslator
                     QueryClauseSyntax clause =>
                         this.context.SemanticModel.GetQueryClauseInfo(clause)
                             .OperationInfo.Symbol as IMethodSymbol,
+                    OrderingSyntax ordering =>
+                        this.context.GetSymbolInfo(ordering).Symbol
+                            as IMethodSymbol,
                     SelectOrGroupClauseSyntax selectOrGroup =>
                         this.context.GetSymbolInfo(selectOrGroup).Symbol as IMethodSymbol,
                     _ => null,
