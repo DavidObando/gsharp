@@ -385,6 +385,11 @@ func packageInputRoles(pkg *packages.Package) map[string]string {
 	for _, path := range pkg.EmbedFiles {
 		roles[path] = "embed"
 	}
+	for path := range roles {
+		if strings.HasSuffix(path, "_test.go") && roles[path] != "ignored" {
+			roles[path] = "test"
+		}
+	}
 	return roles
 }
 

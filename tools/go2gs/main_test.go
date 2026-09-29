@@ -303,11 +303,25 @@ func TestCgoEnabledUsesOnlyApprovedCompiler(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !complete || !analysis.InventoryComplete {
-		t.Fatalf("approved C compiler did not complete inventory: %#v", analysis.Blockers)
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "cgo") {
+		t.Fatalf("CGo transformed source was not fail-closed: %#v", analysis.Blockers)
 	}
 	if err := validateAnalysis(analysis); err != nil {
 		t.Fatal(err)
+	}
+	for _, name := range []string{"cgo.go", "native.h"} {
+		path := "source://" + name
+		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool { return file.Path == path }) {
+			t.Fatalf("captured CGo input %s missing: %#v", path, analysis.Files)
+		}
+	}
+	if slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+		return strings.Contains(file.Path, "gocommand-") || strings.Contains(file.Path, "go-build")
+	}) {
+		t.Fatalf("generated CGo work path escaped into files: %#v", analysis.Files)
+	}
+	if len(analysis.Files) == 0 || len(analysis.Packages) == 0 {
+		t.Fatal("selected CGo package disappeared from inventory")
 	}
 	hash, _, err := hashFile(compiler)
 	if err != nil {
@@ -389,8 +403,8 @@ func TestInactivePkgConfigDirectiveDoesNotBlock(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "pkg-config") {
-		t.Fatalf("inactive pkg-config directive blocked inventory: %#v", analysis.Blockers)
+	if complete || analysis.InventoryComplete || hasBlockerCategory(analysis, "pkg-config") || !hasBlockerCategory(analysis, "cgo") {
+		t.Fatalf("inactive pkg-config directive did not defer solely to the CGo inventory blocker: %#v", analysis.Blockers)
 	}
 }
 
@@ -416,7 +430,7 @@ func TestCgoPkgConfigConstraintsUseSelectedGo(t *testing.T) {
 	for _, constraint := range []string{"!unix", "gccgo", "go2gs_unselected"} {
 		t.Run("inactive-"+constraint, func(t *testing.T) {
 			analysis, complete := analyzePkgConfigConstraint(t, constraint)
-			if !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "pkg-config") {
+			if complete || analysis.InventoryComplete || hasBlockerCategory(analysis, "pkg-config") || !hasBlockerCategory(analysis, "cgo") {
 				t.Fatalf("selected Go unexpectedly activated %q: %#v", constraint, analysis.Blockers)
 			}
 		})
@@ -1056,45 +1070,76 @@ func TestAtomicWriteRejectsStagedAndFinalPathReplacement(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("controlled symlink fixture")
 	}
-	for _, attack := range []string{"staged", "final"} {
-		t.Run(attack, func(t *testing.T) {
-			dir := t.TempDir()
-			path := filepath.Join(dir, "analysis.json")
-			outside := filepath.Join(t.TempDir(), "outside")
-			if err := os.WriteFile(outside, []byte("safe"), 0o644); err != nil {
-				t.Fatal(err)
+	t.Run("staged symlink", func(t *testing.T) {
+		dir := t.TempDir()
+		path := filepath.Join(dir, "analysis.json")
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, []byte("safe"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		var displaced string
+		err := atomicWriteWithHooks(path, bytes.Repeat([]byte("x"), 1<<20), 0o644, func(staged string) {
+			displaced = staged + ".attacker-moved"
+			if renameErr := os.Rename(staged, displaced); renameErr != nil {
+				t.Fatal(renameErr)
 			}
-			var displaced string
-			replace := func(target string) {
-				displaced = target + ".attacker-moved"
-				if err := os.Rename(target, displaced); err != nil {
-					t.Fatal(err)
-				}
-				if err := os.Symlink(outside, target); err != nil {
-					t.Fatal(err)
-				}
+			if symlinkErr := os.Symlink(outside, staged); symlinkErr != nil {
+				t.Fatal(symlinkErr)
 			}
-			var before, after func(string)
-			if attack == "staged" {
-				before = replace
-			} else {
-				after = replace
+		}, nil)
+		if err == nil {
+			t.Fatal("staged pathname replacement was accepted")
+		}
+		if data, readErr := os.ReadFile(outside); readErr != nil || string(data) != "safe" {
+			t.Fatalf("outside target changed: %q, %v", data, readErr)
+		}
+		_ = os.Remove(displaced)
+	})
+
+	t.Run("unrelated final replacement", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "analysis.json")
+		var displaced string
+		err := atomicWriteWithHooks(path, []byte("writer1"), 0o644, nil, func(final string) {
+			displaced = final + ".writer1"
+			if renameErr := os.Rename(final, displaced); renameErr != nil {
+				t.Fatal(renameErr)
 			}
-			err := atomicWriteWithHooks(path, bytes.Repeat([]byte("x"), 1<<20), 0o644, before, after)
-			if err == nil {
-				t.Fatal("pathname replacement was accepted")
-			}
-			if info, statErr := os.Lstat(path); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
-				t.Fatal("failed atomic write left a final symlink")
-			}
-			if data, readErr := os.ReadFile(outside); readErr != nil || string(data) != "safe" {
-				t.Fatalf("outside target changed: %q, %v", data, readErr)
-			}
-			_ = os.Remove(displaced)
-			if matches, _ := filepath.Glob(filepath.Join(dir, ".analysis.json.staged-*")); len(matches) != 0 {
-				t.Fatalf("staged entries were not cleaned up: %v", matches)
+			if writeErr := os.WriteFile(final, []byte("replacement"), 0o644); writeErr != nil {
+				t.Fatal(writeErr)
 			}
 		})
+		if err == nil {
+			t.Fatal("unrelated final replacement was accepted")
+		}
+		if data, readErr := os.ReadFile(path); readErr != nil || string(data) != "replacement" {
+			t.Fatalf("failed writer removed unrelated output: %q, %v", data, readErr)
+		}
+		_ = os.Remove(displaced)
+	})
+}
+
+func TestAtomicWriteFailurePreservesConcurrentSuccessfulOutput(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "analysis.json")
+	renamed := make(chan struct{})
+	resume := make(chan struct{})
+	firstDone := make(chan error, 1)
+	go func() {
+		firstDone <- atomicWriteWithHooks(path, []byte("writer1"), 0o644, nil, func(string) {
+			close(renamed)
+			<-resume
+		})
+	}()
+	<-renamed
+	if err := atomicWrite(path, []byte("writer2"), 0o644); err != nil {
+		close(resume)
+		t.Fatal(err)
+	}
+	close(resume)
+	if err := <-firstDone; err == nil {
+		t.Fatal("superseded writer unexpectedly succeeded")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "writer2" {
+		t.Fatalf("failed writer removed concurrent successful output: %q, %v", data, err)
 	}
 }
 
@@ -1373,6 +1418,73 @@ func use(left Left, right Right, b dep.B) { _, _, _ = left.X, right.X, b.X; left
 	}
 	if early, late := traversalIDs(true), traversalIDs(false); !slices.Equal(early, late) {
 		t.Fatalf("member identities depend on package traversal: declaration-first=%v consumer-first=%v", early, late)
+	}
+}
+
+func TestGenericMemberIdentityUsesOriginDeclaration(t *testing.T) {
+	analyzeFixture := func(withAliasEmbedding bool) map[string][]string {
+		t.Helper()
+		root := t.TempDir()
+		dependency := `package dep
+type A[T any] struct{ X T }
+func (A[T]) M() {}
+func (*A[T]) P() {}
+`
+		consumer := `package members
+import "example.com/genericmembers/dep"
+func use(a dep.A[int]) { _ = a.X; a.M(); (&a).P() }
+`
+		if withAliasEmbedding {
+			dependency += "type Alias = A[string]\ntype Z struct{ Alias }\n"
+			consumer = `package members
+import "example.com/genericmembers/dep"
+func use(a dep.A[int], z dep.Z) { _, _ = a.X, z.X; a.M(); z.M(); (&a).P(); (&z).P() }
+`
+		}
+		for name, content := range map[string]string{
+			"go.mod":     "module example.com/genericmembers\n\ngo 1.27.0\n",
+			"dep/dep.go": dependency,
+			"main.go":    consumer,
+		} {
+			path := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if err != nil || !complete {
+			t.Fatalf("generic member fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+		}
+		names := map[string]string{}
+		for _, symbol := range analysis.Symbols {
+			if symbol.Name == "X" || symbol.Name == "M" || symbol.Name == "P" {
+				names[symbol.ID] = symbol.Name
+			}
+		}
+		result := map[string][]string{}
+		for _, selection := range analysis.Selections {
+			if name := names[selection.ObjectID]; name != "" {
+				result[name] = append(result[name], selection.ObjectID)
+			}
+		}
+		for name := range result {
+			sort.Strings(result[name])
+			result[name] = slices.Compact(result[name])
+		}
+		return result
+	}
+	baseline := analyzeFixture(false)
+	withAlias := analyzeFixture(true)
+	if !reflect.DeepEqual(baseline, withAlias) {
+		t.Fatalf("generic instantiation changed canonical member IDs: baseline=%v withAlias=%v", baseline, withAlias)
+	}
+	for _, name := range []string{"X", "M", "P"} {
+		if len(baseline[name]) != 1 {
+			t.Fatalf("generic member %s did not have one declaration identity: %v", name, baseline)
+		}
 	}
 }
 

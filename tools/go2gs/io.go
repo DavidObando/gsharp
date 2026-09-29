@@ -452,18 +452,25 @@ func atomicWriteWithHooks(path string, data []byte, mode os.FileMode, beforeRena
 		return err
 	}
 	staged := file.Name()
+	openedInfo, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		_ = os.Remove(staged)
+		return err
+	}
 	renamed := false
 	committed := false
 	defer func() {
-		if !committed {
-			_ = os.Remove(staged)
-			if renamed {
-				_ = os.Remove(path)
-			}
-		}
 		if file != nil {
 			if closeErr := file.Close(); err == nil && closeErr != nil {
 				err = closeErr
+			}
+			file = nil
+		}
+		if !committed {
+			removeIfSameFile(staged, openedInfo)
+			if renamed {
+				removeIfSameFile(path, openedInfo)
 			}
 		}
 	}()
@@ -483,7 +490,7 @@ func atomicWriteWithHooks(path string, data []byte, mode os.FileMode, beforeRena
 	if beforeRename != nil {
 		beforeRename(staged)
 	}
-	openedInfo, err := file.Stat()
+	openedInfo, err = file.Stat()
 	if err != nil {
 		return err
 	}
@@ -520,6 +527,16 @@ func atomicWriteWithHooks(path string, data []byte, mode os.FileMode, beforeRena
 	file = nil
 	committed = true
 	return nil
+}
+
+func removeIfSameFile(path string, expected os.FileInfo) {
+	if expected == nil {
+		return
+	}
+	current, err := os.Lstat(path)
+	if err == nil && current.Mode().IsRegular() && os.SameFile(expected, current) {
+		_ = os.Remove(path)
+	}
 }
 
 func hashBytes(data []byte) string {
