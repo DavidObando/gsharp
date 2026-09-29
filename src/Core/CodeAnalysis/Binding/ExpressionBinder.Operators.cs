@@ -1088,6 +1088,7 @@ internal sealed partial class ExpressionBinder
             return bind();
         }
 
+        binderCtx.BeginNarrowingProof(narrowing);
         binderCtx.NarrowedVariables.Add(narrowing);
         try
         {

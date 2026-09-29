@@ -3925,6 +3925,48 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_DoesNotReuseSiblingMemberPathProof()
+    {
+        var result = Evaluate("""
+            import System
+
+            class Box {
+                prop Value string? { get; init; }
+            }
+
+            func Run() int32 {
+                var box = Box() { Value = "safe" }
+                var count = 0
+                var length = 0
+                if box.Value != nil {
+                Again: {
+                        if box.Value != nil {
+                            let value string = box.Value
+                            length = value.Length
+                        }
+                        if count == 0 {
+                            count++
+                            box = Box() { Value = nil }
+                            goto Again
+                        }
+                    }
+                }
+                return length
+            }
+
+            Console.WriteLine(Run())
+            """);
+
+        Assert.True(
+            result.Diagnostics.IsEmpty,
+            string.Join(
+                Environment.NewLine,
+                result.Diagnostics.Select(diagnostic =>
+                    $"{diagnostic.Id} {diagnostic.Location.Text.ToString(diagnostic.Location.Span)}: {diagnostic.Message}")));
+        Assert.Equal($"4{Environment.NewLine}", result.Output.ReplaceLineEndings(Environment.NewLine));
+    }
+
+    [Fact]
     public void NestedFunctionBetweenFinallyAndTarget_DoesNotLoseOuterFinallyEffects()
     {
         var result = Evaluate("""

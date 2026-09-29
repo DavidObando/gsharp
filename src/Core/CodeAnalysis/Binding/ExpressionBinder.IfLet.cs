@@ -81,6 +81,7 @@ internal sealed partial class ExpressionBinder
         // earlier bindings at their non-null underlying types.
         scope = new BoundScope(scope);
         var narrowing = new Dictionary<AccessPath, TypeSymbol>();
+        binderCtx.BeginNarrowingProof(narrowing);
         binderCtx.NarrowedVariables.Add(narrowing);
 
         var bound = ImmutableArray.CreateBuilder<(IfLetBindingClauseSyntax Syntax, VariableSymbol Variable, BoundExpression Initializer)>();

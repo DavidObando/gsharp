@@ -234,6 +234,7 @@ internal sealed partial class ExpressionBinder
                 : BindExpression(syntax, targetType);
         }
 
+        binderCtx.BeginNarrowingProof(frame);
         binderCtx.NarrowedVariables.Add(frame);
         try
         {
@@ -258,6 +259,7 @@ internal sealed partial class ExpressionBinder
             return BindExpression(syntax, TypeSymbol.Bool);
         }
 
+        binderCtx.BeginNarrowingProof(frame);
         binderCtx.NarrowedVariables.Add(frame);
         try
         {

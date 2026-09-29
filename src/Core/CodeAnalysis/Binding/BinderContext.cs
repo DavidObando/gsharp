@@ -104,6 +104,11 @@ internal sealed class BinderContext
 
 #pragma warning restore SA1401
 
+    private readonly Dictionary<IReadOnlyDictionary<AccessPath, TypeSymbol>, int> narrowingProofGenerations =
+        new(ReferenceEqualityComparer.Instance);
+
+    private int narrowingProofGeneration;
+
     /// <summary>
     /// Issue #1201: cached set of user-defined types brought into unqualified
     /// static-member scope via a non-alias type import (<c>import Ns.Type</c>,
@@ -758,6 +763,12 @@ internal sealed class BinderContext
         return new UnsafeContextScope(this, active);
     }
 
+    public void BeginNarrowingProof(IReadOnlyDictionary<AccessPath, TypeSymbol> frame)
+        => narrowingProofGenerations[frame] = ++narrowingProofGeneration;
+
+    public int GetNarrowingProofGeneration(IReadOnlyDictionary<AccessPath, TypeSymbol> frame)
+        => narrowingProofGenerations.TryGetValue(frame, out var generation) ? generation : 0;
+
     public void TrackBackwardGotoNarrowingUse(
         VariableSymbol variable,
         TextLocation location,
@@ -828,9 +839,8 @@ internal sealed class BinderContext
                     path,
                     out var targetFrameIndex)
                 || frameIndex != targetFrameIndex
-                || (path.HasMembers
-                    && (!state.TargetSnapshot.NarrowingFrames.TryGetValue(path, out var targetFrame)
-                        || !ReferenceEquals(NarrowedVariables[frameIndex], targetFrame)))
+                || !state.TargetSnapshot.NarrowingProofGenerations.TryGetValue(path, out var targetProof)
+                || GetNarrowingProofGeneration(NarrowedVariables[frameIndex]) != targetProof
                 || (!path.HasMembers
                     && AssignmentNarrowingGenerations.TryGetValue(
                         variable,

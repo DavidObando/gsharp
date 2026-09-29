@@ -595,6 +595,7 @@ internal sealed partial class StatementBinder
             new Dictionary<VariableSymbol, int>(binderCtx.AssignmentNarrowingGenerations);
         var inheritedFallthrough = currentStatementListFallsThrough;
         var inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel;
+        binderCtx.BeginNarrowingProof(memberNotNullFrame);
         binderCtx.NarrowedVariables.Add(memberNotNullFrame);
         try
         {

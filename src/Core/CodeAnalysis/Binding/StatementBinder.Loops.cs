@@ -788,6 +788,7 @@ internal sealed partial class StatementBinder
             return Invariant.Required(BindStatement(bodySyntax), "a loop body has a bound statement");
         }
 
+        binderCtx.BeginNarrowingProof(loopNarrow);
         binderCtx.NarrowedVariables.Add(loopNarrow);
         try
         {

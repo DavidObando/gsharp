@@ -1258,6 +1258,7 @@ internal sealed partial class StatementBinder
                 return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
             }
 
+            binderCtx.BeginNarrowingProof(frame);
             binderCtx.NarrowedVariables.Add(frame);
             try
             {
@@ -1285,6 +1286,7 @@ internal sealed partial class StatementBinder
             return bindExpressionWithTargetType(syntax, TypeSymbol.Bool);
         }
 
+        binderCtx.BeginNarrowingProof(frame);
         binderCtx.NarrowedVariables.Add(frame);
         try
         {
