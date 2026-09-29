@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using System.Text;
@@ -1151,6 +1152,10 @@ internal sealed partial class ExpressionBinder
 
             _ = instWritable;
             _ = instTargetType;
+            assignmentReceiver = RecoverDeclaredClrMemberWriteReceiver(
+                assignmentReceiver,
+                syntax.FieldIdentifier.Location,
+                instanceMember);
             var instConverted = conversions.BindConversion(syntax.Value.Location, BindValue(instTargetSymbol), instTargetSymbol);
             return new BoundClrPropertyAssignmentExpression(null, assignmentReceiver, instanceMember, instConverted, instTargetSymbol, staticContainerType: null);
         }
@@ -1189,6 +1194,10 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propertyType = effectiveInterface.SubstituteMemberType(ifaceProp.Type);
+                assignmentReceiver = RecoverDeclaredPropertyWriteReceiver(
+                    assignmentReceiver,
+                    syntax.FieldIdentifier.Location,
+                    ifaceProp);
                 var ifaceConverted = conversions.BindConversion(
                     syntax.Value.Location,
                     BindValue(propertyType),
@@ -1351,7 +1360,15 @@ internal sealed partial class ExpressionBinder
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
                 EnforceInitOnlyAssignment(prop, assignmentReceiver, syntax.EqualsToken.Location);
-                return new BoundPropertyAssignmentExpression(null, assignmentReceiver, structSymbol, prop, propConverted);
+                var narrowedReceiver = assignmentReceiver;
+                assignmentReceiver = RecoverDeclaredPropertyWriteReceiver(
+                    assignmentReceiver,
+                    syntax.FieldIdentifier.Location,
+                    prop);
+                var propertyReceiverType = ReferenceEquals(assignmentReceiver, narrowedReceiver)
+                    ? structSymbol
+                    : propDeclaringType;
+                return new BoundPropertyAssignmentExpression(null, assignmentReceiver, propertyReceiverType, prop, propConverted);
             }
 
             // Issue #319 / #1582: a GSharp class inheriting an imported CLR base
@@ -1384,6 +1401,10 @@ internal sealed partial class ExpressionBinder
 
                     _ = inhWritable;
                     _ = inhTargetType;
+                    assignmentReceiver = RecoverDeclaredClrMemberWriteReceiver(
+                        assignmentReceiver,
+                        syntax.FieldIdentifier.Location,
+                        clrMember);
                     var inhConverted = conversions.BindConversion(syntax.Value.Location, BindValue(inhTargetSymbol), inhTargetSymbol);
                     return new BoundClrPropertyAssignmentExpression(null, assignmentReceiver, clrMember, inhConverted, inhTargetSymbol, staticContainerType: null);
                 }
@@ -1393,6 +1414,10 @@ internal sealed partial class ExpressionBinder
             return new BoundErrorExpression(null);
         }
 
+        assignmentReceiver = RecoverDeclaredMemberWriteReceiver(
+            assignmentReceiver,
+            syntax.FieldIdentifier.Location,
+            fieldDeclaringType);
         var receiverIsThisField = ReceiverVariableIsThis(variable);
 
         // Issue #950 / #2044: enforce `protected`/`private` field assignment
@@ -3876,6 +3901,10 @@ internal sealed partial class ExpressionBinder
                     return new BoundErrorExpression(syntax);
                 }
 
+                receiver = RecoverDeclaredMemberWriteReceiver(
+                    receiver,
+                    syntax.FieldIdentifier.Location,
+                    declaringType);
                 return BoundFieldAssignmentExpression.WithExpressionReceiver(null, receiver, declaringType, field, converted);
             }
 
@@ -3917,7 +3946,15 @@ internal sealed partial class ExpressionBinder
 
                 var propConverted = conversions.BindConversion(syntax.Value.Location, BindValue(prop.Type), prop.Type);
                 EnforceInitOnlyAssignment(prop, receiver, syntax.EqualsToken.Location);
-                return new BoundPropertyAssignmentExpression(null, receiver, structSym, prop, propConverted);
+                var narrowedReceiver = receiver;
+                receiver = RecoverDeclaredPropertyWriteReceiver(
+                    receiver,
+                    syntax.FieldIdentifier.Location,
+                    prop);
+                var propertyReceiverType = ReferenceEquals(receiver, narrowedReceiver)
+                    ? structSym
+                    : propDeclaringType;
+                return new BoundPropertyAssignmentExpression(null, receiver, propertyReceiverType, prop, propConverted);
             }
 
             // Inherited CLR base member fallback (issue #1582: walk the user
@@ -3946,6 +3983,10 @@ internal sealed partial class ExpressionBinder
 
                     _ = inhWritable;
                     _ = inhTargetType;
+                    receiver = RecoverDeclaredClrMemberWriteReceiver(
+                        receiver,
+                        syntax.FieldIdentifier.Location,
+                        clrMember);
                     var inhConverted = conversions.BindConversion(syntax.Value.Location, BindValue(inhTargetSymbol), inhTargetSymbol);
                     return new BoundClrPropertyAssignmentExpression(null, receiver, clrMember, inhConverted, inhTargetSymbol, staticContainerType: null);
                 }
@@ -3989,6 +4030,10 @@ internal sealed partial class ExpressionBinder
                 }
 
                 var propertyType = effectiveInterface.SubstituteMemberType(ifaceProp.Type);
+                receiver = RecoverDeclaredPropertyWriteReceiver(
+                    receiver,
+                    syntax.FieldIdentifier.Location,
+                    ifaceProp);
                 var ifaceConverted = conversions.BindConversion(
                     syntax.Value.Location,
                     BindValue(propertyType),
@@ -4076,6 +4121,10 @@ internal sealed partial class ExpressionBinder
 
             _ = instWritable;
             _ = instTargetType;
+            receiver = RecoverDeclaredClrMemberWriteReceiver(
+                receiver,
+                syntax.FieldIdentifier.Location,
+                instanceMember);
 
             // ADR-0156 Phase 2 (issue #3185): a chained write through a
             // prior-cell submission global (`a.B.C = v`) enforces the
@@ -4092,6 +4141,105 @@ internal sealed partial class ExpressionBinder
 
         Diagnostics.ReportUnableToFindMember(syntax.FieldIdentifier.Location, fieldName);
         return new BoundErrorExpression(null);
+    }
+
+    private BoundExpression RecoverDeclaredMemberWriteReceiver(
+        BoundExpression receiver,
+        TextLocation location,
+        TypeSymbol requiredType)
+    {
+        if (!binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var path, out _)
+            || path.HasMembers
+            || path.Root.Type is NullableTypeSymbol
+            || !Conversion.Classify(path.Root.Type, requiredType).IsImplicit)
+        {
+            return receiver;
+        }
+
+        binderCtx.UntrackBackwardGotoNarrowingConversion(path, location);
+        binderCtx.UntrackBackwardGotoNarrowingMemberUse(path, location);
+        return DeclaredReceiver(path.Root, receiver.Syntax);
+    }
+
+    private BoundExpression RecoverDeclaredPropertyWriteReceiver(
+        BoundExpression receiver,
+        TextLocation location,
+        PropertySymbol selectedProperty)
+    {
+        if (!TryGetDeclaredWriteReceiver(receiver, out var path))
+        {
+            return receiver;
+        }
+
+        var declaredType = path.Root.Type;
+        var found = declaredType switch
+        {
+            StructSymbol structType => TypeMemberModel.TryGetProperty(
+                structType,
+                selectedProperty.Name,
+                out var declaredProperty,
+                out _)
+                && SameSelectedProperty(selectedProperty, declaredProperty),
+            InterfaceSymbol interfaceType => TypeMemberModel.TryGetProperty(
+                interfaceType,
+                selectedProperty.Name,
+                out var declaredProperty,
+                out _)
+                && SameSelectedProperty(selectedProperty, declaredProperty),
+            _ => false,
+        };
+        return found ? RecoverDeclaredWriteReceiver(receiver, path, location) : receiver;
+    }
+
+    private BoundExpression RecoverDeclaredClrMemberWriteReceiver(
+        BoundExpression receiver,
+        TextLocation location,
+        MemberInfo selectedMember)
+    {
+        if (!TryGetDeclaredWriteReceiver(receiver, out var path))
+        {
+            return receiver;
+        }
+
+        var declaredType = path.Root.Type;
+        var clrType = declaredType.ClrType
+            ?? (declaredType is StructSymbol structType ? GetInheritedClrBaseType(structType) : null);
+        if (clrType == null)
+        {
+            return receiver;
+        }
+
+        MemberInfo? declaredMember = selectedMember is PropertyInfo
+            ? SafeGetVisibleInstanceProperty(clrType, selectedMember.Name)
+            : SafeGetVisibleInstanceField(clrType, selectedMember.Name);
+        return declaredMember != null
+            && selectedMember.MetadataToken == declaredMember.MetadataToken
+            && ReferenceEquals(selectedMember.Module, declaredMember.Module)
+            ? RecoverDeclaredWriteReceiver(receiver, path, location)
+            : receiver;
+    }
+
+    private static bool SameSelectedProperty(PropertySymbol left, PropertySymbol right)
+        => ReferenceEquals(left, right)
+            || (left.Declaration != null
+                && right.Declaration != null
+                && ReferenceEquals(left.Declaration, right.Declaration));
+
+    private bool TryGetDeclaredWriteReceiver(
+        BoundExpression receiver,
+        [NotNullWhen(true)] out AccessPath? path)
+        => binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out path, out _)
+            && !path.HasMembers
+            && path.Root.Type is not NullableTypeSymbol;
+
+    private BoundExpression RecoverDeclaredWriteReceiver(
+        BoundExpression receiver,
+        AccessPath path,
+        TextLocation location)
+    {
+        binderCtx.UntrackBackwardGotoNarrowingConversion(path, location);
+        binderCtx.UntrackBackwardGotoNarrowingMemberUse(path, location);
+        return DeclaredReceiver(path.Root, receiver.Syntax);
     }
 
     /// <summary>

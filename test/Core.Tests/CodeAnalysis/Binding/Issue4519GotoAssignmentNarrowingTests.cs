@@ -611,6 +611,172 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_InheritedImportedCallDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() int32 {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let text = x.ToString()
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return count
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_InheritedPropertyWriteDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                prop Name string { get; set; }
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    x.Name = "updated"
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return x.Name
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("updated", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_InheritedFieldWriteDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                var Name string = "animal"
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    x.Name = "updated"
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return x.Name
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("updated", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_SubtypeOnlyPropertyWriteStillRequiresNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                prop Sound string { get; set; }
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    x.Sound = "bark"
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Sound", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_SubtypeOnlyFieldWriteStillRequiresNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                var Sound string = "woof"
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    x.Sound = "bark"
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Sound", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_SubtypeOnlyPropertyStillRequiresNarrowedType()
     {
         var result = Evaluate("""
@@ -734,6 +900,80 @@ public class Issue4519GotoAssignmentNarrowingTests
 
             Console.WriteLine(Run())
             """, "dog");
+    }
+
+    [Fact]
+    public void BackwardGoto_HiddenPropertyWriteKeepsSelectedSubtypeSlot()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                var value string = "animal"
+                prop Name string {
+                    get { return this.value }
+                    set(next) { this.value = next }
+                }
+            }
+            class Dog : Animal {
+                var value string = "dog"
+                prop Name string {
+                    get { return this.value }
+                    set(next) { this.value = next }
+                }
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    x.Name = "selected"
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return x.Name
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("selected", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_HiddenFieldWriteKeepsSelectedSubtypeSlot()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                var Name string = "animal"
+            }
+            class Dog : Animal {
+                var Name string = "dog"
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    x.Name = "selected"
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return x.Name
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("selected", result.Value);
     }
 
     [Fact]

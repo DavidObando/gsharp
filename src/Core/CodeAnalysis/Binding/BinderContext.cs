@@ -893,6 +893,12 @@ internal sealed class BinderContext
             location,
             BackwardGotoNarrowingUseKind.Index);
 
+    public void UntrackBackwardGotoNarrowingMemberUse(AccessPath path, TextLocation location)
+        => UntrackBackwardGotoNarrowingUse(
+            path,
+            location,
+            BackwardGotoNarrowingUseKind.Member);
+
     public void UntrackBackwardGotoNarrowingConversion(AccessPath path, TextLocation location)
         => UntrackBackwardGotoNarrowingUse(
             path,
