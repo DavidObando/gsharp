@@ -3084,7 +3084,9 @@ public sealed partial class CSharpToGSharpTranslator
             GTypeReference sourceType = scope.Count == 1
                 ? scope[0].Type
                 : new TupleTypeReference(scope.Select(v => v.Type).ToList());
-            if (sourceType is TupleTypeReference && ContainsNullableLeaf(sourceType))
+            if (sourceType is TupleTypeReference
+                && ContainsNullableLeaf(sourceType)
+                && UsesSystemLinqEnumerable(lambdaBody))
             {
                 // Query lowering has no Roslyn invocation node for the shared
                 // callable-projection funnel. Cast supplies its projected
@@ -3105,6 +3107,17 @@ public sealed partial class CSharpToGSharpTranslator
                 type.IsNullable
                 || (type is TupleTypeReference tuple
                     && tuple.ElementTypes.Any(ContainsNullableLeaf));
+
+            bool UsesSystemLinqEnumerable(ExpressionSyntax body) =>
+                (body.Parent switch
+                {
+                    QueryClauseSyntax clause =>
+                        this.context.SemanticModel.GetQueryClauseInfo(clause)
+                            .OperationInfo.Symbol as IMethodSymbol,
+                    SelectOrGroupClauseSyntax selectOrGroup =>
+                        this.context.GetSymbolInfo(selectOrGroup).Symbol as IMethodSymbol,
+                    _ => null,
+                })?.ContainingType.ToDisplayString() == "System.Linq.Enumerable";
         }
 
         // Builds a lambda over the current query scope: a single scope variable
