@@ -880,6 +880,37 @@ internal sealed class BinderContext
             || declaredType.ClrType != narrowedType.ClrType;
     }
 
+    public bool TryGetBackwardGotoNarrowingPath(
+        BoundExpression expression,
+        [NotNullWhen(true)] out AccessPath? path,
+        [NotNullWhen(true)] out TypeSymbol? narrowedType)
+    {
+        if (expression is BoundVariableExpression { NarrowedType: { } variableNarrowed } variableRead)
+        {
+            path = AccessPath.ForVariable(variableRead.Variable);
+            narrowedType = variableNarrowed;
+            return true;
+        }
+
+        if (!SmartCastStability.TryGetStableMemberPath(expression, out path, out _)
+            || path == null)
+        {
+            narrowedType = null;
+            return false;
+        }
+
+        for (var i = NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (NarrowedVariables[i].TryGetValue(path, out narrowedType))
+            {
+                return true;
+            }
+        }
+
+        narrowedType = null;
+        return false;
+    }
+
     /// <summary>
     /// Records a narrowed variable consumed at a non-null boundary, then
     /// applies the ordinary platform-type coercion.
@@ -896,12 +927,14 @@ internal sealed class BinderContext
         bool suppressible = true)
     {
         if (location is { } useLocation
-            && expression is BoundVariableExpression variableRead
-            && variableRead.NarrowedType is { } narrowedType
-            && !NarrowedReadChangesRuntimeType(variableRead.Variable.Type, narrowedType))
+            && TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType)
+            && (Invariant.Required(path, "a narrowed boundary has an access path").HasMembers
+                || !NarrowedReadChangesRuntimeType(path.Root.Type, Invariant.Required(
+                    narrowedType,
+                    "a narrowed boundary has a narrowed type"))))
         {
             TrackBackwardGotoNarrowingUse(
-                variableRead.Variable,
+                path,
                 useLocation,
                 string.Empty,
                 BackwardGotoNarrowingUseKind.NonNullUse,

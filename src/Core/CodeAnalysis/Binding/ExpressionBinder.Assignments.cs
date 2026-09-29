@@ -3811,10 +3811,10 @@ internal sealed partial class ExpressionBinder
             return receiver;
         }
 
-        if (receiver is BoundVariableExpression variableReceiver)
+        if (binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var path, out _))
         {
             binderCtx.TrackBackwardGotoNarrowingUse(
-                variableReceiver.Variable,
+                path,
                 syntax.FieldIdentifier.Location,
                 syntax.FieldIdentifier.ValueText,
                 BackwardGotoNarrowingUseKind.Member);

@@ -635,6 +635,116 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_InvalidatesNarrowedMemberPathAtLockBoundary()
+    {
+        var result = Evaluate("""
+            class Gate {
+            }
+            data class Box(Gate Gate?) {
+            }
+
+            func Run() int32 {
+                var box = Box(Gate{})
+                if box.Gate != nil {
+                Again:
+                    lock box.Gate {
+                    }
+                    box = Box(nil)
+                    goto Again
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("box.Gate", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_InvalidatesNarrowedMemberPathConversion()
+    {
+        var result = Evaluate("""
+            data class Box(Value string?) {
+            }
+
+            func Run() string {
+                var box = Box("safe")
+                if box.Value != nil {
+                Again:
+                    let value string = box.Value
+                    box = Box(nil)
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("box.Value", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_InvalidatesNarrowedMemberPathIndex()
+    {
+        var result = Evaluate("""
+            data class Box(Text string?) {
+            }
+
+            func Run() char {
+                var box = Box("safe")
+                if box.Text != nil {
+                Again:
+                    let first = box.Text[0]
+                    box = Box(nil)
+                    goto Again
+                }
+                return 'x'
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0116");
+        Assert.Equal("Text", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_InvalidatesNarrowedMemberPathWriteReceiver()
+    {
+        var result = Evaluate("""
+            class Child {
+                var Name string = ""
+            }
+            data class Box(Child Child?) {
+            }
+
+            func Run() int32 {
+                var box = Box(Child{})
+                if box.Child != nil {
+                Again:
+                    box.Child.Name = "safe"
+                    box = Box(nil)
+                    goto Again
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Name", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_IncompatibleSubtypeDoesNotPreserveTargetNarrowing()
     {
         var result = Evaluate("""
@@ -664,6 +774,28 @@ public class Issue4519GotoAssignmentNarrowingTests
 
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
         Assert.Equal("Bark()", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_BypassesConditionFrame_ReportsMemberAccess()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                goto Use
+                if x != nil {
+                Use:
+                    return x.Length
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
     }
 

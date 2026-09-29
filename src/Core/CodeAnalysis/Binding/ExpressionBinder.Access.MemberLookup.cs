@@ -1878,11 +1878,10 @@ internal sealed partial class ExpressionBinder
     /// </summary>
     private void TrackBackwardGotoIndexUse(BoundExpression target, TextLocation location)
     {
-        if (target is BoundVariableExpression variableRead
-            && variableRead.NarrowedType != null)
+        if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var path, out _))
         {
             binderCtx.TrackBackwardGotoNarrowingUse(
-                variableRead.Variable,
+                path,
                 location,
                 string.Empty,
                 BackwardGotoNarrowingUseKind.Index);

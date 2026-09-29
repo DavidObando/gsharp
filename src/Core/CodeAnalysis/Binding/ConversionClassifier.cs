@@ -400,14 +400,16 @@ internal sealed class ConversionClassifier
         bool allowExplicit = false,
         ParameterSymbol? callParameter = null)
     {
-        if (expression is BoundVariableExpression variableRead
-            && variableRead.NarrowedType is { } narrowedType
-            && !BinderContext.NarrowedReadChangesRuntimeType(variableRead.Variable.Type, narrowedType)
+        if (binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType)
+            && (Invariant.Required(path, "a narrowed conversion has an access path").HasMembers
+                || !BinderContext.NarrowedReadChangesRuntimeType(
+                    path.Root.Type,
+                    Invariant.Required(narrowedType, "a narrowed conversion has a narrowed type")))
             && type is not NullableTypeSymbol
             && type is not PlatformTypeSymbol)
         {
             binderCtx.TrackBackwardGotoNarrowingUse(
-                variableRead.Variable,
+                path,
                 diagnosticLocation,
                 string.Empty,
                 BackwardGotoNarrowingUseKind.Conversion,

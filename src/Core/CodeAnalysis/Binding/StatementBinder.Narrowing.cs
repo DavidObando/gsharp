@@ -532,18 +532,9 @@ internal sealed partial class StatementBinder
     /// </summary>
     private IReadOnlyList<GotoNarrowingSnapshot>? InvalidateAssignmentNarrowingsBypassedByGoto(string labelName)
     {
-        if (!binderCtx.PendingGotoAssignmentStarts.Remove(labelName, out var startGeneration))
+        if (!binderCtx.PendingGotoAssignmentStarts.Remove(labelName, out _))
         {
             return null;
-        }
-
-        var variables = new HashSet<VariableSymbol>();
-        foreach (var entry in binderCtx.AssignmentNarrowingGenerations)
-        {
-            if (entry.Value > startGeneration)
-            {
-                variables.Add(entry.Key);
-            }
         }
 
         binderCtx.PendingGotoNarrowingSnapshots.Remove(labelName, out var incomingSnapshots);
@@ -564,39 +555,37 @@ internal sealed partial class StatementBinder
             }
         }
 
-        var variablesToInvalidate = new HashSet<VariableSymbol>(variables);
-        if (incomingSnapshots is { Count: > 0 })
-        {
-            foreach (var variable in variables)
-            {
-                var path = AccessPath.ForVariable(variable);
-                TypeSymbol? targetType = null;
-                for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
-                {
-                    if (binderCtx.NarrowedVariables[i].TryGetValue(path, out targetType))
-                    {
-                        break;
-                    }
-                }
-
-                if (targetType != null
-                    && incomingSnapshots.All(snapshot =>
-                        snapshot.NarrowedVariables.TryGetValue(path, out var sourceType)
-                        && Conversion.Classify(sourceType, targetType).IsImplicit))
-                {
-                    variablesToInvalidate.Remove(variable);
-                }
-            }
-        }
-
-        if (variablesToInvalidate.Count == 0)
+        if (incomingSnapshots is not { Count: > 0 })
         {
             return incomingSnapshots;
         }
 
+        var targetNarrowings = new Dictionary<AccessPath, TypeSymbol>();
         foreach (var frame in binderCtx.NarrowedVariables)
         {
-            RemoveByRoots(frame, variablesToInvalidate);
+            foreach (var entry in frame)
+            {
+                targetNarrowings[entry.Key] = entry.Value;
+            }
+        }
+
+        var pathsToInvalidate = new HashSet<AccessPath>();
+        foreach (var entry in targetNarrowings)
+        {
+            if (incomingSnapshots.Any(snapshot =>
+                !snapshot.NarrowedVariables.TryGetValue(entry.Key, out var sourceType)
+                || !Conversion.Classify(sourceType, entry.Value).IsImplicit))
+            {
+                pathsToInvalidate.Add(entry.Key);
+            }
+        }
+
+        foreach (var frame in binderCtx.NarrowedVariables)
+        {
+            foreach (var path in pathsToInvalidate)
+            {
+                frame.Remove(path);
+            }
         }
 
         return incomingSnapshots;
