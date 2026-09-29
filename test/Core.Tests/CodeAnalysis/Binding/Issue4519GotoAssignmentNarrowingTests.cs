@@ -128,6 +128,86 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsNonNullConversion()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again:
+                let y string = x
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return y.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsIndexReceiver()
+    {
+        var result = Evaluate("""
+            func Run() char {
+                var x string? = nil
+                x = "safe"
+                var count = 0
+            Again:
+                let first = x[0]
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return first
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0116");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_AfterNullableAssignment_ReportsIndirectInvocation()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Run() int32 {
+                var f Func[int32]? = nil
+                f = () -> 1
+                var count = 0
+            Again:
+                let value = f()
+                if count == 0 {
+                    count++
+                    f = nil
+                    goto Again
+                }
+                return value
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("f", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_InvalidationPropagatesThroughForwardLabel()
     {
         var result = Evaluate("""

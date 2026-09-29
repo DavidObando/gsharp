@@ -192,59 +192,19 @@ internal sealed partial class ExpressionBinder
 
         if (receiver is not BoundVariableExpression variableRead
             || variableRead.Variable.Type is not NullableTypeSymbol
-            || variableRead.NarrowedType == null
-            || !TryGetEffectiveNarrowingFrameIndex(variableRead.Variable, out var frameIndex))
+            || variableRead.NarrowedType == null)
         {
             return;
         }
 
-        var access = new BackwardGotoNarrowingAccess(
+        var kind = isInvocation
+            ? BackwardGotoNarrowingUseKind.Function
+            : BackwardGotoNarrowingUseKind.Member;
+        binderCtx.TrackBackwardGotoNarrowingUse(
             variableRead.Variable,
             location,
             memberName,
-            isInvocation);
-        foreach (var entry in binderCtx.BackwardGotoNarrowingStates)
-        {
-            var state = entry.Value;
-            if (!state.TargetSnapshot.NarrowingFrameIndices.TryGetValue(
-                    variableRead.Variable,
-                    out var targetFrameIndex)
-                || frameIndex != targetFrameIndex
-                || (binderCtx.AssignmentNarrowingGenerations.TryGetValue(
-                        variableRead.Variable,
-                        out var assignmentGeneration)
-                    && state.TargetSnapshot.AssignmentGenerations.TryGetValue(
-                        variableRead.Variable,
-                        out var targetAssignmentGeneration)
-                    && assignmentGeneration > targetAssignmentGeneration))
-            {
-                continue;
-            }
-
-            state.Accesses.Add(access);
-            if (state.UpstreamLabels.TryGetValue(variableRead.Variable, out var upstreamLabels))
-            {
-                foreach (var upstreamLabel in upstreamLabels)
-                {
-                    binderCtx.BackwardGotoNarrowingStates[upstreamLabel].Accesses.Add(access);
-                }
-            }
-        }
-    }
-
-    private bool TryGetEffectiveNarrowingFrameIndex(VariableSymbol variable, out int frameIndex)
-    {
-        for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
-        {
-            if (binderCtx.NarrowedVariables[i].ContainsKey(variable))
-            {
-                frameIndex = i;
-                return true;
-            }
-        }
-
-        frameIndex = -1;
-        return false;
+            kind);
     }
 
     /// <summary>
@@ -1360,6 +1320,7 @@ internal sealed partial class ExpressionBinder
         SeparatedSyntaxList<ExpressionSyntax> indexSyntaxes,
         TextLocation targetLocation)
     {
+        TrackBackwardGotoIndexUse(target, targetLocation);
         var rectangular = GetRectangularArrayTypeForBinding(target.Type);
 
         if (rectangular == null && target.Type is StructSymbol or InterfaceSymbol)
@@ -1590,6 +1551,8 @@ internal sealed partial class ExpressionBinder
         TextLocation targetLocation,
         BoundExpression? boundIndexOverride = null)
     {
+        TrackBackwardGotoIndexUse(target, targetLocation);
+
         // ADR-0186 §4/§5: an indexer receiver is a receiver. Checked and
         // unwrapped here for the same two reasons `BindAccessorStep` does it
         // — see `CheckPlatformReceiver`. Without the unwrap, indexing a
@@ -1903,6 +1866,20 @@ internal sealed partial class ExpressionBinder
     /// members), building the type-parameter substitution for a constructed
     /// generic receiver (e.g. <c>IBox[int32]</c> over <c>interface IBox[T]</c>).
     /// </summary>
+    private void TrackBackwardGotoIndexUse(BoundExpression target, TextLocation location)
+    {
+        if (target is BoundVariableExpression variableRead
+            && variableRead.Variable.Type is NullableTypeSymbol
+            && variableRead.NarrowedType != null)
+        {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                variableRead.Variable,
+                location,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Index);
+        }
+    }
+
     private static bool TryGetUserIndexer(
         InterfaceSymbol target,
         [NotNullWhen(true)] out PropertySymbol? indexer,

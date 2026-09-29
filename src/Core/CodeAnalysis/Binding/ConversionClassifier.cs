@@ -400,6 +400,20 @@ internal sealed class ConversionClassifier
         bool allowExplicit = false,
         ParameterSymbol? callParameter = null)
     {
+        if (expression is BoundVariableExpression variableRead
+            && variableRead.Variable.Type is NullableTypeSymbol
+            && variableRead.NarrowedType != null
+            && type is not NullableTypeSymbol
+            && type is not PlatformTypeSymbol)
+        {
+            binderCtx.TrackBackwardGotoNarrowingUse(
+                variableRead.Variable,
+                diagnosticLocation,
+                string.Empty,
+                BackwardGotoNarrowingUseKind.Conversion,
+                type);
+        }
+
         if (NativeSliceTypes.HaveIncompatibleElements(expression.Type, type) || ManagedReferenceTypes.HaveIncompatibleElements(expression.Type, type))
         {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);

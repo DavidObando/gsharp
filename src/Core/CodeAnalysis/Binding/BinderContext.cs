@@ -752,6 +752,63 @@ internal sealed class BinderContext
         return new UnsafeContextScope(this, active);
     }
 
+    public void TrackBackwardGotoNarrowingUse(
+        VariableSymbol variable,
+        TextLocation location,
+        string memberName,
+        BackwardGotoNarrowingUseKind kind,
+        TypeSymbol? targetType = null)
+    {
+        var frameIndex = -1;
+        for (var i = NarrowedVariables.Count - 1; i >= 0; i--)
+        {
+            if (NarrowedVariables[i].ContainsKey(variable))
+            {
+                frameIndex = i;
+                break;
+            }
+        }
+
+        if (frameIndex < 0)
+        {
+            return;
+        }
+
+        var access = new BackwardGotoNarrowingAccess(
+            variable,
+            location,
+            memberName,
+            kind,
+            targetType);
+        foreach (var entry in BackwardGotoNarrowingStates)
+        {
+            var state = entry.Value;
+            if (!state.TargetSnapshot.NarrowingFrameIndices.TryGetValue(
+                    variable,
+                    out var targetFrameIndex)
+                || frameIndex != targetFrameIndex
+                || (AssignmentNarrowingGenerations.TryGetValue(
+                        variable,
+                        out var assignmentGeneration)
+                    && state.TargetSnapshot.AssignmentGenerations.TryGetValue(
+                        variable,
+                        out var targetAssignmentGeneration)
+                    && assignmentGeneration > targetAssignmentGeneration))
+            {
+                continue;
+            }
+
+            state.Accesses.Add(access);
+            if (state.UpstreamLabels.TryGetValue(variable, out var upstreamLabels))
+            {
+                foreach (var upstreamLabel in upstreamLabels)
+                {
+                    BackwardGotoNarrowingStates[upstreamLabel].Accesses.Add(access);
+                }
+            }
+        }
+    }
+
     /// <summary>Enters a base or delegating-constructor argument context.</summary>
     /// <returns>A token that leaves the context when disposed.</returns>
     public ConstructorInitializerContextScope PushConstructorInitializerContext()

@@ -11,6 +11,22 @@ using GSharp.Core.CodeAnalysis.Text;
 
 namespace GSharp.Core.CodeAnalysis.Binding;
 
+/// <summary>Classifies a narrowing-dependent use for deferred diagnostics.</summary>
+internal enum BackwardGotoNarrowingUseKind
+{
+    /// <summary>An instance member read.</summary>
+    Member,
+
+    /// <summary>An instance or indirect function invocation.</summary>
+    Function,
+
+    /// <summary>A conversion to a non-nullable target.</summary>
+    Conversion,
+
+    /// <summary>An index operation.</summary>
+    Index,
+}
+
 internal sealed class GotoNarrowingSnapshot
 {
     private readonly Dictionary<VariableSymbol, TypeSymbol> narrowedVariables;
@@ -95,7 +111,8 @@ internal sealed record BackwardGotoNarrowingAccess(
     VariableSymbol Variable,
     TextLocation Location,
     string MemberName,
-    bool IsInvocation);
+    BackwardGotoNarrowingUseKind Kind,
+    TypeSymbol? TargetType = null);
 
 internal sealed record BackwardGotoNarrowingEdge(
     GotoNarrowingSnapshot SourceSnapshot,

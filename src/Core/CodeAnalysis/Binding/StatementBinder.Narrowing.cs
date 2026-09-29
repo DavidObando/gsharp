@@ -602,13 +602,23 @@ internal sealed partial class StatementBinder
                     if (!sourceSnapshot.NarrowedVariables.ContainsKey(access.Variable)
                         && reported.Add(access))
                     {
-                        if (access.IsInvocation)
+                        switch (access.Kind)
                         {
-                            Diagnostics.ReportUnableToFindFunction(access.Location, access.MemberName);
-                        }
-                        else
-                        {
-                            Diagnostics.ReportUnableToFindMember(access.Location, access.MemberName);
+                            case BackwardGotoNarrowingUseKind.Function:
+                                Diagnostics.ReportUnableToFindFunction(access.Location, access.MemberName);
+                                break;
+                            case BackwardGotoNarrowingUseKind.Conversion:
+                                Diagnostics.ReportCannotConvert(
+                                    access.Location,
+                                    access.Variable.Type,
+                                    Invariant.Required(access.TargetType, "a deferred conversion has a target type"));
+                                break;
+                            case BackwardGotoNarrowingUseKind.Index:
+                                Diagnostics.ReportTypeNotIndexable(access.Location, access.Variable.Type);
+                                break;
+                            default:
+                                Diagnostics.ReportUnableToFindMember(access.Location, access.MemberName);
+                                break;
                         }
                     }
                 }
