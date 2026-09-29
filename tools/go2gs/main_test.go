@@ -370,6 +370,87 @@ func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing
 	}
 }
 
+func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !complete {
+		t.Fatal("fixture inventory incomplete")
+	}
+	valid, err := marshalCanonical(analysis)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(map[string]any) bool
+	}{
+		{"struct-field-type", func(root map[string]any) bool {
+			for _, item := range root["types"].([]any) {
+				fields := item.(map[string]any)["fields"].([]any)
+				if len(fields) > 0 {
+					delete(fields[0].(map[string]any), "typeId")
+					return true
+				}
+			}
+			return false
+		}},
+		{"partial-node-span", func(root map[string]any) bool {
+			nodes := root["nodes"].([]any)
+			nodes[0].(map[string]any)["span"] = map[string]any{"path": "source://main.go"}
+			return true
+		}},
+		{"init-function-location", func(root map[string]any) bool {
+			for _, item := range root["packages"].([]any) {
+				for _, raw := range item.(map[string]any)["initializationOrder"].([]any) {
+					initialization := raw.(map[string]any)
+					if initialization["kind"] == "init-function" {
+						delete(initialization, "fileId")
+						delete(initialization, "nodeId")
+						return true
+					}
+				}
+			}
+			return false
+		}},
+		{"struct-field-export-metadata", func(root map[string]any) bool {
+			for _, item := range root["types"].([]any) {
+				fields := item.(map[string]any)["fields"].([]any)
+				if len(fields) > 0 {
+					delete(fields[0].(map[string]any), "exported")
+					return true
+				}
+			}
+			return false
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			var root map[string]any
+			if err := json.Unmarshal(valid, &root); err != nil {
+				t.Fatal(err)
+			}
+			if !test.mutate(root) {
+				t.Fatal("fixture did not contain target nested record")
+			}
+			data, err := json.Marshal(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "analysis.json")
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			err = runValidate([]string{"--analysis", path})
+			var exitErr *exitError
+			if !errors.As(err, &exitErr) || exitErr.code != 2 {
+				t.Fatalf("malformed nested artifact should exit 2, got %v", err)
+			}
+		})
+	}
+}
+
 func TestGOFLAGSAllowlistRejectsExecutionAndPathOverrides(t *testing.T) {
 	accepted := [][]string{
 		{"-trimpath"}, {"-trimpath=false"}, {"-buildvcs=false"}, {"-buildvcs", "false"},

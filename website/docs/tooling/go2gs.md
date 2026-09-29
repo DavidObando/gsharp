@@ -43,6 +43,6 @@ missing fields, null collections, count mismatches, and dangling identities.
 
 M0 does not emit G#, perform semantic lowering, run a migrated program, or
 provide a Go runtime compatibility layer. See
-[ADR-0191](../../docs/adr/0191-go-to-gsharp-migration-tool.md) and the
+[ADR-0191](https://github.com/DavidObando/gsharp/blob/main/docs/adr/0191-go-to-gsharp-migration-tool.md) and the
 [implementation README](https://github.com/DavidObando/gsharp/tree/main/tools/go2gs)
 for the full profile and validation contract.

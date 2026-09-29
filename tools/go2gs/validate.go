@@ -7,7 +7,9 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"slices"
+	"strings"
 )
 
 func validateAnalysis(a Analysis) error {
@@ -467,6 +469,14 @@ func validateRecordFields(a Analysis) error {
 				initialization.SymbolIDs == nil {
 				return fmt.Errorf("package %q has invalid initialization record %d", value.ID, index)
 			}
+			hasFile, hasNode := initialization.FileID != "", initialization.NodeID != ""
+			if hasFile != hasNode || (initialization.Kind == "init-function" && !hasFile) ||
+				(initialization.Kind == "variable" && len(value.CompiledFileIDs) > 0 && !hasFile) {
+				return fmt.Errorf("package %q initialization record %d has incomplete location", value.ID, index)
+			}
+			if initialization.Kind == "variable" && len(initialization.SymbolIDs) == 0 {
+				return fmt.Errorf("package %q variable initialization %d has no symbols", value.ID, index)
+			}
 		}
 	}
 	for _, value := range a.Files {
@@ -482,31 +492,60 @@ func validateRecordFields(a Analysis) error {
 			value.TypeArgs == nil || value.Fields == nil {
 			return fmt.Errorf("type %q has invalid required fields", value.ID)
 		}
+		for index, field := range value.Fields {
+			if field.Name == "" || field.TypeID == "" {
+				return fmt.Errorf("type %q struct field %d has invalid required fields", value.ID, index)
+			}
+			if field.TagBase64 != "" {
+				if _, err := base64.StdEncoding.DecodeString(field.TagBase64); err != nil {
+					return fmt.Errorf("type %q struct field %d has invalid tag encoding", value.ID, index)
+				}
+			}
+		}
 	}
 	for _, value := range a.Symbols {
 		if value.ID == "" || value.PackageID == "" || value.Name == "" || value.Kind == "" {
 			return fmt.Errorf("symbol %q has invalid required fields", value.ID)
 		}
+		if value.Declaration != nil {
+			if err := validateSourceSpan(*value.Declaration, value.ID+".declaration"); err != nil {
+				return err
+			}
+		}
 	}
 	for _, value := range a.Nodes {
-		if value.ID == "" || value.PackageID == "" || value.FileID == "" || value.Kind == "" || value.Span.Path == "" {
+		if value.ID == "" || value.PackageID == "" || value.FileID == "" || value.Kind == "" {
 			return fmt.Errorf("node %q has invalid required fields", value.ID)
+		}
+		if err := validateSourceSpan(value.Span, value.ID+".span"); err != nil {
+			return err
 		}
 	}
 	for _, value := range a.Constants {
-		if value.ID == "" || value.NodeID == "" || value.Category == "" || value.Exact == "" || value.Span.Path == "" {
+		if value.ID == "" || value.NodeID == "" || value.Category == "" || value.Exact == "" {
 			return fmt.Errorf("constant %q has invalid required fields", value.ID)
+		}
+		if err := validateSourceSpan(value.Span, value.ID+".span"); err != nil {
+			return err
 		}
 	}
 	for _, value := range a.Scopes {
-		if value.ID == "" || value.PackageID == "" || value.Span.Path == "" || value.SymbolIDs == nil || value.Labels == nil {
+		if value.ID == "" || value.PackageID == "" || value.SymbolIDs == nil || value.Labels == nil {
 			return fmt.Errorf("scope %q has invalid required fields", value.ID)
+		}
+		if err := validateSourceSpan(value.Span, value.ID+".span"); err != nil {
+			return err
 		}
 	}
 	for _, value := range a.Selections {
 		if value.ID == "" || value.NodeID == "" || value.Kind == "" || value.ObjectID == "" ||
 			value.ReceiverTypeID == "" || value.TypeID == "" || value.IndexPath == nil {
 			return fmt.Errorf("selection %q has invalid required fields", value.ID)
+		}
+		for _, index := range value.IndexPath {
+			if index < 0 {
+				return fmt.Errorf("selection %q has negative index path", value.ID)
+			}
 		}
 	}
 	for _, value := range a.Calls {
@@ -531,8 +570,11 @@ func validateRecordFields(a Analysis) error {
 		}
 	}
 	for _, value := range a.GenerateDirectives {
-		if value.ID == "" || value.FileID == "" || value.Directive == "" || value.Executed || value.Span.Path == "" {
+		if value.ID == "" || value.FileID == "" || value.Directive == "" || value.Executed {
 			return fmt.Errorf("generate directive %q has invalid required fields", value.ID)
+		}
+		if err := validateSourceSpan(value.Span, value.ID+".span"); err != nil {
+			return err
 		}
 	}
 	for _, value := range a.Dependencies {
@@ -542,15 +584,24 @@ func validateRecordFields(a Analysis) error {
 	}
 	for _, value := range a.FeatureSites {
 		if value.ID == "" || value.NodeID == "" || value.PackageID == "" || value.FileID == "" ||
-			value.Feature == "" || value.Disposition == "" || value.Span.Path == "" {
+			value.Feature == "" || value.Disposition == "" {
 			return fmt.Errorf("feature %q has invalid required fields", value.ID)
+		}
+		if err := validateSourceSpan(value.Span, value.ID+".span"); err != nil {
+			return err
 		}
 	}
 	for _, value := range a.Diagnostics {
 		if value.ID == "" || value.Category == "" || value.Severity == "" || value.Message == "" {
 			return fmt.Errorf("diagnostic %q has invalid required fields", value.ID)
 		}
+		if value.Span != nil {
+			if err := validateSourceSpan(*value.Span, value.ID+".span"); err != nil {
+				return err
+			}
+		}
 	}
+
 	for _, value := range a.Blockers {
 		if value.ID == "" || value.Blocks == "" || value.Category == "" || value.Message == "" ||
 			value.AffectedUnits == nil || value.DiagnosticIDs == nil {
@@ -558,6 +609,40 @@ func validateRecordFields(a Analysis) error {
 		}
 	}
 	return nil
+}
+
+func validateSourceSpan(span SourceSpan, owner string) error {
+	if !validPortableLocation(span.Path) || !validPortableLocation(span.DisplayPath) ||
+		span.StartByte < 0 || span.EndByte < span.StartByte ||
+		span.StartLine < 1 || span.StartColumn < 1 || span.EndLine < span.StartLine ||
+		(span.EndLine == span.StartLine && span.EndColumn < span.StartColumn) ||
+		span.EndColumn < 1 || span.DisplayLine < 1 || span.DisplayColumn < 0 ||
+		(!span.LineDirective && (span.DisplayPath != span.Path ||
+			span.DisplayLine != span.StartLine || span.DisplayColumn != span.StartColumn)) ||
+		(span.LineDirective && !strings.HasPrefix(span.DisplayPath, "line://")) {
+		return fmt.Errorf("%s is not a complete, ordered source span: %#v", owner, span)
+	}
+	return nil
+}
+
+func validPortableLocation(value string) bool {
+	if value == "" || filepath.IsAbs(value) {
+		return false
+	}
+	prefixes := []string{"source://", "module://", "goroot://", "line://", "external://"}
+	prefix := ""
+	for _, candidate := range prefixes {
+		if strings.HasPrefix(value, candidate) {
+			prefix = candidate
+			break
+		}
+	}
+	if prefix == "" {
+		return false
+	}
+	path := strings.TrimPrefix(value, prefix)
+	clean := filepath.Clean(filepath.FromSlash(path))
+	return clean != ".." && !strings.HasPrefix(clean, ".."+string(filepath.Separator))
 }
 
 func validSHA256(value string) bool {

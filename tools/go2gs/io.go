@@ -249,6 +249,9 @@ func validateAnalysisJSONShape(data []byte) error {
 			return err
 		}
 	}
+	if err := validateNestedJSONFields(root); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -273,6 +276,102 @@ func requireJSONArrayFields(root map[string]json.RawMessage, name string, fields
 		}
 	}
 	return nil
+}
+
+var sourceSpanFields = []string{
+	"path", "startByte", "endByte", "startLine", "startColumn", "endLine", "endColumn",
+	"displayPath", "displayLine", "displayColumn", "lineDirective",
+}
+
+func validateNestedJSONFields(root map[string]json.RawMessage) error {
+	for _, collection := range []string{"nodes", "constants", "scopes", "generateDirectives", "featureSites"} {
+		records, err := rawRecordObjects(root, collection)
+		if err != nil {
+			return err
+		}
+		for index, record := range records {
+			if err := requireNestedObjectFields(
+				fmt.Sprintf("analysis.%s[%d]", collection, index), record, "span", false, sourceSpanFields...,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	for _, collection := range []string{"symbols", "diagnostics"} {
+		records, err := rawRecordObjects(root, collection)
+		if err != nil {
+			return err
+		}
+		for index, record := range records {
+			if err := requireNestedObjectFields(
+				fmt.Sprintf("analysis.%s[%d]", collection, index), record, map[string]string{
+					"symbols": "declaration", "diagnostics": "span",
+				}[collection], true, sourceSpanFields...,
+			); err != nil {
+				return err
+			}
+		}
+	}
+	types, err := rawRecordObjects(root, "types")
+	if err != nil {
+		return err
+	}
+	for typeIndex, record := range types {
+		var fields []map[string]json.RawMessage
+		if err := json.Unmarshal(record["fields"], &fields); err != nil {
+			return fmt.Errorf("analysis.types[%d].fields must be an array", typeIndex)
+		}
+		for fieldIndex, field := range fields {
+			if err := requireJSONFields(
+				fmt.Sprintf("analysis.types[%d].fields[%d]", typeIndex, fieldIndex),
+				field, "name", "typeId", "exported", "embedded",
+			); err != nil {
+				return err
+			}
+		}
+	}
+	packages, err := rawRecordObjects(root, "packages")
+	if err != nil {
+		return err
+	}
+	for packageIndex, record := range packages {
+		var initializers []map[string]json.RawMessage
+		if err := json.Unmarshal(record["initializationOrder"], &initializers); err != nil {
+			return fmt.Errorf("analysis.packages[%d].initializationOrder must be an array", packageIndex)
+		}
+		for initializerIndex, initializer := range initializers {
+			if err := requireJSONFields(
+				fmt.Sprintf("analysis.packages[%d].initializationOrder[%d]", packageIndex, initializerIndex),
+				initializer, "order", "kind", "symbolIds",
+			); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+func rawRecordObjects(root map[string]json.RawMessage, name string) ([]map[string]json.RawMessage, error) {
+	var records []map[string]json.RawMessage
+	if err := json.Unmarshal(root[name], &records); err != nil {
+		return nil, fmt.Errorf("analysis.%s must be an array of objects", name)
+	}
+	return records, nil
+}
+
+func requireNestedObjectFields(owner string, record map[string]json.RawMessage, field string, optional bool, fields ...string) error {
+	value, ok := record[field]
+	if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		if optional {
+			return nil
+		}
+		return fmt.Errorf("%s is missing required field %q", owner, field)
+	}
+	var object map[string]json.RawMessage
+	if err := json.Unmarshal(value, &object); err != nil {
+		return fmt.Errorf("%s.%s must be an object", owner, field)
+	}
+	return requireJSONFields(owner+"."+field, object, fields...)
 }
 
 func writeAnalysis(path string, analysis Analysis, maxBytes int64) (int, error) {
