@@ -69,8 +69,9 @@ internal sealed class DocumentTranslationState
     public HashSet<ISymbol> HoistedNullableGuardLocals { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
-    // Active foreach bindings treated as nullable in G# assertion decisions,
-    // whether from translated array widening or Roslyn's element annotation.
+    // Active foreach/query bindings treated as nullable in G# assertion
+    // decisions, whether from translated array widening or Roslyn's element
+    // annotation.
     public HashSet<ISymbol> NullableForEachBindings { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 

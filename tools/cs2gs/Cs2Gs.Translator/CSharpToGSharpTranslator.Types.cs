@@ -2519,10 +2519,10 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         // Determines a query range variable's element type. An explicit type
-        // (`from T x in xs`) wins; otherwise Roslyn's selected query operator
-        // supplies the initial range variable contract. Enumeration and the
-        // single-type-argument query-provider fallback cover shapes without a
-        // bound selector.
+        // (`from T x in xs`) wins; otherwise the emitted projected collection
+        // type wins over Roslyn's stale source contract. The selected query
+        // operator, enumeration, and single-type-argument query-provider
+        // fallback cover shapes without a projection.
         private GTypeReference ResolveRangeVariableType(
             TypeSyntax explicitType, ExpressionSyntax source, SyntaxNode anchor)
         {
@@ -2547,6 +2547,24 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax source,
             SyntaxNode anchor)
         {
+            ITypeSymbol projectedSource =
+                this.GetManagedReferenceArrayProjectedExpressionType(source);
+            ITypeSymbol projectedElement = GetEnumerableElementType(projectedSource);
+            if (projectedElement != null)
+            {
+                return this.ArrayExpressionHasNullableReferenceLikeElement(source)
+                    ? projectedElement.WithNullableAnnotation(NullableAnnotation.Annotated)
+                    : projectedElement;
+            }
+
+            ITypeSymbol sourceType = this.context.GetTypeInfo(source).Type
+                ?? this.context.GetTypeInfo(source).ConvertedType;
+            if (this.ArrayExpressionHasNullableReferenceLikeElement(source)
+                && GetEnumerableElementType(sourceType) is { } nullableElement)
+            {
+                return nullableElement.WithNullableAnnotation(NullableAnnotation.Annotated);
+            }
+
             if (anchor is FromClauseSyntax { Parent: QueryExpressionSyntax } initialFrom)
             {
                 QueryExpressionSyntax query = (QueryExpressionSyntax)initialFrom.Parent;
@@ -2571,8 +2589,6 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            ITypeSymbol sourceType = this.context.GetTypeInfo(source).Type
-                ?? this.context.GetTypeInfo(source).ConvertedType;
             ITypeSymbol enumerableElement = GetEnumerableElementType(sourceType);
             if (enumerableElement != null)
             {
@@ -2718,7 +2734,7 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #3348: as in `BuildScopeLambda`, the `let` value is evaluated
             // inside this Select lambda — hoist into its own prologue, not the
             // enclosing statement's.
-            GExpression letValue = this.TranslateQueryLambdaBody(let.Expression, prologue);
+            GExpression letValue = this.TranslateQueryLambdaBody(let.Expression, prologue, scope);
             GTypeReference letType = this.context.GetTypeInfo(let.Expression).Type is { } t
                 ? this.typeMapper.Map(t, this.context, let.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
@@ -2888,7 +2904,7 @@ public sealed partial class CSharpToGSharpTranslator
             // once per element inside the lambda. Left on the enclosing statement's
             // ambient seam it would instead be emitted before the whole query, where
             // the range variable it references is not in scope.
-            GExpression body = this.TranslateQueryLambdaBody(lambdaBody, prologue);
+            GExpression body = this.TranslateQueryLambdaBody(lambdaBody, prologue, scope);
             if (prologue.Count == 0)
             {
                 return new LambdaExpression(new List<Parameter> { param }, expressionBody: body);
@@ -2906,8 +2922,34 @@ public sealed partial class CSharpToGSharpTranslator
         // reused verbatim rather than duplicated. `CollectEmbeddedAssignments` no
         // longer descends into a query clause (see <see cref="EagerQuerySources"/>),
         // so the enclosing statement leaves these assignments for this call to hoist.
-        private GExpression TranslateQueryLambdaBody(ExpressionSyntax lambdaBody, List<GStatement> prologue) =>
-            this.TranslateConditionWithHoist(lambdaBody, prologue);
+        private GExpression TranslateQueryLambdaBody(
+            ExpressionSyntax lambdaBody,
+            List<GStatement> prologue,
+            IReadOnlyList<(string Name, GTypeReference Type, ISymbol Symbol)> scope)
+        {
+            var addedNullableBindings = new List<ISymbol>();
+            foreach ((_, GTypeReference type, ISymbol symbol) in scope)
+            {
+                if (type.IsNullable
+                    && symbol != null
+                    && this.state.NullableForEachBindings.Add(symbol))
+                {
+                    addedNullableBindings.Add(symbol);
+                }
+            }
+
+            try
+            {
+                return this.TranslateConditionWithHoist(lambdaBody, prologue);
+            }
+            finally
+            {
+                foreach (ISymbol symbol in addedNullableBindings)
+                {
+                    this.state.NullableForEachBindings.Remove(symbol);
+                }
+            }
+        }
 
         // Builds the `(x1, x2) => new{x1, x2}` result-selector shape shared by
         // SelectMany/Join/GroupJoin (spec §12.19.3.3/.7/.8): one parameter for

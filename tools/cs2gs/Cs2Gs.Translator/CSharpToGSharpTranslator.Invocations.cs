@@ -2554,6 +2554,26 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            ITypeSymbol targetResult = GetLambdaResultTargetType(lambda, invoke);
+            if (targetResult == null)
+            {
+                return false;
+            }
+
+            return GetLambdaResultExpressions(lambda).Any(result =>
+            {
+                ITypeSymbol resultType = this.context.GetTypeInfo(result).Type;
+                return resultType != null
+                    && !SymbolEqualityComparer.IncludeNullability.Equals(
+                        resultType,
+                        targetResult);
+            });
+        }
+
+        private static ITypeSymbol GetLambdaResultTargetType(
+            AnonymousFunctionExpressionSyntax lambda,
+            IMethodSymbol invoke)
+        {
             ITypeSymbol targetResult = invoke.ReturnType;
             if (lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)
                 && targetResult is INamedTypeSymbol task
@@ -2562,13 +2582,18 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 if (!task.IsGenericType)
                 {
-                    return false;
+                    return null;
                 }
 
                 targetResult = task.TypeArguments[0];
             }
 
-            IEnumerable<ExpressionSyntax> results = lambda.Body switch
+            return targetResult;
+        }
+
+        private static IEnumerable<ExpressionSyntax> GetLambdaResultExpressions(
+            AnonymousFunctionExpressionSyntax lambda) =>
+            lambda.Body switch
             {
                 ExpressionSyntax expression => new[] { expression },
                 BlockSyntax block => block
@@ -2580,16 +2605,6 @@ public sealed partial class CSharpToGSharpTranslator
                     .Select(statement => statement.Expression),
                 _ => Enumerable.Empty<ExpressionSyntax>(),
             };
-
-            return results.Any(result =>
-            {
-                ITypeSymbol resultType = this.context.GetTypeInfo(result).Type;
-                return resultType != null
-                    && !SymbolEqualityComparer.IncludeNullability.Equals(
-                        resultType,
-                        targetResult);
-            });
-        }
 
         private bool LambdaNeedsExactTarget(
             AnonymousFunctionExpressionSyntax lambda,
@@ -4929,8 +4944,19 @@ public sealed partial class CSharpToGSharpTranslator
                     return;
                 }
 
-                if (argument is AnonymousFunctionExpressionSyntax)
+                if (argument is AnonymousFunctionExpressionSyntax lambda)
                 {
+                    if ((parameterType as INamedTypeSymbol)?.DelegateInvokeMethod
+                            is { ReturnsVoid: false } invoke
+                        && GetLambdaResultTargetType(lambda, invoke)
+                            is { } lambdaResultType)
+                    {
+                        foreach (ExpressionSyntax result in GetLambdaResultExpressions(lambda))
+                        {
+                            RecordWidenedArguments(result, lambdaResultType);
+                        }
+                    }
+
                     return;
                 }
 
