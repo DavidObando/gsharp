@@ -1446,6 +1446,54 @@ func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 	}
 }
 
+func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
+	t.Run("ordinary", func(t *testing.T) {
+		directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-worker-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory.path, "artifact"), []byte("owned"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := directory.cleanup(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(directory.path); !os.IsNotExist(err) {
+			t.Fatalf("ordinary owned directory remains: %v", err)
+		}
+	})
+
+	t.Run("pathname replacement", func(t *testing.T) {
+		parent := t.TempDir()
+		directory, err := createOwnedTempDir(parent, ".go2gs-worker-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		displaced := directory.path + ".displaced"
+		err = directory.cleanupWithHook(func() {
+			if renameErr := os.Rename(directory.path, displaced); renameErr != nil {
+				t.Fatal(renameErr)
+			}
+			if mkdirErr := os.Mkdir(directory.path, 0o700); mkdirErr != nil {
+				t.Fatal(mkdirErr)
+			}
+			if writeErr := os.WriteFile(filepath.Join(directory.path, "valuable.txt"), []byte("valuable"), 0o600); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		data, err := os.ReadFile(filepath.Join(directory.path, "valuable.txt"))
+		if err != nil || string(data) != "valuable" {
+			t.Fatalf("replacement directory was deleted: %q, %v", data, err)
+		}
+		if _, err := os.Lstat(displaced); err != nil {
+			t.Fatalf("displaced owned directory was unexpectedly removed: %v", err)
+		}
+	})
+}
+
 func TestLoadFailureReplacesStaleSuccessfulArtifacts(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("controlled CGo loader failure fixture")
@@ -1729,6 +1777,107 @@ func TestTransientManifestMutationCannotAffectLoader(t *testing.T) {
 				t.Fatalf("loader observed transient live %s mutation near: %s", name, firstDifference(string(got), string(want)))
 			}
 		})
+	}
+}
+
+func TestExternalReplacementManifestDriftFailsClosed(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		path   string
+		mutate func(*testing.T, string)
+	}{
+		{"go-mod-change", "go.mod", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("module example.com/changed\n\ngo 1.23\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"go-sum-delete", "go.sum", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"vendor-manifest-replace", filepath.Join("vendor", "modules.txt"), func(t *testing.T, path string) {
+			replacement := path + ".replacement"
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(replacement, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"go-sum-symlink", "go.sum", func(t *testing.T, path string) {
+			if runtime.GOOS == "windows" {
+				t.Skip("controlled symlink fixture")
+			}
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("outside"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Symlink(outside, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root, dependency := externalReplacementFixture(t)
+			path := filepath.Join(dependency, test.path)
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				test.mutate(t, path)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("external manifest drift was not fail-closed: complete=%v blockers=%#v", complete, analysis.Blockers)
+			}
+			wantPath := "module://example.com/replacement@local/" + filepath.ToSlash(test.path)
+			if !slices.ContainsFunc(analysis.Manifests, func(manifest ManifestRecord) bool {
+				return manifest.Path == wantPath && manifest.SHA256 == hashBytes(original)
+			}) {
+				t.Fatalf("captured external manifest missing: %s in %#v", wantPath, analysis.Manifests)
+			}
+		})
+	}
+}
+
+func TestTransientExternalReplacementManifestCannotAffectLoader(t *testing.T) {
+	root, dependency := externalReplacementFixture(t)
+	baseline, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("baseline external replacement failed: complete=%v err=%v", complete, err)
+	}
+	path := filepath.Join(dependency, "go.mod")
+	original, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyzeWithSnapshotHooks(t.Context(), root, t.TempDir(), testProfile(), func() {
+		if writeErr := os.WriteFile(path, []byte("module example.com/transient\n\ngo 1.23\n"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	}, func() {
+		if writeErr := os.WriteFile(path, original, 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	})
+	if err != nil || !complete {
+		t.Fatalf("transient external manifest affected completeness: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	want, _ := marshalCanonical(baseline)
+	got, _ := marshalCanonical(analysis)
+	if !bytes.Equal(got, want) {
+		t.Fatalf("loader observed transient external manifest near: %s", firstDifference(string(got), string(want)))
 	}
 }
 
@@ -2413,6 +2562,43 @@ func TestLocalReplacementInventoryIsRootIndependent(t *testing.T) {
 	}) {
 		t.Fatalf("portable local replacement identity missing: %#v", first.Modules)
 	}
+	for name, absolute := range map[string]bool{"relative": false, "absolute": true} {
+		t.Run("operational-"+name, func(t *testing.T) {
+			root := copyFixture(t, "replacement")
+			if absolute {
+				modPath := filepath.Join(root, "go.mod")
+				data, err := os.ReadFile(modPath)
+				if err != nil {
+					t.Fatal(err)
+				}
+				data = bytes.Replace(data, []byte("./dep"), []byte(filepath.ToSlash(filepath.Join(root, "dep"))), 1)
+				if err := os.WriteFile(modPath, data, 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			out := t.TempDir()
+			work := filepath.Join(out, "work")
+			if err := os.Mkdir(work, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			mirror, err := createSourceMirror(root, out, work, testProfile().Limits)
+			if err != nil {
+				t.Fatal(err)
+			}
+			operational, err := os.ReadFile(filepath.Join(mirror.root, "go.mod"))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if bytes.Contains(operational, []byte(root)) ||
+				!bytes.Contains(operational, []byte(filepath.ToSlash(filepath.Join(mirror.root, "dep")))) {
+				t.Fatalf("%s in-tree replacement was not rebound to mirror: %s", name, operational)
+			}
+			analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+			if err != nil || !complete {
+				t.Fatalf("%s in-tree replacement failed: complete=%v err=%v blockers=%#v", name, complete, err, analysis.Blockers)
+			}
+		})
+	}
 	for _, root := range []string{firstRoot, secondRoot} {
 		parent := filepath.Dir(root)
 		dependency := filepath.Join(parent, "dep-external")
@@ -2642,6 +2828,36 @@ func copyFixture(t *testing.T, name string) string {
 	target := filepath.Join(t.TempDir(), name)
 	copyTree(t, source, target)
 	return target
+}
+
+func externalReplacementFixture(t *testing.T) (string, string) {
+	t.Helper()
+	parent := t.TempDir()
+	root := filepath.Join(parent, "source")
+	copyTree(t, filepath.Join("testdata", "replacement"), root)
+	dependency := filepath.Join(parent, "dep")
+	if err := os.Rename(filepath.Join(root, "dep"), dependency); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependency, "go.sum"), []byte("example.com/test v1.0.0 h1:test\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Join(dependency, "vendor"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependency, "vendor", "modules.txt"), []byte("# captured\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	modPath := filepath.Join(root, "go.mod")
+	data, err := os.ReadFile(modPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	data = bytes.Replace(data, []byte("=> ./dep"), []byte("=> ../dep"), 1)
+	if err := os.WriteFile(modPath, data, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return root, dependency
 }
 
 func copyTree(t *testing.T, source, target string) {
@@ -2927,7 +3143,11 @@ func TestProcessHelper(t *testing.T) {
 		}
 	case "tree":
 		child := exec.Command(os.Args[0], "-test.run=TestProcessHelper")
-		child.Env = []string{"GO2GS_PROCESS_HELPER=child-marker", "GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER")}
+		child.Env = []string{
+			"GO2GS_PROCESS_HELPER=child-marker",
+			"GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER"),
+			"GO2GS_CHILD_DELAY=" + os.Getenv("GO2GS_CHILD_DELAY"),
+		}
 		if err := child.Start(); err != nil {
 			t.Fatal(err)
 		}
@@ -2941,6 +3161,7 @@ func TestProcessHelper(t *testing.T) {
 				"GO2GS_PROCESS_HELPER=tree",
 				"GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER"),
 				"GO2GS_CHILD_PID=" + os.Getenv("GO2GS_CHILD_PID"),
+				"GO2GS_CHILD_DELAY=" + os.Getenv("GO2GS_CHILD_DELAY"),
 			})
 	case "nested-early-failure-worker":
 		child := exec.Command(os.Args[0], "-test.run=TestProcessHelper")
@@ -2948,6 +3169,7 @@ func TestProcessHelper(t *testing.T) {
 			"GO2GS_PROCESS_HELPER=tree",
 			"GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER"),
 			"GO2GS_CHILD_PID=" + os.Getenv("GO2GS_CHILD_PID"),
+			"GO2GS_CHILD_DELAY=" + os.Getenv("GO2GS_CHILD_DELAY"),
 		}
 		if err := child.Start(); err != nil {
 			t.Fatal(err)
@@ -2964,7 +3186,13 @@ func TestProcessHelper(t *testing.T) {
 		}
 		os.Exit(7)
 	case "child-marker":
-		time.Sleep(500 * time.Millisecond)
+		delay := 500 * time.Millisecond
+		if value := os.Getenv("GO2GS_CHILD_DELAY"); value != "" {
+			if parsed, err := time.ParseDuration(value); err == nil {
+				delay = parsed
+			}
+		}
+		time.Sleep(delay)
 		_ = os.WriteFile(os.Getenv("GO2GS_CHILD_MARKER"), []byte("survived"), 0o600)
 	case "child-sleep":
 		time.Sleep(10 * time.Second)

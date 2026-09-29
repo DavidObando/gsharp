@@ -90,11 +90,12 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		return Analysis{}, false, err
 	}
 
-	workRoot, err := os.MkdirTemp(outRoot, ".go2gs-work-*")
+	workDirectory, err := createOwnedTempDir(outRoot, ".go2gs-work-*")
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	defer os.RemoveAll(workRoot)
+	defer workDirectory.cleanup()
+	workRoot := workDirectory.path
 	blockedToolsRoot := filepath.Join(workRoot, "blocked-tools")
 	if err := os.Mkdir(blockedToolsRoot, 0o500); err != nil {
 		return Analysis{}, false, err
@@ -251,7 +252,13 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	for key := range verifyOriginalPackageInputs(mirror, sourceSnapshot, profile) {
 		builder.inputDrift[key] = true
 	}
-	if !verifyManifestSnapshot(mirror.manifests, sourceRoot, profile.Limits.MaxLocalHashBytes) {
+	manifestDrift := false
+	for _, root := range mirror.manifestRoots {
+		if !verifyManifestSnapshot(root.snapshot, root.root, profile.Limits.MaxLocalHashBytes) {
+			manifestDrift = true
+		}
+	}
+	if manifestDrift {
 		builder.block("input-drift", "module or workspace manifests changed while loading", nil, nil)
 	}
 	builder.snapshotFiles = sourceSnapshot.packageFiles
@@ -383,12 +390,31 @@ type mirroredTree struct {
 }
 
 type sourceMirror struct {
-	root      string
-	manifests manifestSnapshot
-	trees     []mirroredTree
+	root          string
+	manifests     manifestSnapshot
+	manifestRoots []manifestRootSnapshot
+	trees         []mirroredTree
+}
+
+type manifestRootSnapshot struct {
+	root     string
+	snapshot manifestSnapshot
 }
 
 func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (sourceMirror, error) {
+	var err error
+	sourceRoot, err = secureRoot(sourceRoot)
+	if err != nil {
+		return sourceMirror{}, fmt.Errorf("secure source root: %w", err)
+	}
+	outRoot, err = secureRoot(outRoot)
+	if err != nil {
+		return sourceMirror{}, fmt.Errorf("secure output root: %w", err)
+	}
+	workRoot, err = secureRoot(workRoot)
+	if err != nil {
+		return sourceMirror{}, fmt.Errorf("secure work root: %w", err)
+	}
 	mirrorBase := filepath.Join(workRoot, "source-mirror")
 	root := filepath.Join(mirrorBase, "source")
 	budget := &mirrorBudget{}
@@ -397,7 +423,9 @@ func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (so
 		return sourceMirror{}, fmt.Errorf("create immutable source mirror: %w", err)
 	}
 	result := sourceMirror{root: root, trees: []mirroredTree{tree}}
-	result.manifests = manifestsFromTree(tree)
+	mainManifests := manifestsFromTree(tree, sourceRoot, "source://")
+	result.manifests = mainManifests
+	result.manifestRoots = append(result.manifestRoots, manifestRootSnapshot{root: sourceRoot, snapshot: mainManifests})
 	goModPath := filepath.Join(sourceRoot, "go.mod")
 	capturedGoMod, ok := tree.files[goModPath]
 	if !ok {
@@ -428,25 +456,43 @@ func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (so
 		if err != nil {
 			return sourceMirror{}, fmt.Errorf("local replacement %s: %w", replacement.oldPath, err)
 		}
+		destination := ""
+		replacementTree := tree
 		if lexicallyWithin(sourceRoot, replacementRoot) {
-			continue
-		}
-		if lexicallyWithin(outRoot, replacementRoot) {
-			return sourceMirror{}, fmt.Errorf("local replacement %s points into the output root", replacement.oldPath)
-		}
-		destination := mirroredReplacements[replacementRoot]
-		if destination == "" {
-			destination = filepath.Join(mirrorBase, "replacements", hashBytes([]byte(replacement.oldPath + "\x00" + replacement.newPath))[:16])
-			replacementTree, captureErr := captureTree(replacementRoot, destination, nil, limits, budget)
-			if captureErr != nil {
-				return sourceMirror{}, fmt.Errorf("mirror local replacement %s: %w", replacement.oldPath, captureErr)
+			relative, relativeErr := filepath.Rel(sourceRoot, replacementRoot)
+			if relativeErr != nil {
+				return sourceMirror{}, relativeErr
 			}
-			result.trees = append(result.trees, replacementTree)
-			mirroredReplacements[replacementRoot] = destination
+			destination = filepath.Join(root, relative)
+		} else {
+			if lexicallyWithin(outRoot, replacementRoot) {
+				return sourceMirror{}, fmt.Errorf("local replacement %s points into the output root", replacement.oldPath)
+			}
+			destination = mirroredReplacements[replacementRoot]
+			if destination == "" {
+				destination = filepath.Join(mirrorBase, "replacements", hashBytes([]byte(replacement.oldPath + "\x00" + replacement.newPath))[:16])
+				var captureErr error
+				replacementTree, captureErr = captureTree(replacementRoot, destination, nil, limits, budget)
+				if captureErr != nil {
+					return sourceMirror{}, fmt.Errorf("mirror local replacement %s: %w", replacement.oldPath, captureErr)
+				}
+				result.trees = append(result.trees, replacementTree)
+				mirroredReplacements[replacementRoot] = destination
+			} else {
+				for _, candidate := range result.trees {
+					if candidate.sourceRoot == replacementRoot {
+						replacementTree = candidate
+						break
+					}
+				}
+			}
 		}
 		if err := parsed.AddReplace(replacement.oldPath, replacement.oldVersion, filepath.ToSlash(destination), ""); err != nil {
 			return sourceMirror{}, fmt.Errorf("rewrite local replacement %s: %w", replacement.oldPath, err)
 		}
+		replacementManifests := manifestsFromTree(replacementTree, replacementRoot, "module://"+replacement.oldPath+"@local/")
+		result.manifests.records = append(result.manifests.records, replacementManifests.records...)
+		result.manifestRoots = append(result.manifestRoots, manifestRootSnapshot{root: replacementRoot, snapshot: replacementManifests})
 		rewritten = true
 	}
 	if rewritten {
@@ -458,6 +504,9 @@ func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (so
 			return sourceMirror{}, fmt.Errorf("write operational go.mod: %w", err)
 		}
 	}
+	sort.Slice(result.manifests.records, func(i, j int) bool {
+		return result.manifests.records[i].Path < result.manifests.records[j].Path
+	})
 	return result, nil
 }
 
@@ -552,17 +601,17 @@ func lexicallyWithin(root, path string) bool {
 		!strings.HasPrefix(relative, ".."+string(filepath.Separator)) && !filepath.IsAbs(relative)
 }
 
-func manifestsFromTree(tree mirroredTree) manifestSnapshot {
+func manifestsFromTree(tree mirroredTree, manifestRoot, prefix string) manifestSnapshot {
 	result := manifestSnapshot{files: map[string]snapshottedInput{}}
 	for _, name := range manifestNames {
-		path := filepath.Join(tree.sourceRoot, name)
+		path := filepath.Join(manifestRoot, name)
 		captured, ok := tree.files[path]
 		if !ok {
 			continue
 		}
 		result.files[path] = captured
 		result.records = append(result.records, ManifestRecord{
-			Kind: filepath.Base(name), Path: "source://" + slash(name),
+			Kind: filepath.Base(name), Path: prefix + slash(name),
 			SHA256: hashBytes(captured.data), Bytes: int64(len(captured.data)),
 		})
 	}
@@ -583,7 +632,7 @@ func resolveLocalReplacementRoot(sourceRoot, replacement string) (string, error)
 	if err != nil {
 		return "", err
 	}
-	if filepath.Clean(absolute) != filepath.Clean(resolved) {
+	if filepath.Clean(absolute) != filepath.Clean(resolved) && !lexicallyWithin(sourceRoot, resolved) {
 		return "", errors.New("symlinked local replacement roots are not allowed")
 	}
 	info, err := os.Lstat(resolved)
