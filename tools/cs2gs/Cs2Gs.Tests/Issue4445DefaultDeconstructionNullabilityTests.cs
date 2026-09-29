@@ -645,6 +645,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     var (duplicateWriteLeft, duplicateWriteRight) =
                         duplicateWritePair;
                     Fill(ref duplicateWriteLeft, replacement);
+
+                    var mixedWritePair =
+                        (First: replacement, Second: replacement);
+                    (mixedWritePair, mixedWritePair.First) =
+                        (default((T, T)), replacement);
+                    var (_, mixedWriteRight) = mixedWritePair;
+                    Fill(ref mixedWriteRight, replacement);
                 }
 
                 private static void Observe<T>(in (T, T) pair)
@@ -664,6 +671,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) unknownLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) combinedLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) duplicateWriteLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) mixedWriteRight T\? =", printed);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("callRight T? =", printed, StringComparison.Ordinal);

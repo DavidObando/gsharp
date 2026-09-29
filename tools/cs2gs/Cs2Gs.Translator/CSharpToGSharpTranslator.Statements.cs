@@ -1388,6 +1388,11 @@ public sealed partial class CSharpToGSharpTranslator
                     assignment.Right,
                     local,
                     elementWrites);
+                if (!elementWrites.Any(write => write.Path.Count > 0))
+                {
+                    elementWrites.Clear();
+                }
+
                 if (elementWrites.Count > 0)
                 {
                     for (int writeOrdinal = 0;
@@ -1494,9 +1499,16 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax left,
             ExpressionSyntax right,
             ILocalSymbol local,
-            List<(IReadOnlyList<int> Path, ExpressionSyntax Value)> writes)
+            List<(IReadOnlyList<int> Path, ExpressionSyntax Value)> writes,
+            bool includeWholeTuple = false)
         {
             left = Unwrap(left);
+            if (includeWholeTuple && this.BindsTo(left, local))
+            {
+                writes.Add((Array.Empty<int>(), right));
+                return;
+            }
+
             if (this.TryFindTupleElementWritePath(
                 left,
                 local,
@@ -1518,7 +1530,8 @@ public sealed partial class CSharpToGSharpTranslator
                     tuple.Arguments[i].Expression,
                     ProjectTupleElement(right, new[] { i }),
                     local,
-                    writes);
+                    writes,
+                    includeWholeTuple: true);
             }
         }
 
