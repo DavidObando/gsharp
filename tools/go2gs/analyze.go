@@ -186,17 +186,6 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 	}
 	preflight, _ := packages.Load(&preflightConfig, profile.EntryPatterns...)
 	preflight = collectPackages(preflight)
-	if !profile.CGOEnabled {
-		for _, pkg := range preflight {
-			importsC, err := selectedPackageImportsC(pkg)
-			if err != nil {
-				return Analysis{}, false, err
-			}
-			if importsC {
-				builder.block("cgo", "selected package imports C but CGO_ENABLED=0; native preprocessing is not available in this profile", nil, nil)
-			}
-		}
-	}
 	sourceSnapshot, err := snapshotPackageInputs(preflight, sourceRoot, profile.Limits)
 	if err != nil {
 		return Analysis{}, false, err

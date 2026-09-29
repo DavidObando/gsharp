@@ -270,17 +270,29 @@ func TestOfflineMissingDependencyIsIncomplete(t *testing.T) {
 	}
 }
 
-func TestCgoRequirementIsIncomplete(t *testing.T) {
+func TestCgoDisabledIgnoresDefensivelyDiscoveredInputs(t *testing.T) {
 	root := copyFixture(t, "cgo")
 	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
 	if err != nil {
 		t.Fatal(err)
 	}
-	if complete || analysis.InventoryComplete {
-		t.Fatal("CGo requirement must make inventory incomplete")
+	if !complete || !analysis.InventoryComplete {
+		t.Fatalf("ignored CGo inputs made inventory incomplete: %#v", analysis.Blockers)
 	}
-	if !hasBlockerCategory(analysis, "cgo") {
-		t.Fatalf("missing CGo/native blocker: %#v", analysis.Blockers)
+	if hasBlockerCategory(analysis, "cgo") || hasBlockerCategory(analysis, "native") {
+		t.Fatalf("ignored CGo/native inputs created blockers: %#v", analysis.Blockers)
+	}
+	for path, role := range map[string]string{
+		"source://base.go":        "compiled",
+		"source://cgo.go":         "ignored",
+		"source://cgo_tagged.go":  "ignored",
+		"source://cgo_windows.go": "ignored",
+		"source://native.h":       "ignored",
+	} {
+		index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == path })
+		if index < 0 || analysis.Files[index].Role != role {
+			t.Fatalf("%s role: got %#v, want %s", path, analysis.Files, role)
+		}
 	}
 }
 
