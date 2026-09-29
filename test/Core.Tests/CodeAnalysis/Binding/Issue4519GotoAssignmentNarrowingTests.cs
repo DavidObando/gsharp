@@ -1799,6 +1799,39 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_DoesNotAcceptNumericWideningWithoutConversion()
+    {
+        var result = Evaluate("""
+            func Run() int64 {
+                var x object = int64(1)
+                var count = 0
+                if x is int64 {
+                Again:
+                    let value int64 = x
+                    if count == 0 {
+                        count++
+                        x = int32(2)
+                        if x is int32 {
+                            goto Again
+                        }
+                    }
+                    return value
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Contains(
+            result.Diagnostics,
+            d => d.Message.Contains(
+                "Cannot convert type 'object' to 'int64'",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_BypassesConditionFrame_ReportsMemberAccess()
     {
         var result = Evaluate("""
@@ -1934,6 +1967,36 @@ public class Issue4519GotoAssignmentNarrowingTests
                 }
                 finally {
                     (func() { x = nil })()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyIncludesCallableArgumentBodyMutation()
+    {
+        var result = Evaluate("""
+            func Invoke(action (() -> void)) {
+                action()
+            }
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                try {
+                    goto Done
+                }
+                finally {
+                    Invoke(clear)
                 }
             Done:
                 return x.Length
@@ -2696,6 +2759,56 @@ public class Issue4519GotoAssignmentNarrowingTests
                 for keepGoing {
                 Enter:
                     keepGoing = false
+                }
+                goto Done
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_EnteringInfiniteLoopBreakPropagatesReachability()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                goto Enter
+                for {
+                Enter:
+                    break
+                }
+                goto Done
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_EnteringFiniteLoopContinuePropagatesReachability()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                goto Enter
+                for _ in []int32{0} {
+                Enter:
+                    continue
                 }
                 goto Done
                 x = "safe"

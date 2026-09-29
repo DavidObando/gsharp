@@ -556,6 +556,7 @@ internal sealed partial class StatementBinder
             return BindErrorStatement();
         }
 
+        BoundLabel breakLabel;
         if (syntax.LabelIdentifier != null)
         {
             var name = syntax.LabelIdentifier.ValueText;
@@ -563,7 +564,13 @@ internal sealed partial class StatementBinder
             {
                 if (frame.LabelName == name)
                 {
-                    return new BoundGotoStatement(syntax, frame.BreakLabel);
+                    breakLabel = frame.BreakLabel;
+                    if (currentStatementListFallsThrough)
+                    {
+                        internallyReachableLoopExits.Add(breakLabel);
+                    }
+
+                    return new BoundGotoStatement(syntax, breakLabel);
                 }
             }
 
@@ -575,8 +582,13 @@ internal sealed partial class StatementBinder
         // an unlabeled `break` in a switch arm exits the switch, not the
         // enclosing loop). Record the target so the switch appends its
         // break-label statement only when actually jumped to.
-        var breakLabel = binderCtx.LoopStack.Peek().BreakLabel;
+        breakLabel = binderCtx.LoopStack.Peek().BreakLabel;
         binderCtx.UsedBreakLabels.Add(breakLabel);
+        if (currentStatementListFallsThrough)
+        {
+            internallyReachableLoopExits.Add(breakLabel);
+        }
+
         return new BoundGotoStatement(syntax, breakLabel);
     }
 
@@ -621,6 +633,11 @@ internal sealed partial class StatementBinder
             {
                 if (frame.LabelName == name && frame.ContinueLabel is { } labeledContinue)
                 {
+                    if (currentStatementListFallsThrough)
+                    {
+                        internallyReachableLoopBacks.Add(labeledContinue);
+                    }
+
                     return new BoundGotoStatement(syntax, labeledContinue);
                 }
             }
@@ -635,6 +652,11 @@ internal sealed partial class StatementBinder
         {
             if (frame.ContinueLabel is { } continueLabel)
             {
+                if (currentStatementListFallsThrough)
+                {
+                    internallyReachableLoopBacks.Add(continueLabel);
+                }
+
                 return new BoundGotoStatement(syntax, continueLabel);
             }
         }

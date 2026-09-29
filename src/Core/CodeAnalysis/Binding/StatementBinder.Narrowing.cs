@@ -774,7 +774,7 @@ internal sealed partial class StatementBinder
                     if ((!sourceSnapshot.NarrowedVariables.TryGetValue(
                             access.Path,
                             out var sourceType)
-                            || !Conversion.Classify(sourceType, access.RequiredType).IsImplicit)
+                            || !IsRepresentationPreservingJoin(sourceType, access.RequiredType))
                         && reported.Add(access))
                     {
                         switch (access.Kind)
@@ -1675,6 +1675,21 @@ internal sealed partial class StatementBinder
                     {
                         RecordWritableReference(arguments[i]);
                     }
+
+                    if (function.Parameters[i].Type is FunctionTypeSymbol or DelegateTypeSymbol)
+                    {
+                        if (TryGetFunctionLiterals(arguments[i], out var literals))
+                        {
+                            foreach (var literal in literals)
+                            {
+                                VisitFunctionLiteralBody(literal);
+                            }
+                        }
+                        else if (!IsExternalCallable(arguments[i]))
+                        {
+                            MayMutateAnyRoot = true;
+                        }
+                    }
                 }
             }
 
@@ -2282,6 +2297,24 @@ internal sealed partial class StatementBinder
             case BoundPatternSwitchStatement switchStatement:
                 return switchStatement.Arms.Any(arm =>
                     HasInternallyReachableFallthrough(arm.Body));
+
+            case BoundForInfiniteStatement infiniteLoop:
+                return internallyReachableLoopExits.Contains(infiniteLoop.BreakLabel);
+
+            case BoundForEllipsisStatement ellipsisLoop:
+                return internallyReachableLoopExits.Contains(ellipsisLoop.BreakLabel)
+                    || internallyReachableLoopBacks.Contains(ellipsisLoop.ContinueLabel)
+                    || HasInternallyReachableFallthrough(ellipsisLoop.Body);
+
+            case BoundForRangeStatement rangeLoop:
+                return internallyReachableLoopExits.Contains(rangeLoop.BreakLabel)
+                    || internallyReachableLoopBacks.Contains(rangeLoop.ContinueLabel)
+                    || HasInternallyReachableFallthrough(rangeLoop.Body);
+
+            case BoundAwaitForRangeStatement awaitRangeLoop:
+                return internallyReachableLoopExits.Contains(awaitRangeLoop.BreakLabel)
+                    || internallyReachableLoopBacks.Contains(awaitRangeLoop.ContinueLabel)
+                    || HasInternallyReachableFallthrough(awaitRangeLoop.Body);
 
             default:
                 return false;

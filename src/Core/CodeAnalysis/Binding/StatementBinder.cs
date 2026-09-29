@@ -120,6 +120,8 @@ internal sealed partial class StatementBinder
     private readonly List<(string LabelName, TextLocation Location, ImmutableArray<SyntaxNode> SourceRegions)>
         userGotoHandlerRegions = new();
     private readonly HashSet<BoundStatement> internallyReachableFallthroughStatements = new();
+    private readonly HashSet<BoundLabel> internallyReachableLoopExits = new();
+    private readonly HashSet<BoundLabel> internallyReachableLoopBacks = new();
     private bool currentStatementListFallsThrough = true;
     private int usingInitializationFlagCount;
 
