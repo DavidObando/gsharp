@@ -329,7 +329,10 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ExpressionSyntax initializer = this.GetInferredLocalInitializer(local);
+            ExpressionSyntax initializer = this.GetInferredLocalInitializer(
+                local,
+                out ExpressionSyntax flowExpression,
+                out int flowPosition);
             if (initializer == null)
             {
                 // A non-literal tuple/Deconstruct source has no per-leaf flow
@@ -360,7 +363,12 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            NullableFlowState flowState = typeInfo.Nullability.FlowState;
+            NullableFlowState flowState = flowExpression == initializer
+                ? typeInfo.Nullability.FlowState
+                : this.context.SemanticModel.GetSpeculativeTypeInfo(
+                    flowPosition,
+                    flowExpression,
+                    SpeculativeBindingOption.BindAsExpression).Nullability.FlowState;
             if (flowState == NullableFlowState.None)
             {
                 // Roslyn omits element flow in a deconstruction RHS, but
@@ -469,12 +477,19 @@ public sealed partial class CSharpToGSharpTranslator
             };
         }
 
-        private ExpressionSyntax GetInferredLocalInitializer(ILocalSymbol local)
+        private ExpressionSyntax GetInferredLocalInitializer(
+            ILocalSymbol local,
+            out ExpressionSyntax flowExpression,
+            out int flowPosition)
         {
+            flowExpression = null;
+            flowPosition = 0;
             SyntaxNode declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
             if (declaration is VariableDeclaratorSyntax declarator)
             {
-                return declarator.Initializer?.Value;
+                flowExpression = declarator.Initializer?.Value;
+                flowPosition = flowExpression?.SpanStart ?? 0;
+                return flowExpression;
             }
 
             if (declaration is not SingleVariableDesignationSyntax designation
@@ -484,7 +499,131 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
+            if (TryFindDeconstructionPath(designation, left, new List<int>(), out List<int> path))
+            {
+                flowExpression = ProjectTupleElement(right, path);
+                flowPosition = right.SpanStart;
+            }
+
             return FindDeconstructionInitializer(designation, left, right);
+        }
+
+        private static bool TryFindDeconstructionPath(
+            SingleVariableDesignationSyntax target,
+            ExpressionSyntax left,
+            List<int> path,
+            out List<int> found)
+        {
+            left = Unwrap(left);
+            if (left is DeclarationExpressionSyntax declaration)
+            {
+                return TryFindDeconstructionPath(target, declaration.Designation, path, out found);
+            }
+
+            if (left is TupleExpressionSyntax tuple)
+            {
+                for (int i = 0; i < tuple.Arguments.Count; i++)
+                {
+                    path.Add(i);
+                    if (TryFindDeconstructionPath(
+                        target,
+                        tuple.Arguments[i].Expression,
+                        path,
+                        out found))
+                    {
+                        return true;
+                    }
+
+                    path.RemoveAt(path.Count - 1);
+                }
+            }
+
+            found = null;
+            return false;
+        }
+
+        private static bool TryFindDeconstructionPath(
+            SingleVariableDesignationSyntax target,
+            VariableDesignationSyntax designation,
+            List<int> path,
+            out List<int> found)
+        {
+            if (designation.SyntaxTree == target.SyntaxTree
+                && designation.Span == target.Span)
+            {
+                found = new List<int>(path);
+                return true;
+            }
+
+            if (designation is ParenthesizedVariableDesignationSyntax parenthesized)
+            {
+                for (int i = 0; i < parenthesized.Variables.Count; i++)
+                {
+                    path.Add(i);
+                    if (TryFindDeconstructionPath(
+                        target,
+                        parenthesized.Variables[i],
+                        path,
+                        out found))
+                    {
+                        return true;
+                    }
+
+                    path.RemoveAt(path.Count - 1);
+                }
+            }
+
+            found = null;
+            return false;
+        }
+
+        private static ExpressionSyntax ProjectTupleElement(
+            ExpressionSyntax expression,
+            IReadOnlyList<int> path)
+        {
+            return ProjectTupleElement(expression, path, 0);
+        }
+
+        private static ExpressionSyntax ProjectTupleElement(
+            ExpressionSyntax expression,
+            IReadOnlyList<int> path,
+            int depth)
+        {
+            if (depth == path.Count)
+            {
+                return expression;
+            }
+
+            expression = Unwrap(expression);
+            int index = path[depth];
+            if (expression is TupleExpressionSyntax tuple
+                && index < tuple.Arguments.Count)
+            {
+                return ProjectTupleElement(
+                    tuple.Arguments[index].Expression,
+                    path,
+                    depth + 1);
+            }
+
+            if (expression is ConditionalExpressionSyntax conditional)
+            {
+                return conditional
+                    .WithWhenTrue(ProjectTupleElement(conditional.WhenTrue, path, depth))
+                    .WithWhenFalse(ProjectTupleElement(conditional.WhenFalse, path, depth));
+            }
+
+            if (expression is SwitchExpressionSyntax switchExpression)
+            {
+                return switchExpression.WithArms(SyntaxFactory.SeparatedList(
+                    switchExpression.Arms.Select(arm =>
+                        arm.WithExpression(ProjectTupleElement(arm.Expression, path, depth)))));
+            }
+
+            ExpressionSyntax member = SyntaxFactory.MemberAccessExpression(
+                SyntaxKind.SimpleMemberAccessExpression,
+                SyntaxFactory.ParenthesizedExpression(expression),
+                SyntaxFactory.IdentifierName($"Item{index + 1}"));
+            return ProjectTupleElement(member, path, depth + 1);
         }
 
         private ExpressionSyntax FindDeconstructionInitializer(
@@ -505,6 +644,30 @@ public sealed partial class CSharpToGSharpTranslator
             if (left is DeclarationExpressionSyntax declaration)
             {
                 return FindDeconstructionInitializer(target, declaration.Designation, right);
+            }
+
+            if (right is ConditionalExpressionSyntax conditional)
+            {
+                ExpressionSyntax found =
+                    FindDeconstructionInitializer(target, left, conditional.WhenTrue);
+                return this.InitializerOriginatesFromDefault(found)
+                    ? found
+                    : FindDeconstructionInitializer(target, left, conditional.WhenFalse);
+            }
+
+            if (right is SwitchExpressionSyntax switchExpression)
+            {
+                foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+                {
+                    ExpressionSyntax found =
+                        FindDeconstructionInitializer(target, left, arm.Expression);
+                    if (this.InitializerOriginatesFromDefault(found))
+                    {
+                        return found;
+                    }
+                }
+
+                return null;
             }
 
             if (left is not TupleExpressionSyntax leftTuple
@@ -548,6 +711,30 @@ public sealed partial class CSharpToGSharpTranslator
                 return right;
             }
 
+            if (right is ConditionalExpressionSyntax conditional)
+            {
+                ExpressionSyntax found =
+                    FindDeconstructionInitializer(target, designation, conditional.WhenTrue);
+                return this.InitializerOriginatesFromDefault(found)
+                    ? found
+                    : FindDeconstructionInitializer(target, designation, conditional.WhenFalse);
+            }
+
+            if (right is SwitchExpressionSyntax switchExpression)
+            {
+                foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+                {
+                    ExpressionSyntax found =
+                        FindDeconstructionInitializer(target, designation, arm.Expression);
+                    if (this.InitializerOriginatesFromDefault(found))
+                    {
+                        return found;
+                    }
+                }
+
+                return null;
+            }
+
             if (designation is not ParenthesizedVariableDesignationSyntax parenthesized
                 || right is not TupleExpressionSyntax rightTuple
                 || parenthesized.Variables.Count != rightTuple.Arguments.Count)
@@ -568,6 +755,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return null;
+        }
+
+        private bool InitializerOriginatesFromDefault(ExpressionSyntax expression)
+        {
+            return expression != null
+                && this.InferredInitializerOriginatesFromDefault(
+                    expression,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default));
         }
 
         private ExpressionSyntax ResolveStableTupleAlias(ExpressionSyntax expression)
