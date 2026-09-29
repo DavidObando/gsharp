@@ -819,7 +819,9 @@ public sealed partial class CSharpToGSharpTranslator
                     target,
                     leftTuple.Arguments[i].Expression,
                     rightTuple.Arguments[i].Expression,
-                    visited);
+                    new HashSet<ISymbol>(
+                        visited,
+                        SymbolEqualityComparer.Default));
                 if (found != null)
                 {
                     return found;
@@ -969,7 +971,9 @@ public sealed partial class CSharpToGSharpTranslator
                     target,
                     parenthesized.Variables[i],
                     rightTuple.Arguments[i].Expression,
-                    visited);
+                    new HashSet<ISymbol>(
+                        visited,
+                        SymbolEqualityComparer.Default));
                 if (found != null)
                 {
                     return found;
@@ -1386,12 +1390,17 @@ public sealed partial class CSharpToGSharpTranslator
                     elementWrites);
                 if (elementWrites.Count > 0)
                 {
-                    foreach ((IReadOnlyList<int> elementPath, ExpressionSyntax writtenValue)
-                        in elementWrites)
+                    for (int writeOrdinal = 0;
+                        writeOrdinal < elementWrites.Count;
+                        writeOrdinal++)
                     {
+                        (IReadOnlyList<int> elementPath, ExpressionSyntax writtenValue) =
+                            elementWrites[writeOrdinal];
                         string write = assignment.SpanStart
                             + ":"
-                            + string.Join(".", elementPath);
+                            + string.Join(".", elementPath)
+                            + ":"
+                            + writeOrdinal;
                         var aliasPath = visited == null
                             ? null
                             : new HashSet<ISymbol>(

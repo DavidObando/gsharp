@@ -161,6 +161,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     sharedPathChoice = sharedPathSource;
                 }
                 var (sharedPathLeft, sharedPathRight) = sharedPathChoice;
+                T repeatedSource = default;
+                var (_, repeatedAlias) = (repeatedSource, repeatedSource);
 
                 Fill(ref direct, replacement);
                 Fill(ref alias, replacement);
@@ -219,6 +221,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref initializerlessAlias, replacement);
                 Fill(ref sharedPathLeft, replacement);
                 Fill(ref sharedPathRight, replacement);
+                Fill(ref repeatedAlias, replacement);
 
                 for (var loop = default(T); choose;)
                 {
@@ -507,6 +510,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "assignmentAlias", "coalesceAssignmentAlias",
             "initializerlessAlias",
             "sharedPathLeft", "sharedPathRight",
+            "repeatedAlias",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
         })
@@ -633,6 +637,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                             combinedPair.First = default(T),
                             combinedPair);
                     Fill(ref combinedLeft, replacement);
+
+                    var duplicateWritePair =
+                        (First: replacement, Second: replacement);
+                    (duplicateWritePair.First, duplicateWritePair.First) =
+                        (replacement, default(T));
+                    var (duplicateWriteLeft, duplicateWriteRight) =
+                        duplicateWritePair;
+                    Fill(ref duplicateWriteLeft, replacement);
                 }
 
                 private static void Observe<T>(in (T, T) pair)
@@ -651,12 +663,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) inLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) unknownLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) combinedLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) duplicateWriteLeft T\? =", printed);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("callRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("deconstructionWriteRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("inRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("combinedRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("duplicateWriteRight T? =", printed, StringComparison.Ordinal);
     }
 
     [Fact]
