@@ -549,6 +549,11 @@ internal sealed partial class StatementBinder
                     incomingSnapshots.RemoveAt(i);
                 }
             }
+
+            if (incomingSnapshots.Count == 0)
+            {
+                return;
+            }
         }
 
         var variablesToInvalidate = new HashSet<VariableSymbol>(variables);

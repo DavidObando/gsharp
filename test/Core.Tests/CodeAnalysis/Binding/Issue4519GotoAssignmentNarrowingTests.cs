@@ -419,6 +419,30 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void NonCompletingFinally_DoesNotInvalidateFallthroughNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(jump bool) int32 {
+                var x string? = nil
+                if jump {
+                    try {
+                        goto Done
+                    } finally {
+                        return 0
+                    }
+                }
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run(false))
+            """, "4");
+    }
+
+    [Fact]
     public void NestedFunctionBetweenFinallyAndTarget_DoesNotLoseOuterFinallyEffects()
     {
         var result = Evaluate("""
