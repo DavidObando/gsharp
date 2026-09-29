@@ -3025,6 +3025,15 @@ public sealed partial class CSharpToGSharpTranslator
                 Name: join.Into.Identifier.ValueText,
                 Type: (GTypeReference)new NamedTypeReference("sequence", new List<GTypeReference> { innerVarType }),
                 Symbol: this.context.GetDeclaredSymbol(join.Into));
+            ITypeSymbol groupVarTypeSymbol =
+                innerVarTypeSymbol != null
+                && this.context.Compilation.GetTypeByMetadataName(
+                    "System.Collections.Generic.IEnumerable`1") is { } enumerableType
+                    ? enumerableType.Construct(innerVarTypeSymbol)
+                    : null;
+            this.RecordProjectedQueryBinding(
+                groupVar.Symbol,
+                groupVarTypeSymbol);
             LambdaExpression groupResultSelector = this.BuildTransparentResultSelector(scope, groupVar);
             current = new InvocationExpression(
                 new MemberAccessExpression(current, "GroupJoin"),
