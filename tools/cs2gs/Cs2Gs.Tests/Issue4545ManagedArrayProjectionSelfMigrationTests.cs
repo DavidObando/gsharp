@@ -100,6 +100,18 @@ public sealed class Issue4545ManagedArrayProjectionSelfMigrationTests
             "Dictionary[ExpressionSyntax, IMethodSymbol?]",
             state,
             StringComparison.Ordinal);
+        Assert.Contains(
+            "[length]NullableTypeSymbolSlot",
+            state,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "HasValue",
+            state,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "prop this[index int32]",
+            state,
+            StringComparison.Ordinal);
 
         string invocations = translated["CSharpToGSharpTranslator.Invocations.cs"];
         int recordTypeParameters =
@@ -118,6 +130,10 @@ public sealed class Issue4545ManagedArrayProjectionSelfMigrationTests
             StringComparison.Ordinal);
         Assert.Contains(
             "RecordContainingTypeArgument(",
+            invocations,
+            StringComparison.Ordinal);
+        Assert.Contains(
+            "let tupleElement",
             invocations,
             StringComparison.Ordinal);
         Assert.DoesNotContain(

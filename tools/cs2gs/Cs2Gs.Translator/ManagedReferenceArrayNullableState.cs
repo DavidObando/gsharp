@@ -4,6 +4,7 @@
 
 #nullable enable annotations
 
+using System;
 using System.Collections.Generic;
 using Cs2Gs.CodeModel.Ast;
 using Microsoft.CodeAnalysis;
@@ -40,11 +41,11 @@ internal sealed class ManagedReferenceArrayNullableState
 
 internal sealed class NullableTypeSymbolSlots
 {
-    private readonly ITypeSymbol?[] values;
+    private readonly NullableTypeSymbolSlot[] values;
 
     public NullableTypeSymbolSlots(int length)
     {
-        this.values = new ITypeSymbol?[length];
+        this.values = new NullableTypeSymbolSlot[length];
     }
 
     public int Length => this.values.Length;
@@ -53,9 +54,9 @@ internal sealed class NullableTypeSymbolSlots
     {
         get
         {
-            foreach (ITypeSymbol? value in this.values)
+            foreach (NullableTypeSymbolSlot slot in this.values)
             {
-                if (value != null)
+                if (slot != null)
                 {
                     return true;
                 }
@@ -65,9 +66,29 @@ internal sealed class NullableTypeSymbolSlots
         }
     }
 
-    public ITypeSymbol? this[int index]
+    public bool HasValue(int index) => this.values[index] != null;
+
+    public ITypeSymbol GetValue(int index)
     {
-        get => this.values[index];
-        set => this.values[index] = value;
+        NullableTypeSymbolSlot? slot = this.values[index];
+        if (slot == null)
+        {
+            throw new InvalidOperationException("The nullable type-symbol slot is empty.");
+        }
+
+        return slot.Value;
+    }
+
+    public void SetValue(int index, ITypeSymbol value) =>
+        this.values[index] = new NullableTypeSymbolSlot(value);
+
+    private sealed class NullableTypeSymbolSlot
+    {
+        public NullableTypeSymbolSlot(ITypeSymbol value)
+        {
+            this.Value = value;
+        }
+
+        public ITypeSymbol Value { get; }
     }
 }

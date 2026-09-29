@@ -4995,28 +4995,29 @@ public sealed partial class CSharpToGSharpTranslator
                         projectedArgument = typeArguments[i];
                     }
 
-                    if (projectedArgument is not IArrayTypeSymbol
+                    ITypeSymbol effectiveProjectedArgument = projectedArgument;
+                    if (effectiveProjectedArgument is not IArrayTypeSymbol
                         && nullableArrayArgument
                         && (!hasProjectedArgument
                             || SymbolEqualityComparer.IncludeNullability.Equals(
                                 typeArguments[i],
-                                projectedArgument)))
+                                effectiveProjectedArgument)))
                     {
-                        projectedArgument =
-                            projectedArgument.WithNullableAnnotation(
+                        effectiveProjectedArgument =
+                            effectiveProjectedArgument.WithNullableAnnotation(
                                 NullableAnnotation.Annotated);
                     }
 
                     if (apply
-                        && observedArguments[i] != null
+                        && observedArguments.HasValue(i)
                         && !SymbolEqualityComparer.IncludeNullability.Equals(
-                            observedArguments[i],
-                            projectedArgument)
+                            observedArguments.GetValue(i),
+                            effectiveProjectedArgument)
                         && (requiresExactMatch
                             || observedArgumentsRequireExactMatch[i]
                             || !ProjectionTypeFitsDestination(
-                                projectedArgument,
-                                observedArguments[i])))
+                                effectiveProjectedArgument,
+                                observedArguments.GetValue(i))))
                     {
                         conflictingParameter ??= typeParameters[i];
                         continue;
@@ -5024,9 +5025,9 @@ public sealed partial class CSharpToGSharpTranslator
 
                     if (apply)
                     {
-                        if (observedArguments[i] == null)
+                        if (!observedArguments.HasValue(i))
                         {
-                            observedArguments[i] = projectedArgument;
+                            observedArguments.SetValue(i, effectiveProjectedArgument);
                         }
 
                         observedArgumentsRequireExactMatch[i] |= requiresExactMatch;
@@ -5034,7 +5035,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                     if (SymbolEqualityComparer.IncludeNullability.Equals(
                             typeArguments[i],
-                            projectedArgument))
+                            effectiveProjectedArgument))
                     {
                         continue;
                     }
@@ -5045,7 +5046,7 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    if (projectedArgument.NullableAnnotation
+                    if (effectiveProjectedArgument.NullableAnnotation
                             == NullableAnnotation.Annotated
                         && NullableTypeArgumentViolatesTranslatedConstraints(
                             typeParameters[i]))
@@ -5054,7 +5055,7 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    projectedArguments[i] = projectedArgument;
+                    projectedArguments.SetValue(i, effectiveProjectedArgument);
                 }
 
                 return needsProjection;
@@ -5461,11 +5462,11 @@ public sealed partial class CSharpToGSharpTranslator
                         SymbolEqualityComparer.Default);
                 for (int i = 0; i < projectedContainingArguments.Length; i++)
                 {
-                    if (projectedContainingArguments[i] != null)
+                    if (projectedContainingArguments.HasValue(i))
                     {
                         replacements.Add(
                             containingTypeParameters[i],
-                            projectedContainingArguments[i]);
+                            projectedContainingArguments.GetValue(i));
                     }
                 }
 
@@ -5495,9 +5496,9 @@ public sealed partial class CSharpToGSharpTranslator
                 ITypeSymbol[] typeArguments = method.TypeArguments.ToArray();
                 for (int i = 0; i < typeArguments.Length; i++)
                 {
-                    if (projectedMethodArguments[i] != null)
+                    if (projectedMethodArguments.HasValue(i))
                     {
-                        typeArguments[i] = projectedMethodArguments[i];
+                        typeArguments[i] = projectedMethodArguments.GetValue(i);
                     }
                 }
 
@@ -6275,7 +6276,9 @@ public sealed partial class CSharpToGSharpTranslator
                     return null;
                 }
 
-                sinkType = tupleType.TupleElements[tupleIndices[i]].Type;
+                IFieldSymbol tupleElement =
+                    tupleType.TupleElements[tupleIndices[i]];
+                sinkType = tupleElement.Type;
             }
 
             if (tupleIndices.Count != 0)
