@@ -60,6 +60,7 @@ func TestAnalysisWorkerCleansNestedProcessTree(t *testing.T) {
 					"GO2GS_PROCESS_HELPER=" + mode,
 					"GO2GS_CHILD_PID=" + pidPath,
 					"GO2GS_CHILD_MARKER=" + marker,
+					"GO2GS_CHILD_DELAY=5s",
 				})
 			if err != nil {
 				t.Fatal(err)

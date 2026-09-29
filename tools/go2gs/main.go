@@ -127,11 +127,12 @@ func runAnalyze(parent context.Context, args []string) error {
 		return &exitError{2, err}
 	}
 	timeout := time.Duration(profile.Limits.MaxDurationSeconds) * time.Second
-	bootstrapRoot, err := os.MkdirTemp(outRoot, ".go2gs-bootstrap-*")
+	bootstrapDirectory, err := createOwnedTempDir(outRoot, ".go2gs-bootstrap-*")
 	if err != nil {
 		return &exitError{2, err}
 	}
-	defer os.RemoveAll(bootstrapRoot)
+	defer bootstrapDirectory.cleanup()
+	bootstrapRoot := bootstrapDirectory.path
 	versionResult, err := runProcess(parent, min(timeout, 15*time.Second), profile.Limits.MaxLogBytes,
 		sourceRoot, goExecutable, []string{"version"}, bootstrapEnvironment(bootstrapRoot, goExecutable))
 	if err != nil {
@@ -143,11 +144,12 @@ func runAnalyze(parent context.Context, args []string) error {
 	if parseGoVersion(versionResult.Stdout) == "" {
 		return &exitError{2, errors.New("selected Go executable returned an unrecognized version")}
 	}
-	workerRoot, err := os.MkdirTemp(outRoot, ".go2gs-worker-*")
+	workerDirectory, err := createOwnedTempDir(outRoot, ".go2gs-worker-*")
 	if err != nil {
 		return &exitError{2, err}
 	}
-	defer os.RemoveAll(workerRoot)
+	defer workerDirectory.cleanup()
+	workerRoot := workerDirectory.path
 	profileBytes, err := marshalCanonical(profile)
 	if err != nil {
 		return &exitError{2, err}
@@ -189,13 +191,11 @@ func runAnalyze(parent context.Context, args []string) error {
 }
 
 func runAnalysisWorkerProcess(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string) (processResult, error) {
-	return runProcessWithMode(parent, timeout, maxOutput, dir, executable, args, env, true)
+	return runProcessWithMode(parent, timeout, maxOutput, dir, executable, args, env, processGroupOwn)
 }
 
 func runAnalyzeWorker(parent context.Context, args []string) error {
-	if ownsProcessGroup() {
-		parent = inheritProcessGroup(parent)
-	}
+	parent = inheritProcessGroup(parent)
 	source, profilePath, out, err := parseAnalyzeArgs(args)
 	if err != nil {
 		return &exitError{2, err}

@@ -11,27 +11,15 @@ import (
 	"syscall"
 )
 
-func configureProcessTree(cmd *exec.Cmd, ownProcessGroup bool) error {
-	if ownProcessGroup {
+func configureProcessTree(cmd *exec.Cmd, groupMode processGroupMode) error {
+	if groupMode == processGroupOwn {
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	}
 	return nil
 }
 
-func ownsProcessGroup() bool {
-	return syscall.Getpgrp() == os.Getpid()
-}
-
 func terminateProcessTree(process *os.Process) error {
 	err := syscall.Kill(-process.Pid, syscall.SIGKILL)
-	if errors.Is(err, syscall.ESRCH) {
-		return nil
-	}
-	return err
-}
-
-func terminateInheritedProcessTree(*os.Process) error {
-	err := syscall.Kill(-syscall.Getpgrp(), syscall.SIGKILL)
 	if errors.Is(err, syscall.ESRCH) {
 		return nil
 	}
