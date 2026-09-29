@@ -457,6 +457,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local
                 || !visited.Add(local)
+                || !this.LocalInitializerReachesUse(local, expression.SpanStart)
                 || local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                     is not VariableDeclaratorSyntax { Initializer.Value: { } initializer })
             {
@@ -794,17 +795,18 @@ public sealed partial class CSharpToGSharpTranslator
             expression = this.UnwrapTuplePreservingCasts(expression);
             while (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
                 && visited.Add(local)
-                && this.TupleAliasInitializerReachesUse(local, usePosition)
+                && this.LocalInitializerReachesUse(local, usePosition)
                 && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                     is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
             {
                 expression = this.UnwrapTuplePreservingCasts(initializer);
+                usePosition = initializer.SpanStart;
             }
 
             return expression;
         }
 
-        private bool TupleAliasInitializerReachesUse(ILocalSymbol local, int usePosition)
+        private bool LocalInitializerReachesUse(ILocalSymbol local, int usePosition)
         {
             if (!this.IsLocalReassigned(local))
             {

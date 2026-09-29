@@ -53,6 +53,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var mutablePair = (default(T), default(T));
                 var (mutableAliasLeft, mutableAliasRight) = mutablePair;
                 mutablePair = (replacement, replacement);
+                var upstreamPair = (default(T), default(T));
+                var savedPair = upstreamPair;
+                upstreamPair = (replacement, replacement);
+                var (capturedAliasLeft, capturedAliasRight) = savedPair;
                 var reassignedPair = (default(T), default(T));
                 reassignedPair = (replacement, replacement);
                 var (reassignedLeft, reassignedRight) = reassignedPair;
@@ -93,6 +97,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref aliasRight, replacement);
                 Fill(ref mutableAliasLeft, replacement);
                 Fill(ref mutableAliasRight, replacement);
+                Fill(ref capturedAliasLeft, replacement);
+                Fill(ref capturedAliasRight, replacement);
                 Fill(ref conditionalLeft, replacement);
                 Fill(ref conditionalRight, replacement);
                 Fill(ref switchLeft, replacement);
@@ -301,6 +307,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "wholeNestedA", "wholeNestedB", "wholeNestedC",
             "castLeft", "castRight", "aliasLeft", "aliasRight",
             "mutableAliasLeft", "mutableAliasRight",
+            "capturedAliasLeft", "capturedAliasRight",
             "conditionalLeft", "conditionalRight", "switchLeft", "switchRight",
             "coalesceLeft", "coalesceRight",
             "loopLeft", "loopRight", "coalesced", "left", "right",
@@ -346,6 +353,31 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Equal(18, result.Value);
     }
 
+    [Fact]
+    public void Translation_DoesNotUseStaleAliasInitializerAfterReassignment()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class StaleAlias
+            {
+                [return: System.Diagnostics.CodeAnalysis.MaybeNull]
+                private static T Maybe<T>() => default;
+
+                private static void M<T>()
+                {
+                    T source = default(T)!;
+                    source = Maybe<T>();
+                    var alias = source;
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.DoesNotContain("alias T? =", printed, StringComparison.Ordinal);
+    }
+
     private static ILocalSymbol Local(SyntaxNode root, SemanticModel model, string name)
     {
         SyntaxNode declaration = root.DescendantNodes()
@@ -360,7 +392,12 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
     private static string Translate()
     {
-        LoadedCSharpProject project = Load();
+        return Translate(Source);
+    }
+
+    private static string Translate(string source)
+    {
+        LoadedCSharpProject project = Load(source);
         LoadedDocument document = Assert.Single(project.Documents);
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         string printed = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
@@ -370,8 +407,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
     private static LoadedCSharpProject Load()
     {
+        return Load(Source);
+    }
+
+    private static LoadedCSharpProject Load(string source)
+    {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
-            new[] { ("Snippet.cs", Source) });
+            new[] { ("Snippet.cs", source) });
         Assert.True(
             project.BoundWithoutErrors,
             string.Join(Environment.NewLine, project.ErrorDiagnostics));
