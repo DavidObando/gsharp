@@ -4,6 +4,7 @@
 
 using System;
 using System.Collections.Immutable;
+using System.IO;
 using System.Linq;
 using GSharp.Core.CodeAnalysis;
 using GSharp.Core.CodeAnalysis.Binding;
@@ -84,6 +85,74 @@ public sealed class Issue4293ImplicitScopedParameterTests
             """);
 
         Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void ConstrainedSourceStaticOutArgument_DoesNotConstrainRefReturningCall()
+    {
+        var diagnostics = Bind("""
+            package P
+            interface IPick {
+                shared {
+                    func Pick(out scratch int32) ref int32;
+                }
+            }
+            func Forward[T IPick]() ref int32 {
+                var scratch int32
+                return ref T.Pick(&scratch)
+            }
+            """);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void ConstrainedImportedStaticOutArgument_IsExcludedFromEscapeSources()
+    {
+        using var contracts = new Issue4563RefSafetyRulesContracts();
+        var method = contracts.LoadUpdated()
+            .GetType("Issue4563.Updated.IStaticContract")!
+            .GetMethod("Pick")!;
+        var scratch = new BoundVariableExpression(
+            null,
+            new LocalVariableSymbol("scratch", isReadOnly: false, TypeSymbol.Int32));
+        var call = new BoundConstrainedStaticCallExpression(
+            null,
+            new TypeParameterSymbol(
+                "T",
+                ordinal: 0,
+                TypeParameterConstraint.Any,
+                TypeParameterVariance.None),
+            method,
+            ImmutableArray.Create<BoundExpression>(scratch),
+            ImmutableArray.Create(RefKind.Out),
+            TypeSymbol.Int32,
+            TypeSymbol.FromClrType(method.DeclaringType!));
+
+        Assert.True(RefCapabilities.IsNativeRefReturningCall(call));
+        Assert.True(RefCapabilities.TryGetRefReturnEscapeSources(
+            call,
+            out var receiver,
+            out var byRefArguments,
+            out var byValueByRefLikeArguments));
+        Assert.Null(receiver);
+        Assert.Empty(byRefArguments);
+        Assert.Empty(byValueByRefLikeArguments);
+    }
+
+    [Fact]
+    public void RefSafetyRulesFixture_DisposesLegacyFixtureWhenUpdatedConstructionFails()
+    {
+        var legacyDirectory = string.Empty;
+        Assert.Throws<InvalidOperationException>(() =>
+            new Issue4563RefSafetyRulesContracts(path =>
+            {
+                legacyDirectory = path;
+                throw new InvalidOperationException("injected updated-fixture failure");
+            }));
+
+        Assert.NotEmpty(legacyDirectory);
+        Assert.False(Directory.Exists(legacyDirectory));
     }
 
     [Fact]

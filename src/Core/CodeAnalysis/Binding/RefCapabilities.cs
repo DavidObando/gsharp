@@ -16,14 +16,11 @@ internal static class RefCapabilities
     private static readonly ConditionalWeakTable<Type, HashSet<(Module Module, int MetadataToken)>> UnscopedRefPropertyAccessors = new();
 
     /// <summary>
-    /// Issue #4224: true when <paramref name="expression"/> is a call to a
-    /// same-compilation (native) ref-returning function/method or a read of a
-    /// native ref-returning property. An imported/CLR ref-returning member is
-    /// NOT included here — <see cref="ConversionClassifier.AutoDereferenceRefReturn"/>
-    /// already wraps those in a <see cref="BoundDereferenceExpression"/> at
-    /// bind time, so they are already lvalues (see
-    /// <see cref="ExpressionBinder.IsLvalue"/>'s <c>BoundDereferenceExpression</c>
-    /// case) with no change needed here.
+    /// Issue #4224: true when <paramref name="expression"/> is a ref-returning
+    /// call/property node that retains its raw managed reference. This includes
+    /// native calls and constrained static-interface calls. Ordinary imported
+    /// calls are excluded because <see cref="ConversionClassifier.AutoDereferenceRefReturn"/>
+    /// wraps them in a <see cref="BoundDereferenceExpression"/> at bind time.
     /// </summary>
     /// <param name="expression">The bound expression to classify.</param>
     /// <returns><see langword="true"/> when the expression is such a call/property read.</returns>
@@ -39,6 +36,9 @@ internal static class RefCapabilities
                 baseInterface.Method.ReturnRefKind != RefKind.None,
             BoundBaseClassCallExpression { Method: { } method } =>
                 method.ReturnRefKind != RefKind.None,
+            BoundConstrainedStaticCallExpression constrained =>
+                (constrained.InterfaceMethod?.ReturnRefKind
+                    ?? GetReturnRefKind(constrained.ClrMethod)) != RefKind.None,
 
             // A flow-narrowed read (issue #1180) inserts a cast after the
             // getter call; the raw managed pointer from the getter would not
@@ -113,6 +113,24 @@ internal static class RefCapabilities
                 SelectEscapeArguments(
                     method.Parameters,
                     baseClass.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundConstrainedStaticCallExpression { InterfaceMethod: { } method } constrained
+                when method.ReturnRefKind != RefKind.None:
+                receiver = null;
+                SelectEscapeArguments(
+                    method.Parameters,
+                    constrained.Arguments,
+                    out byRefArguments,
+                    out byValueByRefLikeArguments);
+                return true;
+            case BoundConstrainedStaticCallExpression { ClrMethod: { } method } constrained
+                when GetReturnRefKind(method) != RefKind.None:
+                receiver = null;
+                SelectEscapeArguments(
+                    ImportParameters(method.GetParameters()),
+                    constrained.Arguments,
                     out byRefArguments,
                     out byValueByRefLikeArguments);
                 return true;

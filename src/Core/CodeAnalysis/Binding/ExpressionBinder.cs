@@ -1551,13 +1551,13 @@ internal sealed partial class ExpressionBinder
             BoundIndexExpression index => index.IsArrayBackedElementAccess,
             BoundVariableExpression or BoundDereferenceExpression => true,
 
-            // Issue #4224: a call to a native ref-returning function/method, or
-            // a read of a native ref-returning property, leaves a managed
-            // pointer that the emitter can keep instead of dereferencing (see
+            // Issue #4224: a native or constrained-static ref-returning call,
+            // or a native ref-returning property read, leaves a managed pointer
+            // that the emitter can keep instead of dereferencing (see
             // EmitAddressOf's BoundCallExpression/BoundUserInstanceCallExpression/
-            // BoundPropertyAccessExpression cases). An imported/CLR ref-returning
-            // member is already an lvalue via the BoundDereferenceExpression
-            // case above (ConversionClassifier.AutoDereferenceRefReturn).
+            // BoundPropertyAccessExpression cases). Other imported/CLR
+            // ref-returning members are already lvalues via the
+            // BoundDereferenceExpression case above.
             _ when RefCapabilities.IsNativeRefReturningCall(expression) => true,
             _ => false,
         };

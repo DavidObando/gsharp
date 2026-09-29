@@ -13,13 +13,33 @@ namespace GSharp.Core.Tests.Fixtures;
 /// <summary>Builds legacy and version-11 ref-safety contracts outside the ambient test assembly.</summary>
 internal sealed class Issue4563RefSafetyRulesContracts : IDisposable
 {
-    private readonly CSharpFixture legacy = new(
-        LegacySource,
-        parseOptions: new CSharpParseOptions(LanguageVersion.CSharp11).WithFeatures(
-            new[] { new KeyValuePair<string, string>("noRefSafetyRulesAttribute", "true") }));
-    private readonly CSharpFixture updated = new(
-        UpdatedSource,
-        parseOptions: new CSharpParseOptions(LanguageVersion.CSharp11));
+    private readonly CSharpFixture legacy;
+    private readonly CSharpFixture updated;
+
+    public Issue4563RefSafetyRulesContracts(Action<string> beforeUpdated = null)
+    {
+        CSharpFixture createdLegacy = null;
+        CSharpFixture createdUpdated = null;
+        try
+        {
+            createdLegacy = new CSharpFixture(
+                LegacySource,
+                parseOptions: new CSharpParseOptions(LanguageVersion.CSharp11).WithFeatures(
+                    new[] { new KeyValuePair<string, string>("noRefSafetyRulesAttribute", "true") }));
+            beforeUpdated?.Invoke(createdLegacy.DirectoryPath);
+            createdUpdated = new CSharpFixture(
+                UpdatedSource,
+                parseOptions: new CSharpParseOptions(LanguageVersion.CSharp11));
+            legacy = createdLegacy;
+            updated = createdUpdated;
+        }
+        catch
+        {
+            createdUpdated?.Dispose();
+            createdLegacy?.Dispose();
+            throw;
+        }
+    }
 
     /// <summary>Gets the legacy assembly path.</summary>
     public string LegacyPath => legacy.AssemblyPath;
@@ -78,6 +98,11 @@ internal sealed class Issue4563RefSafetyRulesContracts : IDisposable
             public abstract ref int PickUnscoped([UnscopedRef] out int value);
 
             public abstract ref int PickScoped(scoped ref int value);
+        }
+
+        public interface IStaticContract
+        {
+            static abstract ref int Pick(out int scratch);
         }
         """;
 }

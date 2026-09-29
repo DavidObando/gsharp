@@ -701,13 +701,14 @@ internal sealed partial class StatementBinder
             case BoundBlockExpression block:
                 return IsLvalueForRefReturn(block.Expression);
 
-            // Issue #4224: `return ref At(...)` — forwarding a native
-            // ref-returning call/property read. Delegates to the same
+            // Issue #4224: `return ref At(...)` — forwarding a native or
+            // constrained-static ref-returning call/property read. Delegates to the same
             // classifier ExpressionBinder.IsLvalue uses so the two
             // classifiers do not drift (root cause #2 of issue #4224).
             case BoundCallExpression:
             case BoundUserInstanceCallExpression:
             case BoundPropertyAccessExpression:
+            case BoundConstrainedStaticCallExpression:
                 return ExpressionBinder.IsLvalue(expr);
             default:
                 return false;
