@@ -1097,18 +1097,17 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            if (this.context.GetTypeInfo(expression).Type is IArrayTypeSymbol
-                    { ElementType: INamedTypeSymbol { IsTupleType: true } } tupleArray
+            if (this.context.GetTypeInfo(expression).Type is IArrayTypeSymbol array
                 && this.GetMappedArrayElementType(expression)
                     is { } projectedArrayElement
                 && !SymbolEqualityComparer.IncludeNullability.Equals(
-                    tupleArray.ElementType,
+                    array.ElementType,
                     projectedArrayElement))
             {
                 return this.context.Compilation.CreateArrayTypeSymbol(
                     projectedArrayElement,
-                    tupleArray.Rank,
-                    tupleArray.NullableAnnotation);
+                    array.Rank,
+                    array.NullableAnnotation);
             }
 
             if (expression is ConditionalExpressionSyntax conditional)
@@ -1265,8 +1264,51 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return this.context.Compilation.ClassifyConversion(
-                projectedType,
-                destinationType).IsImplicit;
+                    projectedType,
+                    destinationType).IsImplicit
+                && InvariantTypeArgumentsMatch(projectedType, destinationType);
+        }
+
+        private static bool InvariantTypeArgumentsMatch(
+            ITypeSymbol sourceType,
+            ITypeSymbol destinationType)
+        {
+            if (sourceType is not INamedTypeSymbol sourceNamed
+                || destinationType is not INamedTypeSymbol destinationNamed)
+            {
+                return true;
+            }
+
+            INamedTypeSymbol matchingSource = ReceiverTypeHierarchy(sourceNamed)
+                .FirstOrDefault(candidate =>
+                    SymbolEqualityComparer.Default.Equals(
+                        candidate.OriginalDefinition,
+                        destinationNamed.OriginalDefinition));
+            if (matchingSource == null)
+            {
+                return true;
+            }
+
+            for (int i = 0;
+                i < destinationNamed.TypeParameters.Length
+                    && i < matchingSource.TypeArguments.Length;
+                i++)
+            {
+                if (destinationNamed.TypeParameters[i].Variance
+                        == VarianceKind.None
+                    && !SymbolEqualityComparer.IncludeNullability.Equals(
+                        matchingSource.TypeArguments[i],
+                        destinationNamed.TypeArguments[i]))
+                {
+                    return false;
+                }
+            }
+
+            return destinationNamed.ContainingType == null
+                || matchingSource.ContainingType == null
+                || InvariantTypeArgumentsMatch(
+                    matchingSource.ContainingType,
+                    destinationNamed.ContainingType);
         }
 
         private ITypeSymbol GetProjectedDelegateInvocationReturnType(

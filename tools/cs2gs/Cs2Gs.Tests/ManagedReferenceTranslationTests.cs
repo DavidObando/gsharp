@@ -4726,6 +4726,45 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ConditionalRejectsIncompatibleInvariantProjectedArms()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedInvariantConditional;
+            public sealed class Holder<T> {
+                public T Value;
+            }
+            public class Probe {
+                private static Holder<T> Wrap<T>(T[] source) =>
+                    new Holder<T> { Value = source[0] };
+
+                public static void Run(bool flag) {
+                    var source = new ManagedRef<int>[1];
+                    var fixedValue = new Holder<ManagedRef<int>>();
+                    var value = flag ? Wrap(source) : fixedValue;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedInvariantConditional.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "incompatible managed-reference projections",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ConditionalAndSwitchAssignmentsToProjectedArrayElementsStayNullable()
     {
         const string source = """
