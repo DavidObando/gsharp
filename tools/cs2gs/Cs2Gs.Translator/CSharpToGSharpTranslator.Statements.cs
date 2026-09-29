@@ -821,8 +821,7 @@ public sealed partial class CSharpToGSharpTranslator
                 || block.FindToken(usePosition).Parent?.AncestorsAndSelf()
                     .OfType<StatementSyntax>()
                     .FirstOrDefault(statement => statement.Parent == block)
-                    is not { } useStatement
-                || block.DescendantNodes().OfType<GotoStatementSyntax>().Any())
+                    is not { } useStatement)
             {
                 return false;
             }
@@ -834,16 +833,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            for (int i = declarationIndex + 1; i <= useIndex; i++)
+            if (useIndex == declarationIndex + 1)
             {
-                if (block.Statements[i].DescendantNodesAndSelf()
-                    .Any(node => this.SyntaxNodeWritesSymbol(node, local)))
-                {
-                    return false;
-                }
+                return true;
             }
 
-            return true;
+            DataFlowAnalysis flow = this.context.SemanticModel.AnalyzeDataFlow(
+                block.Statements[declarationIndex + 1],
+                block.Statements[useIndex - 1]);
+            return flow.Succeeded
+                && !flow.AlwaysAssigned.Contains(local, SymbolEqualityComparer.Default);
         }
 
         private ExpressionSyntax UnwrapTuplePreservingCasts(ExpressionSyntax expression)

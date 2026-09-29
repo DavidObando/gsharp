@@ -57,6 +57,12 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var savedPair = upstreamPair;
                 upstreamPair = (replacement, replacement);
                 var (capturedAliasLeft, capturedAliasRight) = savedPair;
+                var conditionalPair = (default(T), default(T));
+                if (choose)
+                {
+                    conditionalPair = (replacement, replacement);
+                }
+                var (conditionalAliasLeft, conditionalAliasRight) = conditionalPair;
                 var reassignedPair = (default(T), default(T));
                 reassignedPair = (replacement, replacement);
                 var (reassignedLeft, reassignedRight) = reassignedPair;
@@ -99,6 +105,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref mutableAliasRight, replacement);
                 Fill(ref capturedAliasLeft, replacement);
                 Fill(ref capturedAliasRight, replacement);
+                Fill(ref conditionalAliasLeft, replacement);
+                Fill(ref conditionalAliasRight, replacement);
                 Fill(ref conditionalLeft, replacement);
                 Fill(ref conditionalRight, replacement);
                 Fill(ref switchLeft, replacement);
@@ -308,6 +316,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "castLeft", "castRight", "aliasLeft", "aliasRight",
             "mutableAliasLeft", "mutableAliasRight",
             "capturedAliasLeft", "capturedAliasRight",
+            "conditionalAliasLeft", "conditionalAliasRight",
             "conditionalLeft", "conditionalRight", "switchLeft", "switchRight",
             "coalesceLeft", "coalesceRight",
             "loopLeft", "loopRight", "coalesced", "left", "right",
