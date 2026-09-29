@@ -530,7 +530,9 @@ internal sealed partial class StatementBinder
     /// created after such a jump are removed; narrowings established before
     /// every jump, unrelated variables, and assignments after the label remain.
     /// </summary>
-    private IReadOnlyList<GotoNarrowingSnapshot>? InvalidateAssignmentNarrowingsBypassedByGoto(string labelName)
+    private IReadOnlyList<GotoNarrowingSnapshot>? InvalidateAssignmentNarrowingsBypassedByGoto(
+        string labelName,
+        bool fallthroughReachesLabel)
     {
         if (!binderCtx.PendingGotoAssignmentStarts.Remove(labelName, out _))
         {
@@ -557,6 +559,71 @@ internal sealed partial class StatementBinder
 
         if (incomingSnapshots is not { Count: > 0 })
         {
+            return incomingSnapshots;
+        }
+
+        if (!fallthroughReachesLabel)
+        {
+            var commonIncoming = new Dictionary<AccessPath, TypeSymbol>();
+            var commonFrameIndices = new Dictionary<AccessPath, int>();
+            foreach (var entry in incomingSnapshots[0].NarrowedVariables)
+            {
+                var incomingTypes = new List<TypeSymbol> { entry.Value };
+                for (var i = 1; i < incomingSnapshots.Count; i++)
+                {
+                    if (!incomingSnapshots[i].NarrowedVariables.TryGetValue(
+                            entry.Key,
+                            out var incomingType))
+                    {
+                        incomingTypes.Clear();
+                        break;
+                    }
+
+                    incomingTypes.Add(incomingType);
+                }
+
+                var commonType = incomingTypes.FirstOrDefault(candidate =>
+                    incomingTypes.All(source => Conversion.Classify(source, candidate).IsImplicit));
+                if (commonType != null)
+                {
+                    commonIncoming.Add(entry.Key, commonType);
+                    if (incomingSnapshots[0].NarrowingFrameIndices.TryGetValue(
+                            entry.Key,
+                            out var frameIndex)
+                        && incomingSnapshots.All(snapshot =>
+                            snapshot.NarrowingFrameIndices.TryGetValue(entry.Key, out var incomingFrame)
+                            && incomingFrame == frameIndex))
+                    {
+                        commonFrameIndices.Add(entry.Key, frameIndex);
+                    }
+                }
+            }
+
+            foreach (var frame in binderCtx.NarrowedVariables)
+            {
+                frame.Clear();
+            }
+
+            binderCtx.AssignmentNarrowingGenerations.Clear();
+            foreach (var entry in commonIncoming)
+            {
+                var targetFrame = commonFrameIndices.TryGetValue(entry.Key, out var frameIndex)
+                    && frameIndex < binderCtx.NarrowedVariables.Count
+                    ? binderCtx.NarrowedVariables[frameIndex]
+                    : binderCtx.NarrowedVariables[^1];
+                targetFrame.Add(entry.Key, entry.Value);
+                if (!entry.Key.HasMembers
+                    && incomingSnapshots[0].AssignmentGenerations.TryGetValue(
+                        entry.Key.Root,
+                        out var generation)
+                    && incomingSnapshots.All(snapshot =>
+                        snapshot.AssignmentGenerations.TryGetValue(entry.Key.Root, out var incomingGeneration)
+                        && incomingGeneration == generation))
+                {
+                    binderCtx.AssignmentNarrowingGenerations.Add(entry.Key.Root, generation);
+                }
+            }
+
             return incomingSnapshots;
         }
 
@@ -1526,7 +1593,9 @@ internal sealed partial class StatementBinder
     /// enclosing block (return / throw / unconditional goto, which covers
     /// the lowered shapes of <c>break</c> and <c>continue</c>). A block
     /// counts when its last statement does any of those; an
-    /// <see cref="BoundIfStatement"/> counts only if both arms do.
+    /// <see cref="BoundIfStatement"/> counts only if both arms do; a
+    /// <see cref="BoundTryStatement"/> counts when its <c>finally</c> exits or
+    /// its protected block and every handler exit.
     /// </summary>
     private static bool EndsInUnconditionalExit(BoundStatement? statement)
     {
@@ -1562,6 +1631,16 @@ internal sealed partial class StatementBinder
 
                 return EndsInUnconditionalExit(nested.ThenStatement)
                     && EndsInUnconditionalExit(nested.ElseStatement);
+
+            case BoundTryStatement nestedTry:
+                if (nestedTry.FinallyBlock != null
+                    && EndsInUnconditionalExit(nestedTry.FinallyBlock))
+                {
+                    return true;
+                }
+
+                return EndsInUnconditionalExit(nestedTry.TryBlock)
+                    && nestedTry.CatchClauses.All(clause => EndsInUnconditionalExit(clause.Body));
 
             case BoundPatternSwitchStatement nestedSwitch:
                 {

@@ -96,7 +96,9 @@ internal sealed partial class StatementBinder
         }
 
         userLabelHandlerRegions[labelName] = exceptionHandlerRegions.Reverse().ToImmutableArray();
-        var incomingSnapshots = InvalidateAssignmentNarrowingsBypassedByGoto(labelName);
+        var incomingSnapshots = InvalidateAssignmentNarrowingsBypassedByGoto(
+            labelName,
+            currentStatementListFallsThrough);
         var backwardState = new BackwardGotoNarrowingState(CaptureGotoNarrowingSnapshot());
         AddUpstreamLabelDependencies(backwardState, incomingSnapshots);
         binderCtx.BackwardGotoNarrowingStates[labelName] = backwardState;

@@ -800,6 +800,106 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyEstablishesOnlyReachableNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                try {
+                    goto Done
+                }
+                finally {
+                    x = "safe"
+                }
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyNarrowingDoesNotOverrideReachableFallthrough()
+    {
+        var result = Evaluate("""
+            func Run(jump bool) int32 {
+                var x string? = nil
+                if jump {
+                    try {
+                        goto Done
+                    }
+                    finally {
+                        x = "safe"
+                    }
+                }
+            Done:
+                return x.Length
+            }
+
+            Run(false)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyNarrowingIsInvalidatedByUnsafeBackedge()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                try {
+                    goto Again
+                }
+                finally {
+                    x = "safe"
+                }
+                var count = 0
+            Again:
+                let length = x.Length
+                if count == 0 {
+                    count++
+                    x = nil
+                    goto Again
+                }
+                return length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_IntoNestedScopePreservesOuterNarrowingFrame()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() {
+                var outer string? = nil
+                outer = "safe"
+                {
+                    goto Use
+                Use:
+                    Console.WriteLine(outer.Length)
+                }
+                Console.WriteLine(outer.Length)
+            }
+
+            Run()
+            """, "4", "4");
+    }
+
+    [Fact]
     public void UnrelatedEarlierGotoDoesNotLinkLaterBackwardLabel()
     {
         AssertRuns("""

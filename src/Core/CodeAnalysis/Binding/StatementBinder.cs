@@ -117,6 +117,7 @@ internal sealed partial class StatementBinder
         new(StringComparer.Ordinal);
     private readonly List<(string LabelName, TextLocation Location, ImmutableArray<SyntaxNode> SourceRegions)>
         userGotoHandlerRegions = new();
+    private bool currentStatementListFallsThrough = true;
     private int usingInitializationFlagCount;
 
     public StatementBinder(
@@ -581,6 +582,7 @@ internal sealed partial class StatementBinder
         var memberNotNullFrame = new Dictionary<AccessPath, TypeSymbol>();
         var inheritedAssignmentGenerations =
             new Dictionary<VariableSymbol, int>(binderCtx.AssignmentNarrowingGenerations);
+        var inheritedFallthrough = currentStatementListFallsThrough;
         binderCtx.NarrowedVariables.Add(memberNotNullFrame);
         try
         {
@@ -805,6 +807,9 @@ internal sealed partial class StatementBinder
                 // type. Runs after invalidation for the same reason as the
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame);
+                currentStatementListFallsThrough = statementSyntax is LabeledStatementSyntax
+                    ? !EndsInUnconditionalExit(statement)
+                    : currentStatementListFallsThrough && !EndsInUnconditionalExit(statement);
             }
 
             if (trailingStatement != null)
@@ -820,6 +825,8 @@ internal sealed partial class StatementBinder
             {
                 binderCtx.AssignmentNarrowingGenerations.Add(entry.Key, entry.Value);
             }
+
+            currentStatementListFallsThrough = inheritedFallthrough;
         }
     }
 
