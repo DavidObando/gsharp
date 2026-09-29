@@ -42,7 +42,7 @@ type Limits struct {
 type SchemaHandshake struct {
 	Name                string   `json:"name"`
 	Version             int      `json:"version"`
-	RequiredRecordKinds []string `json:"requiredRecordKinds,omitempty"`
+	RequiredRecordKinds []string `json:"requiredRecordKinds"`
 }
 
 type Analysis struct {
@@ -108,13 +108,14 @@ type ProfileSnapshot struct {
 }
 
 type ToolchainProvenance struct {
-	RequestedVersion string `json:"requestedVersion"`
-	ActualVersion    string `json:"actualVersion"`
-	ExecutableSHA256 string `json:"executableSha256"`
-	ExecutableName   string `json:"executableName"`
-	GOROOTIdentity   string `json:"gorootIdentity"`
-	GOROOTSource     string `json:"gorootSource"`
-	AutoDownload     bool   `json:"autoDownload"`
+	RequestedVersion    string `json:"requestedVersion"`
+	ActualVersion       string `json:"actualVersion"`
+	ExecutableSHA256    string `json:"executableSha256"`
+	ExecutableName      string `json:"executableName"`
+	GOROOTIdentity      string `json:"gorootIdentity"`
+	GOROOTVersionSHA256 string `json:"gorootVersionSha256"`
+	GOROOTSource        string `json:"gorootSource"`
+	AutoDownload        bool   `json:"autoDownload"`
 }
 
 type ManifestRecord struct {
@@ -136,17 +137,26 @@ type ModuleRecord struct {
 }
 
 type PackageRecord struct {
-	ID                  string   `json:"id"`
-	ImportPath          string   `json:"importPath"`
-	Name                string   `json:"name"`
-	Variant             string   `json:"variant"`
-	ModuleID            string   `json:"moduleId,omitempty"`
-	LanguageVersion     string   `json:"languageVersion,omitempty"`
-	FileIDs             []string `json:"fileIds"`
-	ImportPackageIDs    []string `json:"importPackageIds"`
-	InitializationOrder []string `json:"initializationOrder"`
-	DiagnosticIDs       []string `json:"diagnosticIds"`
-	InventoryComplete   bool     `json:"inventoryComplete"`
+	ID                  string                 `json:"id"`
+	ImportPath          string                 `json:"importPath"`
+	Name                string                 `json:"name"`
+	Variant             string                 `json:"variant"`
+	ModuleID            string                 `json:"moduleId,omitempty"`
+	LanguageVersion     string                 `json:"languageVersion,omitempty"`
+	FileIDs             []string               `json:"fileIds"`
+	CompiledFileIDs     []string               `json:"compiledFileIds"`
+	ImportPackageIDs    []string               `json:"importPackageIds"`
+	InitializationOrder []InitializationRecord `json:"initializationOrder"`
+	DiagnosticIDs       []string               `json:"diagnosticIds"`
+	InventoryComplete   bool                   `json:"inventoryComplete"`
+}
+
+type InitializationRecord struct {
+	Order     int      `json:"order"`
+	Kind      string   `json:"kind"`
+	FileID    string   `json:"fileId,omitempty"`
+	NodeID    string   `json:"nodeId,omitempty"`
+	SymbolIDs []string `json:"symbolIds"`
 }
 
 type FileRecord struct {
@@ -175,10 +185,10 @@ type TypeRecord struct {
 	Name       string              `json:"name,omitempty"`
 	Alias      bool                `json:"alias"`
 	Named      bool                `json:"named"`
-	TypeArgs   []string            `json:"typeArgs,omitempty"`
+	TypeArgs   []string            `json:"typeArgs"`
 	Underlying string              `json:"underlying,omitempty"`
 	Constraint string              `json:"constraint,omitempty"`
-	Fields     []StructFieldRecord `json:"fields,omitempty"`
+	Fields     []StructFieldRecord `json:"fields"`
 	Comparable bool                `json:"comparable"`
 	Size       int64               `json:"size"`
 	Align      int64               `json:"align"`
@@ -339,6 +349,7 @@ type DiagnosticRecord struct {
 	Category  string      `json:"category"`
 	Severity  string      `json:"severity"`
 	Message   string      `json:"message"`
+	Position  string      `json:"position,omitempty"`
 	PackageID string      `json:"packageId,omitempty"`
 	Span      *SourceSpan `json:"span,omitempty"`
 	Truncated bool        `json:"truncated"`
@@ -350,7 +361,7 @@ type BlockerRecord struct {
 	Category      string   `json:"category"`
 	Message       string   `json:"message"`
 	AffectedUnits []string `json:"affectedUnits"`
-	DiagnosticIDs []string `json:"diagnosticIds,omitempty"`
+	DiagnosticIDs []string `json:"diagnosticIds"`
 }
 
 type RecordCounts struct {

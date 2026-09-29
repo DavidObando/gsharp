@@ -7,10 +7,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"os"
 	"os/exec"
-	"sync"
+	"path/filepath"
 	"time"
 )
 
@@ -29,37 +28,12 @@ func runProcess(parent context.Context, timeout time.Duration, maxOutput int, di
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.Stdin = nil
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		return processResult{}, err
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		return processResult{}, err
-	}
-	if err := cmd.Start(); err != nil {
-		return processResult{}, err
-	}
-
 	var outBuf, errBuf boundedBuffer
 	outBuf.limit = maxOutput
 	errBuf.limit = maxOutput
-	var wg sync.WaitGroup
-	var outErr, errErr error
-	wg.Add(2)
-	go func() {
-		defer wg.Done()
-		_, outErr = io.Copy(&outBuf, stdout)
-	}()
-	go func() {
-		defer wg.Done()
-		_, errErr = io.Copy(&errBuf, stderr)
-	}()
-	waitErr := cmd.Wait()
-	wg.Wait()
-	if outErr != nil || errErr != nil {
-		return processResult{}, errors.Join(outErr, errErr)
-	}
+	cmd.Stdout = &outBuf
+	cmd.Stderr = &errBuf
+	waitErr := cmd.Run()
 	if ctx.Err() != nil {
 		return processResult{}, fmt.Errorf("process %q timed out or was cancelled: %w", executable, ctx.Err())
 	}
@@ -102,9 +76,30 @@ func (b *boundedBuffer) Write(data []byte) (int, error) {
 
 func (b *boundedBuffer) String() string { return b.buf.String() }
 
-func sanitizedEnvironment(profile Profile, cacheRoot, goroot string) []string {
+func bootstrapEnvironment(cacheRoot, executable string) []string {
+	return canonicalEnv(map[string]string{
+		"PATH":        selectedPath(executable),
+		"HOME":        cacheRoot,
+		"TMPDIR":      cacheRoot,
+		"GOTOOLCHAIN": "local",
+		"GOPROXY":     "off",
+		"GOSUMDB":     "off",
+		"GONOSUMDB":   "*",
+		"GOPRIVATE":   "",
+		"GONOPROXY":   "*",
+		"GOWORK":      "off",
+	})
+}
+
+func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable string) ([]string, error) {
+	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
+		return nil, err
+	}
+	if err := validateGODEBUG(profile.GODEBUG); err != nil {
+		return nil, err
+	}
 	values := map[string]string{
-		"PATH":             os.Getenv("PATH"),
+		"PATH":             selectedPath(executable),
 		"HOME":             cacheRoot,
 		"TMPDIR":           cacheRoot,
 		"GOCACHE":          cacheRoot + string(os.PathSeparator) + "build-cache",
@@ -130,7 +125,16 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot string) []string {
 	for _, feature := range profile.ArchitectureFeatures {
 		values[architectureVariable(profile.GOARCH)] = appendCSV(values[architectureVariable(profile.GOARCH)], feature)
 	}
-	return canonicalEnv(values)
+	return canonicalEnv(values), nil
+}
+
+func selectedPath(executable string) string {
+	dir := filepath.Dir(executable)
+	path := os.Getenv("PATH")
+	if path == "" {
+		return dir
+	}
+	return dir + string(os.PathListSeparator) + path
 }
 
 func boolString(value bool) string {

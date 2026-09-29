@@ -53,7 +53,17 @@ The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,
 `GOSUMDB=off`, `GOWORK=off` unless a later version adds an explicit workspace,
 and disables `GOPACKAGESDRIVER`. The child environment is allowlisted rather
-than inherited wholesale.
+than inherited wholesale. The selected `go` executable's own canonical
+`GOROOT` is resolved before isolation and used for loading. `goFlags` accepts
+only `-tags`, `-trimpath`, and `-buildvcs=false`; execution and path override
+flags such as `-toolexec`, `-overlay`, and `-modfile` are rejected. The only
+accepted `goDebug` key is `gotypesalias`, with value `0` or `1`.
+
+Package records preserve both the exact compiled-file order and the execution
+order of variable initializers followed by `init` functions. Diagnostic
+positions use portable source/module/GOROOT identities. Schema validation
+requires the complete v1 handshake, mandatory fields and collections, exact
+record counts, and valid references.
 
 ## Validate an inventory
 

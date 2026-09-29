@@ -42,8 +42,17 @@ func readProfile(path string) (Profile, error) {
 	if profile.ModuleMode != "readonly" && profile.ModuleMode != "vendor" {
 		return profile, errors.New("moduleMode must be readonly or vendor")
 	}
+	if profile.VendorMode != (profile.ModuleMode == "vendor") {
+		return profile, errors.New("vendorMode must match moduleMode=vendor")
+	}
 	if profile.WorkspaceMode != "off" {
 		return profile, errors.New("M0 requires workspaceMode=off")
+	}
+	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
+		return profile, err
+	}
+	if err := validateGODEBUG(profile.GODEBUG); err != nil {
+		return profile, err
 	}
 	if err := validateLimits(profile.Limits); err != nil {
 		return profile, err
@@ -51,8 +60,81 @@ func readProfile(path string) (Profile, error) {
 	sort.Strings(profile.EntryPatterns)
 	sort.Strings(profile.ArchitectureFeatures)
 	sort.Strings(profile.BuildTags)
-	sort.Strings(profile.GOFLAGS)
 	return profile, nil
+}
+
+func validateGODEBUG(values map[string]string) error {
+	for key, value := range values {
+		if key != "gotypesalias" || (value != "0" && value != "1") {
+			return fmt.Errorf("goDebug setting %q=%q is not allowed in M0", key, value)
+		}
+	}
+	return nil
+}
+
+func validateGOFLAGS(flags []string) error {
+	for i := 0; i < len(flags); i++ {
+		token := flags[i]
+		if token == "" || strings.IndexFunc(token, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' }) >= 0 {
+			return fmt.Errorf("goFlags[%d] must be one non-empty argument", i)
+		}
+		name, value, hasValue := token, "", false
+		if index := strings.IndexByte(token, '='); index >= 0 {
+			name, value, hasValue = token[:index], token[index+1:], true
+		}
+		switch name {
+		case "-tags":
+			if !hasValue {
+				i++
+				if i >= len(flags) {
+					return errors.New("goFlags -tags requires a value")
+				}
+				value = flags[i]
+			}
+			if !validBuildTags(value) {
+				return fmt.Errorf("goFlags -tags has invalid value %q", value)
+			}
+		case "-trimpath":
+			if !hasValue {
+				continue
+			}
+			if value != "true" && value != "false" {
+				return fmt.Errorf("goFlags -trimpath has invalid boolean %q", value)
+			}
+		case "-buildvcs":
+			if !hasValue {
+				i++
+				if i >= len(flags) {
+					return errors.New("goFlags -buildvcs requires false")
+				}
+				value = flags[i]
+			}
+			if value != "false" {
+				return errors.New("goFlags permits only -buildvcs=false")
+			}
+		default:
+			return fmt.Errorf("goFlags option %q is not allowed in M0", name)
+		}
+	}
+	return nil
+}
+
+func validBuildTags(value string) bool {
+	if value == "" || strings.HasPrefix(value, "-") {
+		return false
+	}
+	for _, tag := range strings.Split(value, ",") {
+		if tag == "" {
+			return false
+		}
+		for _, r := range tag {
+			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+				(r >= '0' && r <= '9') || r == '_' || r == '.') {
+				return false
+			}
+		}
+	}
+	return true
 }
 
 func validateLimits(l Limits) error {
@@ -76,7 +158,121 @@ func readAnalysis(path string) (Analysis, error) {
 	if err := decoder.Decode(&analysis); err != nil {
 		return analysis, fmt.Errorf("invalid analysis: %w", err)
 	}
+	if err := validateAnalysisJSONShape(data); err != nil {
+		return analysis, err
+	}
 	return analysis, nil
+}
+
+func validateAnalysisJSONShape(data []byte) error {
+	var root map[string]json.RawMessage
+	if err := json.Unmarshal(data, &root); err != nil {
+		return fmt.Errorf("invalid analysis: %w", err)
+	}
+	if err := requireJSONFields("analysis", root,
+		"schema", "tool", "helper", "profile", "toolchain", "manifests", "modules", "packages",
+		"files", "types", "symbols", "nodes", "constants", "scopes", "selections", "calls",
+		"methodSets", "instances", "embeds", "generateDirectives", "dependencies", "featureSites",
+		"diagnostics", "blockers", "recordCounts", "inventoryComplete", "migrationReady"); err != nil {
+		return err
+	}
+	nested := []struct {
+		name   string
+		fields []string
+	}{
+		{"schema", []string{"name", "version", "requiredRecordKinds"}},
+		{"tool", []string{"version", "sha256"}},
+		{"helper", []string{"version", "sha256"}},
+		{"profile", []string{
+			"id", "sha256", "sourceRootIdentity", "entryPatterns", "loadTests", "goos", "goarch",
+			"architectureFeatures", "buildTags", "cgoEnabled", "goFlags", "goDebug", "moduleMode",
+			"vendorMode", "workspaceMode", "offline", "allowNetwork", "generatorsExecuted",
+			"targetBinariesExecuted", "trustBoundary", "limits",
+		}},
+		{"toolchain", []string{
+			"requestedVersion", "actualVersion", "executableSha256", "executableName",
+			"gorootIdentity", "gorootVersionSha256", "gorootSource", "autoDownload",
+		}},
+		{"recordCounts", []string{
+			"packages", "files", "types", "symbols", "nodes", "constants", "scopes", "selections",
+			"calls", "methodSets", "instances", "embeds", "generateDirectives", "dependencies",
+			"featureSites", "diagnostics", "blockers", "total",
+		}},
+	}
+	for _, item := range nested {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(root[item.name], &object); err != nil {
+			return fmt.Errorf("analysis.%s must be an object", item.name)
+		}
+		if err := requireJSONFields("analysis."+item.name, object, item.fields...); err != nil {
+			return err
+		}
+	}
+	records := []struct {
+		name   string
+		fields []string
+	}{
+		{"manifests", []string{"kind", "path", "sha256", "bytes"}},
+		{"modules", []string{"id", "path", "main"}},
+		{"packages", []string{
+			"id", "importPath", "name", "variant", "fileIds", "compiledFileIds",
+			"importPackageIds", "initializationOrder", "diagnosticIds", "inventoryComplete",
+		}},
+		{"files", []string{
+			"id", "path", "role", "sha256", "bytes", "contentBase64", "validUtf8",
+			"generated", "native", "embed", "provenance",
+		}},
+		{"types", []string{
+			"id", "kind", "canonical", "display", "alias", "named", "typeArgs",
+			"fields", "comparable", "size", "align",
+		}},
+		{"symbols", []string{"id", "packageId", "name", "kind", "exported"}},
+		{"nodes", []string{
+			"id", "packageId", "fileId", "kind", "span", "addressable", "assignable",
+			"isType", "isValue", "isNil", "isBuiltin",
+		}},
+		{"constants", []string{"id", "nodeId", "category", "exact", "untyped", "iota", "arrayLength", "span"}},
+		{"scopes", []string{"id", "packageId", "span", "symbolIds", "labels"}},
+		{"selections", []string{"id", "nodeId", "kind", "objectId", "receiverTypeId", "typeId", "indexPath", "indirect"}},
+		{"calls", []string{"id", "nodeId", "kind", "argumentTypeIds", "variadic", "ellipsis"}},
+		{"methodSets", []string{"id", "typeId", "pointer", "methodSymbolIds"}},
+		{"instances", []string{"id", "nodeId", "typeId", "typeArgIds"}},
+		{"embeds", []string{"id", "packageId", "fileId", "pattern", "logicalName", "contentSha256"}},
+		{"generateDirectives", []string{"id", "fileId", "directive", "executed", "span"}},
+		{"dependencies", []string{"id", "fromPackageId", "importPath", "disposition"}},
+		{"featureSites", []string{"id", "nodeId", "packageId", "fileId", "feature", "disposition", "span"}},
+		{"diagnostics", []string{"id", "category", "severity", "message", "truncated"}},
+		{"blockers", []string{"id", "blocks", "category", "message", "affectedUnits", "diagnosticIds"}},
+	}
+	for _, record := range records {
+		if err := requireJSONArrayFields(root, record.name, record.fields...); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func requireJSONFields(owner string, object map[string]json.RawMessage, fields ...string) error {
+	for _, field := range fields {
+		value, ok := object[field]
+		if !ok || bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return fmt.Errorf("%s is missing required field %q", owner, field)
+		}
+	}
+	return nil
+}
+
+func requireJSONArrayFields(root map[string]json.RawMessage, name string, fields ...string) error {
+	var records []map[string]json.RawMessage
+	if err := json.Unmarshal(root[name], &records); err != nil {
+		return fmt.Errorf("analysis.%s must be an array", name)
+	}
+	for index, record := range records {
+		if err := requireJSONFields(fmt.Sprintf("analysis.%s[%d]", name, index), record, fields...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func writeAnalysis(path string, analysis Analysis, maxBytes int64) (int, error) {

@@ -12,7 +12,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strings"
 	"time"
@@ -61,20 +60,30 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 	}
 	defer os.RemoveAll(workRoot)
 
-	goroot := runtime.GOROOT()
-	env := sanitizedEnvironment(profile, workRoot, goroot)
-	versionResult, err := runProcess(ctx, 15*time.Second, profile.Limits.MaxLogBytes, sourceRoot, executable, []string{"version"}, env)
+	bootstrapEnv := bootstrapEnvironment(workRoot, executable)
+	versionResult, err := runProcess(ctx, 15*time.Second, profile.Limits.MaxLogBytes, sourceRoot, executable, []string{"version"}, bootstrapEnv)
 	if err != nil {
 		return Analysis{}, false, err
 	}
 	actualVersion := parseGoVersion(versionResult.Stdout)
-	gorootResult, err := runProcess(ctx, 15*time.Second, profile.Limits.MaxLogBytes, sourceRoot, executable, []string{"env", "GOROOT"}, env)
+	gorootResult, err := runProcess(ctx, 15*time.Second, profile.Limits.MaxLogBytes, sourceRoot, executable, []string{"env", "GOROOT"}, bootstrapEnv)
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	actualGOROOT := strings.TrimSpace(gorootResult.Stdout)
-	if actualGOROOT == "" {
-		actualGOROOT = goroot
+	if gorootResult.ExitCode != 0 {
+		return Analysis{}, false, fmt.Errorf("resolve selected Go GOROOT: %s", strings.TrimSpace(gorootResult.Stderr))
+	}
+	targetGOROOT, err := secureRoot(strings.TrimSpace(gorootResult.Stdout))
+	if err != nil {
+		return Analysis{}, false, fmt.Errorf("selected Go GOROOT: %w", err)
+	}
+	gorootVersionHash, _, err := hashFile(filepath.Join(targetGOROOT, "VERSION"))
+	if err != nil {
+		return Analysis{}, false, fmt.Errorf("hash selected Go GOROOT VERSION: %w", err)
+	}
+	env, err := sanitizedEnvironment(profile, workRoot, targetGOROOT, executable)
+	if err != nil {
+		return Analysis{}, false, err
 	}
 
 	actualCommit := sourceCommit(ctx, sourceRoot, profile.Limits.MaxLogBytes)
@@ -100,12 +109,14 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		Toolchain: ToolchainProvenance{
 			RequestedVersion: profile.RequestedGoVersion, ActualVersion: actualVersion,
 			ExecutableSHA256: goHash, ExecutableName: filepath.Base(executable),
-			GOROOTIdentity: stableID("goroot", actualVersion+"\x00"+goHash), GOROOTSource: "go env GOROOT (path intentionally omitted)",
-			AutoDownload: false,
+			GOROOTIdentity:      stableID("goroot", actualVersion+"\x00"+goHash+"\x00"+gorootVersionHash),
+			GOROOTVersionSHA256: gorootVersionHash,
+			GOROOTSource:        "selected executable: go env GOROOT (path intentionally omitted)",
+			AutoDownload:        false,
 		},
 	}
 
-	builder := newInventoryBuilder(&analysis, sourceRoot, profile)
+	builder := newInventoryBuilder(&analysis, sourceRoot, targetGOROOT, profile)
 	if err := builder.collectManifests(); err != nil {
 		return Analysis{}, false, err
 	}

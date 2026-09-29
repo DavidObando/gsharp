@@ -11,7 +11,6 @@ import (
 	"go/types"
 	"os"
 	"path/filepath"
-	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -23,6 +22,7 @@ import (
 type inventoryBuilder struct {
 	analysis       *Analysis
 	sourceRoot     string
+	goroot         string
 	profile        Profile
 	packageIDs     map[*packages.Package]string
 	packagePathIDs map[string]string
@@ -40,9 +40,9 @@ type inventoryBuilder struct {
 	diagnosticSeq  int
 }
 
-func newInventoryBuilder(analysis *Analysis, sourceRoot string, profile Profile) *inventoryBuilder {
+func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
 	return &inventoryBuilder{
-		analysis: analysis, sourceRoot: sourceRoot, profile: profile,
+		analysis: analysis, sourceRoot: sourceRoot, goroot: goroot, profile: profile,
 		packageIDs: map[*packages.Package]string{}, packagePathIDs: map[string]string{}, typeIDs: map[types.Type]string{},
 		objectIDs: map[types.Object]string{}, fileIDs: map[string]string{},
 		moduleIDs: map[string]string{}, seenModules: map[string]bool{},
@@ -126,13 +126,18 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 	}
 
 	for _, pkgErr := range pkg.Errors {
-		message, truncated := truncate(sanitizeMessage(pkgErr.Msg, b.sourceRoot, b.profile.Limits.MaxStringBytes), b.profile.Limits.MaxStringBytes)
-		id := stableID("diagnostic", pkgID+"\x00"+strconv.Itoa(int(pkgErr.Kind))+"\x00"+pkgErr.Pos+"\x00"+message)
-		diagnostic := DiagnosticRecord{ID: id, Category: packageErrorCategory(pkgErr.Kind), Severity: "error", Message: message, PackageID: pkgID, Truncated: truncated}
+		message, truncated := truncate(b.sanitizeDiagnosticMessage(pkg, pkgErr.Msg), b.profile.Limits.MaxStringBytes)
+		position := b.portableDiagnosticPosition(pkg, pkgErr.Pos)
+		id := stableID("diagnostic", pkgID+"\x00"+strconv.Itoa(int(pkgErr.Kind))+"\x00"+position+"\x00"+message)
+		diagnostic := DiagnosticRecord{
+			ID: id, Category: packageErrorCategory(pkgErr.Kind), Severity: "error",
+			Message: message, Position: position, PackageID: pkgID, Truncated: truncated,
+		}
 		b.analysis.Diagnostics = append(b.analysis.Diagnostics, diagnostic)
 		record.DiagnosticIDs = append(record.DiagnosticIDs, id)
 		record.InventoryComplete = false
 	}
+
 	if !record.InventoryComplete {
 		b.block("package-load", "package inventory is incomplete", []string{pkgID}, record.DiagnosticIDs)
 	}
@@ -143,12 +148,57 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 		}
 	}
 
-	for _, init := range pkg.TypesInfo.InitOrder {
-		record.InitializationOrder = append(record.InitializationOrder, b.initCanonical(pkgID, init))
-	}
+	b.addInitialization(pkg, &record)
 	sort.Strings(record.DiagnosticIDs)
 	b.analysis.Packages = append(b.analysis.Packages, record)
 	return nil
+}
+
+func (b *inventoryBuilder) sanitizeDiagnosticMessage(pkg *packages.Package, message string) string {
+	message = strings.ReplaceAll(message, b.sourceRoot, "<source>")
+	message = strings.ReplaceAll(message, b.goroot, "<goroot>")
+	if pkg.Module != nil && pkg.Module.Dir != "" {
+		message = strings.ReplaceAll(message, pkg.Module.Dir, "<module>")
+		if pkg.Module.Replace != nil && pkg.Module.Replace.Dir != "" {
+			message = strings.ReplaceAll(message, pkg.Module.Replace.Dir, "<replacement>")
+		}
+	}
+	return message
+}
+
+func (b *inventoryBuilder) portableDiagnosticPosition(pkg *packages.Package, position string) string {
+	path, suffix := splitDiagnosticPosition(position)
+	if path == "" {
+		return position
+	}
+	if !filepath.IsAbs(path) {
+		clean := filepath.Clean(path)
+		if clean == ".." || strings.HasPrefix(clean, ".."+string(filepath.Separator)) {
+			clean = filepath.Base(clean)
+		}
+		return "line://" + slash(clean) + suffix
+	}
+	if portable, err := b.portablePath(pkg, path); err == nil {
+		return portable + suffix
+	}
+	return "external://" + slash(filepath.Base(path)) + suffix
+}
+
+func splitDiagnosticPosition(position string) (string, string) {
+	last := strings.LastIndexByte(position, ':')
+	if last < 0 {
+		return "", ""
+	}
+	if _, err := strconv.Atoi(position[last+1:]); err != nil {
+		return "", ""
+	}
+	start := last
+	if previous := strings.LastIndexByte(position[:last], ':'); previous >= 0 {
+		if _, err := strconv.Atoi(position[previous+1 : last]); err == nil {
+			start = previous
+		}
+	}
+	return position[:start], position[start:]
 }
 
 func isSourcePackage(pkg *packages.Package, sourceRoot string) bool {
@@ -206,6 +256,11 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			return err
 		}
 		record.FileIDs = append(record.FileIDs, fileID)
+	}
+	for _, path := range pkg.CompiledGoFiles {
+		if fileID := b.fileIDs[b.fileKey(pkg, path)]; fileID != "" {
+			record.CompiledFileIDs = append(record.CompiledFileIDs, fileID)
+		}
 	}
 
 	b.addScopes(pkg)
@@ -274,14 +329,10 @@ func (b *inventoryBuilder) portablePath(pkg *packages.Package, path string) (str
 			return "module://" + module.Path + "@" + version + "/" + relative, nil
 		}
 	}
-	if relative, err := pathWithin(runtimeGOROOT(), path); err == nil {
+	if relative, err := pathWithin(b.goroot, path); err == nil {
 		return "goroot://" + relative, nil
 	}
 	return "", fmt.Errorf("selected path is outside declared source/module/GOROOT roots: %s", path)
-}
-
-func runtimeGOROOT() string {
-	return runtime.GOROOT()
 }
 
 func (b *inventoryBuilder) markGenerated(fileID string, generated bool) {
@@ -312,7 +363,7 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 			return true
 		}
 		span := b.span(pkg, node.Pos(), node.End())
-		nodeID := stableID("node", pkgID+"\x00"+fileID+"\x00"+fmt.Sprintf("%d:%d:%T", span.StartByte, span.EndByte, node))
+		nodeID := syntaxNodeID(pkgID, fileID, node, span)
 		record := NodeRecord{ID: nodeID, PackageID: pkgID, FileID: fileID, Kind: fmt.Sprintf("%T", node), Span: span}
 		if len(parents) > 0 {
 			record.ParentID = parents[len(parents)-1]
@@ -350,6 +401,10 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 		b.addFeatureSites(pkg, pkgID, fileID, node, nodeID, span)
 		return true
 	})
+}
+
+func syntaxNodeID(pkgID, fileID string, node ast.Node, span SourceSpan) string {
+	return stableID("node", pkgID+"\x00"+fileID+"\x00"+fmt.Sprintf("%d:%d:%T", span.StartByte, span.EndByte, node))
 }
 
 func (b *inventoryBuilder) addConstant(pkg *packages.Package, nodeID string, expr ast.Expr, tv types.TypeAndValue, span SourceSpan, arrayLength bool) {
@@ -902,12 +957,40 @@ func (b *inventoryBuilder) fileKey(pkg *packages.Package, path string) string {
 	return b.packageIDs[pkg] + "\x00" + path
 }
 
-func (b *inventoryBuilder) initCanonical(pkgID string, init *types.Initializer) string {
-	lhs := make([]string, 0, len(init.Lhs))
-	for _, variable := range init.Lhs {
-		lhs = append(lhs, b.addObjectForPackageID(pkgID, variable))
+func (b *inventoryBuilder) addInitialization(pkg *packages.Package, record *PackageRecord) {
+	for _, init := range pkg.TypesInfo.InitOrder {
+		entry := InitializationRecord{Order: len(record.InitializationOrder), Kind: "variable", SymbolIDs: []string{}}
+		for _, variable := range init.Lhs {
+			entry.SymbolIDs = append(entry.SymbolIDs, b.addObjectForPackageID(record.ID, variable))
+		}
+		if position := pkg.Fset.PositionFor(init.Rhs.Pos(), false); position.IsValid() {
+			entry.FileID = b.fileIDs[b.fileKey(pkg, position.Filename)]
+			if entry.FileID != "" {
+				entry.NodeID = syntaxNodeID(record.ID, entry.FileID, init.Rhs, b.span(pkg, init.Rhs.Pos(), init.Rhs.End()))
+			}
+		}
+		record.InitializationOrder = append(record.InitializationOrder, entry)
 	}
-	return strings.Join(lhs, ",") + "=" + types.ExprString(init.Rhs)
+	for index, file := range pkg.Syntax {
+		if index >= len(pkg.CompiledGoFiles) {
+			break
+		}
+		fileID := b.fileIDs[b.fileKey(pkg, pkg.CompiledGoFiles[index])]
+		if fileID == "" {
+			continue
+		}
+		for _, declaration := range file.Decls {
+			function, ok := declaration.(*ast.FuncDecl)
+			if !ok || function.Recv != nil || function.Name.Name != "init" {
+				continue
+			}
+			span := b.span(pkg, function.Pos(), function.End())
+			record.InitializationOrder = append(record.InitializationOrder, InitializationRecord{
+				Order: len(record.InitializationOrder), Kind: "init-function", FileID: fileID,
+				NodeID: syntaxNodeID(record.ID, fileID, function, span), SymbolIDs: []string{},
+			})
+		}
+	}
 }
 
 func (b *inventoryBuilder) addObjectForPackageID(pkgID string, object types.Object) string {
@@ -986,6 +1069,7 @@ func (b *inventoryBuilder) recordCount() int {
 
 func (b *inventoryBuilder) finish() {
 	a := b.analysis
+	normalizeAnalysisCollections(a)
 	sort.Slice(a.Modules, func(i, j int) bool { return a.Modules[i].ID < a.Modules[j].ID })
 	sort.Slice(a.Packages, func(i, j int) bool { return a.Packages[i].ID < a.Packages[j].ID })
 	sort.Slice(a.Files, func(i, j int) bool { return a.Files[i].ID < a.Files[j].ID })
@@ -1020,6 +1104,142 @@ func (b *inventoryBuilder) finish() {
 		}
 	}
 	a.MigrationReady = false
+}
+
+func normalizeAnalysisCollections(a *Analysis) {
+	if a.Profile.EntryPatterns == nil {
+		a.Profile.EntryPatterns = []string{}
+	}
+	if a.Profile.ArchitectureFeatures == nil {
+		a.Profile.ArchitectureFeatures = []string{}
+	}
+	if a.Profile.BuildTags == nil {
+		a.Profile.BuildTags = []string{}
+	}
+	if a.Profile.GOFLAGS == nil {
+		a.Profile.GOFLAGS = []string{}
+	}
+	if a.Profile.GODEBUG == nil {
+		a.Profile.GODEBUG = map[string]string{}
+	}
+	if a.Manifests == nil {
+		a.Manifests = []ManifestRecord{}
+	}
+	if a.Modules == nil {
+		a.Modules = []ModuleRecord{}
+	}
+	if a.Packages == nil {
+		a.Packages = []PackageRecord{}
+	}
+	if a.Files == nil {
+		a.Files = []FileRecord{}
+	}
+	if a.Types == nil {
+		a.Types = []TypeRecord{}
+	}
+	if a.Symbols == nil {
+		a.Symbols = []SymbolRecord{}
+	}
+	if a.Nodes == nil {
+		a.Nodes = []NodeRecord{}
+	}
+	if a.Constants == nil {
+		a.Constants = []ConstantRecord{}
+	}
+	if a.Scopes == nil {
+		a.Scopes = []ScopeRecord{}
+	}
+	if a.Selections == nil {
+		a.Selections = []SelectionRecord{}
+	}
+	if a.Calls == nil {
+		a.Calls = []CallRecord{}
+	}
+	if a.MethodSets == nil {
+		a.MethodSets = []MethodSetRecord{}
+	}
+	if a.Instances == nil {
+		a.Instances = []InstanceRecord{}
+	}
+	if a.Embeds == nil {
+		a.Embeds = []EmbedRecord{}
+	}
+	if a.GenerateDirectives == nil {
+		a.GenerateDirectives = []GenerateRecord{}
+	}
+	if a.Dependencies == nil {
+		a.Dependencies = []DependencyRecord{}
+	}
+	if a.FeatureSites == nil {
+		a.FeatureSites = []FeatureSite{}
+	}
+	if a.Diagnostics == nil {
+		a.Diagnostics = []DiagnosticRecord{}
+	}
+	if a.Blockers == nil {
+		a.Blockers = []BlockerRecord{}
+	}
+	for i := range a.Packages {
+		if a.Packages[i].FileIDs == nil {
+			a.Packages[i].FileIDs = []string{}
+		}
+		if a.Packages[i].CompiledFileIDs == nil {
+			a.Packages[i].CompiledFileIDs = []string{}
+		}
+		if a.Packages[i].ImportPackageIDs == nil {
+			a.Packages[i].ImportPackageIDs = []string{}
+		}
+		if a.Packages[i].InitializationOrder == nil {
+			a.Packages[i].InitializationOrder = []InitializationRecord{}
+		}
+		if a.Packages[i].DiagnosticIDs == nil {
+			a.Packages[i].DiagnosticIDs = []string{}
+		}
+		for j := range a.Packages[i].InitializationOrder {
+			if a.Packages[i].InitializationOrder[j].SymbolIDs == nil {
+				a.Packages[i].InitializationOrder[j].SymbolIDs = []string{}
+			}
+		}
+	}
+	for i := range a.Types {
+		if a.Types[i].TypeArgs == nil {
+			a.Types[i].TypeArgs = []string{}
+		}
+		if a.Types[i].Fields == nil {
+			a.Types[i].Fields = []StructFieldRecord{}
+		}
+	}
+	for i := range a.Scopes {
+		if a.Scopes[i].SymbolIDs == nil {
+			a.Scopes[i].SymbolIDs = []string{}
+		}
+		if a.Scopes[i].Labels == nil {
+			a.Scopes[i].Labels = []string{}
+		}
+	}
+	for i := range a.Calls {
+		if a.Calls[i].ArgumentTypeIDs == nil {
+			a.Calls[i].ArgumentTypeIDs = []string{}
+		}
+	}
+	for i := range a.MethodSets {
+		if a.MethodSets[i].MethodSymbolIDs == nil {
+			a.MethodSets[i].MethodSymbolIDs = []string{}
+		}
+	}
+	for i := range a.Instances {
+		if a.Instances[i].TypeArgIDs == nil {
+			a.Instances[i].TypeArgIDs = []string{}
+		}
+	}
+	for i := range a.Blockers {
+		if a.Blockers[i].AffectedUnits == nil {
+			a.Blockers[i].AffectedUnits = []string{}
+		}
+		if a.Blockers[i].DiagnosticIDs == nil {
+			a.Blockers[i].DiagnosticIDs = []string{}
+		}
+	}
 }
 
 func stringSet(values []string) map[string]bool {
