@@ -1587,8 +1587,9 @@ public sealed partial class CSharpToGSharpTranslator
         {
             for (int writeOrdinal = 0; writeOrdinal < writes.Count; writeOrdinal++)
             {
-                (IReadOnlyList<int> elementPath, ExpressionSyntax writtenValue) =
-                    writes[writeOrdinal];
+                var elementWrite = writes[writeOrdinal];
+                IReadOnlyList<int> elementPath = elementWrite.Path;
+                ExpressionSyntax writtenValue = elementWrite.Value;
                 string write = writeNode.SpanStart
                     + ":"
                     + string.Join(".", elementPath)
