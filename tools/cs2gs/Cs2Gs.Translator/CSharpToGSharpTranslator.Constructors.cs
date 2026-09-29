@@ -3621,6 +3621,19 @@ public sealed partial class CSharpToGSharpTranslator
                         && (this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression)
                             || (this.IsReferenceLikeOrManagedReference(forEachElement)
                                 && forEachElement.NullableAnnotation == NullableAnnotation.Annotated));
+                    ILocalSymbol projectedLoopLocal =
+                        bindingTypeMatchesElementType ? loopSymbol as ILocalSymbol : null;
+                    bool projectedBinding = projectedLoopLocal != null
+                        && forEachElement != null
+                        && !SymbolEqualityComparer.IncludeNullability.Equals(
+                            projectedLoopLocal.Type,
+                            forEachElement);
+                    if (projectedBinding)
+                    {
+                        this.state.ManagedReferenceArrayProjectedLocalType[
+                            projectedLoopLocal] = forEachElement;
+                    }
+
                     if (nullableElement && loopSymbol != null)
                     {
                         this.state.NullableForEachBindings.Add(loopSymbol);
@@ -3636,6 +3649,12 @@ public sealed partial class CSharpToGSharpTranslator
                         if (nullableElement && loopSymbol != null)
                         {
                             this.state.NullableForEachBindings.Remove(loopSymbol);
+                        }
+
+                        if (projectedBinding)
+                        {
+                            this.state.ManagedReferenceArrayProjectedLocalType.Remove(
+                                projectedLoopLocal);
                         }
                     }
 

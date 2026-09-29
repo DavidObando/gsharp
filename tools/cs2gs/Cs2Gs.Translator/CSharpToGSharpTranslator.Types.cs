@@ -1521,12 +1521,14 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol projectedElement =
                 this.GetProjectedForEachElementType(node, forEachInfo);
             var nullableBindings = new List<ISymbol>();
+            var projectedBindings = new List<ILocalSymbol>();
             if (forEachInfo.ElementConversion.IsIdentity)
             {
                 this.CollectProjectedForEachVariableBindings(
                     node.Variable,
                     projectedElement,
-                    nullableBindings);
+                    nullableBindings,
+                    projectedBindings);
             }
 
             if (names.Count >= 2)
@@ -1542,6 +1544,12 @@ public sealed partial class CSharpToGSharpTranslator
                     foreach (ISymbol binding in nullableBindings)
                     {
                         this.state.NullableForEachBindings.Remove(binding);
+                    }
+
+                    foreach (ILocalSymbol binding in projectedBindings)
+                    {
+                        this.state.ManagedReferenceArrayProjectedLocalType.Remove(
+                            binding);
                     }
                 }
 
@@ -1570,6 +1578,11 @@ public sealed partial class CSharpToGSharpTranslator
                 this.state.NullableForEachBindings.Remove(binding);
             }
 
+            foreach (ILocalSymbol binding in projectedBindings)
+            {
+                this.state.ManagedReferenceArrayProjectedLocalType.Remove(binding);
+            }
+
             this.context.ReportUnsupported(
                 node,
                 "foreach tuple deconstruction with arity < 2 has no canonical G# form yet (ADR-0115 §B).");
@@ -1579,7 +1592,8 @@ public sealed partial class CSharpToGSharpTranslator
         private void CollectProjectedForEachVariableBindings(
             ExpressionSyntax variable,
             ITypeSymbol projectedType,
-            List<ISymbol> bindings)
+            List<ISymbol> nullableBindings,
+            List<ILocalSymbol> projectedBindings)
         {
             switch (variable)
             {
@@ -1587,7 +1601,8 @@ public sealed partial class CSharpToGSharpTranslator
                     this.CollectProjectedForEachVariableBindings(
                         declaration.Designation,
                         projectedType,
-                        bindings);
+                        nullableBindings,
+                        projectedBindings);
                     break;
 
                 case TupleExpressionSyntax tuple
@@ -1599,7 +1614,8 @@ public sealed partial class CSharpToGSharpTranslator
                         this.CollectProjectedForEachVariableBindings(
                             tuple.Arguments[i].Expression,
                             tupleType.TupleElements[i].Type,
-                            bindings);
+                            nullableBindings,
+                            projectedBindings);
                     }
 
                     break;
@@ -1609,17 +1625,30 @@ public sealed partial class CSharpToGSharpTranslator
         private void CollectProjectedForEachVariableBindings(
             VariableDesignationSyntax designation,
             ITypeSymbol projectedType,
-            List<ISymbol> bindings)
+            List<ISymbol> nullableBindings,
+            List<ILocalSymbol> projectedBindings)
         {
             switch (designation)
             {
                 case SingleVariableDesignationSyntax single
-                    when projectedType?.NullableAnnotation
-                        == NullableAnnotation.Annotated
-                    && this.IsReferenceLikeOrManagedReference(projectedType)
-                    && this.context.GetDeclaredSymbol(single) is { } symbol
-                    && this.state.NullableForEachBindings.Add(symbol):
-                    bindings.Add(symbol);
+                    when this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol:
+                    if (!SymbolEqualityComparer.IncludeNullability.Equals(
+                            symbol.Type,
+                            projectedType))
+                    {
+                        this.state.ManagedReferenceArrayProjectedLocalType[symbol] =
+                            projectedType;
+                        projectedBindings.Add(symbol);
+                    }
+
+                    if (projectedType?.NullableAnnotation
+                            == NullableAnnotation.Annotated
+                        && this.IsReferenceLikeOrManagedReference(projectedType)
+                        && this.state.NullableForEachBindings.Add(symbol))
+                    {
+                        nullableBindings.Add(symbol);
+                    }
+
                     break;
 
                 case ParenthesizedVariableDesignationSyntax tuple
@@ -1631,7 +1660,8 @@ public sealed partial class CSharpToGSharpTranslator
                         this.CollectProjectedForEachVariableBindings(
                             tuple.Variables[i],
                             tupleType.TupleElements[i].Type,
-                            bindings);
+                            nullableBindings,
+                            projectedBindings);
                     }
 
                     break;

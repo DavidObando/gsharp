@@ -1062,8 +1062,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return projectedParameterType;
                 }
 
-                if (identifierSymbol is ILocalSymbol local
-                    && IsImplicitlyTypedLocal(local))
+                if (identifierSymbol is ILocalSymbol local)
                 {
                     if (this.state.ManagedReferenceArrayProjectedLocalType.TryGetValue(
                             local,
@@ -1072,7 +1071,8 @@ public sealed partial class CSharpToGSharpTranslator
                         return projectedLocalType;
                     }
 
-                    if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    if (IsImplicitlyTypedLocal(local)
+                        && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                             is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
                     {
                         projectedLocalType =

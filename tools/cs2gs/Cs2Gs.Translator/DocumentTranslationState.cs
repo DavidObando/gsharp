@@ -110,8 +110,8 @@ internal sealed class DocumentTranslationState
             new Dictionary<SyntaxNode, Dictionary<ISymbol, List<SyntaxNode>>>(
                 ReferenceEqualityComparer.Instance);
 
-    // Effective emitted type of an implicitly typed local whose initializer
-    // and every later assignment agree on managed-reference projection.
+    // Effective emitted type of a local whose initializer, assignments, or
+    // active foreach binding agree on managed-reference projection.
     public Dictionary<ILocalSymbol, ITypeSymbol> ManagedReferenceArrayProjectedLocalType { get; } =
         new Dictionary<ILocalSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
 
