@@ -161,7 +161,7 @@ type InitializationRecord struct {
 
 type FileRecord struct {
 	ID              string `json:"id"`
-	PackageID       string `json:"packageId,omitempty"`
+	PackageID       string `json:"packageId"`
 	Path            string `json:"path"`
 	Role            string `json:"role"`
 	Reason          string `json:"reason,omitempty"`

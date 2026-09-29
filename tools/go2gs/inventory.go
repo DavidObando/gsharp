@@ -27,7 +27,7 @@ type inventoryBuilder struct {
 	packageIDs     map[*packages.Package]string
 	packagePathIDs map[string]string
 	typeIDs        map[types.Type]string
-	objectIDs      map[types.Object]string
+	objectIDs      map[objectRef]string
 	fileIDs        map[string]string
 	moduleIDs      map[string]string
 	seenModules    map[string]bool
@@ -44,11 +44,16 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 	return &inventoryBuilder{
 		analysis: analysis, sourceRoot: sourceRoot, goroot: goroot, profile: profile,
 		packageIDs: map[*packages.Package]string{}, packagePathIDs: map[string]string{}, typeIDs: map[types.Type]string{},
-		objectIDs: map[types.Object]string{}, fileIDs: map[string]string{},
+		objectIDs: map[objectRef]string{}, fileIDs: map[string]string{},
 		moduleIDs: map[string]string{}, seenModules: map[string]bool{},
 		seenFiles: map[string]bool{}, seenTypes: map[string]bool{}, seenSymbols: map[string]bool{},
 		seenMethodSets: map[string]bool{}, scopeIDs: map[*types.Scope]string{},
 	}
+}
+
+type objectRef struct {
+	object    types.Object
+	packageID string
 }
 
 func (b *inventoryBuilder) collectManifests() error {
@@ -809,13 +814,6 @@ func (b *inventoryBuilder) addObject(pkg *packages.Package, object types.Object,
 	if object == nil {
 		return ""
 	}
-	if id := b.objectIDs[object]; id != "" {
-		return id
-	}
-	declarationKey := ""
-	if declaration.Path != "" {
-		declarationKey = declaration.Path + "\x00" + strconv.Itoa(declaration.StartByte)
-	}
 	pkgID := b.packageIDs[pkg]
 	if object.Pkg() != nil && object.Pkg().Path() != pkg.PkgPath {
 		pkgID = b.packagePathIDs[object.Pkg().Path()]
@@ -823,8 +821,27 @@ func (b *inventoryBuilder) addObject(pkg *packages.Package, object types.Object,
 			pkgID = b.packageIDs[pkg]
 		}
 	}
+	if declaration.Path == "" && object.Pos().IsValid() && b.fileIDForPosition(pkg, object.Pos()) != "" {
+		declaration = b.span(pkg, object.Pos(), object.Pos()+token.Pos(len(object.Name())))
+	}
+	key := objectRef{object: object, packageID: pkgID}
+	if id := b.objectIDs[key]; id != "" {
+		if declaration.Path != "" {
+			for i := range b.analysis.Symbols {
+				if b.analysis.Symbols[i].ID == id && b.analysis.Symbols[i].Declaration == nil {
+					b.analysis.Symbols[i].Declaration = &declaration
+					break
+				}
+			}
+		}
+		return id
+	}
+	declarationKey := ""
+	if declaration.Path != "" {
+		declarationKey = declaration.Path + "\x00" + strconv.Itoa(declaration.StartByte)
+	}
 	id := stableID("symbol", objectCanonical(pkgID, object, declarationKey))
-	b.objectIDs[object] = id
+	b.objectIDs[key] = id
 	if b.seenSymbols[id] {
 		return id
 	}
@@ -994,11 +1011,12 @@ func (b *inventoryBuilder) addInitialization(pkg *packages.Package, record *Pack
 }
 
 func (b *inventoryBuilder) addObjectForPackageID(pkgID string, object types.Object) string {
-	if id := b.objectIDs[object]; id != "" {
+	key := objectRef{object: object, packageID: pkgID}
+	if id := b.objectIDs[key]; id != "" {
 		return id
 	}
 	id := stableID("symbol", objectCanonical(pkgID, object, ""))
-	b.objectIDs[object] = id
+	b.objectIDs[key] = id
 	if !b.seenSymbols[id] {
 		b.seenSymbols[id] = true
 		b.analysis.Symbols = append(b.analysis.Symbols, SymbolRecord{
