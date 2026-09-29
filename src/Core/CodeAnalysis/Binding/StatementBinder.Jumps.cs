@@ -315,6 +315,24 @@ internal sealed partial class StatementBinder
         return false;
     }
 
+    private static bool ContainsUserLabel(SyntaxNode? node)
+    {
+        switch (node)
+        {
+            case null:
+                return false;
+            case LabeledStatementSyntax labeled when !IsLabelableLoop(labeled.Statement):
+                return true;
+            case FunctionLiteralExpressionSyntax:
+            case LambdaExpressionSyntax:
+            case FunctionDeclarationSyntax:
+            case EventDeclarationSyntax:
+                return false;
+        }
+
+        return node.GetChildren().Any(ContainsUserLabel);
+    }
+
     private static bool IsHandlerRegionPrefix(
         ImmutableArray<SyntaxNode> targetRegions,
         ImmutableArray<SyntaxNode> sourceRegions)

@@ -1382,6 +1382,33 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_DoesNotJoinNumericWideningWithoutConversion()
+    {
+        var result = Evaluate("""
+            func Run() int64 {
+                var x object = int32(1)
+                if x is int32 {
+                    goto Use
+                }
+                if x is int64 {
+                Use:
+                    return x
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Contains(
+            result.Diagnostics,
+            d => d.Message.Contains(
+                "Cannot convert type 'object' to 'int64'",
+                StringComparison.Ordinal));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_BypassesConditionFrame_ReportsMemberAccess()
     {
         var result = Evaluate("""
@@ -2352,6 +2379,30 @@ public class Issue4519GotoAssignmentNarrowingTests
 
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
         Assert.Equal("Bark()", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_IntoNestedLabeledElseDoesNotLiftOuterGuard()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                goto Inside
+            Guard:
+                if x == nil {
+                    return 0
+                } else {
+                Inside:
+                }
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
     }
 

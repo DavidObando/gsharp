@@ -456,7 +456,9 @@ internal sealed partial class StatementBinder
         // executes the guard. Limit that exception to bare variables, whose
         // proof generations the goto join can track.
         if (binderCtx.FunctionContainsUserGotoOrLabel
-            && !(isLabeledStatement && statement is BoundIfStatement))
+            && !(isLabeledStatement
+                && statement is BoundIfStatement
+                && !ContainsUserLabel(statement.Syntax)))
         {
             return;
         }
@@ -707,7 +709,7 @@ internal sealed partial class StatementBinder
         }
 
         var commonType = sourceTypes.FirstOrDefault(candidate =>
-            sourceTypes.All(source => Conversion.Classify(source, candidate).IsImplicit));
+            sourceTypes.All(source => IsRepresentationPreservingJoin(source, candidate)));
         if (commonType != null)
         {
             return commonType;
@@ -721,9 +723,28 @@ internal sealed partial class StatementBinder
         var declaredType = path.Root.Type is NullableTypeSymbol nullable
             ? nullable.UnderlyingType
             : path.Root.Type;
-        return sourceTypes.All(source => Conversion.Classify(source, declaredType).IsImplicit)
+        return sourceTypes.All(source => IsRepresentationPreservingJoin(source, declaredType))
             ? declaredType
             : null;
+    }
+
+    private static bool IsRepresentationPreservingJoin(TypeSymbol source, TypeSymbol target)
+    {
+        var conversion = Conversion.Classify(source, target);
+        if (conversion.IsIdentity)
+        {
+            return true;
+        }
+
+        if (!Conversion.IsReferenceLikeTarget(source)
+            || !Conversion.IsReferenceLikeTarget(target))
+        {
+            return false;
+        }
+
+        return source.ClrType is { } sourceClr && target.ClrType is { } targetClr
+            ? ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr)
+            : Conversion.IsImplicitReferenceVariantSlot(source, target);
     }
 
     internal void ReportUnsafeBackwardGotoNarrowings()
