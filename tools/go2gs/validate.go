@@ -23,9 +23,6 @@ func validateAnalysis(a Analysis) error {
 			return fmt.Errorf("unknown required record kind %q", kind)
 		}
 	}
-	if a.InventoryComplete && len(a.Blockers) != 0 {
-		return errors.New("inventoryComplete cannot be true when blockers exist")
-	}
 	if a.MigrationReady && !a.InventoryComplete {
 		return errors.New("migrationReady cannot be true when inventory is incomplete")
 	}
@@ -215,6 +212,9 @@ func validateAnalysis(a Analysis) error {
 		if err := require(value.ID, "scopeId", value.ScopeID, "scope"); err != nil {
 			return err
 		}
+		if err := require(value.ID, "parentId", value.ParentID, "node"); err != nil {
+			return err
+		}
 	}
 	for _, value := range a.Constants {
 		if err := require(value.ID, "nodeId", value.NodeID, "node"); err != nil {
@@ -307,6 +307,9 @@ func validateAnalysis(a Analysis) error {
 		}
 	}
 	for _, value := range a.FeatureSites {
+		if err := require(value.ID, "nodeId", value.NodeID, "node"); err != nil {
+			return err
+		}
 		if err := require(value.ID, "packageId", value.PackageID, "package"); err != nil {
 			return err
 		}
@@ -320,6 +323,15 @@ func validateAnalysis(a Analysis) error {
 		}
 	}
 	for _, value := range a.Blockers {
+		if value.Blocks != "inventory" && value.Blocks != "migration" {
+			return fmt.Errorf("%s.blocks has unknown disposition %q", value.ID, value.Blocks)
+		}
+		if a.InventoryComplete && value.Blocks == "inventory" {
+			return errors.New("inventoryComplete cannot be true when inventory blockers exist")
+		}
+		if a.MigrationReady && value.Blocks == "migration" {
+			return errors.New("migrationReady cannot be true when migration blockers exist")
+		}
 		if err := requireMany(value.ID, "affectedUnits", value.AffectedUnits, "package"); err != nil {
 			return err
 		}

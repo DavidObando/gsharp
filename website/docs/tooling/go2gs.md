@@ -31,6 +31,11 @@ downloads, network module resolution, ambient workspaces, unapproved package
 drivers, generators, and target execution. Exit zero means only that the
 requested inventory completed. M0 always reports `migrationReady: false`.
 
+Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
+value arrays, and concurrency are inventoried as typed syntax sites with
+migration blockers. Their G# lowering and runtime representations are explicit
+M1 prerequisites and are not selected by M0.
+
 M0 does not emit G#, perform semantic lowering, run a migrated program, or
 provide a Go runtime compatibility layer. See
 [ADR-0191](../../docs/adr/0191-go-to-gsharp-migration-tool.md) and the

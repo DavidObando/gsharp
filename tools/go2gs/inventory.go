@@ -298,6 +298,7 @@ func (b *inventoryBuilder) markGenerated(fileID string, generated bool) {
 
 func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file *ast.File) {
 	pkgID := b.packageIDs[pkg]
+	var parents []string
 	arrayLengths := map[ast.Expr]bool{}
 	ast.Inspect(file, func(node ast.Node) bool {
 		if array, ok := node.(*ast.ArrayType); ok && array.Len != nil {
@@ -307,11 +308,16 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 	})
 	ast.Inspect(file, func(node ast.Node) bool {
 		if node == nil {
+			parents = parents[:len(parents)-1]
 			return true
 		}
 		span := b.span(pkg, node.Pos(), node.End())
 		nodeID := stableID("node", pkgID+"\x00"+fileID+"\x00"+fmt.Sprintf("%d:%d:%T", span.StartByte, span.EndByte, node))
 		record := NodeRecord{ID: nodeID, PackageID: pkgID, FileID: fileID, Kind: fmt.Sprintf("%T", node), Span: span}
+		if len(parents) > 0 {
+			record.ParentID = parents[len(parents)-1]
+		}
+		parents = append(parents, nodeID)
 		record.ScopeID = b.scopeFor(pkgID, node.Pos())
 		if expression, ok := node.(ast.Expr); ok {
 			tv, exists := pkg.TypesInfo.Types[expression]
@@ -341,7 +347,7 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 			}
 		}
 		b.analysis.Nodes = append(b.analysis.Nodes, record)
-		b.addFeatureSite(pkgID, fileID, node, nodeID, span)
+		b.addFeatureSites(pkg, pkgID, fileID, node, nodeID, span)
 		return true
 	})
 }
@@ -389,32 +395,95 @@ func (b *inventoryBuilder) addCall(pkg *packages.Package, nodeID string, call *a
 	b.analysis.Calls = append(b.analysis.Calls, record)
 }
 
-func (b *inventoryBuilder) addFeatureSite(pkgID, fileID string, node ast.Node, nodeID string, span SourceSpan) {
-	feature := ""
-	disposition := "inventoried"
+func (b *inventoryBuilder) addFeatureSites(pkg *packages.Package, pkgID, fileID string, node ast.Node, nodeID string, span SourceSpan) {
+	features := map[string]string{}
+	add := func(feature, blocker string) {
+		features[feature] = blocker
+	}
 	switch node.(type) {
 	case *ast.GoStmt:
-		feature = "goroutine"
+		add("goroutine", "m1-concurrency")
 	case *ast.DeferStmt:
-		feature = "defer"
+		add("defer", "m1-panic-defer-recover")
 	case *ast.RangeStmt:
-		feature = "range"
+		add("range", "")
 	case *ast.TypeSwitchStmt:
-		feature = "type-switch"
+		add("type-switch", "m1-typed-nil-interface")
 	case *ast.IndexListExpr:
-		feature = "generic-instantiation"
+		add("generic-instantiation", "")
 	case *ast.FuncLit:
-		feature = "closure"
+		add("closure", "")
 	case *ast.SendStmt:
-		feature = "channel-send"
+		add("channel-send", "m1-concurrency")
+	case *ast.SelectStmt:
+		add("channel-select", "m1-concurrency")
+	case *ast.ChanType:
+		add("channel-type", "m1-concurrency")
+	case *ast.ArrayType:
+		if node.(*ast.ArrayType).Len != nil {
+			add("fixed-value-array", "m1-fixed-value-arrays")
+		}
 	}
-	if feature == "" {
-		return
+	if expression, ok := node.(ast.Expr); ok {
+		t := pkg.TypesInfo.TypeOf(expression)
+		if t != nil {
+			switch t.Underlying().(type) {
+			case *types.Interface:
+				add("interface-value", "m1-typed-nil-interface")
+			case *types.Map:
+				add("map-value", "m1-byte-strings-maps")
+			case *types.Array:
+				add("fixed-value-array", "m1-fixed-value-arrays")
+			case *types.Chan:
+				add("channel-value", "m1-concurrency")
+			}
+		}
+		if isStringType(t) {
+			add("byte-string", "m1-byte-strings-maps")
+		}
 	}
-	b.analysis.FeatureSites = append(b.analysis.FeatureSites, FeatureSite{
-		ID: stableID("feature", nodeID+"\x00"+feature), PackageID: pkgID, FileID: fileID,
-		Feature: feature, Disposition: disposition, Span: span,
-	})
+	if ident, ok := node.(*ast.Ident); ok {
+		switch ident.Name {
+		case "nil":
+			add("nil-value", "m1-typed-nil-interface")
+		case "panic", "recover":
+			if _, builtin := pkg.TypesInfo.Uses[ident].(*types.Builtin); builtin {
+				add(ident.Name, "m1-panic-defer-recover")
+			}
+		case "close":
+			if _, builtin := pkg.TypesInfo.Uses[ident].(*types.Builtin); builtin {
+				add("channel-close", "m1-concurrency")
+			}
+		}
+	}
+	if unary, ok := node.(*ast.UnaryExpr); ok && unary.Op == token.ARROW {
+		add("channel-receive", "m1-concurrency")
+	}
+	names := make([]string, 0, len(features))
+	for feature := range features {
+		names = append(names, feature)
+	}
+	sort.Strings(names)
+	for _, feature := range names {
+		blocker := features[feature]
+		disposition := "inventoried"
+		if blocker != "" {
+			disposition = "m1-prerequisite"
+			b.migrationBlock(blocker, "M1 requires an approved lowering/runtime design for "+feature, []string{pkgID})
+		}
+		b.analysis.FeatureSites = append(b.analysis.FeatureSites, FeatureSite{
+			ID: stableID("feature", nodeID+"\x00"+feature), NodeID: nodeID, PackageID: pkgID, FileID: fileID,
+			Feature: feature, Disposition: disposition, Span: span,
+		})
+	}
+}
+
+func isStringType(t types.Type) bool {
+	if t == nil {
+		return false
+	}
+	basic, ok := t.Underlying().(*types.Basic)
+	return ok && basic.Info()&types.IsString != 0
 }
 
 func (b *inventoryBuilder) addScopes(pkg *packages.Package) {
@@ -880,6 +949,14 @@ func (b *inventoryBuilder) addTypeForUnknown(t types.Type) string {
 }
 
 func (b *inventoryBuilder) block(category, message string, units, diagnostics []string) {
+	b.addBlocker("inventory", category, message, units, diagnostics)
+}
+
+func (b *inventoryBuilder) migrationBlock(category, message string, units []string) {
+	b.addBlocker("migration", category, message, units, nil)
+}
+
+func (b *inventoryBuilder) addBlocker(blocks, category, message string, units, diagnostics []string) {
 	if units == nil {
 		units = []string{}
 	}
@@ -888,14 +965,14 @@ func (b *inventoryBuilder) block(category, message string, units, diagnostics []
 	}
 	sort.Strings(units)
 	sort.Strings(diagnostics)
-	id := stableID("blocker", category+"\x00"+message+"\x00"+strings.Join(units, "\x00"))
+	id := stableID("blocker", blocks+"\x00"+category+"\x00"+message+"\x00"+strings.Join(units, "\x00"))
 	for _, existing := range b.analysis.Blockers {
 		if existing.ID == id {
 			return
 		}
 	}
 	b.analysis.Blockers = append(b.analysis.Blockers, BlockerRecord{
-		ID: id, Category: category, Message: message, AffectedUnits: units, DiagnosticIDs: diagnostics,
+		ID: id, Blocks: blocks, Category: category, Message: message, AffectedUnits: units, DiagnosticIDs: diagnostics,
 	})
 }
 
@@ -935,7 +1012,13 @@ func (b *inventoryBuilder) finish() {
 		FeatureSites: len(a.FeatureSites), Diagnostics: len(a.Diagnostics), Blockers: len(a.Blockers),
 	}
 	a.RecordCounts.Total = b.recordCount()
-	a.InventoryComplete = len(a.Blockers) == 0
+	a.InventoryComplete = true
+	for _, blocker := range a.Blockers {
+		if blocker.Blocks == "inventory" {
+			a.InventoryComplete = false
+			break
+		}
+	}
 	a.MigrationReady = false
 }
 

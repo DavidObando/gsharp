@@ -26,6 +26,9 @@
   [`tools/go2gs`](../../tools/go2gs/README.md) with schema/profile version 1.
   It provides `analyze` and analysis validation only. Translation, lowering,
   compatibility support, and runtime validation remain later milestones.
+  Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
+  value arrays, and concurrency are inventoried with migration blockers; their
+  G# lowering/runtime representations are explicit prerequisites for M1.
 
 ## Context
 

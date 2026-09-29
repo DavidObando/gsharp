@@ -98,7 +98,10 @@ Before moving an application to a different compiler version, pin the intended S
   fail-closed: automatic toolchain downloads, ambient workspaces,
   `GOPACKAGESDRIVER`, generators, target binaries, and network module
   resolution are disabled. Exit zero means the requested inventory completed,
-  while `migrationReady` remains independent and false in M0. The pinned
+  while `migrationReady` remains independent and false in M0. Migration
+  blockers preserve typed nil/interface, byte-string, map,
+  panic/defer/recover, fixed-array, and concurrency sites without choosing
+  their later G# representation. The pinned
   cliamp profile reports an actionable mismatch rather than substituting the
   installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
