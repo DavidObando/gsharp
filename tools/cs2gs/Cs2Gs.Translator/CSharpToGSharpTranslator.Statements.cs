@@ -2134,6 +2134,29 @@ public sealed partial class CSharpToGSharpTranslator
                 assignment.Left,
                 this.context.GetSymbolInfo(assignment.Left).Symbol);
             ITypeSymbol assignmentTargetType = this.GetAssignmentTargetType(assignment.Left, assignmentTarget);
+            ITypeSymbol projectedValue =
+                this.GetManagedReferenceArrayProjectedArgumentType(
+                    assignment.Right);
+            if (assignment.Left is MemberAccessExpressionSyntax staticMember
+                && this.context.GetSymbolInfo(staticMember.Expression).Symbol
+                    is INamedTypeSymbol { IsGenericType: true }
+                && assignmentTarget is IFieldSymbol { IsStatic: true }
+                    or IPropertySymbol { IsStatic: true }
+                && assignmentTargetType != null
+                && projectedValue != null
+                && SymbolEqualityComparer.Default.Equals(
+                    assignmentTargetType,
+                    projectedValue)
+                && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    assignmentTargetType,
+                    projectedValue))
+            {
+                this.context.ReportUnsupported(
+                    assignment,
+                    "managed-reference array widening cannot change a static generic member's fixed receiver type; no exact G# translation exists.");
+                return value;
+            }
+
             ISymbol promotionTarget = assignmentTarget;
             if (assignmentTarget is ILocalSymbol inferredAssignmentLocal
                 && inferredAssignmentLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()

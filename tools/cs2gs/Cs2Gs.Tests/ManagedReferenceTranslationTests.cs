@@ -4079,6 +4079,126 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void NestedArrayMemberInitializerUsesProjectedElementType()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayNestedArrayInitializer;
+            public sealed class Holder<T> {
+                public Holder(T value) { }
+                public T[] Items { get; } = new T[1];
+            }
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    var holder = new Holder<ManagedRef<int>>(source[0]) {
+                        Items = { [0] = source[0] },
+                    };
+                    return holder.Items[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayNestedArrayInitializer.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Holder[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void RepeatedGenericProjectionConflictReportsUnsupported()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayRepeatedGenericProjection;
+            public sealed class Pair<TFirst, TSecond> {
+                public TFirst First;
+                public TSecond Second;
+            }
+            public class Probe {
+                private static void Accept<T>(Pair<T, T> pair) { }
+                public static void Run() {
+                    int[] values = { 1 };
+                    var source = new ManagedRef<int>[1];
+                    var nonNull = ManagedRef<int>.FromArray(values, 0);
+                    Accept(new Pair<ManagedRef<int>, ManagedRef<int>> {
+                        First = nonNull,
+                        Second = source[0],
+                    });
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayRepeatedGenericProjection.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "conflicting argument types",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void StaticGenericMemberWriteWithProjectedValueReportsUnsupported()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayStaticGenericMemberWrite;
+            public static class Holder<T> {
+                public static T Value;
+            }
+            public class Probe {
+                public static void Run() {
+                    var source = new ManagedRef<int>[1];
+                    Holder<ManagedRef<int>>.Value = source[0];
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayStaticGenericMemberWrite.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "static generic member's fixed receiver type",
+                    StringComparison.Ordinal));
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ExplicitQueryRangeVariablePreservesIdentityProjectedElementType()
     {
         const string source = """
