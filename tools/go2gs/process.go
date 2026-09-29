@@ -155,7 +155,7 @@ func bootstrapEnvironment(cacheRoot, executable string) []string {
 	})
 }
 
-func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompiler string) ([]string, error) {
+func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompiler, compilerHelperDir string) ([]string, error) {
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
 		return nil, err
 	}
@@ -163,7 +163,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable, cCompi
 		return nil, err
 	}
 	values := map[string]string{
-		"PATH":             selectedPath(executable, cCompiler),
+		"PATH":             selectedPath(executable, compilerHelperDir),
 		"HOME":             cacheRoot,
 		"TMPDIR":           cacheRoot,
 		"GOCACHE":          cacheRoot + string(os.PathSeparator) + "build-cache",
@@ -200,20 +200,19 @@ func unavailableToolPath(cacheRoot, name string) string {
 	return filepath.Join(cacheRoot, "blocked-tools", name)
 }
 
-func selectedPath(executables ...string) string {
+func selectedPath(executable string, directories ...string) string {
 	seen := map[string]bool{}
-	directories := make([]string, 0, len(executables))
-	for _, executable := range executables {
-		if executable == "" {
+	paths := make([]string, 0, len(directories)+1)
+	for _, directory := range append(directories, filepath.Dir(executable)) {
+		if directory == "" {
 			continue
 		}
-		directory := filepath.Dir(executable)
 		if !seen[directory] {
 			seen[directory] = true
-			directories = append(directories, directory)
+			paths = append(paths, directory)
 		}
 	}
-	return strings.Join(directories, string(os.PathListSeparator))
+	return strings.Join(paths, string(os.PathListSeparator))
 }
 
 func boolString(value bool) string {

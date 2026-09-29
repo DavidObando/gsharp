@@ -411,7 +411,8 @@ func validateAnalysisHeader(a Analysis) error {
 	if p.ID == "" || !validSHA256(p.SHA256) || p.SourceRootIdentity == "" ||
 		len(p.EntryPatterns) == 0 || p.GOOS == "" || p.GOARCH == "" ||
 		p.ModuleMode == "" || p.WorkspaceMode == "" || !p.Offline || p.AllowNetwork ||
-		p.GeneratorsExecuted || p.TargetBinariesExecuted || p.TrustBoundary == "" {
+		p.GeneratorsExecuted || p.TargetBinariesExecuted || p.TrustBoundary == "" ||
+		p.CCompilerHelpers == nil {
 		return errors.New("analysis profile snapshot is missing mandatory or fail-closed fields")
 	}
 	if err := validateLimits(p.Limits); err != nil {
@@ -434,7 +435,7 @@ func validateAnalysisHeader(a Analysis) error {
 	t := a.Toolchain
 	if t.RequestedVersion == "" || t.ActualVersion == "" || !validSHA256(t.ExecutableSHA256) ||
 		t.ExecutableName == "" || t.GOROOTIdentity == "" || !validSHA256(t.GOROOTVersionSHA256) ||
-		t.GOROOTSource == "" || t.AutoDownload {
+		t.GOROOTSource == "" || t.AutoDownload || t.CCompilerHelpers == nil {
 		return errors.New("analysis toolchain provenance is missing mandatory or fail-closed fields")
 	}
 	if t.RequestedVersion != t.ActualVersion {
@@ -465,8 +466,45 @@ func validateAnalysisHeader(a Analysis) error {
 		if t.CCompilerName == "" || !validSHA256(t.CCompilerSHA256) {
 			return errors.New("CGo analysis requires C compiler provenance")
 		}
-	} else if t.CCompilerName != "" || t.CCompilerSHA256 != "" {
+		if err := validateCompilerHelperIdentities(t.CCompilerHelpers, p.Limits); err != nil {
+			return err
+		}
+		if !slices.Equal(p.CCompilerHelpers, t.CCompilerHelpers) {
+			return errors.New("profile and toolchain compiler helper provenance differ")
+		}
+	} else if t.CCompilerName != "" || t.CCompilerSHA256 != "" ||
+		len(t.CCompilerHelpers) != 0 || len(p.CCompilerHelpers) != 0 {
 		return errors.New("non-CGo analysis must not contain C compiler provenance")
+	}
+	return nil
+}
+
+func validateCompilerHelperIdentities(helpers []CompilerHelperIdentity, limits Limits) error {
+	if len(helpers) > 64 {
+		return errors.New("compiler helper provenance exceeds the 64-entry limit")
+	}
+	previous := ""
+	names := map[string]bool{}
+	var total int64
+	for index, helper := range helpers {
+		if !validCompilerHelperName(helper.Name) || forbiddenCompilerHelperName(helper.Name) ||
+			!validSHA256(helper.SHA256) || helper.Bytes < 0 || helper.Bytes > maxCompilerHelperBytes ||
+			helper.ExecutableMode&0o111 == 0 || helper.ExecutableMode&^uint32(0o555) != 0 {
+			return fmt.Errorf("compiler helper provenance %d is invalid", index)
+		}
+		nameKey := compilerHelperNameKey(helper.Name)
+		if names[nameKey] {
+			return errors.New("compiler helper provenance names collide")
+		}
+		names[nameKey] = true
+		if helper.Bytes > limits.MaxLocalHashBytes-total {
+			return errors.New("compiler helper provenance exceeds maxLocalHashBytes")
+		}
+		total += helper.Bytes
+		if helper.Name <= previous {
+			return errors.New("compiler helper provenance must be uniquely sorted by name")
+		}
+		previous = helper.Name
 	}
 	return nil
 }

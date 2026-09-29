@@ -38,11 +38,16 @@ executable or unusable GOROOT—exit 2 and may produce no artifact. Once
 bootstrap succeeds, exact-version or source-commit mismatches produce an
 incomplete artifact and exit 1.
 Profiles enabling CGo must set `cCompiler` to an absolute, explicitly approved
-compiler executable. go2gs hashes that compiler and records its name and hash;
-the compiler is passed as absolute `CC`, while child `PATH` contains only the
-selected Go directory. Active `#cgo pkg-config:` directives fail closed
-because M0 does not yet model or approve a pkg-config executable; directives
-inactive under the selected build constraints are ignored.
+compiler executable. go2gs hashes that compiler and records its name and hash.
+Every PATH-resolved compiler helper must also be explicitly listed in
+`cCompilerHelpers` by logical name, canonical absolute path, and SHA-256.
+go2gs captures those bounded regular executables without following links,
+stages only the captured bytes in a private PATH directory, records their
+hashes, sizes, and executable modes, and detects source or staged-copy drift.
+The compiler's source directory and ambient PATH are never exposed. Active
+`#cgo pkg-config:` directives fail closed because M0 does not model or approve
+pkg-config; directives inactive under the selected build constraints are
+ignored.
 Commit provenance is read directly from bounded repository metadata rather
 than by discovering or executing an ambient `git` command.
 Source inputs and authorized local replacements are loaded from a private,

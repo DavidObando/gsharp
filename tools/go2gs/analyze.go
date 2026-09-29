@@ -80,14 +80,6 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	profileIdentity := profile
-	if cCompiler != "" {
-		profileIdentity.CCompiler = filepath.Base(profile.CCompiler) + "@sha256:" + cCompilerHash
-	}
-	profileBytes, err := json.Marshal(profileIdentity)
-	if err != nil {
-		return Analysis{}, false, err
-	}
 
 	workDirectory, err := createOwnedTempDir(outRoot, ".go2gs-work-*")
 	if err != nil {
@@ -99,6 +91,26 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	workRoot := workDirectory.path
 	blockedToolsRoot := filepath.Join(workRoot, "blocked-tools")
 	if err := os.Mkdir(blockedToolsRoot, 0o500); err != nil {
+		return Analysis{}, false, err
+	}
+	compilerHelpers, compilerHelperDir, err := captureCompilerHelpers(profile, workRoot)
+	if err != nil {
+		return Analysis{}, false, fmt.Errorf("capture C compiler helpers: %w", err)
+	}
+	compilerHelperIdentities := compilerHelperIdentityList(compilerHelpers)
+	profileIdentity := profile
+	if cCompiler != "" {
+		profileIdentity.CCompiler = filepath.Base(profile.CCompiler) + "@sha256:" + cCompilerHash
+		profileIdentity.CCompilerHelpers = append([]CompilerHelper{}, profile.CCompilerHelpers...)
+		sort.Slice(profileIdentity.CCompilerHelpers, func(i, j int) bool {
+			return profileIdentity.CCompilerHelpers[i].Name < profileIdentity.CCompilerHelpers[j].Name
+		})
+		for index := range profileIdentity.CCompilerHelpers {
+			profileIdentity.CCompilerHelpers[index].Path = "helper://" + profileIdentity.CCompilerHelpers[index].Name
+		}
+	}
+	profileBytes, err := json.Marshal(profileIdentity)
+	if err != nil {
 		return Analysis{}, false, err
 	}
 
@@ -129,7 +141,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("hash selected Go GOROOT VERSION: %w", err)
 	}
-	env, err := sanitizedEnvironment(profile, workRoot, targetGOROOT, executable, cCompiler)
+	env, err := sanitizedEnvironment(profile, workRoot, targetGOROOT, executable, cCompiler, compilerHelperDir)
 	if err != nil {
 		return Analysis{}, false, err
 	}
@@ -147,6 +159,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		toolchain.CCompilerName = filepath.Base(profile.CCompiler)
 		toolchain.CCompilerSHA256 = cCompilerHash
 	}
+	toolchain.CCompilerHelpers = append([]CompilerHelperIdentity{}, compilerHelperIdentities...)
 	analysis := Analysis{
 		Schema: SchemaHandshake{Name: schemaName, Version: schemaVersion, RequiredRecordKinds: append([]string{}, requiredRecordKinds...)},
 		Tool:   VersionIdentity{Version: toolVersion, SHA256: helperHash},
@@ -156,6 +169,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 			ExpectedSourceCommit: profile.ExpectedSourceCommit, ActualSourceCommit: actualCommit,
 			EntryPatterns: append([]string{}, profile.EntryPatterns...), LoadTests: profile.LoadTests,
 			GOOS: profile.GOOS, GOARCH: profile.GOARCH,
+			CCompilerHelpers:     append([]CompilerHelperIdentity{}, compilerHelperIdentities...),
 			ArchitectureFeatures: append([]string{}, profile.ArchitectureFeatures...),
 			BuildTags:            append([]string{}, profile.BuildTags...), CGOEnabled: profile.CGOEnabled,
 			GOFLAGS: append([]string{}, profile.GOFLAGS...), GOEXPERIMENT: profile.GOEXPERIMENT,
@@ -234,6 +248,9 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	loaded, loadErr := packages.Load(config, profile.EntryPatterns...)
 	if afterLoad != nil {
 		afterLoad()
+	}
+	if err := verifyCompilerHelpers(compilerHelpers, compilerHelperDir); err != nil {
+		return Analysis{}, false, fmt.Errorf("verify C compiler helpers: %w", err)
 	}
 	pkgConfigPath := unavailableToolPath(workRoot, "pkg-config")
 	if sanitizeUnavailableToolFailure(loaded, pkgConfigPath) ||
@@ -1061,6 +1078,136 @@ func resolveCCompiler(profile Profile) (string, string, error) {
 		return "", "", fmt.Errorf("hash C compiler: %w", err)
 	}
 	return path, hash, nil
+}
+
+const maxCompilerHelperBytes int64 = 64 << 20
+
+type capturedCompilerHelper struct {
+	spec       CompilerHelper
+	identity   CompilerHelperIdentity
+	data       []byte
+	sourceInfo os.FileInfo
+	stagedPath string
+}
+
+func captureCompilerHelpers(profile Profile, workRoot string) ([]capturedCompilerHelper, string, error) {
+	if !profile.CGOEnabled {
+		if len(profile.CCompilerHelpers) != 0 {
+			return nil, "", errors.New("compiler helpers require cgoEnabled")
+		}
+		return []capturedCompilerHelper{}, "", nil
+	}
+	if profile.CCompilerHelpers == nil {
+		return nil, "", errors.New("cCompilerHelpers must be an array")
+	}
+	if err := validateCompilerHelpers(profile.CCompilerHelpers); err != nil {
+		return nil, "", err
+	}
+	helperDir := filepath.Join(workRoot, "compiler-tools")
+	if err := os.Mkdir(helperDir, 0o700); err != nil {
+		return nil, "", err
+	}
+	helpers := append([]CompilerHelper{}, profile.CCompilerHelpers...)
+	sort.Slice(helpers, func(i, j int) bool { return helpers[i].Name < helpers[j].Name })
+	captured := make([]capturedCompilerHelper, 0, len(helpers))
+	var total int64
+	for _, helper := range helpers {
+		parent, err := secureRoot(filepath.Dir(helper.Path))
+		if err != nil {
+			return nil, "", fmt.Errorf("secure helper %q parent: %w", helper.Name, err)
+		}
+		if filepath.Join(parent, filepath.Base(helper.Path)) != helper.Path {
+			return nil, "", fmt.Errorf("helper %q path must use its canonical no-symlink parent", helper.Name)
+		}
+		initialInfo, err := os.Lstat(helper.Path)
+		if err != nil {
+			return nil, "", fmt.Errorf("inspect helper %q: %w", helper.Name, err)
+		}
+		if !initialInfo.Mode().IsRegular() || initialInfo.Mode().Perm()&0o111 == 0 {
+			return nil, "", fmt.Errorf("helper %q is not a regular executable", helper.Name)
+		}
+		remaining := profile.Limits.MaxLocalHashBytes - total
+		limit := min(maxCompilerHelperBytes, remaining)
+		if limit <= 0 {
+			return nil, "", errors.New("C compiler helpers exceed maxLocalHashBytes")
+		}
+		data, err := readBoundedRegularFile(helper.Path, limit)
+		if err != nil {
+			return nil, "", fmt.Errorf("capture helper %q: %w", helper.Name, err)
+		}
+		finalInfo, err := os.Lstat(helper.Path)
+		if err != nil || !os.SameFile(initialInfo, finalInfo) || finalInfo.Mode() != initialInfo.Mode() {
+			return nil, "", fmt.Errorf("helper %q changed during capture", helper.Name)
+		}
+		actualHash := hashBytes(data)
+		if actualHash != helper.SHA256 {
+			return nil, "", fmt.Errorf("helper %q SHA-256 mismatch", helper.Name)
+		}
+		mode := initialInfo.Mode().Perm() & 0o555
+		stagedPath := filepath.Join(helperDir, helper.Name)
+		if err := atomicWrite(stagedPath, data, mode); err != nil {
+			return nil, "", fmt.Errorf("stage helper %q: %w", helper.Name, err)
+		}
+		identity := CompilerHelperIdentity{
+			Name: helper.Name, SHA256: actualHash, Bytes: int64(len(data)), ExecutableMode: uint32(mode),
+		}
+		captured = append(captured, capturedCompilerHelper{
+			spec: helper, identity: identity, data: data, sourceInfo: initialInfo, stagedPath: stagedPath,
+		})
+		total += int64(len(data))
+	}
+	if err := verifyCompilerHelpers(captured, helperDir); err != nil {
+		return nil, "", err
+	}
+	return captured, helperDir, nil
+}
+
+func compilerHelperIdentityList(helpers []capturedCompilerHelper) []CompilerHelperIdentity {
+	identities := make([]CompilerHelperIdentity, len(helpers))
+	for index := range helpers {
+		identities[index] = helpers[index].identity
+	}
+	return identities
+}
+
+func verifyCompilerHelpers(helpers []capturedCompilerHelper, helperDir string) error {
+	if helperDir == "" {
+		if len(helpers) != 0 {
+			return errors.New("compiler helper staging directory is missing")
+		}
+		return nil
+	}
+	entries, err := os.ReadDir(helperDir)
+	if err != nil {
+		return err
+	}
+	if len(entries) != len(helpers) {
+		return errors.New("compiler helper staging directory contains unexpected entries")
+	}
+	for index, helper := range helpers {
+		if entries[index].Name() != helper.identity.Name {
+			return errors.New("compiler helper staging directory ordering or contents changed")
+		}
+		sourceInfo, err := os.Lstat(helper.spec.Path)
+		if err != nil || !sourceInfo.Mode().IsRegular() ||
+			!os.SameFile(helper.sourceInfo, sourceInfo) || sourceInfo.Mode() != helper.sourceInfo.Mode() {
+			return fmt.Errorf("compiler helper %q source identity changed", helper.identity.Name)
+		}
+		sourceData, err := readBoundedRegularFile(helper.spec.Path, int64(len(helper.data)))
+		if err != nil || !bytes.Equal(sourceData, helper.data) {
+			return fmt.Errorf("compiler helper %q source content changed", helper.identity.Name)
+		}
+		stagedInfo, err := os.Lstat(helper.stagedPath)
+		if err != nil || !stagedInfo.Mode().IsRegular() ||
+			uint32(stagedInfo.Mode().Perm()) != helper.identity.ExecutableMode {
+			return fmt.Errorf("compiler helper %q staged identity changed", helper.identity.Name)
+		}
+		stagedData, err := readBoundedRegularFile(helper.stagedPath, helper.identity.Bytes)
+		if err != nil || !bytes.Equal(stagedData, helper.data) {
+			return fmt.Errorf("compiler helper %q staged content changed", helper.identity.Name)
+		}
+	}
+	return nil
 }
 
 func replaceEnvironment(env []string, key, value string) []string {

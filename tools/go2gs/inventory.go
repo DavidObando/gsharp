@@ -2113,6 +2113,12 @@ func normalizeAnalysisCollections(a *Analysis) {
 	if a.Profile.GODEBUG == nil {
 		a.Profile.GODEBUG = map[string]string{}
 	}
+	if a.Profile.CCompilerHelpers == nil {
+		a.Profile.CCompilerHelpers = []CompilerHelperIdentity{}
+	}
+	if a.Toolchain.CCompilerHelpers == nil {
+		a.Toolchain.CCompilerHelpers = []CompilerHelperIdentity{}
+	}
 	if a.Manifests == nil {
 		a.Manifests = []ManifestRecord{}
 	}

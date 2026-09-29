@@ -14,6 +14,7 @@ type Profile struct {
 	GOOS                  string            `json:"goos"`
 	GOARCH                string            `json:"goarch"`
 	CCompiler             string            `json:"cCompiler,omitempty"`
+	CCompilerHelpers      []CompilerHelper  `json:"cCompilerHelpers"`
 	ArchitectureFeatures  []string          `json:"architectureFeatures,omitempty"`
 	BuildTags             []string          `json:"buildTags,omitempty"`
 	CGOEnabled            bool              `json:"cgoEnabled"`
@@ -38,6 +39,19 @@ type Limits struct {
 	MaxLogBytes        int   `json:"maxLogBytes"`
 	MaxOutputBytes     int64 `json:"maxOutputBytes"`
 	MaxLocalHashBytes  int64 `json:"maxLocalHashBytes"`
+}
+
+type CompilerHelper struct {
+	Name   string `json:"name"`
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+type CompilerHelperIdentity struct {
+	Name           string `json:"name"`
+	SHA256         string `json:"sha256"`
+	Bytes          int64  `json:"bytes"`
+	ExecutableMode uint32 `json:"executableMode"`
 }
 
 type SchemaHandshake struct {
@@ -82,43 +96,45 @@ type VersionIdentity struct {
 }
 
 type ProfileSnapshot struct {
-	ID                     string            `json:"id"`
-	SHA256                 string            `json:"sha256"`
-	SourceRootIdentity     string            `json:"sourceRootIdentity"`
-	ExpectedSourceCommit   string            `json:"expectedSourceCommit,omitempty"`
-	ActualSourceCommit     string            `json:"actualSourceCommit,omitempty"`
-	EntryPatterns          []string          `json:"entryPatterns"`
-	LoadTests              bool              `json:"loadTests"`
-	GOOS                   string            `json:"goos"`
-	GOARCH                 string            `json:"goarch"`
-	ArchitectureFeatures   []string          `json:"architectureFeatures"`
-	BuildTags              []string          `json:"buildTags"`
-	CGOEnabled             bool              `json:"cgoEnabled"`
-	GOFLAGS                []string          `json:"goFlags"`
-	GOEXPERIMENT           string            `json:"goExperiment,omitempty"`
-	GODEBUG                map[string]string `json:"goDebug"`
-	ModuleMode             string            `json:"moduleMode"`
-	VendorMode             bool              `json:"vendorMode"`
-	WorkspaceMode          string            `json:"workspaceMode"`
-	Offline                bool              `json:"offline"`
-	AllowNetwork           bool              `json:"allowNetwork"`
-	GeneratorsExecuted     bool              `json:"generatorsExecuted"`
-	TargetBinariesExecuted bool              `json:"targetBinariesExecuted"`
-	TrustBoundary          string            `json:"trustBoundary"`
-	Limits                 Limits            `json:"limits"`
+	ID                     string                   `json:"id"`
+	SHA256                 string                   `json:"sha256"`
+	SourceRootIdentity     string                   `json:"sourceRootIdentity"`
+	ExpectedSourceCommit   string                   `json:"expectedSourceCommit,omitempty"`
+	ActualSourceCommit     string                   `json:"actualSourceCommit,omitempty"`
+	EntryPatterns          []string                 `json:"entryPatterns"`
+	LoadTests              bool                     `json:"loadTests"`
+	GOOS                   string                   `json:"goos"`
+	GOARCH                 string                   `json:"goarch"`
+	CCompilerHelpers       []CompilerHelperIdentity `json:"cCompilerHelpers"`
+	ArchitectureFeatures   []string                 `json:"architectureFeatures"`
+	BuildTags              []string                 `json:"buildTags"`
+	CGOEnabled             bool                     `json:"cgoEnabled"`
+	GOFLAGS                []string                 `json:"goFlags"`
+	GOEXPERIMENT           string                   `json:"goExperiment,omitempty"`
+	GODEBUG                map[string]string        `json:"goDebug"`
+	ModuleMode             string                   `json:"moduleMode"`
+	VendorMode             bool                     `json:"vendorMode"`
+	WorkspaceMode          string                   `json:"workspaceMode"`
+	Offline                bool                     `json:"offline"`
+	AllowNetwork           bool                     `json:"allowNetwork"`
+	GeneratorsExecuted     bool                     `json:"generatorsExecuted"`
+	TargetBinariesExecuted bool                     `json:"targetBinariesExecuted"`
+	TrustBoundary          string                   `json:"trustBoundary"`
+	Limits                 Limits                   `json:"limits"`
 }
 
 type ToolchainProvenance struct {
-	RequestedVersion    string `json:"requestedVersion"`
-	ActualVersion       string `json:"actualVersion"`
-	ExecutableSHA256    string `json:"executableSha256"`
-	ExecutableName      string `json:"executableName"`
-	GOROOTIdentity      string `json:"gorootIdentity"`
-	GOROOTVersionSHA256 string `json:"gorootVersionSha256"`
-	GOROOTSource        string `json:"gorootSource"`
-	CCompilerName       string `json:"cCompilerName,omitempty"`
-	CCompilerSHA256     string `json:"cCompilerSha256,omitempty"`
-	AutoDownload        bool   `json:"autoDownload"`
+	RequestedVersion    string                   `json:"requestedVersion"`
+	ActualVersion       string                   `json:"actualVersion"`
+	ExecutableSHA256    string                   `json:"executableSha256"`
+	ExecutableName      string                   `json:"executableName"`
+	GOROOTIdentity      string                   `json:"gorootIdentity"`
+	GOROOTVersionSHA256 string                   `json:"gorootVersionSha256"`
+	GOROOTSource        string                   `json:"gorootSource"`
+	CCompilerName       string                   `json:"cCompilerName,omitempty"`
+	CCompilerSHA256     string                   `json:"cCompilerSha256,omitempty"`
+	CCompilerHelpers    []CompilerHelperIdentity `json:"cCompilerHelpers"`
+	AutoDownload        bool                     `json:"autoDownload"`
 }
 
 type ManifestRecord struct {

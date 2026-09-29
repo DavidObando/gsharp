@@ -41,6 +41,9 @@ func readProfile(path string) (Profile, error) {
 	if profile.ID == "" || len(profile.EntryPatterns) == 0 || profile.RequestedGoVersion == "" {
 		return profile, errors.New("profile id, entryPatterns, and requestedGoVersion are required")
 	}
+	if profile.CCompilerHelpers == nil {
+		return profile, errors.New("cCompilerHelpers must be an array")
+	}
 	if profile.ExpectedSourceCommit != "" && !validCommitID(profile.ExpectedSourceCommit) {
 		return profile, errors.New("expectedSourceCommit must be a lowercase 40- or 64-character Git object ID")
 	}
@@ -63,8 +66,11 @@ func readProfile(path string) (Profile, error) {
 		if err := validateCompilerPath(profile.CCompiler); err != nil {
 			return profile, err
 		}
-	} else if profile.CCompiler != "" {
-		return profile, errors.New("cCompiler is only valid when cgoEnabled is true")
+		if err := validateCompilerHelpers(profile.CCompilerHelpers); err != nil {
+			return profile, err
+		}
+	} else if profile.CCompiler != "" || len(profile.CCompilerHelpers) != 0 {
+		return profile, errors.New("cCompiler and cCompilerHelpers are only valid when cgoEnabled is true")
 	}
 
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
@@ -79,7 +85,70 @@ func readProfile(path string) (Profile, error) {
 	sort.Strings(profile.EntryPatterns)
 	sort.Strings(profile.ArchitectureFeatures)
 	sort.Strings(profile.BuildTags)
+	sort.Slice(profile.CCompilerHelpers, func(i, j int) bool {
+		return profile.CCompilerHelpers[i].Name < profile.CCompilerHelpers[j].Name
+	})
 	return profile, nil
+}
+
+func validateCompilerHelpers(helpers []CompilerHelper) error {
+	if len(helpers) > 64 {
+		return errors.New("cCompilerHelpers exceeds the 64-entry limit")
+	}
+	names := map[string]bool{}
+	paths := map[string]bool{}
+	for index, helper := range helpers {
+		if !validCompilerHelperName(helper.Name) {
+			return fmt.Errorf("cCompilerHelpers[%d].name is not a safe executable name", index)
+		}
+		if forbiddenCompilerHelperName(helper.Name) {
+			return fmt.Errorf("cCompilerHelpers must not provide reserved executable %q", helper.Name)
+		}
+		nameKey := compilerHelperNameKey(helper.Name)
+		if names[nameKey] {
+			return fmt.Errorf("cCompilerHelpers has duplicate name %q", helper.Name)
+		}
+		names[nameKey] = true
+		if err := validateCompilerPath(helper.Path); err != nil {
+			return fmt.Errorf("cCompilerHelpers[%d].path: %w", index, err)
+		}
+		if paths[helper.Path] {
+			return fmt.Errorf("cCompilerHelpers has duplicate path %q", filepath.Base(helper.Path))
+		}
+		paths[helper.Path] = true
+		if !validSHA256(helper.SHA256) {
+			return fmt.Errorf("cCompilerHelpers[%d].sha256 is invalid", index)
+		}
+	}
+	return nil
+}
+
+func validCompilerHelperName(value string) bool {
+	if value == "" || value == "." || value == ".." || filepath.Base(value) != value {
+		return false
+	}
+	return strings.IndexFunc(value, func(char rune) bool {
+		return unicode.IsSpace(char) || unicode.IsControl(char) || char == '/' || char == '\\'
+	}) < 0
+}
+
+func compilerHelperNameKey(value string) string {
+	value = strings.ToLower(value)
+	for _, suffix := range []string{".exe", ".com", ".bat", ".cmd"} {
+		if strings.HasSuffix(value, suffix) {
+			return strings.TrimSuffix(value, suffix)
+		}
+	}
+	return value
+}
+
+func forbiddenCompilerHelperName(value string) bool {
+	switch compilerHelperNameKey(value) {
+	case "go", "pkg-config":
+		return true
+	default:
+		return false
+	}
 }
 
 func validateCompilerPath(value string) error {
@@ -372,13 +441,13 @@ func validateAnalysisJSONShape(data []byte) error {
 		{"helper", []string{"version", "sha256"}},
 		{"profile", []string{
 			"id", "sha256", "sourceRootIdentity", "entryPatterns", "loadTests", "goos", "goarch",
-			"architectureFeatures", "buildTags", "cgoEnabled", "goFlags", "goDebug", "moduleMode",
-			"vendorMode", "workspaceMode", "offline", "allowNetwork", "generatorsExecuted",
-			"targetBinariesExecuted", "trustBoundary", "limits",
+			"cCompilerHelpers", "architectureFeatures", "buildTags", "cgoEnabled", "goFlags",
+			"goDebug", "moduleMode", "vendorMode", "workspaceMode", "offline", "allowNetwork",
+			"generatorsExecuted", "targetBinariesExecuted", "trustBoundary", "limits",
 		}},
 		{"toolchain", []string{
 			"requestedVersion", "actualVersion", "executableSha256", "executableName",
-			"gorootIdentity", "gorootVersionSha256", "gorootSource", "autoDownload",
+			"gorootIdentity", "gorootVersionSha256", "gorootSource", "cCompilerHelpers", "autoDownload",
 		}},
 		{"recordCounts", []string{
 			"modules", "packages", "files", "types", "symbols", "nodes", "constants", "scopes", "selections",
@@ -471,6 +540,18 @@ var sourceSpanFields = []string{
 }
 
 func validateNestedJSONFields(root map[string]json.RawMessage) error {
+	for _, owner := range []string{"profile", "toolchain"} {
+		var object map[string]json.RawMessage
+		if err := json.Unmarshal(root[owner], &object); err != nil {
+			return fmt.Errorf("analysis.%s must be an object", owner)
+		}
+		if err := requireObjectJSONArrayFields(
+			"analysis."+owner, object, "cCompilerHelpers",
+			"name", "sha256", "bytes", "executableMode",
+		); err != nil {
+			return err
+		}
+	}
 	for _, collection := range []string{"nodes", "constants", "scopes", "generateDirectives", "featureSites"} {
 		records, err := rawRecordObjects(root, collection)
 		if err != nil {
@@ -544,6 +625,19 @@ func rawRecordObjects(root map[string]json.RawMessage, name string) ([]map[strin
 		return nil, fmt.Errorf("analysis.%s must be an array of objects", name)
 	}
 	return records, nil
+}
+
+func requireObjectJSONArrayFields(owner string, object map[string]json.RawMessage, name string, fields ...string) error {
+	var records []map[string]json.RawMessage
+	if err := json.Unmarshal(object[name], &records); err != nil {
+		return fmt.Errorf("%s.%s must be an array", owner, name)
+	}
+	for index, record := range records {
+		if err := requireJSONFields(fmt.Sprintf("%s.%s[%d]", owner, name, index), record, fields...); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func requireNestedObjectFields(owner string, record map[string]json.RawMessage, field string, optional bool, fields ...string) error {
