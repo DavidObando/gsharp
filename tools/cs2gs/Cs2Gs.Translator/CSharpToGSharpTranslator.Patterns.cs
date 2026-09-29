@@ -1633,6 +1633,9 @@ public sealed partial class CSharpToGSharpTranslator
                         this.context.GetDeclaredSymbol(varSingle) is { } varBound)
                     {
                         this.state.PatternBindings[varBound] = receiver;
+                        this.RegisterProjectedPatternBinding(
+                            varBound,
+                            receiverType);
                     }
                     else if (varPattern.Designation is ParenthesizedVariableDesignationSyntax)
                     {
@@ -1802,6 +1805,12 @@ public sealed partial class CSharpToGSharpTranslator
                 case VarPatternSyntax { Designation: SingleVariableDesignationSyntax variable }
                     when this.context.GetDeclaredSymbol(variable) is { } boundSymbol:
                     this.state.PatternBindings[boundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
+                    this.RegisterProjectedPatternBinding(
+                        boundSymbol,
+                        this.GetProjectedSlicePatternType(
+                            slice,
+                            receiverType,
+                            (receiverType as IArrayTypeSymbol)?.ElementType));
                     return null;
 
                 case VarPatternSyntax { Designation: DiscardDesignationSyntax }:
@@ -1817,13 +1826,30 @@ public sealed partial class CSharpToGSharpTranslator
                     // the slice's own `[]T` type, so the (redundant) type check is
                     // dropped — same bind-only treatment as the `var` capture above.
                     this.state.PatternBindings[declBoundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
+                    this.RegisterProjectedPatternBinding(
+                        declBoundSymbol,
+                        this.GetProjectedSlicePatternType(
+                            slice,
+                            receiverType,
+                            (receiverType as IArrayTypeSymbol)?.ElementType));
                     return null;
 
                 default:
+                    ITypeSymbol nestedSliceType =
+                        this.GetProjectedSlicePatternType(
+                            slice,
+                            receiverType,
+                            (receiverType as IArrayTypeSymbol)?.ElementType)
+                        ?? receiverType;
+
                     // A nested subpattern tested against the middle slice (e.g.
                     // `.. { Length: 0 }`, `.. [1, 2]`) — recurse the normal
                     // boolean-test lowering against the materialized slice value.
-                    return this.TranslatePatternTest(BuildSliceExpression(receiver, prefixCount, suffixCount), slice.Pattern, receiverType, isNestedPatternMember: isNestedPatternMember);
+                    return this.TranslatePatternTest(
+                        BuildSliceExpression(receiver, prefixCount, suffixCount),
+                        slice.Pattern,
+                        nestedSliceType,
+                        isNestedPatternMember: isNestedPatternMember);
             }
         }
 

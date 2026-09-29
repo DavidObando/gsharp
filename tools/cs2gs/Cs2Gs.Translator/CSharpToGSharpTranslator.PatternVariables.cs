@@ -8,6 +8,7 @@ using Cs2Gs.CodeModel.Ast;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace Cs2Gs.Translator;
 
@@ -79,16 +80,9 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     Designation: SingleVariableDesignationSyntax variable,
                 }:
-                    if (this.context.GetDeclaredSymbol(variable)
-                            is ILocalSymbol local
-                        && TypeContainsRecognizedManagedReferenceConsumer(
-                            receiverType,
-                            this.context.Compilation))
-                    {
-                        this.state.ManagedReferenceArrayProjectedLocalType[local] =
-                            receiverType;
-                    }
-
+                    this.RegisterProjectedPatternBinding(
+                        this.context.GetDeclaredSymbol(variable),
+                        receiverType);
                     break;
 
                 case ListPatternSyntax list:
@@ -98,7 +92,20 @@ public sealed partial class CSharpToGSharpTranslator
                         : this.GetListPatternElementType(list, receiverType));
                     foreach (PatternSyntax element in list.Patterns)
                     {
-                        if (element is not SlicePatternSyntax)
+                        if (element is SlicePatternSyntax slice)
+                        {
+                            if (slice.Pattern != null
+                                && PatternIntroducesBinding(slice.Pattern))
+                            {
+                                this.RegisterProjectedNativePatternBindings(
+                                    slice.Pattern,
+                                    this.GetProjectedSlicePatternType(
+                                        slice,
+                                        receiverType,
+                                        mappedListElementType));
+                            }
+                        }
+                        else
                         {
                             this.RegisterProjectedNativePatternBindings(
                                 element,
@@ -160,6 +167,56 @@ public sealed partial class CSharpToGSharpTranslator
                         receiverType);
                     break;
             }
+        }
+
+        private void RegisterProjectedPatternBinding(
+            ISymbol symbol,
+            ITypeSymbol effectiveType)
+        {
+            if (symbol is ILocalSymbol local
+                && effectiveType != null
+                && TypeContainsRecognizedManagedReferenceConsumer(
+                    effectiveType,
+                    this.context.Compilation))
+            {
+                this.state.ManagedReferenceArrayProjectedLocalType[local] =
+                    effectiveType;
+            }
+        }
+
+        private ITypeSymbol GetProjectedSlicePatternType(
+            SlicePatternSyntax slice,
+            ITypeSymbol receiverType,
+            ITypeSymbol mappedArrayElementType)
+        {
+            if (receiverType is IArrayTypeSymbol array)
+            {
+                return mappedArrayElementType == null
+                    ? receiverType
+                    : this.context.Compilation.CreateArrayTypeSymbol(
+                        mappedArrayElementType,
+                        array.Rank,
+                        array.NullableAnnotation);
+            }
+
+            ISymbol sliceSymbol =
+                (this.context.SemanticModel.GetOperation(slice)
+                    as ISlicePatternOperation)?.SliceSymbol;
+            if (receiverType is INamedTypeSymbol projectedReceiver
+                && sliceSymbol != null)
+            {
+                sliceSymbol = this.GetProjectedMember(
+                        projectedReceiver,
+                        sliceSymbol)
+                    ?? sliceSymbol;
+            }
+
+            return sliceSymbol switch
+            {
+                IPropertySymbol property => property.Type,
+                IMethodSymbol method => method.ReturnType,
+                _ => null,
+            };
         }
 
         private ITypeSymbol GetProjectedPatternMemberPathType(
