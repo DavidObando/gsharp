@@ -657,6 +657,16 @@ public sealed partial class CSharpToGSharpTranslator
                     : FindDeconstructionInitializer(target, left, conditional.WhenFalse);
             }
 
+            if (right is BinaryExpressionSyntax coalesce
+                && coalesce.IsKind(SyntaxKind.CoalesceExpression))
+            {
+                ExpressionSyntax found =
+                    FindDeconstructionInitializer(target, left, coalesce.Left);
+                return this.InitializerOriginatesFromDefault(found)
+                    ? found
+                    : FindDeconstructionInitializer(target, left, coalesce.Right);
+            }
+
             if (right is SwitchExpressionSyntax switchExpression)
             {
                 foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
@@ -722,6 +732,16 @@ public sealed partial class CSharpToGSharpTranslator
                     : FindDeconstructionInitializer(target, designation, conditional.WhenFalse);
             }
 
+            if (right is BinaryExpressionSyntax coalesce
+                && coalesce.IsKind(SyntaxKind.CoalesceExpression))
+            {
+                ExpressionSyntax found =
+                    FindDeconstructionInitializer(target, designation, coalesce.Left);
+                return this.InitializerOriginatesFromDefault(found)
+                    ? found
+                    : FindDeconstructionInitializer(target, designation, coalesce.Right);
+            }
+
             if (right is SwitchExpressionSyntax switchExpression)
             {
                 foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
@@ -770,10 +790,11 @@ public sealed partial class CSharpToGSharpTranslator
         private ExpressionSyntax ResolveStableTupleAlias(ExpressionSyntax expression)
         {
             var visited = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            int usePosition = expression.SpanStart;
             expression = this.UnwrapTuplePreservingCasts(expression);
             while (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
                 && visited.Add(local)
-                && !this.IsLocalReassigned(local)
+                && this.TupleAliasInitializerReachesUse(local, usePosition)
                 && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
                     is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
             {
@@ -781,6 +802,46 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return expression;
+        }
+
+        private bool TupleAliasInitializerReachesUse(ILocalSymbol local, int usePosition)
+        {
+            if (!this.IsLocalReassigned(local))
+            {
+                return true;
+            }
+
+            if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is not VariableDeclaratorSyntax declarator
+                || declarator.Ancestors().OfType<StatementSyntax>()
+                    .FirstOrDefault(statement => statement.Parent is BlockSyntax)
+                    is not { Parent: BlockSyntax block } declarationStatement
+                || block.FindToken(usePosition).Parent?.AncestorsAndSelf()
+                    .OfType<StatementSyntax>()
+                    .FirstOrDefault(statement => statement.Parent == block)
+                    is not { } useStatement
+                || block.DescendantNodes().OfType<GotoStatementSyntax>().Any())
+            {
+                return false;
+            }
+
+            int declarationIndex = block.Statements.IndexOf(declarationStatement);
+            int useIndex = block.Statements.IndexOf(useStatement);
+            if (declarationIndex < 0 || useIndex <= declarationIndex)
+            {
+                return false;
+            }
+
+            for (int i = declarationIndex + 1; i <= useIndex; i++)
+            {
+                if (block.Statements[i].DescendantNodesAndSelf()
+                    .Any(node => this.SyntaxNodeWritesSymbol(node, local)))
+                {
+                    return false;
+                }
+            }
+
+            return true;
         }
 
         private ExpressionSyntax UnwrapTuplePreservingCasts(ExpressionSyntax expression)

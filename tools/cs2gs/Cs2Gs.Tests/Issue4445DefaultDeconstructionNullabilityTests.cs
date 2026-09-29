@@ -50,6 +50,12 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var (castLeft, castRight) = ((T, T))(default(T), default(T));
                 var defaultPair = (default(T), default(T));
                 var (aliasLeft, aliasRight) = defaultPair;
+                var mutablePair = (default(T), default(T));
+                var (mutableAliasLeft, mutableAliasRight) = mutablePair;
+                mutablePair = (replacement, replacement);
+                var reassignedPair = (default(T), default(T));
+                reassignedPair = (replacement, replacement);
+                var (reassignedLeft, reassignedRight) = reassignedPair;
                 var (conditionalLeft, conditionalRight) = choose
                     ? (default(T), replacement)
                     : (replacement, default(T));
@@ -58,6 +64,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     true => (default(T), replacement),
                     _ => (replacement, default(T)),
                 };
+                (T, T)? nullablePair = choose ? (replacement, replacement) : null;
+                var (coalesceLeft, coalesceRight) =
+                    nullablePair ?? (default(T), default(T));
                 var (methodLeft, methodRight) = NullablePair<T>();
 
                 Fill(ref direct, replacement);
@@ -82,10 +91,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref castRight, replacement);
                 Fill(ref aliasLeft, replacement);
                 Fill(ref aliasRight, replacement);
+                Fill(ref mutableAliasLeft, replacement);
+                Fill(ref mutableAliasRight, replacement);
                 Fill(ref conditionalLeft, replacement);
                 Fill(ref conditionalRight, replacement);
                 Fill(ref switchLeft, replacement);
                 Fill(ref switchRight, replacement);
+                Fill(ref coalesceLeft, replacement);
+                Fill(ref coalesceRight, replacement);
                 Fill(ref methodLeft, replacement);
                 Fill(ref methodRight, replacement);
 
@@ -136,6 +149,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     null => (replacement, 0),
                     { } => (branchValue, 0),
                 };
+                (T, T)? defaultPair = default;
+                var (coalescePairNarrowed, _) =
+                    defaultPair ?? (replacement, replacement);
                 var coalesced = default(T) ?? default(T);
                 var coalesceNarrowed = default(T) ?? replacement;
                 var (left, right) = (default(T), default(T));
@@ -225,6 +241,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         ILocalSymbol narrowedWholeAlias = Local(root, model, "narrowedWholeAlias");
         ILocalSymbol conditionalNarrowed = Local(root, model, "conditionalNarrowed");
         ILocalSymbol switchNarrowed = Local(root, model, "switchNarrowed");
+        ILocalSymbol coalesceLeft = Local(root, model, "coalesceLeft");
+        ILocalSymbol coalesceRight = Local(root, model, "coalesceRight");
+        ILocalSymbol coalescePairNarrowed = Local(root, model, "coalescePairNarrowed");
         VariableDeclaratorSyntax suppressedSyntax = root.DescendantNodes()
             .OfType<VariableDeclaratorSyntax>()
             .Single(node => node.Identifier.ValueText == "suppressed");
@@ -250,6 +269,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Equal(NullableAnnotation.Annotated, narrowedWholeAlias.NullableAnnotation);
         Assert.Equal(NullableAnnotation.Annotated, conditionalNarrowed.NullableAnnotation);
         Assert.Equal(NullableAnnotation.Annotated, switchNarrowed.NullableAnnotation);
+        Assert.Equal(NullableAnnotation.Annotated, coalesceLeft.NullableAnnotation);
+        Assert.Equal(NullableAnnotation.Annotated, coalesceRight.NullableAnnotation);
+        Assert.Equal(NullableAnnotation.Annotated, coalescePairNarrowed.NullableAnnotation);
         Assert.Equal(
             NullableFlowState.NotNull,
             model.GetTypeInfo(narrowedSyntax.Initializer.Value).Nullability.FlowState);
@@ -278,7 +300,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "nestedA", "nestedB", "nestedC", "wholeLeft", "wholeRight",
             "wholeNestedA", "wholeNestedB", "wholeNestedC",
             "castLeft", "castRight", "aliasLeft", "aliasRight",
+            "mutableAliasLeft", "mutableAliasRight",
             "conditionalLeft", "conditionalRight", "switchLeft", "switchRight",
+            "coalesceLeft", "coalesceRight",
             "loopLeft", "loopRight", "coalesced", "left", "right",
         })
         {
@@ -300,8 +324,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("narrowedRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowedAlias T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("narrowedWholeAlias T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("reassignedLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("reassignedRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("conditionalNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("switchNarrowed T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("coalescePairNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("coalesceNarrowed T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("methodLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("methodRight T? =", printed, StringComparison.Ordinal);
