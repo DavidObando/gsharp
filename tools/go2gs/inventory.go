@@ -234,6 +234,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	compiled := stringSet(pkg.CompiledGoFiles)
 	active := stringSet(pkg.GoFiles)
 	embed := stringSet(pkg.EmbedFiles)
+	activeCgo := b.packageImportsC(pkg)
 	all := append([]string{}, pkg.CompiledGoFiles...)
 	all = append(all, pkg.GoFiles...)
 	all = append(all, pkg.IgnoredFiles...)
@@ -250,11 +251,11 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	if len(b.seenFiles)+newFiles > b.profile.Limits.MaxFiles {
 		return fmt.Errorf("file count exceeds limit %d", b.profile.Limits.MaxFiles)
 	}
-	if len(pkg.OtherFiles) > 0 {
+	if b.hasSelectedNativeInput(pkg, activeCgo) {
 		b.block("native", "selected package requires native, assembly, or CGo build inputs; M0 records them but does not authorize the native toolchain", []string{record.ID}, nil)
 		record.InventoryComplete = false
 	}
-	unmappedCgo := b.snapshotImportsC(pkg)
+	unmappedCgo := activeCgo
 	if unmappedCgo {
 		b.block("cgo", "selected package uses CGo-transformed syntax that M0 cannot faithfully relate to original source", []string{record.ID}, nil)
 		record.InventoryComplete = false
@@ -274,7 +275,11 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		case embed[path]:
 			role, reason = "embed", "selected by go:embed"
 		case contains(pkg.OtherFiles, path):
-			role, reason = "native", "selected non-Go build input"
+			if activeCgo || !cgoOnlyNativeInput(path) {
+				role, reason = "native", "selected non-Go build input"
+			} else {
+				role, reason = "ignored", "inactive because no selected Go file imports C"
+			}
 		case contains(pkg.IgnoredFiles, path):
 			role, reason = "ignored", "excluded by current build constraints or file naming"
 		case strings.HasSuffix(path, "_test.go"):
@@ -291,6 +296,10 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			!contains(pkg.IgnoredFiles, path) && !contains(pkg.OtherFiles, path) && !contains(pkg.EmbedFiles, path) {
 			role = snapshotRole
 			reason = "captured before package loading"
+			if !activeCgo && (snapshotRole == "native" || b.snapshotFileImportsC(path)) {
+				role = "ignored"
+				reason = "discovered defensively but inactive in the selected profile"
+			}
 		}
 		fileID, err := b.addFile(pkg, path, role, reason)
 		if err != nil {
@@ -331,27 +340,51 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	return nil
 }
 
-func (b *inventoryBuilder) snapshotImportsC(pkg *packages.Package) bool {
-	key := packageInputKey(pkg)
-	for _, path := range b.snapshotFiles[key] {
-		role := b.snapshotRoles[key][path]
-		if role != "active" && role != "compiled" && role != "test" {
-			continue
-		}
-		if filepath.Ext(path) != ".go" {
-			continue
-		}
-		file, err := parser.ParseFile(token.NewFileSet(), path, b.sourceSnapshot[path], parser.ImportsOnly)
-		if err != nil {
-			continue
-		}
-		for _, imported := range file.Imports {
-			if imported.Path.Value == `"C"` {
-				return true
-			}
+func (b *inventoryBuilder) packageImportsC(pkg *packages.Package) bool {
+	for _, path := range pkg.GoFiles {
+		if b.snapshotFileImportsC(path) {
+			return true
 		}
 	}
 	return false
+}
+
+func (b *inventoryBuilder) snapshotFileImportsC(path string) bool {
+	if filepath.Ext(path) != ".go" {
+		return false
+	}
+	data, captured := b.sourceSnapshot[path]
+	if !captured {
+		return false
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), path, data, parser.ImportsOnly)
+	if err != nil {
+		return false
+	}
+	for _, imported := range file.Imports {
+		if imported.Path.Value == `"C"` {
+			return true
+		}
+	}
+	return false
+}
+
+func (b *inventoryBuilder) hasSelectedNativeInput(pkg *packages.Package, activeCgo bool) bool {
+	for _, path := range pkg.OtherFiles {
+		if activeCgo || !cgoOnlyNativeInput(path) {
+			return true
+		}
+	}
+	return false
+}
+
+func cgoOnlyNativeInput(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".c", ".cc", ".cpp", ".cxx", ".f", ".f90", ".for", ".h", ".hh", ".hpp", ".m", ".mm", ".swig", ".swigcxx":
+		return true
+	default:
+		return false
+	}
 }
 
 func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason string) (string, error) {
