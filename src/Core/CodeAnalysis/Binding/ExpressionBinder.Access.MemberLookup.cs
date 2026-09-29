@@ -288,7 +288,17 @@ internal sealed partial class ExpressionBinder
                 && SameMethodSlot(left.GetterSymbol, right.GetterSymbol))
             || (left.SetterSymbol != null
                 && right.SetterSymbol != null
-                && SameMethodSlot(left.SetterSymbol, right.SetterSymbol));
+                && SameMethodSlot(left.SetterSymbol, right.SetterSymbol))
+            || (right.ContainingType is InterfaceSymbol
+                && left.Name == right.Name
+                && Equals(left.Type, right.Type)
+                && left.ReturnRefKind == right.ReturnRefKind
+                && left.Parameters.Length == right.Parameters.Length
+                && left.Parameters.Zip(right.Parameters).All(pair =>
+                    pair.First.RefKind == pair.Second.RefKind
+                    && Equals(pair.First.Type, pair.Second.Type))
+                && ((left.HasGetter && right.HasGetter)
+                    || (left.HasSetter && right.HasSetter)));
     }
 
     private static bool SameMethodSlot(FunctionSymbol left, FunctionSymbol right)

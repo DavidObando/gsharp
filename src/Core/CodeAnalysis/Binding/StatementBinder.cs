@@ -847,13 +847,19 @@ internal sealed partial class StatementBinder
                 currentStatementListFallsThrough =
                     (currentStatementListFallsThrough || HasInternallyReachableFallthrough(statement))
                     && !EndsInUnconditionalExit(statement);
-                if (EndsInUnconditionalExit(statement)
-                    && statement is not (BoundTryStatement
-                        or BoundPatternSwitchStatement
+                var mayGainDeferredFallthrough = statement switch
+                {
+                    BoundTryStatement { FinallyBlock: null } => true,
+                    BoundTryStatement { FinallyBlock: { } finallyBlock } =>
+                        !EndsInUnconditionalExit(finallyBlock),
+                    BoundPatternSwitchStatement
                         or BoundForInfiniteStatement
                         or BoundForEllipsisStatement
                         or BoundForRangeStatement
-                        or BoundAwaitForRangeStatement))
+                        or BoundAwaitForRangeStatement => true,
+                    _ => false,
+                };
+                if (EndsInUnconditionalExit(statement) && !mayGainDeferredFallthrough)
                 {
                     binderCtx.PotentialReachabilityLabel = null;
                 }
