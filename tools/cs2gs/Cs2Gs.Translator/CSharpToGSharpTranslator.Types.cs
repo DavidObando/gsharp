@@ -2704,6 +2704,8 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax source,
             SyntaxNode anchor)
         {
+            ITypeSymbol mappedArrayElement =
+                this.GetMappedArrayElementType(source);
             if (anchor is FromClauseSyntax { Parent: QueryBodySyntax } additionalFrom
                 && this.context.SemanticModel.GetQueryClauseInfo(additionalFrom)
                     .OperationInfo.Symbol is IMethodSymbol selectMany)
@@ -2715,11 +2717,20 @@ public sealed partial class CSharpToGSharpTranslator
                     .FirstOrDefault();
                 if (resultSelector is { Parameters.Length: >= 2 })
                 {
-                    return resultSelector.Parameters[1].Type;
+                    ITypeSymbol selectorElement = resultSelector.Parameters[1].Type;
+
+                    // Preserve a custom provider contract; replace only the
+                    // original managed-array element with its projected form.
+                    return mappedArrayElement != null
+                        && SymbolEqualityComparer.Default.Equals(
+                            mappedArrayElement,
+                            selectorElement)
+                            ? mappedArrayElement
+                            : selectorElement;
                 }
             }
 
-            if (this.GetMappedArrayElementType(source) is { } mappedArrayElement)
+            if (mappedArrayElement != null)
             {
                 return mappedArrayElement;
             }
