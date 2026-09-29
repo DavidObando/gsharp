@@ -5457,6 +5457,20 @@ public sealed partial class CSharpToGSharpTranslator
                 projectedMethod = projectedMethod.ConstructedFrom.Construct(typeArguments);
             }
 
+            if (!this.ProjectedCallableResultsMatch(
+                    call,
+                    projectedMethod,
+                    out IParameterSymbol incompatibleCallableParameter))
+            {
+                string message =
+                    $"managed-reference array widening changes callback return storage for parameter " +
+                    $"'{incompatibleCallableParameter.Name}', but its delegate return type is fixed; no exact G# translation exists.";
+                this.context.ReportUnsupported(
+                    call,
+                    message);
+                return Complete(false);
+            }
+
             if (!this.ProjectedByRefArgumentsMatch(
                     call,
                     projectedMethod,
@@ -5517,6 +5531,73 @@ public sealed partial class CSharpToGSharpTranslator
 
             this.state.ManagedReferenceArrayProjectedMethodByCall[call] = projected;
             return Complete(projected != null);
+        }
+
+        private bool ProjectedCallableResultsMatch(
+            ExpressionSyntax call,
+            IMethodSymbol projectedMethod,
+            out IParameterSymbol incompatibleParameter)
+        {
+            incompatibleParameter = null;
+            SeparatedSyntaxList<ArgumentSyntax> arguments = call switch
+            {
+                InvocationExpressionSyntax invocation => invocation.ArgumentList.Arguments,
+                ObjectCreationExpressionSyntax creation =>
+                    creation.ArgumentList?.Arguments ?? default,
+                ImplicitObjectCreationExpressionSyntax creation =>
+                    creation.ArgumentList.Arguments,
+                _ => default,
+            };
+
+            foreach (ArgumentSyntax argument in arguments)
+            {
+                if (StripParentheses(argument.Expression)
+                        is not AnonymousFunctionExpressionSyntax lambda)
+                {
+                    continue;
+                }
+
+                IParameterSymbol parameter =
+                    this.GetArgumentParameter(argument, projectedMethod);
+                if (parameter == null)
+                {
+                    continue;
+                }
+
+                ITypeSymbol targetType = parameter.Type;
+                if (this.TryGetExpandedParamsElementTarget(
+                        argument,
+                        parameter,
+                        out ITypeSymbol paramsElementType,
+                        out _))
+                {
+                    targetType = paramsElementType;
+                }
+
+                ITypeSymbol targetResult = GetLambdaResultTargetType(
+                    lambda,
+                    (targetType as INamedTypeSymbol)?.DelegateInvokeMethod);
+                if (targetResult == null)
+                {
+                    continue;
+                }
+
+                foreach (ExpressionSyntax result in GetLambdaResultExpressions(lambda))
+                {
+                    ITypeSymbol projectedResult =
+                        this.GetManagedReferenceArrayProjectedExpressionType(result);
+                    if (projectedResult != null
+                        && !SymbolEqualityComparer.IncludeNullability.Equals(
+                            projectedResult,
+                            targetResult))
+                    {
+                        incompatibleParameter = parameter;
+                        return false;
+                    }
+                }
+            }
+
+            return true;
         }
 
         private bool ProjectedByRefArgumentsMatch(

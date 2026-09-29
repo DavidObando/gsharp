@@ -94,6 +94,72 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void DefaultInitializedManagedReferenceTupleArraysWidenTupleLeaves()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedTupleArrayTranslation;
+            public class Probe {
+                public static int Run() {
+                    var pairs = new (ManagedRef<int> Reference, int Value)[1];
+                    return pairs[0].Reference == null && pairs[0].Value == 0 ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedTupleArrays.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Reference managed[int32]?", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void DefaultInitializedManagedReferenceAggregateArraysFailLoudly()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedAggregateArrayTranslation;
+            public struct Holder {
+                public ManagedRef<int> Reference;
+            }
+            public class Probe {
+                public static Holder[] Create() => new Holder[1];
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedAggregateArrays.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "managed-reference storage outside a tuple",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ManagedReferenceArraysUseNullableElementsAcrossStorageShapes()
     {
         const string source = """
@@ -3104,7 +3170,11 @@ public sealed class ManagedReferenceTranslationTests
 
                 public static int Run() {
                     var source = new ManagedRef<int>[1];
-                    return Create<ManagedRef<int>>(() => source[0]) == null ? 42 : 0;
+                    var expression = Create<ManagedRef<int>>(() => source[0]);
+                    var block = Create<ManagedRef<int>>(() => {
+                        return source[0];
+                    });
+                    return expression == null && block == null ? 42 : 0;
                 }
             }
             """;
@@ -3120,7 +3190,9 @@ public sealed class ManagedReferenceTranslationTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Empty(context.Diagnostics);
-        Assert.Contains("Create[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.Equal(
+            2,
+            text.Split("Create[managed[int32]?]", StringSplitOptions.None).Length - 1);
         Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
@@ -3128,6 +3200,42 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionRejectsFixedLambdaResultStorage()
+    {
+        const string source = """
+            using System;
+            using Gsharp.Values;
+            namespace ManagedArrayFixedLambdaResult;
+            public class Probe {
+                private static ManagedRef<int> Create(Func<ManagedRef<int>> factory) =>
+                    factory();
+
+                public static ManagedRef<int> Run() {
+                    var source = new ManagedRef<int>[1];
+                    return Create(() => source[0]);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayFixedLambdaResult.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "callback return storage",
+                    StringComparison.Ordinal));
     }
 
     [Fact]
