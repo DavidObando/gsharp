@@ -2541,10 +2541,10 @@ internal sealed partial class ExpressionBinder
                 ?? ResolveMethodGenericParameterPointeeType(resolvedMethod, paramIndex, typeArgSymbols)
                 ?? MemberLookup.ResolveByRefParameterPointeeFromSymbolicTypeArgs(resolvedMethod, paramIndex, symbolicMethodTypeArgs, receiverType)
                 ?? ClrNullability.GetParameterTypeSymbol(parameters[paramIndex]).StripToBareShape();
-            var syntheticParameter = new ParameterSymbol(
-                parameters[paramIndex].Name ?? "value",
+            var syntheticParameter = RefCapabilities.CreateParameterSymbol(
+                parameters[paramIndex],
                 pointeeType,
-                refKind: RefKind.Out);
+                "value");
 
             var rebound = BindRefArgumentExpression(refArg, syntheticParameter);
             rebuilt ??= arguments.ToBuilder();

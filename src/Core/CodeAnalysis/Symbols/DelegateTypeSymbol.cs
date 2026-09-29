@@ -220,12 +220,9 @@ public sealed class DelegateTypeSymbol : TypeSymbol
         {
             var substitutedType = StructSymbol.SubstituteTypeParameters(p.Type, subst);
             var clone = new ParameterSymbol(
-                p.Name,
+                p,
                 substitutedType,
-                p.IsVariadic,
-                declaringSyntax: p.DeclaringSyntax,
-                isScoped: p.IsScoped,
-                refKind: p.RefKind);
+                p.DeclaringSyntax);
             if (p.HasExplicitDefaultValue)
             {
                 clone.SetExplicitDefaultValue(p.ExplicitDefaultValue);

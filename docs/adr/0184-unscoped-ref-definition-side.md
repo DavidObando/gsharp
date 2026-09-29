@@ -434,8 +434,9 @@ It reports GS0254 rather than GS0591, which is accurate: by the time the
 
 ## Amendment: implicit parameter ref scopes (issue #4293)
 
-Parameter ref scope is now computed once on `ParameterSymbol`, separately from
-the existing value-scope `IsScoped` bit:
+Parameter ref scope and value scope are now computed separately on
+`ParameterSymbol`; the explicit `IsScoped` bit is only one input to those
+effective contracts:
 
 - an `out` parameter has function-local ref scope by default;
 - every `ref` or `in` parameter has return-only ref scope by default, matching
@@ -446,6 +447,13 @@ the existing value-scope `IsScoped` bit:
 - an explicit `scoped` modifier remains function-local and cannot be combined
   with `@UnscopedRef`.
 
+For value escape, a `ref` parameter whose type is a `ref struct` has
+function-local safe-to-escape scope by default. Returning that parameter by
+value, or returning a local derived from it, reports GS0219. `@UnscopedRef`
+widens that value scope to the caller and is the explicit escape hatch. Other
+parameters retain their existing value-scope behavior unless explicitly
+`scoped`.
+
 The distinction is required for C# ref-escape parity. In particular, a `ref`
 parameter may still be returned directly by reference; its default ref escape
 is the return-only boundary, not caller scope. Conversely, an ordinary `out T`
@@ -453,11 +461,12 @@ cannot be returned by reference unless its parameter carries `@UnscopedRef`.
 At call sites, an implicitly scoped `out` argument does not constrain a
 ref-returning call, while an `@UnscopedRef out` argument does.
 
-Roslyn separately gives `ref` parameters of `ref struct` type a scoped
-*value* contract used by its mixing analysis. G# does not yet expose that full
-`ScopedKind`/mixing model, so this amendment does not claim parity for every
-ref-struct assignment shape; it records the ref-escape behavior implemented by
-this issue.
+The value rule is deliberately separate from the reference rule:
+`return ref value` from a `ref Acc` parameter remains legal at the return-only
+ref boundary, while `return value` is rejected by the function-local value
+boundary. G# still does not expose Roslyn's full `ScopedKind`/MAMM assignment
+model, so this amendment does not claim parity for every multi-argument
+ref-struct mixing shape.
 
 ## Consequences
 

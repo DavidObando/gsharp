@@ -19,6 +19,15 @@ internal enum ParameterRefScope
     FunctionLocal,
 }
 
+internal enum ParameterValueScope
+{
+    /// <summary>The value may flow to the caller.</summary>
+    Caller,
+
+    /// <summary>The value cannot leave the current function.</summary>
+    FunctionLocal,
+}
+
 /// <summary>
 /// Represents a function declaration parameter symbol in the language.
 /// </summary>
@@ -64,9 +73,14 @@ public sealed class ParameterSymbol : LocalVariableSymbol
     /// <param name="source">The parameter whose contract is copied.</param>
     /// <param name="type">The substituted parameter type.</param>
     /// <param name="declaringSyntax">The syntax to associate with the clone, if any.</param>
-    internal ParameterSymbol(ParameterSymbol source, TypeSymbol type, SyntaxNode? declaringSyntax = null)
+    /// <param name="name">An optional synthesized name for the clone.</param>
+    internal ParameterSymbol(
+        ParameterSymbol source,
+        TypeSymbol type,
+        SyntaxNode? declaringSyntax = null,
+        string? name = null)
         : this(
-            source.Name,
+            name ?? source.Name,
             type,
             source.IsVariadic,
             declaringSyntax,
@@ -74,6 +88,8 @@ public sealed class ParameterSymbol : LocalVariableSymbol
             source.RefKind)
     {
         hasUnscopedRef = source.HasUnscopedRef;
+        IsReceiverParameter = source.IsReceiverParameter;
+        IsUnscopedRefReceiver = source.IsUnscopedRefReceiver;
     }
 
     /// <inheritdoc/>
@@ -242,10 +258,25 @@ public sealed class ParameterSymbol : LocalVariableSymbol
         return ParameterRefScope.Caller;
     }
 
-    /// <summary>Returns whether another parameter has the same effective ref contract.</summary>
+    /// <summary>
+    /// Gets the parameter's effective safe-to-escape scope. A <c>ref</c>
+    /// parameter of ref-struct type is implicitly scoped unless
+    /// <c>@UnscopedRef</c> widens its value contract.
+    /// </summary>
+    /// <returns>The effective value safe-to-escape scope.</returns>
+    internal ParameterValueScope GetEffectiveValueScope()
+        => IsScoped
+            || (RefKind == RefKind.Ref
+                && TypeSymbol.IsByRefLike(Type)
+                && !HasUnscopedRef)
+            ? ParameterValueScope.FunctionLocal
+            : ParameterValueScope.Caller;
+
+    /// <summary>Returns whether another parameter has the same effective ref-safety contract.</summary>
     /// <param name="other">The parameter to compare.</param>
-    /// <returns><see langword="true"/> when ref kind and effective ref scope match.</returns>
+    /// <returns><see langword="true"/> when ref kind and effective ref/value scopes match.</returns>
     internal bool HasSameRefContract(ParameterSymbol other)
         => RefKind == other.RefKind
-            && GetEffectiveRefScope() == other.GetEffectiveRefScope();
+            && GetEffectiveRefScope() == other.GetEffectiveRefScope()
+            && GetEffectiveValueScope() == other.GetEffectiveValueScope();
 }

@@ -124,6 +124,47 @@ public sealed class Issue4293ImplicitScopedParameterTests
     }
 
     [Fact]
+    public void ConstructedGenericInterface_PreservesUnscopedRefOutCallEscape()
+    {
+        const string source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            interface I[T] {
+                func Pick(@UnscopedRef out value T) ref T;
+            }
+            func Bad(source I[int32]) ref int32 {
+                var value int32
+                return ref source.Pick(out value)
+            }
+            """;
+
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0254");
+        Assert.Equal(source.LastIndexOf("source.Pick", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Fact]
+    public void ConstructedGenericDelegate_PreservesUnscopedRefOutContract()
+    {
+        const string source = """
+            package P
+            import System.Diagnostics.CodeAnalysis
+            delegate Picker[T](@UnscopedRef out value T);
+            """;
+
+        var tree = SyntaxTree.Parse(SourceText.From(source));
+        var compilation = new Compilation(tree);
+        _ = GSharp.Core.CodeAnalysis.Binding.Binder.BindProgram(
+            compilation.GlobalScope,
+            compilation.References);
+        Assert.Empty(tree.Diagnostics.Concat(compilation.GlobalScope.Diagnostics));
+
+        var definition = Assert.Single(compilation.GlobalScope.Delegates);
+        var constructed = Assert.IsType<DelegateTypeSymbol>(
+            DelegateTypeSymbol.Construct(definition, ImmutableArray.Create<TypeSymbol>(TypeSymbol.Int32)));
+        Assert.Equal(ParameterRefScope.ReturnOnly, Assert.Single(constructed.Parameters).GetEffectiveRefScope());
+    }
+
+    [Fact]
     public void RefStructRefParameter_CanStillBeReturnedByReference()
     {
         var diagnostics = Bind("""
@@ -131,6 +172,53 @@ public sealed class Issue4293ImplicitScopedParameterTests
             ref struct Acc { var Value int32 }
             func Pass(ref value Acc) ref Acc {
                 return ref value
+            }
+            """);
+
+        Assert.Empty(diagnostics);
+    }
+
+    [Fact]
+    public void RefStructRefParameter_CannotBeReturnedByValue()
+    {
+        const string source = """
+            package P
+            ref struct Acc { var Value int32 }
+            func Bad(ref value Acc) Acc {
+                return value
+            }
+            """;
+
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0219");
+        Assert.Equal(source.LastIndexOf("value", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+        Assert.Contains("function-local safe-to-escape scope", diagnostic.Message, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RefStructRefParameter_ValueScopePropagatesThroughLocal()
+    {
+        const string source = """
+            package P
+            ref struct Acc { var Value int32 }
+            func Bad(ref value Acc) Acc {
+                let copy = value
+                return copy
+            }
+            """;
+
+        var diagnostic = Assert.Single(Bind(source), d => d.Id == "GS0219");
+        Assert.Equal(source.LastIndexOf("copy", StringComparison.Ordinal), diagnostic.Location.Span.Start);
+    }
+
+    [Fact]
+    public void UnscopedRefRefStructParameter_CanBeReturnedByValue()
+    {
+        var diagnostics = Bind("""
+            package P
+            import System.Diagnostics.CodeAnalysis
+            ref struct Acc { var Value int32 }
+            func Pass(@UnscopedRef ref value Acc) Acc {
+                return value
             }
             """);
 

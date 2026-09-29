@@ -2471,7 +2471,7 @@ public sealed class StructSymbol : TypeSymbol
                 {
                     var st = SubstituteTypeForConstruction(par.Type, subst, mapClrType);
                     paramsChanged |= !ReferenceEquals(st, par.Type);
-                    pb.Add(new ParameterSymbol(par.Name, st, isVariadic: par.IsVariadic, isScoped: par.IsScoped));
+                    pb.Add(new ParameterSymbol(par, st, par.DeclaringSyntax));
                 }
 
                 if (paramsChanged)

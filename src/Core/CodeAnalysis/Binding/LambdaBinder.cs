@@ -1993,10 +1993,10 @@ internal sealed class LambdaBinder
         {
             var sourceParameterIndex = i + (function.IsExtension && adapterReceiver != null ? 1 : 0);
             var parameter = new ParameterSymbol(
-                $"arg{i}",
+                function.Parameters[sourceParameterIndex],
                 functionType.ParameterTypes[i],
                 declaringSyntax: group.Syntax,
-                refKind: function.Parameters[sourceParameterIndex].RefKind);
+                name: $"arg{i}");
             adapterParameters.Add(parameter);
             BoundExpression argument = new BoundVariableExpression(null, parameter);
             if (parameter.RefKind != RefKind.None)

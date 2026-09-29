@@ -619,7 +619,9 @@ internal sealed partial class StatementBinder
             // cannot be returned. This covers:
             // - direct reference to a `scoped` parameter or local
             // - value derived from a scoped source through constructor, member access, etc.
-            if (TypeSymbol.IsByRefLike(expression.Type) && HasFunctionLocalEscapeScope(expression))
+            if (!isRefReturn
+                && TypeSymbol.IsByRefLike(expression.Type)
+                && HasFunctionLocalEscapeScope(expression))
             {
                 Diagnostics.ReportByRefLikeEscape(
                     Invariant.Required(syntax.Expression, "a by-ref-like return expression is present").Location,
@@ -1045,9 +1047,9 @@ internal sealed partial class StatementBinder
     private static bool HasFunctionLocalReferentScope(BoundExpression expr)
     {
         // This is the by-ref-like value's encapsulated referent scope, not
-        // the parameter reference's effective scope computed for #4293.
+        // the parameter reference's effective ref scope.
         return expr is BoundVariableExpression { Variable: ParameterSymbol p }
-            ? p.IsScoped
+            ? p.GetEffectiveValueScope() == ParameterValueScope.FunctionLocal
             : HasFunctionLocalRefScope(expr);
     }
 
@@ -1074,9 +1076,14 @@ internal sealed partial class StatementBinder
             // `ref struct` instance method is legal with or without `@UnscopedRef`;
             // the pre-ADR-0184 code conflated the two and reported GS0219 for it.
             case BoundVariableExpression varExpr:
-                return varExpr.Variable is LocalVariableSymbol local
-                    && local.IsScoped
-                    && local is not ParameterSymbol { IsReceiverParameter: true };
+                return varExpr.Variable switch
+                {
+                    ParameterSymbol { IsReceiverParameter: true } => false,
+                    ParameterSymbol parameter =>
+                        parameter.GetEffectiveValueScope() == ParameterValueScope.FunctionLocal,
+                    LocalVariableSymbol local => local.IsScoped,
+                    _ => false,
+                };
 
             // Conversion (implicit/explicit) preserves STE of the inner expression.
             case BoundConversionExpression conv:
