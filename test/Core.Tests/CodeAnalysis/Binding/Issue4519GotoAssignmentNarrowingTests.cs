@@ -541,6 +541,41 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_NullableUserMethodReceiverStillRequiresNonNull()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                func Name() string { return "animal" }
+            }
+            class Dog : Animal {
+            }
+
+            func Run() string {
+                var x Animal? = nil
+                x = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let name = x.Name()
+                    if count == 0 {
+                        count++
+                        x = nil
+                        goto Again
+                    }
+                    return name
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("Name", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_InheritedPropertyDoesNotRequireNarrowedType()
     {
         var result = Evaluate("""

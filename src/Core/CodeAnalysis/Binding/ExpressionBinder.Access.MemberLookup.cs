@@ -167,6 +167,7 @@ internal sealed partial class ExpressionBinder
         if (receiver != null
             && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var receiverPath, out _)
             && !receiverPath.HasMembers
+            && receiverPath.Root.Type is not NullableTypeSymbol
             && rightPart is CallExpressionSyntax callSyntax
             && result is BoundUserInstanceCallExpression call
             && FindDeclaredMethod(
