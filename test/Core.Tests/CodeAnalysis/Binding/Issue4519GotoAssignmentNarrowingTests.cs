@@ -1176,6 +1176,32 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyIncludesCapturedGenericLocalFunctionMutation()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate[T] = func(seed T) { x = nil }
+                    mutate(0)
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_FinallyIncludesInvokedStoredFunctionBodyMutation()
     {
         var result = Evaluate("""
@@ -1313,6 +1339,132 @@ public class Issue4519GotoAssignmentNarrowingTests
 
             Console.WriteLine(Run())
             """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyPreservesCallableTargetAcrossZeroIterationLoop()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action (() -> void) = mutate
+                    for _ in []int32{} {
+                        action = noop
+                    }
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyUsesUnconditionalCallableTargetAfterLoop()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action (() -> void) = mutate
+                    for _ in []int32{} {
+                        action = mutate
+                    }
+                    action = noop
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyPreservesCallableTargetAcrossSwitchArms()
+    {
+        var result = Evaluate("""
+            func Run(value int32) int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action (() -> void) = mutate
+                    switch value {
+                        case 1 { action = noop }
+                        default { }
+                    }
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run(0)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyPreservesCallableTargetAcrossCatchBranches()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action (() -> void) = mutate
+                    try {
+                    }
+                    catch {
+                        action = noop
+                    }
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
     }
 
     [Fact]

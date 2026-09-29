@@ -1525,6 +1525,7 @@ internal sealed partial class StatementBinder
         private readonly Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> functionLiterals = new();
         private readonly HashSet<VariableSymbol> unknownFunctionValues = new();
         private readonly HashSet<BoundFunctionLiteralExpression> visitedFunctionLiterals = new();
+        private readonly HashSet<BoundLabel> pendingConditionalTargets = new();
 
         public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing)
         {
@@ -1536,6 +1537,16 @@ internal sealed partial class StatementBinder
         public bool MayMutateMemberPaths { get; private set; }
 
         public bool MayMutateAnyRoot { get; private set; }
+
+        public override void VisitStatement(BoundStatement? node)
+        {
+            if (node is BoundLabelStatement label)
+            {
+                pendingConditionalTargets.Remove(label.Label);
+            }
+
+            base.VisitStatement(node);
+        }
 
         public override void VisitExpression(BoundExpression? node)
         {
@@ -1555,6 +1566,11 @@ internal sealed partial class StatementBinder
                     Arguments: var arguments,
                 })
             {
+                if (function.HasCaptures)
+                {
+                    MayMutateAnyRoot = true;
+                }
+
                 var count = Math.Min(arguments.Length, function.Parameters.Length);
                 for (var i = 0; i < count; i++)
                 {
@@ -1637,18 +1653,126 @@ internal sealed partial class StatementBinder
         protected override void VisitIfStatement(BoundIfStatement node)
         {
             VisitExpression(node.Condition);
-            var branchStart = CloneFunctionLiterals();
-            var unknownAtBranchStart = new HashSet<VariableSymbol>(unknownFunctionValues);
+            var branchStart = CaptureCallableState();
 
             VisitStatement(node.ThenStatement);
-            var thenLiterals = CloneFunctionLiterals();
-            var thenUnknown = new HashSet<VariableSymbol>(unknownFunctionValues);
+            var thenState = CaptureCallableState();
 
-            RestoreFunctionLiterals(branchStart);
-            RestoreUnknownFunctionValues(unknownAtBranchStart);
+            RestoreCallableState(branchStart);
             VisitStatement(node.ElseStatement);
+            MergeCallableState(thenState);
+        }
 
-            foreach (var entry in thenLiterals)
+        protected override void VisitConditionalGotoStatement(BoundConditionalGotoStatement node)
+        {
+            VisitExpression(node.Condition);
+            pendingConditionalTargets.Add(node.Label);
+        }
+
+        protected override void VisitForInfiniteStatement(BoundForInfiniteStatement node)
+            => VisitPossiblySkippedBody(node.Body);
+
+        protected override void VisitForEllipsisStatement(BoundForEllipsisStatement node)
+        {
+            VisitExpression(node.LowerBound);
+            VisitExpression(node.UpperBound);
+            VisitPossiblySkippedBody(node.Body);
+        }
+
+        protected override void VisitForRangeStatement(BoundForRangeStatement node)
+        {
+            VisitExpression(node.Collection);
+            VisitPossiblySkippedBody(node.Body);
+        }
+
+        protected override void VisitAwaitForRangeStatement(BoundAwaitForRangeStatement node)
+        {
+            VisitExpression(node.Stream);
+            VisitPossiblySkippedBody(node.Body);
+        }
+
+        protected override void VisitPatternSwitchStatement(BoundPatternSwitchStatement node)
+        {
+            VisitExpression(node.Discriminant);
+            var branchStart = CaptureCallableState();
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown)? joined =
+                node.IsExhaustive ? null : branchStart;
+
+            foreach (var arm in node.Arms)
+            {
+                RestoreCallableState(branchStart);
+                VisitPattern(arm.Pattern);
+                VisitExpression(arm.Guard);
+                VisitStatement(arm.Body);
+                joined = JoinCallableStates(joined, CaptureCallableState());
+            }
+
+            RestoreCallableState(joined ?? branchStart);
+        }
+
+        protected override void VisitSwitchExpression(BoundSwitchExpression node)
+        {
+            VisitExpression(node.Discriminant);
+            var branchStart = CaptureCallableState();
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown)? joined = null;
+
+            foreach (var arm in node.Arms)
+            {
+                RestoreCallableState(branchStart);
+                VisitPattern(arm.Pattern);
+                VisitExpression(arm.Guard);
+                VisitExpression(arm.Result);
+                joined = JoinCallableStates(joined, CaptureCallableState());
+            }
+
+            RestoreCallableState(joined ?? branchStart);
+        }
+
+        protected override void VisitTryStatement(BoundTryStatement node)
+        {
+            var branchStart = CaptureCallableState();
+            VisitStatement(node.TryBlock);
+            var joined = CaptureCallableState();
+
+            foreach (var clause in node.CatchClauses)
+            {
+                RestoreCallableState(branchStart);
+                MergeCallableState(joined);
+                VisitExpression(clause.Filter);
+                VisitStatement(clause.Body);
+                joined = JoinCallableStates(joined, CaptureCallableState());
+            }
+
+            RestoreCallableState(joined);
+            VisitStatement(node.FinallyBlock);
+        }
+
+        private void VisitPossiblySkippedBody(BoundStatement body)
+        {
+            var entry = CaptureCallableState();
+            VisitStatement(body);
+            MergeCallableState(entry);
+        }
+
+        private (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) CaptureCallableState()
+            => (
+                functionLiterals.ToDictionary(
+                    entry => entry.Key,
+                    entry => new HashSet<BoundFunctionLiteralExpression>(entry.Value)),
+                new HashSet<VariableSymbol>(unknownFunctionValues));
+
+        private void RestoreCallableState(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) state)
+        {
+            functionLiterals.Clear();
+            unknownFunctionValues.Clear();
+            MergeCallableState(state);
+        }
+
+        private void MergeCallableState(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) state)
+        {
+            foreach (var entry in state.Literals)
             {
                 if (!functionLiterals.TryGetValue(entry.Key, out var literals))
                 {
@@ -1659,30 +1783,31 @@ internal sealed partial class StatementBinder
                 literals.UnionWith(entry.Value);
             }
 
-            unknownFunctionValues.UnionWith(thenUnknown);
+            unknownFunctionValues.UnionWith(state.Unknown);
         }
 
-        private Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> CloneFunctionLiterals()
-            => functionLiterals.ToDictionary(
-                entry => entry.Key,
-                entry => new HashSet<BoundFunctionLiteralExpression>(entry.Value));
-
-        private void RestoreFunctionLiterals(
-            Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> snapshot)
+        private static (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) JoinCallableStates(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown)? left,
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown) right)
         {
-            functionLiterals.Clear();
-            foreach (var entry in snapshot)
+            if (left == null)
             {
-                functionLiterals.Add(
-                    entry.Key,
-                    new HashSet<BoundFunctionLiteralExpression>(entry.Value));
+                return right;
             }
-        }
 
-        private void RestoreUnknownFunctionValues(HashSet<VariableSymbol> snapshot)
-        {
-            unknownFunctionValues.Clear();
-            unknownFunctionValues.UnionWith(snapshot);
+            foreach (var entry in right.Literals)
+            {
+                if (!left.Value.Literals.TryGetValue(entry.Key, out var literals))
+                {
+                    literals = new HashSet<BoundFunctionLiteralExpression>();
+                    left.Value.Literals.Add(entry.Key, literals);
+                }
+
+                literals.UnionWith(entry.Value);
+            }
+
+            left.Value.Unknown.UnionWith(right.Unknown);
+            return left.Value;
         }
 
         private bool TryGetFunctionLiterals(
@@ -1737,21 +1862,34 @@ internal sealed partial class StatementBinder
             {
                 if (TryGetFunctionLiterals(node.Expression, out var literals))
                 {
-                    functionLiterals[node.Variable] =
-                        new HashSet<BoundFunctionLiteralExpression>(literals);
+                    if (pendingConditionalTargets.Count > 0
+                        && functionLiterals.TryGetValue(node.Variable, out var existing))
+                    {
+                        existing.UnionWith(literals);
+                    }
+                    else
+                    {
+                        functionLiterals[node.Variable] =
+                            new HashSet<BoundFunctionLiteralExpression>(literals);
+                    }
+
                     if (UnwrapCallable(node.Expression) is BoundVariableExpression source
                         && unknownFunctionValues.Contains(source.Variable))
                     {
                         unknownFunctionValues.Add(node.Variable);
                     }
-                    else
+                    else if (pendingConditionalTargets.Count == 0)
                     {
                         unknownFunctionValues.Remove(node.Variable);
                     }
                 }
                 else
                 {
-                    functionLiterals.Remove(node.Variable);
+                    if (pendingConditionalTargets.Count == 0)
+                    {
+                        functionLiterals.Remove(node.Variable);
+                    }
+
                     unknownFunctionValues.Add(node.Variable);
                 }
 
