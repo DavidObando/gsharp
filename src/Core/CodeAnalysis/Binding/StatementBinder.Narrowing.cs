@@ -1090,6 +1090,28 @@ internal sealed partial class StatementBinder
 
                 return true;
 
+            case BoundTryStatement tryStatement:
+                ClearAssignedRoots(tryStatement, state);
+                if (tryStatement.FinallyBlock == null)
+                {
+                    return true;
+                }
+
+                var finallyState = ContainsUserGotoOrLabel(tryStatement.FinallyBlock.Syntax)
+                    ? new Dictionary<AccessPath, TypeSymbol>()
+                    : ComputeBranchFallthroughNonNull(tryStatement.FinallyBlock, entry: null);
+                if (finallyState == null)
+                {
+                    return false;
+                }
+
+                foreach (var entry in finallyState)
+                {
+                    state[entry.Key] = entry.Value;
+                }
+
+                return true;
+
             default:
                 // Loops, switches, and any other construct that could reassign a
                 // tracked local: conservatively drop every narrowing on a local

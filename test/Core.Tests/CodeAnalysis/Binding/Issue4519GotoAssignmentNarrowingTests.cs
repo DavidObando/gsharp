@@ -394,6 +394,31 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void NestedFinally_EstablishesNarrowingForOuterGoto()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(jump bool) {
+                var x string? = nil
+                try {
+                    if jump { goto Done }
+                } finally {
+                    try {
+                    } finally {
+                        x = "safe"
+                    }
+                }
+                x = "again"
+            Done:
+                Console.WriteLine(x.Length)
+            }
+
+            Run(true)
+            """, "4");
+    }
+
+    [Fact]
     public void NestedFunctionBetweenFinallyAndTarget_DoesNotLoseOuterFinallyEffects()
     {
         var result = Evaluate("""
