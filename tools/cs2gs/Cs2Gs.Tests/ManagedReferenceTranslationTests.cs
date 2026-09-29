@@ -4690,6 +4690,54 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Equal(42, result.Value);
     }
 
+    [Fact]
+    public void ForEachProjectionPreservesFixedConcreteCurrentType()
+    {
+        const string source = """
+            using System.Collections;
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedProjectedFixedCurrent;
+            public sealed class Sequence<T> : IEnumerable<ManagedRef<int>> {
+                public IEnumerator<ManagedRef<int>> GetEnumerator() {
+                    int[] values = { 3 };
+                    yield return ManagedRef<int>.FromArray(values, 0);
+                }
+                IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+            }
+            public class Probe {
+                private static Sequence<T> Create<T>(T[] source) => new Sequence<T>();
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    foreach (var item in Create(source)) {
+                        return item.Borrow();
+                    }
+                    return 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedProjectedFixedCurrent.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("item!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(3, result.Value);
+    }
+
     [Theory]
     [InlineData("int managed = 1;", "managed", 4)]
     [InlineData("int managed() => 2;", "managed()", 5)]

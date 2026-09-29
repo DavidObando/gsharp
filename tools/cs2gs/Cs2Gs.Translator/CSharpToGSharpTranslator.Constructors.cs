@@ -3739,19 +3739,19 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol projectedCollection =
                 this.GetManagedReferenceArrayProjectedExpressionType(forEach.Expression);
-            ITypeSymbol selectedElement =
-                forEachInfo.CurrentProperty?.Type ?? forEachInfo.ElementType;
-            ITypeSymbol originalCollection =
-                this.context.GetTypeInfo(forEach.Expression).Type;
-            if (projectedCollection is INamedTypeSymbol projectedNamed
-                && originalCollection is INamedTypeSymbol originalNamed
-                && selectedElement != null)
+            if (projectedCollection is INamedTypeSymbol projectedNamed)
             {
-                return ProjectTypeThroughConstructedType(
-                    selectedElement,
-                    originalNamed,
-                    projectedNamed,
-                    this.context.Compilation);
+                if (forEachInfo.GetEnumeratorMethod is { } getEnumerator
+                    && this.GetProjectedMember(projectedNamed, getEnumerator)
+                        is IMethodSymbol projectedGetEnumerator
+                    && projectedGetEnumerator.ReturnType is INamedTypeSymbol
+                        projectedEnumerator
+                    && forEachInfo.CurrentProperty is { } current
+                    && this.GetProjectedMember(projectedEnumerator, current)
+                        is IPropertySymbol projectedCurrent)
+                {
+                    return projectedCurrent.Type;
+                }
             }
 
             return GetEnumerableElementType(
