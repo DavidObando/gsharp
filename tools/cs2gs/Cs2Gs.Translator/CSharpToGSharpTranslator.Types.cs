@@ -2734,8 +2734,12 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #3348: as in `BuildScopeLambda`, the `let` value is evaluated
             // inside this Select lambda — hoist into its own prologue, not the
             // enclosing statement's.
-            GExpression letValue = this.TranslateQueryLambdaBody(let.Expression, prologue, scope);
-            GTypeReference letType = this.context.GetTypeInfo(let.Expression).Type is { } t
+            GExpression letValue = this.TranslateQueryLambdaBody(
+                let.Expression,
+                prologue,
+                scope,
+                out ITypeSymbol effectiveLetType);
+            GTypeReference letType = effectiveLetType is { } t
                 ? this.typeMapper.Map(t, this.context, let.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
@@ -2904,7 +2908,11 @@ public sealed partial class CSharpToGSharpTranslator
             // once per element inside the lambda. Left on the enclosing statement's
             // ambient seam it would instead be emitted before the whole query, where
             // the range variable it references is not in scope.
-            GExpression body = this.TranslateQueryLambdaBody(lambdaBody, prologue, scope);
+            GExpression body = this.TranslateQueryLambdaBody(
+                lambdaBody,
+                prologue,
+                scope,
+                out _);
             if (prologue.Count == 0)
             {
                 return new LambdaExpression(new List<Parameter> { param }, expressionBody: body);
@@ -2925,7 +2933,8 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateQueryLambdaBody(
             ExpressionSyntax lambdaBody,
             List<GStatement> prologue,
-            IReadOnlyList<(string Name, GTypeReference Type, ISymbol Symbol)> scope)
+            IReadOnlyList<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
+            out ITypeSymbol effectiveType)
         {
             var addedNullableBindings = new List<ISymbol>();
             foreach ((_, GTypeReference type, ISymbol symbol) in scope)
@@ -2940,7 +2949,11 @@ public sealed partial class CSharpToGSharpTranslator
 
             try
             {
-                return this.TranslateConditionWithHoist(lambdaBody, prologue);
+                GExpression result =
+                    this.TranslateConditionWithHoist(lambdaBody, prologue);
+                effectiveType =
+                    this.GetManagedReferenceArrayProjectedArgumentType(lambdaBody);
+                return result;
             }
             finally
             {
