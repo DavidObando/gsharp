@@ -4751,9 +4751,21 @@ public sealed class ManagedReferenceTranslationTests
                     source[0] = ManagedRef<int>.FromArray(values, 0);
                     var pairs = new (ManagedRef<int> Reference, int Value)[1];
                     pairs[0] = (ManagedRef<int>.FromArray(values, 0), 0);
+                    var nestedPairs =
+                        new ((ManagedRef<int> Reference, int Value) Pair, int Other)[1];
+                    nestedPairs[0] =
+                        ((ManagedRef<int>.FromArray(values, 0), 0), 0);
                     int first = source is [var item] ? item.Borrow() : 0;
                     int second = pairs is [var pair] ? pair.Reference.Borrow() : 0;
-                    return first + second;
+                    int third = pairs is [{ Reference: var reference }]
+                        && reference.Borrow() > 0
+                        ? reference.Borrow()
+                        : 0;
+                    int fourth = nestedPairs is [{ Pair.Reference: var nestedReference }]
+                        && nestedReference.Borrow() > 0
+                        ? nestedReference.Borrow()
+                        : 0;
+                    return first + second + third + fourth;
                 }
             }
             """;
@@ -4771,12 +4783,14 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Empty(context.Diagnostics);
         Assert.Contains("item!!.Borrow()", text, StringComparison.Ordinal);
         Assert.Contains("pair.Reference!!.Borrow()", text, StringComparison.Ordinal);
+        Assert.Contains("reference!!.Borrow()", text, StringComparison.Ordinal);
+        Assert.Contains("nestedReference!!.Borrow()", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
-        Assert.Equal(42, result.Value);
+        Assert.Equal(84, result.Value);
     }
 
     [Theory]

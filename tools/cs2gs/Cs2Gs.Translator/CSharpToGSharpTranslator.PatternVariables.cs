@@ -108,17 +108,39 @@ public sealed partial class CSharpToGSharpTranslator
 
                     break;
 
-                case RecursivePatternSyntax
-                    { PositionalPatternClause.Subpatterns: var subpatterns }
-                    when receiverType is INamedTypeSymbol
-                    { IsTupleType: true } tuple:
-                    for (int i = 0;
-                        i < subpatterns.Count && i < tuple.TupleElements.Length;
-                        i++)
+                case RecursivePatternSyntax recursive:
+                    if (recursive.PropertyPatternClause != null)
                     {
-                        this.RegisterProjectedNativePatternBindings(
-                            subpatterns[i].Pattern,
-                            tuple.TupleElements[i].Type);
+                        foreach (SubpatternSyntax subpattern
+                            in recursive.PropertyPatternClause.Subpatterns)
+                        {
+                            ITypeSymbol memberType = subpattern.NameColon != null
+                                ? this.GetProjectedPatternMemberType(
+                                    receiverType,
+                                    subpattern.NameColon.Name)
+                                : this.GetProjectedPatternMemberPathType(
+                                    receiverType,
+                                    subpattern.ExpressionColon?.Expression);
+                            this.RegisterProjectedNativePatternBindings(
+                                subpattern.Pattern,
+                                memberType);
+                        }
+                    }
+
+                    if (recursive.PositionalPatternClause != null
+                        && receiverType is INamedTypeSymbol
+                            { IsTupleType: true } tuple)
+                    {
+                        SeparatedSyntaxList<SubpatternSyntax> subpatterns =
+                            recursive.PositionalPatternClause.Subpatterns;
+                        for (int i = 0;
+                            i < subpatterns.Count && i < tuple.TupleElements.Length;
+                            i++)
+                        {
+                            this.RegisterProjectedNativePatternBindings(
+                                subpatterns[i].Pattern,
+                                tuple.TupleElements[i].Type);
+                        }
                     }
 
                     break;
@@ -138,6 +160,47 @@ public sealed partial class CSharpToGSharpTranslator
                         receiverType);
                     break;
             }
+        }
+
+        private ITypeSymbol GetProjectedPatternMemberPathType(
+            ITypeSymbol receiverType,
+            ExpressionSyntax path)
+        {
+            return path switch
+            {
+                SimpleNameSyntax name =>
+                    this.GetProjectedPatternMemberType(receiverType, name),
+                MemberAccessExpressionSyntax access =>
+                    this.GetProjectedPatternMemberType(
+                        this.GetProjectedPatternMemberPathType(
+                            receiverType,
+                            access.Expression),
+                        access),
+                _ => null,
+            };
+        }
+
+        private ITypeSymbol GetProjectedPatternMemberType(
+            ITypeSymbol receiverType,
+            SyntaxNode memberSyntax)
+        {
+            ISymbol member = memberSyntax == null
+                ? null
+                : this.GetPatternMemberSymbol(memberSyntax);
+            if (receiverType is INamedTypeSymbol projectedReceiver
+                && member != null)
+            {
+                member = this.GetProjectedMember(projectedReceiver, member)
+                    ?? member;
+            }
+
+            return member switch
+            {
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                IMethodSymbol method => method.ReturnType,
+                _ => null,
+            };
         }
 
         private static bool HasUnsupportedBindingUnderTopLevelNot(PatternSyntax pattern)
