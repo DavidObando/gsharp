@@ -2936,6 +2936,56 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceArrayParamsEnumerableInitializerRejectsNullCollectionForm()
+    {
+        const string source = """
+            using System.Collections;
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayParamsEnumerableInitializerNullForm;
+            public sealed class Rows<T> : IEnumerable {
+                public bool SawNull { get; private set; }
+                public void Add(int key, params IEnumerable<T> added) {
+                    if (key == 1) {
+                        this.SawNull = added == null;
+                    }
+                }
+                public IEnumerator GetEnumerator() => System.Array.Empty<T>().GetEnumerator();
+            }
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    var rows = new Rows<ManagedRef<int>> {
+                        { 0, source[0] },
+                        { 1, null },
+                    };
+                    return rows.SawNull ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayParamsEnumerableInitializerNullForm.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "direct null params-collection argument",
+                    StringComparison.Ordinal));
+        Assert.True(
+            text.Contains("Rows[managed[int32]?]", StringComparison.Ordinal),
+            text);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayParamsCollectionInitializerKeepsNormalFormArray()
     {
         const string source = """

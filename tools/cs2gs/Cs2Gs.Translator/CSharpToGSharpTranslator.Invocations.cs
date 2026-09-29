@@ -2308,7 +2308,8 @@ public sealed partial class CSharpToGSharpTranslator
                 ? boundMethod.Parameters[index]
                 : boundMethod.Parameters.LastOrDefault();
             ITypeSymbol paramsElementType = GetParamsElementType(targetParameter);
-            ITypeSymbol sourceType = this.context.GetTypeInfo(value).Type;
+            TypeInfo valueType = this.context.GetTypeInfo(value);
+            ITypeSymbol sourceType = valueType.Type ?? valueType.ConvertedType;
             bool directCollectionForm = sourceType != null
                 && boundParameter != null
                 && this.context.Compilation.ClassifyConversion(
@@ -4088,6 +4089,20 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            ExpressionSyntax unsupportedNullParamsCollection =
+                isCollectionInitializer
+                    ? initializer.Expressions.FirstOrDefault(
+                        this.IsUnsupportedDirectNullParamsCollectionElement)
+                    : null;
+            if (unsupportedNullParamsCollection != null)
+            {
+                this.context.ReportUnsupported(
+                    unsupportedNullParamsCollection,
+                    "a direct null params-collection argument has no exact G# form: a G# variadic call always materializes the carrier.");
+                result = BuildConstruction(type, arguments);
+                return true;
+            }
+
             // Issue #3501 / ADR-0117: a G# collection-initializer element holds
             // exactly one or two values, so an N-ary `{ a, b, c }` element
             // (xunit's TheoryData rows are the canonical case — sugar for
@@ -4118,6 +4133,31 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression construction = BuildConstruction(type, arguments);
             result = new CollectionInitializerExpression(construction, elements);
             return true;
+        }
+
+        private bool IsUnsupportedDirectNullParamsCollectionElement(
+            ExpressionSyntax element)
+        {
+            IReadOnlyList<ExpressionSyntax> values =
+                element is InitializerExpressionSyntax complex
+                    && element.IsKind(
+                        SyntaxKind.ComplexElementInitializerExpression)
+                    ? complex.Expressions
+                    : new[] { element };
+            IMethodSymbol addMethod =
+                this.context.SemanticModel.GetCollectionInitializerSymbolInfo(
+                    element).Symbol as IMethodSymbol;
+            if (addMethod == null
+                || values.Count != addMethod.Parameters.Length)
+            {
+                return false;
+            }
+
+            IParameterSymbol parameter = addMethod.Parameters[^1];
+            return parameter.IsParams
+                && parameter.Type is INamedTypeSymbol collection
+                && IsSupportedParamsCollectionType(collection)
+                && IsNullOrSuppressedNull(values[^1]);
         }
 
         // Lowers a collection initializer containing an N-ary (N != 2) complex
