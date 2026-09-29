@@ -217,6 +217,7 @@ internal sealed partial class StatementBinder
     {
         var narrowedAtSource = new Dictionary<AccessPath, TypeSymbol>();
         var narrowingFrameIndices = new Dictionary<AccessPath, int>();
+        var narrowingFrames = new Dictionary<AccessPath, IReadOnlyDictionary<AccessPath, TypeSymbol>>();
 
         // Frames are ordered outermost to innermost, so overwriting records
         // the currently effective narrowing for a repeated root.
@@ -227,12 +228,14 @@ internal sealed partial class StatementBinder
             {
                 narrowedAtSource[entry.Key] = entry.Value;
                 narrowingFrameIndices[entry.Key] = i;
+                narrowingFrames[entry.Key] = frame;
             }
         }
 
         return new GotoNarrowingSnapshot(
             narrowedAtSource,
             narrowingFrameIndices,
+            narrowingFrames,
             binderCtx.AssignmentNarrowingGenerations,
             activeFinallyClauses.ToImmutableArray(),
             activeCleanupStatements.ToImmutableArray(),
@@ -285,6 +288,10 @@ internal sealed partial class StatementBinder
             && source.NarrowingFrameIndices.TryGetValue(path, out var sourceFrame)
             && target.NarrowingFrameIndices.TryGetValue(path, out var targetFrame)
             && sourceFrame == targetFrame
+            && (!path.HasMembers
+                || (source.NarrowingFrames.TryGetValue(path, out var sourceProof)
+                    && target.NarrowingFrames.TryGetValue(path, out var targetProof)
+                    && ReferenceEquals(sourceProof, targetProof)))
             && (path.HasMembers
                 || !source.AssignmentGenerations.TryGetValue(path.Root, out var sourceGeneration)
                 || (target.AssignmentGenerations.TryGetValue(path.Root, out var targetGeneration)

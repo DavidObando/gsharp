@@ -34,11 +34,13 @@ internal sealed class GotoNarrowingSnapshot
 {
     private readonly Dictionary<AccessPath, TypeSymbol> narrowedVariables;
     private readonly Dictionary<AccessPath, int> narrowingFrameIndices;
+    private readonly Dictionary<AccessPath, IReadOnlyDictionary<AccessPath, TypeSymbol>> narrowingFrames;
     private readonly Dictionary<VariableSymbol, int> assignmentGenerations;
 
     public GotoNarrowingSnapshot(
         IReadOnlyDictionary<AccessPath, TypeSymbol> narrowedVariables,
         IReadOnlyDictionary<AccessPath, int> narrowingFrameIndices,
+        IReadOnlyDictionary<AccessPath, IReadOnlyDictionary<AccessPath, TypeSymbol>> narrowingFrames,
         IReadOnlyDictionary<VariableSymbol, int> assignmentGenerations,
         ImmutableArray<FinallyClauseSyntax> activeFinallyClauses,
         ImmutableArray<BoundStatement> activeCleanupStatements,
@@ -47,9 +49,11 @@ internal sealed class GotoNarrowingSnapshot
     {
         this.narrowedVariables = new Dictionary<AccessPath, TypeSymbol>(narrowedVariables);
         this.narrowingFrameIndices = new Dictionary<AccessPath, int>(narrowingFrameIndices);
+        this.narrowingFrames = new Dictionary<AccessPath, IReadOnlyDictionary<AccessPath, TypeSymbol>>(narrowingFrames);
         this.assignmentGenerations = new Dictionary<VariableSymbol, int>(assignmentGenerations);
         NarrowedVariables = new ReadOnlyDictionary<AccessPath, TypeSymbol>(this.narrowedVariables);
         NarrowingFrameIndices = new ReadOnlyDictionary<AccessPath, int>(this.narrowingFrameIndices);
+        NarrowingFrames = new ReadOnlyDictionary<AccessPath, IReadOnlyDictionary<AccessPath, TypeSymbol>>(this.narrowingFrames);
         AssignmentGenerations = new ReadOnlyDictionary<VariableSymbol, int>(this.assignmentGenerations);
         ActiveFinallyClauses = activeFinallyClauses;
         ActiveCleanupStatements = activeCleanupStatements;
@@ -60,6 +64,8 @@ internal sealed class GotoNarrowingSnapshot
     public IReadOnlyDictionary<AccessPath, TypeSymbol> NarrowedVariables { get; }
 
     public IReadOnlyDictionary<AccessPath, int> NarrowingFrameIndices { get; }
+
+    public IReadOnlyDictionary<AccessPath, IReadOnlyDictionary<AccessPath, TypeSymbol>> NarrowingFrames { get; }
 
     public IReadOnlyDictionary<VariableSymbol, int> AssignmentGenerations { get; }
 
@@ -75,6 +81,7 @@ internal sealed class GotoNarrowingSnapshot
         => new(
             narrowedVariables,
             NarrowingFrameIndices,
+            NarrowingFrames,
             AssignmentGenerations,
             ActiveFinallyClauses,
             ActiveCleanupStatements,
@@ -85,6 +92,7 @@ internal sealed class GotoNarrowingSnapshot
     {
         narrowedVariables.Remove(path);
         narrowingFrameIndices.Remove(path);
+        narrowingFrames.Remove(path);
         if (!path.HasMembers)
         {
             assignmentGenerations.Remove(path.Root);
@@ -95,6 +103,7 @@ internal sealed class GotoNarrowingSnapshot
     {
         narrowedVariables[path] = type;
         narrowingFrameIndices.Remove(path);
+        narrowingFrames.Remove(path);
         if (!path.HasMembers)
         {
             assignmentGenerations.Remove(path.Root);

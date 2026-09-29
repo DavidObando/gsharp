@@ -828,6 +828,9 @@ internal sealed class BinderContext
                     path,
                     out var targetFrameIndex)
                 || frameIndex != targetFrameIndex
+                || (path.HasMembers
+                    && (!state.TargetSnapshot.NarrowingFrames.TryGetValue(path, out var targetFrame)
+                        || !ReferenceEquals(NarrowedVariables[frameIndex], targetFrame)))
                 || (!path.HasMembers
                     && AssignmentNarrowingGenerations.TryGetValue(
                         variable,
