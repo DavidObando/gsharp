@@ -77,10 +77,20 @@ public sealed partial class CSharpToGSharpTranslator
                     && declarator.Initializer?.Value is { } initializerSyntax
                     && this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localTarget)
                 {
+                    ITypeSymbol targetType = localTarget.Type;
+                    if (IsImplicitlyTypedLocal(localTarget)
+                        && this.GetManagedReferenceArrayProjectedExpressionType(
+                            initializerSyntax) is { } projectedType)
+                    {
+                        targetType = projectedType;
+                        this.state.ManagedReferenceArrayProjectedLocalType[localTarget] =
+                            projectedType;
+                    }
+
                     initializer = this.ForgiveNullableReferenceValue(
                         initializerSyntax,
                         initializer,
-                        localTarget.Type,
+                        targetType,
                         localTarget);
                 }
 

@@ -128,6 +128,45 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void DeconstructedForEachUsesProjectedManagedReferenceTupleLeaves()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedTupleArrayForEachTranslation;
+            public class Probe {
+                public static int Run() {
+                    int[] values = { 42 };
+                    var pairs = new (ManagedRef<int> Reference, int Value)[1];
+                    pairs[0] = (ManagedRef<int>.FromArray(values, 0), 1);
+                    foreach (var (reference, _) in pairs) {
+                        return reference.Borrow();
+                    }
+                    return 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedTupleArrayForEach.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("reference!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void DefaultInitializedManagedReferenceAggregateArraysFailLoudly()
     {
         const string source = """
@@ -3795,6 +3834,48 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ExplicitQueryRangeVariablePreservesIdentityProjectedElementType()
+    {
+        const string source = """
+            using System.Linq;
+            using Gsharp.Values;
+            namespace ManagedArrayExplicitProjectedQueryRange;
+            public class Probe {
+                public static int Run() {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    return (from ManagedRef<int> item in source
+                            select item.Borrow()).First();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayExplicitProjectedQueryRange.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "item managed[int32]?",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("item!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void QueryLetKeepsProjectedManagedReferenceRangeType()
     {
         const string source = """
@@ -3868,6 +3949,58 @@ public sealed class ManagedReferenceTranslationTests
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Empty(context.Diagnostics);
         Assert.Contains("Read(item!!)", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ExpressionTreeCallbacksUseProjectedManagedReferenceContracts()
+    {
+        const string source = """
+            using System;
+            using System.Linq;
+            using System.Linq.Expressions;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedExpressionTreeCallbacks;
+            public class Probe {
+                private static T Create<T>(Expression<Func<T>> factory, T fallback) => fallback;
+                private static bool Test<T>(T[] source, Expression<Func<T, bool>> predicate) =>
+                    source[0] != null;
+
+                public static int Run() {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    var created = Create<ManagedRef<int>>(() => source.First(), source[0]);
+                    return Test(source, item => item != null)
+                        && created.Borrow() == 42
+                        ? 42
+                        : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedExpressionTreeCallbacks.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "item Gsharp.Values.ManagedRef[int32]?",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("Create[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.Contains("created!!.Borrow()", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });

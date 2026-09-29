@@ -3708,9 +3708,16 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private ITypeSymbol GetProjectedForEachElementType(
-            ForEachStatementSyntax forEach,
+            CommonForEachStatementSyntax forEach,
             ForEachStatementInfo forEachInfo)
         {
+            if (forEachInfo.ElementConversion.IsIdentity
+                && this.GetMappedArrayElementType(forEach.Expression)
+                    is { } mappedArrayElement)
+            {
+                return mappedArrayElement;
+            }
+
             ITypeSymbol projectedCollection =
                 this.GetManagedReferenceArrayProjectedExpressionType(forEach.Expression);
             ITypeSymbol selectedElement =

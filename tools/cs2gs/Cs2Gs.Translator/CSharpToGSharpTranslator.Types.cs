@@ -68,8 +68,9 @@ public sealed partial class CSharpToGSharpTranslator
                 // type's Invoke signature; if that type can't be resolved, this is
                 // a genuine gap rather than a silent zero-arg guess.
                 IMethodSymbol invokeMethod = exactTargetInvoke
-                    ?? (this.context.GetTypeInfo(implicitParamsAnonymousMethod).ConvertedType
-                        as INamedTypeSymbol)?.DelegateInvokeMethod;
+                    ?? GetDelegateInvokeMethod(
+                        this.context.GetTypeInfo(
+                            implicitParamsAnonymousMethod).ConvertedType);
                 if (invokeMethod != null)
                 {
                     // The body can never reference these params (C# gives them no
@@ -92,7 +93,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
             IMethodSymbol lambdaSymbol = this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol
-                ?? (this.context.GetTypeInfo(lambda).ConvertedType as INamedTypeSymbol)?.DelegateInvokeMethod;
+                ?? GetDelegateInvokeMethod(
+                    this.context.GetTypeInfo(lambda).ConvertedType);
             GTypeReference exactReturnType = exactTargetInvoke != null
                 ? this.MapDelegateLikeReturnType(
                     exactTargetInvoke,
@@ -1514,18 +1516,35 @@ public sealed partial class CSharpToGSharpTranslator
             List<string> names = new List<string>();
             CollectForEachVariableNames(node.Variable, names);
 
-            // Issue #1967: `foreach (var (i, r) in pairs)` declares each element
-            // via a designation nested in `node.Variable` — check every one here,
-            // this method's single entry point for deconstructing foreach.
-            foreach (SingleVariableDesignationSyntax designation in
-                node.Variable.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
+            ForEachStatementInfo forEachInfo =
+                this.context.SemanticModel.GetForEachStatementInfo(node);
+            ITypeSymbol projectedElement =
+                this.GetProjectedForEachElementType(node, forEachInfo);
+            var nullableBindings = new List<ISymbol>();
+            if (forEachInfo.ElementConversion.IsIdentity)
             {
+                this.CollectProjectedForEachVariableBindings(
+                    node.Variable,
+                    projectedElement,
+                    nullableBindings);
             }
 
             if (names.Count >= 2)
             {
                 bool isAwait = !node.AwaitKeyword.IsKind(SyntaxKind.None);
-                BlockStatement body = this.TranslateStatementAsBlock(node.Statement);
+                BlockStatement body;
+                try
+                {
+                    body = this.TranslateStatementAsBlock(node.Statement);
+                }
+                finally
+                {
+                    foreach (ISymbol binding in nullableBindings)
+                    {
+                        this.state.NullableForEachBindings.Remove(binding);
+                    }
+                }
+
                 var iterable = this.TranslateReceiverWithNullForgiveness(node.Expression);
 
                 if (!isAwait)
@@ -1546,10 +1565,77 @@ public sealed partial class CSharpToGSharpTranslator
                 return new ForInStatement(pair, iterable, new BlockStatement(statements), isAwait: true);
             }
 
+            foreach (ISymbol binding in nullableBindings)
+            {
+                this.state.NullableForEachBindings.Remove(binding);
+            }
+
             this.context.ReportUnsupported(
                 node,
                 "foreach tuple deconstruction with arity < 2 has no canonical G# form yet (ADR-0115 §B).");
             return new RawStatement("// unsupported: foreach variable deconstruction");
+        }
+
+        private void CollectProjectedForEachVariableBindings(
+            ExpressionSyntax variable,
+            ITypeSymbol projectedType,
+            List<ISymbol> bindings)
+        {
+            switch (variable)
+            {
+                case DeclarationExpressionSyntax declaration:
+                    this.CollectProjectedForEachVariableBindings(
+                        declaration.Designation,
+                        projectedType,
+                        bindings);
+                    break;
+
+                case TupleExpressionSyntax tuple
+                    when projectedType is INamedTypeSymbol
+                        { IsTupleType: true } tupleType
+                    && tuple.Arguments.Count == tupleType.TupleElements.Length:
+                    for (int i = 0; i < tuple.Arguments.Count; i++)
+                    {
+                        this.CollectProjectedForEachVariableBindings(
+                            tuple.Arguments[i].Expression,
+                            tupleType.TupleElements[i].Type,
+                            bindings);
+                    }
+
+                    break;
+            }
+        }
+
+        private void CollectProjectedForEachVariableBindings(
+            VariableDesignationSyntax designation,
+            ITypeSymbol projectedType,
+            List<ISymbol> bindings)
+        {
+            switch (designation)
+            {
+                case SingleVariableDesignationSyntax single
+                    when projectedType?.NullableAnnotation
+                        == NullableAnnotation.Annotated
+                    && this.IsReferenceLikeOrManagedReference(projectedType)
+                    && this.context.GetDeclaredSymbol(single) is { } symbol
+                    && this.state.NullableForEachBindings.Add(symbol):
+                    bindings.Add(symbol);
+                    break;
+
+                case ParenthesizedVariableDesignationSyntax tuple
+                    when projectedType is INamedTypeSymbol
+                        { IsTupleType: true } tupleType
+                    && tuple.Variables.Count == tupleType.TupleElements.Length:
+                    for (int i = 0; i < tuple.Variables.Count; i++)
+                    {
+                        this.CollectProjectedForEachVariableBindings(
+                            tuple.Variables[i],
+                            tupleType.TupleElements[i].Type,
+                            bindings);
+                    }
+
+                    break;
+            }
         }
 
         private void CollectForEachVariableNames(ExpressionSyntax variable, List<string> names)
@@ -2518,20 +2604,35 @@ public sealed partial class CSharpToGSharpTranslator
             return current;
         }
 
-        // Determines a query range variable's element type. An explicit type
-        // (`from T x in xs`) wins; otherwise the emitted projected collection
-        // type wins over Roslyn's stale source contract. The selected query
-        // operator, enumeration, and single-type-argument query-provider
-        // fallback cover shapes without a projection.
+        // Determines a query range variable's element type. The emitted
+        // projected collection type wins when an explicit range type has an
+        // identity conversion; a real conversion keeps the explicit target.
+        // The selected query operator, enumeration, and single-type-argument
+        // query-provider fallback cover shapes without a projection.
         private GTypeReference ResolveRangeVariableType(
             TypeSyntax explicitType, ExpressionSyntax source, SyntaxNode anchor)
         {
+            ITypeSymbol elementType =
+                this.ResolveRangeVariableElementTypeSymbol(source, anchor);
             if (explicitType != null)
             {
+                ITypeSymbol explicitTypeSymbol =
+                    this.context.GetTypeInfo(explicitType).Type;
+                if (elementType != null
+                    && explicitTypeSymbol != null
+                    && this.context.Compilation.ClassifyConversion(
+                        elementType,
+                        explicitTypeSymbol).IsIdentity)
+                {
+                    return this.typeMapper.Map(
+                        elementType,
+                        this.context,
+                        anchor.GetLocation());
+                }
+
                 return this.MapTypeSyntax(explicitType);
             }
 
-            ITypeSymbol elementType = this.ResolveRangeVariableElementTypeSymbol(source, anchor);
             if (elementType != null)
             {
                 return this.typeMapper.Map(elementType, this.context, anchor.GetLocation());
