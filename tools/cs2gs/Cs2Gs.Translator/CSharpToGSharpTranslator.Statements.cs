@@ -353,7 +353,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            TypeInfo typeInfo = this.context.GetTypeInfo(initializer);
+            TypeInfo typeInfo = initializer.SyntaxTree == this.context.SemanticModel.SyntaxTree
+                ? this.context.GetTypeInfo(initializer)
+                : default;
             bool isWholeTupleDefault = IsNullOrDefaultLiteral(initializer)
                 && typeInfo.Type is { IsTupleType: true };
 
@@ -456,15 +458,15 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (this.context.GetSymbolInfo(expression).Symbol is not ILocalSymbol local
-                || !visited.Add(local)
-                || !this.LocalInitializerReachesUse(local, expression.SpanStart)
-                || local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                    is not VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                || !visited.Add(local))
             {
                 return false;
             }
 
-            return this.InferredInitializerOriginatesFromDefault(initializer, visited);
+            return this.GetReachingLocalValues(local, expression.SpanStart).Any(value =>
+                this.InferredInitializerOriginatesFromDefault(
+                    value,
+                    new HashSet<ISymbol>(visited, SymbolEqualityComparer.Default)));
         }
 
         private static bool IsNullForgiven(ExpressionSyntax expression)
@@ -635,6 +637,26 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax right)
         {
             left = Unwrap(left);
+            if (this.context.GetSymbolInfo(right).Symbol is ILocalSymbol alias)
+            {
+                IReadOnlyList<ExpressionSyntax> reaching =
+                    this.GetReachingLocalValues(alias, right.SpanStart);
+                if (reaching.Count > 1)
+                {
+                    foreach (ExpressionSyntax value in reaching)
+                    {
+                        ExpressionSyntax found =
+                            FindDeconstructionInitializer(target, left, value);
+                        if (this.InitializerOriginatesFromDefault(found))
+                        {
+                            return found;
+                        }
+                    }
+
+                    return null;
+                }
+            }
+
             right = this.ResolveStableTupleAlias(right);
 
             if (left.SyntaxTree == target.SyntaxTree
@@ -716,6 +738,26 @@ public sealed partial class CSharpToGSharpTranslator
                 return right;
             }
 
+            if (this.context.GetSymbolInfo(right).Symbol is ILocalSymbol alias)
+            {
+                IReadOnlyList<ExpressionSyntax> reaching =
+                    this.GetReachingLocalValues(alias, right.SpanStart);
+                if (reaching.Count > 1)
+                {
+                    foreach (ExpressionSyntax value in reaching)
+                    {
+                        ExpressionSyntax found =
+                            FindDeconstructionInitializer(target, designation, value);
+                        if (this.InitializerOriginatesFromDefault(found))
+                        {
+                            return found;
+                        }
+                    }
+
+                    return null;
+                }
+            }
+
             right = this.ResolveStableTupleAlias(right);
             if (designation.SyntaxTree == target.SyntaxTree
                 && designation.Span.Contains(target.Span)
@@ -790,32 +832,53 @@ public sealed partial class CSharpToGSharpTranslator
 
         private ExpressionSyntax ResolveStableTupleAlias(ExpressionSyntax expression)
         {
+            if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+            {
+                return expression;
+            }
+
             var visited = new HashSet<ISymbol>(SymbolEqualityComparer.Default);
             int usePosition = expression.SpanStart;
             expression = this.UnwrapTuplePreservingCasts(expression);
             while (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
-                && visited.Add(local)
-                && this.LocalInitializerReachesUse(local, usePosition)
-                && local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                    is VariableDeclaratorSyntax { Initializer.Value: { } initializer })
+                && visited.Add(local))
             {
-                expression = this.UnwrapTuplePreservingCasts(initializer);
-                usePosition = initializer.SpanStart;
+                IReadOnlyList<ExpressionSyntax> reaching =
+                    this.GetReachingLocalValues(local, usePosition);
+                if (reaching.Count == 0)
+                {
+                    break;
+                }
+
+                if (reaching.Count != 1)
+                {
+                    break;
+                }
+
+                expression = reaching[0];
+                expression = this.UnwrapTuplePreservingCasts(expression);
+                usePosition = reaching[0].SpanStart;
             }
 
             return expression;
         }
 
-        private bool LocalInitializerReachesUse(ILocalSymbol local, int usePosition)
+        private IReadOnlyList<ExpressionSyntax> GetReachingLocalValues(
+            ILocalSymbol local,
+            int usePosition)
         {
-            if (!this.IsLocalReassigned(local))
+            if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
+                    is not VariableDeclaratorSyntax { Initializer.Value: { } initializer })
             {
-                return true;
+                return Array.Empty<ExpressionSyntax>();
             }
 
-            if (local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
-                    is not VariableDeclaratorSyntax declarator
-                || declarator.Ancestors().OfType<StatementSyntax>()
+            if (!this.IsLocalReassigned(local))
+            {
+                return new[] { initializer };
+            }
+
+            if (initializer.Ancestors().OfType<StatementSyntax>()
                     .FirstOrDefault(statement => statement.Parent is BlockSyntax)
                     is not { Parent: BlockSyntax block } declarationStatement
                 || block.FindToken(usePosition).Parent?.AncestorsAndSelf()
@@ -823,26 +886,49 @@ public sealed partial class CSharpToGSharpTranslator
                     .FirstOrDefault(statement => statement.Parent == block)
                     is not { } useStatement)
             {
-                return false;
+                return Array.Empty<ExpressionSyntax>();
             }
 
             int declarationIndex = block.Statements.IndexOf(declarationStatement);
             int useIndex = block.Statements.IndexOf(useStatement);
             if (declarationIndex < 0 || useIndex <= declarationIndex)
             {
-                return false;
+                return Array.Empty<ExpressionSyntax>();
             }
 
+            var reaching = new List<ExpressionSyntax> { initializer };
             if (useIndex == declarationIndex + 1)
             {
-                return true;
+                return reaching;
             }
 
-            DataFlowAnalysis flow = this.context.SemanticModel.AnalyzeDataFlow(
-                block.Statements[declarationIndex + 1],
-                block.Statements[useIndex - 1]);
-            return flow.Succeeded
-                && !flow.AlwaysAssigned.Contains(local, SymbolEqualityComparer.Default);
+            for (int i = declarationIndex + 1; i < useIndex; i++)
+            {
+                StatementSyntax statement = block.Statements[i];
+                if (!statement.DescendantNodesAndSelf()
+                    .Any(node => this.SyntaxNodeWritesSymbol(node, local)))
+                {
+                    continue;
+                }
+
+                DataFlowAnalysis flow = this.context.SemanticModel.AnalyzeDataFlow(statement);
+                if (!flow.Succeeded)
+                {
+                    return Array.Empty<ExpressionSyntax>();
+                }
+
+                if (flow.AlwaysAssigned.Contains(local, SymbolEqualityComparer.Default))
+                {
+                    reaching.Clear();
+                }
+
+                reaching.AddRange(statement.DescendantNodesAndSelf()
+                    .OfType<AssignmentExpressionSyntax>()
+                    .Where(assignment => this.BindsTo(assignment.Left, local))
+                    .Select(assignment => assignment.Right));
+            }
+
+            return reaching;
         }
 
         private ExpressionSyntax UnwrapTuplePreservingCasts(ExpressionSyntax expression)

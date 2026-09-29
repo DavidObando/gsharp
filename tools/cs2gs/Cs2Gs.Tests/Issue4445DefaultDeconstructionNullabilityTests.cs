@@ -63,6 +63,16 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     conditionalPair = (replacement, replacement);
                 }
                 var (conditionalAliasLeft, conditionalAliasRight) = conditionalPair;
+                var assignedPair = (replacement, replacement);
+                assignedPair = (default(T), default(T));
+                var (assignedLeft, assignedRight) = assignedPair;
+                var conditionallyAssignedPair = (replacement, replacement);
+                if (choose)
+                {
+                    conditionallyAssignedPair = (default(T), default(T));
+                }
+                var (conditionallyAssignedLeft, conditionallyAssignedRight) =
+                    conditionallyAssignedPair;
                 var reassignedPair = (default(T), default(T));
                 reassignedPair = (replacement, replacement);
                 var (reassignedLeft, reassignedRight) = reassignedPair;
@@ -107,6 +117,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref capturedAliasRight, replacement);
                 Fill(ref conditionalAliasLeft, replacement);
                 Fill(ref conditionalAliasRight, replacement);
+                Fill(ref assignedLeft, replacement);
+                Fill(ref assignedRight, replacement);
+                Fill(ref conditionallyAssignedLeft, replacement);
+                Fill(ref conditionallyAssignedRight, replacement);
                 Fill(ref conditionalLeft, replacement);
                 Fill(ref conditionalRight, replacement);
                 Fill(ref switchLeft, replacement);
@@ -317,6 +331,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "mutableAliasLeft", "mutableAliasRight",
             "capturedAliasLeft", "capturedAliasRight",
             "conditionalAliasLeft", "conditionalAliasRight",
+            "assignedLeft", "assignedRight",
+            "conditionallyAssignedLeft", "conditionallyAssignedRight",
             "conditionalLeft", "conditionalRight", "switchLeft", "switchRight",
             "coalesceLeft", "coalesceRight",
             "loopLeft", "loopRight", "coalesced", "left", "right",
