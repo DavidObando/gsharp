@@ -126,6 +126,7 @@ internal sealed record BackwardGotoNarrowingAccess(
     string MemberName,
     BackwardGotoNarrowingUseKind Kind,
     TypeSymbol RequiredType,
+    TypeSymbol DeclaredType,
     TypeSymbol? TargetType = null)
 {
     public VariableSymbol Variable => Path.Root;

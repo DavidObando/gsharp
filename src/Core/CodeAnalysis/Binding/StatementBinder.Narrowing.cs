@@ -703,16 +703,16 @@ internal sealed partial class StatementBinder
                             case BackwardGotoNarrowingUseKind.Conversion:
                                 Diagnostics.ReportCannotConvert(
                                     access.Location,
-                                    access.Variable.Type,
+                                    access.DeclaredType,
                                     Invariant.Required(access.TargetType, "a deferred conversion has a target type"));
                                 break;
                             case BackwardGotoNarrowingUseKind.Index:
-                                Diagnostics.ReportTypeNotIndexable(access.Location, access.Variable.Type);
+                                Diagnostics.ReportTypeNotIndexable(access.Location, access.DeclaredType);
                                 break;
                             case BackwardGotoNarrowingUseKind.NonNullUse:
                                 Diagnostics.ReportCannotConvert(
                                     access.Location,
-                                    access.Variable.Type,
+                                    access.DeclaredType,
                                     Invariant.Required(access.TargetType, "a deferred non-null use has a target type"));
                                 break;
                             default:
@@ -1455,19 +1455,25 @@ internal sealed partial class StatementBinder
                 || rootAssignments.Any(assignment => !assignmentPreservesNarrowing(assignment, narrowedType));
         }
 
-        public override void VisitExpression(BoundExpression? node)
+        protected override void VisitIndirectCallExpression(BoundIndirectCallExpression node)
         {
-            if (node == null)
+            var target = node.Target;
+            while (target is BoundConversionExpression conversion)
             {
-                return;
+                target = conversion.Expression;
             }
 
-            if (node is BoundFunctionLiteralExpression literal && literal.Body != null)
+            while (target is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
             {
-                VisitStatement(literal.Body);
+                target = assertion.Operand;
             }
 
-            base.VisitExpression(node);
+            if (target is BoundFunctionLiteralExpression { Body: { } body })
+            {
+                VisitStatement(body);
+            }
+
+            base.VisitIndirectCallExpression(node);
         }
 
         protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
@@ -1608,22 +1614,38 @@ internal sealed partial class StatementBinder
             return true;
         }
 
-        return statement switch
+        switch (statement)
         {
-            BoundIfStatement ifStatement =>
-                HasInternallyReachableFallthrough(ifStatement.ThenStatement)
-                || (ifStatement.ElseStatement != null
-                    && HasInternallyReachableFallthrough(ifStatement.ElseStatement)),
-            BoundTryStatement tryStatement =>
-                (tryStatement.FinallyBlock == null
-                    || !EndsInUnconditionalExit(tryStatement.FinallyBlock))
-                && (HasInternallyReachableFallthrough(tryStatement.TryBlock)
-                    || tryStatement.CatchClauses.Any(clause =>
-                        HasInternallyReachableFallthrough(clause.Body))),
-            BoundPatternSwitchStatement switchStatement =>
-                switchStatement.Arms.Any(arm => HasInternallyReachableFallthrough(arm.Body)),
-            _ => false,
-        };
+            case BoundBlockStatement block:
+                var fallsThrough = false;
+                foreach (var child in block.Statements)
+                {
+                    fallsThrough =
+                        (fallsThrough || HasInternallyReachableFallthrough(child))
+                        && !EndsInUnconditionalExit(child);
+                }
+
+                return fallsThrough;
+
+            case BoundIfStatement ifStatement:
+                return HasInternallyReachableFallthrough(ifStatement.ThenStatement)
+                    || (ifStatement.ElseStatement != null
+                        && HasInternallyReachableFallthrough(ifStatement.ElseStatement));
+
+            case BoundTryStatement tryStatement:
+                return (tryStatement.FinallyBlock == null
+                        || !EndsInUnconditionalExit(tryStatement.FinallyBlock))
+                    && (HasInternallyReachableFallthrough(tryStatement.TryBlock)
+                        || tryStatement.CatchClauses.Any(clause =>
+                            HasInternallyReachableFallthrough(clause.Body)));
+
+            case BoundPatternSwitchStatement switchStatement:
+                return switchStatement.Arms.Any(arm =>
+                    HasInternallyReachableFallthrough(arm.Body));
+
+            default:
+                return false;
+        }
     }
 
     /// <summary>

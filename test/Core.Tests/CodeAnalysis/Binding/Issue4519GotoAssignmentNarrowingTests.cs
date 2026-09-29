@@ -686,6 +686,8 @@ public class Issue4519GotoAssignmentNarrowingTests
 
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0155");
         Assert.Equal("box.Value", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.Contains("'string?'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("'Box'", diagnostic.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
     }
 
@@ -712,6 +714,8 @@ public class Issue4519GotoAssignmentNarrowingTests
 
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0116");
         Assert.Equal("Text", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.Contains("'string?'", diagnostic.Message, StringComparison.Ordinal);
+        Assert.DoesNotContain("'Box'", diagnostic.Message, StringComparison.Ordinal);
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
     }
 
@@ -879,6 +883,54 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyIgnoresUninvokedFunctionBodyMutation()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                }
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyIncludesImmediatelyInvokedFunctionBodyMutation()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    (func() { x = nil })()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_IntoNestedScopePreservesOuterNarrowingFrame()
     {
         AssertRuns("""
@@ -949,6 +1001,32 @@ public class Issue4519GotoAssignmentNarrowingTests
                 {
                 Enter:
                     var marker = 0
+                }
+                goto Done
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_EnteringLoopBodyPropagatesReachability()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                var keepGoing = true
+                goto Enter
+                for keepGoing {
+                Enter:
+                    keepGoing = false
                 }
                 goto Done
                 x = "safe"
