@@ -88,6 +88,19 @@ Before moving an application to a different compiler version, pin the intended S
 
 ### Added
 
+- **`go2gs analyze` now provides the M0 typed Go inventory** (ADR-0191,
+  issue [#4333](https://github.com/DavidObando/gsharp/issues/4333)). The
+  separately versioned Go helper pins `golang.org/x/tools/go/packages` and
+  records schema-v1 package/test variants, module and build provenance,
+  source bytes/spans, stable typed identities, exact constants, scopes,
+  selections, calls, method sets, generic instances, embeds, generators,
+  dependencies, diagnostics, and blockers. Analysis is offline and
+  fail-closed: automatic toolchain downloads, ambient workspaces,
+  `GOPACKAGESDRIVER`, generators, target binaries, and network module
+  resolution are disabled. Exit zero means the requested inventory completed,
+  while `migrationReady` remains independent and false in M0. The pinned
+  cliamp profile reports an actionable mismatch rather than substituting the
+  installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged
   performance gates** (issue
   [#4513](https://github.com/DavidObando/gsharp/issues/4513)). Concrete values

@@ -1,0 +1,37 @@
+{
+  "schema": {
+    "name": "go2gs.profile",
+    "version": 1
+  },
+  "id": "cliamp-darwin-arm64-m0",
+  "entryPatterns": [
+    "./..."
+  ],
+  "requestedGoVersion": "1.26.6",
+  "expectedSourceCommit": "4dee32c6c967cb2cc6069196e40cd3ff397deb3f",
+  "loadTests": true,
+  "goos": "darwin",
+  "goarch": "arm64",
+  "architectureFeatures": [],
+  "buildTags": [],
+  "cgoEnabled": false,
+  "goFlags": [],
+  "goExperiment": "",
+  "goDebug": {},
+  "moduleMode": "readonly",
+  "vendorMode": false,
+  "workspaceMode": "off",
+  "offline": true,
+  "allowNetwork": false,
+  "allowGoPackagesDriver": false,
+  "limits": {
+    "maxDurationSeconds": 600,
+    "maxPackages": 10000,
+    "maxFiles": 50000,
+    "maxRecords": 5000000,
+    "maxStringBytes": 1048576,
+    "maxLogBytes": 4194304,
+    "maxOutputBytes": 536870912,
+    "maxLocalHashBytes": 2147483648
+  }
+}

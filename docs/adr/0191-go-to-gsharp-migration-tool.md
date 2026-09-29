@@ -22,6 +22,10 @@
   before application-scale performance readiness is claimed.
   Approval of their design direction is not implementation availability.
   This ADR neither accepts nor changes them.
+- **Implementation status**: M0 typed inventory is implemented under
+  [`tools/go2gs`](../../tools/go2gs/README.md) with schema/profile version 1.
+  It provides `analyze` and analysis validation only. Translation, lowering,
+  compatibility support, and runtime validation remain later milestones.
 
 ## Context
 
@@ -226,13 +230,14 @@ for the first correct lowering.
 
 ### 4. Proposed CLI and artifact contracts
 
-Use three verbs initially; `translate` is the emission operation, not an
-alias for a successful migration:
+M0 implements `analyze` plus `validate-analysis`. Later milestones add
+`translate` and runtime `validate`; `translate` is the emission operation, not
+an alias for a successful migration:
 
 ```sh
-# Proposed commands, not commands available in this checkout.
 go2gs analyze --source ../cliamp --profile cliamp-leaf.json \
   --out artifacts/cliamp-analysis
+# Later milestones:
 go2gs translate --source ../cliamp \
   --analysis artifacts/cliamp-analysis/analysis.json \
   --out migrated-cliamp --artifacts artifacts/cliamp-translation
