@@ -579,6 +579,8 @@ internal sealed partial class StatementBinder
         // named fields are added to this frame and remain narrowed for all
         // subsequent statements in the block (until assignment invalidates them).
         var memberNotNullFrame = new Dictionary<AccessPath, TypeSymbol>();
+        var inheritedAssignmentGenerations =
+            new Dictionary<VariableSymbol, int>(binderCtx.AssignmentNarrowingGenerations);
         binderCtx.NarrowedVariables.Add(memberNotNullFrame);
         try
         {
@@ -813,6 +815,11 @@ internal sealed partial class StatementBinder
         finally
         {
             binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            binderCtx.AssignmentNarrowingGenerations.Clear();
+            foreach (var entry in inheritedAssignmentGenerations)
+            {
+                binderCtx.AssignmentNarrowingGenerations.Add(entry.Key, entry.Value);
+            }
         }
     }
 
