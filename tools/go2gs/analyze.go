@@ -480,6 +480,7 @@ func packedGitReference(path, ref string) (string, bool, error) {
 	objectIDWidth := 0
 	seen := map[string]bool{}
 	headerRegion := true
+	headerSeen := false
 	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
 		if line == "" {
 			return "", false, errors.New("repository packed-refs metadata contains an empty record")
@@ -488,11 +489,27 @@ func packedGitReference(path, ref string) (string, bool, error) {
 			if !headerRegion {
 				return "", false, errors.New("repository packed-refs metadata has a comment after its first ref")
 			}
-			if strings.HasPrefix(line, "# pack-refs with:") {
-				for _, trait := range strings.Fields(strings.TrimPrefix(line, "# pack-refs with:")) {
-					if trait == "sorted" {
-						sortedFile = true
-					}
+			const header = "# pack-refs with: "
+			if headerSeen || !strings.HasPrefix(line, header) {
+				return "", false, errors.New("repository packed-refs metadata has an invalid header")
+			}
+			traits := strings.Fields(strings.TrimPrefix(line, header))
+			if len(traits) == 0 {
+				return "", false, errors.New("repository packed-refs metadata has an empty header")
+			}
+			headerSeen = true
+			seenTraits := map[string]bool{}
+			for _, trait := range traits {
+				if seenTraits[trait] {
+					return "", false, errors.New("repository packed-refs metadata has a duplicate header trait")
+				}
+				seenTraits[trait] = true
+				switch trait {
+				case "peeled", "fully-peeled":
+				case "sorted":
+					sortedFile = true
+				default:
+					return "", false, fmt.Errorf("repository packed-refs metadata has unknown header trait %q", trait)
 				}
 			}
 			previousRef = ""
