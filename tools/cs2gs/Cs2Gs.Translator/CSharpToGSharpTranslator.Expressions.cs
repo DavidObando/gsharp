@@ -1091,6 +1091,20 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
+            if (this.context.GetTypeInfo(expression).Type is IArrayTypeSymbol
+                    { ElementType: INamedTypeSymbol { IsTupleType: true } } tupleArray
+                && this.GetMappedArrayElementType(expression)
+                    is { } projectedArrayElement
+                && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    tupleArray.ElementType,
+                    projectedArrayElement))
+            {
+                return this.context.Compilation.CreateArrayTypeSymbol(
+                    projectedArrayElement,
+                    tupleArray.Rank,
+                    tupleArray.NullableAnnotation);
+            }
+
             if (expression is ElementAccessExpressionSyntax arrayElement
                 && this.GetMappedArrayElementType(arrayElement.Expression)
                     is { } projectedElement

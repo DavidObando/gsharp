@@ -4424,6 +4424,96 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Equal(42, result.Value);
     }
 
+    [Fact]
+    public void TupleArrayForEachBindingsKeepProjectedNullableLeaves()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedTupleArrayForEach;
+            public class Probe {
+                private static int ReadPair((ManagedRef<int> Reference, int Value)[] pairs) {
+                    foreach (var pair in pairs) {
+                        return pair.Reference.Borrow();
+                    }
+                    return 0;
+                }
+
+                private static int ReadDeconstructed((ManagedRef<int> Reference, int Value)[] pairs) {
+                    foreach (var (reference, _) in pairs) {
+                        return reference.Borrow();
+                    }
+                    return 0;
+                }
+
+                public static int Run() {
+                    int[] values = { 21 };
+                    var pairs = new (ManagedRef<int> Reference, int Value)[1];
+                    pairs[0] = (ManagedRef<int>.FromArray(values, 0), 0);
+                    return ReadPair(pairs) + ReadDeconstructed(pairs);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedTupleArrayForEach.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("pair.Reference!!.Borrow()", text, StringComparison.Ordinal);
+        Assert.Contains("reference!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void TupleArrayQueryRangeKeepsProjectedNullableLeaf()
+    {
+        const string source = """
+            using System.Linq;
+            using Gsharp.Values;
+            namespace ManagedTupleArrayQuery;
+            public class Probe {
+                public static int Run() {
+                    int[] values = { 42 };
+                    var pairs = new (ManagedRef<int> Reference, int Value)[1];
+                    pairs[0] = (ManagedRef<int>.FromArray(values, 0), 0);
+                    return (from pair in pairs select pair.Reference.Borrow()).First();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedTupleArrayQuery.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("pair.Reference!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.True(
+            !result.Diagnostics.Any(),
+            text + Environment.NewLine + string.Join(Environment.NewLine, result.Diagnostics));
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
     [Theory]
     [InlineData("int managed = 1;", "managed", 4)]
     [InlineData("int managed() => 2;", "managed()", 5)]

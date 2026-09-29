@@ -3081,11 +3081,30 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax lambdaBody,
             out ITypeSymbol effectiveType)
         {
+            GTypeReference sourceType = scope.Count == 1
+                ? scope[0].Type
+                : new TupleTypeReference(scope.Select(v => v.Type).ToList());
+            if (sourceType is TupleTypeReference && ContainsNullableLeaf(sourceType))
+            {
+                // Query lowering has no Roslyn invocation node for the shared
+                // callable-projection funnel. Cast supplies its projected
+                // recursive tuple element type to LINQ before method binding.
+                receiver = new InvocationExpression(
+                    new MemberAccessExpression(new IdentifierExpression("System.Linq.Enumerable"), "Cast"),
+                    new List<GExpression> { receiver },
+                    new List<GTypeReference> { sourceType });
+            }
+
             LambdaExpression lambda =
                 this.BuildScopeLambda(scope, lambdaBody, out effectiveType);
             return new InvocationExpression(
                 new MemberAccessExpression(receiver, method),
                 new List<GExpression> { lambda });
+
+            static bool ContainsNullableLeaf(GTypeReference type) =>
+                type.IsNullable
+                || (type is TupleTypeReference tuple
+                    && tuple.ElementTypes.Any(ContainsNullableLeaf));
         }
 
         // Builds a lambda over the current query scope: a single scope variable
