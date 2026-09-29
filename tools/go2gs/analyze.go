@@ -368,7 +368,11 @@ func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot st
 		if !nativeIncludeCarrier(path) {
 			continue
 		}
-		for _, include := range localQuotedIncludes(data) {
+		includes, malformed := localQuotedIncludes(data)
+		if malformed {
+			continue
+		}
+		for _, include := range includes {
 			for owner := range result.fileOwners[path] {
 				target, ok := resolveLocalInclude(result.packageDirs[owner], path, include)
 				if !ok {

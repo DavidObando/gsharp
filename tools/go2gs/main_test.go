@@ -968,8 +968,64 @@ func TestLocalQuotedIncludesUsesPreprocessorLexing(t *testing.T) {
 		"#include <system.h>\n" +
 		"#include_next \"next.h\"\n")
 	want := []string{"comments.h", "constants.h", "crlf.h", "spliced.h"}
-	if got := localQuotedIncludes(source); !slices.Equal(got, want) {
+	got, malformed := localQuotedIncludes(source)
+	if malformed || !slices.Equal(got, want) {
 		t.Fatalf("quoted include tokens mismatch:\ngot  %q\nwant %q", got, want)
+	}
+}
+
+func TestLocalQuotedIncludesSkipsCXXRawStrings(t *testing.T) {
+	source := []byte(`const char* exact = R"tag(
+#include "fake-exact.h"
+)ta"
+)tag";
+const char* empty = u8R"(
+#include "fake-empty.h"
+)";
+const char* utf16 = uR"x(#include "fake-u.h")x";
+const char* utf32 = UR"xx(#include "fake-U.h")xx";
+const char* wide = LR"custom(
+// #include "fake-L.h"
+/* "#include fake-comment.h" */
+)custom";
+const char* ordinary = "R\"tag(#include fake-string.h)tag\"";
+#include "real.h"
+`)
+	got, malformed := localQuotedIncludes(source)
+	if malformed || !slices.Equal(got, []string{"real.h"}) {
+		t.Fatalf("raw strings affected quoted includes: got=%q malformed=%v", got, malformed)
+	}
+}
+
+func TestLocalQuotedIncludesRejectsMalformedCXXRawStrings(t *testing.T) {
+	for name, source := range map[string][]byte{
+		"unterminated":   []byte("R\"tag(\n#include \"fake.h\"\n"),
+		"space":          []byte("R\"bad tag(content)bad tag\""),
+		"control":        []byte("R\"bad\x01tag(content)bad\x01tag\""),
+		"parenthesis":    []byte("R\"bad)(content)bad)\""),
+		"backslash":      []byte("R\"bad\\tag(content)bad\\tag\""),
+		"long-delimiter": []byte("R\"12345678901234567(content)12345678901234567\""),
+	} {
+		t.Run(name, func(t *testing.T) {
+			includes, malformed := localQuotedIncludes(source)
+			if !malformed || len(includes) != 0 {
+				t.Fatalf("malformed raw string was accepted: includes=%q malformed=%v", includes, malformed)
+			}
+		})
+	}
+}
+
+func TestMalformedNativeRawStringFailsClosed(t *testing.T) {
+	root := copyFixture(t, "native")
+	if err := os.WriteFile(filepath.Join(root, "native.s"), []byte("R\"tag(\n#include \"fake.h\"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "native-include") {
+		t.Fatalf("malformed native raw string did not fail closed: %#v", analysis.Blockers)
 	}
 }
 

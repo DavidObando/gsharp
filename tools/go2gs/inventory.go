@@ -261,7 +261,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		record.InventoryComplete = false
 	}
 	if unsafeIncludes {
-		b.block("native-include", "selected native source has an unsafe or unavailable local quoted include", []string{record.ID}, nil)
+		b.block("native-include", "selected native source has an unsafe, unavailable, or malformed local quoted include/raw literal", []string{record.ID}, nil)
 		record.InventoryComplete = false
 	}
 	unmappedCgo := activeCgo
@@ -431,7 +431,12 @@ func selectedNativeIncludes(pkg *packages.Package, snapshot map[string][]byte) (
 			unsafe = true
 			continue
 		}
-		for _, include := range localQuotedIncludes(data) {
+		includes, malformed := localQuotedIncludes(data)
+		if malformed {
+			unsafe = true
+			continue
+		}
+		for _, include := range includes {
 			target, ok := resolveLocalInclude(pkg.Dir, path, include)
 			if !ok {
 				unsafe = true
@@ -451,8 +456,11 @@ func selectedNativeIncludes(pkg *packages.Package, snapshot map[string][]byte) (
 	return reachable, unsafe
 }
 
-func localQuotedIncludes(data []byte) []string {
-	data = stripCComments(spliceCPreprocessorLines(data))
+func localQuotedIncludes(data []byte) ([]string, bool) {
+	data, malformed := stripCCommentsAndRawStrings(spliceCPreprocessorLines(data))
+	if malformed {
+		return nil, true
+	}
 	var result []string
 	for len(data) > 0 {
 		line := data
@@ -486,7 +494,7 @@ func localQuotedIncludes(data []byte) []string {
 		result = append(result, string(line[start:start+end]))
 	}
 	sort.Strings(result)
-	return result
+	return result, false
 }
 
 func spliceCPreprocessorLines(data []byte) []byte {
@@ -505,9 +513,23 @@ func spliceCPreprocessorLines(data []byte) []byte {
 	return result
 }
 
-func stripCComments(data []byte) []byte {
+func stripCCommentsAndRawStrings(data []byte) ([]byte, bool) {
 	result := make([]byte, 0, len(data))
 	for i := 0; i < len(data); {
+		if prefixLength := cxxRawStringPrefix(data, i); prefixLength > 0 {
+			end, ok := cxxRawStringEnd(data, i+prefixLength)
+			if !ok {
+				return nil, true
+			}
+			result = append(result, ' ')
+			for _, value := range data[i:end] {
+				if value == '\n' {
+					result = append(result, '\n')
+				}
+			}
+			i = end
+			continue
+		}
 		if i+1 < len(data) && data[i] == '/' && data[i+1] == '/' {
 			result = append(result, ' ')
 			i += 2
@@ -552,7 +574,43 @@ func stripCComments(data []byte) []byte {
 		result = append(result, data[i])
 		i++
 	}
-	return result
+	return result, false
+}
+
+func cxxRawStringPrefix(data []byte, index int) int {
+	if index > 0 && isIdentifierByte(data[index-1]) {
+		return 0
+	}
+	for _, prefix := range [...]string{`u8R"`, `uR"`, `UR"`, `LR"`, `R"`} {
+		if bytes.HasPrefix(data[index:], []byte(prefix)) {
+			return len(prefix)
+		}
+	}
+	return 0
+}
+
+func cxxRawStringEnd(data []byte, delimiterStart int) (int, bool) {
+	const maxDelimiterLength = 16
+	delimiterEnd := delimiterStart
+	for delimiterEnd < len(data) && data[delimiterEnd] != '(' {
+		value := data[delimiterEnd]
+		if delimiterEnd-delimiterStart == maxDelimiterLength ||
+			value < 0x21 || value > 0x7e || value == ')' || value == '\\' {
+			return 0, false
+		}
+		delimiterEnd++
+	}
+	if delimiterEnd >= len(data) {
+		return 0, false
+	}
+	delimiter := data[delimiterStart:delimiterEnd]
+	terminator := append(append(make([]byte, 0, len(delimiter)+2), ')'), delimiter...)
+	terminator = append(terminator, '"')
+	end := bytes.Index(data[delimiterEnd+1:], terminator)
+	if end < 0 {
+		return 0, false
+	}
+	return delimiterEnd + 1 + end + len(terminator), true
 }
 
 func skipHorizontalSpace(data []byte, index int) int {
