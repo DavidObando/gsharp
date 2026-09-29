@@ -26,10 +26,6 @@ var requiredRecordKinds = []string{
 }
 
 func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (Analysis, bool, error) {
-	profileBytes, err := json.Marshal(profile)
-	if err != nil {
-		return Analysis{}, false, err
-	}
 	executable, err := exec.LookPath("go")
 	if err != nil {
 		return Analysis{}, false, errors.New("Go executable not found")
@@ -51,6 +47,14 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		return Analysis{}, false, fmt.Errorf("hash helper: %w", err)
 	}
 	cCompiler, cCompilerHash, err := resolveCCompiler(profile)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	profileIdentity := profile
+	if cCompiler != "" {
+		profileIdentity.CCompiler = filepath.Base(profile.CCompiler) + "@sha256:" + cCompilerHash
+	}
+	profileBytes, err := json.Marshal(profileIdentity)
 	if err != nil {
 		return Analysis{}, false, err
 	}
@@ -90,7 +94,7 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		return Analysis{}, false, err
 	}
 
-	actualCommit := sourceCommit(sourceRoot)
+	actualCommit, sourceCommitErr := sourceCommit(sourceRoot)
 	toolchain := ToolchainProvenance{
 		RequestedVersion: profile.RequestedGoVersion, ActualVersion: actualVersion,
 		ExecutableSHA256: goHash, ExecutableName: filepath.Base(executable),
@@ -100,7 +104,7 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		AutoDownload:        false,
 	}
 	if cCompiler != "" {
-		toolchain.CCompilerName = filepath.Base(cCompiler)
+		toolchain.CCompilerName = filepath.Base(profile.CCompiler)
 		toolchain.CCompilerSHA256 = cCompilerHash
 	}
 	analysis := Analysis{
@@ -130,6 +134,11 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		return Analysis{}, false, err
 	}
 	analysis.Profile.SourceRootIdentity = sourceIdentity(actualCommit, analysis.Manifests)
+	if sourceCommitErr != nil {
+		builder.block("source-metadata", sourceCommitErr.Error(), nil, nil)
+		builder.finish()
+		return analysis, false, nil
+	}
 	if actualVersion != profile.RequestedGoVersion {
 		builder.block("toolchain", fmt.Sprintf("profile requests Go %s but verified executable is Go %s; automatic toolchain download and silent upgrade are disabled", profile.RequestedGoVersion, actualVersion), nil, nil)
 		builder.finish()
@@ -161,20 +170,23 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 	if loadErr != nil {
 		builder.block("loader", sanitizeMessage(loadErr.Error(), sourceRoot, profile.Limits.MaxStringBytes), nil, nil)
 	}
+	cgoPackages := loaded
 	if !profile.CGOEnabled {
 		cgoConfig := *config
 		cgoConfig.Mode = packages.NeedName | packages.NeedFiles
 		cgoConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
-		cgoPackages, _ := packages.Load(&cgoConfig, profile.EntryPatterns...)
-		for _, pkg := range cgoPackages {
-			cgo, err := selectedPackageImportsC(pkg)
-			if err != nil {
-				return Analysis{}, false, err
-			}
-			if cgo {
-				builder.block("cgo", "selected package imports C but CGO_ENABLED=0; native preprocessing is not available in this profile", nil, nil)
-				break
-			}
+		cgoPackages, _ = packages.Load(&cgoConfig, profile.EntryPatterns...)
+	}
+	for _, pkg := range cgoPackages {
+		importsC, usesPkgConfig, err := selectedPackageCgoRequirements(pkg)
+		if err != nil {
+			return Analysis{}, false, err
+		}
+		if importsC && !profile.CGOEnabled {
+			builder.block("cgo", "selected package imports C but CGO_ENABLED=0; native preprocessing is not available in this profile", nil, nil)
+		}
+		if usesPkgConfig {
+			builder.block("pkg-config", "selected package requires #cgo pkg-config, but M0 has no approved pkg-config executable or provenance model", nil, nil)
 		}
 	}
 	if len(loaded) == 0 {
@@ -208,8 +220,8 @@ func resolveCCompiler(profile Profile) (string, string, error) {
 		}
 		return "", "", nil
 	}
-	if profile.CCompiler == "" || !filepath.IsAbs(profile.CCompiler) {
-		return "", "", errors.New("cgoEnabled requires an absolute cCompiler path")
+	if err := validateCompilerPath(profile.CCompiler); err != nil {
+		return "", "", err
 	}
 	path, err := filepath.EvalSymlinks(profile.CCompiler)
 	if err != nil {
@@ -313,86 +325,161 @@ func parseGoVersion(output string) string {
 	return strings.TrimSpace(output)
 }
 
-func sourceCommit(root string) string {
-	gitDir := filepath.Join(root, ".git")
-	info, err := os.Lstat(gitDir)
+func sourceCommit(root string) (string, error) {
+	gitPath := filepath.Join(root, ".git")
+	info, err := os.Lstat(gitPath)
 	if err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("inspect repository metadata: %w", err)
 	}
+	gitDir := gitPath
+	commonDir := gitDir
 	if !info.IsDir() {
-		data, err := readBoundedRegularFile(gitDir, 4096)
+		if !info.Mode().IsRegular() {
+			return "", errors.New("repository .git metadata is neither a directory nor a regular gitdir file")
+		}
+		data, err := readBoundedRegularFile(gitPath, 4096)
 		if err != nil {
-			return ""
+			return "", fmt.Errorf("read repository gitdir metadata: %w", err)
 		}
 		value := strings.TrimSpace(string(data))
-		if !strings.HasPrefix(value, "gitdir: ") {
-			return ""
+		if strings.ContainsAny(value, "\r\n\x00") || !strings.HasPrefix(value, "gitdir: ") {
+			return "", errors.New("repository gitdir metadata is malformed")
 		}
 		gitDir = strings.TrimSpace(strings.TrimPrefix(value, "gitdir: "))
+		if gitDir == "" {
+			return "", errors.New("repository gitdir metadata has an empty target")
+		}
 		if !filepath.IsAbs(gitDir) {
 			gitDir = filepath.Join(root, gitDir)
 		}
 		gitDir, err = filepath.Abs(gitDir)
 		if err != nil {
-			return ""
+			return "", fmt.Errorf("resolve repository gitdir metadata: %w", err)
 		}
+		if err := rejectSymlinkPath(gitDir); err != nil {
+			return "", fmt.Errorf("repository gitdir metadata: %w", err)
+		}
+		targetInfo, err := os.Lstat(gitDir)
+		if err != nil || !targetInfo.IsDir() {
+			return "", errors.New("repository gitdir target is not a directory")
+		}
+		commonDir, err = validateGitDirIndirection(root, gitPath, gitDir)
+		if err != nil {
+			return "", err
+		}
+	} else if err := rejectSymlinkPath(gitDir); err != nil {
+		return "", fmt.Errorf("repository metadata: %w", err)
 	}
 	head, err := readBoundedRegularFile(filepath.Join(gitDir, "HEAD"), 4096)
 	if err != nil {
-		return ""
+		return "", fmt.Errorf("read repository HEAD: %w", err)
 	}
 	value := strings.TrimSpace(string(head))
 	if validCommitID(value) {
-		return value
+		return value, nil
 	}
 	if !strings.HasPrefix(value, "ref: ") {
-		return ""
+		return "", errors.New("repository HEAD is malformed")
 	}
 	ref := strings.TrimSpace(strings.TrimPrefix(value, "ref: "))
 	if !validGitRef(ref) {
-		return ""
+		return "", fmt.Errorf("repository HEAD contains invalid ref %q", ref)
 	}
-	for _, root := range gitReferenceRoots(gitDir) {
-		if data, err := readBoundedRegularFile(filepath.Join(root, filepath.FromSlash(ref)), 4096); err == nil {
+	for _, metadataRoot := range uniqueSorted([]string{gitDir, commonDir}) {
+		refPath := filepath.Join(metadataRoot, filepath.FromSlash(ref))
+		if err := rejectSymlinkPath(refPath); err != nil {
+			return "", fmt.Errorf("repository ref %q: %w", ref, err)
+		}
+		if data, err := readBoundedRegularFile(refPath, 4096); err == nil {
 			if commit := strings.TrimSpace(string(data)); validCommitID(commit) {
-				return commit
+				return commit, nil
 			}
+			return "", fmt.Errorf("repository ref %q has malformed content", ref)
+		} else if !os.IsNotExist(err) {
+			return "", fmt.Errorf("read repository ref %q: %w", ref, err)
 		}
-		if commit := packedGitReference(filepath.Join(root, "packed-refs"), ref); commit != "" {
-			return commit
+		commit, found, err := packedGitReference(filepath.Join(metadataRoot, "packed-refs"), ref)
+		if err != nil {
+			return "", err
+		}
+		if found {
+			return commit, nil
 		}
 	}
-	return ""
+	return "", fmt.Errorf("repository ref %q is unresolved", ref)
 }
 
-func gitReferenceRoots(gitDir string) []string {
-	roots := []string{gitDir}
+func validateGitDirIndirection(root, gitPath, gitDir string) (string, error) {
 	data, err := readBoundedRegularFile(filepath.Join(gitDir, "commondir"), 4096)
 	if err != nil {
-		return roots
+		return "", errors.New("external gitdir target is not a supported linked worktree")
 	}
 	common := strings.TrimSpace(string(data))
+	if common == "" || strings.ContainsAny(common, "\r\n\x00") {
+		return "", errors.New("repository commondir metadata is malformed")
+	}
 	if !filepath.IsAbs(common) {
 		common = filepath.Join(gitDir, common)
 	}
-	if absolute, err := filepath.Abs(common); err == nil && absolute != gitDir {
-		roots = append(roots, absolute)
+	common, err = filepath.Abs(common)
+	if err != nil {
+		return "", fmt.Errorf("resolve repository commondir: %w", err)
 	}
-	return roots
+	expectedWorktrees := filepath.Join(common, "worktrees")
+	relative, err := filepath.Rel(expectedWorktrees, gitDir)
+	if err != nil || relative == "." || relative == ".." ||
+		strings.HasPrefix(relative, ".."+string(filepath.Separator)) ||
+		strings.Contains(relative, string(filepath.Separator)) {
+		return "", errors.New("repository gitdir target escapes the linked-worktree metadata area")
+	}
+	backlink, err := readBoundedRegularFile(filepath.Join(gitDir, "gitdir"), 4096)
+	if err != nil {
+		return "", errors.New("linked-worktree gitdir backlink is missing or unsafe")
+	}
+	backlinkPath := strings.TrimSpace(string(backlink))
+	if !filepath.IsAbs(backlinkPath) {
+		backlinkPath = filepath.Join(gitDir, backlinkPath)
+	}
+	backlinkPath, err = filepath.Abs(backlinkPath)
+	if err != nil || filepath.Clean(backlinkPath) != filepath.Clean(gitPath) {
+		return "", errors.New("linked-worktree gitdir backlink does not match the source root")
+	}
+	if err := rejectSymlinkPath(common); err != nil {
+		return "", fmt.Errorf("repository common metadata: %w", err)
+	}
+	return common, nil
 }
 
-func packedGitReference(path, ref string) string {
+func packedGitReference(path, ref string) (string, bool, error) {
 	data, err := readBoundedRegularFile(path, 16<<20)
 	if err != nil {
-		return ""
+		if os.IsNotExist(err) {
+			return "", false, nil
+		}
+		return "", false, fmt.Errorf("read repository packed refs: %w", err)
 	}
 	for _, line := range strings.Split(string(data), "\n") {
+		if line == "" || strings.HasPrefix(line, "#") {
+			continue
+		}
+		if strings.HasPrefix(line, "^") {
+			if !validCommitID(strings.TrimPrefix(line, "^")) {
+				return "", false, errors.New("repository packed-refs metadata has malformed peeled content")
+			}
+			continue
+		}
 		fields := strings.Fields(line)
-		if len(fields) == 2 && fields[1] == ref && validCommitID(fields[0]) {
-			return fields[0]
+		if len(fields) != 2 || !validCommitID(fields[0]) || !validGitRef(fields[1]) {
+			return "", false, errors.New("repository packed-refs metadata is malformed")
+		}
+		if fields[1] == ref {
+			return fields[0], true, nil
 		}
 	}
-	return ""
+	return "", false, nil
 }
 
 func readBoundedRegularFile(path string, limit int64) ([]byte, error) {
@@ -407,9 +494,24 @@ func readBoundedRegularFile(path string, limit int64) ([]byte, error) {
 }
 
 func validGitRef(value string) bool {
-	clean := filepath.ToSlash(filepath.Clean(value))
-	return strings.HasPrefix(clean, "refs/") && clean == value &&
-		!strings.Contains(clean, "..") && !strings.ContainsAny(clean, "\\\x00")
+	if !strings.HasPrefix(value, "refs/") || strings.HasSuffix(value, "/") ||
+		strings.Contains(value, "..") || strings.Contains(value, "@{") ||
+		strings.Contains(value, "//") {
+		return false
+	}
+	for _, char := range value {
+		if char <= ' ' || char == 0x7f || strings.ContainsRune("~^:?*[\\", char) {
+			return false
+		}
+	}
+	for _, component := range strings.Split(value, "/") {
+		if component == "" || component == "." || component == ".." ||
+			strings.HasPrefix(component, ".") || strings.HasSuffix(component, ".") ||
+			strings.HasSuffix(component, ".lock") {
+			return false
+		}
+	}
+	return true
 }
 
 func validCommitID(value string) bool {

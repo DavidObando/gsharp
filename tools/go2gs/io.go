@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"unicode"
 )
 
 func readProfile(path string) (Profile, error) {
@@ -49,12 +50,13 @@ func readProfile(path string) (Profile, error) {
 		return profile, errors.New("M0 requires workspaceMode=off")
 	}
 	if profile.CGOEnabled {
-		if profile.CCompiler == "" || !filepath.IsAbs(profile.CCompiler) {
-			return profile, errors.New("cgoEnabled requires an absolute cCompiler path")
+		if err := validateCompilerPath(profile.CCompiler); err != nil {
+			return profile, err
 		}
 	} else if profile.CCompiler != "" {
 		return profile, errors.New("cCompiler is only valid when cgoEnabled is true")
 	}
+
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
 		return profile, err
 	}
@@ -68,6 +70,18 @@ func readProfile(path string) (Profile, error) {
 	sort.Strings(profile.ArchitectureFeatures)
 	sort.Strings(profile.BuildTags)
 	return profile, nil
+}
+
+func validateCompilerPath(value string) error {
+	if value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
+		return errors.New("cgoEnabled requires a normalized absolute cCompiler path")
+	}
+	if strings.ContainsAny(value, "'\"`\\") || strings.IndexFunc(value, func(char rune) bool {
+		return unicode.IsSpace(char) || unicode.IsControl(char)
+	}) >= 0 {
+		return errors.New("cCompiler must be one absolute executable pathname without quoting, whitespace, controls, or argument syntax")
+	}
+	return nil
 }
 
 func validateGODEBUG(values map[string]string) error {
