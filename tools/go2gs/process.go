@@ -24,7 +24,10 @@ type processResult struct {
 func runProcess(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string) (processResult, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
-	cmd := exec.CommandContext(ctx, executable, args...)
+	cmd := exec.Command(executable, args...)
+	if err := configureProcessTree(cmd); err != nil {
+		return processResult{}, fmt.Errorf("secure process isolation for %q: %w", executable, err)
+	}
 	cmd.Dir = dir
 	cmd.Env = env
 	cmd.Stdin = nil
@@ -33,8 +36,26 @@ func runProcess(parent context.Context, timeout time.Duration, maxOutput int, di
 	errBuf.limit = maxOutput
 	cmd.Stdout = &outBuf
 	cmd.Stderr = &errBuf
-	waitErr := cmd.Run()
-	if ctx.Err() != nil {
+	if err := cmd.Start(); err != nil {
+		return processResult{}, err
+	}
+	wait := make(chan error, 1)
+	go func() { wait <- cmd.Wait() }()
+	var waitErr error
+	select {
+	case waitErr = <-wait:
+		if ctx.Err() != nil {
+			if err := terminateProcessTree(cmd.Process); err != nil {
+				return processResult{}, fmt.Errorf("terminate process tree for %q: %w", executable, err)
+			}
+			return processResult{}, fmt.Errorf("process %q timed out or was cancelled: %w", executable, ctx.Err())
+		}
+	case <-ctx.Done():
+		killErr := terminateProcessTree(cmd.Process)
+		waitErr = <-wait
+		if killErr != nil {
+			return processResult{}, fmt.Errorf("terminate process tree for %q: %w", executable, killErr)
+		}
 		return processResult{}, fmt.Errorf("process %q timed out or was cancelled: %w", executable, ctx.Err())
 	}
 	result := processResult{
@@ -129,12 +150,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, executable string)
 }
 
 func selectedPath(executable string) string {
-	dir := filepath.Dir(executable)
-	path := os.Getenv("PATH")
-	if path == "" {
-		return dir
-	}
-	return dir + string(os.PathListSeparator) + path
+	return filepath.Dir(executable)
 }
 
 func boolString(value bool) string {

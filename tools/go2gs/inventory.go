@@ -10,7 +10,9 @@ import (
 	"go/token"
 	"go/types"
 	"os"
+	pathpkg "path"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -322,16 +324,23 @@ func (b *inventoryBuilder) portablePath(pkg *packages.Package, path string) (str
 		return "source://" + relative, nil
 	}
 	if pkg.Module != nil && pkg.Module.Dir != "" {
-		module := pkg.Module
-		if module.Replace != nil {
-			module = module.Replace
+		root := pkg.Module.Dir
+		logicalPath := pkg.Module.Path
+		version := pkg.Module.Version
+		if pkg.Module.Replace != nil {
+			root = pkg.Module.Replace.Dir
+			if pkg.Module.Replace.Version != "" {
+				logicalPath = pkg.Module.Replace.Path
+				version = pkg.Module.Replace.Version
+			} else {
+				version = "local"
+			}
 		}
-		if relative, err := pathWithin(module.Dir, path); err == nil {
-			version := module.Version
+		if relative, err := pathWithin(root, path); err == nil {
 			if version == "" {
 				version = "local"
 			}
-			return "module://" + module.Path + "@" + version + "/" + relative, nil
+			return "module://" + logicalPath + "@" + version + "/" + relative, nil
 		}
 	}
 	if relative, err := pathWithin(b.goroot, path); err == nil {
@@ -355,13 +364,24 @@ func (b *inventoryBuilder) markGenerated(fileID string, generated bool) {
 func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file *ast.File) {
 	pkgID := b.packageIDs[pkg]
 	var parents []string
+	nodeParents := map[ast.Node]ast.Node{}
 	arrayLengths := map[ast.Expr]bool{}
+	var astParents []ast.Node
 	ast.Inspect(file, func(node ast.Node) bool {
+		if node == nil {
+			astParents = astParents[:len(astParents)-1]
+			return true
+		}
+		if len(astParents) > 0 {
+			nodeParents[node] = astParents[len(astParents)-1]
+		}
+		astParents = append(astParents, node)
 		if array, ok := node.(*ast.ArrayType); ok && array.Len != nil {
 			arrayLengths[array.Len] = true
 		}
 		return true
 	})
+	constants := declaredConstants(file)
 	ast.Inspect(file, func(node ast.Node) bool {
 		if node == nil {
 			parents = parents[:len(parents)-1]
@@ -378,8 +398,10 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 		if expression, ok := node.(ast.Expr); ok {
 			tv, exists := pkg.TypesInfo.Types[expression]
 			if exists {
-				record.OriginalTypeID = b.addType(pkg, tv.Type)
-				record.EffectiveTypeID = record.OriginalTypeID
+				original, effective, conversion := expressionTypeFacts(pkg, expression, tv, nodeParents)
+				record.OriginalTypeID = b.addType(pkg, original)
+				record.EffectiveTypeID = b.addType(pkg, effective)
+				record.ConversionTypeID = b.addType(pkg, conversion)
 				record.Addressable = tv.Addressable()
 				record.Assignable = tv.Assignable()
 				record.IsType = tv.IsType()
@@ -387,7 +409,7 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 				record.IsNil = tv.IsNil()
 				record.IsBuiltin = tv.IsBuiltin()
 				if tv.Value != nil {
-					b.addConstant(pkg, nodeID, expression, tv, span, arrayLengths[expression])
+					b.addConstant(pkg, nodeID, expression, tv, conversion, span, arrayLengths[expression])
 				}
 			}
 			if call, ok := expression.(*ast.CallExpr); ok {
@@ -397,6 +419,9 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 		if ident, ok := node.(*ast.Ident); ok {
 			if object := pkg.TypesInfo.Defs[ident]; object != nil {
 				record.DeclarationID = b.addObject(pkg, object, b.span(pkg, ident.Pos(), ident.End()))
+				if value, ok := object.(*types.Const); ok {
+					b.addDeclaredConstant(pkg, nodeID, record.DeclarationID, value, span, constants[ident])
+				}
 			}
 			if object := pkg.TypesInfo.Uses[ident]; object != nil {
 				record.UseID = b.addObject(pkg, object, SourceSpan{})
@@ -412,12 +437,257 @@ func syntaxNodeID(pkgID, fileID string, node ast.Node, span SourceSpan) string {
 	return stableID("node", pkgID+"\x00"+fileID+"\x00"+fmt.Sprintf("%d:%d:%T", span.StartByte, span.EndByte, node))
 }
 
-func (b *inventoryBuilder) addConstant(pkg *packages.Package, nodeID string, expr ast.Expr, tv types.TypeAndValue, span SourceSpan, arrayLength bool) {
+func expressionTypeFacts(pkg *packages.Package, expr ast.Expr, tv types.TypeAndValue, parents map[ast.Node]ast.Node) (original, effective, conversion types.Type) {
+	effective = tv.Type
+	if call, ok := expr.(*ast.CallExpr); ok && len(call.Args) == 1 {
+		if fun, exists := pkg.TypesInfo.Types[call.Fun]; exists && fun.IsType() {
+			return pkg.TypesInfo.TypeOf(call.Args[0]), tv.Type, tv.Type
+		}
+	}
+	contextType := contextualType(pkg, expr, parents)
+	if contextType != nil && tv.Type != nil && !types.Identical(tv.Type, contextType) && types.AssignableTo(tv.Type, contextType) {
+		return tv.Type, contextType, contextType
+	}
+	if tv.Value != nil && tv.Type != nil && !isUntyped(tv.Type) {
+		if untyped := untypedConstantType(pkg, expr, tv.Value); untyped != nil && !types.Identical(untyped, tv.Type) {
+			return untyped, tv.Type, tv.Type
+		}
+	}
+	return nil, effective, nil
+}
+
+func contextualType(pkg *packages.Package, expr ast.Expr, parents map[ast.Node]ast.Node) types.Type {
+	parent := parents[expr]
+	switch value := parent.(type) {
+	case *ast.ValueSpec:
+		if value.Type != nil && slices.Contains(value.Values, expr) {
+			return pkg.TypesInfo.TypeOf(value.Type)
+		}
+	case *ast.AssignStmt:
+		if value.Tok == token.ASSIGN && len(value.Lhs) == len(value.Rhs) {
+			for i, rhs := range value.Rhs {
+				if rhs == expr {
+					return pkg.TypesInfo.TypeOf(value.Lhs[i])
+				}
+			}
+		}
+	case *ast.CallExpr:
+		if fun, ok := pkg.TypesInfo.Types[value.Fun]; ok && fun.IsType() {
+			return fun.Type
+		}
+		signature, _ := pkg.TypesInfo.TypeOf(value.Fun).(*types.Signature)
+		if signature == nil {
+			return nil
+		}
+		for i, argument := range value.Args {
+			if argument != expr {
+				continue
+			}
+			index := i
+			if signature.Variadic() && index >= signature.Params().Len()-1 {
+				index = signature.Params().Len() - 1
+				parameter := signature.Params().At(index).Type()
+				if !value.Ellipsis.IsValid() {
+					if slice, ok := parameter.(*types.Slice); ok {
+						return slice.Elem()
+					}
+				}
+				return parameter
+			}
+			if index < signature.Params().Len() {
+				return signature.Params().At(index).Type()
+			}
+		}
+	case *ast.SendStmt:
+		if value.Value == expr {
+			channelType := pkg.TypesInfo.TypeOf(value.Chan)
+			if channelType != nil {
+				if channel, ok := channelType.Underlying().(*types.Chan); ok {
+					return channel.Elem()
+				}
+			}
+		}
+	case *ast.ReturnStmt:
+		for node := ast.Node(value); node != nil; node = parents[node] {
+			switch function := parents[node].(type) {
+			case *ast.FuncDecl:
+				if object, ok := pkg.TypesInfo.Defs[function.Name].(*types.Func); ok {
+					return resultTypeForExpression(object.Type().(*types.Signature), value, expr)
+				}
+			case *ast.FuncLit:
+				if signature, ok := pkg.TypesInfo.TypeOf(function.Type).(*types.Signature); ok {
+					return resultTypeForExpression(signature, value, expr)
+				}
+			}
+		}
+	case *ast.CompositeLit:
+		return compositeElementType(pkg.TypesInfo.TypeOf(value), value, expr)
+	case *ast.KeyValueExpr:
+		if literal, ok := parents[value].(*ast.CompositeLit); ok {
+			switch composite := pkg.TypesInfo.TypeOf(literal).Underlying().(type) {
+			case *types.Map:
+				if value.Key == expr {
+					return composite.Key()
+				}
+				if value.Value == expr {
+					return composite.Elem()
+				}
+			case *types.Struct:
+				if value.Value == expr {
+					if ident, ok := value.Key.(*ast.Ident); ok {
+						for i := 0; i < composite.NumFields(); i++ {
+							if composite.Field(i).Name() == ident.Name {
+								return composite.Field(i).Type()
+							}
+						}
+					}
+				}
+			}
+		}
+	}
+	return nil
+}
+
+func resultTypeForExpression(signature *types.Signature, statement *ast.ReturnStmt, expr ast.Expr) types.Type {
+	if signature == nil || signature.Results() == nil || len(statement.Results) != signature.Results().Len() {
+		return nil
+	}
+	for i, result := range statement.Results {
+		if result == expr {
+			return signature.Results().At(i).Type()
+		}
+	}
+	return nil
+}
+
+func compositeElementType(t types.Type, literal *ast.CompositeLit, expr ast.Expr) types.Type {
+	if t == nil {
+		return nil
+	}
+	switch composite := t.Underlying().(type) {
+	case *types.Array:
+		return composite.Elem()
+	case *types.Slice:
+		return composite.Elem()
+	case *types.Struct:
+		for i, element := range literal.Elts {
+			if element == expr && i < composite.NumFields() {
+				return composite.Field(i).Type()
+			}
+		}
+	}
+	return nil
+}
+
+func untypedConstantType(pkg *packages.Package, expr ast.Expr, value constant.Value) types.Type {
+	if !isUntypedConstantExpression(pkg, expr) {
+		return nil
+	}
+	if ident, ok := expr.(*ast.Ident); ok {
+		if object, ok := pkg.TypesInfo.Uses[ident].(*types.Const); ok {
+			return object.Type()
+		}
+	}
+	if literal, ok := expr.(*ast.BasicLit); ok && literal.Kind == token.CHAR {
+		return types.Typ[types.UntypedRune]
+	}
+	switch value.Kind() {
+	case constant.Bool:
+		return types.Typ[types.UntypedBool]
+	case constant.String:
+		return types.Typ[types.UntypedString]
+	case constant.Int:
+		return types.Typ[types.UntypedInt]
+	case constant.Float:
+		return types.Typ[types.UntypedFloat]
+	case constant.Complex:
+		return types.Typ[types.UntypedComplex]
+	default:
+		return nil
+	}
+}
+
+func isUntypedConstantExpression(pkg *packages.Package, expression ast.Expr) bool {
+	switch value := expression.(type) {
+	case *ast.BasicLit:
+		return true
+	case *ast.Ident:
+		if object, ok := pkg.TypesInfo.Uses[value].(*types.Const); ok {
+			return isUntyped(object.Type())
+		}
+		return value.Name == "true" || value.Name == "false" || value.Name == "iota"
+	case *ast.ParenExpr:
+		return isUntypedConstantExpression(pkg, value.X)
+	case *ast.UnaryExpr:
+		return isUntypedConstantExpression(pkg, value.X)
+	case *ast.BinaryExpr:
+		return isUntypedConstantExpression(pkg, value.X) && isUntypedConstantExpression(pkg, value.Y)
+	default:
+		return false
+	}
+}
+
+func declaredConstants(file *ast.File) map[*ast.Ident]bool {
+	result := map[*ast.Ident]bool{}
+	for _, declaration := range file.Decls {
+		group, ok := declaration.(*ast.GenDecl)
+		if !ok || group.Tok != token.CONST {
+			continue
+		}
+		var inherited []ast.Expr
+		for _, raw := range group.Specs {
+			spec := raw.(*ast.ValueSpec)
+			if len(spec.Values) > 0 {
+				inherited = spec.Values
+			}
+			iota := expressionsContainIota(inherited)
+			for _, name := range spec.Names {
+				result[name] = iota
+			}
+		}
+	}
+	return result
+}
+
+func expressionsContainIota(expressions []ast.Expr) bool {
+	found := false
+	for _, expression := range expressions {
+		ast.Inspect(expression, func(node ast.Node) bool {
+			if ident, ok := node.(*ast.Ident); ok && ident.Name == "iota" {
+				found = true
+			}
+			return !found
+		})
+	}
+	return found
+}
+
+func calleeObject(pkg *packages.Package, expression ast.Expr) types.Object {
+	switch value := expression.(type) {
+	case *ast.Ident:
+		return pkg.TypesInfo.Uses[value]
+	case *ast.SelectorExpr:
+		if selection := pkg.TypesInfo.Selections[value]; selection != nil {
+			return selection.Obj()
+		}
+		return pkg.TypesInfo.Uses[value.Sel]
+	case *ast.IndexExpr:
+		return calleeObject(pkg, value.X)
+	case *ast.IndexListExpr:
+		return calleeObject(pkg, value.X)
+	case *ast.ParenExpr:
+		return calleeObject(pkg, value.X)
+	default:
+		return nil
+	}
+}
+
+func (b *inventoryBuilder) addConstant(pkg *packages.Package, nodeID string, expr ast.Expr, tv types.TypeAndValue, contextType types.Type, span SourceSpan, arrayLength bool) {
 	exact := tv.Value.ExactString()
 	record := ConstantRecord{
 		ID: stableID("constant", nodeID+"\x00"+exact), NodeID: nodeID,
 		TypeID: b.addType(pkg, tv.Type), Category: constantCategory(tv.Type), Exact: exact,
-		Untyped: isUntyped(tv.Type), Span: span,
+		Untyped: isUntyped(tv.Type), ContextTypeID: b.addType(pkg, contextType), Span: span,
 	}
 	if tv.Value.Kind() == constant.Complex {
 		record.RealExact = constant.Real(tv.Value).ExactString()
@@ -427,6 +697,23 @@ func (b *inventoryBuilder) addConstant(pkg *packages.Package, nodeID string, exp
 		record.Iota = true
 	}
 	record.ArrayLength = arrayLength
+	b.analysis.Constants = append(b.analysis.Constants, record)
+}
+
+func (b *inventoryBuilder) addDeclaredConstant(pkg *packages.Package, nodeID, symbolID string, value *types.Const, span SourceSpan, iota bool) {
+	exact := value.Val().ExactString()
+	record := ConstantRecord{
+		ID: stableID("constant", symbolID+"\x00"+exact), NodeID: nodeID, SymbolID: symbolID,
+		TypeID: b.addType(pkg, value.Type()), Category: constantCategory(value.Type()), Exact: exact,
+		Untyped: isUntyped(value.Type()), Iota: iota, Span: span,
+	}
+	if !record.Untyped {
+		record.ContextTypeID = record.TypeID
+	}
+	if value.Val().Kind() == constant.Complex {
+		record.RealExact = constant.Real(value.Val()).ExactString()
+		record.ImaginaryExact = constant.Imag(value.Val()).ExactString()
+	}
 	b.analysis.Constants = append(b.analysis.Constants, record)
 }
 
@@ -440,13 +727,13 @@ func (b *inventoryBuilder) addCall(pkg *packages.Package, nodeID string, call *a
 		record.SignatureTypeID = b.addType(pkg, signature)
 		record.Variadic = signature.Variadic()
 	}
-	if ident, ok := call.Fun.(*ast.Ident); ok {
-		if object := pkg.TypesInfo.Uses[ident]; object != nil {
+	if object := calleeObject(pkg, call.Fun); object != nil {
+		if _, isType := object.(*types.TypeName); !isType {
 			record.CalleeSymbolID = b.addObject(pkg, object, SourceSpan{})
-			if _, ok := object.(*types.Builtin); ok {
-				record.Kind = "builtin"
-				record.Builtin = object.Name()
-			}
+		}
+		if _, ok := object.(*types.Builtin); ok {
+			record.Kind = "builtin"
+			record.Builtin = object.Name()
 		}
 	}
 	for _, argument := range call.Args {
@@ -690,15 +977,18 @@ func (b *inventoryBuilder) addEmbeds(pkg *packages.Package) {
 	for _, pattern := range pkg.EmbedPatterns {
 		pattern = b.embedPattern(pkg, pattern)
 		for _, path := range pkg.EmbedFiles {
-			fileID := b.fileIDs[b.fileKey(pkg, path)]
-			if fileID == "" {
-				continue
-			}
 			logical := filepath.Base(path)
 			if pkg.Dir != "" {
 				if relative, err := pathWithin(pkg.Dir, path); err == nil {
 					logical = relative
 				}
+			}
+			if !embedPatternMatches(pattern, logical) {
+				continue
+			}
+			fileID := b.fileIDs[b.fileKey(pkg, path)]
+			if fileID == "" {
+				continue
 			}
 
 			hash := ""
@@ -715,6 +1005,19 @@ func (b *inventoryBuilder) addEmbeds(pkg *packages.Package) {
 			})
 		}
 	}
+}
+
+func embedPatternMatches(pattern, logical string) bool {
+	pattern = strings.TrimPrefix(pattern, "all:")
+	logical = slash(logical)
+	matched, err := pathpkg.Match(pattern, logical)
+	if err != nil {
+		return false
+	}
+	if matched {
+		return true
+	}
+	return !strings.ContainsAny(pattern, "*?[") && strings.HasPrefix(logical, strings.TrimSuffix(pattern, "/")+"/")
 }
 
 func (b *inventoryBuilder) embedPattern(pkg *packages.Package, pattern string) string {
@@ -861,10 +1164,19 @@ func (b *inventoryBuilder) addModule(module *packages.Module) (string, error) {
 	if module == nil {
 		return "", nil
 	}
-	canonical := module.Path + "\x00" + module.Version
+	replacementID := ""
 	if module.Replace != nil {
-		canonical += "\x00replace\x00" + module.Replace.Path + "\x00" + module.Replace.Version
+		var err error
+		if module.Replace.Version == "" && module.Replace.Dir != "" {
+			replacementID, err = b.addLocalReplacement(module.Path, module.Replace)
+		} else {
+			replacementID, err = b.addModule(module.Replace)
+		}
+		if err != nil {
+			return "", err
+		}
 	}
+	canonical := module.Path + "\x00" + module.Version + "\x00replace\x00" + replacementID
 	id := stableID("module", canonical)
 	b.moduleIDs[canonical] = id
 	if b.seenModules[id] {
@@ -872,24 +1184,30 @@ func (b *inventoryBuilder) addModule(module *packages.Module) (string, error) {
 	}
 	b.seenModules[id] = true
 	record := ModuleRecord{ID: id, Path: module.Path, Version: module.Version, GoVersion: module.GoVersion, Main: module.Main}
-	if module.Replace != nil {
-		replacementID, err := b.addModule(module.Replace)
-		if err != nil {
-			return "", err
-		}
+	if replacementID != "" {
 		record.ReplacementID = replacementID
-		if module.Replace.Version == "" && module.Replace.Dir != "" {
-			hash, err := hashTree(module.Replace.Dir, b.profile.Limits.MaxLocalHashBytes)
-			if err != nil {
-				return "", fmt.Errorf("hash local replacement %s: %w", module.Replace.Path, err)
-			}
-			record.LocalContentSHA256 = hash
-		}
 	}
 	if b.profile.VendorMode {
 		record.VendorProvenance = "source://vendor/modules.txt"
 	}
 	b.analysis.Modules = append(b.analysis.Modules, record)
+	return id, nil
+}
+
+func (b *inventoryBuilder) addLocalReplacement(logicalPath string, replacement *packages.Module) (string, error) {
+	hash, err := hashTree(replacement.Dir, b.profile.Limits.MaxLocalHashBytes)
+	if err != nil {
+		return "", fmt.Errorf("hash local replacement for %s: %w", logicalPath, err)
+	}
+	canonical := logicalPath + "\x00local-replacement\x00" + hash
+	id := stableID("module", canonical)
+	if b.seenModules[id] {
+		return id, nil
+	}
+	b.seenModules[id] = true
+	b.analysis.Modules = append(b.analysis.Modules, ModuleRecord{
+		ID: id, Path: logicalPath, GoVersion: replacement.GoVersion, LocalContentSHA256: hash,
+	})
 	return id, nil
 }
 
@@ -944,7 +1262,7 @@ func (b *inventoryBuilder) span(pkg *packages.Package, start, end token.Pos) Sou
 		}
 	}
 	displayPath := portable
-	lineDirective := display.Filename != rawStart.Filename || display.Line != rawStart.Line
+	lineDirective := display.Filename != rawStart.Filename || display.Line != rawStart.Line || display.Column != rawStart.Column
 	if lineDirective {
 		displayPath = "line://" + b.logicalDisplayPath(display.Filename)
 	}
@@ -1079,7 +1397,7 @@ func (b *inventoryBuilder) addBlocker(blocks, category, message string, units, d
 
 func (b *inventoryBuilder) recordCount() int {
 	a := b.analysis
-	return len(a.Packages) + len(a.Files) + len(a.Types) + len(a.Symbols) + len(a.Nodes) +
+	return len(a.Modules) + len(a.Packages) + len(a.Files) + len(a.Types) + len(a.Symbols) + len(a.Nodes) +
 		len(a.Constants) + len(a.Scopes) + len(a.Selections) + len(a.Calls) + len(a.MethodSets) +
 		len(a.Instances) + len(a.Embeds) + len(a.GenerateDirectives) + len(a.Dependencies) +
 		len(a.FeatureSites) + len(a.Diagnostics) + len(a.Blockers)
@@ -1107,7 +1425,7 @@ func (b *inventoryBuilder) finish() {
 	sort.Slice(a.Diagnostics, func(i, j int) bool { return a.Diagnostics[i].ID < a.Diagnostics[j].ID })
 	sort.Slice(a.Blockers, func(i, j int) bool { return a.Blockers[i].ID < a.Blockers[j].ID })
 	a.RecordCounts = RecordCounts{
-		Packages: len(a.Packages), Files: len(a.Files), Types: len(a.Types), Symbols: len(a.Symbols),
+		Modules: len(a.Modules), Packages: len(a.Packages), Files: len(a.Files), Types: len(a.Types), Symbols: len(a.Symbols),
 		Nodes: len(a.Nodes), Constants: len(a.Constants), Scopes: len(a.Scopes), Selections: len(a.Selections),
 		Calls: len(a.Calls), MethodSets: len(a.MethodSets), Instances: len(a.Instances), Embeds: len(a.Embeds),
 		GenerateDirectives: len(a.GenerateDirectives), Dependencies: len(a.Dependencies),

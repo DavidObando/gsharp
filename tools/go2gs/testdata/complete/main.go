@@ -1,6 +1,9 @@
 package fixture
 
-import _ "embed"
+import (
+	"embed"
+	"fmt"
+)
 
 const (
 	HugeInteger  = 1234567890123456789012345678901234567890
@@ -35,9 +38,19 @@ func (outer *Outer) Add(value int) int {
 //go:embed asset.bin
 var asset string
 
+//go:embed assets/a.txt
+var assetA string
+
+//go:embed assets/*.txt
+var assets embed.FS
+
 //go:generate echo never-executed
 
 var InterfaceValue any = (*Inner)(nil)
+var ContextualInt int64 = 7
+var PackageCall = fmt.Sprint(8)
+var MethodExpressionCall = (*Outer).Add(&Outer{}, 9)
+var MethodValueCall = (&Outer{}).Add(10)
 var ByteString = string([]byte{0xff, 0})
 var MapValue = map[string]int{"answer": 42}
 var ArrayValue Triple

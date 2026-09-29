@@ -1,5 +1,6 @@
 ---
 title: "go2gs typed inventory"
+description: "Analyze Go packages into a deterministic, typed migration inventory without generating G# code."
 ---
 
 # go2gs typed inventory

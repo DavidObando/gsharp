@@ -251,6 +251,9 @@ func validateAnalysis(a Analysis) error {
 		if err := require(value.ID, "nodeId", value.NodeID, "node"); err != nil {
 			return err
 		}
+		if err := require(value.ID, "symbolId", value.SymbolID, "symbol"); err != nil {
+			return err
+		}
 		if err := require(value.ID, "typeId", value.TypeID, "type"); err != nil {
 			return err
 		}
@@ -374,13 +377,13 @@ func validateAnalysis(a Analysis) error {
 		return err
 	}
 	expectedCounts := RecordCounts{
-		Packages: len(a.Packages), Files: len(a.Files), Types: len(a.Types), Symbols: len(a.Symbols),
+		Modules: len(a.Modules), Packages: len(a.Packages), Files: len(a.Files), Types: len(a.Types), Symbols: len(a.Symbols),
 		Nodes: len(a.Nodes), Constants: len(a.Constants), Scopes: len(a.Scopes), Selections: len(a.Selections),
 		Calls: len(a.Calls), MethodSets: len(a.MethodSets), Instances: len(a.Instances), Embeds: len(a.Embeds),
 		GenerateDirectives: len(a.GenerateDirectives), Dependencies: len(a.Dependencies),
 		FeatureSites: len(a.FeatureSites), Diagnostics: len(a.Diagnostics), Blockers: len(a.Blockers),
 	}
-	expectedCounts.Total = expectedCounts.Packages + expectedCounts.Files + expectedCounts.Types +
+	expectedCounts.Total = expectedCounts.Modules + expectedCounts.Packages + expectedCounts.Files + expectedCounts.Types +
 		expectedCounts.Symbols + expectedCounts.Nodes + expectedCounts.Constants + expectedCounts.Scopes +
 		expectedCounts.Selections + expectedCounts.Calls + expectedCounts.MethodSets + expectedCounts.Instances +
 		expectedCounts.Embeds + expectedCounts.GenerateDirectives + expectedCounts.Dependencies +
@@ -456,7 +459,9 @@ func validateRecordFields(a Analysis) error {
 		}
 	}
 	for _, value := range a.Modules {
-		if value.ID == "" || value.Path == "" {
+		if value.ID == "" || value.Path == "" || filepath.IsAbs(value.Path) ||
+			filepath.VolumeName(value.Path) != "" || strings.Contains(value.Path, "\\") ||
+			(value.LocalContentSHA256 != "" && !validSHA256(value.LocalContentSHA256)) {
 			return fmt.Errorf("module %q has invalid required fields", value.ID)
 		}
 	}
@@ -763,10 +768,26 @@ func validateOwnership(a Analysis) error {
 			}
 		}
 	}
+	constantsBySymbol := map[string]int{}
 	for _, constant := range a.Constants {
 		node := nodes[constant.NodeID]
 		if constant.Span != node.Span {
 			return fmt.Errorf("constant %q span does not match node %q", constant.ID, constant.NodeID)
+		}
+		if constant.SymbolID != "" {
+			symbol := symbols[constant.SymbolID]
+			if node.DeclarationID != symbol.ID || node.PackageID != symbol.PackageID {
+				return fmt.Errorf("constant %q declaration ownership is inconsistent", constant.ID)
+			}
+			constantsBySymbol[constant.SymbolID]++
+			if constantsBySymbol[constant.SymbolID] != 1 {
+				return fmt.Errorf("symbol %q has multiple declared constant values", constant.SymbolID)
+			}
+		}
+	}
+	for _, symbol := range a.Symbols {
+		if symbol.Kind == "constant" && symbol.Declaration != nil && constantsBySymbol[symbol.ID] != 1 {
+			return fmt.Errorf("declared constant symbol %q must have exactly one linked value", symbol.ID)
 		}
 	}
 	for _, embed := range a.Embeds {
@@ -834,7 +855,33 @@ func validateSpanForFile(span SourceSpan, file FileRecord, owner string) error {
 	if span.Path != file.Path || int64(span.StartByte) > file.Bytes || int64(span.EndByte) > file.Bytes {
 		return fmt.Errorf("%s does not match file %q or exceeds its byte bounds", owner, file.ID)
 	}
+	data, err := base64.StdEncoding.DecodeString(file.ContentBase64)
+	if err != nil {
+		return fmt.Errorf("%s references file %q with invalid content", owner, file.ID)
+	}
+	startLine, startColumn := sourceCoordinate(data, span.StartByte)
+	endLine, endColumn := sourceCoordinate(data, span.EndByte)
+	if span.StartLine != startLine || span.StartColumn != startColumn ||
+		span.EndLine != endLine || span.EndColumn != endColumn {
+		return fmt.Errorf("%s raw coordinates do not match file %q byte offsets", owner, file.ID)
+	}
+	if !span.LineDirective && (span.DisplayPath != span.Path ||
+		span.DisplayLine != span.StartLine || span.DisplayColumn != span.StartColumn) {
+		return fmt.Errorf("%s display coordinates differ without //line provenance", owner)
+	}
 	return nil
+}
+
+func sourceCoordinate(data []byte, offset int) (line, column int) {
+	line, column = 1, 1
+	for index := 0; index < offset; index++ {
+		if data[index] == '\n' {
+			line, column = line+1, 1
+		} else {
+			column++
+		}
+	}
+	return line, column
 }
 
 func validPortableLocation(value string) bool {
