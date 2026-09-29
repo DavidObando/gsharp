@@ -1610,6 +1610,12 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 values.Clear();
+                if (writeNode is ArgumentSyntax
+                    { RefOrOutKeyword.RawKind: (int)SyntaxKind.RefKeyword })
+                {
+                    values.UnionWith(previousValues);
+                }
+
                 foreach (ExpressionSyntax previous in previousValues)
                 {
                     if (appliedElementWrites.TryGetValue(

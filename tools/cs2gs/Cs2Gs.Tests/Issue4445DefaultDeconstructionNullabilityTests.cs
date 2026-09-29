@@ -701,6 +701,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     var (inLeft, inRight) = inPair;
                     Fill(ref inLeft, replacement);
 
+                    var refElementPair = (default(T), replacement);
+                    ObserveRef(ref refElementPair.Item1);
+                    var (refElementLeft, refElementRight) = refElementPair;
+                    Fill(ref refElementLeft, replacement);
+
                     var unknownPair = (First: replacement, Second: replacement);
                     Reset(out unknownPair);
                     unknownPair.First = default;
@@ -745,6 +750,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static void Observe<T>(in (T, T) pair)
                 {
                 }
+
+                private static void ObserveRef<T>(ref T value)
+                {
+                }
             }
             """;
 
@@ -756,12 +765,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) deconstructionWriteLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) untouchedDefaultRight T\? =", printed);
         Assert.Matches(@"\b(let|var) inLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) refElementLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) unknownLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) combinedLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) duplicateWriteLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) mixedWriteRight T\? =", printed);
         Assert.DoesNotContain("outElementLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("outElementRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("refElementRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("orderedOutLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("orderedOutRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
