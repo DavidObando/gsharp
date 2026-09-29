@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"go/ast"
 	"go/constant"
+	"go/parser"
 	"go/token"
 	"go/types"
 	"os"
@@ -49,6 +50,7 @@ type inventoryBuilder struct {
 	snapshotFiles    map[string][]string
 	snapshotRoles    map[string]map[string]string
 	memberIdentity   map[types.Object]string
+	skipSemantics    map[*packages.Package]bool
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
@@ -61,6 +63,7 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		seenMethodSets: map[string]bool{}, scopeIDs: map[*types.Scope]string{},
 		inputDrift: map[string]bool{}, snapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
 		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
+		skipSemantics: map[*packages.Package]bool{},
 	}
 }
 
@@ -165,13 +168,15 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 		b.block("package-load", "package inventory is incomplete", []string{pkgID}, record.DiagnosticIDs)
 	}
 
-	if isSourcePackage(pkg, b.sourceRoot) {
+	if len(b.snapshotFiles[packageInputKey(pkg)]) > 0 {
 		if err := b.addSourcePackage(pkg, &record); err != nil {
 			return err
 		}
 	}
 
-	b.addInitialization(pkg, &record)
+	if !b.skipSemantics[pkg] {
+		b.addInitialization(pkg, &record)
+	}
 	sort.Strings(record.DiagnosticIDs)
 	b.analysis.Packages = append(b.analysis.Packages, record)
 	return nil
@@ -225,15 +230,6 @@ func splitDiagnosticPosition(position string) (string, string) {
 	return position[:start], position[start:]
 }
 
-func isSourcePackage(pkg *packages.Package, sourceRoot string) bool {
-	for _, path := range pkg.CompiledGoFiles {
-		if _, err := pathWithin(sourceRoot, path); err == nil {
-			return true
-		}
-	}
-	return false
-}
-
 func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *PackageRecord) error {
 	compiled := stringSet(pkg.CompiledGoFiles)
 	active := stringSet(pkg.GoFiles)
@@ -258,8 +254,17 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		b.block("native", "selected package requires native, assembly, or CGo build inputs; M0 records them but does not authorize the native toolchain", []string{record.ID}, nil)
 		record.InventoryComplete = false
 	}
+	unmappedCgo := b.snapshotImportsC(pkg)
+	if unmappedCgo {
+		b.block("cgo", "selected package uses CGo-transformed syntax that M0 cannot faithfully relate to original source", []string{record.ID}, nil)
+		record.InventoryComplete = false
+		b.skipSemantics[pkg] = true
+	}
 	for _, path := range all {
 		if _, captured := b.sourceSnapshot[path]; !captured {
+			if unmappedCgo {
+				continue
+			}
 			b.block("input-snapshot", "selected package input was not captured before loading", []string{record.ID}, nil)
 			record.InventoryComplete = false
 			continue
@@ -293,6 +298,10 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		}
 		record.FileIDs = append(record.FileIDs, fileID)
 	}
+	if unmappedCgo {
+		sort.Strings(record.FileIDs)
+		return nil
+	}
 	for _, path := range pkg.CompiledGoFiles {
 		if fileID := b.fileIDs[b.fileKey(pkg, path)]; fileID != "" {
 			record.CompiledFileIDs = append(record.CompiledFileIDs, fileID)
@@ -320,6 +329,29 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	sort.Strings(record.FileIDs)
 	sort.Strings(record.ImportPackageIDs)
 	return nil
+}
+
+func (b *inventoryBuilder) snapshotImportsC(pkg *packages.Package) bool {
+	key := packageInputKey(pkg)
+	for _, path := range b.snapshotFiles[key] {
+		role := b.snapshotRoles[key][path]
+		if role != "active" && role != "compiled" && role != "test" {
+			continue
+		}
+		if filepath.Ext(path) != ".go" {
+			continue
+		}
+		file, err := parser.ParseFile(token.NewFileSet(), path, b.sourceSnapshot[path], parser.ImportsOnly)
+		if err != nil {
+			continue
+		}
+		for _, imported := range file.Imports {
+			if imported.Path.Value == `"C"` {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason string) (string, error) {
@@ -1276,8 +1308,9 @@ func (b *inventoryBuilder) indexDeclaredMembers(loaded []*packages.Package) {
 		case *types.Pointer:
 			indexType(pkg, value.Elem())
 		case *types.Alias:
-			indexType(pkg, value.Rhs())
+			indexType(pkg, value.Origin().Rhs())
 		case *types.Named:
+			value = value.Origin()
 			if seen[value] {
 				return
 			}
