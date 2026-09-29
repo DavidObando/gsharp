@@ -27,13 +27,14 @@ internal sealed partial class StatementBinder
     {
         var labelName = syntax.LabelIdentifier.ValueText;
         var labelDefined = binderCtx.DefinedUserLabels.Contains(labelName);
-        if (!labelDefined
+        if (currentStatementListFallsThrough
+            && !labelDefined
             && !binderCtx.PendingGotoAssignmentStarts.ContainsKey(labelName))
         {
             binderCtx.PendingGotoAssignmentStarts[labelName] = binderCtx.AssignmentNarrowingGeneration;
         }
 
-        if (!labelDefined)
+        if (currentStatementListFallsThrough && !labelDefined)
         {
             if (!binderCtx.PendingGotoNarrowingSnapshots.TryGetValue(labelName, out var snapshots))
             {
@@ -43,7 +44,8 @@ internal sealed partial class StatementBinder
 
             snapshots.Add(CaptureGotoNarrowingSnapshot());
         }
-        else if (binderCtx.BackwardGotoNarrowingStates.TryGetValue(labelName, out var backwardState))
+        else if (currentStatementListFallsThrough
+            && binderCtx.BackwardGotoNarrowingStates.TryGetValue(labelName, out var backwardState))
         {
             backwardState.Edges.Add(new BackwardGotoNarrowingEdge(
                 CaptureGotoNarrowingSnapshot(),
@@ -99,6 +101,8 @@ internal sealed partial class StatementBinder
         var incomingSnapshots = InvalidateAssignmentNarrowingsBypassedByGoto(
             labelName,
             currentStatementListFallsThrough);
+        currentStatementListFallsThrough =
+            currentStatementListFallsThrough || incomingSnapshots is { Count: > 0 };
         var backwardState = new BackwardGotoNarrowingState(CaptureGotoNarrowingSnapshot());
         AddUpstreamLabelDependencies(backwardState, incomingSnapshots);
         binderCtx.BackwardGotoNarrowingStates[labelName] = backwardState;

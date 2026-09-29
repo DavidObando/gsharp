@@ -900,6 +900,46 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void UnreachableForwardGoto_DoesNotInvalidateReachableNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                goto Done
+                x = nil
+                goto Done
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
+    public void UnreachableBackwardGoto_DoesNotInvalidateReachableNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+            Again:
+                let length = x.Length
+                return length
+                x = nil
+                goto Again
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
     public void UnrelatedEarlierGotoDoesNotLinkLaterBackwardLabel()
     {
         AssertRuns("""

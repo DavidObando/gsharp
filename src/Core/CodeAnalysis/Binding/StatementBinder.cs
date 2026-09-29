@@ -807,9 +807,8 @@ internal sealed partial class StatementBinder
                 // type. Runs after invalidation for the same reason as the
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame);
-                currentStatementListFallsThrough = statementSyntax is LabeledStatementSyntax
-                    ? !EndsInUnconditionalExit(statement)
-                    : currentStatementListFallsThrough && !EndsInUnconditionalExit(statement);
+                currentStatementListFallsThrough =
+                    currentStatementListFallsThrough && !EndsInUnconditionalExit(statement);
             }
 
             if (trailingStatement != null)
