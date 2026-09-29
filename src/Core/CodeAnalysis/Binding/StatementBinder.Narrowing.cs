@@ -162,11 +162,13 @@ internal sealed partial class StatementBinder
         // that invalidate before producing one bound statement retain the
         // syntax-name fallback.
         HashSet<VariableSymbol> assignedRoots;
+        var dropAllRoots = false;
         if (boundStatement != null)
         {
             var collector = new AssignedRootsCollector(null);
             collector.Visit(boundStatement);
             assignedRoots = collector.Roots;
+            dropAllRoots = collector.MayMutateAnyRoot;
             foreach (var frame in binderCtx.NarrowedVariables)
             {
                 foreach (var path in frame.Keys)
@@ -190,7 +192,7 @@ internal sealed partial class StatementBinder
             }
         }
 
-        if (assignedRoots.Count == 0 && !dropAllMemberPaths)
+        if (assignedRoots.Count == 0 && !dropAllMemberPaths && !dropAllRoots)
         {
             return;
         }
@@ -209,7 +211,8 @@ internal sealed partial class StatementBinder
             List<AccessPath>? toRemove = null;
             foreach (var key in frame.Keys)
             {
-                var drop = assignedRoots.Contains(key.Root)
+                var drop = dropAllRoots
+                    || assignedRoots.Contains(key.Root)
                     || (key.HasMembers && dropAllMemberPaths);
                 if (drop)
                 {
@@ -655,22 +658,41 @@ internal sealed partial class StatementBinder
             }
         }
 
-        var pathsToInvalidate = new HashSet<AccessPath>();
+        var joinedTypes = new Dictionary<AccessPath, TypeSymbol>();
         foreach (var entry in targetNarrowings)
         {
-            if (incomingSnapshots.Any(snapshot =>
-                !snapshot.NarrowedVariables.TryGetValue(entry.Key, out var sourceType)
-                || !Conversion.Classify(sourceType, entry.Value).IsImplicit))
+            var types = new List<TypeSymbol> { entry.Value };
+            foreach (var snapshot in incomingSnapshots)
             {
-                pathsToInvalidate.Add(entry.Key);
+                if (!snapshot.NarrowedVariables.TryGetValue(entry.Key, out var sourceType))
+                {
+                    types.Clear();
+                    break;
+                }
+
+                types.Add(sourceType);
+            }
+
+            var commonType = types.FirstOrDefault(candidate =>
+                types.All(source => Conversion.Classify(source, candidate).IsImplicit));
+            if (commonType != null)
+            {
+                joinedTypes.Add(entry.Key, commonType);
             }
         }
 
         foreach (var frame in binderCtx.NarrowedVariables)
         {
-            foreach (var path in pathsToInvalidate)
+            foreach (var path in frame.Keys.ToArray())
             {
-                frame.Remove(path);
+                if (joinedTypes.TryGetValue(path, out var joinedType))
+                {
+                    frame[path] = joinedType;
+                }
+                else
+                {
+                    frame.Remove(path);
+                }
             }
         }
 
@@ -1625,15 +1647,21 @@ internal sealed partial class StatementBinder
             {
                 VisitFunctionLiteralBody(direct);
             }
-            else if (target is BoundVariableExpression variable
-                && functionLiterals.TryGetValue(variable.Variable, out var literals))
+            else if (target is BoundVariableExpression variable)
             {
-                foreach (var literal in literals)
+                if (functionLiterals.TryGetValue(variable.Variable, out var literals))
                 {
-                    VisitFunctionLiteralBody(literal);
+                    foreach (var literal in literals)
+                    {
+                        VisitFunctionLiteralBody(literal);
+                    }
                 }
 
-                MayMutateAnyRoot |= unknownFunctionValues.Contains(variable.Variable);
+                // A read-only callable parameter originates outside this
+                // function and cannot capture this function's local slots.
+                MayMutateAnyRoot |= variable.Variable is not ParameterSymbol { IsReadOnly: true }
+                    && (!functionLiterals.ContainsKey(variable.Variable)
+                        || unknownFunctionValues.Contains(variable.Variable));
             }
             else
             {

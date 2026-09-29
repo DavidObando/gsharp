@@ -541,6 +541,138 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_InheritedPropertyDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                prop Name string -> "animal"
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() int32 {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let name = x.Name
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return name.Length
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_InheritedFieldDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                var Name string = "animal"
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() int32 {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let name = x.Name
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return name.Length
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_SubtypeOnlyPropertyStillRequiresNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                prop Sound string -> "woof"
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    let sound = x.Sound
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Sound", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_SubtypeOnlyFieldStillRequiresNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                var Sound string = "woof"
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    let sound = x.Sound
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Sound", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_ParenthesizedOverrideDoesNotRequireNarrowedType()
     {
         var result = Evaluate("""
@@ -1192,6 +1324,34 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_JoinsFallthroughAndIncomingToCommonSupertype()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                prop Name string -> "animal"
+            }
+            class Dog : Animal {
+            }
+
+            func Run(jump bool) string {
+                var x Animal? = nil
+                if jump {
+                    x = Animal{}
+                    goto Use
+                }
+                x = Dog{}
+            Use:
+                return x.Name
+            }
+
+            Run(true)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("animal", result.Value);
+    }
+
+    [Fact]
     public void ForwardGoto_BypassesConditionFrame_ReportsMemberAccess()
     {
         var result = Evaluate("""
@@ -1676,6 +1836,28 @@ public class Issue4519GotoAssignmentNarrowingTests
                     goto Done
                 }
             Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void Fallthrough_DeferAliasCleanupInvalidatesNarrowing()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                {
+                    defer clear()
+                }
                 return x.Length
             }
 

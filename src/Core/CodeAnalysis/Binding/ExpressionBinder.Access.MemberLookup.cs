@@ -190,6 +190,30 @@ internal sealed partial class ExpressionBinder
                 MethodTypeArguments = call.MethodTypeArguments,
             };
         }
+        else if (receiver != null
+            && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out receiverPath, out _)
+            && !receiverPath.HasMembers
+            && receiverPath.Root.Type is not NullableTypeSymbol
+            && rightPart is NameExpressionSyntax)
+        {
+            var declaredReceiver = DeclaredReceiver(receiverPath.Root, receiver.Syntax);
+            var diagnosticCount = Diagnostics.Count;
+            var declaredResult = BindAccessorStepAfterPlatformReceiverCheck(
+                declaredReceiver,
+                classSymbol == null ? null : WithFamilyAccess(classSymbol),
+                rightPart,
+                receiverSyntax,
+                receiverStart);
+            Diagnostics.TruncateTo(diagnosticCount);
+            if (declaredResult is not BoundErrorExpression)
+            {
+                binderCtx.UntrackBackwardGotoNarrowingConversion(
+                    receiverPath,
+                    receiverSyntax?.Location ?? rightPart.Location);
+                receiver = declaredReceiver;
+                result = declaredResult;
+            }
+        }
 
         TrackBackwardGotoNarrowingAccess(receiver, rightPart, result);
         return result;
