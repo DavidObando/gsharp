@@ -151,7 +151,6 @@ internal sealed partial class StatementBinder
         finallyFlowSummaries.Clear();
         userGotoHandlerRegions.Clear();
         userLabelHandlerRegions.Clear();
-        internallyReachableFallthroughStatements.Clear();
     }
 
     private GotoNarrowingSnapshot CaptureGotoNarrowingSnapshot()
