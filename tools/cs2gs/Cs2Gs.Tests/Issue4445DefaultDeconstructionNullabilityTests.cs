@@ -593,6 +593,60 @@ public class Issue4445DefaultDeconstructionNullabilityTests
     }
 
     [Fact]
+    public void Translation_TracksTupleElementReads()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class TupleElementRead
+            {
+                private static void Fill<T>(ref T? value, T replacement) =>
+                    value = replacement;
+
+                private static void M<T>(T replacement)
+                {
+                    (T First, T Second) pair = (default(T), replacement);
+                    var first = pair.First;
+                    var second = pair.Second;
+                    Fill(ref first, replacement);
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) first T\? =", printed);
+        Assert.DoesNotContain("second T? =", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Translation_LowersParenthesizedForDeconstruction()
+    {
+        const string source = """
+            public static class ParenthesizedFor
+            {
+                private static void Consume((int, int) value)
+                {
+                }
+
+                private static void M()
+                {
+                    var left = 0;
+                    var right = 0;
+                    for (Consume((left, right) = (1, 2)); left < 1;)
+                    {
+                        break;
+                    }
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Contains("while", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void Translation_TracksAliasesInInitializerLambdas()
     {
         const string source = """

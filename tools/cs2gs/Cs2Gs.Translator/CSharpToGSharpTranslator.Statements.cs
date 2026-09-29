@@ -462,6 +462,32 @@ public sealed partial class CSharpToGSharpTranslator
                         this.InferredInitializerOriginatesFromDefault(
                             arm.Expression,
                             visited));
+
+                case MemberAccessExpressionSyntax member
+                    when this.context.GetSymbolInfo(member.Name).Symbol
+                        is IFieldSymbol { ContainingType.IsTupleType: true } field
+                        && this.context.GetTypeInfo(member.Expression).Type
+                            is INamedTypeSymbol { IsTupleType: true } tupleType:
+                {
+                    int index = TupleElementIndex(tupleType, field);
+                    if (index < 0
+                        || this.context.GetSymbolInfo(member.Expression).Symbol
+                            is not ILocalSymbol receiver
+                        || !visited.Add(receiver))
+                    {
+                        return false;
+                    }
+
+                    return this.GetReachingLocalValues(
+                            receiver,
+                            member.SpanStart,
+                            visited)
+                        .Any(value => this.InferredInitializerOriginatesFromDefault(
+                            ProjectTupleElement(value, new[] { index }),
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default)));
+                }
             }
 
             if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
@@ -1358,7 +1384,7 @@ public sealed partial class CSharpToGSharpTranslator
                     is INamedTypeSymbol { IsTupleType: true } tupleType
                 && this.context.GetSymbolInfo(member.Name).Symbol is IFieldSymbol field)
             {
-                int index = tupleType.TupleElements.IndexOf(field);
+                int index = TupleElementIndex(tupleType, field);
                 if (index >= 0)
                 {
                     path.Insert(0, index);
@@ -1377,6 +1403,26 @@ public sealed partial class CSharpToGSharpTranslator
 
             found = null;
             return false;
+        }
+
+        private static int TupleElementIndex(
+            INamedTypeSymbol tupleType,
+            IFieldSymbol field)
+        {
+            IFieldSymbol canonical = field.CorrespondingTupleField ?? field;
+            for (int i = 0; i < tupleType.TupleElements.Length; i++)
+            {
+                IFieldSymbol candidate =
+                    tupleType.TupleElements[i].CorrespondingTupleField
+                    ?? tupleType.TupleElements[i];
+                if (SymbolEqualityComparer.Default.Equals(candidate, canonical)
+                    || tupleType.TupleElements[i].Name == field.Name)
+                {
+                    return i;
+                }
+            }
+
+            return -1;
         }
 
         private static ExpressionSyntax ReplaceTupleElement(
