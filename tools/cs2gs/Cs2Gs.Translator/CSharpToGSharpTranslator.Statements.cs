@@ -487,13 +487,13 @@ public sealed partial class CSharpToGSharpTranslator
             return FindDeconstructionInitializer(designation, left, right);
         }
 
-        private static ExpressionSyntax FindDeconstructionInitializer(
+        private ExpressionSyntax FindDeconstructionInitializer(
             SingleVariableDesignationSyntax target,
             ExpressionSyntax left,
             ExpressionSyntax right)
         {
             left = Unwrap(left);
-            right = Unwrap(right);
+            right = this.UnwrapTuplePreservingCasts(right);
 
             if (left.SyntaxTree == target.SyntaxTree
                 && left.Span.Contains(target.Span)
@@ -529,7 +529,7 @@ public sealed partial class CSharpToGSharpTranslator
             return null;
         }
 
-        private static ExpressionSyntax FindDeconstructionInitializer(
+        private ExpressionSyntax FindDeconstructionInitializer(
             SingleVariableDesignationSyntax target,
             VariableDesignationSyntax designation,
             ExpressionSyntax right)
@@ -540,7 +540,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return right;
             }
 
-            right = Unwrap(right);
+            right = this.UnwrapTuplePreservingCasts(right);
             if (designation.SyntaxTree == target.SyntaxTree
                 && designation.Span.Contains(target.Span)
                 && IsNullOrDefaultLiteral(right))
@@ -568,6 +568,18 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return null;
+        }
+
+        private ExpressionSyntax UnwrapTuplePreservingCasts(ExpressionSyntax expression)
+        {
+            expression = Unwrap(expression);
+            while (expression is CastExpressionSyntax cast
+                && this.context.GetTypeInfo(cast).Type is { IsTupleType: true })
+            {
+                expression = Unwrap(cast.Expression);
+            }
+
+            return expression;
         }
 
         /// <summary>

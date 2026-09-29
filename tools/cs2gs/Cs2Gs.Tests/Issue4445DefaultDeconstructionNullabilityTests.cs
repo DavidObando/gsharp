@@ -46,6 +46,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var (wholeLeft, wholeRight) = default((T, T));
                 var ((wholeNestedA, wholeNestedB), wholeNestedC) =
                     default(((T, T), T));
+                var (castLeft, castRight) = ((T, T))(default(T), default(T));
                 var (methodLeft, methodRight) = NullablePair<T>();
 
                 Fill(ref direct, replacement);
@@ -65,6 +66,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref wholeNestedA, replacement);
                 Fill(ref wholeNestedB, replacement);
                 Fill(ref wholeNestedC, replacement);
+                Fill(ref castLeft, replacement);
+                Fill(ref castRight, replacement);
                 Fill(ref methodLeft, replacement);
                 Fill(ref methodRight, replacement);
 
@@ -219,7 +222,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "direct", "alias", "branch", "a", "b", "c", "d", "e", "f", "loop",
             "nestedA", "nestedB", "nestedC", "wholeLeft", "wholeRight",
             "wholeNestedA", "wholeNestedB", "wholeNestedC",
-            "loopLeft", "loopRight", "coalesced", "left", "right",
+            "castLeft", "castRight", "loopLeft", "loopRight", "coalesced", "left", "right",
         })
         {
             Assert.Matches($@"\b(let|var) {name} T\? =", printed);
