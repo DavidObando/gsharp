@@ -325,6 +325,26 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 }
                 CapturedLocal();
 
+                var postCaptureLambdaPair = (replacement, replacement);
+                System.Action postCaptureLambda = () =>
+                {
+                    var (postCaptureLambdaLeft, postCaptureLambdaRight) =
+                        postCaptureLambdaPair;
+                    Fill(ref postCaptureLambdaLeft, replacement);
+                };
+                postCaptureLambdaPair = (default(T), replacement);
+                postCaptureLambda();
+
+                var postCaptureLocalPair = (replacement, replacement);
+                void PostCaptureLocal()
+                {
+                    var (postCaptureLocalLeft, postCaptureLocalRight) =
+                        postCaptureLocalPair;
+                    Fill(ref postCaptureLocalLeft, replacement);
+                }
+                postCaptureLocalPair = (default(T), replacement);
+                PostCaptureLocal();
+
                 var nestedCapturePair = (replacement, replacement);
                 System.Action outerCapture = () =>
                 {
@@ -575,6 +595,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "nestedRead",
             "capturedLambdaLeft", "capturedLambdaRight",
             "capturedLocalLeft", "capturedLocalRight",
+            "postCaptureLambdaLeft",
+            "postCaptureLocalLeft",
             "nestedCaptureLeft", "nestedCaptureRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
@@ -706,6 +728,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     var (refElementLeft, refElementRight) = refElementPair;
                     Fill(ref refElementLeft, replacement);
 
+                    var refPair = (default(T), replacement);
+                    ObserveRef(ref refPair);
+                    var (refLeft, refRight) = refPair;
+                    Fill(ref refLeft, replacement);
+
                     var unknownPair = (First: replacement, Second: replacement);
                     Reset(out unknownPair);
                     unknownPair.First = default;
@@ -766,6 +793,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) untouchedDefaultRight T\? =", printed);
         Assert.Matches(@"\b(let|var) inLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) refElementLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) refLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) unknownLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) combinedLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) duplicateWriteLeft T\? =", printed);
@@ -773,6 +801,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("outElementLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("outElementRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("refElementRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("refRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("orderedOutLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("orderedOutRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);

@@ -1129,17 +1129,35 @@ public sealed partial class CSharpToGSharpTranslator
                     .ToList();
                 foreach (SyntaxNode nestedExecutable in nestedExecutables)
                 {
-                    HashSet<ISymbol> enclosingVisited = visited == null
+                    HashSet<ISymbol> declarationVisited = visited == null
                         ? null
                         : new HashSet<ISymbol>(
                             visited,
                             SymbolEqualityComparer.Default);
-                    initialValues = this.GetReachingLocalValues(
-                        local,
-                        nestedExecutable.SpanStart,
-                        enclosingVisited,
-                        executable,
-                        initialValues);
+                    var nestedInitialValues = new HashSet<ExpressionSyntax>(
+                        this.GetReachingLocalValues(
+                            local,
+                            nestedExecutable.SpanStart,
+                            declarationVisited,
+                            executable,
+                            initialValues));
+                    foreach (int invocationPosition
+                        in this.GetInvocationPositions(nestedExecutable, executable))
+                    {
+                        HashSet<ISymbol> invocationVisited = visited == null
+                            ? null
+                            : new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default);
+                        nestedInitialValues.UnionWith(this.GetReachingLocalValues(
+                            local,
+                            invocationPosition,
+                            invocationVisited,
+                            executable,
+                            initialValues));
+                    }
+
+                    initialValues = nestedInitialValues.ToList();
                     executable = nestedExecutable;
                 }
             }
@@ -1323,6 +1341,56 @@ public sealed partial class CSharpToGSharpTranslator
             return reaching.ToList();
         }
 
+        private IEnumerable<int> GetInvocationPositions(
+            SyntaxNode nestedExecutable,
+            SyntaxNode enclosingExecutable)
+        {
+            ISymbol callable = null;
+            if (nestedExecutable is LocalFunctionStatementSyntax localFunction)
+            {
+                callable = this.context.SemanticModel.GetDeclaredSymbol(localFunction);
+            }
+            else if (nestedExecutable is AnonymousFunctionExpressionSyntax anonymousFunction)
+            {
+                if (anonymousFunction.Parent is EqualsValueClauseSyntax
+                    {
+                        Parent: VariableDeclaratorSyntax declarator,
+                    })
+                {
+                    callable = this.context.SemanticModel.GetDeclaredSymbol(declarator);
+                }
+                else if (anonymousFunction.Parent
+                    is AssignmentExpressionSyntax assignment)
+                {
+                    callable = this.context.GetSymbolInfo(assignment.Left).Symbol;
+                }
+            }
+
+            if (callable == null)
+            {
+                yield break;
+            }
+
+            foreach (InvocationExpressionSyntax invocation in
+                EagerExecutionNodes(enclosingExecutable)
+                    .OfType<InvocationExpressionSyntax>())
+            {
+                ExpressionSyntax target = invocation.Expression;
+                if (target is MemberAccessExpressionSyntax invoke
+                    && invoke.Name.Identifier.ValueText == "Invoke")
+                {
+                    target = invoke.Expression;
+                }
+
+                if (SymbolEqualityComparer.Default.Equals(
+                    this.context.GetSymbolInfo(target).Symbol,
+                    callable))
+                {
+                    yield return invocation.SpanStart;
+                }
+            }
+        }
+
         private Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph CreateControlFlowGraph(
             SyntaxNode executable)
         {
@@ -1489,6 +1557,18 @@ public sealed partial class CSharpToGSharpTranslator
                             appliedElementWrites,
                             visited,
                             unknownTuple);
+                        continue;
+                    }
+
+                    if (writeNode is ArgumentSyntax refOrOutArgument)
+                    {
+                        if (!refOrOutArgument.RefOrOutKeyword.IsKind(
+                            SyntaxKind.RefKeyword))
+                        {
+                            values.Clear();
+                        }
+
+                        values.Add(unknownTuple);
                         continue;
                     }
 
