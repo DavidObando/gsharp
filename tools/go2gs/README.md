@@ -65,7 +65,8 @@ with bounded, no-follow reads into a private mirror. The loader sees only
 those captured bytes; emitted manifest hashes remain those of the originals.
 On Linux and macOS, private temporary trees are removed recursively through
 verified directory descriptors and atomic name exchanges without following
-links. Other platforms leave non-empty private trees behind rather than risk
+links; an exchange failure or retained entry makes the command fail. Other
+platforms intentionally leave non-empty private trees behind rather than risk
 deleting a path that another process replaced.
 
 Profiles with `cgoEnabled: true` must set `cCompiler` to an absolute,
