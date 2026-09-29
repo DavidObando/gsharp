@@ -2208,11 +2208,11 @@ public class Issue4519GotoAssignmentNarrowingTests
             func Run(callback (() -> void), choose bool) int32 {
                 var text string? = nil
                 text = "safe"
+                let alias (() -> void) = callback
                 try {
                     goto Done
                 }
                 finally {
-                    let alias (() -> void) = callback
                     var action (() -> void) = alias
                     if choose {
                         action = callback

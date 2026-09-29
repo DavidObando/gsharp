@@ -23,6 +23,8 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class StatementBinder
 {
+    private readonly HashSet<VariableSymbol> externalReadOnlyCallableAliases = new();
+
     /// <summary>
     /// If <paramref name="statement"/> is a call expression statement whose
     /// called function carries <c>[MemberNotNull("_f", …)]</c>, narrows each
@@ -165,7 +167,7 @@ internal sealed partial class StatementBinder
         var dropAllRoots = false;
         if (boundStatement != null)
         {
-            var collector = new AssignedRootsCollector(null);
+            var collector = new AssignedRootsCollector(null, externalReadOnlyCallableAliases);
             collector.Visit(boundStatement);
             assignedRoots = collector.Roots;
             dropAllRoots = collector.MayMutateAnyRoot;
@@ -836,7 +838,9 @@ internal sealed partial class StatementBinder
                 }
                 else
                 {
-                    var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
+                    var mutations = new AssignedRootsCollector(
+                        AssignmentPreservesNarrowing,
+                        externalReadOnlyCallableAliases);
                     mutations.Visit(cleanup);
                     summary = new FinallyFlowSummary(
                         mutations,
@@ -869,7 +873,9 @@ internal sealed partial class StatementBinder
             return summary;
         }
 
-        var mutations = new AssignedRootsCollector(AssignmentPreservesNarrowing);
+        var mutations = new AssignedRootsCollector(
+            AssignmentPreservesNarrowing,
+            externalReadOnlyCallableAliases);
         mutations.Visit(finallyBlock);
         var nonNullOnNormalExit = ContainsUserGotoOrLabel(finallyClause.Body)
             ? EndsInUnconditionalExit(finallyBlock)
@@ -1574,7 +1580,7 @@ internal sealed partial class StatementBinder
             return;
         }
 
-        var collector = new AssignedRootsCollector(null);
+        var collector = new AssignedRootsCollector(null, externalReadOnlyCallableAliases);
         collector.Visit(node);
         if (collector.MayMutateAnyRoot)
         {
@@ -1608,9 +1614,15 @@ internal sealed partial class StatementBinder
         private readonly HashSet<BoundLabel> pendingConditionalTargets = new();
         private HashSet<VariableSymbol>? tryAssignedVariables;
 
-        public AssignedRootsCollector(Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing)
+        public AssignedRootsCollector(
+            Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing,
+            IEnumerable<VariableSymbol>? externalFunctionValues = null)
         {
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing;
+            if (externalFunctionValues != null)
+            {
+                this.externalFunctionValues.UnionWith(externalFunctionValues);
+            }
         }
 
         public HashSet<VariableSymbol> Roots { get; } = new HashSet<VariableSymbol>();
@@ -2863,6 +2875,14 @@ internal sealed partial class StatementBinder
         }
 
         var declaredVariable = Invariant.Required(variable, "a variable declaration produces a variable symbol");
+        if (declaredVariable.IsReadOnly
+            && convertedInitializer is { } callableInitializer
+            && GetCallableSourceVariable(callableInitializer) is { } callableSource
+            && (callableSource is ParameterSymbol { IsReadOnly: true }
+                || externalReadOnlyCallableAliases.Contains(callableSource)))
+        {
+            externalReadOnlyCallableAliases.Add(declaredVariable);
+        }
 
         // Issue #216 / #3519: a foldable `const` initializer carries its
         // target-typed compile-time value. Package constants also retain that
@@ -2904,6 +2924,21 @@ internal sealed partial class StatementBinder
             declaredVariable,
             convertedInitializer,
             constValue);
+    }
+
+    private static VariableSymbol? GetCallableSourceVariable(BoundExpression expression)
+    {
+        while (expression is BoundConversionExpression conversion)
+        {
+            expression = conversion.Expression;
+        }
+
+        while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+        {
+            expression = assertion.Operand;
+        }
+
+        return expression is BoundVariableExpression variable ? variable.Variable : null;
     }
 
     private static ImmutableArray<string> GetCallableParameterNames(BoundExpression initializer)
