@@ -1,6 +1,6 @@
 // Copyright (C) GSharp Authors. All rights reserved.
 
-//go:build !linux && !darwin && !freebsd && !netbsd && !openbsd && !dragonfly && !solaris
+//go:build !linux && !darwin
 
 package main
 

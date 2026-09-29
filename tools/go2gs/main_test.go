@@ -1460,15 +1460,6 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 			if err := os.WriteFile(filepath.Join(nested, "artifact"), []byte("owned"), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			outside := filepath.Join(t.TempDir(), "outside")
-			if err := os.WriteFile(outside, []byte("safe"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if secureTempCleanupSupported() {
-				if err := os.Symlink(outside, filepath.Join(directory.path, "link")); err != nil {
-					t.Fatal(err)
-				}
-			}
 			if err := directory.cleanup(); err != nil {
 				t.Fatal(err)
 			}
@@ -1481,11 +1472,36 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 			if _, err := os.Lstat(directory.path); !os.IsNotExist(err) {
 				t.Fatalf("ordinary owned directory remains: %v", err)
 			}
-			if data, err := os.ReadFile(outside); err != nil || string(data) != "safe" {
-				t.Fatalf("symlink target was changed: %q, %v", data, err)
-			}
 		})
 	}
+
+	t.Run("symlink child retained", func(t *testing.T) {
+		if !secureTempCleanupSupported() {
+			t.Skip("descriptor-relative cleanup is unavailable")
+		}
+		directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-worker-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		outside := filepath.Join(t.TempDir(), "outside")
+		if err := os.WriteFile(outside, []byte("safe"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		link := filepath.Join(directory.path, "link")
+		if err := os.Symlink(outside, link); err != nil {
+			t.Fatal(err)
+		}
+		var tombstone string
+		if err := directory.cleanupWithHooks(nil, func(path string) { tombstone = path }); err != nil {
+			t.Fatal(err)
+		}
+		if info, err := os.Lstat(filepath.Join(tombstone, "link")); err != nil || info.Mode()&os.ModeSymlink == 0 {
+			t.Fatalf("unbound symlink was not safely retained: %v, %v", info, err)
+		}
+		if data, err := os.ReadFile(outside); err != nil || string(data) != "safe" {
+			t.Fatalf("symlink target was changed: %q, %v", data, err)
+		}
+	})
 
 	t.Run("pathname replacement", func(t *testing.T) {
 		parent := t.TempDir()
@@ -1553,6 +1569,77 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 			t.Fatalf("descriptor-owned directory was unexpectedly removed by pathname: %v", err)
 		}
 	})
+}
+
+func TestOwnedTemporaryDirectoryLateFileReplacementSurvives(t *testing.T) {
+	if !secureTempCleanupSupported() {
+		t.Skip("atomic exchange cleanup is unavailable")
+	}
+	for _, replacement := range []string{"file", "symlink"} {
+		t.Run(replacement, func(t *testing.T) {
+			directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-worker-*")
+			if err != nil {
+				t.Fatal(err)
+			}
+			const fileCount = 2000
+			for index := 0; index < fileCount; index++ {
+				name := filepath.Join(directory.path, fmt.Sprintf("%04d", index))
+				if err := os.WriteFile(name, []byte("owned"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var tombstone string
+			done := make(chan error, 1)
+			err = directory.cleanupWithHooks(nil, func(path string) {
+				tombstone = path
+				go func() {
+					trigger := filepath.Join(path, "0500")
+					target := filepath.Join(path, "1999")
+					deadline := time.Now().Add(10 * time.Second)
+					for {
+						if _, statErr := os.Lstat(trigger); os.IsNotExist(statErr) {
+							break
+						}
+						if time.Now().After(deadline) {
+							done <- errors.New("cleanup did not reach replacement trigger")
+							return
+						}
+						time.Sleep(time.Millisecond)
+					}
+					displaced := target + ".owned"
+					if renameErr := os.Rename(target, displaced); renameErr != nil {
+						done <- renameErr
+						return
+					}
+					if replacement == "symlink" {
+						outside := filepath.Join(filepath.Dir(path), "valuable-target")
+						if writeErr := os.WriteFile(outside, []byte("valuable"), 0o600); writeErr != nil {
+							done <- writeErr
+							return
+						}
+						done <- os.Symlink(outside, target)
+						return
+					}
+					done <- os.WriteFile(target, []byte("valuable"), 0o600)
+				}()
+			})
+			if watcherErr := <-done; watcherErr != nil {
+				t.Fatal(watcherErr)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			target := filepath.Join(tombstone, "1999")
+			if replacement == "symlink" {
+				info, statErr := os.Lstat(target)
+				if statErr != nil || info.Mode()&os.ModeSymlink == 0 {
+					t.Fatalf("replacement symlink was deleted: %v, %v", info, statErr)
+				}
+			} else if data, readErr := os.ReadFile(target); readErr != nil || string(data) != "valuable" {
+				t.Fatalf("replacement file was deleted: %q, %v", data, readErr)
+			}
+		})
+	}
 }
 
 func TestLoadFailureReplacesStaleSuccessfulArtifacts(t *testing.T) {
