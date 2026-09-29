@@ -1085,11 +1085,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (expression is ElementAccessExpressionSyntax arrayElement
-                && this.ArrayExpressionHasNullableReferenceLikeElement(
-                    arrayElement.Expression)
-                && this.context.GetTypeInfo(arrayElement).Type is { } elementType)
+                && this.GetMappedArrayElementType(arrayElement.Expression)
+                    is { } projectedElement
+                && this.context.GetTypeInfo(arrayElement).Type is { } elementType
+                && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    elementType,
+                    projectedElement))
             {
-                return elementType.WithNullableAnnotation(NullableAnnotation.Annotated);
+                return projectedElement;
             }
 
             if (expression is InvocationExpressionSyntax invocation)

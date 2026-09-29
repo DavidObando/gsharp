@@ -76,9 +76,9 @@ internal sealed class DocumentTranslationState
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
     // Keyed by the Roslyn element type; outer array nullability does not affect
-    // whether CSharpTypeMapper emits the element as nullable.
-    public Dictionary<ITypeSymbol, bool> MappedArrayElementIsNullableByElementType { get; } =
-        new Dictionary<ITypeSymbol, bool>(SymbolEqualityComparer.IncludeNullability);
+    // CSharpTypeMapper's recursively projected element shape.
+    public Dictionary<ITypeSymbol, GTypeReference> MappedArrayElementByElementType { get; } =
+        new Dictionary<ITypeSymbol, GTypeReference>(SymbolEqualityComparer.IncludeNullability);
 
     // Per-call effective method after managed-array projection. A null value
     // caches that the invocation or construction needs no substitution.

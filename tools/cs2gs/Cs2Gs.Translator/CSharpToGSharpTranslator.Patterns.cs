@@ -3061,27 +3061,105 @@ public sealed partial class CSharpToGSharpTranslator
         {
             expression = Unparenthesize(expression);
             TypeInfo typeInfo = this.context.GetTypeInfo(expression);
-            if ((typeInfo.Type ?? typeInfo.ConvertedType) is not IArrayTypeSymbol array
+            if ((typeInfo.Type ?? typeInfo.ConvertedType)
+                is not IArrayTypeSymbol array
                 || (requireReferenceLikeElement
                     && !this.IsReferenceLikeOrManagedReference(array.ElementType)))
             {
                 return false;
             }
 
-            if (!this.state.MappedArrayElementIsNullableByElementType.TryGetValue(
-                    array.ElementType,
-                    out bool mappedNullable))
-            {
-                mappedNullable = this.typeMapper.Map(array, this.context, expression.GetLocation())
-                    is ArrayTypeReference { ElementType.IsNullable: true };
-                this.state.MappedArrayElementIsNullableByElementType.Add(
-                    array.ElementType,
-                    mappedNullable);
-            }
-
-            return mappedNullable
+            return this.GetMappedArrayElement(expression)?.IsNullable == true
                 || (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
                     && this.IsWidenedArrayElementLocal(local));
+        }
+
+        private ITypeSymbol GetMappedArrayElementType(ExpressionSyntax expression)
+        {
+            expression = Unparenthesize(expression);
+            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
+            if ((typeInfo.Type ?? typeInfo.ConvertedType)
+                is not IArrayTypeSymbol array)
+            {
+                return null;
+            }
+
+            GTypeReference mappedElement = this.GetMappedArrayElement(expression);
+            ITypeSymbol projectedElement = mappedElement == null
+                ? array.ElementType
+                : this.ApplyMappedArrayElementShape(
+                    array.ElementType,
+                    mappedElement);
+
+            return this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
+                && this.IsWidenedArrayElementLocal(local)
+                    ? projectedElement.WithNullableAnnotation(
+                        NullableAnnotation.Annotated)
+                    : projectedElement;
+        }
+
+        private GTypeReference GetMappedArrayElement(ExpressionSyntax expression)
+        {
+            expression = Unparenthesize(expression);
+            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
+            if ((typeInfo.Type ?? typeInfo.ConvertedType)
+                is not IArrayTypeSymbol array)
+            {
+                return null;
+            }
+
+            if (!this.state.MappedArrayElementByElementType.TryGetValue(
+                    array.ElementType,
+                    out GTypeReference mappedElement))
+            {
+                mappedElement =
+                    (this.typeMapper.Map(array, this.context, expression.GetLocation())
+                        as ArrayTypeReference)?.ElementType;
+                this.state.MappedArrayElementByElementType.Add(
+                    array.ElementType,
+                    mappedElement);
+            }
+
+            return mappedElement;
+        }
+
+        private ITypeSymbol ApplyMappedArrayElementShape(
+            ITypeSymbol source,
+            GTypeReference mapped)
+        {
+            if (source is INamedTypeSymbol { IsTupleType: true } tuple
+                && mapped is TupleTypeReference mappedTuple
+                && tuple.TupleElements.Length == mappedTuple.ElementTypes.Count)
+            {
+                ImmutableArray<ITypeSymbol> elements = tuple.TupleElements
+                    .Select((element, index) => this.ApplyMappedArrayElementShape(
+                        element.Type,
+                        mappedTuple.ElementTypes[index]))
+                    .ToImmutableArray();
+                if (elements.Select((element, index) => (element, index))
+                    .All(pair => SymbolEqualityComparer.IncludeNullability.Equals(
+                        pair.element,
+                        tuple.TupleElements[pair.index].Type)))
+                {
+                    return source;
+                }
+
+                ImmutableArray<string> names = tuple.TupleElements
+                    .Select(element => element.IsImplicitlyDeclared ? null : element.Name)
+                    .ToImmutableArray();
+                ImmutableArray<NullableAnnotation> annotations = elements
+                    .Select(element => element.NullableAnnotation)
+                    .ToImmutableArray();
+                return this.context.Compilation.CreateTupleTypeSymbol(
+                    elements,
+                    names,
+                    default,
+                    annotations);
+            }
+
+            return mapped.IsNullable
+                ? source.WithNullableAnnotation(NullableAnnotation.Annotated)
+                : source;
         }
 
         private ILocalSymbol GetArrayAllocationOwner(

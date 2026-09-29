@@ -410,14 +410,25 @@ public sealed partial class CSharpToGSharpTranslator
         // The <paramref name="index"/>th arrow-parameter type of a delegate-typed
         // (or `Expression<TDelegate>`-typed) callee parameter, or null when the
         // shape is not a delegate at all.
-        private static ITypeSymbol DelegateParameterTypeAt(ITypeSymbol parameterType, int index)
+        private static IMethodSymbol GetDelegateInvokeMethod(ITypeSymbol targetType)
         {
-            if (parameterType is INamedTypeSymbol { Name: "Expression", TypeArguments.Length: 1, DelegateInvokeMethod: null } expression)
+            if (targetType is INamedTypeSymbol expression
+                && expression.OriginalDefinition.MetadataName == "Expression`1"
+                && expression.TypeArguments.Length == 1
+                && expression.DelegateInvokeMethod == null
+                && expression.ContainingNamespace?.ToDisplayString()
+                    == "System.Linq.Expressions")
             {
-                parameterType = expression.TypeArguments[0];
+                targetType = expression.TypeArguments[0];
             }
 
-            return parameterType is INamedTypeSymbol { DelegateInvokeMethod: { } invoke }
+            return (targetType as INamedTypeSymbol)?.DelegateInvokeMethod;
+        }
+
+        private static ITypeSymbol DelegateParameterTypeAt(ITypeSymbol parameterType, int index)
+        {
+            IMethodSymbol invoke = GetDelegateInvokeMethod(parameterType);
+            return invoke != null
                 && index >= 0
                 && index < invoke.Parameters.Length
                 ? invoke.Parameters[index].Type

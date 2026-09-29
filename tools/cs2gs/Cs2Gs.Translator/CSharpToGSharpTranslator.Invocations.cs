@@ -1126,8 +1126,8 @@ public sealed partial class CSharpToGSharpTranslator
                 this.TranslateReceiverWithNullForgiveness(member.Expression),
                 member.Expression);
 
-            IMethodSymbol invoke = (this.context.GetTypeInfo(member).ConvertedType as INamedTypeSymbol)
-                ?.DelegateInvokeMethod;
+            IMethodSymbol invoke = GetDelegateInvokeMethod(
+                this.context.GetTypeInfo(member).ConvertedType);
             ImmutableArray<IParameterSymbol> sourceParameters =
                 invoke?.Parameters ?? method.Parameters;
             var parameters = new List<Parameter>(sourceParameters.Length);
@@ -2374,7 +2374,7 @@ public sealed partial class CSharpToGSharpTranslator
                 targetType = paramsElementType;
             }
 
-            invoke = (targetType as INamedTypeSymbol)?.DelegateInvokeMethod;
+            invoke = GetDelegateInvokeMethod(targetType);
             return invoke != null;
         }
 
@@ -2540,8 +2540,8 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression,
             out IMethodSymbol invoke)
         {
-            invoke = (this.context.GetTypeInfo(expression).ConvertedType as INamedTypeSymbol)
-                ?.DelegateInvokeMethod;
+            invoke = GetDelegateInvokeMethod(
+                this.context.GetTypeInfo(expression).ConvertedType);
             return invoke != null;
         }
 
@@ -4957,7 +4957,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 if (argument is AnonymousFunctionExpressionSyntax lambda)
                 {
-                    if ((parameterType as INamedTypeSymbol)?.DelegateInvokeMethod
+                    if (GetDelegateInvokeMethod(parameterType)
                             is { ReturnsVoid: false } invoke
                         && GetLambdaResultTargetType(lambda, invoke)
                             is { } lambdaResultType)
@@ -5576,7 +5576,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 ITypeSymbol targetResult = GetLambdaResultTargetType(
                     lambda,
-                    (targetType as INamedTypeSymbol)?.DelegateInvokeMethod);
+                    GetDelegateInvokeMethod(targetType));
                 if (targetResult == null)
                 {
                     continue;
@@ -6031,8 +6031,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            returnType = this.GetLambdaTargetDelegateType(lambda)
-                ?.DelegateInvokeMethod?.ReturnType;
+            returnType = GetDelegateInvokeMethod(
+                this.context.GetTypeInfo(lambda).ConvertedType)?.ReturnType;
             return returnType != null;
         }
 
