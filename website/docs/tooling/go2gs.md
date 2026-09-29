@@ -33,6 +33,10 @@ drivers, generators, and target execution. Exit zero means only that the
 requested inventory completed. M0 always reports `migrationReady: false`.
 The selected Go executable supplies the verified GOROOT. Profile `goFlags`
 are allowlisted; tool execution and path overrides are rejected.
+Profile, output, and toolchain bootstrap failures—including a missing `go`
+executable or unusable GOROOT—exit 2 and may produce no artifact. Once
+bootstrap succeeds, exact-version or source-commit mismatches produce an
+incomplete artifact and exit 1.
 Profiles enabling CGo must set `cCompiler` to an absolute, explicitly approved
 compiler executable. go2gs hashes that compiler and records its name and hash;
 the compiler is passed as absolute `CC`, while child `PATH` contains only the

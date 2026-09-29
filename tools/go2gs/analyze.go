@@ -27,6 +27,10 @@ var requiredRecordKinds = []string{
 }
 
 func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (Analysis, bool, error) {
+	return analyzeWithSnapshotHook(ctx, sourceRoot, outRoot, profile, nil)
+}
+
+func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot func()) (Analysis, bool, error) {
 	executable, err := exec.LookPath("go")
 	if err != nil {
 		return Analysis{}, false, errors.New("Go executable not found")
@@ -171,11 +175,14 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 		BuildFlags: buildFlags,
 		Tests:      profile.LoadTests,
 	}
+	preflightConfig := *config
+	preflightConfig.Mode = packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedDeps | packages.NeedModule
 	if !profile.CGOEnabled {
-		preflightConfig := *config
-		preflightConfig.Mode = packages.NeedName | packages.NeedFiles
 		preflightConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
-		preflight, _ := packages.Load(&preflightConfig, profile.EntryPatterns...)
+	}
+	preflight, _ := packages.Load(&preflightConfig, profile.EntryPatterns...)
+	preflight = collectPackages(preflight)
+	if !profile.CGOEnabled {
 		for _, pkg := range preflight {
 			importsC, err := selectedPackageImportsC(pkg)
 			if err != nil {
@@ -185,6 +192,15 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 				builder.block("cgo", "selected package imports C but CGO_ENABLED=0; native preprocessing is not available in this profile", nil, nil)
 			}
 		}
+	}
+	sourceSnapshot, err := snapshotPackageSources(preflight, sourceRoot, profile.Limits)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	config.Overlay = sourceSnapshot
+	builder.sourceSnapshot = sourceSnapshot
+	if afterSnapshot != nil {
+		afterSnapshot()
 	}
 	loaded, loadErr := packages.Load(config, profile.EntryPatterns...)
 	pkgConfigPath := unavailableToolPath(workRoot, "pkg-config")
@@ -218,6 +234,55 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 	}
 	builder.finish()
 	return analysis, analysis.InventoryComplete, nil
+}
+
+func snapshotPackageSources(loaded []*packages.Package, sourceRoot string, limits Limits) (map[string][]byte, error) {
+	directories := map[string]bool{}
+	for _, pkg := range loaded {
+		files := append([]string{}, pkg.GoFiles...)
+		files = append(files, pkg.CompiledGoFiles...)
+		files = append(files, pkg.IgnoredFiles...)
+		for _, path := range files {
+			if _, err := pathWithin(sourceRoot, path); err == nil {
+				directories[filepath.Dir(path)] = true
+			}
+		}
+	}
+	snapshot := map[string][]byte{}
+	var total int64
+	sortedDirectories := make([]string, 0, len(directories))
+	for directory := range directories {
+		sortedDirectories = append(sortedDirectories, directory)
+	}
+	sort.Strings(sortedDirectories)
+	for _, directory := range sortedDirectories {
+		entries, err := os.ReadDir(directory)
+		if err != nil {
+			return nil, fmt.Errorf("snapshot source directory: %w", err)
+		}
+		for _, entry := range entries {
+			if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+				continue
+			}
+			path := filepath.Join(directory, entry.Name())
+			if total >= limits.MaxLocalHashBytes {
+				return nil, fmt.Errorf("source snapshot exceeds limit %d", limits.MaxLocalHashBytes)
+			}
+			data, err := readBoundedRegularFile(path, limits.MaxLocalHashBytes-total)
+			if err != nil {
+				return nil, fmt.Errorf("snapshot source file %s: %w", entry.Name(), err)
+			}
+			total += int64(len(data))
+			if total > limits.MaxLocalHashBytes {
+				return nil, fmt.Errorf("source snapshot exceeds limit %d", limits.MaxLocalHashBytes)
+			}
+			snapshot[path] = data
+			if len(snapshot) > limits.MaxFiles {
+				return nil, fmt.Errorf("source snapshot file count exceeds limit %d", limits.MaxFiles)
+			}
+		}
+	}
+	return snapshot, nil
 }
 
 func resolveCCompiler(profile Profile) (string, string, error) {

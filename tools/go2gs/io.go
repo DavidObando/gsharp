@@ -28,6 +28,13 @@ func readProfile(path string) (Profile, error) {
 	if err := decoder.Decode(&profile); err != nil {
 		return profile, fmt.Errorf("invalid profile: %w", err)
 	}
+	var trailing any
+	if err := decoder.Decode(&trailing); err != io.EOF {
+		if err == nil {
+			return profile, errors.New("invalid profile: trailing JSON value")
+		}
+		return profile, fmt.Errorf("invalid profile trailing data: %w", err)
+	}
 	if profile.Schema.Name != profileName || profile.Schema.Version != profileVersion {
 		return profile, fmt.Errorf("unsupported profile schema %q version %d", profile.Schema.Name, profile.Schema.Version)
 	}
@@ -436,15 +443,28 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
 	}
-	staged := filepath.Join(dir, "."+filepath.Base(path)+".staged")
-	if err := os.WriteFile(staged, data, mode); err != nil {
+	file, err := os.CreateTemp(dir, "."+filepath.Base(path)+".staged-*")
+	if err != nil {
 		return err
 	}
-	if err := os.Rename(staged, path); err != nil {
-		_ = os.Remove(staged)
+	staged := file.Name()
+	defer os.Remove(staged)
+	if err := file.Chmod(mode); err != nil {
+		_ = file.Close()
 		return err
 	}
-	return nil
+	if _, err := file.Write(data); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Sync(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	if err := file.Close(); err != nil {
+		return err
+	}
+	return os.Rename(staged, path)
 }
 
 func hashBytes(data []byte) string {

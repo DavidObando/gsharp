@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"go/types"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -19,6 +20,110 @@ func canonicalType(t types.Type) string {
 		}
 		return pkg.Path()
 	})
+}
+
+func canonicalTypeIdentity(t types.Type) string {
+	return canonicalTypeIdentityWith(t, typeObjectIdentity)
+}
+
+func canonicalTypeIdentityWith(t types.Type, identify func(*types.TypeName) string) string {
+	display := canonicalType(t)
+	if t == nil {
+		return display
+	}
+	seen := map[types.Type]bool{}
+	declarations := map[string]bool{}
+	var walk func(types.Type)
+	walk = func(current types.Type) {
+		if current == nil || seen[current] {
+			return
+		}
+		seen[current] = true
+		switch value := current.(type) {
+		case *types.TypeParam:
+			declarations["typeparam:"+identify(value.Obj())] = true
+			walk(value.Constraint())
+		case *types.Named:
+			declarations["named:"+identify(value.Obj())] = true
+			if arguments := value.TypeArgs(); arguments != nil {
+				for i := 0; i < arguments.Len(); i++ {
+					walk(arguments.At(i))
+				}
+			}
+			walk(value.Underlying())
+		case *types.Alias:
+			declarations["alias:"+identify(value.Obj())] = true
+			if arguments := value.TypeArgs(); arguments != nil {
+				for i := 0; i < arguments.Len(); i++ {
+					walk(arguments.At(i))
+				}
+			}
+			walk(value.Underlying())
+		case *types.Array:
+			walk(value.Elem())
+		case *types.Slice:
+			walk(value.Elem())
+		case *types.Pointer:
+			walk(value.Elem())
+		case *types.Map:
+			walk(value.Key())
+			walk(value.Elem())
+		case *types.Chan:
+			walk(value.Elem())
+		case *types.Struct:
+			for i := 0; i < value.NumFields(); i++ {
+				walk(value.Field(i).Type())
+			}
+		case *types.Tuple:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.At(i).Type())
+			}
+		case *types.Signature:
+			if value.Recv() != nil {
+				walk(value.Recv().Type())
+			}
+			if parameters := value.TypeParams(); parameters != nil {
+				for i := 0; i < parameters.Len(); i++ {
+					walk(parameters.At(i))
+				}
+			}
+			walk(value.Params())
+			walk(value.Results())
+		case *types.Interface:
+			value.Complete()
+			for i := 0; i < value.NumMethods(); i++ {
+				walk(value.Method(i).Type())
+			}
+			for i := 0; i < value.NumEmbeddeds(); i++ {
+				walk(value.EmbeddedType(i))
+			}
+		case *types.Union:
+			for i := 0; i < value.Len(); i++ {
+				walk(value.Term(i).Type())
+			}
+		}
+	}
+	walk(t)
+	if len(declarations) == 0 {
+		return display
+	}
+	keys := make([]string, 0, len(declarations))
+	for declaration := range declarations {
+		keys = append(keys, declaration)
+	}
+	sort.Strings(keys)
+	return display + "\x00declarations=" + strings.Join(keys, ",")
+}
+
+func typeObjectIdentity(object *types.TypeName) string {
+	if object == nil {
+		return ""
+	}
+	owner := ""
+	if object.Pkg() != nil {
+		owner = object.Pkg().Path()
+	}
+	return owner + ":" + object.Name()
 }
 
 func typeKind(t types.Type) string {
@@ -120,7 +225,12 @@ func objectCanonical(pkgID string, object types.Object, declaration string) stri
 		owner = object.Pkg().Path()
 	}
 	if declaration == "" {
-		declaration = owner + "\x00" + object.Name() + "\x00" + canonicalType(object.Type())
+		declaration = owner + "\x00" + object.Name() + "\x00" + canonicalTypeIdentity(object.Type())
+		if function, ok := object.(*types.Func); ok {
+			if signature, ok := function.Type().(*types.Signature); ok && signature.Recv() != nil {
+				declaration += "\x00receiver=" + canonicalTypeIdentity(signature.Recv().Type())
+			}
+		}
 	}
 	return pkgID + "\x00" + objectKind(object) + "\x00" + declaration
 }
@@ -136,6 +246,14 @@ func selectionKind(kind types.SelectionKind) string {
 	default:
 		return fmt.Sprintf("selection-%d", kind)
 	}
+}
+
+func selectionObjectIdentity(selection *types.Selection) string {
+	index := make([]string, len(selection.Index()))
+	for i, value := range selection.Index() {
+		index[i] = strconv.Itoa(value)
+	}
+	return "selection\x00" + canonicalTypeIdentity(selection.Recv()) + "\x00" + strings.Join(index, ".")
 }
 
 func methodSetObjects(t types.Type) []types.Object {

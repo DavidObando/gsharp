@@ -11,6 +11,7 @@ const (
 	ExactComplex = HugeInteger + ExactThird*1i
 	IotaZero     = iota
 	IotaOne
+	MixedIota, MixedZero = iota, 0
 )
 
 type Box[T comparable] struct {

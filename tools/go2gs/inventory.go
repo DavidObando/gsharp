@@ -12,6 +12,7 @@ import (
 	"os"
 	pathpkg "path"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"sort"
 	"strconv"
@@ -20,6 +21,8 @@ import (
 
 	"golang.org/x/tools/go/packages"
 )
+
+var overlayDiagnosticPath = regexp.MustCompile(`[^\s\n]*gocommand-[0-9]+[/\\][0-9]+-([^:\s\n]+)`)
 
 type inventoryBuilder struct {
 	analysis       *Analysis
@@ -40,6 +43,7 @@ type inventoryBuilder struct {
 	scopeIDs       map[*types.Scope]string
 	scopeRanges    []scopeRange
 	diagnosticSeq  int
+	sourceSnapshot map[string][]byte
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
@@ -162,6 +166,7 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 }
 
 func (b *inventoryBuilder) sanitizeDiagnosticMessage(pkg *packages.Package, message string) string {
+	message = overlayDiagnosticPath.ReplaceAllString(message, "<overlay>/$1")
 	message = strings.ReplaceAll(message, b.sourceRoot, "<source>")
 	message = strings.ReplaceAll(message, b.goroot, "<goroot>")
 	if pkg.Module != nil && pkg.Module.Dir != "" {
@@ -302,9 +307,16 @@ func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason str
 	if err != nil {
 		return "", err
 	}
-	data, err := os.ReadFile(path)
-	if err != nil {
-		return "", err
+	data := b.sourceSnapshot[path]
+	if data == nil {
+		if _, sourceErr := pathWithin(b.sourceRoot, path); sourceErr == nil && filepath.Ext(path) == ".go" {
+			return "", fmt.Errorf("selected source file was not captured in the immutable loader snapshot: %s", filepath.Base(path))
+		}
+		var err error
+		data, err = os.ReadFile(path)
+		if err != nil {
+			return "", err
+		}
 	}
 	id := stableID("file", b.packageIDs[pkg]+"\x00"+portable+"\x00"+hashBytes(data))
 	record := FileRecord{
@@ -424,7 +436,15 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 				}
 			}
 			if object := pkg.TypesInfo.Uses[ident]; object != nil {
-				record.UseID = b.addObject(pkg, object, SourceSpan{})
+				if selector, ok := nodeParents[ident].(*ast.SelectorExpr); ok && selector.Sel == ident {
+					if selection := pkg.TypesInfo.Selections[selector]; selection != nil {
+						record.UseID = b.addObjectWithFallback(pkg, object, SourceSpan{}, selectionObjectIdentity(selection))
+					} else {
+						record.UseID = b.addObject(pkg, object, SourceSpan{})
+					}
+				} else {
+					record.UseID = b.addObject(pkg, object, SourceSpan{})
+				}
 			}
 		}
 		b.analysis.Nodes = append(b.analysis.Nodes, record)
@@ -646,9 +666,8 @@ func declaredConstants(file *ast.File) map[*ast.Ident]bool {
 			if len(spec.Values) > 0 {
 				inherited = spec.Values
 			}
-			iota := expressionsContainIota(inherited)
-			for _, name := range spec.Names {
-				result[name] = iota
+			for index, name := range spec.Names {
+				result[name] = index < len(inherited) && expressionsContainIota([]ast.Expr{inherited[index]})
 			}
 		}
 	}
@@ -915,9 +934,10 @@ func (b *inventoryBuilder) addSelections(pkg *packages.Package) {
 		span := b.span(pkg, item.expr.Pos(), item.expr.End())
 		nodeID := stableID("node", b.packageIDs[pkg]+"\x00"+b.fileIDForPosition(pkg, item.expr.Pos())+"\x00"+fmt.Sprintf("%d:%d:%T", span.StartByte, span.EndByte, item.expr))
 		index := append([]int{}, item.selection.Index()...)
+		objectID := b.addObjectWithFallback(pkg, item.selection.Obj(), SourceSpan{}, selectionObjectIdentity(item.selection))
 		b.analysis.Selections = append(b.analysis.Selections, SelectionRecord{
 			ID: stableID("selection", nodeID), NodeID: nodeID, Kind: selectionKind(item.selection.Kind()),
-			ObjectID:       b.addObject(pkg, item.selection.Obj(), SourceSpan{}),
+			ObjectID:       objectID,
 			ReceiverTypeID: b.addType(pkg, item.selection.Recv()), TypeID: b.addType(pkg, item.selection.Type()),
 			IndexPath: index, Indirect: item.selection.Indirect(),
 		})
@@ -969,7 +989,8 @@ func (b *inventoryBuilder) addMethodSets(pkg *packages.Package) {
 			b.seenMethodSets[id] = true
 			record := MethodSetRecord{ID: id, TypeID: typeID, Pointer: candidate.pointer}
 			for _, method := range methodSetObjects(candidate.t) {
-				record.MethodSymbolIDs = append(record.MethodSymbolIDs, b.addObject(pkg, method, SourceSpan{}))
+				fallback := "method-set\x00" + typeID + "\x00" + method.Name()
+				record.MethodSymbolIDs = append(record.MethodSymbolIDs, b.addObjectWithFallback(pkg, method, SourceSpan{}, fallback))
 			}
 			b.analysis.MethodSets = append(b.analysis.MethodSets, record)
 		}
@@ -1092,7 +1113,8 @@ func (b *inventoryBuilder) addType(pkg *packages.Package, t types.Type) string {
 	if id := b.typeIDs[t]; id != "" {
 		return id
 	}
-	canonical := canonicalType(t)
+	display := canonicalType(t)
+	canonical := b.typeIdentity(pkg, t)
 	id := stableID("type", canonical)
 	b.typeIDs[t] = id
 	if b.seenTypes[id] {
@@ -1101,7 +1123,7 @@ func (b *inventoryBuilder) addType(pkg *packages.Package, t types.Type) string {
 	b.seenTypes[id] = true
 	pkgPath, name, alias, named, args, underlying := typeDetails(t)
 	record := TypeRecord{
-		ID: id, Kind: typeKind(t), Canonical: canonical, Display: canonical,
+		ID: id, Kind: typeKind(t), Canonical: canonical, Display: display,
 		Package: pkgPath, Name: name, Alias: alias, Named: named, Underlying: underlying,
 		Comparable: types.Comparable(t), Size: -1, Align: -1,
 	}
@@ -1140,7 +1162,26 @@ func safeSize(sizes types.Sizes, t types.Type) (size, align int64) {
 	return size, align
 }
 
+func (b *inventoryBuilder) typeIdentity(pkg *packages.Package, t types.Type) string {
+	return canonicalTypeIdentityWith(t, func(object *types.TypeName) string {
+		base := typeObjectIdentity(object)
+		if object == nil || object.Pkg() == nil || object.Parent() == object.Pkg().Scope() ||
+			!object.Pos().IsValid() || pkg == nil || pkg.Fset == nil {
+			return base
+		}
+		span := b.span(pkg, object.Pos(), object.Pos()+token.Pos(len(object.Name())))
+		if span.Path == "" {
+			return base
+		}
+		return base + ":" + span.Path + ":" + strconv.Itoa(span.StartByte)
+	})
+}
+
 func (b *inventoryBuilder) addObject(pkg *packages.Package, object types.Object, declaration SourceSpan) string {
+	return b.addObjectWithFallback(pkg, object, declaration, "")
+}
+
+func (b *inventoryBuilder) addObjectWithFallback(pkg *packages.Package, object types.Object, declaration SourceSpan, fallback string) string {
 	if object == nil {
 		return ""
 	}
@@ -1169,6 +1210,8 @@ func (b *inventoryBuilder) addObject(pkg *packages.Package, object types.Object,
 	declarationKey := ""
 	if declaration.Path != "" {
 		declarationKey = declaration.Path + "\x00" + strconv.Itoa(declaration.StartByte)
+	} else if fallback != "" {
+		declarationKey = fallback
 	}
 	id := stableID("symbol", objectCanonical(pkgID, object, declarationKey))
 	b.objectIDs[key] = id
@@ -1379,14 +1422,15 @@ func (b *inventoryBuilder) addTypeForUnknown(t types.Type) string {
 	if id := b.typeIDs[t]; id != "" {
 		return id
 	}
-	canonical := canonicalType(t)
+	display := canonicalType(t)
+	canonical := canonicalTypeIdentity(t)
 	id := stableID("type", canonical)
 	b.typeIDs[t] = id
 	if !b.seenTypes[id] {
 		b.seenTypes[id] = true
 		pkgPath, name, alias, named, _, underlying := typeDetails(t)
 		b.analysis.Types = append(b.analysis.Types, TypeRecord{
-			ID: id, Kind: typeKind(t), Canonical: canonical, Display: canonical,
+			ID: id, Kind: typeKind(t), Canonical: canonical, Display: display,
 			Package: pkgPath, Name: name, Alias: alias, Named: named,
 			Underlying: underlying, Comparable: types.Comparable(t), Size: -1, Align: -1,
 		})
