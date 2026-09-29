@@ -4941,6 +4941,7 @@ public sealed partial class CSharpToGSharpTranslator
             bool fixedStorageNeedsNullableArgument = false;
             void RecordWidenedArguments(ExpressionSyntax argument, ITypeSymbol parameterType)
             {
+                argument = Unparenthesize(argument);
                 if (argument is TupleExpressionSyntax tuple
                     && parameterType is INamedTypeSymbol { IsTupleType: true } parameterTuple
                     && tuple.Arguments.Count == parameterTuple.TupleElements.Length)
@@ -4950,6 +4951,23 @@ public sealed partial class CSharpToGSharpTranslator
                         RecordWidenedArguments(
                             tuple.Arguments[i].Expression,
                             parameterTuple.TupleElements[i].Type);
+                    }
+
+                    return;
+                }
+
+                if (argument is ConditionalExpressionSyntax conditional)
+                {
+                    RecordWidenedArguments(conditional.WhenTrue, parameterType);
+                    RecordWidenedArguments(conditional.WhenFalse, parameterType);
+                    return;
+                }
+
+                if (argument is SwitchExpressionSyntax switchExpression)
+                {
+                    foreach (SwitchExpressionArmSyntax arm in switchExpression.Arms)
+                    {
+                        RecordWidenedArguments(arm.Expression, parameterType);
                     }
 
                     return;

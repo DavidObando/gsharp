@@ -75,6 +75,11 @@ internal sealed class DocumentTranslationState
     public HashSet<ISymbol> NullableForEachBindings { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
+    // Effective source-level type of query bindings after managed-reference
+    // projection. Query range symbols do not expose a Type through Roslyn.
+    public Dictionary<ISymbol, ITypeSymbol> ProjectedQueryBindingType { get; } =
+        new Dictionary<ISymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
+
     // Keyed by the Roslyn element type; outer array nullability does not affect
     // CSharpTypeMapper's recursively projected element shape.
     public Dictionary<ITypeSymbol, GTypeReference> MappedArrayElementByElementType { get; } =

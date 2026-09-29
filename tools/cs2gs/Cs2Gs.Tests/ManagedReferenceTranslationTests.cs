@@ -3940,6 +3940,74 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void QueryContinuationPreservesProjectedManagedReferenceResult()
+    {
+        const string source = """
+            using System.Linq;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedQueryContinuation;
+            public class Probe {
+                public static int Run() {
+                    int[] values = { 42 };
+                    var refs = new ManagedRef<int>[1];
+                    refs[0] = ManagedRef<int>.FromArray(values, 0);
+                    return (from x in refs
+                            select x into y
+                            select y.Borrow()).First();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedQueryContinuation.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("y managed[int32]?", text, StringComparison.Ordinal);
+        Assert.Contains("y!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void NullableValueQueryRangeDoesNotUseReferenceAssertion()
+    {
+        const string source = """
+            using System.Linq;
+            namespace NullableValueQueryRange;
+            public class Probe {
+                public static int Run() {
+                    int?[] values = { 42 };
+                    return (from x in values
+                            select x.GetValueOrDefault()).First();
+                }
+            }
+            """;
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("NullableValueQueryRange.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("x!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(text + "\nProbe.Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void QueryLetKeepsProjectedManagedReferenceRangeType()
     {
         const string source = """
@@ -4067,6 +4135,51 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Contains("created!!.Borrow()", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ConditionalAndSwitchArgumentsPreserveManagedReferenceProjection()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedConditionalArguments;
+            public class Probe {
+                private static int Accept<T>(T value) => value == null ? 21 : 0;
+
+                public static int Run(bool flag) {
+                    var source = new ManagedRef<int>[1];
+                    int conditional =
+                        Accept<ManagedRef<int>>(flag ? source[0] : source[0]);
+                    int switched = Accept<ManagedRef<int>>(
+                        flag switch {
+                            true => source[0],
+                            false => source[0],
+                        });
+                    return conditional + switched;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedConditionalArguments.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Accept[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Accept[managed[int32]]", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run(true)",
             new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);

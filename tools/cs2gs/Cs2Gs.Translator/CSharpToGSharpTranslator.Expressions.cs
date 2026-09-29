@@ -1054,6 +1054,13 @@ public sealed partial class CSharpToGSharpTranslator
             if (expression is IdentifierNameSyntax identifier
                 && this.context.GetSymbolInfo(identifier).Symbol is { } identifierSymbol)
             {
+                if (this.state.ProjectedQueryBindingType.TryGetValue(
+                        identifierSymbol,
+                        out ITypeSymbol projectedQueryType))
+                {
+                    return projectedQueryType;
+                }
+
                 if (identifierSymbol is IParameterSymbol parameter
                     && this.state.ProjectedCallableParameterType.TryGetValue(
                         parameter,
