@@ -1763,6 +1763,37 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyReanalyzesCallableWithUpdatedAliasState()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    let mutate = func() { x = nil }
+                    let noop = func() { }
+                    var action (() -> void) = noop
+                    let invoke = func() { action() }
+                    invoke()
+                    action = mutate
+                    invoke()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_FinallyUsesUnconditionalCallableTargetAfterLoop()
     {
         AssertRuns("""

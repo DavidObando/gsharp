@@ -1921,10 +1921,19 @@ internal sealed partial class StatementBinder
 
         private void VisitFunctionLiteralBody(BoundFunctionLiteralExpression literal)
         {
-            if (literal.Body is { } body
-                && visitedFunctionLiterals.Add(literal))
+            if (literal.Body is not { } body
+                || !visitedFunctionLiterals.Add(literal))
+            {
+                return;
+            }
+
+            try
             {
                 VisitStatement(body);
+            }
+            finally
+            {
+                visitedFunctionLiterals.Remove(literal);
             }
         }
 
