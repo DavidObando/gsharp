@@ -163,6 +163,19 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 var (sharedPathLeft, sharedPathRight) = sharedPathChoice;
                 T repeatedSource = default;
                 var (_, repeatedAlias) = (repeatedSource, repeatedSource);
+                T conditionalCycleSource = replacement;
+                T conditionalCycleAlias = conditionalCycleSource;
+                var conditionalCycle =
+                    (conditionalCycleSource = default(T)) is not null
+                        ? conditionalCycleAlias
+                        : conditionalCycleSource;
+                T switchCycleSource = replacement;
+                T switchCycleAlias = switchCycleSource;
+                var switchCycle = (switchCycleSource = default(T)) switch
+                {
+                    { } => switchCycleAlias,
+                    _ => switchCycleSource,
+                };
                 var deadPair = NullablePair<T>();
                 goto afterDeadAssignment;
                 deadPair = (default(T), default(T));
@@ -227,6 +240,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 Fill(ref sharedPathLeft, replacement);
                 Fill(ref sharedPathRight, replacement);
                 Fill(ref repeatedAlias, replacement);
+                Fill(ref conditionalCycle, replacement);
+                Fill(ref switchCycle, replacement);
 
                 for (var loop = default(T); choose;)
                 {
@@ -538,6 +553,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "initializerlessAlias",
             "sharedPathLeft", "sharedPathRight",
             "repeatedAlias",
+            "conditionalCycle", "switchCycle",
             "capturedLambdaLeft", "capturedLambdaRight",
             "capturedLocalLeft", "capturedLocalRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
@@ -617,6 +633,12 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static void Replace<T>(out T value, T replacement) =>
                     value = replacement;
 
+                private static void ResetAfter<T>(
+                    out (T First, T Second) pair,
+                    T ignored,
+                    T replacement) =>
+                    pair = (replacement, replacement);
+
                 private static void M<T>(T replacement)
                 {
                     (T First, T Second) pair = (replacement, replacement);
@@ -690,6 +712,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     var outElementPair = (default(T), replacement);
                     Replace(out outElementPair.Item1, replacement);
                     var (outElementLeft, outElementRight) = outElementPair;
+
+                    var orderedOutPair =
+                        (First: replacement, Second: replacement);
+                    ResetAfter(
+                        out orderedOutPair,
+                        orderedOutPair.First = default(T),
+                        replacement);
+                    var (orderedOutLeft, orderedOutRight) = orderedOutPair;
                 }
 
                 private static void Observe<T>(in (T, T) pair)
@@ -712,6 +742,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) mixedWriteRight T\? =", printed);
         Assert.DoesNotContain("outElementLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("outElementRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("orderedOutLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("orderedOutRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("callRight T? =", printed, StringComparison.Ordinal);

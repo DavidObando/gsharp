@@ -443,25 +443,35 @@ public sealed partial class CSharpToGSharpTranslator
                 case ConditionalExpressionSyntax conditional:
                     return this.InferredInitializerOriginatesFromDefault(
                             conditional.WhenTrue,
-                            visited)
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default))
                         || this.InferredInitializerOriginatesFromDefault(
                             conditional.WhenFalse,
-                            visited);
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default));
 
                 case BinaryExpressionSyntax coalesce
                     when coalesce.IsKind(SyntaxKind.CoalesceExpression):
                     return this.InferredInitializerOriginatesFromDefault(
                             coalesce.Left,
-                            visited)
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default))
                         || this.InferredInitializerOriginatesFromDefault(
                             coalesce.Right,
-                            visited);
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default));
 
                 case SwitchExpressionSyntax switchExpression:
                     return switchExpression.Arms.Any(arm =>
                         this.InferredInitializerOriginatesFromDefault(
                             arm.Expression,
-                            visited));
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default)));
 
                 case MemberAccessExpressionSyntax member
                     when member.SyntaxTree == this.context.SemanticModel.SyntaxTree
@@ -1413,10 +1423,11 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             foreach (SyntaxNode writeNode in EagerExecutionNodes(operation.Syntax)
-                .Where(node => node.Span.End <= beforePosition)
+                .Where(node => ReachingWritePosition(node) <= beforePosition)
                 .Where(node => node is AssignmentExpressionSyntax
                     || this.ReachingWriteTargetsLocal(node, local))
-                .OrderBy(node => node.Span.End))
+                .OrderBy(ReachingWritePosition)
+                .ThenBy(node => node.SpanStart))
             {
                 var elementWrites =
                     new List<(IReadOnlyList<int> Path, ExpressionSyntax Value)>();
@@ -1501,6 +1512,12 @@ public sealed partial class CSharpToGSharpTranslator
                 values.Add(value);
             }
         }
+
+        private static int ReachingWritePosition(SyntaxNode node) =>
+            node is ArgumentSyntax
+                { RefOrOutKeyword.RawKind: not (int)SyntaxKind.None } argument
+                ? argument.Parent?.Parent?.Span.End ?? argument.Span.End
+                : node.Span.End;
 
         private bool ReachingWriteTargetsLocal(SyntaxNode node, ILocalSymbol local)
         {
