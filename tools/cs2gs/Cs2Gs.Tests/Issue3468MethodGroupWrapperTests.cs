@@ -161,6 +161,37 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void NullableReceiverRootCollision_UsesSourceDerivedSuffix()
+        {
+            string printed = Translate("""
+                using System;
+
+                public sealed class Renderer
+                {
+                    public string Render(object? value)
+                        => value?.ToString() ?? "";
+                }
+
+                public static class W
+                {
+                    public static void Bind(Renderer? value)
+                        => Use((Func<string, string>)value!.Render);
+
+                    private static void Use(Func<string, string> transform)
+                    {
+                    }
+                }
+                """);
+
+            Assert.Contains(
+                "(value_ string) -> Func[string, string](value!!.Render)(value_)",
+                printed,
+                StringComparison.Ordinal);
+            Assert.DoesNotContain("__arg", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
         public void UnreachableDoubleSuffixCollision_PreservesFutureSourceName()
         {
             // Issue #4298: preserve the legal future source name `value_`

@@ -2426,20 +2426,31 @@ public sealed partial class CSharpToGSharpTranslator
             HashSet<string> usedNames)
         {
             GExpression current = receiver;
-            while (current is ConversionExpression conversion)
+            while (true)
             {
-                // A delegate construction can wrap the method-group member.
-                current = conversion.Operand;
-            }
-
-            while (current is MemberAccessExpression memberAccess)
-            {
-                current = memberAccess.Target;
-            }
-
-            if (current is IdentifierExpression identifier)
-            {
-                usedNames.Add(identifier.Name);
+                switch (current)
+                {
+                    case ConversionExpression conversion:
+                        current = conversion.Operand;
+                        break;
+                    case NonNullAssertionExpression assertion:
+                        current = assertion.Operand;
+                        break;
+                    case ParenthesizedExpression parenthesized:
+                        current = parenthesized.Inner;
+                        break;
+                    case MemberAccessExpression memberAccess:
+                        current = memberAccess.Target;
+                        break;
+                    case ConditionalAccessExpression conditionalAccess:
+                        current = conditionalAccess.Target;
+                        break;
+                    case IdentifierExpression identifier:
+                        usedNames.Add(identifier.Name);
+                        return;
+                    default:
+                        return;
+                }
             }
         }
 
