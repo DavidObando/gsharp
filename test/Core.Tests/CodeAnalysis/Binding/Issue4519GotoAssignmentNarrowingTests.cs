@@ -413,6 +413,140 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_InheritedMemberDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                func Name() string { return "animal" }
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() int32 {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let name = x.Name()
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return name.Length
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_SubtypeOnlyOverloadStillRequiresNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                func Describe(value int32) string { return value.ToString() }
+            }
+            class Dog : Animal {
+                func Describe(value string) string { return value }
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    let description = x.Describe("dog")
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("Describe", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_InheritedIndexerDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                prop this[index int32] int32 -> index + 1
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() int32 {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x[0]
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return value
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(1, result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_SubtypeOnlyIndexerOverloadStillRequiresNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                prop this[index int32] string -> index.ToString()
+            }
+            class Dog : Animal {
+                prop this[index string] string -> index
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                if x is Dog {
+                Again:
+                    let value = x["dog"]
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0116");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_ExistingEdgeReceivesLaterMemberAccess()
     {
         var result = Evaluate("""

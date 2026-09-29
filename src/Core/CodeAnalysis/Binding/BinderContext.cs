@@ -770,7 +770,8 @@ internal sealed class BinderContext
         TextLocation location,
         string memberName,
         BackwardGotoNarrowingUseKind kind,
-        TypeSymbol? targetType = null)
+        TypeSymbol? targetType = null,
+        TypeSymbol? requiredType = null)
     {
         static TypeSymbol GetDeclaredType(AccessPath accessPath, TypeSymbol narrowedType)
         {
@@ -805,12 +806,13 @@ internal sealed class BinderContext
 
         var variable = path.Root;
         var narrowedType = NarrowedVariables[frameIndex][path];
+        var operationRequiredType = requiredType ?? narrowedType;
         var access = new BackwardGotoNarrowingAccess(
             path,
             location,
             memberName,
             kind,
-            narrowedType,
+            operationRequiredType,
             GetDeclaredType(path, narrowedType),
             targetType);
         foreach (var entry in BackwardGotoNarrowingStates)
@@ -876,6 +878,27 @@ internal sealed class BinderContext
             string.Empty,
             BackwardGotoNarrowingUseKind.Conversion,
             narrowedType);
+    }
+
+    public void UntrackBackwardGotoNarrowingIndex(VariableSymbol variable, TextLocation location)
+    {
+        var path = AccessPath.ForVariable(variable);
+        foreach (var state in BackwardGotoNarrowingStates.Values)
+        {
+            state.Accesses.RemoveAll(access =>
+                access.Path.Equals(path)
+                && access.Location.Equals(location)
+                && access.Kind is BackwardGotoNarrowingUseKind.Conversion
+                    or BackwardGotoNarrowingUseKind.Index);
+            foreach (var edge in state.Edges)
+            {
+                edge.Accesses.RemoveAll(access =>
+                    access.Path.Equals(path)
+                    && access.Location.Equals(location)
+                    && access.Kind is BackwardGotoNarrowingUseKind.Conversion
+                        or BackwardGotoNarrowingUseKind.Index);
+            }
+        }
     }
 
     public static bool NarrowedReadChangesRuntimeType(TypeSymbol declaredType, TypeSymbol narrowedType)

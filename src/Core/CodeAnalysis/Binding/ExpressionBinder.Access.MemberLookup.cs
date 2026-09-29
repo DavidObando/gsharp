@@ -158,18 +158,47 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax? receiverSyntax = null,
         int? receiverStart = null)
     {
-        TrackBackwardGotoNarrowingAccess(receiver, rightPart);
-        return BindAccessorStepAfterPlatformReceiverCheck(
+        var result = BindAccessorStepAfterPlatformReceiverCheck(
             CheckPlatformReceiver(receiver, receiverSyntax?.Location ?? rightPart.Location),
             classSymbol == null ? null : WithFamilyAccess(classSymbol),
             rightPart,
             receiverSyntax,
             receiverStart);
+        if (receiver is BoundVariableExpression { NarrowedType: not null } variable
+            && rightPart is CallExpressionSyntax callSyntax
+            && result is BoundUserInstanceCallExpression call
+            && variable.Variable.Type is StructSymbol declaredStruct)
+        {
+            var declaredMethod = declaredStruct
+                .GetMethodsIncludingInherited(callSyntax.Identifier.ValueText)
+                .FirstOrDefault(candidate => ReferenceEquals(
+                    candidate.Declaration,
+                    call.Method.Declaration));
+            if (declaredMethod != null)
+            {
+                receiver = new BoundVariableExpression(variable.Syntax, variable.Variable);
+                result = new BoundUserInstanceCallExpression(
+                    call.Syntax,
+                    receiver,
+                    declaredMethod,
+                    call.Arguments,
+                    call.Type,
+                    call.ConstrainedReceiverTypeParameter,
+                    call.ConstrainedInterfaceType)
+                {
+                    MethodTypeArguments = call.MethodTypeArguments,
+                };
+            }
+        }
+
+        TrackBackwardGotoNarrowingAccess(receiver, rightPart, result);
+        return result;
     }
 
     private void TrackBackwardGotoNarrowingAccess(
         BoundExpression? receiver,
-        ExpressionSyntax rightPart)
+        ExpressionSyntax rightPart,
+        BoundExpression result)
     {
         TextLocation location;
         string? memberName;
@@ -210,11 +239,23 @@ internal sealed partial class ExpressionBinder
         var kind = isInvocation
             ? BackwardGotoNarrowingUseKind.Function
             : BackwardGotoNarrowingUseKind.Member;
+        var requiredType = result switch
+        {
+            BoundUserInstanceCallExpression call => call.Method.ContainingType,
+            BoundImportedInstanceCallExpression call => call.CalledFunction.ContainingType,
+            BoundFieldAccessExpression field => field.Field.ContainingType,
+            BoundPropertyAccessExpression property => property.Property.ContainingType,
+            BoundClrPropertyAccessExpression property => property.ReferencedProperty?.ContainingType,
+            BoundMethodGroupExpression group => group.Function?.ContainingType,
+            BoundClrMethodGroupExpression group => group.Method?.ContainingType,
+            _ => null,
+        };
         binderCtx.TrackBackwardGotoNarrowingUse(
             path,
             location,
             memberName,
-            kind);
+            kind,
+            requiredType: requiredType);
     }
 
     /// <summary>
@@ -1838,6 +1879,15 @@ internal sealed partial class ExpressionBinder
                 out var readReported,
                 out var readView))
             {
+                if (target is BoundVariableExpression { NarrowedType: not null } variable
+                    && variable.Variable.Type is StructSymbol declaredStruct
+                    && DeclaresIndexer(declaredStruct, readIndexer))
+                {
+                    binderCtx.UntrackBackwardGotoNarrowingIndex(variable.Variable, targetLocation);
+                    target = new BoundVariableExpression(variable.Syntax, variable.Variable);
+                    readView = declaredStruct;
+                }
+
                 return BindUserIndexerRead(
                     ViewIndexerReceiver(target, readView, targetLocation),
                     readIndexer,
@@ -1864,6 +1914,22 @@ internal sealed partial class ExpressionBinder
         return new BoundErrorExpression(null);
     }
 
+    private static bool DeclaresIndexer(StructSymbol type, PropertySymbol indexer)
+    {
+        foreach (var current in type.GetHierarchy())
+        {
+            foreach (var candidate in current.Properties)
+            {
+                if (ReferenceEquals(candidate.Declaration, indexer.Declaration))
+                {
+                    return true;
+                }
+            }
+        }
+
+        return false;
+    }
+
     /// <summary>
     /// ADR-0149 follow-up (issue #2370): the interface counterpart of
     /// <see cref="TryGetUserIndexer(StructSymbol, out PropertySymbol, out Dictionary{TypeParameterSymbol, TypeSymbol})"/>.
@@ -1880,11 +1946,24 @@ internal sealed partial class ExpressionBinder
     {
         if (binderCtx.TryGetBackwardGotoNarrowingPath(target, out var path, out _))
         {
+            TypeSymbol? requiredType = null;
+            if (target.Type is StructSymbol structType
+                && TryGetUserIndexer(structType, out var structIndexer, out _))
+            {
+                requiredType = structIndexer.ContainingType;
+            }
+            else if (target.Type is InterfaceSymbol interfaceType
+                && TryGetUserIndexer(interfaceType, out var interfaceIndexer, out _))
+            {
+                requiredType = interfaceIndexer.ContainingType;
+            }
+
             binderCtx.TrackBackwardGotoNarrowingUse(
                 path,
                 location,
                 string.Empty,
-                BackwardGotoNarrowingUseKind.Index);
+                BackwardGotoNarrowingUseKind.Index,
+                requiredType: requiredType);
         }
     }
 
