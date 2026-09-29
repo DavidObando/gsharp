@@ -3,6 +3,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -176,7 +178,9 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 		Tests:      profile.LoadTests,
 	}
 	preflightConfig := *config
-	preflightConfig.Mode = packages.NeedName | packages.NeedFiles | packages.NeedImports | packages.NeedDeps | packages.NeedModule
+	preflightConfig.Mode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
+		packages.NeedEmbedFiles | packages.NeedEmbedPatterns | packages.NeedImports |
+		packages.NeedDeps | packages.NeedModule | packages.NeedForTest
 	if !profile.CGOEnabled {
 		preflightConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
 	}
@@ -193,12 +197,13 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 			}
 		}
 	}
-	sourceSnapshot, err := snapshotPackageSources(preflight, sourceRoot, profile.Limits)
+	sourceSnapshot, err := snapshotPackageInputs(preflight, sourceRoot, profile.Limits)
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	config.Overlay = sourceSnapshot
-	builder.sourceSnapshot = sourceSnapshot
+	config.Overlay = sourceSnapshot.overlay
+	builder.sourceSnapshot = sourceSnapshot.data
+	builder.snapshotPortable = sourceSnapshot.portable
 	if afterSnapshot != nil {
 		afterSnapshot()
 	}
@@ -217,6 +222,12 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 	}
 
 	all := collectPackages(loaded)
+	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, sourceRoot)
+	builder.snapshotFiles = sourceSnapshot.packageFiles
+	builder.snapshotRoles = sourceSnapshot.packageRoles
+	if len(builder.inputDrift) > 0 {
+		builder.block("input-drift", "selected package inputs changed while loading", nil, nil)
+	}
 	if len(all) > profile.Limits.MaxPackages {
 		return Analysis{}, false, fmt.Errorf("loaded package count %d exceeds limit %d", len(all), profile.Limits.MaxPackages)
 	}
@@ -236,20 +247,51 @@ func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, pr
 	return analysis, analysis.InventoryComplete, nil
 }
 
-func snapshotPackageSources(loaded []*packages.Package, sourceRoot string, limits Limits) (map[string][]byte, error) {
-	directories := map[string]bool{}
+type snapshottedInput struct {
+	data []byte
+	info os.FileInfo
+}
+
+type packageInputSnapshot struct {
+	data         map[string][]byte
+	overlay      map[string][]byte
+	files        map[string]snapshottedInput
+	packageFiles map[string][]string
+	packageRoles map[string]map[string]string
+	fileOwners   map[string]map[string]bool
+	portable     map[string]string
+}
+
+func snapshotPackageInputs(loaded []*packages.Package, sourceRoot string, limits Limits) (packageInputSnapshot, error) {
+	result := packageInputSnapshot{
+		data:         map[string][]byte{},
+		overlay:      map[string][]byte{},
+		files:        map[string]snapshottedInput{},
+		packageFiles: map[string][]string{},
+		packageRoles: map[string]map[string]string{},
+		fileOwners:   map[string]map[string]bool{},
+		portable:     map[string]string{},
+	}
+	directories := map[string]map[string]bool{}
 	for _, pkg := range loaded {
-		files := append([]string{}, pkg.GoFiles...)
-		files = append(files, pkg.CompiledGoFiles...)
-		files = append(files, pkg.IgnoredFiles...)
-		for _, path := range files {
-			if _, err := pathWithin(sourceRoot, path); err == nil {
-				directories[filepath.Dir(path)] = true
+		key := packageInputKey(pkg)
+		result.packageRoles[key] = packageInputRoles(pkg)
+		for _, path := range packageInputPaths(pkg, sourceRoot) {
+			result.packageFiles[key] = append(result.packageFiles[key], path)
+			if result.fileOwners[path] == nil {
+				result.fileOwners[path] = map[string]bool{}
+			}
+			result.fileOwners[path][key] = true
+			if filepath.Ext(path) == ".go" {
+				directory := filepath.Dir(path)
+				if directories[directory] == nil {
+					directories[directory] = map[string]bool{}
+				}
+				directories[directory][key] = true
 			}
 		}
+		result.packageFiles[key] = uniqueSorted(result.packageFiles[key])
 	}
-	snapshot := map[string][]byte{}
-	var total int64
 	sortedDirectories := make([]string, 0, len(directories))
 	for directory := range directories {
 		sortedDirectories = append(sortedDirectories, directory)
@@ -258,31 +300,128 @@ func snapshotPackageSources(loaded []*packages.Package, sourceRoot string, limit
 	for _, directory := range sortedDirectories {
 		entries, err := os.ReadDir(directory)
 		if err != nil {
-			return nil, fmt.Errorf("snapshot source directory: %w", err)
+			return packageInputSnapshot{}, fmt.Errorf("snapshot source directory: %w", err)
 		}
 		for _, entry := range entries {
 			if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
 				continue
 			}
 			path := filepath.Join(directory, entry.Name())
-			if total >= limits.MaxLocalHashBytes {
-				return nil, fmt.Errorf("source snapshot exceeds limit %d", limits.MaxLocalHashBytes)
+			if result.fileOwners[path] == nil {
+				result.fileOwners[path] = map[string]bool{}
 			}
-			data, err := readBoundedRegularFile(path, limits.MaxLocalHashBytes-total)
-			if err != nil {
-				return nil, fmt.Errorf("snapshot source file %s: %w", entry.Name(), err)
-			}
-			total += int64(len(data))
-			if total > limits.MaxLocalHashBytes {
-				return nil, fmt.Errorf("source snapshot exceeds limit %d", limits.MaxLocalHashBytes)
-			}
-			snapshot[path] = data
-			if len(snapshot) > limits.MaxFiles {
-				return nil, fmt.Errorf("source snapshot file count exceeds limit %d", limits.MaxFiles)
+			for owner := range directories[directory] {
+				result.fileOwners[path][owner] = true
 			}
 		}
 	}
-	return snapshot, nil
+	paths := make([]string, 0, len(result.fileOwners))
+	for path := range result.fileOwners {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	var total int64
+	for _, path := range paths {
+		if len(result.files) >= limits.MaxFiles || total >= limits.MaxLocalHashBytes {
+			return packageInputSnapshot{}, fmt.Errorf("input snapshot exceeds configured limits")
+		}
+		initialInfo, err := os.Lstat(path)
+		if err != nil {
+			return packageInputSnapshot{}, fmt.Errorf("snapshot input %s: %w", filepath.Base(path), err)
+		}
+		data, err := readBoundedRegularFile(path, limits.MaxLocalHashBytes-total)
+		if err != nil {
+			return packageInputSnapshot{}, fmt.Errorf("snapshot input %s: %w", filepath.Base(path), err)
+		}
+		finalInfo, err := os.Lstat(path)
+		if err != nil || !finalInfo.Mode().IsRegular() || !os.SameFile(initialInfo, finalInfo) {
+			return packageInputSnapshot{}, fmt.Errorf("snapshot input changed while reading: %s", filepath.Base(path))
+		}
+		total += int64(len(data))
+		result.data[path] = data
+		result.files[path] = snapshottedInput{data: data, info: finalInfo}
+		relative, _ := pathWithin(sourceRoot, path)
+		result.portable[path] = "source://" + relative
+		if filepath.Ext(path) == ".go" {
+			result.overlay[path] = data
+		}
+	}
+	return result, nil
+}
+
+func packageInputKey(pkg *packages.Package) string {
+	return pkg.PkgPath + "\x00" + pkg.ForTest + "\x00" + packageVariant(pkg)
+}
+
+func packageInputPaths(pkg *packages.Package, sourceRoot string) []string {
+	files := append([]string{}, pkg.GoFiles...)
+	files = append(files, pkg.CompiledGoFiles...)
+	files = append(files, pkg.IgnoredFiles...)
+	files = append(files, pkg.OtherFiles...)
+	files = append(files, pkg.EmbedFiles...)
+	var result []string
+	for _, path := range uniqueSorted(files) {
+		if _, err := pathWithin(sourceRoot, path); err == nil {
+			result = append(result, path)
+		}
+	}
+	return result
+}
+
+func packageInputRoles(pkg *packages.Package) map[string]string {
+	roles := map[string]string{}
+	for _, path := range pkg.GoFiles {
+		roles[path] = "active"
+	}
+	for _, path := range pkg.CompiledGoFiles {
+		roles[path] = "compiled"
+	}
+	for _, path := range pkg.IgnoredFiles {
+		roles[path] = "ignored"
+	}
+	for _, path := range pkg.OtherFiles {
+		roles[path] = "native"
+	}
+	for _, path := range pkg.EmbedFiles {
+		roles[path] = "embed"
+	}
+	return roles
+}
+
+func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Package, sourceRoot string) map[string]bool {
+	drift := map[string]bool{}
+	actual := map[string][]string{}
+	for _, pkg := range loaded {
+		actual[packageInputKey(pkg)] = packageInputPaths(pkg, sourceRoot)
+	}
+	keys := map[string]bool{}
+	for key := range snapshot.packageFiles {
+		keys[key] = true
+	}
+	for key := range actual {
+		keys[key] = true
+	}
+	for key := range keys {
+		if !slices.Equal(snapshot.packageFiles[key], actual[key]) {
+			drift[key] = true
+		}
+	}
+	for path, captured := range snapshot.files {
+		info, err := os.Lstat(path)
+		if err != nil || !info.Mode().IsRegular() || !os.SameFile(captured.info, info) {
+			for owner := range snapshot.fileOwners[path] {
+				drift[owner] = true
+			}
+			continue
+		}
+		data, err := readBoundedRegularFile(path, int64(len(captured.data))+1)
+		if err != nil || !bytes.Equal(data, captured.data) {
+			for owner := range snapshot.fileOwners[path] {
+				drift[owner] = true
+			}
+		}
+	}
+	return drift
 }
 
 func resolveCCompiler(profile Profile) (string, string, error) {

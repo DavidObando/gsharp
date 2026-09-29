@@ -439,6 +439,10 @@ func marshalCanonical(value any) ([]byte, error) {
 }
 
 func atomicWrite(path string, data []byte, mode os.FileMode) error {
+	return atomicWriteWithHooks(path, data, mode, nil, nil)
+}
+
+func atomicWriteWithHooks(path string, data []byte, mode os.FileMode, beforeRename, afterRename func(string)) (err error) {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return err
@@ -448,23 +452,74 @@ func atomicWrite(path string, data []byte, mode os.FileMode) error {
 		return err
 	}
 	staged := file.Name()
-	defer os.Remove(staged)
+	renamed := false
+	committed := false
+	defer func() {
+		if !committed {
+			_ = os.Remove(staged)
+			if renamed {
+				_ = os.Remove(path)
+			}
+		}
+		if file != nil {
+			if closeErr := file.Close(); err == nil && closeErr != nil {
+				err = closeErr
+			}
+		}
+	}()
 	if err := file.Chmod(mode); err != nil {
-		_ = file.Close()
 		return err
 	}
-	if _, err := file.Write(data); err != nil {
-		_ = file.Close()
+	written, err := file.Write(data)
+	if err != nil {
 		return err
+	}
+	if written != len(data) {
+		return io.ErrShortWrite
 	}
 	if err := file.Sync(); err != nil {
-		_ = file.Close()
+		return err
+	}
+	if beforeRename != nil {
+		beforeRename(staged)
+	}
+	openedInfo, err := file.Stat()
+	if err != nil {
+		return err
+	}
+	stagedInfo, err := os.Lstat(staged)
+	if err != nil || !openedInfo.Mode().IsRegular() || !stagedInfo.Mode().IsRegular() || !os.SameFile(openedInfo, stagedInfo) {
+		return errors.New("staged output path changed before rename")
+	}
+	if err := os.Rename(staged, path); err != nil {
+		return err
+	}
+	renamed = true
+	if afterRename != nil {
+		afterRename(path)
+	}
+	finalInfo, err := os.Lstat(path)
+	if err != nil || !finalInfo.Mode().IsRegular() || !os.SameFile(openedInfo, finalInfo) {
+		return errors.New("final output path does not identify the staged file")
+	}
+	directory, err := os.Open(dir)
+	if err != nil {
+		return err
+	}
+	if err := directory.Sync(); err != nil {
+		_ = directory.Close()
+		return err
+	}
+	if err := directory.Close(); err != nil {
 		return err
 	}
 	if err := file.Close(); err != nil {
+		file = nil
 		return err
 	}
-	return os.Rename(staged, path)
+	file = nil
+	committed = true
+	return nil
 }
 
 func hashBytes(data []byte) string {

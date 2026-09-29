@@ -1052,37 +1052,154 @@ func TestAtomicWriteDoesNotFollowPredictableSymlinks(t *testing.T) {
 	}
 }
 
-func TestImmutableSourceSnapshotPreventsSemanticContentDrift(t *testing.T) {
-	firstRoot := copyFixture(t, "complete")
-	first, complete, err := analyze(t.Context(), firstRoot, t.TempDir(), testProfile())
-	if err != nil || !complete {
-		t.Fatalf("baseline analysis failed: complete=%v err=%v", complete, err)
+func TestAtomicWriteRejectsStagedAndFinalPathReplacement(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("controlled symlink fixture")
 	}
-	secondRoot := copyFixture(t, "complete")
-	path := filepath.Join(secondRoot, "main.go")
-	second, complete, err := analyzeWithSnapshotHook(t.Context(), secondRoot, t.TempDir(), testProfile(), func() {
-		data, readErr := os.ReadFile(path)
-		if readErr != nil {
-			t.Fatal(readErr)
-		}
-		data = bytes.Replace(data, []byte("ContextualInt int64 = 7"), []byte("ContextualInt int64 = 8"), 1)
-		if writeErr := os.WriteFile(path, data, 0o644); writeErr != nil {
+	for _, attack := range []string{"staged", "final"} {
+		t.Run(attack, func(t *testing.T) {
+			dir := t.TempDir()
+			path := filepath.Join(dir, "analysis.json")
+			outside := filepath.Join(t.TempDir(), "outside")
+			if err := os.WriteFile(outside, []byte("safe"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			var displaced string
+			replace := func(target string) {
+				displaced = target + ".attacker-moved"
+				if err := os.Rename(target, displaced); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(outside, target); err != nil {
+					t.Fatal(err)
+				}
+			}
+			var before, after func(string)
+			if attack == "staged" {
+				before = replace
+			} else {
+				after = replace
+			}
+			err := atomicWriteWithHooks(path, bytes.Repeat([]byte("x"), 1<<20), 0o644, before, after)
+			if err == nil {
+				t.Fatal("pathname replacement was accepted")
+			}
+			if info, statErr := os.Lstat(path); statErr == nil && info.Mode()&os.ModeSymlink != 0 {
+				t.Fatal("failed atomic write left a final symlink")
+			}
+			if data, readErr := os.ReadFile(outside); readErr != nil || string(data) != "safe" {
+				t.Fatalf("outside target changed: %q, %v", data, readErr)
+			}
+			_ = os.Remove(displaced)
+			if matches, _ := filepath.Glob(filepath.Join(dir, ".analysis.json.staged-*")); len(matches) != 0 {
+				t.Fatalf("staged entries were not cleaned up: %v", matches)
+			}
+		})
+	}
+}
+
+func TestImmutableInputSnapshotDetectsLoadTimeDrift(t *testing.T) {
+	cases := []struct {
+		name   string
+		path   string
+		mutate func(*testing.T, string)
+	}{
+		{"go-change", "main.go", func(t *testing.T, path string) {
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			data = bytes.Replace(data, []byte("ContextualInt int64 = 7"), []byte("ContextualInt int64 = 8"), 1)
+			if err := os.WriteFile(path, data, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"embed-change", "assets/visible.txt", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("changed"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"embed-delete", "assets/visible.txt", func(t *testing.T, path string) {
+			if err := os.Remove(path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"embed-replace", "assets/visible.txt", func(t *testing.T, path string) {
+			replacement := path + ".replacement"
+			if err := os.WriteFile(replacement, []byte("replacement"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Rename(replacement, path); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"go-add", "added.go", func(t *testing.T, path string) {
+			if err := os.WriteFile(path, []byte("package fixture\nconst Added = 1\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			path := filepath.Join(root, filepath.FromSlash(test.path))
+			original, readErr := os.ReadFile(path)
+			if readErr != nil && test.name != "go-add" {
+				t.Fatal(readErr)
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				test.mutate(t, path)
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("load-time drift was not fail-closed: complete=%v blockers=%#v", complete, analysis.Blockers)
+			}
+			if strings.HasPrefix(test.name, "embed-") {
+				index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool {
+					return file.Path == "source://assets/visible.txt"
+				})
+				if index < 0 {
+					t.Fatal("captured embed input missing")
+				}
+				data, decodeErr := base64.StdEncoding.DecodeString(analysis.Files[index].ContentBase64)
+				if decodeErr != nil || !bytes.Equal(data, original) {
+					t.Fatalf("inventory did not use captured embed bytes: %q, %v", data, decodeErr)
+				}
+			}
+			if test.name == "go-add" && slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+				return file.Path == "source://added.go"
+			}) {
+				t.Fatal("uncaptured added source was emitted")
+			}
+		})
+	}
+
+	root := copyFixture(t, "native")
+	nativePath := filepath.Join(root, "native.s")
+	originalNative, err := os.ReadFile(nativePath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.CCompiler = approvedCompiler(t)
+	analysis, _, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), profile, func() {
+		if writeErr := os.WriteFile(nativePath, []byte("changed"), 0o644); writeErr != nil {
 			t.Fatal(writeErr)
 		}
 	})
-	if err != nil || !complete {
-		t.Fatalf("snapshot analysis failed: complete=%v err=%v", complete, err)
+	if err != nil || !hasBlockerCategory(analysis, "input-drift") {
+		t.Fatalf("native input drift was not detected: err=%v blockers=%#v", err, analysis.Blockers)
 	}
-	left, err := marshalCanonical(first)
-	if err != nil {
-		t.Fatal(err)
+	index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == "source://native.s" })
+	if index < 0 {
+		t.Fatal("captured native input missing")
 	}
-	right, err := marshalCanonical(second)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !bytes.Equal(left, right) {
-		t.Fatalf("source mutation escaped immutable snapshot near: %s", firstDifference(string(left), string(right)))
+	nativeData, err := base64.StdEncoding.DecodeString(analysis.Files[index].ContentBase64)
+	if err != nil || !bytes.Equal(nativeData, originalNative) {
+		t.Fatalf("inventory did not use captured native bytes: %q, %v", nativeData, err)
 	}
 }
 
@@ -1106,7 +1223,7 @@ func GenericString[T ~string](value T) { type Local int; var _ Local }
 		}
 		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
 		if err != nil || !complete {
-			t.Fatalf("identity fixture failed: complete=%v err=%v", complete, err)
+			t.Fatalf("identity fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
 		}
 		return analysis
 	}
@@ -1153,6 +1270,109 @@ func GenericString[T ~string](value T) { type Local int; var _ Local }
 	methodIDB := builder.addObject(consumer, method(namedB), SourceSpan{})
 	if methodIDA == methodIDB {
 		t.Fatal("same-name imported methods collided")
+	}
+}
+
+func TestPromotedMemberIdentityUsesImportedDeclaration(t *testing.T) {
+	analyzeFixture := func(reverse bool) Analysis {
+		t.Helper()
+		root := t.TempDir()
+		files := map[string]string{
+			"go.mod": "module example.com/members\n\ngo 1.27.0\n",
+			"dep/dep.go": `package dep
+type A struct{ X int }
+func (A) M() {}
+type B struct{ X int }
+func (B) M() {}
+type E struct{ A }
+`,
+		}
+		if reverse {
+			files["main.go"] = `package members
+import "example.com/members/dep"
+type Right struct{ dep.E }
+type Left struct{ dep.E }
+func use(right Right, left Left, b dep.B) { _, _, _ = right.X, left.X, b.X; right.M(); left.M(); b.M(); _, _ = right.A, left.A }
+`
+		} else {
+			files["main.go"] = `package members
+import "example.com/members/dep"
+type Left struct{ dep.E }
+type Right struct{ dep.E }
+func use(left Left, right Right, b dep.B) { _, _, _ = left.X, right.X, b.X; left.M(); right.M(); b.M(); _, _ = left.A, right.A }
+`
+		}
+		for name, content := range files {
+			path := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if err != nil || !complete {
+			t.Fatalf("member fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+		}
+		return analysis
+	}
+	memberIDs := func(analysis Analysis) map[string][]string {
+		names := map[string]string{}
+		for _, symbol := range analysis.Symbols {
+			if symbol.Name == "X" || symbol.Name == "M" || symbol.Name == "A" {
+				names[symbol.ID] = symbol.Name
+			}
+		}
+		result := map[string][]string{}
+		for _, selection := range analysis.Selections {
+			if name := names[selection.ObjectID]; name != "" {
+				result[name] = append(result[name], selection.ObjectID)
+			}
+		}
+		for name := range result {
+			sort.Strings(result[name])
+			result[name] = slices.Compact(result[name])
+		}
+		return result
+	}
+	first := memberIDs(analyzeFixture(false))
+	second := memberIDs(analyzeFixture(true))
+	if !reflect.DeepEqual(first, second) {
+		t.Fatalf("member identities depend on consumer order: first=%v second=%v", first, second)
+	}
+	if len(first["X"]) != 2 || len(first["M"]) != 2 || len(first["A"]) != 1 {
+		t.Fatalf("declaration identities were not reused or distinguished: %v", first)
+	}
+
+	dependency := types.NewPackage("example.com/dependency", "dependency")
+	field := types.NewField(token.NoPos, dependency, "X", types.Typ[types.Int], false)
+	typeName := types.NewTypeName(token.NoPos, dependency, "A", nil)
+	named := types.NewNamed(typeName, types.NewStruct([]*types.Var{field}, nil), nil)
+	dependency.Scope().Insert(typeName)
+	method := types.NewFunc(token.NoPos, dependency, "M", types.NewSignatureType(
+		types.NewVar(token.NoPos, dependency, "", named), nil, nil, types.NewTuple(), types.NewTuple(), false))
+	named.AddMethod(method)
+	dependencyPackage := &packages.Package{PkgPath: dependency.Path(), Types: dependency, Fset: token.NewFileSet()}
+	consumer := &packages.Package{PkgPath: "example.com/consumer", Types: types.NewPackage("example.com/consumer", "consumer"), Fset: token.NewFileSet()}
+	traversalIDs := func(declarationFirst bool) []string {
+		analysis := validIncompleteAnalysis()
+		builder := newInventoryBuilder(&analysis, "", "", testProfile())
+		builder.indexPackages([]*packages.Package{consumer, dependencyPackage})
+		add := func(object types.Object) string {
+			if declarationFirst {
+				builder.addObject(dependencyPackage, object, SourceSpan{Path: "module://example.com/dependency@local/dep.go", StartByte: 10})
+			}
+			id := builder.addObjectWithFallback(consumer, object, SourceSpan{}, "consumer-selection")
+			if !declarationFirst {
+				builder.addObject(dependencyPackage, object, SourceSpan{Path: "module://example.com/dependency@local/dep.go", StartByte: 10})
+			}
+			return id
+		}
+		return []string{add(field), add(method)}
+	}
+	if early, late := traversalIDs(true), traversalIDs(false); !slices.Equal(early, late) {
+		t.Fatalf("member identities depend on package traversal: declaration-first=%v consumer-first=%v", early, late)
 	}
 }
 
