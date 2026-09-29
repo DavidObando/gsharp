@@ -1165,13 +1165,22 @@ internal sealed partial class StatementBinder
         // enclosing block, matching C#'s `goto`/label semantics).
         if (!IsLabelableLoop(inner))
         {
+            var reachableOnEntry = currentStatementListFallsThrough;
             var userLabel = DefineUserLabel(labelName, syntax.LabelIdentifier.Location);
             var boundInner = BindStatement(inner);
-            return new BoundBlockStatement(
+            var labeledStatement = new BoundBlockStatement(
                 syntax,
                 ImmutableArray.Create<BoundStatement>(
                     new BoundLabelStatement(syntax, userLabel),
                     Invariant.Required(boundInner, "a labeled statement has a bound inner statement")));
+            if (!reachableOnEntry
+                && currentStatementListFallsThrough
+                && !EndsInUnconditionalExit(boundInner))
+            {
+                internallyReachableFallthroughStatements.Add(labeledStatement);
+            }
+
+            return labeledStatement;
         }
 
         // ADR-0070: a label that shadows an enclosing live loop's label is a

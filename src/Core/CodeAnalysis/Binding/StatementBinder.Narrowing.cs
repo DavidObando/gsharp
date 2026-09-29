@@ -31,6 +31,14 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyMemberNotNullNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> frame)
     {
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
         BoundExpression? callExpr = null;
         if (statement is BoundExpressionStatement exprStmt)
         {
@@ -98,7 +106,21 @@ internal sealed partial class StatementBinder
         if (scope.TryLookupSymbol(fieldName) is ImplicitFieldVariableSymbol fieldVar
             && fieldVar.Type is NullableTypeSymbol nullable)
         {
-            frame[fieldVar] = nullable.UnderlyingType;
+            SetPersistentNarrowing(frame, fieldVar, nullable.UnderlyingType);
+        }
+    }
+
+    private void SetPersistentNarrowing(
+        Dictionary<AccessPath, TypeSymbol> frame,
+        AccessPath path,
+        TypeSymbol narrowedType)
+    {
+        frame[path] = narrowedType;
+        if (!path.HasMembers)
+        {
+            binderCtx.AssignmentNarrowingGeneration++;
+            binderCtx.AssignmentNarrowingGenerations[path.Root] =
+                binderCtx.AssignmentNarrowingGeneration;
         }
     }
 
@@ -461,13 +483,7 @@ internal sealed partial class StatementBinder
                     continue;
                 }
 
-                persistentFrame[kv.Key] = kv.Value;
-                if (kv.Key.Members.IsDefaultOrEmpty)
-                {
-                    binderCtx.AssignmentNarrowingGeneration++;
-                    binderCtx.AssignmentNarrowingGenerations[kv.Key.Root] =
-                        binderCtx.AssignmentNarrowingGeneration;
-                }
+                SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value);
             }
 
             return;
@@ -483,7 +499,7 @@ internal sealed partial class StatementBinder
 
             foreach (var kv in switchFrame)
             {
-                persistentFrame[kv.Key] = kv.Value;
+                SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value);
             }
         }
     }
@@ -515,12 +531,10 @@ internal sealed partial class StatementBinder
             && TryClassifyNonNullAssignment(assign, out var variable, out var underlying))
         {
             var narrowedVariable = Invariant.Required(variable, "a successful assignment narrowing has a variable");
-            persistentFrame[narrowedVariable]
-                = Invariant.Required(underlying, "a successful assignment narrowing has an underlying type");
-
-            binderCtx.AssignmentNarrowingGeneration++;
-            binderCtx.AssignmentNarrowingGenerations[narrowedVariable] =
-                binderCtx.AssignmentNarrowingGeneration;
+            SetPersistentNarrowing(
+                persistentFrame,
+                narrowedVariable,
+                Invariant.Required(underlying, "a successful assignment narrowing has an underlying type"));
         }
     }
 
@@ -1070,7 +1084,7 @@ internal sealed partial class StatementBinder
                 continue;
             }
 
-            persistentFrame[path] = nullable.UnderlyingType;
+            SetPersistentNarrowing(persistentFrame, path, nullable.UnderlyingType);
         }
     }
 
@@ -1586,6 +1600,31 @@ internal sealed partial class StatementBinder
     /// <returns><see langword="true"/> when <paramref name="type"/> is reference-like.</returns>
     private static bool IsReferenceLikeType(TypeSymbol type)
         => type != null && Conversion.IsReferenceLikeTarget(type);
+
+    private bool HasInternallyReachableFallthrough(BoundStatement statement)
+    {
+        if (internallyReachableFallthroughStatements.Contains(statement))
+        {
+            return true;
+        }
+
+        return statement switch
+        {
+            BoundIfStatement ifStatement =>
+                HasInternallyReachableFallthrough(ifStatement.ThenStatement)
+                || (ifStatement.ElseStatement != null
+                    && HasInternallyReachableFallthrough(ifStatement.ElseStatement)),
+            BoundTryStatement tryStatement =>
+                (tryStatement.FinallyBlock == null
+                    || !EndsInUnconditionalExit(tryStatement.FinallyBlock))
+                && (HasInternallyReachableFallthrough(tryStatement.TryBlock)
+                    || tryStatement.CatchClauses.Any(clause =>
+                        HasInternallyReachableFallthrough(clause.Body))),
+            BoundPatternSwitchStatement switchStatement =>
+                switchStatement.Arms.Any(arm => HasInternallyReachableFallthrough(arm.Body)),
+            _ => false,
+        };
+    }
 
     /// <summary>
     /// ADR-0069 / issue #700: structurally determine whether the given

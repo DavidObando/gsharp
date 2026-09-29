@@ -1249,19 +1249,27 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<AccessPath, TypeSymbol>? frame)
     {
-        if (frame == null)
-        {
-            return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
-        }
-
-        binderCtx.NarrowedVariables.Add(frame);
+        var inheritedFallthrough = currentStatementListFallsThrough;
         try
         {
-            return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
+            if (frame == null)
+            {
+                return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
+            }
+
+            binderCtx.NarrowedVariables.Add(frame);
+            try
+            {
+                return Invariant.Required(BindStatement(syntax), "a narrowed statement has a bound statement");
+            }
+            finally
+            {
+                binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            }
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            currentStatementListFallsThrough = inheritedFallthrough;
         }
     }
 

@@ -117,6 +117,7 @@ internal sealed partial class StatementBinder
         new(StringComparer.Ordinal);
     private readonly List<(string LabelName, TextLocation Location, ImmutableArray<SyntaxNode> SourceRegions)>
         userGotoHandlerRegions = new();
+    private readonly HashSet<BoundStatement> internallyReachableFallthroughStatements = new();
     private bool currentStatementListFallsThrough = true;
     private int usingInitializationFlagCount;
 
@@ -289,6 +290,7 @@ internal sealed partial class StatementBinder
     internal BoundStatement BindBlockStatement(BlockStatementSyntax syntax)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
+        var reachableOnEntry = currentStatementListFallsThrough;
         scope = new BoundScope(scope);
 
         // ADR-0175 (#3820/#3824): a block statement accepts only the
@@ -333,12 +335,16 @@ internal sealed partial class StatementBinder
             : default;
         using (binderCtx.PushUnsafeContext(entersUnsafe))
         {
-            BindBlockStatements(syntax.Statements, 0, statements);
+            var fallsThrough = BindBlockStatements(syntax.Statements, 0, statements);
+            var block = new BoundBlockStatement(syntax, statements.ToImmutable());
+            if (!reachableOnEntry && fallsThrough)
+            {
+                internallyReachableFallthroughStatements.Add(block);
+            }
+
+            scope = scope.Pop();
+            return block;
         }
-
-        scope = scope.Pop();
-
-        return new BoundBlockStatement(syntax, statements.ToImmutable());
     }
 
     internal ImmutableArray<BoundStatement> BindStatementList(
@@ -347,7 +353,7 @@ internal sealed partial class StatementBinder
         Func<BoundStatement>? trailingStatement = null)
     {
         var statements = ImmutableArray.CreateBuilder<BoundStatement>();
-        BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement);
+        _ = BindBlockStatements(statementSyntaxes, 0, statements, beforeBind, trailingStatement);
         return statements.ToImmutable();
     }
 
@@ -568,7 +574,7 @@ internal sealed partial class StatementBinder
         return end - 1;
     }
 
-    private void BindBlockStatements(
+    private bool BindBlockStatements(
         ImmutableArray<StatementSyntax> statementSyntaxes,
         int startIndex,
         ImmutableArray<BoundStatement>.Builder statements,
@@ -666,9 +672,14 @@ internal sealed partial class StatementBinder
 
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
+                    var fallsThrough = BindBlockStatements(
+                        statementSyntaxes,
+                        i + 1,
+                        innerStatements,
+                        beforeBind,
+                        trailingStatement);
                     statements.Add(BuildCleanupTryStatement(innerStatements.ToImmutable(), defer.Cleanup, shieldCleanup: true));
-                    return;
+                    return fallsThrough;
                 }
 
                 if (statementSyntax is UsingStatementSyntax usingSyntax)
@@ -701,13 +712,18 @@ internal sealed partial class StatementBinder
                         Invariant.Required(usingLowering.Initialized, "a valid using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
+                    var fallsThrough = BindBlockStatements(
+                        statementSyntaxes,
+                        i + 1,
+                        innerStatements,
+                        beforeBind,
+                        trailingStatement);
                     statements.Add(BuildCleanupTryStatement(
                         innerStatements.ToImmutable(),
                         usingLowering.Cleanup,
                         usingLowering.Initialized,
                         usingResource));
-                    return;
+                    return fallsThrough;
                 }
 
                 if (statementSyntax is AwaitUsingStatementSyntax awaitUsingSyntax)
@@ -739,13 +755,18 @@ internal sealed partial class StatementBinder
                         Invariant.Required(awaitUsingLowering.Initialized, "a valid await using lowering has an initialized variable")));
                     InvalidateNarrowingsForAssignedVariables(statementSyntax);
                     var innerStatements = ImmutableArray.CreateBuilder<BoundStatement>();
-                    BindBlockStatements(statementSyntaxes, i + 1, innerStatements, beforeBind, trailingStatement);
+                    var fallsThrough = BindBlockStatements(
+                        statementSyntaxes,
+                        i + 1,
+                        innerStatements,
+                        beforeBind,
+                        trailingStatement);
                     statements.Add(BuildCleanupTryStatement(
                         innerStatements.ToImmutable(),
                         awaitUsingLowering.Cleanup,
                         awaitUsingLowering.Initialized,
                         awaitUsingResource));
-                    return;
+                    return fallsThrough;
                 }
 
                 // ADR-0071 / issue #708: `guard let` extends the enclosing block's
@@ -808,13 +829,16 @@ internal sealed partial class StatementBinder
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame);
                 currentStatementListFallsThrough =
-                    currentStatementListFallsThrough && !EndsInUnconditionalExit(statement);
+                    (currentStatementListFallsThrough || HasInternallyReachableFallthrough(statement))
+                    && !EndsInUnconditionalExit(statement);
             }
 
             if (trailingStatement != null)
             {
                 statements.Add(trailingStatement());
             }
+
+            return currentStatementListFallsThrough;
         }
         finally
         {

@@ -940,6 +940,97 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_EnteringNestedBlockPropagatesReachability()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                goto Enter
+                {
+                Enter:
+                    var marker = 0
+                }
+                goto Done
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_InvalidatesNarrowedCallableMemberPath()
+    {
+        var result = Evaluate("""
+            data class Holder(Callback (() -> int32)?) {
+            }
+
+            func One() int32 { return 1 }
+
+            func Run() int32 {
+                var holder = Holder(One)
+                if holder.Callback != nil {
+                Again:
+                    let value = holder.Callback.Invoke()
+                    holder = Holder(nil)
+                    goto Again
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("Invoke", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_MemberNotNullAfterLabelReestablishesNarrowing()
+    {
+        AssertRuns("""
+            import System
+            import System.Diagnostics.CodeAnalysis
+
+            class Box {
+                var _name string?
+
+                func EnsureInit() {
+                    _name = "safe"
+                }
+
+                @MemberNotNull(members: []string{"_name"})
+                func EnsureInitAnnotated() {
+                    _name = "safe"
+                }
+
+                func Run() int32 {
+                    _name = "seed"
+                    var count = 0
+                Again:
+                    this.EnsureInitAnnotated()
+                    let length = _name.Length
+                    if count == 0 {
+                        count++
+                        _name = nil
+                        goto Again
+                    }
+                    return length
+                }
+            }
+
+            Console.WriteLine(Box{}.Run())
+            """, "4");
+    }
+
+    [Fact]
     public void UnrelatedEarlierGotoDoesNotLinkLaterBackwardLabel()
     {
         AssertRuns("""

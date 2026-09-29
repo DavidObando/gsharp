@@ -698,7 +698,18 @@ internal sealed partial class StatementBinder
     /// <param name="syntax">The nested function's block body.</param>
     /// <returns>The bound body.</returns>
     internal BoundStatement BindNestedFunctionBody(BlockStatementSyntax syntax)
-        => OutsideExceptionHandlers(() => BindBlockStatement(syntax));
+    {
+        var inheritedFallthrough = currentStatementListFallsThrough;
+        currentStatementListFallsThrough = true;
+        try
+        {
+            return OutsideExceptionHandlers(() => BindBlockStatement(syntax));
+        }
+        finally
+        {
+            currentStatementListFallsThrough = inheritedFallthrough;
+        }
+    }
 
     /// <summary>
     /// Runs <paramref name="bind"/> with the enclosing exception-handler
