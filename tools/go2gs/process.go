@@ -22,10 +22,25 @@ type processResult struct {
 }
 
 func runProcess(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string) (processResult, error) {
+	return runProcessWithMode(parent, timeout, maxOutput, dir, executable, args, env, processGroupMode(parent))
+}
+
+type processGroupContextKey struct{}
+
+func inheritProcessGroup(parent context.Context) context.Context {
+	return context.WithValue(parent, processGroupContextKey{}, true)
+}
+
+func processGroupMode(ctx context.Context) bool {
+	inherit, _ := ctx.Value(processGroupContextKey{}).(bool)
+	return !inherit
+}
+
+func runProcessWithMode(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string, ownProcessGroup bool) (processResult, error) {
 	ctx, cancel := context.WithTimeout(parent, timeout)
 	defer cancel()
 	cmd := exec.Command(executable, args...)
-	if err := configureProcessTree(cmd); err != nil {
+	if err := configureProcessTree(cmd, ownProcessGroup); err != nil {
 		return processResult{}, fmt.Errorf("secure process isolation for %q: %w", executable, err)
 	}
 	cmd.Dir = dir
@@ -45,18 +60,23 @@ func runProcess(parent context.Context, timeout time.Duration, maxOutput int, di
 	select {
 	case waitErr = <-wait:
 		if ctx.Err() != nil {
-			if err := terminateProcessTree(cmd.Process); err != nil {
+			if err := terminateProcess(cmd.Process, ownProcessGroup); err != nil {
 				return processResult{}, fmt.Errorf("terminate process tree for %q: %w", executable, err)
 			}
 			return processResult{}, fmt.Errorf("process %q timed out or was cancelled: %w", executable, ctx.Err())
 		}
 	case <-ctx.Done():
-		killErr := terminateProcessTree(cmd.Process)
+		killErr := terminateProcess(cmd.Process, ownProcessGroup)
 		waitErr = <-wait
 		if killErr != nil {
 			return processResult{}, fmt.Errorf("terminate process tree for %q: %w", executable, killErr)
 		}
 		return processResult{}, fmt.Errorf("process %q timed out or was cancelled: %w", executable, ctx.Err())
+	}
+	if ownProcessGroup {
+		if err := cleanupProcessTree(cmd.Process); err != nil {
+			return processResult{}, fmt.Errorf("clean process tree for %q: %w", executable, err)
+		}
 	}
 	result := processResult{
 		ExitCode:        cmd.ProcessState.ExitCode(),
@@ -72,6 +92,13 @@ func runProcess(parent context.Context, timeout time.Duration, maxOutput int, di
 		}
 	}
 	return result, nil
+}
+
+func terminateProcess(process *os.Process, processGroup bool) error {
+	if processGroup {
+		return terminateProcessTree(process)
+	}
+	return terminateInheritedProcessTree(process)
 }
 
 type boundedBuffer struct {

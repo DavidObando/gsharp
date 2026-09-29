@@ -189,10 +189,13 @@ func runAnalyze(parent context.Context, args []string) error {
 }
 
 func runAnalysisWorkerProcess(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string) (processResult, error) {
-	return runProcess(parent, timeout, maxOutput, dir, executable, args, env)
+	return runProcessWithMode(parent, timeout, maxOutput, dir, executable, args, env, true)
 }
 
 func runAnalyzeWorker(parent context.Context, args []string) error {
+	if ownsProcessGroup() {
+		parent = inheritProcessGroup(parent)
+	}
 	source, profilePath, out, err := parseAnalyzeArgs(args)
 	if err != nil {
 		return &exitError{2, err}

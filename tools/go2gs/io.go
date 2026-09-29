@@ -287,17 +287,6 @@ func lockAndInvalidateOutput(outRoot string) (func(), error) {
 				release()
 				return nil, fmt.Errorf("remove stale go2gs output %s: %w", name, err)
 			}
-			continue
-		}
-		if strings.HasPrefix(name, ".analysis.json.staged-") ||
-			strings.HasPrefix(name, ".run.json.staged-") ||
-			strings.HasPrefix(name, ".go2gs-worker-") ||
-			strings.HasPrefix(name, ".go2gs-bootstrap-") ||
-			name == ".go2gs-work" || strings.HasPrefix(name, ".go2gs-work-") {
-			if err := os.RemoveAll(filepath.Join(outRoot, name)); err != nil {
-				release()
-				return nil, fmt.Errorf("remove stale go2gs output %s: %w", name, err)
-			}
 		}
 	}
 	return release, nil

@@ -1390,6 +1390,7 @@ func TestAtomicWriteFailurePreservesConcurrentSuccessfulOutput(t *testing.T) {
 func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 	out := t.TempDir()
 	unrelated := filepath.Join(out, "keep.txt")
+	userData := filepath.Join(out, ".go2gs-worker-user-data", "valuable.txt")
 	for name, content := range map[string]string{
 		"analysis.json":                 "stale analysis",
 		"run.json":                      "stale run",
@@ -1400,7 +1401,10 @@ func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Mkdir(filepath.Join(out, ".go2gs-worker-crashed"), 0o700); err != nil {
+	if err := os.MkdirAll(filepath.Dir(userData), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(userData, []byte("valuable"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	release, err := lockAndInvalidateOutput(out)
@@ -1410,13 +1414,21 @@ func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 	if _, err := lockAndInvalidateOutput(out); err == nil {
 		t.Fatal("concurrent output writer acquired the same lock")
 	}
-	for _, name := range []string{"analysis.json", "run.json", ".analysis.json.staged-crashed", ".go2gs-worker-crashed"} {
+	for _, name := range []string{"analysis.json", "run.json"} {
 		if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
 			t.Fatalf("owned stale output %s remains: %v", name, err)
 		}
 	}
 	if data, err := os.ReadFile(unrelated); err != nil || string(data) != "keep" {
 		t.Fatalf("unrelated output was changed: %q, %v", data, err)
+	}
+	for path, want := range map[string]string{
+		filepath.Join(out, ".analysis.json.staged-crashed"): "staged",
+		userData: "valuable",
+	} {
+		if data, err := os.ReadFile(path); err != nil || string(data) != want {
+			t.Fatalf("unowned prefixed data was changed: %s: %q, %v", path, data, err)
+		}
 	}
 	if err := publishWorkerArtifacts(out, []byte("new analysis"), []byte("new run"), func() {
 		if mkdirErr := os.Mkdir(filepath.Join(out, "run.json"), 0o755); mkdirErr != nil {
@@ -1664,6 +1676,57 @@ func TestManifestSnapshotDetectsLoadTimeDrift(t *testing.T) {
 			}
 			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
 				t.Fatalf("manifest drift was not fail-closed: complete=%v blockers=%#v", complete, analysis.Blockers)
+			}
+		})
+	}
+}
+
+func TestTransientManifestMutationCannotAffectLoader(t *testing.T) {
+	baselineRoot := copyFixture(t, "complete")
+	baseline, complete, err := analyze(t.Context(), baselineRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("baseline analysis failed: complete=%v err=%v", complete, err)
+	}
+	want, err := marshalCanonical(baseline)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, test := range map[string]struct {
+		path   string
+		mutate func([]byte) []byte
+	}{
+		"manifest": {"go.mod", func(data []byte) []byte {
+			return bytes.Replace(data, []byte("module example.com/go2gsfixture"), []byte("module example.com/transient"), 1)
+		}},
+		"source": {"main.go", func(data []byte) []byte {
+			return bytes.Replace(data, []byte("return int(int64(Identity(outer.Add(3))))"), []byte("return 999"), 1)
+		}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			path := filepath.Join(root, test.path)
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			analysis, complete, err := analyzeWithSnapshotHooks(t.Context(), root, t.TempDir(), testProfile(), func() {
+				if writeErr := os.WriteFile(path, test.mutate(original), 0o644); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			}, func() {
+				if writeErr := os.WriteFile(path, original, 0o644); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			})
+			if err != nil || !complete {
+				t.Fatalf("transient mutation affected completeness: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+			}
+			got, err := marshalCanonical(analysis)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(got, want) {
+				t.Fatalf("loader observed transient live %s mutation near: %s", name, firstDifference(string(got), string(want)))
 			}
 		})
 	}
@@ -2350,6 +2413,35 @@ func TestLocalReplacementInventoryIsRootIndependent(t *testing.T) {
 	}) {
 		t.Fatalf("portable local replacement identity missing: %#v", first.Modules)
 	}
+	for _, root := range []string{firstRoot, secondRoot} {
+		parent := filepath.Dir(root)
+		dependency := filepath.Join(parent, "dep-external")
+		if err := os.Rename(filepath.Join(root, "dep"), dependency); err != nil {
+			t.Fatal(err)
+		}
+		modPath := filepath.Join(root, "go.mod")
+		data, err := os.ReadFile(modPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		data = bytes.Replace(data, []byte("=> ./dep"), []byte("=> ../dep-external"), 1)
+		if err := os.WriteFile(modPath, data, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	externalFirst, complete, err := analyze(t.Context(), firstRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("external replacement inventory failed: complete=%v err=%v blockers=%#v", complete, err, externalFirst.Blockers)
+	}
+	externalSecond, complete, err := analyze(t.Context(), secondRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("second external replacement inventory failed: complete=%v err=%v", complete, err)
+	}
+	externalLeft, _ := marshalCanonical(externalFirst)
+	externalRight, _ := marshalCanonical(externalSecond)
+	if !bytes.Equal(externalLeft, externalRight) || bytes.Contains(externalLeft, []byte(".go2gs-work-")) {
+		t.Fatalf("external replacement mirror affected deterministic output near: %s", firstDifference(string(externalLeft), string(externalRight)))
+	}
 	profile := testProfile()
 	profile.Limits.MaxRecords = first.RecordCounts.Total - first.RecordCounts.Modules
 	if _, _, err := analyze(t.Context(), firstRoot, t.TempDir(), profile); err == nil ||
@@ -2843,6 +2935,34 @@ func TestProcessHelper(t *testing.T) {
 			t.Fatal(err)
 		}
 		time.Sleep(10 * time.Second)
+	case "nested-timeout-worker":
+		_, _ = runProcess(inheritProcessGroup(t.Context()), 50*time.Millisecond, 1024, "", os.Args[0],
+			[]string{"-test.run=TestProcessHelper"}, []string{
+				"GO2GS_PROCESS_HELPER=tree",
+				"GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER"),
+				"GO2GS_CHILD_PID=" + os.Getenv("GO2GS_CHILD_PID"),
+			})
+	case "nested-early-failure-worker":
+		child := exec.Command(os.Args[0], "-test.run=TestProcessHelper")
+		child.Env = []string{
+			"GO2GS_PROCESS_HELPER=tree",
+			"GO2GS_CHILD_MARKER=" + os.Getenv("GO2GS_CHILD_MARKER"),
+			"GO2GS_CHILD_PID=" + os.Getenv("GO2GS_CHILD_PID"),
+		}
+		if err := child.Start(); err != nil {
+			t.Fatal(err)
+		}
+		deadline := time.Now().Add(time.Second)
+		for {
+			if _, err := os.Stat(os.Getenv("GO2GS_CHILD_PID")); err == nil {
+				break
+			}
+			if time.Now().After(deadline) {
+				t.Fatal("nested child did not start")
+			}
+			time.Sleep(time.Millisecond)
+		}
+		os.Exit(7)
 	case "child-marker":
 		time.Sleep(500 * time.Millisecond)
 		_ = os.WriteFile(os.Getenv("GO2GS_CHILD_MARKER"), []byte("survived"), 0o600)

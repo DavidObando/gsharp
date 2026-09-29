@@ -45,6 +45,9 @@ because M0 does not yet model or approve a pkg-config executable; directives
 inactive under the selected build constraints are ignored.
 Commit provenance is read directly from bounded repository metadata rather
 than by discovering or executing an ambient `git` command.
+Source inputs and authorized local replacements are loaded from a private,
+bounded no-follow mirror, so loader semantics and emitted inventory bytes
+come from the same captured snapshot.
 
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
 value arrays, and concurrency are inventoried as typed syntax sites with
