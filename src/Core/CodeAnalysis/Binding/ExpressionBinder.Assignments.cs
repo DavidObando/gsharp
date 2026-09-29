@@ -4179,13 +4179,13 @@ internal sealed partial class ExpressionBinder
                 selectedProperty.Name,
                 out var declaredProperty,
                 out _)
-                && SamePropertySlot(selectedProperty, declaredProperty),
+                && SamePropertySlot(selectedProperty, declaredProperty, MemberOperation.Write),
             InterfaceSymbol interfaceType => TypeMemberModel.TryGetProperty(
                 interfaceType,
                 selectedProperty.Name,
                 out var declaredProperty,
                 out _)
-                && SamePropertySlot(selectedProperty, declaredProperty),
+                && SamePropertySlot(selectedProperty, declaredProperty, MemberOperation.Write),
             _ => false,
         };
         return found ? RecoverDeclaredWriteReceiver(receiver, path, location) : receiver;
@@ -4212,7 +4212,8 @@ internal sealed partial class ExpressionBinder
         MemberInfo? declaredMember = selectedMember is PropertyInfo
             ? SafeGetVisibleInstanceProperty(clrType, selectedMember.Name)
             : SafeGetVisibleInstanceField(clrType, selectedMember.Name);
-        return declaredMember != null && SameClrMemberSlot(selectedMember, declaredMember)
+        return declaredMember != null
+            && SameClrMemberSlot(selectedMember, declaredMember, MemberOperation.Write)
             ? (RecoverDeclaredWriteReceiver(receiver, path, location), declaredMember)
             : (receiver, selectedMember);
     }

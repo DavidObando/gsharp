@@ -51,15 +51,11 @@ internal sealed partial class StatementBinder
             backwardState.Edges.Add(new BackwardGotoNarrowingEdge(
                 snapshot,
                 backwardState.Accesses));
+            binderCtx.ReachableUserLabels.Add(labelName);
         }
         else if (!currentStatementListFallsThrough && binderCtx.PotentialReachabilityLabel is { } sourceLabel)
         {
             binderCtx.DeferredUnreachableGotoEdges.Add((sourceLabel, labelName, snapshot));
-        }
-
-        if (currentStatementListFallsThrough)
-        {
-            binderCtx.ReachableUserLabels.Add(labelName);
         }
 
         var label = GetOrCreateUserLabelForGoto(labelName, syntax.LabelIdentifier.Location);
@@ -204,7 +200,9 @@ internal sealed partial class StatementBinder
 
                 if (binderCtx.BackwardGotoNarrowingStates.TryGetValue(edge.TargetLabel, out var targetState))
                 {
-                    targetState.Edges.Add(new BackwardGotoNarrowingEdge(edge.Snapshot, targetState.Accesses));
+                    targetState.Edges.Add(new BackwardGotoNarrowingEdge(
+                        edge.Snapshot,
+                        targetState.Accesses));
                 }
 
                 changed |= binderCtx.ReachableUserLabels.Add(edge.TargetLabel);

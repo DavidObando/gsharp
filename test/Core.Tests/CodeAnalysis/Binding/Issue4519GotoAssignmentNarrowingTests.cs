@@ -4227,6 +4227,326 @@ public class Issue4519GotoAssignmentNarrowingTests
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
     }
 
+    [Fact]
+    public void ImportedCallRecovery_DoesNotRebindInlineOutVariable()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            func Run() int32 {
+                var x Issue4519ImportedCallReceiver = Issue4519ImportedCallDog()
+                var count = 0
+                if x is Issue4519ImportedCallDog {
+                Again:
+                    let found = x.TryRead("value", out var value)
+                    if count == 0 {
+                        count++
+                        x = Issue4519ImportedCallCat()
+                        goto Again
+                    }
+                    return if found { value } else { 0 }
+                }
+                return 0
+            }
+
+            Run()
+            """,
+            new[] { typeof(Issue4519ImportedCallReceiver).Assembly.Location });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(22, result.Value);
+    }
+
+    [Fact]
+    public void ImportedCallRecovery_DoesNotRebindCapturedLambda()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            func Run() int32 {
+                var x Issue4519ImportedCallReceiver = Issue4519ImportedCallDog()
+                let offset = 3
+                var count = 0
+                if x is Issue4519ImportedCallDog {
+                Again:
+                    let value = x.Apply((item int32) -> item + offset)
+                    if count == 0 {
+                        count++
+                        x = Issue4519ImportedCallCat()
+                        goto Again
+                    }
+                    return value
+                }
+                return 0
+            }
+
+            Run()
+            """,
+            new[] { typeof(Issue4519ImportedCallReceiver).Assembly.Location });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(25, result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_PublicPropertyDoesNotAliasExplicitInterfaceProperty()
+    {
+        var result = Evaluate("""
+            interface View {
+                prop Value string { get; }
+            }
+            class Dog : View {
+                prop Value string -> "public"
+                private prop (View) Value string -> "explicit"
+            }
+
+            func Run() string {
+                var x View = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x.Value
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("public", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_ConstructedGenericPropertyGuardRetainsNullableType()
+    {
+        var result = Evaluate("""
+            class Box[T] {
+                prop Value T { get; set; }
+            }
+
+            func Run() int32 {
+                let box = Box[string?]{Value: "safe"}
+                var count = 0
+                if box.Value != nil {
+                    if box.Value != nil {
+                    Again:
+                        let length = box.Value.Length
+                        if count == 0 {
+                            count++
+                            box.Value = nil
+                            goto Again
+                        }
+                        return length
+                    }
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_ConstructedGenericFieldGuardRetainsNullableType()
+    {
+        var result = Evaluate("""
+            class Box[T] {
+                var Value T
+            }
+
+            func Run() int32 {
+                let box = Box[string?]{Value: "safe"}
+                var count = 0
+                if box.Value != nil {
+                    if box.Value != nil {
+                    Again:
+                        let length = box.Value.Length
+                        if count == 0 {
+                            count++
+                            box.Value = nil
+                            goto Again
+                        }
+                        return length
+                    }
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_ThroughNonCompletingFinally_DoesNotActivateTargetEdges()
+    {
+        AssertRuns("""
+            func Run(enter bool) int32 {
+                var x string? = nil
+                x = "safe"
+                if enter {
+                    try {
+                        goto Enter
+                    }
+                    finally {
+                        return 0
+                    }
+                }
+                goto Use
+            Enter:
+                x = nil
+                goto Use
+            Use:
+                return x.Length
+            }
+
+            Console.WriteLine(Run(false))
+            """, "4");
+    }
+
+    [Fact]
+    public void BackwardGoto_GetterOnlyPropertyDoesNotValidateSubtypeSetter()
+    {
+        var result = Evaluate("""
+            interface View {
+                prop Value string { get; }
+            }
+            class Dog : View {
+                prop Value string { get; set; }
+            }
+            class Cat : View {
+                prop Value string -> "cat"
+            }
+
+            func Run() {
+                var x View = Dog{}
+                if x is Dog {
+                Again:
+                    x.Value = "changed"
+                    x = Cat{}
+                    goto Again
+                }
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Value", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+    }
+
+    [Fact]
+    public void BackwardGoto_SetterOnlyPropertyDoesNotValidateSubtypeGetter()
+    {
+        var result = Evaluate("""
+            interface View {
+                prop Value string { set; }
+            }
+            class Dog : View {
+                prop Value string { get; set; }
+            }
+            class Cat : View {
+                prop Value string { set; }
+            }
+
+            func Run() string {
+                var x View = Dog{}
+                if x is Dog {
+                Again:
+                    let value = x.Value
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Value", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+    }
+
+    [Fact]
+    public void BackwardGoto_GetterOnlyIndexerDoesNotValidateSubtypeSetter()
+    {
+        var result = Evaluate("""
+            interface Values {
+                prop this[index int32] string { get; }
+            }
+            class Dog : Values {
+                prop this[index int32] string { get { return "dog" } set { } }
+            }
+            class Cat : Values {
+                prop this[index int32] string -> "cat"
+            }
+
+            func Run() {
+                var x Values = Dog{}
+                if x is Dog {
+                Again:
+                    x[0] = "changed"
+                    x = Cat{}
+                    goto Again
+                }
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0116");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_SetterOnlyIndexerDoesNotValidateSubtypeGetter()
+    {
+        var result = Evaluate("""
+            interface Values {
+                prop this[index int32] string { set; }
+            }
+            class Dog : Values {
+                prop this[index int32] string { get { return "dog" } set { } }
+            }
+            class Cat : Values {
+                prop this[index int32] string { set { } }
+            }
+
+            func Run() string {
+                var x Values = Dog{}
+                if x is Dog {
+                Again:
+                    let value = x[0]
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0116");
+        Assert.Equal("x", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
     private static void AssertRuns(string source, params string[] expectedLines)
     {
         var result = Evaluate(source);
@@ -4235,4 +4555,42 @@ public class Issue4519GotoAssignmentNarrowingTests
             string.Join(Environment.NewLine, expectedLines) + Environment.NewLine,
             result.Output.ReplaceLineEndings(Environment.NewLine));
     }
+}
+
+/// <summary>Imported call surface used to verify declared-receiver recovery does not rebind arguments.</summary>
+public interface Issue4519ImportedCallReceiver
+{
+    /// <summary>Reads a deterministic value.</summary>
+    bool TryRead(string key, out int value);
+
+    /// <summary>Applies a callback to a deterministic value.</summary>
+    int Apply(Func<int, int> selector);
+}
+
+/// <summary>First imported implementation used as the narrowed receiver.</summary>
+public sealed class Issue4519ImportedCallDog : Issue4519ImportedCallReceiver
+{
+    /// <inheritdoc/>
+    public bool TryRead(string key, out int value)
+    {
+        value = 11;
+        return true;
+    }
+
+    /// <inheritdoc/>
+    public int Apply(Func<int, int> selector) => selector(11);
+}
+
+/// <summary>Second imported implementation reached by the backedge.</summary>
+public sealed class Issue4519ImportedCallCat : Issue4519ImportedCallReceiver
+{
+    /// <inheritdoc/>
+    public bool TryRead(string key, out int value)
+    {
+        value = 22;
+        return true;
+    }
+
+    /// <inheritdoc/>
+    public int Apply(Func<int, int> selector) => selector(22);
 }

@@ -195,23 +195,6 @@ internal static class SmartCastStability
     /// <returns><c>true</c> when a nil-guard leaf was recognised.</returns>
     public static bool TryClassifyNilGuardLeaf(BoundExpression condition, bool restrictBareVariableToLocalsAndParams, bool referenceNullableOnly, [NotNullWhen(true)] out AccessPath? target, [NotNullWhen(true)] out TypeSymbol? underlying, out bool nonNilWhenTrue)
     {
-        static TypeSymbol GetDeclaredMemberType(AccessPath path, TypeSymbol fallback)
-        {
-            var member = path.Members[^1];
-            return member.SourceSymbol switch
-            {
-                FieldSymbol field => field.Type,
-                PropertySymbol property => property.Type,
-                VariableSymbol variable => variable.Type,
-                _ => member.ClrMember switch
-                {
-                    FieldInfo field => ClrNullability.GetFieldTypeSymbol(field),
-                    PropertyInfo property => ClrNullability.GetPropertyTypeSymbol(property),
-                    _ => fallback,
-                },
-            };
-        }
-
         target = null;
         underlying = null;
         nonNilWhenTrue = false;
@@ -254,12 +237,12 @@ internal static class SmartCastStability
         else if (StatementBinder.IsNilLiteral(right) && TryGetStableMemberPath(left, out var leftPath, out var leftType))
         {
             target = leftPath;
-            targetType = GetDeclaredMemberType(leftPath, leftType);
+            targetType = MemberLookup.GetDeclaredAccessPathType(leftPath, leftType);
         }
         else if (StatementBinder.IsNilLiteral(left) && TryGetStableMemberPath(right, out var rightPath, out var rightType))
         {
             target = rightPath;
-            targetType = GetDeclaredMemberType(rightPath, rightType);
+            targetType = MemberLookup.GetDeclaredAccessPathType(rightPath, rightType);
         }
 
         // ADR-0186 §6: a nil guard narrows a PLATFORM value exactly as it

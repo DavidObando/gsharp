@@ -5329,6 +5329,55 @@ internal sealed class MemberLookup
         return ClrNullability.GetPropertyTypeSymbol(closedProperty);
     }
 
+    internal static TypeSymbol GetDeclaredAccessPathType(AccessPath path, TypeSymbol fallback)
+    {
+        var receiverType = path.Root.Type;
+        foreach (var member in path.Members)
+        {
+            receiverType = receiverType is NullableTypeSymbol nullable
+                ? nullable.UnderlyingType
+                : receiverType;
+            receiverType = member.SourceSymbol switch
+            {
+                FieldSymbol field => FindSourceFieldType(receiverType, field) ?? field.Type,
+                PropertySymbol property => FindSourcePropertyType(receiverType, property) ?? property.Type,
+                VariableSymbol variable => variable.Type,
+                _ => member.ClrMember switch
+                {
+                    FieldInfo field => GetClrFieldTypeSymbol(receiverType, field),
+                    PropertyInfo property => GetClrPropertyTypeSymbol(receiverType, property),
+                    _ => fallback,
+                },
+            };
+        }
+
+        return receiverType;
+
+        static TypeSymbol? FindSourceFieldType(TypeSymbol receiver, FieldSymbol selected)
+            => receiver is StructSymbol structType
+                ? structType.GetHierarchy().SelectMany(type => type.Fields).FirstOrDefault(candidate =>
+                    ReferenceEquals(candidate, selected)
+                    || (selected.Declaration != null
+                        && ReferenceEquals(candidate.Declaration, selected.Declaration)))?.Type
+                : null;
+
+        static TypeSymbol? FindSourcePropertyType(TypeSymbol receiver, PropertySymbol selected)
+        {
+            IEnumerable<PropertySymbol> candidates = receiver switch
+            {
+                StructSymbol structType => structType.GetHierarchy().SelectMany(type => type.Properties),
+                InterfaceSymbol interfaceType => interfaceType
+                    .SelfAndAllBaseInterfaces()
+                    .SelectMany(type => type.Properties),
+                _ => Enumerable.Empty<PropertySymbol>(),
+            };
+            return candidates.FirstOrDefault(candidate =>
+                ReferenceEquals(candidate, selected)
+                || (selected.Declaration != null
+                    && ReferenceEquals(candidate.Declaration, selected.Declaration)))?.Type;
+        }
+    }
+
     /// <summary>
     /// Resolves a CLR field type through receiver-carried generic nullability.
     /// </summary>
