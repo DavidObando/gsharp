@@ -1250,6 +1250,7 @@ internal sealed partial class StatementBinder
     private BoundStatement BindStatementWithNarrowing(StatementSyntax syntax, Dictionary<AccessPath, TypeSymbol>? frame)
     {
         var inheritedFallthrough = currentStatementListFallsThrough;
+        var inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel;
         try
         {
             if (frame == null)
@@ -1270,6 +1271,7 @@ internal sealed partial class StatementBinder
         finally
         {
             currentStatementListFallsThrough = inheritedFallthrough;
+            binderCtx.PotentialReachabilityLabel = inheritedPotentialReachabilityLabel;
         }
     }
 

@@ -2333,6 +2333,9 @@ internal sealed class LambdaBinder
         binderCtx.AssignmentNarrowingGeneration = 0;
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
         binderCtx.BackwardGotoNarrowingStates.Clear();
+        binderCtx.ReachableUserLabels.Clear();
+        binderCtx.DeferredUnreachableGotoEdges.Clear();
+        binderCtx.PotentialReachabilityLabel = null;
         binderCtx.LoopStack.Clear();
         binderCtx.CurrentFallthroughTarget = null;
         binderCtx.CurrentFallthroughAnchor = null;
@@ -2414,6 +2417,12 @@ internal sealed class LambdaBinder
         {
             binderCtx.BackwardGotoNarrowingStates[kvp.Key] = kvp.Value.Clone();
         }
+
+        binderCtx.ReachableUserLabels.Clear();
+        binderCtx.ReachableUserLabels.UnionWith(saved.ReachableUserLabels);
+        binderCtx.DeferredUnreachableGotoEdges.Clear();
+        binderCtx.DeferredUnreachableGotoEdges.AddRange(saved.DeferredUnreachableGotoEdges);
+        binderCtx.PotentialReachabilityLabel = saved.PotentialReachabilityLabel;
 
         // BinderContext.LoopStack.ToArray() orders elements top-of-stack
         // first; push back bottom-first so the restored stack's top matches
@@ -3065,6 +3074,11 @@ internal sealed class LambdaBinder
             BackwardGotoNarrowingStates = ctx.BackwardGotoNarrowingStates.ToDictionary(
                 entry => entry.Key,
                 entry => entry.Value.Clone());
+            ReachableUserLabels = new HashSet<string>(ctx.ReachableUserLabels);
+            DeferredUnreachableGotoEdges = ctx.DeferredUnreachableGotoEdges
+                .Select(edge => (edge.SourceLabel, edge.TargetLabel, edge.Snapshot.Clone()))
+                .ToList();
+            PotentialReachabilityLabel = ctx.PotentialReachabilityLabel;
             LoopStack = ctx.LoopStack.ToArray();
             FallthroughTarget = ctx.CurrentFallthroughTarget;
             FallthroughAnchor = ctx.CurrentFallthroughAnchor;
@@ -3086,6 +3100,12 @@ internal sealed class LambdaBinder
         public Dictionary<string, List<GotoNarrowingSnapshot>> PendingGotoNarrowingSnapshots { get; }
 
         public Dictionary<string, BackwardGotoNarrowingState> BackwardGotoNarrowingStates { get; }
+
+        public HashSet<string> ReachableUserLabels { get; }
+
+        public List<(string SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)> DeferredUnreachableGotoEdges { get; }
+
+        public string? PotentialReachabilityLabel { get; }
 
         public (string? LabelName, BoundLabel BreakLabel, BoundLabel? ContinueLabel)[] LoopStack { get; }
 

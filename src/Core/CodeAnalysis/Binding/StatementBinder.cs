@@ -122,11 +122,8 @@ internal sealed partial class StatementBinder
     private readonly HashSet<BoundStatement> internallyReachableFallthroughStatements = new();
     private readonly HashSet<BoundLabel> internallyReachableLoopExits = new();
     private readonly HashSet<BoundLabel> internallyReachableLoopBacks = new();
-    private readonly HashSet<string> reachableUserLabels = new(StringComparer.Ordinal);
-    private readonly List<(string SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)> deferredUnreachableGotoEdges = new();
     private int internalReachabilityGeneration;
     private bool currentStatementListFallsThrough = true;
-    private string? potentialReachabilityLabel;
     private int usingInitializationFlagCount;
 
     public StatementBinder(
@@ -597,7 +594,7 @@ internal sealed partial class StatementBinder
         var inheritedAssignmentGenerations =
             new Dictionary<VariableSymbol, int>(binderCtx.AssignmentNarrowingGenerations);
         var inheritedFallthrough = currentStatementListFallsThrough;
-        var inheritedPotentialReachabilityLabel = potentialReachabilityLabel;
+        var inheritedPotentialReachabilityLabel = binderCtx.PotentialReachabilityLabel;
         binderCtx.NarrowedVariables.Add(memberNotNullFrame);
         try
         {
@@ -850,9 +847,15 @@ internal sealed partial class StatementBinder
                 currentStatementListFallsThrough =
                     (currentStatementListFallsThrough || HasInternallyReachableFallthrough(statement))
                     && !EndsInUnconditionalExit(statement);
-                if (EndsInUnconditionalExit(statement))
+                if (EndsInUnconditionalExit(statement)
+                    && statement is not (BoundTryStatement
+                        or BoundPatternSwitchStatement
+                        or BoundForInfiniteStatement
+                        or BoundForEllipsisStatement
+                        or BoundForRangeStatement
+                        or BoundAwaitForRangeStatement))
                 {
-                    potentialReachabilityLabel = null;
+                    binderCtx.PotentialReachabilityLabel = null;
                 }
             }
 
@@ -873,7 +876,7 @@ internal sealed partial class StatementBinder
             }
 
             currentStatementListFallsThrough = inheritedFallthrough;
-            potentialReachabilityLabel = inheritedPotentialReachabilityLabel;
+            binderCtx.PotentialReachabilityLabel = inheritedPotentialReachabilityLabel;
         }
     }
 

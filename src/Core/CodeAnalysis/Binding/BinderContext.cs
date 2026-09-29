@@ -318,6 +318,12 @@ internal sealed class BinderContext
     public Dictionary<string, BackwardGotoNarrowingState> BackwardGotoNarrowingStates { get; }
         = new Dictionary<string, BackwardGotoNarrowingState>();
 
+    public HashSet<string> ReachableUserLabels { get; } = new(StringComparer.Ordinal);
+
+    public List<(string SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)> DeferredUnreachableGotoEdges { get; } = [];
+
+    public string? PotentialReachabilityLabel { get; set; }
+
     /// <summary>
     /// Gets or sets a value indicating whether the CURRENT function/lambda/
     /// local-function body contains any user-written <c>goto</c> statement or non-loop
