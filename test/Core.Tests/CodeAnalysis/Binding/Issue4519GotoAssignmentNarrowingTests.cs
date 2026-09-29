@@ -2079,6 +2079,34 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyIncludesImportedCallableArgumentBodyMutation()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                var values = []int32{1}
+                try {
+                    goto Done
+                }
+                finally {
+                    Array.ForEach(values, func(value int32) { x = nil })
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_FinallyTreatsMixedExternalAndUnknownCallableAsUnsafe()
     {
         var result = Evaluate("""

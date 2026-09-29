@@ -1701,25 +1701,12 @@ internal sealed partial class StatementBinder
                     {
                         RecordWritableReference(arguments[i]);
                     }
-
-                    if (function.Parameters[i].Type is FunctionTypeSymbol or DelegateTypeSymbol)
-                    {
-                        var hasKnownTargets = TryGetFunctionLiterals(arguments[i], out var literals);
-                        if (literals != null)
-                        {
-                            foreach (var literal in literals)
-                            {
-                                VisitFunctionLiteralBody(literal);
-                            }
-                        }
-
-                        if (IsUnknownCallable(arguments[i])
-                            || (!hasKnownTargets && !IsExternalCallable(arguments[i])))
-                        {
-                            MayMutateAnyRoot = true;
-                        }
-                    }
                 }
+            }
+
+            if (node is BoundCallOperationExpression call)
+            {
+                AnalyzeCallableArguments(call.Arguments);
             }
 
             base.VisitExpression(node);
@@ -1780,7 +1767,46 @@ internal sealed partial class StatementBinder
                 MayMutateAnyRoot = true;
             }
 
+            AnalyzeCallableArguments(node.Arguments);
             base.VisitIndirectCallExpression(node);
+        }
+
+        protected override void VisitConstructorCallExpression(BoundConstructorCallExpression node)
+        {
+            AnalyzeCallableArguments(node.Arguments);
+            base.VisitConstructorCallExpression(node);
+        }
+
+        protected override void VisitClrConstructorCallExpression(BoundClrConstructorCallExpression node)
+        {
+            AnalyzeCallableArguments(node.Arguments);
+            base.VisitClrConstructorCallExpression(node);
+        }
+
+        private void AnalyzeCallableArguments(ImmutableArray<BoundExpression> arguments)
+        {
+            foreach (var argument in arguments)
+            {
+                if (argument.Type is not (FunctionTypeSymbol or DelegateTypeSymbol))
+                {
+                    continue;
+                }
+
+                var hasKnownTargets = TryGetFunctionLiterals(argument, out var literals);
+                if (literals != null)
+                {
+                    foreach (var literal in literals)
+                    {
+                        VisitFunctionLiteralBody(literal);
+                    }
+                }
+
+                if (IsUnknownCallable(argument)
+                    || (!hasKnownTargets && !IsExternalCallable(argument)))
+                {
+                    MayMutateAnyRoot = true;
+                }
+            }
         }
 
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
