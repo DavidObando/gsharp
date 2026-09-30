@@ -1756,35 +1756,7 @@ internal sealed partial class StatementBinder
 
         protected override void VisitIndirectCallExpression(BoundIndirectCallExpression node)
         {
-            var target = UnwrapCallable(node.Target);
-            if (target is BoundFunctionLiteralExpression direct)
-            {
-                VisitFunctionLiteralBody(direct);
-            }
-            else if (target is BoundVariableExpression variable)
-            {
-                if (functionLiterals.TryGetValue(variable.Variable, out var literals))
-                {
-                    foreach (var literal in literals)
-                    {
-                        VisitFunctionLiteralBody(literal);
-                    }
-                }
-
-                // A read-only callable parameter originates outside this
-                // function and cannot capture this function's local slots.
-                MayMutateAnyRoot |= unknownFunctionValues.Contains(variable.Variable)
-                    || (variable.Variable is not ParameterSymbol { IsReadOnly: true }
-                        && !externalFunctionValues.Contains(variable.Variable)
-                        && !functionLiterals.ContainsKey(variable.Variable));
-                MayMutateGlobalRoots |= variable.Variable is ParameterSymbol { IsReadOnly: true }
-                    || externalFunctionValues.Contains(variable.Variable);
-            }
-            else
-            {
-                MayMutateAnyRoot = true;
-            }
-
+            AnalyzeCallableInvocation(node.Target);
             AnalyzeCallableArguments(node.Arguments);
             base.VisitIndirectCallExpression(node);
         }
@@ -1793,6 +1765,17 @@ internal sealed partial class StatementBinder
         {
             AnalyzeCallableArguments(node.Arguments);
             base.VisitBaseClassCallExpression(node);
+        }
+
+        protected override void VisitImportedInstanceCallExpression(BoundImportedInstanceCallExpression node)
+        {
+            if (string.Equals(node.Method.Name, "Invoke", StringComparison.Ordinal)
+                && IsCallableType(node.Receiver.Type))
+            {
+                AnalyzeCallableInvocation(node.Receiver);
+            }
+
+            base.VisitImportedInstanceCallExpression(node);
         }
 
         protected override void VisitFunctionPointerInvocationExpression(BoundFunctionPointerInvocationExpression node)
@@ -1817,7 +1800,7 @@ internal sealed partial class StatementBinder
         {
             foreach (var argument in arguments)
             {
-                if (argument.Type is not (FunctionTypeSymbol or DelegateTypeSymbol))
+                if (!IsCallableType(argument.Type))
                 {
                     continue;
                 }
@@ -2082,6 +2065,43 @@ internal sealed partial class StatementBinder
         private bool IsUnknownCallable(BoundExpression expression)
             => UnwrapCallable(expression) is BoundVariableExpression variable
                 && unknownFunctionValues.Contains(variable.Variable);
+
+        private void AnalyzeCallableInvocation(BoundExpression expression)
+        {
+            var callable = UnwrapCallable(expression);
+            if (callable is BoundFunctionLiteralExpression direct)
+            {
+                VisitFunctionLiteralBody(direct);
+                return;
+            }
+
+            if (callable is not BoundVariableExpression variable)
+            {
+                MayMutateAnyRoot = true;
+                return;
+            }
+
+            if (functionLiterals.TryGetValue(variable.Variable, out var literals))
+            {
+                foreach (var literal in literals)
+                {
+                    VisitFunctionLiteralBody(literal);
+                }
+            }
+
+            // A read-only callable parameter originates outside this function
+            // and cannot capture this function's local slots.
+            MayMutateAnyRoot |= unknownFunctionValues.Contains(variable.Variable)
+                || (variable.Variable is not ParameterSymbol { IsReadOnly: true }
+                    && !externalFunctionValues.Contains(variable.Variable)
+                    && !functionLiterals.ContainsKey(variable.Variable));
+            MayMutateGlobalRoots |= variable.Variable is ParameterSymbol { IsReadOnly: true }
+                || externalFunctionValues.Contains(variable.Variable);
+        }
+
+        private static bool IsCallableType(TypeSymbol? type)
+            => type is FunctionTypeSymbol or DelegateTypeSymbol
+                || (type?.ClrType is { } clrType && ClrTypeUtilities.IsDelegateType(clrType));
 
         private bool TryGetFunctionLiterals(
             BoundExpression expression,
