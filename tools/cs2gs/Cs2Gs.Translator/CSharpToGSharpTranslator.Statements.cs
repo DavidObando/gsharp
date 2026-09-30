@@ -1537,7 +1537,7 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
                 }
-                else if (targetSymbol is not (IFieldSymbol or IPropertySymbol)
+                else if (!this.IsNonLocalDelegateStorage(target)
                     || !this.NonLocalDelegateMayReferenceAnonymousFunction(
                         target,
                         invocation.SpanStart,
@@ -1613,8 +1613,8 @@ public sealed partial class CSharpToGSharpTranslator
             foreach (AssignmentExpressionSyntax assignment in
                 EagerExecutionNodes(executionBody)
                     .OfType<AssignmentExpressionSyntax>()
-                    .Where(candidate => this.context.GetSymbolInfo(
-                        candidate.Left).Symbol is IFieldSymbol or IPropertySymbol))
+                    .Where(candidate =>
+                        this.IsNonLocalDelegateStorage(candidate.Left)))
             {
                 if (!this.DelegateExpressionReachesAnonymousFunction(
                     assignment.Right,
@@ -1756,8 +1756,7 @@ public sealed partial class CSharpToGSharpTranslator
             AnonymousFunctionExpressionSyntax anonymousFunction,
             SyntaxNode enclosingExecutable)
         {
-            ISymbol symbol = this.context.GetSymbolInfo(storage).Symbol;
-            if (symbol is not (IFieldSymbol or IPropertySymbol))
+            if (!this.IsNonLocalDelegateStorage(storage))
             {
                 return false;
             }
@@ -1905,6 +1904,16 @@ public sealed partial class CSharpToGSharpTranslator
             return reaching.Any(count => count > 0);
         }
 
+        private bool IsNonLocalDelegateStorage(ExpressionSyntax expression)
+        {
+            expression = Unwrap(expression);
+            return this.context.GetSymbolInfo(expression).Symbol
+                    is IFieldSymbol or IPropertySymbol
+                || (expression is ElementAccessExpressionSyntax
+                    && this.context.GetTypeInfo(expression).Type
+                        is { TypeKind: TypeKind.Delegate });
+        }
+
         private HashSet<int> ApplyDelegateReachingOperation(
             IOperation operation,
             ExpressionSyntax storage,
@@ -2029,6 +2038,20 @@ public sealed partial class CSharpToGSharpTranslator
         {
             left = Unwrap(left);
             right = Unwrap(right);
+            if (left is ElementAccessExpressionSyntax
+                || right is ElementAccessExpressionSyntax)
+            {
+                if (left is not ElementAccessExpressionSyntax leftElement
+                    || right is not ElementAccessExpressionSyntax rightElement)
+                {
+                    return false;
+                }
+
+                return this.IndexedDelegateStorageMatches(
+                    leftElement,
+                    rightElement);
+            }
+
             ISymbol leftSymbol = this.context.GetSymbolInfo(left).Symbol;
             ISymbol rightSymbol = this.context.GetSymbolInfo(right).Symbol;
             if (!SymbolEqualityComparer.Default.Equals(leftSymbol, rightSymbol))
@@ -2088,17 +2111,162 @@ public sealed partial class CSharpToGSharpTranslator
             if (left is ElementAccessExpressionSyntax leftElement
                 && right is ElementAccessExpressionSyntax rightElement)
             {
-                return this.DelegateReceiverMatches(
-                        leftElement.Expression,
-                        rightElement.Expression)
-                    && SyntaxFactory.AreEquivalent(
-                        leftElement.ArgumentList,
-                        rightElement.ArgumentList);
+                return this.IndexedDelegateStorageMatches(
+                    leftElement,
+                    rightElement);
             }
 
-            return SymbolEqualityComparer.Default.Equals(
-                this.context.GetSymbolInfo(left).Symbol,
-                this.context.GetSymbolInfo(right).Symbol);
+            ISymbol leftSymbol = this.context.GetSymbolInfo(left).Symbol;
+            ISymbol rightSymbol = this.context.GetSymbolInfo(right).Symbol;
+            return leftSymbol != null
+                && SymbolEqualityComparer.Default.Equals(
+                    leftSymbol,
+                    rightSymbol);
+        }
+
+        private bool IndexedDelegateStorageMatches(
+            ElementAccessExpressionSyntax left,
+            ElementAccessExpressionSyntax right)
+        {
+            if (left.ArgumentList.Arguments.Count
+                    != right.ArgumentList.Arguments.Count)
+            {
+                return false;
+            }
+
+            for (int i = 0; i < left.ArgumentList.Arguments.Count; i++)
+            {
+                Optional<object> leftIndex = this.context.SemanticModel
+                    .GetConstantValue(
+                        left.ArgumentList.Arguments[i].Expression);
+                Optional<object> rightIndex = this.context.SemanticModel
+                    .GetConstantValue(
+                        right.ArgumentList.Arguments[i].Expression);
+                if (!leftIndex.HasValue
+                    || !rightIndex.HasValue
+                    || !Equals(leftIndex.Value, rightIndex.Value))
+                {
+                    return false;
+                }
+            }
+
+            IReadOnlyList<ExpressionSyntax> leftOrigins =
+                this.GetIndexedDelegateReceiverOrigins(
+                    left.Expression,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+            IReadOnlyList<ExpressionSyntax> rightOrigins =
+                this.GetIndexedDelegateReceiverOrigins(
+                    right.Expression,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+            return leftOrigins.Any(leftOrigin =>
+                rightOrigins.Any(rightOrigin =>
+                    this.IndexedDelegateReceiverOriginMatches(
+                        leftOrigin,
+                        rightOrigin)));
+        }
+
+        private IReadOnlyList<ExpressionSyntax> GetIndexedDelegateReceiverOrigins(
+            ExpressionSyntax expression,
+            HashSet<ISymbol> visited)
+        {
+            expression = Unwrap(expression);
+            if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+            {
+                return Array.Empty<ExpressionSyntax>();
+            }
+
+            ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+            if (symbol is ILocalSymbol local)
+            {
+                if (!visited.Add(local))
+                {
+                    return Array.Empty<ExpressionSyntax>();
+                }
+
+                IReadOnlyList<ExpressionSyntax> reaching =
+                    this.GetReachingLocalValues(
+                        local,
+                        expression.SpanStart,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
+                if (reaching.Count == 0)
+                {
+                    return new[] { expression };
+                }
+
+                return reaching
+                    .SelectMany(value =>
+                        this.GetIndexedDelegateReceiverOrigins(
+                            value,
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default)))
+                    .ToList();
+            }
+
+            if (symbol is IPropertySymbol or IMethodSymbol
+                || expression is InvocationExpressionSyntax)
+            {
+                return Array.Empty<ExpressionSyntax>();
+            }
+
+            return new[] { expression };
+        }
+
+        private bool IndexedDelegateReceiverOriginMatches(
+            ExpressionSyntax left,
+            ExpressionSyntax right)
+        {
+            left = Unwrap(left);
+            right = Unwrap(right);
+            if (left.SyntaxTree == right.SyntaxTree
+                && left.Span == right.Span)
+            {
+                return true;
+            }
+
+            ISymbol leftSymbol = this.context.GetSymbolInfo(left).Symbol;
+            ISymbol rightSymbol = this.context.GetSymbolInfo(right).Symbol;
+            if (leftSymbol is IParameterSymbol
+                || leftSymbol is ILocalSymbol)
+            {
+                return SymbolEqualityComparer.Default.Equals(
+                    leftSymbol,
+                    rightSymbol);
+            }
+
+            if (leftSymbol is not IFieldSymbol
+                || !SymbolEqualityComparer.Default.Equals(
+                    leftSymbol,
+                    rightSymbol))
+            {
+                return left is ThisExpressionSyntax
+                    && right is ThisExpressionSyntax;
+            }
+
+            ExpressionSyntax leftReceiver =
+                (left as MemberAccessExpressionSyntax)?.Expression;
+            ExpressionSyntax rightReceiver =
+                (right as MemberAccessExpressionSyntax)?.Expression;
+            if (leftReceiver == null || rightReceiver == null)
+            {
+                return leftReceiver == null && rightReceiver == null;
+            }
+
+            IReadOnlyList<ExpressionSyntax> leftOrigins =
+                this.GetIndexedDelegateReceiverOrigins(
+                    leftReceiver,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+            IReadOnlyList<ExpressionSyntax> rightOrigins =
+                this.GetIndexedDelegateReceiverOrigins(
+                    rightReceiver,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default));
+            return leftOrigins.Any(leftOrigin =>
+                rightOrigins.Any(rightOrigin =>
+                    this.IndexedDelegateReceiverOriginMatches(
+                        leftOrigin,
+                        rightOrigin)));
         }
 
         private bool DelegateLocalReachesAnonymousFunction(
@@ -2285,6 +2453,14 @@ public sealed partial class CSharpToGSharpTranslator
                 .OrderBy(ReachingWritePosition)
                 .ThenBy(node => node.SpanStart))
             {
+                if (local.RefKind != RefKind.None
+                    && (writeNode is not AssignmentExpressionSyntax refAssignment
+                        || !this.BindsTo(refAssignment.Left, local)
+                        || refAssignment.Right is not RefExpressionSyntax))
+                {
+                    continue;
+                }
+
                 var elementWrites =
                     new List<(IReadOnlyList<int> Path, ExpressionSyntax Value)>();
                 if (writeNode is ArgumentSyntax argument
@@ -2435,11 +2611,12 @@ public sealed partial class CSharpToGSharpTranslator
 
             return node is ArgumentSyntax
             { RefOrOutKeyword.RawKind: not (int)SyntaxKind.None } argument
-                && this.TryFindTupleElementWritePath(
-                    argument.Expression,
-                    local,
-                    new List<int>(),
-                    out _);
+                && (this.ReachingBindsTo(argument.Expression, local)
+                    || this.TryFindTupleElementWritePath(
+                        argument.Expression,
+                        local,
+                        new List<int>(),
+                        out _));
         }
 
         private void ApplyTupleElementWrites(
@@ -2531,7 +2708,7 @@ public sealed partial class CSharpToGSharpTranslator
             bool includeWholeTuple = false)
         {
             left = Unwrap(left);
-            if (includeWholeTuple && this.BindsTo(left, local))
+            if (includeWholeTuple && this.ReachingBindsTo(left, local))
             {
                 writes.Add((Array.Empty<int>(), right));
                 return;
@@ -2570,10 +2747,23 @@ public sealed partial class CSharpToGSharpTranslator
             out IReadOnlyList<int> found)
         {
             expression = Unwrap(expression);
-            if (this.BindsTo(expression, local))
+            if (this.ReachingBindsTo(expression, local))
             {
                 found = new List<int>(path);
                 return path.Count > 0;
+            }
+
+            foreach (ExpressionSyntax aliasTarget
+                in this.GetRefAliasTargets(expression))
+            {
+                if (this.TryFindTupleElementWritePath(
+                    aliasTarget,
+                    local,
+                    path,
+                    out found))
+                {
+                    return true;
+                }
             }
 
             if (expression is MemberAccessExpressionSyntax member
@@ -2734,10 +2924,22 @@ public sealed partial class CSharpToGSharpTranslator
             out IReadOnlyList<int> found)
         {
             left = Unwrap(left);
-            if (this.BindsTo(left, local))
+            if (this.ReachingBindsTo(left, local))
             {
                 found = new List<int>(path);
                 return true;
+            }
+
+            foreach (ExpressionSyntax aliasTarget in this.GetRefAliasTargets(left))
+            {
+                if (this.TryFindAssignedValuePath(
+                    aliasTarget,
+                    local,
+                    path,
+                    out found))
+                {
+                    return true;
+                }
             }
 
             if (left is DeclarationExpressionSyntax declaration)
@@ -2769,6 +2971,49 @@ public sealed partial class CSharpToGSharpTranslator
 
             found = null;
             return false;
+        }
+
+        private bool ReachingBindsTo(
+            ExpressionSyntax expression,
+            ILocalSymbol local,
+            HashSet<ISymbol> visited = null)
+        {
+            expression = Unwrap(expression);
+            if (this.BindsTo(expression, local))
+            {
+                return true;
+            }
+
+            visited ??= new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+            return this.GetRefAliasTargets(expression, visited)
+                .Any(aliasTarget =>
+                    this.ReachingBindsTo(aliasTarget, local, visited));
+        }
+
+        private IEnumerable<ExpressionSyntax> GetRefAliasTargets(
+            ExpressionSyntax expression,
+            HashSet<ISymbol> visited = null)
+        {
+            if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree
+                || this.context.GetSymbolInfo(expression).Symbol
+                    is not ILocalSymbol { RefKind: not RefKind.None } alias
+                || (visited != null && !visited.Add(alias)))
+            {
+                return Array.Empty<ExpressionSyntax>();
+            }
+
+            HashSet<ISymbol> reachingVisited = visited == null
+                ? null
+                : new HashSet<ISymbol>(
+                    visited,
+                    SymbolEqualityComparer.Default);
+            return this.GetReachingLocalValues(
+                    alias,
+                    expression.SpanStart,
+                    reachingVisited)
+                .OfType<RefExpressionSyntax>()
+                .Select(target => target.Expression)
+                .ToList();
         }
 
         private bool TryFindAssignedValuePath(

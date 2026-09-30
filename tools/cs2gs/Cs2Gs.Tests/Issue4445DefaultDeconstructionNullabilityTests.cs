@@ -1496,6 +1496,84 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotMatch(@"\b(let|var) ignoredLeft T\? =", printed);
     }
 
+    [Fact]
+    public void Translation_TracksRefAliasesAndIndexedDelegateStorage()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class ReachingStorage
+            {
+                private static void Fill<T>(ref T? value, T replacement) =>
+                    value = replacement;
+
+                private static void Keep<T>(ref T value)
+                {
+                }
+
+                private static System.Action[] GetCallbacks() =>
+                    new System.Action[1];
+
+                public static void M<T>(T replacement)
+                {
+                    var firstRefPair = (replacement, replacement);
+                    var secondRefPair = (replacement, replacement);
+                    ref var refAlias = ref firstRefPair;
+                    refAlias = ref secondRefPair;
+                    refAlias = (default(T), replacement);
+                    var (firstRefAliasLeft, _) = firstRefPair;
+                    var (secondRefAliasLeft, _) = secondRefPair;
+                    Keep(ref firstRefAliasLeft);
+                    Fill(ref secondRefAliasLeft, replacement);
+
+                    var indexedPair = (replacement, replacement);
+                    System.Action indexed = () =>
+                    {
+                        var (indexedLeft, _) = indexedPair;
+                        Fill(ref indexedLeft, replacement);
+                    };
+                    var callbacks = new System.Action[2];
+                    callbacks[0] = indexed;
+                    callbacks[1] = () => { };
+                    var callbackAlias = callbacks;
+                    indexedPair = (default(T), replacement);
+                    callbackAlias[0]();
+
+                    var shiftedPair = (replacement, replacement);
+                    System.Action shifted = () =>
+                    {
+                        var (shiftedLeft, _) = shiftedPair;
+                        Keep(ref shiftedLeft);
+                    };
+                    var shiftedCallbacks = new System.Action[2];
+                    var index = 0;
+                    shiftedCallbacks[index] = shifted;
+                    index = 1;
+                    shiftedPair = (default(T), replacement);
+                    shiftedCallbacks[index]();
+
+                    var freshPair = (replacement, replacement);
+                    System.Action fresh = () =>
+                    {
+                        var (freshLeft, _) = freshPair;
+                        Keep(ref freshLeft);
+                    };
+                    GetCallbacks()[0] = fresh;
+                    freshPair = (default(T), replacement);
+                    GetCallbacks()[0]();
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.DoesNotMatch(@"\b(let|var) firstRefAliasLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) secondRefAliasLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) indexedLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) shiftedLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) freshLeft T\? =", printed);
+    }
+
     private static ILocalSymbol Local(SyntaxNode root, SemanticModel model, string name)
     {
         SyntaxNode declaration = root.DescendantNodes()
