@@ -5827,6 +5827,205 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_InheritedPublicMethodIgnoresDerivedExplicitReimplementation()
+    {
+        var result = Evaluate("""
+            interface View {
+                func Read() string;
+            }
+            open class Base {
+                func Read() string -> "public"
+            }
+            class Dog : Base, View {
+                private func (View) Read() string -> "explicit"
+            }
+
+            func Run() string {
+                var x View = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x.Read()
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("public", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_InheritedPublicIndexerIgnoresDerivedExplicitReimplementation()
+    {
+        var result = Evaluate("""
+            interface View {
+                prop this[index int32] string { get; }
+            }
+            open class Base {
+                prop this[index int32] string -> "public"
+            }
+            class Dog : Base, View {
+                private prop (View) this[index int32] string -> "explicit"
+            }
+
+            func Run() string {
+                var x View = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x[0]
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("public", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_ImportedInheritedPublicMethodIgnoresDerivedExplicitReimplementation()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            func Run() string {
+                var x Issue4519ImportedInheritedView = Issue4519ImportedInheritedDog()
+                var count = 0
+                if x is Issue4519ImportedInheritedDog {
+                Again:
+                    let value = x.Describe()
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """,
+            new[] { typeof(Issue4519ImportedInheritedView).Assembly.Location });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("public", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_ImportedInheritedPropertyWriteDoesNotRequireNarrowedType()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            func Run() string {
+                var x Issue4519ImportedWritableBase = Issue4519ImportedWritableDog()
+                var count = 0
+                if x is Issue4519ImportedWritableDog {
+                Again:
+                    x.Name = "updated"
+                    if count == 0 {
+                        count++
+                        x = Issue4519ImportedWritableCat()
+                        goto Again
+                    }
+                    return x.Name
+                }
+                return ""
+            }
+
+            Run()
+            """,
+            new[] { typeof(Issue4519ImportedWritableBase).Assembly.Location });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("updated", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_ImportedInheritedFieldWriteDoesNotRequireNarrowedType()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            func Run() string {
+                var x Issue4519ImportedWritableBase = Issue4519ImportedWritableDog()
+                var count = 0
+                if x is Issue4519ImportedWritableDog {
+                Again:
+                    x.Label = "updated"
+                    if count == 0 {
+                        count++
+                        x = Issue4519ImportedWritableCat()
+                        goto Again
+                    }
+                    return x.Label
+                }
+                return ""
+            }
+
+            Run()
+            """,
+            new[] { typeof(Issue4519ImportedWritableBase).Assembly.Location });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("updated", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_ParenthesizedInheritedPropertyWriteDoesNotRequireNarrowedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                prop Name string { get; set; }
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+
+            func Run() string {
+                var x Animal = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    (x).Name = "updated"
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return x.Name
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("updated", result.Value);
+    }
+
+    [Fact]
     public void BackwardGoto_SiblingInterfacePropertySlotsDoNotAlias()
     {
         var result = Evaluate("""
@@ -6575,6 +6774,46 @@ public sealed class Issue4519ImportedGenericMapperCat : Issue4519ImportedGeneric
 {
     /// <inheritdoc/>
     public T Map<T>(T value, Func<T, T> selector) => selector(value);
+}
+
+/// <summary>Imported interface re-implemented explicitly by a derived class over an inherited public method.</summary>
+public interface Issue4519ImportedInheritedView
+{
+    /// <summary>Describes the selected dispatch slot.</summary>
+    string Describe();
+}
+
+/// <summary>Imported base declaring the public method that a derived class inherits.</summary>
+public class Issue4519ImportedInheritedBase
+{
+    /// <summary>Public inherited method that ordinary concrete lookup must retain.</summary>
+    public string Describe() => "public";
+}
+
+/// <summary>Imported derived class that re-implements the interface explicitly.</summary>
+public sealed class Issue4519ImportedInheritedDog : Issue4519ImportedInheritedBase, Issue4519ImportedInheritedView
+{
+    string Issue4519ImportedInheritedView.Describe() => "explicit";
+}
+
+/// <summary>Imported writable base used by inherited-write recovery tests.</summary>
+public class Issue4519ImportedWritableBase
+{
+    /// <summary>Gets or sets the name.</summary>
+    public string Name { get; set; } = "base";
+
+    /// <summary>Public writable field.</summary>
+    public string Label = "base";
+}
+
+/// <summary>First imported writable subtype.</summary>
+public sealed class Issue4519ImportedWritableDog : Issue4519ImportedWritableBase
+{
+}
+
+/// <summary>Second imported writable subtype.</summary>
+public sealed class Issue4519ImportedWritableCat : Issue4519ImportedWritableBase
+{
 }
 
 /// <summary>Imported base with ref-returning members used by declared-slot recovery tests.</summary>
