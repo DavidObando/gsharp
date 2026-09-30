@@ -5,6 +5,7 @@
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
@@ -1114,13 +1115,6 @@ public sealed class LspServer
         }
     }
 
-    private bool TryGet(TextDocumentIdentifier identifier, out DocumentContent content)
-    {
-        content = null;
-        var uri = identifier?.Uri;
-        return uri != null && this.documentContentService.TryGet(uri.ToString(), out content);
-    }
-
     private DiagnosticComputationResult UpdateDocument(DocumentUri uri, string text)
     {
         var filePath = uri.GetFileSystemPath();
@@ -1869,5 +1863,15 @@ public sealed class LspServer
         {
             return null;
         }
+    }
+
+#nullable enable annotations
+    private bool TryGet(
+        TextDocumentIdentifier identifier,
+        [NotNullWhen(true)] out DocumentContent? content)
+    {
+        content = null;
+        var uri = identifier?.Uri;
+        return uri != null && this.documentContentService.TryGet(uri.ToString(), out content);
     }
 }
