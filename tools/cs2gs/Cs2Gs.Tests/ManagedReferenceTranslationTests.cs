@@ -4856,6 +4856,85 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ImportedStaticGenericMemberWriteWithProjectedValueReportsUnsupported()
+    {
+        const string source = """
+            using Gsharp.Values;
+            using static ManagedArrayImportedStaticGenericMemberWrite.Holder<Gsharp.Values.ManagedRef<int>>;
+            namespace ManagedArrayImportedStaticGenericMemberWrite;
+            public static class Holder<T> {
+                public static T Value;
+            }
+            public class Probe {
+                public static void Run() {
+                    var source = new ManagedRef<int>[1];
+                    Value = source[0];
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayImportedStaticGenericMemberWrite.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "static generic member's fixed receiver type",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ProjectedConditionalLocalValidatesLaterFixedAssignment()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedConditionalLocalAssignment;
+            public sealed class Holder<T> {
+                public Holder(T value) { Value = value; }
+                public T Value { get; }
+            }
+            public class Probe {
+                private static Holder<T> Wrap<T>(T[] source) =>
+                    new Holder<T>(source[0]);
+                private static Holder<ManagedRef<int>> Fixed(ManagedRef<int> value) =>
+                    new Holder<ManagedRef<int>>(value);
+
+                public static void Run(bool flag) {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    var projected = flag ? Wrap(source) : Wrap(source);
+                    projected = Fixed(ManagedRef<int>.FromArray(values, 0));
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedConditionalLocalAssignment.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "conflicts with a later assignment or consumer",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ConditionalAndSwitchAssignmentsToProjectedArrayElementsStayNullable()
     {
         const string source = """

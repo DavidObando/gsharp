@@ -6568,6 +6568,8 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
+            ExpressionSyntax normalizedProjectedValue =
+                Unparenthesize(projectedValue);
             bool matches = true;
             ExpressionSyntax initializer = null;
             this.state.ManagedReferenceArrayNullable
@@ -6621,6 +6623,23 @@ public sealed partial class CSharpToGSharpTranslator
                             continue;
                         }
 
+                        if (use.Parent is ArgumentSyntax
+                                { Parent.Parent: ExpressionSyntax projectedCall }
+                            && this.context.GetSymbolInfo(projectedCall).Symbol
+                                is IMethodSymbol projectedCallMethod
+                            && (projectedCallMethod.IsGenericMethod
+                                || projectedCallMethod.ContainingType?.IsGenericType
+                                    == true)
+                            && MethodMayRequireManagedReferenceArrayProjection(
+                                projectedCallMethod,
+                                this.context.Compilation))
+                        {
+                            this.RecordManagedReferenceArrayProjectionParent(
+                                projectedCall,
+                                projectedValue);
+                            continue;
+                        }
+
                         if (!this.ProjectedResultMatchesDestination(
                                 use,
                                 projectedType,
@@ -6659,6 +6678,11 @@ public sealed partial class CSharpToGSharpTranslator
             bool ValueMatches(ExpressionSyntax candidate)
             {
                 candidate = Unparenthesize(candidate);
+                if (candidate == normalizedProjectedValue)
+                {
+                    return true;
+                }
+
                 if (candidate is ConditionalExpressionSyntax conditional)
                 {
                     return ValueMatches(conditional.WhenTrue)
@@ -6671,9 +6695,8 @@ public sealed partial class CSharpToGSharpTranslator
                         arm => ValueMatches(arm.Expression));
                 }
 
-                ITypeSymbol candidateType = candidate == projectedValue
-                    ? projectedType
-                    : this.GetManagedReferenceArrayProjectedArgumentType(candidate);
+                ITypeSymbol candidateType =
+                    this.GetManagedReferenceArrayProjectedArgumentType(candidate);
                 return SymbolEqualityComparer.IncludeNullability.Equals(
                     candidateType,
                     projectedType);

@@ -82,10 +82,29 @@ public sealed partial class CSharpToGSharpTranslator
                         && this.GetManagedReferenceArrayProjectedExpressionType(
                             initializerSyntax) is { } projectedType)
                     {
-                        targetType = projectedType;
-                        this.state.ManagedReferenceArrayNullable
-                            .ManagedReferenceArrayProjectedLocalType[localTarget] =
-                            projectedType;
+                        ExpressionSyntax unparenthesizedInitializer =
+                            Unparenthesize(initializerSyntax);
+                        bool compositeInitializer =
+                            unparenthesizedInitializer
+                                is ConditionalExpressionSyntax
+                                or SwitchExpressionSyntax;
+                        if (!compositeInitializer
+                            || this.InferredLocalAssignmentsMatch(
+                                localTarget,
+                                initializerSyntax,
+                                projectedType))
+                        {
+                            targetType = projectedType;
+                            this.state.ManagedReferenceArrayNullable
+                                .ManagedReferenceArrayProjectedLocalType[localTarget] =
+                                projectedType;
+                        }
+                        else
+                        {
+                            this.context.ReportUnsupported(
+                                initializerSyntax,
+                                "managed-reference array widening conflicts with a later assignment or consumer of this inferred local; no exact G# translation exists.");
+                        }
                     }
 
                     initializer = this.ForgiveNullableReferenceValue(
@@ -2137,11 +2156,10 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol projectedValue =
                 this.GetManagedReferenceArrayProjectedArgumentType(
                     assignment.Right);
-            if (assignment.Left is MemberAccessExpressionSyntax staticMember
-                && this.context.GetSymbolInfo(staticMember.Expression).Symbol
-                    is INamedTypeSymbol { IsGenericType: true }
-                && assignmentTarget is IFieldSymbol { IsStatic: true }
-                    or IPropertySymbol { IsStatic: true }
+            if (assignmentTarget is IFieldSymbol
+                    { IsStatic: true, ContainingType.IsGenericType: true }
+                    or IPropertySymbol
+                    { IsStatic: true, ContainingType.IsGenericType: true }
                 && assignmentTargetType != null
                 && projectedValue != null
                 && SymbolEqualityComparer.Default.Equals(
