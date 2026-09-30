@@ -484,12 +484,35 @@ internal static class KnownAttributes
         var expectedAssembly = expected.Assembly.GetName();
         var candidateToken = candidateAssembly.GetPublicKeyToken() ?? Array.Empty<byte>();
         var expectedToken = expectedAssembly.GetPublicKeyToken() ?? Array.Empty<byte>();
-        return string.Equals(
-                candidateAssembly.Name,
-                expectedAssembly.Name,
-                StringComparison.OrdinalIgnoreCase)
-            && candidateToken.AsSpan().SequenceEqual(expectedToken);
+        return (string.Equals(
+                    candidateAssembly.Name,
+                    expectedAssembly.Name,
+                    StringComparison.OrdinalIgnoreCase)
+                && candidateToken.AsSpan().SequenceEqual(expectedToken))
+            || (IsPlatformAssemblyIdentity(candidateAssembly.Name, candidateToken)
+                && IsPlatformAssemblyIdentity(expectedAssembly.Name, expectedToken));
     }
+
+    // Issue #4584: the same BCL type has a different assembly identity
+    // depending on where gsc loaded it from. The host runtime defines
+    // `typeof(UnscopedRefAttribute)` in System.Private.CoreLib, but a project
+    // built by the SDK binds against the reference assembly (System.Runtime,
+    // a different name AND key), so a name-and-token comparison against the
+    // host type rejected the genuine attribute and GS0589 fired on members
+    // that carried `@UnscopedRef`. Platform identities are listed explicitly
+    // rather than matched by name alone, so a same-named user assembly with a
+    // different key is still not recognized (ADR-0084 section L5).
+    // ReferenceResolver.WellKnownBclAssemblyNames is name-only, so it cannot
+    // serve this token-checked identity test.
+    private static bool IsPlatformAssemblyIdentity(string? name, byte[] publicKeyToken)
+        => (name?.ToLowerInvariant(), Convert.ToHexString(publicKeyToken).ToLowerInvariant()) switch
+        {
+            ("system.private.corelib", "7cec85d7bea7798e") => true,
+            ("system.runtime", "b03f5f7f11d50a3a") => true,
+            ("mscorlib", "b77a5c561934e089") => true,
+            ("netstandard", "cc7b13ffcd2ddd51") => true,
+            _ => false,
+        };
 
     /// <summary>
     /// ADR-0184 / issue #376: returns <c>true</c> when <paramref name="attribute"/>
