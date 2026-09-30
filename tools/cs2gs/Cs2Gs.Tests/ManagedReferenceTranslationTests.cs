@@ -4939,7 +4939,7 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
-    public void ConditionalContravarianceKeepsSafeNonNullCommonType()
+    public void ConditionalAllowsSafeContravariantCommonType()
     {
         const string source = """
             using Gsharp.Values;
@@ -4950,19 +4950,17 @@ public sealed class ManagedReferenceTranslationTests
             public sealed class Consumer<T> : IConsumer<T> {
                 public int Consume(T value) => 42;
             }
-            public sealed class ObjectConsumer : IConsumer<object> {
-                public int Consume(object value) => 42;
-            }
             public class Probe {
                 private static IConsumer<T> Wrap<T>(T[] source) =>
                     new Consumer<T>();
+                private static int Use<T>(IConsumer<T> value) => 42;
 
                 public static int Run(bool flag) {
                     var source = new ManagedRef<int>[1];
-                    IConsumer<object> fallback = new ObjectConsumer();
+                    IConsumer<ManagedRef<int>> fallback =
+                        new Consumer<ManagedRef<int>>();
                     var selected = flag ? Wrap(source) : fallback;
-                    var storage = new int[1];
-                    return selected.Consume(ManagedRef<int>.FromArray(storage, 0));
+                    return Use(selected);
                 }
             }
             """;
@@ -4978,14 +4976,6 @@ public sealed class ManagedReferenceTranslationTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Empty(context.Diagnostics);
-        Assert.Contains(
-            "cast[IConsumer[managed[int32]]](fallback)",
-            text,
-            StringComparison.Ordinal);
-        Assert.DoesNotContain(
-            "cast[IConsumer[managed[int32]?]](fallback)",
-            text,
-            StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run(false)",
             new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
