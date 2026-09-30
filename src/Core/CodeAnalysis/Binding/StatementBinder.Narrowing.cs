@@ -23,7 +23,7 @@ namespace GSharp.Core.CodeAnalysis.Binding;
 
 internal sealed partial class StatementBinder
 {
-    private readonly HashSet<VariableSymbol> externalReadOnlyCallableAliases = new();
+    private readonly HashSet<VariableSymbol> externalCallableAliases = new();
 
     /// <summary>
     /// If <paramref name="statement"/> is a call expression statement whose
@@ -168,7 +168,7 @@ internal sealed partial class StatementBinder
         var dropGlobalRoots = false;
         if (boundStatement != null)
         {
-            var collector = new AssignedRootsCollector(null, externalReadOnlyCallableAliases);
+            var collector = new AssignedRootsCollector(null, externalCallableAliases);
             collector.Visit(boundStatement);
             assignedRoots = collector.Roots;
             dropAllRoots = collector.MayMutateAnyRoot;
@@ -232,6 +232,24 @@ internal sealed partial class StatementBinder
                     frame.Remove(key);
                 }
             }
+        }
+    }
+
+    private void UpdateExternalCallableAliases(BoundStatement statement)
+    {
+        var directAssignment = (statement as BoundExpressionStatement)?.Expression
+            as BoundAssignmentExpression;
+        var assignsExternalCallable = directAssignment != null
+            && IsMethodCallableSource(directAssignment.Expression);
+
+        var collector = new AssignedRootsCollector(null, externalCallableAliases);
+        collector.Visit(statement);
+        externalCallableAliases.ExceptWith(collector.Roots);
+
+        if (assignsExternalCallable)
+        {
+            externalCallableAliases.Add(
+                Invariant.Required(directAssignment, "an external callable assignment has a target").Variable);
         }
     }
 
@@ -744,21 +762,7 @@ internal sealed partial class StatementBinder
 
     private static bool IsRepresentationPreservingJoin(TypeSymbol source, TypeSymbol target)
     {
-        var conversion = Conversion.Classify(source, target);
-        if (conversion.IsIdentity)
-        {
-            return true;
-        }
-
-        if (!Conversion.IsReferenceLikeTarget(source)
-            || !Conversion.IsReferenceLikeTarget(target))
-        {
-            return false;
-        }
-
-        return source.ClrType is { } sourceClr && target.ClrType is { } targetClr
-            ? ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr)
-            : Conversion.IsImplicitReferenceVariantSlot(source, target);
+        return Conversion.IsRepresentationPreservingImplicit(source, target);
     }
 
     internal void ReportUnsafeBackwardGotoNarrowings()
@@ -858,7 +862,7 @@ internal sealed partial class StatementBinder
                 {
                     var mutations = new AssignedRootsCollector(
                         AssignmentPreservesNarrowing,
-                        externalReadOnlyCallableAliases,
+                        externalCallableAliases,
                         trackSourceCallGlobalMutations: true);
                     mutations.Visit(cleanup);
                     summary = new FinallyFlowSummary(
@@ -894,7 +898,7 @@ internal sealed partial class StatementBinder
 
         var mutations = new AssignedRootsCollector(
             AssignmentPreservesNarrowing,
-            externalReadOnlyCallableAliases,
+            externalCallableAliases,
             trackSourceCallGlobalMutations: true);
         mutations.Visit(finallyBlock);
         var nonNullOnNormalExit = ContainsUserGotoOrLabel(finallyClause.Body)
@@ -1615,7 +1619,7 @@ internal sealed partial class StatementBinder
             return;
         }
 
-        var collector = new AssignedRootsCollector(null, externalReadOnlyCallableAliases);
+        var collector = new AssignedRootsCollector(null, externalCallableAliases);
         collector.Visit(node);
         if (collector.MayMutateAnyRoot)
         {
@@ -1681,6 +1685,20 @@ internal sealed partial class StatementBinder
         public bool MayMutateAnyRoot { get; private set; }
 
         public bool MayMutateGlobalRoots { get; private set; }
+
+        protected override void VisitIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
+        {
+            if (node.Pointer is BoundAddressOfExpression { Operand: BoundVariableExpression variable })
+            {
+                Roots.Add(variable.Variable);
+            }
+            else
+            {
+                MayMutateAnyRoot = true;
+            }
+
+            base.VisitIndirectAssignmentExpression(node);
+        }
 
         public override void VisitStatement(BoundStatement? node)
         {
@@ -3077,13 +3095,12 @@ internal sealed partial class StatementBinder
         }
 
         var declaredVariable = Invariant.Required(variable, "a variable declaration produces a variable symbol");
-        if (declaredVariable.IsReadOnly
-            && convertedInitializer is { } callableInitializer
-            && GetCallableSourceVariable(callableInitializer) is { } callableSource
-            && (callableSource is ParameterSymbol { IsReadOnly: true }
-                || externalReadOnlyCallableAliases.Contains(callableSource)))
+        if (convertedInitializer is { } callableInitializer
+            && (declaredVariable.IsReadOnly
+                ? IsExternalCallableSource(callableInitializer)
+                : IsMethodCallableSource(callableInitializer)))
         {
-            externalReadOnlyCallableAliases.Add(declaredVariable);
+            externalCallableAliases.Add(declaredVariable);
         }
 
         // Issue #216 / #3519: a foldable `const` initializer carries its
@@ -3141,6 +3158,44 @@ internal sealed partial class StatementBinder
         }
 
         return expression is BoundVariableExpression variable ? variable.Variable : null;
+    }
+
+    private bool IsExternalCallableSource(BoundExpression expression)
+    {
+        if (IsMethodCallableSource(expression))
+        {
+            return true;
+        }
+
+        while (expression is BoundConversionExpression conversion)
+        {
+            expression = conversion.Expression;
+        }
+
+        while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+        {
+            expression = assertion.Operand;
+        }
+
+        return expression is BoundVariableExpression variable
+                && (variable.Variable is ParameterSymbol { IsReadOnly: true }
+                    || externalCallableAliases.Contains(variable.Variable));
+    }
+
+    private static bool IsMethodCallableSource(BoundExpression expression)
+    {
+        while (expression is BoundConversionExpression conversion)
+        {
+            expression = conversion.Expression;
+        }
+
+        while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+        {
+            expression = assertion.Operand;
+        }
+
+        return expression is BoundFunctionPointerFromMethodExpression
+            or BoundMethodGroupExpression;
     }
 
     private static ImmutableArray<string> GetCallableParameterNames(BoundExpression initializer)

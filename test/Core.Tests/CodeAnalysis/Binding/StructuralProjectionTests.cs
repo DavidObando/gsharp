@@ -44,6 +44,25 @@ let source = Source{Name: ""Ada"", Age: 36, Extra: true}
     }
 
     [Fact]
+    public void ReceiverWriteRecoveryRejectsStructuralProjection()
+    {
+        const string sourceText = """
+            class Source { var Name string var Age int32 }
+            class Target { var Name string var Age int64 }
+            let source = Source{Name: "Ada", Age: 36}
+            0
+            """;
+        var tree = SyntaxTree.Parse(SourceText.From(sourceText));
+        var compilation = new Compilation(tree);
+        _ = EmittedOracle.CompileDiagnostics(compilation);
+        var sourceType = compilation.GlobalScope.Variables.Single(v => v.Name == "source").Type;
+        var targetType = compilation.GlobalScope.Structs.Single(s => s.Name == "Target");
+
+        Assert.True(Conversion.Classify(sourceType, targetType).IsStructuralProjection);
+        Assert.False(Conversion.IsRepresentationPreservingImplicit(sourceType, targetType));
+    }
+
+    [Fact]
     public void AnonymousObject_ImplicitlyProjectsToNamedClass()
     {
         var result = Evaluate(@"

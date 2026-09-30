@@ -4151,7 +4151,7 @@ internal sealed partial class ExpressionBinder
         if (!binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var path, out _)
             || path.HasMembers
             || path.Root.Type is NullableTypeSymbol
-            || !Conversion.Classify(path.Root.Type, requiredType).IsImplicit)
+            || !Conversion.IsRepresentationPreservingImplicit(path.Root.Type, requiredType))
         {
             return receiver;
         }

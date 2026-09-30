@@ -2310,6 +2310,25 @@ public sealed class Conversion
         return conversion.Exists && conversion.IsImplicit && !conversion.IsStructuralProjection;
     }
 
+    internal static bool IsRepresentationPreservingImplicit(TypeSymbol source, TypeSymbol target)
+    {
+        var conversion = Classify(source, target);
+        if (conversion.IsIdentity)
+        {
+            return true;
+        }
+
+        if (!IsReferenceLikeTarget(source)
+            || !IsReferenceLikeTarget(target))
+        {
+            return false;
+        }
+
+        return source.ClrType is { } sourceClr && target.ClrType is { } targetClr
+            ? ClrTypeUtilities.IsAssignableByName(targetClr, sourceClr)
+            : IsImplicitReferenceVariantSlot(source, target);
+    }
+
     /// <summary>
     /// True when <paramref name="type"/> is a reference-capable type for
     /// conversion purposes — a G# interface, a G# <c>class</c> (as opposed to

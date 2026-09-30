@@ -120,7 +120,7 @@ internal sealed partial class StatementBinder
 
         scope = scope.Pop();
 
-        return new BoundForInfiniteStatement(null, body, breakLabel, continueLabel);
+        return new BoundForInfiniteStatement(originatingSyntax, body, breakLabel, continueLabel);
     }
 
     private BoundStatement BindForEllipsisStatement(ForEllipsisStatementSyntax syntax)

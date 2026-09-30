@@ -3459,6 +3459,36 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_ThroughFinallyIndirectAliasMutation_ReportsNullableReceiver()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                let p = &x
+                x = "safe"
+                var count = 0
+            Again:
+                let length = x.Length
+                if count == 0 {
+                    count++
+                    try {
+                        goto Again
+                    } finally {
+                        *p = nil
+                    }
+                }
+                return length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_ThroughNonNullFinallyAssignment_RemainsNarrowed()
     {
         AssertRuns("""

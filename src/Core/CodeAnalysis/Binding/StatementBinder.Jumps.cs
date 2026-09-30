@@ -470,6 +470,7 @@ internal sealed partial class StatementBinder
         var pendingSwitchExitFrames = binderCtx.PendingSwitchExitFrames.ToArray();
         var definedUserLabels = binderCtx.DefinedUserLabels.ToArray();
         var pendingGotoAssignmentStarts = new Dictionary<string, int>(binderCtx.PendingGotoAssignmentStarts);
+        var externalCallableAliasesSnapshot = externalCallableAliases.ToArray();
         var assignmentNarrowingGenerations =
             new Dictionary<VariableSymbol, int>(binderCtx.AssignmentNarrowingGenerations);
         var assignmentNarrowingGeneration = binderCtx.AssignmentNarrowingGeneration;
@@ -550,6 +551,7 @@ internal sealed partial class StatementBinder
         RestoreDictionary(
             binderCtx.PendingGotoAssignmentStarts,
             pendingGotoAssignmentStarts.ToArray());
+        RestoreSet(externalCallableAliases, externalCallableAliasesSnapshot);
         RestoreDictionary(
             binderCtx.AssignmentNarrowingGenerations,
             assignmentNarrowingGenerations.ToArray());
