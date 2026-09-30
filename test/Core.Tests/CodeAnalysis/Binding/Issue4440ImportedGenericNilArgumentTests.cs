@@ -301,6 +301,14 @@ public sealed class Issue4440ImportedGenericNilArgumentTests
                 {
                     public static void Put(T value) { }
                 }
+
+                public sealed class Middle
+                {
+                    public sealed class Inner
+                    {
+                        public static void Put(T value) { }
+                    }
+                }
             }
 
             public static class Extensions
@@ -319,17 +327,56 @@ public sealed class Issue4440ImportedGenericNilArgumentTests
             StaticSink.Put[string](nil)
             StaticBox[string].Put(nil)
             StaticOuter[string].Nested.Put(nil)
+            StaticOuter[string].Middle.Inner.Put(nil)
             NullableDerived.Nested.Put(nil)
             Extensions.Put[string](List[string](), nil)
             """,
             resolver));
 
         Assert.Equal(
-            new[] { "GS0155", "GS0155", "GS0155", "GS0155" },
+            new[] { "GS0155", "GS0155", "GS0155", "GS0155", "GS0155" },
             diagnostics.Select(diagnostic => diagnostic.Id));
         Assert.Equal(
-            new[] { 4, 5, 6, 8 },
+            new[] { 4, 5, 6, 7, 9 },
             diagnostics.Select(diagnostic => diagnostic.Location.StartLine + 1).Order());
+    }
+
+    [Fact]
+    public void ImportedInParametersProjectGenericNilTargets()
+    {
+        const string librarySource = """
+            #nullable enable
+            namespace Issue4440.Library;
+
+            public sealed class InBox<T>
+            {
+                public void Take(in T value) { }
+                public void TakeMethod<U>(in U value) { }
+            }
+
+            public static class InSink
+            {
+                public static void Take<T>(in T value) { }
+            }
+            """;
+        using var library = new CSharpFixture(librarySource);
+        using var resolver = ReferenceResolver.WithReferences(new[] { library.AssemblyPath });
+
+        var diagnostics = Errors(Compile(
+            """
+            import Issue4440.Library
+            InBox[string]().Take(nil)
+            InBox[string]().TakeMethod[string](nil)
+            InSink.Take[string](nil)
+            InBox[string]().TakeMethod[string?](nil)
+            InSink.Take[string?](nil)
+            """,
+            resolver));
+
+        Assert.Equal(
+            new[] { 2, 3, 4 },
+            diagnostics.Select(diagnostic => diagnostic.Location.StartLine + 1).Order());
+        Assert.Equal(new[] { "GS0155", "GS0155", "GS0155" }, diagnostics.Select(diagnostic => diagnostic.Id));
     }
 
     private static ImmutableArray<Diagnostic> Compile(string source)

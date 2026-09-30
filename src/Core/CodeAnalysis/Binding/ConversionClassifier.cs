@@ -1207,7 +1207,13 @@ internal sealed class ConversionClassifier
                     TypeSymbol? inPointeeOverride = null;
                     parameterTypeOverrides?.TryGetValue(paramIndex, out inPointeeOverride);
                     var inPointee = inPointeeOverride
-                        ?? GetImplicitInClrPointeeType(parameters[paramIndex], paramIndex, method, receiverType, symbolicMethodTypeArgs);
+                        ?? GetImplicitInClrPointeeType(
+                            parameters[paramIndex],
+                            paramIndex,
+                            method,
+                            receiverType,
+                            symbolicMethodTypeArgs,
+                            argument);
                     rebound = TryRejectClrPlatformContainerArgument(
                         argument,
                         parameters[paramIndex],
@@ -3344,17 +3350,31 @@ internal sealed class ConversionClassifier
     /// <param name="method">The resolved CLR method, when known.</param>
     /// <param name="receiverType">The receiver type carrying symbolic type arguments.</param>
     /// <param name="symbolicMethodTypeArgs">The symbolic method type arguments.</param>
+    /// <param name="argument">The argument whose nil-containing target may need full projection.</param>
     /// <returns>The pointee type.</returns>
     public static TypeSymbol GetImplicitInClrPointeeType(
         ParameterInfo parameter,
         int paramIndex,
         MethodInfo? method,
         TypeSymbol? receiverType,
-        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs)
+        ImmutableArray<TypeSymbol?> symbolicMethodTypeArgs,
+        BoundExpression? argument = null)
     {
         // Each of these readers already peels the by-ref slot and returns the
         // (nullability-annotated) pointee — `in string?` stays `string?`, and
         // an `in int*` pointee stays a pointer — so none is re-peeled here.
+        if (method != null
+            && argument != null
+            && TypeSymbol.ContainsNullLiteralType(argument.Type)
+            && MemberLookup.GetClrMethodParameterConversionTargetTypeSymbol(
+                receiverType,
+                method,
+                paramIndex,
+                symbolicMethodTypeArgs) is { } nilTarget)
+        {
+            return nilTarget;
+        }
+
         return TrySubstituteParameterTypeFromReceiver(method, paramIndex, receiverType, symbolicMethodTypeArgs)
             ?? TrySubstituteParameterTypeFromMethodTypeArgs(method, paramIndex, symbolicMethodTypeArgs)
             ?? TryRecoverReceiverTypeParameterSlot(method, paramIndex, receiverType)
@@ -3400,7 +3420,8 @@ internal sealed class ConversionClassifier
                     paramIndex,
                     method,
                     receiverType,
-                    symbolicMethodTypeArgs: default);
+                    symbolicMethodTypeArgs: default,
+                    arguments[i]);
                 builder ??= arguments.ToBuilder();
                 builder[i] = TryRejectClrPlatformContainerArgument(
                     arguments[i],
