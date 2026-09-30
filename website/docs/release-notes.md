@@ -124,7 +124,10 @@ Before moving an application to a different compiler version, pin the intended S
   structural and relational consistency. Unsupported labels and nonempty
   `goExperiment`/`goDebug` settings or helper build-time
   `GOEXPERIMENT`/`DefaultGODEBUG` overrides fail bootstrap rather than silently
-  using different in-process parser/type-checker semantics. Diagnostics
+  using different in-process parser/type-checker semantics. Source capture and
+  verification reject symlinks in every path component, profile and `goFlags`
+  tags share one canonical selection set, and complete artifacts require a
+  typed `*ast.File` root for every compiled file. Diagnostics
   are path-stable, initialization order is explicit, and schema validation
   rejects missing fields, count mismatches, and complete artifacts without a
   loaded main-module package/source ownership graph. The pinned

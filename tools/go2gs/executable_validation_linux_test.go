@@ -301,6 +301,7 @@ func TestPublicAnalyzeRejectsCmdGoClaimingDifferentHelperVersion(t *testing.T) {
 		t.Fatalf("semantic mismatch reached packages.Load %d times", loads)
 	}
 
+	requireExecutableNamespaceTest(t)
 	binary := buildGo2gsBinary(t)
 	out, err := secureRoot(t.TempDir())
 	if err != nil {

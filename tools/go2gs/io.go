@@ -75,6 +75,11 @@ func readProfile(path string) (Profile, error) {
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
 		return profile, err
 	}
+	for index, tag := range profile.BuildTags {
+		if !validBuildTag(tag) {
+			return profile, fmt.Errorf("buildTags[%d] has invalid value %q", index, tag)
+		}
+	}
 	if err := validateLimits(profile.Limits); err != nil {
 		return profile, err
 	}
@@ -160,10 +165,15 @@ func parseGOROOTVersion(data []byte) (string, error) {
 }
 
 func validateGOFLAGS(flags []string) error {
+	_, _, err := splitGOFLAGS(flags)
+	return err
+}
+
+func splitGOFLAGS(flags []string) (remaining, tags []string, err error) {
 	for i := 0; i < len(flags); i++ {
 		token := flags[i]
 		if token == "" || strings.IndexFunc(token, func(r rune) bool { return r == ' ' || r == '\t' || r == '\n' || r == '\r' }) >= 0 {
-			return fmt.Errorf("goFlags[%d] must be one non-empty argument", i)
+			return nil, nil, fmt.Errorf("goFlags[%d] must be one non-empty argument", i)
 		}
 		name, value, hasValue := token, "", false
 		if index := strings.IndexByte(token, '='); index >= 0 {
@@ -174,36 +184,58 @@ func validateGOFLAGS(flags []string) error {
 			if !hasValue {
 				i++
 				if i >= len(flags) {
-					return errors.New("goFlags -tags requires a value")
+					return nil, nil, errors.New("goFlags -tags requires a value")
 				}
 				value = flags[i]
 			}
 			if !validBuildTags(value) {
-				return fmt.Errorf("goFlags -tags has invalid value %q", value)
+				return nil, nil, fmt.Errorf("goFlags -tags has invalid value %q", value)
 			}
+			tags = append(tags, strings.Split(value, ",")...)
 		case "-trimpath":
+			remaining = append(remaining, token)
 			if !hasValue {
 				continue
 			}
 			if value != "true" && value != "false" {
-				return fmt.Errorf("goFlags -trimpath has invalid boolean %q", value)
+				return nil, nil, fmt.Errorf("goFlags -trimpath has invalid boolean %q", value)
 			}
 		case "-buildvcs":
 			if !hasValue {
 				i++
 				if i >= len(flags) {
-					return errors.New("goFlags -buildvcs requires false")
+					return nil, nil, errors.New("goFlags -buildvcs requires false")
 				}
 				value = flags[i]
 			}
 			if value != "false" {
-				return errors.New("goFlags permits only -buildvcs=false")
+				return nil, nil, errors.New("goFlags permits only -buildvcs=false")
+			}
+			if hasValue {
+				remaining = append(remaining, token)
+			} else {
+				remaining = append(remaining, name, value)
 			}
 		default:
-			return fmt.Errorf("goFlags option %q is not allowed in M0", name)
+			return nil, nil, fmt.Errorf("goFlags option %q is not allowed in M0", name)
 		}
 	}
-	return nil
+	return remaining, tags, nil
+}
+
+func effectiveBuildTags(profile Profile) ([]string, error) {
+	_, flagTags, err := splitGOFLAGS(profile.GOFLAGS)
+	if err != nil {
+		return nil, err
+	}
+	tags := append([]string{}, profile.BuildTags...)
+	tags = append(tags, flagTags...)
+	for index, tag := range tags {
+		if !validBuildTag(tag) {
+			return nil, fmt.Errorf("build tag %d has invalid value %q", index, tag)
+		}
+	}
+	return uniqueSorted(tags), nil
 }
 
 func validBuildTags(value string) bool {
@@ -211,14 +243,21 @@ func validBuildTags(value string) bool {
 		return false
 	}
 	for _, tag := range strings.Split(value, ",") {
-		if tag == "" {
+		if !validBuildTag(tag) {
 			return false
 		}
-		for _, r := range tag {
-			if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
-				(r >= '0' && r <= '9') || r == '_' || r == '.') {
-				return false
-			}
+	}
+	return true
+}
+
+func validBuildTag(tag string) bool {
+	if tag == "" || strings.HasPrefix(tag, "-") {
+		return false
+	}
+	for _, r := range tag {
+		if !((r >= 'a' && r <= 'z') || (r >= 'A' && r <= 'Z') ||
+			(r >= '0' && r <= '9') || r == '_' || r == '.') {
+			return false
 		}
 	}
 	return true

@@ -34,7 +34,9 @@ requested inventory completed. M0 always reports `migrationReady: false`.
 The selected Go executable's build metadata supplies its version. Its verified
 path or parent handoff supplies GOROOT, whose bounded `VERSION` file is hashed;
 bootstrap does not run `go version` or `go env`. Profile `goFlags` are
-allowlisted; tool execution and path overrides are rejected.
+allowlisted; tool execution and path overrides are rejected. Profile
+`buildTags` and `goFlags -tags` values are merged into one canonical tag set
+used by package loading and in-process source classification.
 `goExperiment` and `goDebug` must be empty because the in-process semantic
 engine cannot authoritatively apply selected-toolchain overrides.
 Profile, output, and toolchain bootstrap failures—including a missing `go`
@@ -46,6 +48,8 @@ secure and invalidate the output first, then run only the preload checks. A
 definitive toolchain/source mismatch publishes a deterministic exit-1 artifact
 without `go/packages`; a matching preload exits 2 without an artifact because
 the required descriptor-bound launch cannot be provided securely.
+Source and local-replacement capture and verification use descriptor-relative
+reads that reject symlinks in every path component.
 
 The selected native `cmd/go` is captured into a parent bootstrap capsule only
 for handoff. Linux first validates the captured bytes as a supported static ELF

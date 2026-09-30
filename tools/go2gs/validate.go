@@ -456,6 +456,11 @@ func validateAnalysisHeader(a Analysis) error {
 	if err := validateGOFLAGS(p.GOFLAGS); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
+	for index, tag := range p.BuildTags {
+		if !validBuildTag(tag) {
+			return fmt.Errorf("analysis profile buildTags[%d] has invalid value %q", index, tag)
+		}
+	}
 	if err := validateSemanticProfile(Profile{GOEXPERIMENT: p.GOEXPERIMENT, GODEBUG: p.GODEBUG}); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
@@ -785,6 +790,24 @@ func validateOwnership(a Analysis) error {
 			return err
 		}
 		nodes[node.ID] = node
+	}
+	if a.InventoryComplete {
+		astFiles := map[string]int{}
+		for _, node := range a.Nodes {
+			if node.Kind == "*ast.File" {
+				if node.ParentID != "" {
+					return fmt.Errorf("complete analysis *ast.File node %q has a parent", node.ID)
+				}
+				astFiles[node.FileID]++
+			}
+		}
+		for _, pkg := range a.Packages {
+			for _, fileID := range pkg.CompiledFileIDs {
+				if astFiles[fileID] != 1 {
+					return fmt.Errorf("complete analysis compiled file %q requires exactly one *ast.File node", fileID)
+				}
+			}
+		}
 	}
 	for _, node := range a.Nodes {
 		if node.ParentID == "" {
