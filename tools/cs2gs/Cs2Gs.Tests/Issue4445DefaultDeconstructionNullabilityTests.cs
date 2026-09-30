@@ -364,6 +364,16 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 conditionalCapturePair = (default(T), replacement);
                 conditionalCapture?.Invoke();
 
+                var aliasedCapturePair = (replacement, replacement);
+                System.Action originalCapture = () =>
+                {
+                    var (aliasedCaptureLeft, _) = aliasedCapturePair;
+                    Fill(ref aliasedCaptureLeft, replacement);
+                };
+                System.Action aliasedCapture = originalCapture;
+                aliasedCapturePair = (default(T), replacement);
+                aliasedCapture();
+
                 var reassignedCapturePair = (replacement, replacement);
                 System.Action reassignedCapture = () =>
                 {
@@ -640,6 +650,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "postCaptureLocalLeft",
             "wrappedCaptureLeft",
             "conditionalCaptureLeft",
+            "aliasedCaptureLeft",
             "nestedCaptureLeft", "nestedCaptureRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
@@ -819,6 +830,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     Fill(ref duplicateWriteLeft, replacement);
                     Keep(ref duplicateWriteRight);
 
+                    T preservedSource = default(T);
+                    var preservedPair = (preservedSource, replacement);
+                    preservedPair.Item2 = replacement;
+                    var (preservedLeft, preservedRight) = preservedPair;
+                    Fill(ref preservedLeft, replacement);
+                    Keep(ref preservedRight);
+
                     var mixedWritePair =
                         (First: replacement, Second: replacement);
                     (mixedWritePair, mixedWritePair.First) =
@@ -878,6 +896,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) unknownLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) combinedLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) duplicateWriteLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) preservedLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) mixedWriteRight T\? =", printed);
         Assert.Matches(@"\b(let|var) joinedMixedRight T\? =", printed);
         Assert.DoesNotContain("outElementLeft T? =", printed, StringComparison.Ordinal);
@@ -890,6 +909,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("callRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("deconstructionWriteRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("preservedRight T? =", printed, StringComparison.Ordinal);
     }
 
     [Fact]

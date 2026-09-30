@@ -14,7 +14,6 @@ using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
 using Microsoft.CodeAnalysis.Operations;
-using Microsoft.CodeAnalysis.Text;
 
 namespace Cs2Gs.Translator;
 
@@ -22,6 +21,14 @@ public sealed partial class CSharpToGSharpTranslator
 {
     private sealed partial class DeclarationVisitor
     {
+        private const string ReachingTupleProjectionAnnotation =
+            "cs2gs-reaching-tuple-projection";
+
+        private readonly Dictionary<
+            string,
+            (ExpressionSyntax Source, IReadOnlyList<int> Path)>
+            reachingTupleProjections = new();
+
         private IEnumerable<GStatement> TranslateLocalDeclaration(VariableDeclarationSyntax declaration, bool isConst, bool isUsing = false, bool isAwait = false)
         {
             // Issue #1900: `ref int r = ref xs[1];` — a ref local. `declaration.Type`
@@ -410,6 +417,17 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression,
             HashSet<ISymbol> visited)
         {
+            if (this.TryGetReachingTupleProjection(
+                expression,
+                out ExpressionSyntax projectionSource,
+                out IReadOnlyList<int> projectionPath))
+            {
+                return this.InferredTupleProjectionOriginatesFromDefault(
+                    projectionSource,
+                    projectionPath,
+                    visited);
+            }
+
             switch (expression)
             {
                 case ParenthesizedExpressionSyntax parenthesized:
@@ -512,6 +530,81 @@ public sealed partial class CSharpToGSharpTranslator
                 this.InferredInitializerOriginatesFromDefault(
                     value,
                     new HashSet<ISymbol>(visited, SymbolEqualityComparer.Default)));
+        }
+
+        private bool InferredTupleProjectionOriginatesFromDefault(
+            ExpressionSyntax source,
+            IReadOnlyList<int> path,
+            HashSet<ISymbol> visited)
+        {
+            if (path.Count == 0)
+            {
+                return this.InferredInitializerOriginatesFromDefault(source, visited);
+            }
+
+            source = Unwrap(source);
+            if (IsNullOrDefaultLiteral(source))
+            {
+                return true;
+            }
+
+            int index = path[0];
+            IReadOnlyList<int> remaining = path.Skip(1).ToArray();
+            if (source is TupleExpressionSyntax tuple
+                && index < tuple.Arguments.Count)
+            {
+                return this.InferredTupleProjectionOriginatesFromDefault(
+                    tuple.Arguments[index].Expression,
+                    remaining,
+                    visited);
+            }
+
+            if (source is ConditionalExpressionSyntax conditional)
+            {
+                return this.InferredTupleProjectionOriginatesFromDefault(
+                        conditional.WhenTrue,
+                        path,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default))
+                    || this.InferredTupleProjectionOriginatesFromDefault(
+                        conditional.WhenFalse,
+                        path,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
+            }
+
+            if (source is SwitchExpressionSyntax switchExpression)
+            {
+                return switchExpression.Arms.Any(arm =>
+                    this.InferredTupleProjectionOriginatesFromDefault(
+                        arm.Expression,
+                        path,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default)));
+            }
+
+            if (source.SyntaxTree == this.context.SemanticModel.SyntaxTree
+                && this.context.GetSymbolInfo(source).Symbol is ILocalSymbol local
+                && visited.Add(local))
+            {
+                return this.GetReachingLocalValues(
+                        local,
+                        source.SpanStart,
+                        visited)
+                    .Any(value => this.InferredTupleProjectionOriginatesFromDefault(
+                        value,
+                        path,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default)));
+            }
+
+            ExpressionSyntax projected = ProjectTupleElement(source, path);
+            return projected.SyntaxTree == this.context.SemanticModel.SyntaxTree
+                && this.InferredInitializerOriginatesFromDefault(projected, visited);
         }
 
         private bool TryGetTupleElementAccess(
@@ -1407,28 +1500,78 @@ public sealed partial class CSharpToGSharpTranslator
                     target = conditional.Expression;
                 }
 
-                if (!SymbolEqualityComparer.Default.Equals(
-                    this.context.GetSymbolInfo(target).Symbol,
-                    callable))
+                ISymbol targetSymbol = this.context.GetSymbolInfo(target).Symbol;
+                if (anonymousFunction == null)
                 {
-                    continue;
+                    if (!SymbolEqualityComparer.Default.Equals(targetSymbol, callable))
+                    {
+                        continue;
+                    }
                 }
-
-                if (callable is ILocalSymbol delegateLocal
-                    && anonymousFunction != null
-                    && !this.GetReachingLocalValues(
-                            delegateLocal,
-                            invocation.SpanStart,
-                            preserveDelegateCompoundAssignments: true)
-                        .Any(value => value.DescendantNodesAndSelf().Any(node =>
-                            node.SyntaxTree == anonymousFunction.SyntaxTree
-                                && node.Span == anonymousFunction.Span)))
+                else if (targetSymbol is ILocalSymbol delegateLocal)
+                {
+                    if (!this.DelegateLocalReachesAnonymousFunction(
+                        delegateLocal,
+                        invocation.SpanStart,
+                        anonymousFunction,
+                        new HashSet<ISymbol>(SymbolEqualityComparer.Default)))
+                    {
+                        continue;
+                    }
+                }
+                else if (!SymbolEqualityComparer.Default.Equals(targetSymbol, callable))
                 {
                     continue;
                 }
 
                 yield return invocation.ArgumentList.CloseParenToken.SpanStart;
             }
+        }
+
+        private bool DelegateLocalReachesAnonymousFunction(
+            ILocalSymbol local,
+            int usePosition,
+            AnonymousFunctionExpressionSyntax anonymousFunction,
+            HashSet<ISymbol> visited)
+        {
+            if (!visited.Add(local))
+            {
+                return false;
+            }
+
+            foreach (ExpressionSyntax value in this.GetReachingLocalValues(
+                local,
+                usePosition,
+                preserveDelegateCompoundAssignments: true))
+            {
+                if (value.DescendantNodesAndSelf().Any(node =>
+                    node.SyntaxTree == anonymousFunction.SyntaxTree
+                        && node.Span == anonymousFunction.Span))
+                {
+                    return true;
+                }
+
+                foreach (ExpressionSyntax expression in
+                    value.DescendantNodesAndSelf().OfType<ExpressionSyntax>())
+                {
+                    if (expression.SyntaxTree == this.context.SemanticModel.SyntaxTree
+                        && this.context.GetSymbolInfo(expression).Symbol
+                            is ILocalSymbol alias
+                        && alias.Type.TypeKind == TypeKind.Delegate
+                        && this.DelegateLocalReachesAnonymousFunction(
+                            alias,
+                            expression.SpanStart,
+                            anonymousFunction,
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default)))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph CreateControlFlowGraph(
@@ -1758,12 +1901,12 @@ public sealed partial class CSharpToGSharpTranslator
 
                 foreach (ExpressionSyntax previous in previousValues)
                 {
-                    var key = (write, previous.ToString());
+                    var key = (write, TupleReachingStateKey(previous));
                     if (!elementAssignedValues.TryGetValue(
                         key,
                         out ExpressionSyntax updated))
                     {
-                        updated = ReplaceTupleElement(
+                        updated = this.ReplaceTupleElement(
                             previous,
                             local.Type,
                             elementPath,
@@ -1888,7 +2031,7 @@ public sealed partial class CSharpToGSharpTranslator
             return -1;
         }
 
-        private static ExpressionSyntax ReplaceTupleElement(
+        private ExpressionSyntax ReplaceTupleElement(
             ExpressionSyntax expression,
             ITypeSymbol type,
             IReadOnlyList<int> path,
@@ -1897,7 +2040,9 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (depth == path.Count)
             {
-                return replacement;
+                return this.PreserveReachingTupleProjection(
+                    replacement,
+                    Array.Empty<int>());
             }
 
             if (type is not INamedTypeSymbol { IsTupleType: true } tupleType)
@@ -1909,11 +2054,11 @@ public sealed partial class CSharpToGSharpTranslator
             return SyntaxFactory.TupleExpression(SyntaxFactory.SeparatedList(
                 tupleType.TupleElements.Select((element, index) =>
                 {
-                    ExpressionSyntax projected = ProjectTupleElement(
+                    ExpressionSyntax projected = this.PreserveReachingTupleProjection(
                         expression,
                         new[] { index });
                     return SyntaxFactory.Argument(index == replacedIndex
-                        ? ReplaceTupleElement(
+                        ? this.ReplaceTupleElement(
                             projected,
                             element.Type,
                             path,
@@ -1921,6 +2066,74 @@ public sealed partial class CSharpToGSharpTranslator
                             replacement)
                         : projected);
                 })));
+        }
+
+        private ExpressionSyntax PreserveReachingTupleProjection(
+            ExpressionSyntax source,
+            IReadOnlyList<int> path)
+        {
+            ExpressionSyntax projected = ProjectTupleElement(source, path);
+            if (projected.GetAnnotations(ReachingTupleProjectionAnnotation).Any())
+            {
+                return projected;
+            }
+
+            ExpressionSyntax origin = source;
+            SyntaxAnnotation annotation =
+                source.GetAnnotations(ReachingTupleProjectionAnnotation).FirstOrDefault();
+            if (annotation != null
+                && this.reachingTupleProjections.TryGetValue(
+                    annotation.Data,
+                    out var sourceProjection))
+            {
+                origin = sourceProjection.Source;
+                path = sourceProjection.Path.Concat(path).ToArray();
+            }
+            else if (source.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+            {
+                return projected;
+            }
+
+            string data = origin.SpanStart.ToString(CultureInfo.InvariantCulture)
+                + ":"
+                + origin.Span.Length.ToString(CultureInfo.InvariantCulture)
+                + ":"
+                + string.Join(".", path);
+            this.reachingTupleProjections.TryAdd(data, (origin, path));
+            return projected.WithAdditionalAnnotations(
+                new SyntaxAnnotation(ReachingTupleProjectionAnnotation, data));
+        }
+
+        private bool TryGetReachingTupleProjection(
+            ExpressionSyntax expression,
+            out ExpressionSyntax source,
+            out IReadOnlyList<int> path)
+        {
+            SyntaxAnnotation annotation =
+                expression.GetAnnotations(ReachingTupleProjectionAnnotation)
+                    .FirstOrDefault();
+            if (annotation == null
+                || !this.reachingTupleProjections.TryGetValue(
+                    annotation.Data,
+                    out var projection))
+            {
+                source = null;
+                path = null;
+                return false;
+            }
+
+            source = projection.Source;
+            path = projection.Path;
+            return true;
+        }
+
+        private static string TupleReachingStateKey(ExpressionSyntax expression)
+        {
+            IEnumerable<string> projections = expression.DescendantNodesAndSelf()
+                .SelectMany(node =>
+                    node.GetAnnotations(ReachingTupleProjectionAnnotation))
+                .Select(annotation => annotation.Data);
+            return expression + "|" + string.Join(";", projections);
         }
 
         private bool TryFindAssignedValuePath(
