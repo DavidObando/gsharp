@@ -31,18 +31,24 @@ Analysis is offline and fail-closed. It disables automatic Go toolchain
 downloads, network module resolution, ambient workspaces, unapproved package
 drivers, generators, and target execution. Exit zero means only that the
 requested inventory completed. M0 always reports `migrationReady: false`.
-The selected Go executable supplies the verified GOROOT. Profile `goFlags`
-are allowlisted; tool execution and path overrides are rejected.
+The selected Go executable's build metadata supplies its version. Its verified
+path or parent handoff supplies GOROOT, whose bounded `VERSION` file is hashed;
+bootstrap does not run `go version` or `go env`. Profile `goFlags` are
+allowlisted; tool execution and path overrides are rejected.
 Profile, output, and toolchain bootstrap failures—including a missing `go`
-executable or unusable GOROOT—exit 2 and may produce no artifact. Once
-bootstrap succeeds, exact-version or source-commit mismatches produce an
+executable, unusable GOROOT, or dynamically linked Linux `cmd/go`—exit 2 and
+may produce no artifact. Exact-version or source-commit mismatches produce an
 incomplete artifact and exit 1.
-Public `analyze` is supported only on Linux. Non-Linux platforms fail closed
-before artifact publication because the required descriptor-bound executable
-launch cannot be provided securely.
+Complete public `analyze` is supported only on Linux. Non-Linux platforms
+secure and invalidate the output first, then run only the preload checks. A
+definitive toolchain/source mismatch publishes a deterministic exit-1 artifact
+without `go/packages`; a matching preload exits 2 without an artifact because
+the required descriptor-bound launch cannot be provided securely.
 
 The selected native `cmd/go` is captured into a parent bootstrap capsule only
-for handoff. The Linux worker enters a private user and mount namespace,
+for handoff. Linux first validates the captured bytes as a supported static ELF
+executable or static PIE with no interpreter, imported libraries or dynamic
+symbols, RPATH, or RUNPATH. The Linux worker then enters a private user and mount namespace,
 recaptures the handoff by expected SHA-256, and places only `go` in a read-only
 tmpfs. It holds the directory descriptor and sets both process `PATH` and
 `packages.Config.Env` `PATH` to `/proc/<worker-pid>/fd/<dir-fd>`. Both package

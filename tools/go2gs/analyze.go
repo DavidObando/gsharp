@@ -20,7 +20,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 
 	"golang.org/x/mod/modfile"
 	"golang.org/x/tools/go/packages"
@@ -39,11 +38,19 @@ func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (
 	return analyzeWithSnapshotHook(ctx, sourceRoot, outRoot, profile, nil)
 }
 
+func analyzePreload(ctx context.Context, sourceRoot, outRoot string, profile Profile) (Analysis, bool, error) {
+	return analyzeWithSnapshotHooksMode(ctx, sourceRoot, outRoot, profile, nil, nil, true, "")
+}
+
 func analyzeWithSnapshotHook(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot func()) (Analysis, bool, error) {
 	return analyzeWithSnapshotHooks(ctx, sourceRoot, outRoot, profile, afterSnapshot, nil)
 }
 
 func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot, afterLoad func()) (_ Analysis, _ bool, err error) {
+	return analyzeWithSnapshotHooksMode(ctx, sourceRoot, outRoot, profile, afterSnapshot, afterLoad, false, os.Getenv("GO2GS_SELECTED_GOROOT"))
+}
+
+func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot, afterLoad func(), preloadOnly bool, gorootHandoff string) (_ Analysis, _ bool, err error) {
 	sourceRoot, err = secureRoot(sourceRoot)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("source root: %w", err)
@@ -129,40 +136,19 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		return Analysis{}, false, err
 	}
 
-	bootstrapEnv := bootstrapEnvironment(workRoot, capsule.directory.executionPath())
-	selectedGOROOT := inferSelectedGOROOT(goExecutable.sourcePath)
-	if selectedGOROOT == "" {
-		selectedGOROOT = os.Getenv("GO2GS_SELECTED_GOROOT")
+	actualVersion := goExecutable.goVersion
+	if parseGoVersion("go version go"+actualVersion+" native") == "" {
+		return Analysis{}, false, errors.New("selected Go build metadata has an unrecognized Go version")
 	}
-	if selectedGOROOT != "" {
-		bootstrapEnv = replaceEnvironment(bootstrapEnv, "GOROOT", selectedGOROOT)
-	}
-	versionResult, err := runProcess(ctx, 15*time.Second, profile.Limits.MaxLogBytes, sourceRoot, executable, []string{"version"}, bootstrapEnv)
+	targetGOROOT, err := selectedGoRoot(goExecutable, gorootHandoff)
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	if versionResult.ExitCode != 0 {
-		return Analysis{}, false, fmt.Errorf("resolve selected Go version: %s", strings.TrimSpace(versionResult.Stderr))
-	}
-	actualVersion := parseGoVersion(versionResult.Stdout)
-	if actualVersion == "" {
-		return Analysis{}, false, errors.New("selected Go executable returned an unrecognized version")
-	}
-	gorootResult, err := runProcess(ctx, 15*time.Second, profile.Limits.MaxLogBytes, sourceRoot, executable, []string{"env", "GOROOT"}, bootstrapEnv)
-	if err != nil {
-		return Analysis{}, false, err
-	}
-	if gorootResult.ExitCode != 0 {
-		return Analysis{}, false, fmt.Errorf("resolve selected Go GOROOT: %s", strings.TrimSpace(gorootResult.Stderr))
-	}
-	targetGOROOT, err := secureRoot(strings.TrimSpace(gorootResult.Stdout))
-	if err != nil {
-		return Analysis{}, false, fmt.Errorf("selected Go GOROOT: %w", err)
-	}
-	gorootVersionHash, _, err := hashFile(filepath.Join(targetGOROOT, "VERSION"))
+	gorootVersion, err := readBoundedRegularFile(filepath.Join(targetGOROOT, "VERSION"), 1<<20)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("hash selected Go GOROOT VERSION: %w", err)
 	}
+	gorootVersionHash := hashBytes(gorootVersion)
 	env, err := sanitizedEnvironment(profile, workRoot, targetGOROOT, capsule.directory.executionPath())
 	if err != nil {
 		return Analysis{}, false, err
@@ -174,7 +160,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		ExecutableSHA256: goHash, ExecutableName: filepath.Base(executable),
 		GOROOTIdentity:      stableID("goroot", actualVersion+"\x00"+goHash+"\x00"+gorootVersionHash),
 		GOROOTVersionSHA256: gorootVersionHash,
-		GOROOTSource:        "selected executable: go env GOROOT (path intentionally omitted)",
+		GOROOTSource:        "selected executable path or verified parent handoff (path intentionally omitted)",
 		AutoDownload:        false,
 	}
 	toolchain.CCompilerHelpers = []CompilerHelperIdentity{}
@@ -213,20 +199,29 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	)
 	builder.collectManifests(mirror.manifests.records)
 	analysis.Profile.SourceRootIdentity = sourceIdentity(actualCommit, analysis.Manifests)
+	preloadBlocked := false
 	if sourceCommitErr != nil {
 		builder.block("source-metadata", sourceCommitErr.Error(), nil, nil)
-		builder.finish()
-		return analysis, false, nil
+		preloadBlocked = true
 	}
 	if actualVersion != profile.RequestedGoVersion {
 		builder.block("toolchain", fmt.Sprintf("profile requests Go %s but verified executable is Go %s; automatic toolchain download and silent upgrade are disabled", profile.RequestedGoVersion, actualVersion), nil, nil)
+		preloadBlocked = true
+	}
+	if profile.ExpectedSourceCommit != "" && actualCommit != profile.ExpectedSourceCommit {
+		category := "source"
+		if actualCommit == "" {
+			category = "source-metadata"
+		}
+		builder.block(category, fmt.Sprintf("profile requires source commit %s but checkout is %s", profile.ExpectedSourceCommit, displayMissing(actualCommit)), nil, nil)
+		preloadBlocked = true
+	}
+	if preloadBlocked {
 		builder.finish()
 		return analysis, false, nil
 	}
-	if profile.ExpectedSourceCommit != "" && actualCommit != profile.ExpectedSourceCommit {
-		builder.block("source", fmt.Sprintf("profile requires source commit %s but checkout is %s", profile.ExpectedSourceCommit, displayMissing(actualCommit)), nil, nil)
-		builder.finish()
-		return analysis, false, nil
+	if preloadOnly {
+		return Analysis{}, false, errors.New(unsupportedExecutionBinding)
 	}
 	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 		packages.NeedEmbedFiles | packages.NeedEmbedPatterns | packages.NeedImports | packages.NeedDeps |
@@ -1453,6 +1448,25 @@ func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Packa
 		}
 	}
 	return drift
+}
+
+func selectedGoRoot(executable capturedExecutable, handoff string) (string, error) {
+	root := inferSelectedGOROOT(executable.sourcePath)
+	if root == "" {
+		root = handoff
+	}
+	if root == "" {
+		return "", errors.New("selected Go GOROOT cannot be derived from its verified path or parent handoff")
+	}
+	root, err := secureRoot(root)
+	if err != nil {
+		return "", fmt.Errorf("selected Go GOROOT: %w", err)
+	}
+	info, err := os.Lstat(filepath.Join(root, "VERSION"))
+	if err != nil || !info.Mode().IsRegular() {
+		return "", errors.New("selected Go GOROOT has no regular VERSION file")
+	}
+	return root, nil
 }
 
 func inferSelectedGOROOT(executable string) string {

@@ -41,8 +41,8 @@ Outputs:
 Exit zero means `inventoryComplete: true`; it does not mean
 `migrationReady: true`. Loader, toolchain, checksum, source-identity, CGo,
 native-input, and resource-limit failures are nonzero while preserving any
-diagnostics that were available. Profile, output, and toolchain bootstrap
-failures—including a missing `go` executable or unusable GOROOT—exit 2 and
+diagnostics that were available. Profile, output, and toolchain bootstrap failures—including a missing `go`
+executable, unusable GOROOT, or dynamically linked Linux `cmd/go`—exit 2 and
 may produce no artifact.
 
 M0 also records migration blockers without making a complete inventory fail.
@@ -55,11 +55,13 @@ The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,
 `GOSUMDB=off`, `GOWORK=off` unless a later version adds an explicit workspace,
 and disables `GOPACKAGESDRIVER`. The child environment is allowlisted rather
-than inherited wholesale. The selected `go` executable's own canonical
-`GOROOT` is resolved before isolation and used for loading. `goFlags` accepts
-only `-tags`, `-trimpath`, and `-buildvcs=false`; execution and path override
-flags such as `-toolexec`, `-overlay`, and `-modfile` are rejected. The only
-accepted `goDebug` key is `gotypesalias`, with value `0` or `1`.
+than inherited wholesale. The selected `go` executable's build metadata supplies its version. Its
+`GOROOT` is derived from the verified executable path or the parent's verified
+handoff, and the bounded `VERSION` file is hashed. Bootstrap never runs
+`go version` or `go env`. `goFlags` accepts only `-tags`, `-trimpath`, and
+`-buildvcs=false`; execution and path override flags such as `-toolexec`,
+`-overlay`, and `-modfile` are rejected. The only accepted `goDebug` key is
+`gotypesalias`, with value `0` or `1`.
 Before loading, source inputs and authorized local replacements are copied
 with bounded, no-follow reads into a private mirror. The loader sees only
 those captured bytes; emitted manifest hashes remain those of the originals.
@@ -69,12 +71,18 @@ links; an exchange failure or retained entry makes the command fail. Other
 platforms intentionally leave non-empty private trees behind rather than risk
 deleting a path that another process replaced.
 
-Public `analyze` is supported only on Linux. Other platforms fail closed before
-publishing artifacts because Go does not expose a portable execution primitive
-that binds a child launch to already-verified executable bytes.
+Complete public `analyze` is supported only on Linux. Other platforms still
+secure and lock the output, invalidate stale owned artifacts, capture native
+`cmd/go` without executing it, mirror source/manifests, and publish deterministic
+exit-1 artifacts for definitive toolchain or source-provenance mismatches. A
+matching preload reaches the unsupported secure-execution binding and exits 2
+without an artifact. It never calls `go/packages`.
 
 The parent captures the selected native `cmd/go` into a bootstrap capsule only
-for handoff. Every analysis worker runs in a private user and mount namespace,
+for handoff. On Linux the captured bytes must be a supported ELF executable or
+static PIE with no `PT_INTERP`, imported libraries or dynamic symbols,
+`DT_RPATH`, or `DT_RUNPATH`; this check completes before any execution. Every
+analysis worker runs in a private user and mount namespace,
 captures that handoff by expected SHA-256, and copies only `go` into a read-only
 tmpfs. The worker holds the tmpfs directory descriptor and gives both process
 `PATH` and `packages.Config.Env` the descriptor path

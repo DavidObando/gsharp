@@ -248,6 +248,30 @@ func publishWorkerArtifacts(outRoot string, analysisBytes, runBytes []byte, befo
 	return nil
 }
 
+func encodeAnalysisArtifacts(analysis Analysis, run RunMetadata, maxBytes int64) ([]byte, []byte, error) {
+	if err := validateAnalysis(analysis); err != nil {
+		return nil, nil, fmt.Errorf("internal schema validation failed: %w", err)
+	}
+	analysisBytes, err := marshalCanonical(analysis)
+	if err != nil {
+		return nil, nil, err
+	}
+	if int64(len(analysisBytes)) > maxBytes {
+		return nil, nil, fmt.Errorf("analysis output %d bytes exceeds limit %d", len(analysisBytes), maxBytes)
+	}
+	run.AnalysisBytes = int64(len(analysisBytes))
+	run.PackageCount = len(analysis.Packages)
+	run.RecordCount = analysis.RecordCounts.Total
+	runBytes, err := marshalCanonical(run)
+	if err != nil {
+		return nil, nil, err
+	}
+	if int64(len(runBytes)) > maxBytes {
+		return nil, nil, fmt.Errorf("output %d bytes exceeds limit %d", len(runBytes), maxBytes)
+	}
+	return analysisBytes, runBytes, nil
+}
+
 type ownedTempDir struct {
 	path string
 	info os.FileInfo
