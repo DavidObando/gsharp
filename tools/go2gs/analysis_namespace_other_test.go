@@ -96,8 +96,20 @@ func TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages(t *testing
 	root := copyFixture(t, "complete")
 	marker := filepath.Join(secureTestRoot(t), "native-ran")
 	toolDir := secureTestRoot(t)
-	if err := os.Symlink(filepath.Join(runtime.GOROOT(), "bin", selectedGoName()), filepath.Join(toolDir, selectedGoName())); err != nil {
-		t.Fatal(err)
+	sourceGo := filepath.Join(runtime.GOROOT(), "bin", selectedGoName())
+	selectedGo := filepath.Join(toolDir, selectedGoName())
+	var stageErr error
+	if runtime.GOOS == "windows" {
+		var data []byte
+		data, stageErr = os.ReadFile(sourceGo)
+		if stageErr == nil {
+			stageErr = os.WriteFile(selectedGo, data, 0o755)
+		}
+	} else {
+		stageErr = os.Symlink(sourceGo, selectedGo)
+	}
+	if stageErr != nil {
+		t.Fatal(stageErr)
 	}
 	for _, name := range []string{"cc", "gcc", "clang", "pkg-config", "as", "ld"} {
 		if err := os.WriteFile(filepath.Join(toolDir, name), []byte("#!/bin/sh\n: > \""+marker+"\"\nexit 99\n"), 0o755); err != nil {
