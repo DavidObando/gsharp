@@ -4419,6 +4419,48 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_CapturedSiblingAssignmentPreservesDeclaredBaseConversion()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                open func Read() string -> "animal"
+            }
+            class Dog : Animal {
+                func Bark() string -> "dog"
+                override func Read() string -> "dog"
+            }
+            class Cat : Animal {
+                override func Read() string -> "cat"
+            }
+            data class Holder(Callback (() -> void)) { }
+
+            func Select(useUnknown bool, holder Holder) Animal {
+                var x Animal = Dog{}
+                var count = 0
+                var replace = func() { x = Cat{} }
+                if useUnknown {
+                    replace = holder.Callback
+                }
+                if x is Dog {
+                Again:
+                    if count == 0 {
+                        count++
+                        replace()
+                        goto Again
+                    }
+                    return x
+                }
+                return x
+            }
+
+            Select(false, Holder{Callback: func() { }}).Read()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("cat", result.Value);
+    }
+
+    [Fact]
     public void BackwardGoto_ConstructedGenericPropertyGuardRetainsNullableType()
     {
         var result = Evaluate("""

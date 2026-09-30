@@ -783,9 +783,15 @@ internal sealed partial class StatementBinder
 
                 foreach (var access in edge.Accesses)
                 {
-                    if ((!sourceSnapshot.NarrowedVariables.TryGetValue(
-                            access.Path,
-                            out var sourceType)
+                    var sourceType = sourceSnapshot.NarrowedVariables.TryGetValue(
+                        access.Path,
+                        out var narrowedSourceType)
+                        ? narrowedSourceType
+                        : access.Path.HasMembers
+                            || access.DeclaredType is NullableTypeSymbol
+                            ? null
+                            : access.DeclaredType;
+                    if ((sourceType == null
                             || !IsRepresentationPreservingJoin(sourceType, access.RequiredType))
                         && reported.Add(access))
                     {
