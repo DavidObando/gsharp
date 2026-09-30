@@ -5,8 +5,11 @@
 using System;
 using System.IO;
 using System.Linq;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Cs2Gs.Pipeline;
+using Cs2Gs.Translator.Loading;
+using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -36,20 +39,75 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
         {
             sourceRoot = NewDirectory("scratch-projects");
             File.WriteAllText(Path.Combine(sourceRoot, "Directory.Build.props"), "<Project></Project>");
+            string supportPath = Path.Combine(sourceRoot, "Cs2Gs.InMemory.dll");
+            var runtimeDirectory = new DirectoryInfo(RuntimeEnvironment.GetRuntimeDirectory());
+            string referenceDirectory = Path.Combine(
+                runtimeDirectory.Parent.Parent.Parent.FullName,
+                "packs",
+                "Microsoft.NETCore.App.Ref",
+                runtimeDirectory.Name,
+                "ref",
+                "net10.0");
+            MetadataReference[] supportReferences = Directory
+                .GetFiles(referenceDirectory, "*.dll")
+                .Select(path => MetadataReference.CreateFromFile(path))
+                .ToArray();
+            LoadedCSharpProject support = CSharpProjectLoader.LoadInMemory(
+                new[]
+                {
+                    ("SideEffectingPair.cs", """
+                        namespace Support;
+
+                        public sealed class SideEffectingPair
+                        {
+                            public static int Calls;
+
+                            public void Deconstruct(out int left, out int right)
+                            {
+                                Calls++;
+                                left = 24;
+                                right = 25;
+                            }
+                        }
+                        """),
+                },
+                supportReferences);
+            Assert.True(
+                support.BoundWithoutErrors,
+                string.Join(Environment.NewLine, support.ErrorDiagnostics));
+            Microsoft.CodeAnalysis.Emit.EmitResult supportEmit;
+            using (FileStream supportStream = File.Create(supportPath))
+            {
+                supportEmit = support.Compilation.Emit(supportStream);
+            }
+
+            Assert.True(
+                supportEmit.Success,
+                string.Join(
+                    Environment.NewLine,
+                    supportEmit.Diagnostics.Where(
+                        diagnostic => diagnostic.Severity == Microsoft.CodeAnalysis.DiagnosticSeverity.Error)));
+
             string projectDirectory = Path.Combine(sourceRoot, "Issue4300");
             Directory.CreateDirectory(projectDirectory);
             string projectPath = Path.Combine(projectDirectory, "Issue4300.csproj");
-            File.WriteAllText(projectPath, """
+            File.WriteAllText(projectPath, $"""
                 <Project Sdk="Microsoft.NET.Sdk">
                   <PropertyGroup>
                     <OutputType>Exe</OutputType>
                     <TargetFramework>net10.0</TargetFramework>
                     <Nullable>enable</Nullable>
                   </PropertyGroup>
+                  <ItemGroup>
+                    <Reference Include="Cs2Gs.InMemory">
+                      <HintPath>{supportPath}</HintPath>
+                    </Reference>
+                  </ItemGroup>
                 </Project>
                 """);
             File.WriteAllText(Path.Combine(projectDirectory, "Program.cs"), """
                 using System;
+                using Support;
 
                 public sealed class Box
                 {
@@ -98,6 +156,10 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
                         int kept = 0;
                         (kept, (_, _)) = (11, (12, 13));
 
+                        var (_, (_, _)) = (0, new SideEffectingPair());
+                        int discardExisting = 0;
+                        (discardExisting, (_, _)) = (0, new SideEffectingPair());
+
                         ((GetTarget().Value, State.Values[GetIndex()]), existing) = GetValues();
 
                         var result = ((a, b), _) = ((14, 15), 16);
@@ -107,6 +169,7 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
                         int aValue = 98;
                         ((a, b), c) = ((19, 20), 21);
 
+                        Console.WriteLine($"deconstruct:{SideEffectingPair.Calls}");
                         Console.WriteLine($"{declA},{declB},{declC}");
                         Console.WriteLine($"{fresh},{a},{b},{c},{d},{kept}");
                         Console.WriteLine($"{State.Target.Value},{State.Values[0]},{existing}");
@@ -118,7 +181,7 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
             string goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden");
             File.WriteAllText(
                 goldenPath,
-                "target\nindex\nrhs\n1,2,3\n5,19,20,21,10,11\n21,22,23\n14,15,16\n17,18,99,98\n");
+                "target\nindex\nrhs\ndeconstruct:2\n1,2,3\n5,19,20,21,10,11\n21,22,23\n14,15,16\n17,18,99,98\n");
 
             outputRoot = NewDirectory("pipeline-tests");
             var app = new CorpusApp(
@@ -156,7 +219,10 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
             Assert.DoesNotContain("__decon", translated, StringComparison.Ordinal);
             Assert.Contains("aTuple2", translated, StringComparison.Ordinal);
             Assert.Contains("aValue2", translated, StringComparison.Ordinal);
-            Assert.DoesNotContain("let (_, _)", translated, StringComparison.Ordinal);
+            Assert.Contains("let (keptValue, _) = (11, (12, 13))", translated, StringComparison.Ordinal);
+            Assert.Contains("let (_, deconstructedTuple) = (0, SideEffectingPair())", translated, StringComparison.Ordinal);
+            Assert.Contains("let (_, _) = deconstructedTuple", translated, StringComparison.Ordinal);
+            Assert.Contains("let (_, _) = deconstructedTuple2", translated, StringComparison.Ordinal);
             Assert.NotEmpty(appResult.Stages);
             Assert.Equal(
                 new[] { "translate", "compile", "ilverify", "test-parity" },

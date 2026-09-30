@@ -1020,12 +1020,16 @@ public sealed partial class CSharpToGSharpTranslator
                 // A nested tuple target needs its own real temp to recurse
                 // into — UNLESS every leaf underneath it is itself a true
                 // discard, in which case the whole nested arm is dead and
-                // recursing into it would only emit a pointless inner
-                // redundant nested discard binding (issue #2099, item 3).
+                // the RHS element is an actual tuple. A custom Deconstruct
+                // method must still run even when every output is discarded.
+                bool sideEffectFreeAllDiscardTuple =
+                    targetExpr is TupleExpressionSyntax nestedDiscardCheck
+                    && this.IsAllDiscardTuple(nestedDiscardCheck)
+                    && rhsTupleType is { IsTupleType: true }
+                    && i < rhsTupleType.TupleElements.Length
+                    && rhsTupleType.TupleElements[i].Type is INamedTypeSymbol { IsTupleType: true };
                 bool needsRealTemp = forceRealTemps ||
-                    (targetExpr is TupleExpressionSyntax nestedDiscardCheck
-                        ? !this.IsAllDiscardTuple(nestedDiscardCheck)
-                        : !this.IsDeconstructionDiscard(targetExpr));
+                    (!sideEffectFreeAllDiscardTuple && !this.IsDeconstructionDiscard(targetExpr));
                 temps.Add(needsRealTemp
                     ? this.AllocateDeconstructionTempName(targetExpr)
                     : "_");
@@ -1068,7 +1072,18 @@ public sealed partial class CSharpToGSharpTranslator
                     // to flatten every depth into one `let (...)` (issue
                     // #1974). The recursive rhsValue is already a bare temp
                     // read, so no further spill is needed before recursing.
-                    List<GExpression> nestedValues = this.LowerTuplePattern(nestedTuple, tempRead, forceRealTemps, statements, captured);
+                    INamedTypeSymbol nestedRhsTupleType =
+                        rhsTupleType is { IsTupleType: true }
+                            && i < rhsTupleType.TupleElements.Length
+                            ? rhsTupleType.TupleElements[i].Type as INamedTypeSymbol
+                            : null;
+                    List<GExpression> nestedValues = this.LowerTuplePattern(
+                        nestedTuple,
+                        tempRead,
+                        forceRealTemps,
+                        statements,
+                        captured,
+                        nestedRhsTupleType);
                     values.Add(forceRealTemps ? new TupleLiteralExpression(nestedValues) : null);
                     continue;
                 }
@@ -1229,7 +1244,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
                 else
                 {
-                    temps.Add(!preserveValue && this.IsAllDiscardDesignation(child)
+                    temps.Add(!preserveValue && child is DiscardDesignationSyntax
                         ? "_"
                         : this.AllocateDeconstructionTempName(child));
                 }
@@ -1287,11 +1302,6 @@ public sealed partial class CSharpToGSharpTranslator
                     return statements;
                 });
         }
-
-        private bool IsAllDiscardDesignation(VariableDesignationSyntax designation) =>
-            designation is DiscardDesignationSyntax ||
-            (designation is ParenthesizedVariableDesignationSyntax parenthesized
-                && parenthesized.Variables.All(this.IsAllDiscardDesignation));
 
         private bool TryGetDeconstructionTargets(
             ExpressionSyntax left,
