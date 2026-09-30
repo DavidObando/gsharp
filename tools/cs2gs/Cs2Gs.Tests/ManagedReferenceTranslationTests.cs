@@ -4900,6 +4900,144 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ConditionalRejectsCovariantProjectedArgumentErasure()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedCovariantConditional;
+            public class Probe {
+                private static List<T> Wrap<T>(T[] source) =>
+                    new List<T> { source[0] };
+
+                public static IEnumerable<object> Run(bool flag) {
+                    var source = new ManagedRef<int>[1];
+                    var selected = flag
+                        ? Wrap(source)
+                        : (IEnumerable<object>)new List<object>();
+                    return selected;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedCovariantConditional.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "incompatible managed-reference projections",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ConditionalContravarianceKeepsSafeNonNullCommonType()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedContravariantConditional;
+            public interface IConsumer<in T> {
+                int Consume(T value);
+            }
+            public sealed class Consumer<T> : IConsumer<T> {
+                public int Consume(T value) => 42;
+            }
+            public sealed class ObjectConsumer : IConsumer<object> {
+                public int Consume(object value) => 42;
+            }
+            public class Probe {
+                private static IConsumer<T> Wrap<T>(T[] source) =>
+                    new Consumer<T>();
+
+                public static int Run(bool flag) {
+                    var source = new ManagedRef<int>[1];
+                    IConsumer<object> fallback = new ObjectConsumer();
+                    var selected = flag ? Wrap(source) : fallback;
+                    var storage = new int[1];
+                    return selected.Consume(ManagedRef<int>.FromArray(storage, 0));
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedContravariantConditional.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "cast[IConsumer[managed[int32]]](fallback)",
+            text,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "cast[IConsumer[managed[int32]?]](fallback)",
+            text,
+            StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run(false)",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ConditionalAllowsVarianceWithSameProjectedArgument()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using System.Linq;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedVariantControl;
+            public class Probe {
+                private static List<T> WrapList<T>(T[] source) =>
+                    new List<T> { source[0] };
+                private static IEnumerable<T> WrapSequence<T>(T[] source) =>
+                    new List<T> { source[0] };
+
+                public static int Run(bool flag) {
+                    var source = new ManagedRef<int>[1];
+                    var selected = flag
+                        ? WrapList(source)
+                        : WrapSequence(source);
+                    return selected.Count() == 1 ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedVariantControl.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run(true)",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ImportedStaticGenericMemberWriteWithProjectedValueReportsUnsupported()
     {
         const string source = """
