@@ -4238,12 +4238,20 @@ public sealed partial class CSharpToGSharpTranslator
             var replacements =
                 new Dictionary<ITypeParameterSymbol, ITypeSymbol>(
                     SymbolEqualityComparer.Default);
-            foreach (ExpressionSyntax element in collection.Elements
-                .OfType<ExpressionElementSyntax>()
-                .Select(item => item.Expression))
+            foreach (CollectionElementSyntax collectionElement in collection.Elements)
             {
-                ITypeSymbol projectedElement =
-                    this.GetManagedReferenceArrayProjectedArgumentType(element);
+                // A spread contributes its projected enumerable element type
+                // exactly as a plain element contributes its own projected type.
+                ITypeSymbol projectedElement = collectionElement switch
+                {
+                    ExpressionElementSyntax item =>
+                        this.GetManagedReferenceArrayProjectedArgumentType(item.Expression),
+                    SpreadElementSyntax spread =>
+                        this.GetMappedArrayElementType(spread.Expression)
+                            ?? GetEnumerableElementType(
+                                this.GetManagedReferenceArrayProjectedArgumentType(spread.Expression)),
+                    _ => null,
+                };
                 if (projectedElement == null)
                 {
                     continue;

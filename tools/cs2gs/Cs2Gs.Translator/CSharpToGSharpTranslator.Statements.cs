@@ -2160,6 +2160,10 @@ public sealed partial class CSharpToGSharpTranslator
                 this.context.SemanticModel.GetEnclosingSymbol(
                     assignment.SpanStart)
                     ?.ContainingType;
+
+            // A projection only exists when it differs from the C# value type;
+            // ordinary nullable-annotation differences (`AsyncLocal<string?>.Value
+            // = "x"`) are not managed-reference widening.
             if (assignmentTarget is IFieldSymbol
                     { ContainingType.IsGenericType: true }
                     or IPropertySymbol
@@ -2170,6 +2174,10 @@ public sealed partial class CSharpToGSharpTranslator
                         assignmentTarget.ContainingType.OriginalDefinition))
                 && assignmentTargetType != null
                 && projectedValue != null
+                && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    this.context.GetTypeInfo(assignment.Right).Type
+                        ?? this.context.GetTypeInfo(assignment.Right).ConvertedType,
+                    projectedValue)
                 && SymbolEqualityComparer.Default.Equals(
                     assignmentTargetType,
                     projectedValue)
