@@ -220,7 +220,12 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	active := stringSet(pkg.GoFiles)
 	embed := stringSet(pkg.EmbedFiles)
 	activeCgo := b.packageImportsC(pkg)
-	reachableHeaders, unsafeIncludes := selectedNativeIncludes(pkg, b.sourceSnapshot)
+	key := packageInputKey(pkg)
+	reachableHeaders, unsafeIncludes := selectedNativeIncludes(
+		pkg,
+		selectedNativePaths(b.selectedSnapshotFiles[key], b.snapshotRoles[key]),
+		b.sourceSnapshot,
+	)
 	nativeConsumer := hasSelectedNativeConsumer(pkg, activeCgo)
 	for _, path := range b.selectedSnapshotFiles[packageInputKey(pkg)] {
 		if b.snapshotRoles[packageInputKey(pkg)][path] == "native" {
@@ -278,8 +283,9 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			}
 		case contains(pkg.IgnoredFiles, path):
 			key := packageInputKey(pkg)
-			if contains(b.selectedSnapshotFiles[key], path) && b.snapshotRoles[key][path] == "active" {
-				role, reason = "active", "selected from the immutable source mirror under the requested CGo profile"
+			snapshotRole := b.snapshotRoles[key][path]
+			if contains(b.selectedSnapshotFiles[key], path) && snapshotRole != "" && snapshotRole != "ignored" {
+				role, reason = snapshotRole, "selected from the immutable source mirror under the requested CGo profile"
 			} else {
 				role, reason = "ignored", "excluded by current build constraints or file naming"
 			}
@@ -407,15 +413,15 @@ func pathsImportC(paths []string, snapshot map[string][]byte) bool {
 	return false
 }
 
-func selectedNativeIncludes(pkg *packages.Package, snapshot map[string][]byte) (map[string]bool, bool) {
+func selectedNativeIncludes(pkg *packages.Package, selected []string, snapshot map[string][]byte) (map[string]bool, bool) {
 	reachable := map[string]bool{}
 	pending := []string{}
-	for _, path := range pkg.OtherFiles {
-		if !nativeHeader(path) {
+	for _, path := range append(append([]string{}, pkg.OtherFiles...), selected...) {
+		if nativeIncludeCarrier(path) {
 			pending = append(pending, path)
 		}
 	}
-	sort.Strings(pending)
+	pending = uniqueSorted(pending)
 	visited := map[string]bool{}
 	unsafe := false
 	for len(pending) > 0 {
@@ -453,6 +459,16 @@ func selectedNativeIncludes(pkg *packages.Package, snapshot map[string][]byte) (
 		}
 	}
 	return reachable, unsafe
+}
+
+func selectedNativePaths(paths []string, roles map[string]string) []string {
+	selected := make([]string, 0, len(paths))
+	for _, path := range paths {
+		if roles[path] == "native" {
+			selected = append(selected, path)
+		}
+	}
+	return selected
 }
 
 func localQuotedIncludes(data []byte) ([]string, bool) {
@@ -687,24 +703,49 @@ func resolveLocalInclude(packageDir, includingPath, include string) (string, boo
 }
 
 func nativeHeader(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".h", ".hh", ".hpp":
-		return true
-	default:
-		return false
-	}
+	return classifyGoPackageInput(path)&goPackageInputHeader != 0
 }
 
 func nativeIncludeCarrier(path string) bool {
-	if nativeHeader(path) {
-		return true
-	}
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".c", ".cc", ".cpp", ".cxx", ".f", ".f90", ".for", ".m", ".mm", ".s", ".swig", ".swigcxx":
-		return true
+	return classifyGoPackageInput(path)&goPackageInputIncludeCarrier != 0
+}
+
+type goPackageInputKind uint8
+
+const (
+	goPackageInputGo goPackageInputKind = 1 << iota
+	goPackageInputNative
+	goPackageInputHeader
+	goPackageInputIncludeCarrier
+	goPackageInputCgoOnly
+)
+
+func classifyGoPackageInput(path string) goPackageInputKind {
+	switch filepath.Ext(path) {
+	case ".go":
+		return goPackageInputGo
+	case ".h", ".hh", ".hpp", ".hxx":
+		return goPackageInputNative | goPackageInputHeader | goPackageInputIncludeCarrier
+	case ".c", ".cc", ".cpp", ".cxx", ".m",
+		".f", ".F", ".for", ".f90", ".swig", ".swigcxx":
+		return goPackageInputNative | goPackageInputIncludeCarrier | goPackageInputCgoOnly
+	case ".s":
+		return goPackageInputNative | goPackageInputIncludeCarrier
+	case ".S", ".sx":
+		return goPackageInputNative | goPackageInputIncludeCarrier | goPackageInputCgoOnly
+	case ".syso":
+		return goPackageInputNative
 	default:
-		return false
+		return 0
 	}
+}
+
+func recognizedGoPackageInput(path string) bool {
+	return classifyGoPackageInput(path) != 0
+}
+
+func recognizedNativePackageInput(path string) bool {
+	return classifyGoPackageInput(path)&goPackageInputNative != 0
 }
 
 func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason string) (string, error) {

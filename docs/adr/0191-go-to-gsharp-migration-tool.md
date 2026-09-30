@@ -214,6 +214,9 @@ invalid UTF-8 string values, through an explicit byte encoding. Reject unknown
 required record kinds and dangling IDs; diagnostics cannot masquerade as
 missing optional type information. Deterministic output IDs come from
 canonical declarations/types, not dictionary traversal or absolute cache paths.
+The final record bound applies equally to preload-only failure inventories.
+Validation recomputes source-manifest identity and byte-validity claims, and
+indexes record ownership rather than repeatedly scanning record collections.
 
 Normalize expression sequencing, multi-assignment, return slots, range loops,
 and defer registration into a small set of Go-specific operations. Maintain

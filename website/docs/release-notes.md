@@ -103,7 +103,11 @@ Before moving an application to a different compiler version, pin the intended S
   panic/defer/recover, fixed-array, and concurrency sites without choosing
   their later G# representation. Profile flags are allowlisted against tool
   execution/path overrides, and the selected Go executable supplies its own
-  verified GOROOT. Version and GOROOT discovery use captured build metadata and
+  verified GOROOT. Preload-only failure inventories now obey the same final
+  record bound as loaded inventories; package-input drift covers every
+  Go-recognized extension independently of CGo selection; and validation
+  recomputes source-manifest identity and UTF-8 claims while indexing scope
+  ownership linearly. Version and GOROOT discovery use captured build metadata and
   the verified path/handoff rather than executing `go version` or `go env`.
   The captured executable must identify as native `cmd/go`; on Linux it must
   also be static ELF (including an internally linked static PIE) with no

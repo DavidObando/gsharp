@@ -89,6 +89,9 @@ with Go build constraints and file naming rules. Selected CGo files, native
 sources, assembly, and reachable headers are recorded with deterministic
 `cgo`/`native` blockers. Active `#cgo pkg-config:` directives are parsed from
 source and block without executing pkg-config; inactive directives are ignored.
+Directory drift checks cover every package-input extension recognized by the
+pinned Go build rules regardless of whether CGo is enabled; CGo selection only
+decides which captured native inputs are active.
 Commit provenance is read directly from bounded repository metadata rather
 than by discovering or executing an ambient `git` command.
 Source inputs and authorized local replacements are loaded from a private,

@@ -131,6 +131,9 @@ native, assembly, and reachable header inputs, and emits deterministic
 `cgo`/`native` blockers. Active `#cgo pkg-config:` directives are parsed from
 selected source and emit a `pkg-config` blocker without running pkg-config;
 inactive directives do not block.
+Directory drift checks cover every package-input extension recognized by the
+pinned Go build rules regardless of whether CGo is enabled; CGo selection only
+decides which captured native inputs are active.
 Source commit provenance is read directly from bounded `.git` metadata; the
 analyzer never discovers or executes an ambient `git` command.
 
