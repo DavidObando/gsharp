@@ -2519,6 +2519,31 @@ public sealed partial class CSharpToGSharpTranslator
                         observedProjection = projectedArgument;
                     }
 
+                    bool hasProjectedReturn = TryGetProjectedTypeArgument(
+                        method.OriginalDefinition.ReturnType,
+                        invoke.ReturnType,
+                        typeParameter,
+                        this.context.Compilation,
+                        out ITypeSymbol projectedReturn,
+                        out bool conflictingReturn);
+                    if (conflictingReturn
+                        || (hasProjectedReturn
+                            && observedProjection != null
+                            && !SymbolEqualityComparer.IncludeNullability.Equals(
+                                observedProjection,
+                                projectedReturn)))
+                    {
+                        this.context.ReportUnsupported(
+                            argument,
+                            $"projected delegate adaptation found conflicting types for type parameter '{typeParameter.Name}'.");
+                        return null;
+                    }
+
+                    if (hasProjectedReturn)
+                    {
+                        observedProjection = projectedReturn;
+                    }
+
                     if (observedProjection == null
                         || SymbolEqualityComparer.IncludeNullability.Equals(
                             containingArguments[typeIndex],
@@ -2608,6 +2633,31 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     observedProjection = projectedArgument;
+                }
+
+                bool hasProjectedReturn = TryGetProjectedTypeArgument(
+                    projectedMethod.ConstructedFrom.ReturnType,
+                    invoke.ReturnType,
+                    typeParameter,
+                    this.context.Compilation,
+                    out ITypeSymbol projectedReturn,
+                    out bool conflictingReturn);
+                if (conflictingReturn
+                    || (hasProjectedReturn
+                        && observedProjection != null
+                        && !SymbolEqualityComparer.IncludeNullability.Equals(
+                            observedProjection,
+                            projectedReturn)))
+                {
+                    this.context.ReportUnsupported(
+                        argument,
+                        $"projected delegate adaptation found conflicting types for type parameter '{typeParameter.Name}'.");
+                    return null;
+                }
+
+                if (hasProjectedReturn)
+                {
+                    observedProjection = projectedReturn;
                 }
 
                 if (observedProjection == null

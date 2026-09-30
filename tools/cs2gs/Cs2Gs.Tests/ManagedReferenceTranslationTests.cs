@@ -5679,6 +5679,67 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceArrayProjectionUpdatesReturnOnlyMethodGroup()
+    {
+        const string source = """
+            #nullable enable
+            using System;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedReturnOnlyMethodGroup;
+            public static class Holder<T> {
+                public static T[] Produce() => new T[1];
+            }
+            public class Probe {
+                private static T[] Produce<T>() => new T[1];
+                private static string[] EmptyStrings() => Array.Empty<string>();
+
+                private static bool Apply<T>(
+                    T[] source,
+                    Func<T[]> factory) =>
+                    factory()[0] == null;
+
+                private static bool ApplyOrdinary(Func<string[]> factory) =>
+                    factory().Length == 0;
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return Apply(source, Produce<ManagedRef<int>>)
+                        && Apply(source, Holder<ManagedRef<int>>.Produce)
+                        && ApplyOrdinary(EmptyStrings)
+                        ? 42
+                        : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedReturnOnlyMethodGroup.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains("Produce[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "Holder[managed[int32]?].Produce",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("ApplyOrdinary(EmptyStrings)", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionUpdatesMethodGroupContainingType()
     {
         const string source = """
