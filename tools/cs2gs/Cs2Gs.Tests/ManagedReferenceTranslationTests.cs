@@ -3034,6 +3034,50 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void NestedManagedReferenceArrayParamsInitializerRejectsNullCarrier()
+    {
+        const string source = """
+            using System.Collections;
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayNestedParamsInitializerNullCarrier;
+            public sealed class Rows<T> : IEnumerable {
+                public void Add(int key, params T[] added) { }
+                public IEnumerator GetEnumerator() => System.Array.Empty<T>().GetEnumerator();
+            }
+            public sealed class Holder<T> {
+                public Rows<T> Rows { get; } = new Rows<T>();
+            }
+            public class Probe {
+                public static void Run() {
+                    var holder = new Holder<ManagedRef<int>> {
+                        Rows = {
+                            { 1, null },
+                        },
+                    };
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayNestedParamsInitializerNullCarrier.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "direct null/default params carrier",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ManagedReferenceArrayParamsCollectionInitializerKeepsNormalFormArray()
     {
         const string source = """
@@ -5121,6 +5165,43 @@ public sealed class ManagedReferenceTranslationTests
         };
         var project = CSharpProjectLoader.LoadInMemory(
             new[] { ("ManagedArrayCovarianceErasure.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "incompatible managed-reference projections",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionRejectsInterfaceCovarianceErasure()
+    {
+        const string source = """
+            #nullable enable
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayInterfaceCovarianceErasure;
+            public class Probe {
+                public static IEnumerable<object> Run(bool flag) {
+                    var managedRefArray = new ManagedRef<int>[1];
+                    var selected = flag
+                        ? managedRefArray
+                        : (IEnumerable<object>)new List<object>();
+                    return selected;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayInterfaceCovarianceErasure.cs", source) },
             references);
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
         var document = Assert.Single(project.Documents);

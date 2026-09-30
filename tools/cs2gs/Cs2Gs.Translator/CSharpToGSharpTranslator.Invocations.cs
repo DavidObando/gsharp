@@ -4303,6 +4303,14 @@ public sealed partial class CSharpToGSharpTranslator
             var elements = new List<CollectionInitializerElement>();
             foreach (ExpressionSyntax element in initializer.Expressions)
             {
+                if (this.IsUnsupportedDirectNullParamsCarrierElement(element))
+                {
+                    this.context.ReportUnsupported(
+                        element,
+                        "a direct null/default params carrier has no exact G# form: a G# variadic call always materializes the carrier.");
+                    return null;
+                }
+
                 if (element is AssignmentExpressionSyntax { Left: IdentifierNameSyntax memberName } memberAssignment)
                 {
                     if (memberAssignment.Right is InitializerExpressionSyntax nestedInitializer

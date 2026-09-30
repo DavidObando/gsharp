@@ -1344,6 +1344,21 @@ public sealed partial class CSharpToGSharpTranslator
                         destinationArray.ElementType);
             }
 
+            if (sourceType is IArrayTypeSymbol sourceInterfaceArray
+                && destinationType is INamedTypeSymbol
+                    { TypeArguments.Length: 1 } destinationInterface)
+            {
+                return (!TypeContainsRecognizedManagedReferenceConsumer(
+                            sourceInterfaceArray.ElementType,
+                            this.context.Compilation)
+                        || SymbolEqualityComparer.IncludeNullability.Equals(
+                            sourceInterfaceArray.ElementType,
+                            destinationInterface.TypeArguments[0]))
+                    && this.NestedProjectionFitsDestination(
+                        sourceInterfaceArray.ElementType,
+                        destinationInterface.TypeArguments[0]);
+            }
+
             if (sourceType is not INamedTypeSymbol sourceNamed
                 || destinationType is not INamedTypeSymbol destinationNamed)
             {
