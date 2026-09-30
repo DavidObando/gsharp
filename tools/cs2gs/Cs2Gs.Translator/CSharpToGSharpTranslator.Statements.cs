@@ -1076,7 +1076,8 @@ public sealed partial class CSharpToGSharpTranslator
             int usePosition,
             HashSet<ISymbol> visited = null,
             SyntaxNode executableOverride = null,
-            IReadOnlyList<ExpressionSyntax> entryValues = null)
+            IReadOnlyList<ExpressionSyntax> entryValues = null,
+            bool preserveDelegateCompoundAssignments = false)
         {
             SyntaxNode declaration = local.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax();
             ExpressionSyntax initializer = null;
@@ -1140,7 +1141,8 @@ public sealed partial class CSharpToGSharpTranslator
                             nestedExecutable.SpanStart,
                             declarationVisited,
                             executable,
-                            initialValues));
+                            initialValues,
+                            preserveDelegateCompoundAssignments));
                     foreach (int invocationPosition
                         in this.GetInvocationPositions(nestedExecutable, executable))
                     {
@@ -1154,7 +1156,8 @@ public sealed partial class CSharpToGSharpTranslator
                             invocationPosition,
                             invocationVisited,
                             executable,
-                            initialValues));
+                            initialValues,
+                            preserveDelegateCompoundAssignments));
                     }
 
                     initialValues = nestedInitialValues.ToList();
@@ -1251,7 +1254,8 @@ public sealed partial class CSharpToGSharpTranslator
                             assignedValues,
                             elementAssignedValues,
                             visited,
-                            unknownTuple);
+                            unknownTuple,
+                            preserveDelegateCompoundAssignments);
                     }
 
                     if (block.BranchValue is { } branchValue)
@@ -1265,7 +1269,8 @@ public sealed partial class CSharpToGSharpTranslator
                             assignedValues,
                             elementAssignedValues,
                             visited,
-                            unknownTuple);
+                            unknownTuple,
+                            preserveDelegateCompoundAssignments);
                     }
 
                     if (!outputs.TryGetValue(block, out var previous)
@@ -1299,7 +1304,8 @@ public sealed partial class CSharpToGSharpTranslator
                     assignedValues,
                     elementAssignedValues,
                     visited,
-                    unknownTuple);
+                    unknownTuple,
+                    preserveDelegateCompoundAssignments);
             }
 
             if (useOperationIndex < useBlock.Operations.Length)
@@ -1314,6 +1320,7 @@ public sealed partial class CSharpToGSharpTranslator
                     elementAssignedValues,
                     visited,
                     unknownTuple,
+                    preserveDelegateCompoundAssignments,
                     usePosition);
             }
             else if (useBlock.BranchValue is { } branchValue)
@@ -1328,6 +1335,7 @@ public sealed partial class CSharpToGSharpTranslator
                     elementAssignedValues,
                     visited,
                     unknownTuple,
+                    preserveDelegateCompoundAssignments,
                     usePosition);
             }
 
@@ -1339,12 +1347,14 @@ public sealed partial class CSharpToGSharpTranslator
             SyntaxNode enclosingExecutable)
         {
             ISymbol callable = null;
+            AnonymousFunctionExpressionSyntax anonymousFunction = null;
             if (nestedExecutable is LocalFunctionStatementSyntax localFunction)
             {
                 callable = this.context.SemanticModel.GetDeclaredSymbol(localFunction);
             }
-            else if (nestedExecutable is AnonymousFunctionExpressionSyntax anonymousFunction)
+            else if (nestedExecutable is AnonymousFunctionExpressionSyntax nestedAnonymousFunction)
             {
+                anonymousFunction = nestedAnonymousFunction;
                 SyntaxNode owner = anonymousFunction;
                 while (owner.Parent switch
                 {
@@ -1390,13 +1400,34 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     target = invoke.Expression;
                 }
+                else if (target is MemberBindingExpressionSyntax binding
+                    && binding.Name.Identifier.ValueText == "Invoke"
+                    && invocation.Parent is ConditionalAccessExpressionSyntax conditional)
+                {
+                    target = conditional.Expression;
+                }
 
-                if (SymbolEqualityComparer.Default.Equals(
+                if (!SymbolEqualityComparer.Default.Equals(
                     this.context.GetSymbolInfo(target).Symbol,
                     callable))
                 {
-                    yield return invocation.ArgumentList.CloseParenToken.SpanStart;
+                    continue;
                 }
+
+                if (callable is ILocalSymbol delegateLocal
+                    && anonymousFunction != null
+                    && !this.GetReachingLocalValues(
+                            delegateLocal,
+                            invocation.SpanStart,
+                            preserveDelegateCompoundAssignments: true)
+                        .Any(value => value.DescendantNodesAndSelf().Any(node =>
+                            node.SyntaxTree == anonymousFunction.SyntaxTree
+                                && node.Span == anonymousFunction.Span)))
+                {
+                    continue;
+                }
+
+                yield return invocation.ArgumentList.CloseParenToken.SpanStart;
             }
         }
 
@@ -1518,6 +1549,7 @@ public sealed partial class CSharpToGSharpTranslator
                 elementAssignedValues,
             HashSet<ISymbol> visited,
             ExpressionSyntax unknownTuple,
+            bool preserveDelegateCompoundAssignments,
             int beforePosition = int.MaxValue)
         {
             if (declaration.SpanStart < beforePosition
@@ -1617,7 +1649,22 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                values.Clear();
+                bool preserveExistingValues =
+                    preserveDelegateCompoundAssignments
+                        && (assignment.IsKind(SyntaxKind.AddAssignmentExpression)
+                            || assignment.IsKind(
+                                SyntaxKind.SubtractAssignmentExpression));
+                if (!preserveExistingValues)
+                {
+                    values.Clear();
+                }
+
+                if (preserveDelegateCompoundAssignments
+                    && assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                {
+                    continue;
+                }
+
                 if (!assignedValues.TryGetValue(assignment, out ExpressionSyntax value))
                 {
                     var aliasPath = visited == null

@@ -355,6 +355,26 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 wrappedCapturePair = (default(T), replacement);
                 wrappedCapture();
 
+                var conditionalCapturePair = (replacement, replacement);
+                System.Action conditionalCapture = () =>
+                {
+                    var (conditionalCaptureLeft, _) = conditionalCapturePair;
+                    Fill(ref conditionalCaptureLeft, replacement);
+                };
+                conditionalCapturePair = (default(T), replacement);
+                conditionalCapture?.Invoke();
+
+                var reassignedCapturePair = (replacement, replacement);
+                System.Action reassignedCapture = () =>
+                {
+                    var (reassignedCaptureLeft, _) = reassignedCapturePair;
+                    Keep(ref reassignedCaptureLeft);
+                };
+                reassignedCapture();
+                reassignedCapture = () => { };
+                reassignedCapturePair = (default(T), replacement);
+                reassignedCapture();
+
                 var deadCapturePair = (replacement, replacement);
                 System.Action deadCapture = () =>
                 {
@@ -619,6 +639,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "postCaptureLambdaLeft",
             "postCaptureLocalLeft",
             "wrappedCaptureLeft",
+            "conditionalCaptureLeft",
             "nestedCaptureLeft", "nestedCaptureRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
@@ -653,6 +674,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("deadLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("deadRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("deadCaptureLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("reassignedCaptureLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("conditionalNarrowed T? =", printed, StringComparison.Ordinal);
@@ -762,6 +784,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     Observe(in inPair);
                     var (inLeft, inRight) = inPair;
                     Fill(ref inLeft, replacement);
+                    Keep(ref inRight);
 
                     var refElementPair = (default(T), replacement);
                     ObserveRef(ref refElementPair.Item1);
@@ -785,6 +808,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                             combinedPair.First = default(T),
                             combinedPair);
                     Fill(ref combinedLeft, replacement);
+                    Keep(ref combinedRight);
 
                     var duplicateWritePair =
                         (First: replacement, Second: replacement);
@@ -793,6 +817,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     var (duplicateWriteLeft, duplicateWriteRight) =
                         duplicateWritePair;
                     Fill(ref duplicateWriteLeft, replacement);
+                    Keep(ref duplicateWriteRight);
 
                     var mixedWritePair =
                         (First: replacement, Second: replacement);
