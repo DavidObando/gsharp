@@ -1531,6 +1531,23 @@ public sealed partial class CSharpToGSharpTranslator
                 EagerExecutionNodes(executionBody)
                     .OfType<InvocationExpressionSyntax>())
             {
+                IMethodSymbol invokedMethod =
+                    this.context.GetSymbolInfo(invocation).Symbol
+                        as IMethodSymbol;
+                if (anonymousFunction != null
+                    && invokedMethod?.MethodKind != MethodKind.DelegateInvoke)
+                {
+                    continue;
+                }
+
+                if (anonymousFunction == null
+                    && invokedMethod?.MethodKind
+                        is not (MethodKind.LocalFunction
+                            or MethodKind.DelegateInvoke))
+                {
+                    continue;
+                }
+
                 ExpressionSyntax target = invocation.Expression;
                 if (target is MemberAccessExpressionSyntax invoke
                     && invoke.Name.Identifier.ValueText == "Invoke")

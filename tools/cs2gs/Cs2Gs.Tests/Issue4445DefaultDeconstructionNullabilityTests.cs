@@ -1741,6 +1741,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static void Fill<T>(ref T? value, T replacement) =>
                     value = replacement;
 
+                private static void Keep<T>(ref T value)
+                {
+                }
+
                 private static void InvokeNested(System.Action callback)
                 {
                     void Run() => callback();
@@ -1766,6 +1770,15 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     };
                     nestedPair = (default(T), replacement);
                     InvokeNested(nested);
+
+                    var hashPair = (replacement, replacement);
+                    System.Action hash = () =>
+                    {
+                        var (hashLeft, _) = hashPair;
+                        Keep(ref hashLeft);
+                    };
+                    hashPair = (default(T), replacement);
+                    _ = hash.GetHashCode();
 
                     var returnedPair = (replacement, replacement);
                     void Returned()
@@ -1802,6 +1815,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
         Assert.Matches(@"\b(let|var) wrappedLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) nestedHelperLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) hashLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) returnedLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) recursiveLeft T\? =", printed);
     }
