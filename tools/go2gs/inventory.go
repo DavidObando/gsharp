@@ -214,7 +214,8 @@ func splitDiagnosticPosition(position string) (string, string) {
 }
 
 func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *PackageRecord) error {
-	compiled := stringSet(pkg.CompiledGoFiles)
+	syntaxPaths := syntaxFilePaths(pkg)
+	compiled := stringSet(syntaxPaths)
 	active := stringSet(pkg.GoFiles)
 	embed := stringSet(pkg.EmbedFiles)
 	activeCgo := b.packageImportsC(pkg)
@@ -226,8 +227,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			break
 		}
 	}
-	all := append([]string{}, pkg.CompiledGoFiles...)
-	all = append(all, pkg.GoFiles...)
+	all := append([]string{}, pkg.GoFiles...)
 	all = append(all, pkg.IgnoredFiles...)
 	all = append(all, pkg.OtherFiles...)
 	all = append(all, pkg.EmbedFiles...)
@@ -292,7 +292,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 			role, reason = "input", "reported by go/packages"
 		}
 		key := packageInputKey(pkg)
-		if !contains(pkg.GoFiles, path) && !contains(pkg.CompiledGoFiles, path) &&
+		if !contains(pkg.GoFiles, path) &&
 			!contains(pkg.IgnoredFiles, path) && !contains(pkg.OtherFiles, path) && !contains(pkg.EmbedFiles, path) {
 			snapshotRole := b.snapshotRoles[key][path]
 			if contains(b.selectedSnapshotFiles[key], path) {
@@ -319,7 +319,7 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		sort.Strings(record.FileIDs)
 		return nil
 	}
-	for _, path := range pkg.CompiledGoFiles {
+	for _, path := range syntaxPaths {
 		if fileID := b.fileIDs[b.fileKey(pkg, path)]; fileID != "" {
 			record.CompiledFileIDs = append(record.CompiledFileIDs, fileID)
 		}
@@ -327,10 +327,10 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 
 	b.addScopes(pkg)
 	for index, file := range pkg.Syntax {
-		if index >= len(pkg.CompiledGoFiles) {
+		if index >= len(syntaxPaths) {
 			break
 		}
-		path := pkg.CompiledGoFiles[index]
+		path := syntaxPaths[index]
 		fileID := b.fileIDs[b.fileKey(pkg, path)]
 		if fileID == "" {
 			continue
@@ -1981,11 +1981,12 @@ func (b *inventoryBuilder) addInitialization(pkg *packages.Package, record *Pack
 		}
 		record.InitializationOrder = append(record.InitializationOrder, entry)
 	}
+	syntaxPaths := syntaxFilePaths(pkg)
 	for index, file := range pkg.Syntax {
-		if index >= len(pkg.CompiledGoFiles) {
+		if index >= len(syntaxPaths) {
 			break
 		}
-		fileID := b.fileIDs[b.fileKey(pkg, pkg.CompiledGoFiles[index])]
+		fileID := b.fileIDs[b.fileKey(pkg, syntaxPaths[index])]
 		if fileID == "" {
 			continue
 		}
@@ -2001,6 +2002,15 @@ func (b *inventoryBuilder) addInitialization(pkg *packages.Package, record *Pack
 			})
 		}
 	}
+
+}
+
+func syntaxFilePaths(pkg *packages.Package) []string {
+	paths := make([]string, len(pkg.Syntax))
+	for index, file := range pkg.Syntax {
+		paths[index] = tokenPositionFor(pkg.Fset, file.Pos(), false).Filename
+	}
+	return paths
 }
 
 func (b *inventoryBuilder) addObjectForPackageID(pkgID string, object types.Object) string {

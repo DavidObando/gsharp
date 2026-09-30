@@ -111,12 +111,15 @@ Before moving an application to a different compiler version, pin the intended S
   rejected, and child PATH contains only its private stage. Non-Linux preload
   checks can publish deterministic toolchain/source mismatch blockers without
   loading packages; a matching profile still fails closed before publication.
-  M0 now forces `CGO_ENABLED=0` and never executes cgo, a C/C++ compiler,
-  linker, assembler, pkg-config, or helper. It independently records
+  M0 now uses `go/packages` only for metadata with `CGO_ENABLED=0`, then parses
+  captured source and type-checks it in-process without compiled-file/export
+  requests. It never executes the GOROOT compiler, assembler, linker, cgo, vet,
+  a C/C++ compiler, pkg-config, or helper. It independently records
   profile-selected CGo/native source inputs and emits deterministic blockers;
   legacy profile compiler fields must be empty. Diagnostics
   are path-stable, initialization order is explicit, and schema validation
-  rejects missing fields and count mismatches. The pinned
+  rejects missing fields, count mismatches, and complete artifacts without a
+  loaded main-module package/source ownership graph. The pinned
   cliamp profile reports an actionable mismatch rather than substituting the
   installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged

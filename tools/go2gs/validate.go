@@ -51,7 +51,6 @@ func validateAnalysis(a Analysis) error {
 			}
 		}
 	}
-
 	ids := map[string]string{}
 	add := func(id, kind string) error {
 		if id == "" {
@@ -398,7 +397,43 @@ func validateAnalysis(a Analysis) error {
 	if a.RecordCounts != expectedCounts {
 		return fmt.Errorf("recordCounts do not match records: got %#v, expected %#v", a.RecordCounts, expectedCounts)
 	}
+	if err := validateCompletenessEvidence(a); err != nil {
+		return err
+	}
 	return nil
+}
+
+func validateCompletenessEvidence(a Analysis) error {
+	hasInventoryBlocker := slices.ContainsFunc(a.Blockers, func(blocker BlockerRecord) bool {
+		return blocker.Blocks == "inventory"
+	})
+	if !a.InventoryComplete {
+		if !hasInventoryBlocker {
+			return errors.New("incomplete analysis requires an inventory blocker")
+		}
+		return nil
+	}
+	if hasInventoryBlocker {
+		return errors.New("complete analysis cannot contain an inventory blocker")
+	}
+	if len(a.Modules) == 0 || len(a.Packages) == 0 || len(a.Files) == 0 {
+		return errors.New("complete analysis requires loaded modules, packages, and source files")
+	}
+	mainModules := map[string]bool{}
+	for _, module := range a.Modules {
+		if module.Main {
+			mainModules[module.ID] = true
+		}
+	}
+	if len(mainModules) == 0 {
+		return errors.New("complete analysis requires a main module")
+	}
+	for _, pkg := range a.Packages {
+		if mainModules[pkg.ModuleID] && len(pkg.FileIDs) != 0 && len(pkg.CompiledFileIDs) != 0 {
+			return nil
+		}
+	}
+	return errors.New("complete analysis requires a loaded main-module package with owned source and compiled files")
 }
 
 func validateAnalysisHeader(a Analysis) error {

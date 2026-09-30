@@ -55,9 +55,11 @@ tmpfs. It holds the directory descriptor and sets both process `PATH` and
 loads therefore execute the worker's immutable object and do not depend on the
 original path, bootstrap pathname, or ambient sibling tools after launch.
 
-M0 forces `CGO_ENABLED=0` for every `go/packages` load and never executes cgo,
-a C/C++ compiler, linker, assembler, pkg-config, or helper. Profile-v1
-`cCompiler` and `cCompilerHelpers` fields are accepted only when empty.
+M0 uses `go/packages` only for metadata with `CGO_ENABLED=0` and no compiled
+file or export request. Captured source is parsed and type-checked in-process,
+so the GOROOT compiler, assembler, linker, cgo, vet, C/C++ compilers,
+pkg-config, and helpers are never executed. Profile-v1 `cCompiler` and
+`cCompilerHelpers` fields are accepted only when empty.
 Requested CGo selection is instead classified from the immutable source mirror
 with Go build constraints and file naming rules. Selected CGo files, native
 sources, assembly, and reachable headers are recorded with deterministic
@@ -68,6 +70,9 @@ than by discovering or executing an ambient `git` command.
 Source inputs and authorized local replacements are loaded from a private,
 bounded no-follow mirror, so loader semantics and emitted inventory bytes
 come from the same captured snapshot.
+Schema validation permits `inventoryComplete: true` only when the artifact
+contains a loaded main module, package, owned source files, and typed-file
+ownership; blocker-free preload artifacts are rejected.
 
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
 value arrays, and concurrency are inventoried as typed syntax sites with
