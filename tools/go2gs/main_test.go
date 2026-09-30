@@ -1646,6 +1646,234 @@ func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 	}
 }
 
+func TestArtifactPairRejectsAnalysisReplacementBeforeRun(t *testing.T) {
+	out := t.TempDir()
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), func() {
+		if removeErr := os.Remove(filepath.Join(out, "analysis.json")); removeErr != nil {
+			t.Fatal(removeErr)
+		}
+		if writeErr := os.WriteFile(filepath.Join(out, "analysis.json"), []byte("attacker analysis"), 0o644); writeErr != nil {
+			t.Fatal(writeErr)
+		}
+	})
+	if err == nil {
+		t.Fatal("publication succeeded after analysis identity replacement")
+	}
+	if data, readErr := os.ReadFile(filepath.Join(out, "analysis.json")); readErr != nil || string(data) != "attacker analysis" {
+		t.Fatalf("replacement analysis changed: %q, %v", data, readErr)
+	}
+	if _, statErr := os.Lstat(filepath.Join(out, "run.json")); !os.IsNotExist(statErr) {
+		t.Fatalf("run metadata survived failed pair publication: %v", statErr)
+	}
+	if err := output.release(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestArtifactPairRejectsLockLossBeforeEachPublication(t *testing.T) {
+	for _, artifact := range []string{"analysis.json", "run.json"} {
+		for _, replace := range []bool{false, true} {
+			name := strings.TrimSuffix(artifact, ".json") + "-remove"
+			if replace {
+				name = strings.TrimSuffix(artifact, ".json") + "-replace"
+			}
+			t.Run(name, func(t *testing.T) {
+				out := t.TempDir()
+				output, err := lockAndInvalidateOutput(out)
+				if err != nil {
+					t.Fatal(err)
+				}
+				outputPublicationBoundaryHook = func(name string) {
+					if name != artifact {
+						return
+					}
+					outputPublicationBoundaryHook = nil
+					lock := filepath.Join(out, ".go2gs-lock")
+					if removeErr := os.Remove(lock); removeErr != nil {
+						t.Fatal(removeErr)
+					}
+					if replace {
+						if mkdirErr := os.Mkdir(lock, 0o700); mkdirErr != nil {
+							t.Fatal(mkdirErr)
+						}
+					}
+				}
+				t.Cleanup(func() { outputPublicationBoundaryHook = nil })
+				if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err == nil {
+					t.Fatal("publication succeeded after output lock loss")
+				}
+				for _, name := range []string{"analysis.json", "run.json"} {
+					if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
+						t.Fatalf("owned %s survived lock loss: %v", name, err)
+					}
+				}
+				if err := output.release(); err == nil {
+					t.Fatal("release succeeded after output lock loss")
+				}
+			})
+		}
+	}
+}
+
+func TestArtifactPairCleanupPreservesCompetitorAfterLockReplacement(t *testing.T) {
+	out := t.TempDir()
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	err = publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), func() {
+		lock := filepath.Join(out, ".go2gs-lock")
+		if removeErr := os.Remove(lock); removeErr != nil {
+			t.Fatal(removeErr)
+		}
+		if mkdirErr := os.Mkdir(lock, 0o700); mkdirErr != nil {
+			t.Fatal(mkdirErr)
+		}
+		if removeErr := os.Remove(filepath.Join(out, "analysis.json")); removeErr != nil {
+			t.Fatal(removeErr)
+		}
+		for name, content := range map[string]string{
+			"analysis.json": "competitor analysis",
+			"run.json":      "competitor run",
+		} {
+			if writeErr := os.WriteFile(filepath.Join(out, name), []byte(content), 0o644); writeErr != nil {
+				t.Fatal(writeErr)
+			}
+		}
+	})
+	if err == nil {
+		t.Fatal("publication succeeded after competitor replaced the lock")
+	}
+	if err := output.release(); err == nil {
+		t.Fatal("release succeeded after competitor replaced the lock")
+	}
+	for name, want := range map[string]string{
+		"analysis.json": "competitor analysis",
+		"run.json":      "competitor run",
+	} {
+		if data, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(data) != want {
+			t.Fatalf("competitor %s changed: %q, %v", name, data, err)
+		}
+	}
+}
+
+func TestArtifactPairSuccessRetainsFinalOwnership(t *testing.T) {
+	out := t.TempDir()
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if output.publishedAnalysis == nil || output.publishedRun == nil {
+		t.Fatal("successful publication did not retain artifact identities")
+	}
+	if err := output.verifyPublication(output.publishedAnalysis, output.publishedRun); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.release(); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"analysis.json": "owned analysis",
+		"run.json":      "owned run",
+	} {
+		if data, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(data) != want {
+			t.Fatalf("published %s = %q, %v", name, data, err)
+		}
+	}
+}
+
+func TestArtifactPairRejectsInPlaceContentMutation(t *testing.T) {
+	for _, name := range []string{"analysis.json", "run.json"} {
+		t.Run(name, func(t *testing.T) {
+			out := t.TempDir()
+			output, err := lockAndInvalidateOutput(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(out, name), []byte("mutated"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := output.release(); err == nil {
+				t.Fatal("release succeeded after in-place artifact mutation")
+			}
+			for _, artifact := range []string{"analysis.json", "run.json"} {
+				if _, err := os.Lstat(filepath.Join(out, artifact)); !os.IsNotExist(err) {
+					t.Fatalf("%s survived failed content verification: %v", artifact, err)
+				}
+			}
+		})
+	}
+}
+
+func TestReleaseLockLossInvalidatesOwnedArtifactPair(t *testing.T) {
+	out := t.TempDir()
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(out, ".go2gs-lock")); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.release(); err == nil {
+		t.Fatal("release succeeded after output lock loss")
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
+			t.Fatalf("owned %s survived release-time lock loss: %v", name, err)
+		}
+	}
+}
+
+func TestReleaseRevalidatesArtifactsAfterRetiringLock(t *testing.T) {
+	out := t.TempDir()
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err != nil {
+		t.Fatal(err)
+	}
+	outputLockReleasedHook = func() {
+		outputLockReleasedHook = nil
+		if err := os.WriteFile(filepath.Join(out, "analysis.json"), []byte("mutated after lock release"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { outputLockReleasedHook = nil })
+	if err := output.release(); err == nil {
+		t.Fatal("release succeeded after post-lock artifact mutation")
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
+			t.Fatalf("%s survived post-lock ownership failure: %v", name, err)
+		}
+	}
+}
+
+func TestOutputReleaseFailureOverridesIncompleteExit(t *testing.T) {
+	err := joinOutputReleaseError(
+		&exitError{1, errors.New("inventory incomplete")},
+		errors.New("output ownership lost"),
+	)
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("release failure did not take exit-code precedence: %v", err)
+	}
+}
+
 func TestBoundOutputRootResistsAncestorReplacement(t *testing.T) {
 	base := t.TempDir()
 	ancestor := filepath.Join(base, "ancestor")

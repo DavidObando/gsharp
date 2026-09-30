@@ -54,7 +54,9 @@ Source and local-replacement capture and verification use descriptor-relative
 reads that reject symlinks in every path component.
 Output locking, stale-artifact invalidation, and atomic publication remain
 relative to one held directory descriptor/handle, so replacing an output-root
-ancestor cannot redirect them.
+ancestor cannot redirect them. Open artifact handles and content hashes remain
+bound through lock release; ownership loss invalidates only that invocation's
+outputs.
 
 The selected native `cmd/go` is captured into a parent bootstrap capsule only
 for handoff. Linux first validates the captured bytes as a supported static ELF

@@ -130,7 +130,9 @@ Before moving an application to a different compiler version, pin the intended S
   to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
   typed `*ast.File` root for every compiled file. Output locking, invalidation,
   and publication stay relative to one held directory handle across ancestor
-  renames. Span validation reparses captured bytes to verify exact raw and
+  renames, with final artifact identities and content hashes retained through
+  lock release so ownership loss cannot leave a valid mixed pair. Span
+  validation reparses captured bytes to verify exact raw and
   line-directive-adjusted paths, lines, and columns. Diagnostics
   are path-stable, initialization order is explicit, and schema validation
   rejects missing fields, count mismatches, and complete artifacts without a
