@@ -85,7 +85,10 @@ artifact handles and verifies the lock, file identities, and content hashes
 through release; ownership loss invalidates only the invocation's files. Unix
 removal atomically moves the held entry without replacement into a private
 descriptor-bound quarantine; Windows removal targets the held non-reparse NT
-handle. Unsupported identity-bound operations fail without changing the name.
+handle. Unix restoration uses atomic exchange when another occupant appears;
+any occupant that cannot be restored is preserved for inspection and blocks
+the next invocation. Unsupported identity-bound operations fail before moving
+the name.
 On Linux and macOS, private temporary trees are removed recursively through
 verified directory descriptors and atomic name exchanges without following
 links; an exchange failure or retained entry makes the command fail. Other

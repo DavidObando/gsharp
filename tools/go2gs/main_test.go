@@ -1736,6 +1736,107 @@ func TestIdentityBoundRemovalPreservesReplacementAtOriginalPath(t *testing.T) {
 	}
 }
 
+func TestIdentityBoundRemovalPreservesSecondCanonicalOccupant(t *testing.T) {
+	for _, name := range []string{".go2gs-lock", "analysis.json", "run.json"} {
+		t.Run(name, func(t *testing.T) {
+			out := t.TempDir()
+			output, err := lockAndInvalidateOutput(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(out, name)
+			if name != ".go2gs-lock" {
+				if err := os.WriteFile(path, []byte("owned"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			expected, err := os.Lstat(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			displaced := filepath.Join(out, strings.TrimPrefix(name, ".")+".owned")
+			outputBeforeDestructiveHook = func(candidate string) {
+				if candidate != name {
+					return
+				}
+				outputBeforeDestructiveHook = nil
+				if err := os.Rename(path, displaced); err != nil {
+					t.Fatal(err)
+				}
+				if name == ".go2gs-lock" {
+					if err := os.Mkdir(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(path, "first"), []byte("competitor one"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(path, []byte("competitor one"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			outputAfterDestructiveMoveHook = func(candidate string) {
+				if candidate != name {
+					return
+				}
+				outputAfterDestructiveMoveHook = nil
+				if name == ".go2gs-lock" {
+					if err := os.Mkdir(path, 0o700); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.WriteFile(filepath.Join(path, "second"), []byte("competitor two"), 0o600); err != nil {
+						t.Fatal(err)
+					}
+				} else if err := os.WriteFile(path, []byte("competitor two"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			t.Cleanup(func() {
+				outputBeforeDestructiveHook = nil
+				outputAfterDestructiveMoveHook = nil
+			})
+			if removed, err := removeOutputEntryIfSame(output, name, expected); err == nil || removed {
+				t.Fatalf("second occupant did not fail closed: removed=%v err=%v", removed, err)
+			}
+			if name == ".go2gs-lock" {
+				if data, err := os.ReadFile(filepath.Join(path, "first")); err != nil || string(data) != "competitor one" {
+					t.Fatalf("first competitor lock changed: %q, %v", data, err)
+				}
+			} else if data, err := os.ReadFile(path); err != nil || string(data) != "competitor one" {
+				t.Fatalf("first competitor %s changed: %q, %v", name, data, err)
+			}
+			if err := output.release(); err == nil {
+				t.Fatal("release succeeded with a preserved second occupant")
+			}
+			var foundSecond bool
+			err = filepath.WalkDir(out, func(path string, entry os.DirEntry, err error) error {
+				if err != nil || entry.IsDir() {
+					return err
+				}
+				data, readErr := os.ReadFile(path)
+				if readErr != nil {
+					return readErr
+				}
+				if string(data) == "competitor two" {
+					foundSecond = true
+				}
+				return nil
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !foundSecond {
+				t.Fatal("second competitor was not preserved")
+			}
+			if name != ".go2gs-lock" {
+				if _, err := lockAndInvalidateOutput(out); err == nil ||
+					!strings.Contains(err.Error(), "preserved output quarantine") {
+					t.Fatalf("preserved quarantine was not surfaced on restart: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestIdentityBoundRemovalHandlesHardlinksAndRejectsSymlinks(t *testing.T) {
 	t.Run("hardlink", func(t *testing.T) {
 		out := t.TempDir()
