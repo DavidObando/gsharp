@@ -34,8 +34,74 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             private static (T? Left, T? Right) NullablePair<T>() =>
                 (default, default);
 
+            private sealed class FieldCallbacks<T>
+            {
+                public System.Action callback = () => { };
+
+                public void Check(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    this.callback = () =>
+                    {
+                        var (fieldCaptureLeft, _) = pair;
+                        Keep(ref fieldCaptureLeft);
+                    };
+                    this.callback = () => { };
+                    pair = (default(T), replacement);
+                    this.callback();
+                }
+
+                public void CheckOther(T replacement, FieldCallbacks<T> other)
+                {
+                    var pair = (replacement, replacement);
+                    this.callback = () =>
+                    {
+                        var (retainedFieldLeft, _) = pair;
+                        Fill(ref retainedFieldLeft, replacement);
+                    };
+                    other.callback = () => { };
+                    pair = (default(T), replacement);
+                    this.callback();
+                }
+
+                public void StoreAlias(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action first = () =>
+                    {
+                        var (escapedFieldAliasLeft, _) = pair;
+                        Fill(ref escapedFieldAliasLeft, replacement);
+                    };
+                    this.callback = first;
+                    pair = (default(T), replacement);
+                }
+            }
+
+            private sealed class ReceiverContainer<T>
+            {
+                public FieldCallbacks<T> Holder = new FieldCallbacks<T>();
+            }
+
             private static int Unconstrained<T>(T replacement, bool choose)
             {
+                var fieldCallbacks = new FieldCallbacks<T>();
+                fieldCallbacks.Check(replacement);
+                fieldCallbacks.CheckOther(replacement, new FieldCallbacks<T>());
+                fieldCallbacks.StoreAlias(replacement);
+
+                var firstContainer = new ReceiverContainer<T>();
+                var secondContainer = new ReceiverContainer<T>();
+                var nestedReceiverPair = (replacement, replacement);
+                System.Action nestedReceiver = () =>
+                {
+                    var (nestedReceiverLeft, _) = nestedReceiverPair;
+                    Fill(ref nestedReceiverLeft, replacement);
+                };
+                firstContainer.Holder.callback = nestedReceiver;
+                secondContainer.Holder.callback = () => { };
+                nestedReceiverPair = (default(T), replacement);
+                firstContainer.Holder.callback();
+
                 var direct = default(T);
                 var alias = direct;
                 var branch = choose ? default(T) : alias;
@@ -364,6 +430,19 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 conditionalCapturePair = (default(T), replacement);
                 conditionalCapture?.Invoke();
 
+                System.Action MakeReturnedCapture()
+                {
+                    var returnedCapturePair = (replacement, replacement);
+                    System.Action returnedCapture = () =>
+                    {
+                        var (returnedCaptureLeft, _) = returnedCapturePair;
+                        Fill(ref returnedCaptureLeft, replacement);
+                    };
+                    returnedCapturePair = (default(T), replacement);
+                    return returnedCapture;
+                }
+                var escapedCapture = MakeReturnedCapture();
+
                 var aliasedCapturePair = (replacement, replacement);
                 System.Action originalCapture = () =>
                 {
@@ -650,7 +729,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "postCaptureLocalLeft",
             "wrappedCaptureLeft",
             "conditionalCaptureLeft",
+            "returnedCaptureLeft",
             "aliasedCaptureLeft",
+            "retainedFieldLeft",
+            "escapedFieldAliasLeft",
+            "nestedReceiverLeft",
             "nestedCaptureLeft", "nestedCaptureRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
@@ -686,6 +769,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("deadRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("deadCaptureLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("reassignedCaptureLeft T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("fieldCaptureLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("conditionalNarrowed T? =", printed, StringComparison.Ordinal);
@@ -1230,6 +1314,101 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         string printed = Translate(source);
 
         Assert.DoesNotContain("alias T? =", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Translation_RemovedDelegateDoesNotSeedCapturedDefault()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class RemovedDelegate
+            {
+                private static void Keep<T>(ref T value)
+                {
+                }
+
+                private static void M<T>(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action first = () =>
+                    {
+                        var (removedCaptureLeft, _) = pair;
+                        Keep(ref removedCaptureLeft);
+                    };
+                    System.Action? callback = first;
+                    callback -= first;
+                    pair = (default(T), replacement);
+                    callback?.Invoke();
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = Load(source);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.Single(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "delegate multicast",
+                    StringComparison.Ordinal));
+        Assert.DoesNotContain("removedCaptureLeft T? =", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Translation_DuplicateFieldDelegateSurvivesOneRemoval()
+    {
+        const string source = """
+            #nullable enable
+
+            public sealed class DuplicateFieldDelegate<T>
+            {
+                private System.Action callback = () => { };
+
+                private static void Fill(ref T? value, T replacement) =>
+                    value = replacement;
+
+                public void M(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action first = () =>
+                    {
+                        var (duplicateFieldLeft, _) = pair;
+                        Fill(ref duplicateFieldLeft, replacement);
+                    };
+                    this.callback = first;
+                    this.callback += first;
+                    this.callback += first;
+                    this.callback -= first + first;
+                    pair = (default(T), replacement);
+                    this.callback();
+                }
+            }
+            """;
+
+        LoadedCSharpProject project = Load(source);
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(
+            project.Compilation,
+            document.SemanticModel,
+            document.FilePath);
+        string printed = GSharpPrinter.Print(
+            new CSharpToGSharpTranslator().TranslateDocument(document, context));
+
+        Assert.True(
+            context.Diagnostics.Count(diagnostic =>
+                diagnostic.Severity == TranslationSeverity.Unsupported
+                    && diagnostic.Message.Contains(
+                        "delegate multicast",
+                        StringComparison.Ordinal)) >= 3);
+        Assert.Matches(@"\b(let|var) duplicateFieldLeft T\? =", printed);
     }
 
     private static ILocalSymbol Local(SyntaxNode root, SemanticModel model, string name)

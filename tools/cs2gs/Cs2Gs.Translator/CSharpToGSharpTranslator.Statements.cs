@@ -497,22 +497,22 @@ public sealed partial class CSharpToGSharpTranslator
                             member,
                             out ILocalSymbol receiver,
                             out IReadOnlyList<int> path):
-                {
-                    if (!visited.Add(receiver))
                     {
-                        return false;
-                    }
+                        if (!visited.Add(receiver))
+                        {
+                            return false;
+                        }
 
-                    return this.GetReachingLocalValues(
-                            receiver,
-                            member.SpanStart,
-                            visited)
-                        .Any(value => this.InferredInitializerOriginatesFromDefault(
-                            ProjectTupleElement(value, path),
-                            new HashSet<ISymbol>(
-                                visited,
-                                SymbolEqualityComparer.Default)));
-                }
+                        return this.GetReachingLocalValues(
+                                receiver,
+                                member.SpanStart,
+                                visited)
+                            .Any(value => this.InferredInitializerOriginatesFromDefault(
+                                ProjectTupleElement(value, path),
+                                new HashSet<ISymbol>(
+                                    visited,
+                                    SymbolEqualityComparer.Default)));
+                    }
             }
 
             if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
@@ -1483,8 +1483,17 @@ public sealed partial class CSharpToGSharpTranslator
                 yield break;
             }
 
+            SyntaxNode executionBody = enclosingExecutable switch
+            {
+                AnonymousFunctionExpressionSyntax anonymous => anonymous.Body,
+                LocalFunctionStatementSyntax { Body: { } body } => body,
+                LocalFunctionStatementSyntax
+                { ExpressionBody.Expression: { } expression } => expression,
+                _ => enclosingExecutable,
+            };
+
             foreach (InvocationExpressionSyntax invocation in
-                EagerExecutionNodes(enclosingExecutable)
+                EagerExecutionNodes(executionBody)
                     .OfType<InvocationExpressionSyntax>())
             {
                 ExpressionSyntax target = invocation.Expression;
@@ -1519,13 +1528,512 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
                 }
-                else if (!SymbolEqualityComparer.Default.Equals(targetSymbol, callable))
+                else if (targetSymbol is not (IFieldSymbol or IPropertySymbol)
+                    || !this.NonLocalDelegateMayReferenceAnonymousFunction(
+                        target,
+                        invocation.SpanStart,
+                        anonymousFunction,
+                        enclosingExecutable))
                 {
                     continue;
                 }
 
                 yield return invocation.ArgumentList.CloseParenToken.SpanStart;
             }
+
+            if (anonymousFunction == null)
+            {
+                yield break;
+            }
+
+            foreach (SyntaxNode escape in EagerExecutionNodes(executionBody)
+                .Where(node => node is ReturnStatementSyntax
+                    or YieldStatementSyntax
+                    or ArgumentSyntax))
+            {
+                ExpressionSyntax value;
+                int position;
+                switch (escape)
+                {
+                    case ReturnStatementSyntax { Expression: { } returned }:
+                        value = returned;
+                        position = returned.Span.End - 1;
+                        break;
+
+                    case YieldStatementSyntax
+                    {
+                        RawKind: (int)SyntaxKind.YieldReturnStatement,
+                        Expression: { } yielded,
+                    }:
+                        value = yielded;
+                        position = yielded.Span.End - 1;
+                        break;
+
+                    case ArgumentSyntax argument
+                        when this.context.GetTypeInfo(argument.Expression).Type
+                            is { TypeKind: TypeKind.Delegate }:
+                        value = argument.Expression;
+                        position = argument.Parent?.Parent
+                            is InvocationExpressionSyntax escapedInvocation
+                                ? escapedInvocation.ArgumentList.CloseParenToken.SpanStart
+                                : argument.Span.End;
+                        break;
+
+                    default:
+                        continue;
+                }
+
+                if (this.DelegateExpressionReachesAnonymousFunction(
+                    value,
+                    value.SpanStart,
+                    anonymousFunction,
+                    enclosingExecutable,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default)))
+                {
+                    yield return position;
+                    foreach (StatementSyntax later in
+                        EagerExecutionNodes(executionBody)
+                            .OfType<StatementSyntax>()
+                            .Where(statement => statement.SpanStart > escape.SpanStart))
+                    {
+                        yield return later.Span.End - 1;
+                    }
+                }
+            }
+
+            foreach (AssignmentExpressionSyntax assignment in
+                EagerExecutionNodes(executionBody)
+                    .OfType<AssignmentExpressionSyntax>()
+                    .Where(candidate => this.context.GetSymbolInfo(
+                        candidate.Left).Symbol is IFieldSymbol or IPropertySymbol))
+            {
+                if (!this.DelegateExpressionReachesAnonymousFunction(
+                    assignment.Right,
+                    assignment.Right.SpanStart,
+                    anonymousFunction,
+                    enclosingExecutable,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default)))
+                {
+                    continue;
+                }
+
+                foreach (StatementSyntax later in
+                    EagerExecutionNodes(executionBody)
+                        .OfType<StatementSyntax>()
+                        .Where(statement => statement.SpanStart >= assignment.Span.End))
+                {
+                    int position = later.Span.End - 1;
+                    if (this.NonLocalDelegateMayReferenceAnonymousFunction(
+                        assignment.Left,
+                        position,
+                        anonymousFunction,
+                        enclosingExecutable))
+                    {
+                        yield return position;
+                    }
+                }
+            }
+        }
+
+        private bool DelegateExpressionReachesAnonymousFunction(
+                ExpressionSyntax expression,
+                int usePosition,
+                AnonymousFunctionExpressionSyntax anonymousFunction,
+                SyntaxNode enclosingExecutable,
+                HashSet<ISymbol> visited)
+        {
+            if (expression.DescendantNodesAndSelf().Any(node =>
+                node.SyntaxTree == anonymousFunction.SyntaxTree
+                    && node.Span == anonymousFunction.Span))
+            {
+                return true;
+            }
+
+            foreach (ExpressionSyntax candidate in
+                expression.DescendantNodesAndSelf().OfType<ExpressionSyntax>())
+            {
+                if (candidate.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+                {
+                    continue;
+                }
+
+                ISymbol symbol = this.context.GetSymbolInfo(candidate).Symbol;
+                if (symbol is ILocalSymbol local
+                    && local.Type.TypeKind == TypeKind.Delegate
+                    && this.DelegateLocalReachesAnonymousFunction(
+                        local,
+                        usePosition,
+                        anonymousFunction,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default)))
+                {
+                    return true;
+                }
+
+                if (symbol is (IFieldSymbol or IPropertySymbol)
+                    && this.NonLocalDelegateMayReferenceAnonymousFunction(
+                        candidate,
+                        usePosition,
+                        anonymousFunction,
+                        enclosingExecutable))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private bool NonLocalDelegateMayReferenceAnonymousFunction(
+            ExpressionSyntax storage,
+            int usePosition,
+            AnonymousFunctionExpressionSyntax anonymousFunction,
+            SyntaxNode enclosingExecutable)
+        {
+            ISymbol symbol = this.context.GetSymbolInfo(storage).Symbol;
+            if (symbol is not (IFieldSymbol or IPropertySymbol))
+            {
+                return false;
+            }
+
+            Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowGraph graph;
+            try
+            {
+                graph = this.CreateControlFlowGraph(enclosingExecutable);
+            }
+            catch (ArgumentException)
+            {
+                return false;
+            }
+
+            Microsoft.CodeAnalysis.FlowAnalysis.BasicBlock useBlock = null;
+            int useOperationIndex = -1;
+            foreach (Microsoft.CodeAnalysis.FlowAnalysis.BasicBlock block in graph.Blocks)
+            {
+                for (int i = 0; i < block.Operations.Length; i++)
+                {
+                    if (block.Operations[i].Syntax.FullSpan.Contains(usePosition))
+                    {
+                        useBlock = block;
+                        useOperationIndex = i;
+                        break;
+                    }
+                }
+
+                if (useBlock == null
+                    && block.BranchValue?.Syntax.FullSpan.Contains(usePosition) == true)
+                {
+                    useBlock = block;
+                    useOperationIndex = block.Operations.Length;
+                }
+
+                if (useBlock != null)
+                {
+                    break;
+                }
+            }
+
+            if (useBlock?.IsReachable != true)
+            {
+                return false;
+            }
+
+            var outputs =
+                new Dictionary<
+                    Microsoft.CodeAnalysis.FlowAnalysis.BasicBlock,
+                    HashSet<int>>();
+            bool changed;
+            do
+            {
+                changed = false;
+                foreach (Microsoft.CodeAnalysis.FlowAnalysis.BasicBlock block
+                    in graph.Blocks)
+                {
+                    if (!block.IsReachable)
+                    {
+                        continue;
+                    }
+
+                    var states = new HashSet<int>();
+                    if (block.Kind
+                        == Microsoft.CodeAnalysis.FlowAnalysis.BasicBlockKind.Entry)
+                    {
+                        states.Add(0);
+                    }
+
+                    foreach (Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowBranch predecessor
+                        in block.Predecessors)
+                    {
+                        if (outputs.TryGetValue(predecessor.Source, out var predecessorStates))
+                        {
+                            states.UnionWith(predecessorStates);
+                        }
+                    }
+
+                    foreach (IOperation operation in block.Operations)
+                    {
+                        states = this.ApplyDelegateReachingOperation(
+                            operation,
+                            storage,
+                            states,
+                            anonymousFunction);
+                    }
+
+                    if (block.BranchValue is { } branchValue)
+                    {
+                        states = this.ApplyDelegateReachingOperation(
+                            branchValue,
+                            storage,
+                            states,
+                            anonymousFunction);
+                    }
+
+                    if (!outputs.TryGetValue(block, out var previous)
+                        || !previous.SetEquals(states))
+                    {
+                        outputs[block] = states;
+                        changed = true;
+                    }
+                }
+            }
+            while (changed);
+
+            var reaching = new HashSet<int>();
+            foreach (Microsoft.CodeAnalysis.FlowAnalysis.ControlFlowBranch predecessor
+                in useBlock.Predecessors)
+            {
+                if (outputs.TryGetValue(predecessor.Source, out var predecessorStates))
+                {
+                    reaching.UnionWith(predecessorStates);
+                }
+            }
+
+            for (int i = 0; i < useOperationIndex; i++)
+            {
+                reaching = this.ApplyDelegateReachingOperation(
+                    useBlock.Operations[i],
+                    storage,
+                    reaching,
+                    anonymousFunction);
+            }
+
+            if (useOperationIndex < useBlock.Operations.Length)
+            {
+                reaching = this.ApplyDelegateReachingOperation(
+                    useBlock.Operations[useOperationIndex],
+                    storage,
+                    reaching,
+                    anonymousFunction,
+                    usePosition);
+            }
+            else if (useBlock.BranchValue is { } branchValue)
+            {
+                reaching = this.ApplyDelegateReachingOperation(
+                    branchValue,
+                    storage,
+                    reaching,
+                    anonymousFunction,
+                    usePosition);
+            }
+
+            return reaching.Any(count => count > 0);
+        }
+
+        private HashSet<int> ApplyDelegateReachingOperation(
+            IOperation operation,
+            ExpressionSyntax storage,
+            HashSet<int> states,
+            AnonymousFunctionExpressionSyntax anonymousFunction,
+            int beforePosition = int.MaxValue)
+        {
+            foreach (AssignmentExpressionSyntax assignment in
+                EagerExecutionNodes(operation.Syntax)
+                    .OfType<AssignmentExpressionSyntax>()
+                    .Where(candidate => candidate.Span.End <= beforePosition)
+                    .Where(candidate =>
+                        this.DelegateStorageMatches(candidate.Left, storage))
+                    .OrderBy(candidate => candidate.Span.End))
+            {
+                var next = new HashSet<int>();
+                foreach (int state in states)
+                {
+                    int rightCount =
+                        this.DelegateAssignmentValueAnonymousFunctionCount(
+                            assignment.Right,
+                            state,
+                            storage,
+                            anonymousFunction);
+                    next.Add(assignment.Kind() switch
+                    {
+                        SyntaxKind.AddAssignmentExpression =>
+                            Math.Min(2, state + rightCount),
+                        SyntaxKind.SubtractAssignmentExpression =>
+                            state == 1 && rightCount == 1 ? 0 : state,
+                        _ => rightCount,
+                    });
+                }
+
+                states = next;
+            }
+
+            return states;
+        }
+
+        private int DelegateAssignmentValueAnonymousFunctionCount(
+            ExpressionSyntax expression,
+            int currentState,
+            ExpressionSyntax trackedStorage,
+            AnonymousFunctionExpressionSyntax anonymousFunction)
+        {
+            expression = Unwrap(expression);
+            if (expression.DescendantNodesAndSelf().Any(node =>
+                node.SyntaxTree == anonymousFunction.SyntaxTree
+                    && node.Span == anonymousFunction.Span))
+            {
+                return 1;
+            }
+
+            if (this.DelegateStorageMatches(expression, trackedStorage))
+            {
+                return currentState;
+            }
+
+            if (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
+                && local.Type.TypeKind == TypeKind.Delegate)
+            {
+                return this.DelegateLocalReachesAnonymousFunction(
+                    local,
+                    expression.SpanStart,
+                    anonymousFunction,
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default))
+                        ? 1
+                        : 0;
+            }
+
+            return expression switch
+            {
+                ConditionalExpressionSyntax conditional =>
+                    Math.Max(
+                        this.DelegateAssignmentValueAnonymousFunctionCount(
+                            conditional.WhenTrue,
+                            currentState,
+                            trackedStorage,
+                            anonymousFunction),
+                        this.DelegateAssignmentValueAnonymousFunctionCount(
+                            conditional.WhenFalse,
+                            currentState,
+                            trackedStorage,
+                            anonymousFunction)),
+                BinaryExpressionSyntax binary when binary.IsKind(
+                    SyntaxKind.AddExpression) =>
+                    AddDelegateCounts(
+                        this.DelegateAssignmentValueAnonymousFunctionCount(
+                            binary.Left,
+                            currentState,
+                            trackedStorage,
+                            anonymousFunction),
+                        this.DelegateAssignmentValueAnonymousFunctionCount(
+                            binary.Right,
+                            currentState,
+                            trackedStorage,
+                            anonymousFunction)),
+                BinaryExpressionSyntax binary when binary.IsKind(
+                    SyntaxKind.CoalesceExpression) =>
+                    Math.Max(
+                        this.DelegateAssignmentValueAnonymousFunctionCount(
+                            binary.Left,
+                            currentState,
+                            trackedStorage,
+                            anonymousFunction),
+                        this.DelegateAssignmentValueAnonymousFunctionCount(
+                            binary.Right,
+                            currentState,
+                            trackedStorage,
+                            anonymousFunction)),
+                _ => 0,
+            };
+        }
+
+        private static int AddDelegateCounts(int left, int right) =>
+            Math.Min(2, left + right);
+
+        private bool DelegateStorageMatches(
+            ExpressionSyntax left,
+            ExpressionSyntax right)
+        {
+            left = Unwrap(left);
+            right = Unwrap(right);
+            ISymbol leftSymbol = this.context.GetSymbolInfo(left).Symbol;
+            ISymbol rightSymbol = this.context.GetSymbolInfo(right).Symbol;
+            if (!SymbolEqualityComparer.Default.Equals(leftSymbol, rightSymbol))
+            {
+                return false;
+            }
+
+            if (leftSymbol?.IsStatic == true)
+            {
+                return true;
+            }
+
+            ExpressionSyntax leftReceiver =
+                (left as MemberAccessExpressionSyntax)?.Expression;
+            ExpressionSyntax rightReceiver =
+                (right as MemberAccessExpressionSyntax)?.Expression;
+            if (leftReceiver == null || rightReceiver == null)
+            {
+                ExpressionSyntax explicitReceiver = leftReceiver ?? rightReceiver;
+                return explicitReceiver == null
+                    || explicitReceiver is ThisExpressionSyntax;
+            }
+
+            if (leftReceiver is ThisExpressionSyntax
+                || rightReceiver is ThisExpressionSyntax)
+            {
+                return leftReceiver is ThisExpressionSyntax
+                    && rightReceiver is ThisExpressionSyntax;
+            }
+
+            return this.DelegateReceiverMatches(leftReceiver, rightReceiver);
+        }
+
+        private bool DelegateReceiverMatches(
+            ExpressionSyntax left,
+            ExpressionSyntax right)
+        {
+            left = Unwrap(left);
+            right = Unwrap(right);
+            if (left is ThisExpressionSyntax || right is ThisExpressionSyntax)
+            {
+                return left is ThisExpressionSyntax
+                    && right is ThisExpressionSyntax;
+            }
+
+            if (left is MemberAccessExpressionSyntax leftMember
+                && right is MemberAccessExpressionSyntax rightMember)
+            {
+                return SymbolEqualityComparer.Default.Equals(
+                        this.context.GetSymbolInfo(leftMember).Symbol,
+                        this.context.GetSymbolInfo(rightMember).Symbol)
+                    && this.DelegateReceiverMatches(
+                        leftMember.Expression,
+                        rightMember.Expression);
+            }
+
+            if (left is ElementAccessExpressionSyntax leftElement
+                && right is ElementAccessExpressionSyntax rightElement)
+            {
+                return this.DelegateReceiverMatches(
+                        leftElement.Expression,
+                        rightElement.Expression)
+                    && SyntaxFactory.AreEquivalent(
+                        leftElement.ArgumentList,
+                        rightElement.ArgumentList);
+            }
+
+            return SymbolEqualityComparer.Default.Equals(
+                this.context.GetSymbolInfo(left).Symbol,
+                this.context.GetSymbolInfo(right).Symbol);
         }
 
         private bool DelegateLocalReachesAnonymousFunction(
@@ -1802,12 +2310,6 @@ public sealed partial class CSharpToGSharpTranslator
                     values.Clear();
                 }
 
-                if (preserveDelegateCompoundAssignments
-                    && assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
-                {
-                    continue;
-                }
-
                 if (!assignedValues.TryGetValue(assignment, out ExpressionSyntax value))
                 {
                     var aliasPath = visited == null
@@ -1819,13 +2321,37 @@ public sealed partial class CSharpToGSharpTranslator
                     assignedValues.Add(assignment, value);
                 }
 
+                if (preserveDelegateCompoundAssignments
+                    && assignment.IsKind(SyntaxKind.SubtractAssignmentExpression))
+                {
+                    bool priorAddition = FindEnclosingExecutable(assignment)
+                        .DescendantNodes()
+                        .OfType<AssignmentExpressionSyntax>()
+                        .Any(candidate =>
+                            candidate.SpanStart < assignment.SpanStart
+                                && candidate.IsKind(
+                                    SyntaxKind.AddAssignmentExpression)
+                                && this.BindsTo(candidate.Left, local));
+                    if (!priorAddition && values.Count == 1)
+                    {
+                        ExpressionSyntax existing =
+                            this.ResolveStableTupleAlias(values.Single());
+                        if (SyntaxFactory.AreEquivalent(existing, value))
+                        {
+                            values.Clear();
+                        }
+                    }
+
+                    continue;
+                }
+
                 values.Add(value);
             }
         }
 
         private static int ReachingWritePosition(SyntaxNode node) =>
             node is ArgumentSyntax
-                { RefOrOutKeyword.RawKind: not (int)SyntaxKind.None } argument
+            { RefOrOutKeyword.RawKind: not (int)SyntaxKind.None } argument
                 ? argument.Parent?.Parent?.Span.End ?? argument.Span.End
                 : node.Span.End;
 
@@ -1843,7 +2369,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return node is ArgumentSyntax
-                { RefOrOutKeyword.RawKind: not (int)SyntaxKind.None } argument
+            { RefOrOutKeyword.RawKind: not (int)SyntaxKind.None } argument
                 && this.TryFindTupleElementWritePath(
                     argument.Expression,
                     local,
@@ -2990,7 +3516,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (this.context.GetSymbolInfo(elementAccess).Symbol is IPropertySymbol
-                    { IsIndexer: true, Parameters.Length: 1 } indexer)
+                { IsIndexer: true, Parameters.Length: 1 } indexer)
             {
                 return indexer.Parameters[0].Type.SpecialType == SpecialType.System_Int32;
             }
