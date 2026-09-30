@@ -325,7 +325,7 @@ internal sealed class BinderContext
 
     public HashSet<string> ReachableUserLabels { get; } = new(StringComparer.Ordinal);
 
-    public List<(string SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)> DeferredUnreachableGotoEdges { get; } = [];
+    public List<(string? SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)> DeferredUnreachableGotoEdges { get; } = [];
 
     public string? PotentialReachabilityLabel { get; set; }
 

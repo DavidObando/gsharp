@@ -3103,7 +3103,7 @@ internal sealed class LambdaBinder
 
         public HashSet<string> ReachableUserLabels { get; }
 
-        public List<(string SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)> DeferredUnreachableGotoEdges { get; }
+        public List<(string? SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)> DeferredUnreachableGotoEdges { get; }
 
         public string? PotentialReachabilityLabel { get; }
 

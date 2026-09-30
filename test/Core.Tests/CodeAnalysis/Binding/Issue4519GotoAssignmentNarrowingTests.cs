@@ -4420,6 +4420,32 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_ThroughNonCompletingFinally_DoesNotActivateTargetEdges()
+    {
+        AssertRuns("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                goto After
+            Enter:
+                x = nil
+                goto Use
+            After:
+                try {
+                    goto Enter
+                }
+                finally {
+                    return 4
+                }
+            Use:
+                return x.Length
+            }
+
+            Console.WriteLine(Run())
+            """, "4");
+    }
+
+    [Fact]
     public void BackwardGoto_GetterOnlyPropertyDoesNotValidateSubtypeSetter()
     {
         var result = Evaluate("""

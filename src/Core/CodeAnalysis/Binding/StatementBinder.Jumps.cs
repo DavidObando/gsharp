@@ -48,10 +48,7 @@ internal sealed partial class StatementBinder
         else if (currentStatementListFallsThrough
             && binderCtx.BackwardGotoNarrowingStates.TryGetValue(labelName, out var backwardState))
         {
-            backwardState.Edges.Add(new BackwardGotoNarrowingEdge(
-                snapshot,
-                backwardState.Accesses));
-            binderCtx.ReachableUserLabels.Add(labelName);
+            binderCtx.DeferredUnreachableGotoEdges.Add((null, labelName, snapshot));
         }
         else if (!currentStatementListFallsThrough && binderCtx.PotentialReachabilityLabel is { } sourceLabel)
         {
@@ -184,7 +181,7 @@ internal sealed partial class StatementBinder
 
     private void ActivateDeferredReachableGotoEdges()
     {
-        var remaining = new List<(string SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)>(
+        var remaining = new List<(string? SourceLabel, string TargetLabel, GotoNarrowingSnapshot Snapshot)>(
             binderCtx.DeferredUnreachableGotoEdges);
         var changed = true;
         while (changed)
@@ -193,18 +190,34 @@ internal sealed partial class StatementBinder
             for (var i = remaining.Count - 1; i >= 0; i--)
             {
                 var edge = remaining[i];
-                if (!binderCtx.ReachableUserLabels.Contains(edge.SourceLabel))
+                if (edge.SourceLabel != null
+                    && !binderCtx.ReachableUserLabels.Contains(edge.SourceLabel))
                 {
                     continue;
                 }
 
-                if (binderCtx.BackwardGotoNarrowingStates.TryGetValue(edge.TargetLabel, out var targetState))
+                if (!binderCtx.BackwardGotoNarrowingStates.TryGetValue(edge.TargetLabel, out var targetState))
                 {
-                    targetState.Edges.Add(new BackwardGotoNarrowingEdge(
-                        edge.Snapshot,
-                        targetState.Accesses));
+                    remaining.RemoveAt(i);
+                    continue;
                 }
 
+                var targetFinallySet = new HashSet<FinallyClauseSyntax>(
+                    targetState.TargetSnapshot.ActiveFinallyClauses);
+                var targetCleanupSet = new HashSet<BoundStatement>(
+                    targetState.TargetSnapshot.ActiveCleanupStatements);
+                if (!ApplyExitedFinallyEffects(
+                        edge.Snapshot.Clone(),
+                        targetFinallySet,
+                        targetCleanupSet))
+                {
+                    remaining.RemoveAt(i);
+                    continue;
+                }
+
+                targetState.Edges.Add(new BackwardGotoNarrowingEdge(
+                    edge.Snapshot,
+                    targetState.Accesses));
                 changed |= binderCtx.ReachableUserLabels.Add(edge.TargetLabel);
                 remaining.RemoveAt(i);
             }
