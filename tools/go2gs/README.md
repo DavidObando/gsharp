@@ -70,33 +70,21 @@ platforms intentionally leave non-empty private trees behind rather than risk
 deleting a path that another process replaced.
 
 The selected Go executable is captured with a bounded no-follow read and
-staged under the canonical `go` or `go.exe` name. Child `PATH` contains only
-private staged directories; the selected Go executable's original parent
-directory and its siblings are never exposed.
+required by Go build metadata to identify itself as native `cmd/go`, then
+staged under the canonical `go` or `go.exe` name. Scripts, interpreted
+wrappers, and native delegate wrappers are rejected before execution. Child
+`PATH` contains only the private staged Go directory; the selected executable's
+original parent directory and its siblings are never exposed.
 
-Profiles with `cgoEnabled: true` must set `cCompiler` to an absolute,
-explicitly approved compiler executable. The helper resolves and hashes that
-compiler, records its name and hash, and passes it by absolute `CC`. Any
-executable required by that compiler, including internal drivers such as GCC's
-`cc1` and PATH-resolved assembler/linker tools, must be declared in the
-profile's `cCompilerHelpers` array with a safe logical name, canonical absolute
-path, and SHA-256 hash. go2gs captures each bounded, no-follow regular
-executable, stages the captured bytes under that logical name in a private
-directory, records its hash, byte count, and executable mode in both profile
-and toolchain provenance, pins `PATH` and GCC's `-B` executable prefix to that
-directory, and checks the source and staged copies again after loading. On
-Linux, the selected Go executable, C compiler, and helpers are
-copied into a private tmpfs inside a private user/mount namespace, remounted
-read-only, and addressed through a held directory descriptor. Host-visible
-pathname replacement therefore cannot change the bytes executed during
-loading. M0 fails closed for CGo on platforms without that identity-binding
-mechanism. Missing, changed, oversized, non-regular, symlinked, colliding,
-nonportable, or unmanifested helpers fail closed; source executable directories
-and ambient PATH are never exposed. `PKG_CONFIG` remains pinned to an
-unavailable private path and every portable alias of `pkg-config` is forbidden
-as a helper name, so `#cgo pkg-config:` directives fail closed because
-pkg-config provenance is not modeled in M0; directives whose build constraints
-are inactive for the selected profile are ignored.
+M0 always invokes `go/packages` with `CGO_ENABLED=0`. It never executes a C/C++
+compiler, linker, assembler, cgo, pkg-config, or helper. `cCompiler` and
+`cCompilerHelpers` remain profile-v1 compatibility fields only: they must be
+empty. When `cgoEnabled` requests CGo selection, go2gs independently applies Go
+file/build-tag selection to the immutable source mirror, records selected CGo,
+native, assembly, and reachable header inputs, and emits deterministic
+`cgo`/`native` blockers. Active `#cgo pkg-config:` directives are parsed from
+selected source and emit a `pkg-config` blocker without running pkg-config;
+inactive directives do not block.
 Source commit provenance is read directly from bounded `.git` metadata; the
 analyzer never discovers or executes an ambient `git` command.
 

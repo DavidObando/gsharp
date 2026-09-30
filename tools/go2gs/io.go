@@ -14,7 +14,6 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
-	"unicode"
 )
 
 func readProfile(path string) (Profile, error) {
@@ -62,15 +61,11 @@ func readProfile(path string) (Profile, error) {
 	if profile.WorkspaceMode != "off" {
 		return profile, errors.New("M0 requires workspaceMode=off")
 	}
-	if profile.CGOEnabled {
-		if err := validateCompilerPath(profile.CCompiler); err != nil {
-			return profile, err
-		}
-		if err := validateCompilerHelpers(profile.CCompilerHelpers); err != nil {
-			return profile, err
-		}
-	} else if profile.CCompiler != "" || len(profile.CCompilerHelpers) != 0 {
-		return profile, errors.New("cCompiler and cCompilerHelpers are only valid when cgoEnabled is true")
+	if profile.CCompiler != "" {
+		return profile, errors.New("cCompiler is obsolete and is never executed in M0; remove it")
+	}
+	if len(profile.CCompilerHelpers) != 0 {
+		return profile, errors.New("cCompilerHelpers are obsolete and are never executed in M0; use an empty array")
 	}
 
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
@@ -85,103 +80,7 @@ func readProfile(path string) (Profile, error) {
 	sort.Strings(profile.EntryPatterns)
 	sort.Strings(profile.ArchitectureFeatures)
 	sort.Strings(profile.BuildTags)
-	sort.Slice(profile.CCompilerHelpers, func(i, j int) bool {
-		return profile.CCompilerHelpers[i].Name < profile.CCompilerHelpers[j].Name
-	})
 	return profile, nil
-}
-
-func validateCompilerHelpers(helpers []CompilerHelper) error {
-	if len(helpers) > 64 {
-		return errors.New("cCompilerHelpers exceeds the 64-entry limit")
-	}
-	names := map[string]bool{}
-	paths := map[string]bool{}
-	for index, helper := range helpers {
-		if !validCompilerHelperName(helper.Name) {
-			return fmt.Errorf("cCompilerHelpers[%d].name is not a safe executable name", index)
-		}
-		if forbiddenCompilerHelperName(helper.Name) {
-			return fmt.Errorf("cCompilerHelpers must not provide reserved executable %q", helper.Name)
-		}
-		nameKey := compilerHelperNameKey(helper.Name)
-		if names[nameKey] {
-			return fmt.Errorf("cCompilerHelpers has duplicate name %q", helper.Name)
-		}
-		names[nameKey] = true
-		if err := validateCompilerPath(helper.Path); err != nil {
-			return fmt.Errorf("cCompilerHelpers[%d].path: %w", index, err)
-		}
-		if paths[helper.Path] {
-			return fmt.Errorf("cCompilerHelpers has duplicate path %q", filepath.Base(helper.Path))
-		}
-		paths[helper.Path] = true
-		if !validSHA256(helper.SHA256) {
-			return fmt.Errorf("cCompilerHelpers[%d].sha256 is invalid", index)
-		}
-	}
-	return nil
-}
-
-func validCompilerHelperName(value string) bool {
-	if value == "" || value == "." || value == ".." ||
-		strings.TrimRight(value, ". ") != value ||
-		strings.ContainsAny(value, `<>:"/\|?*`) {
-		return false
-	}
-	if strings.IndexFunc(value, func(char rune) bool {
-		return unicode.IsSpace(char) || unicode.IsControl(char)
-	}) >= 0 {
-		return false
-	}
-	base := strings.ToLower(strings.SplitN(value, ".", 2)[0])
-	switch base {
-	case "con", "prn", "aux", "nul", "clock$", "conin$", "conout$":
-		return false
-	}
-	for _, prefix := range []string{"com", "lpt"} {
-		suffix := strings.TrimPrefix(base, prefix)
-		if suffix == base {
-			continue
-		}
-		switch suffix {
-		case "1", "2", "3", "4", "5", "6", "7", "8", "9", "¹", "²", "³":
-			return false
-		}
-	}
-	return true
-}
-
-func compilerHelperNameKey(value string) string {
-	value = strings.ToLower(strings.TrimRight(value, ". "))
-	for _, suffix := range []string{".exe", ".com", ".bat", ".cmd"} {
-		if strings.HasSuffix(value, suffix) {
-			value = strings.TrimSuffix(value, suffix)
-			break
-		}
-	}
-	return strings.TrimRight(value, ". ")
-}
-
-func forbiddenCompilerHelperName(value string) bool {
-	switch compilerHelperNameKey(value) {
-	case "go", "pkg-config":
-		return true
-	default:
-		return false
-	}
-}
-
-func validateCompilerPath(value string) error {
-	if value == "" || !filepath.IsAbs(value) || filepath.Clean(value) != value {
-		return errors.New("cgoEnabled requires a normalized absolute cCompiler path")
-	}
-	if strings.ContainsAny(value, "'\"`\\") || strings.IndexFunc(value, func(char rune) bool {
-		return unicode.IsSpace(char) || unicode.IsControl(char)
-	}) >= 0 {
-		return errors.New("cCompiler must be one absolute executable pathname without quoting, whitespace, controls, or argument syntax")
-	}
-	return nil
 }
 
 func validateGODEBUG(values map[string]string) error {

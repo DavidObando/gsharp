@@ -162,6 +162,7 @@ func bootstrapEnvironment(cacheRoot string, pathDirectories ...string) []string 
 		"HOME":        cacheRoot,
 		"TMPDIR":      cacheRoot,
 		"GOTOOLCHAIN": "local",
+		"GOTELEMETRY": "off",
 		"GOPROXY":     "off",
 		"GOSUMDB":     "off",
 		"GONOSUMDB":   "*",
@@ -172,12 +173,13 @@ func bootstrapEnvironment(cacheRoot string, pathDirectories ...string) []string 
 	})
 }
 
-func analysisWorkerEnvironment(cacheRoot, selectedGo, selectedGoHash string, secureExecutableNamespace bool) []string {
+func analysisWorkerEnvironment(cacheRoot, selectedGo, selectedGoHash, selectedGOROOT string) []string {
 	values := map[string]string{
-		"PATH":                     unavailableToolPath(cacheRoot, "path"),
+		"PATH":                     filepath.Dir(selectedGo),
 		"HOME":                     cacheRoot,
 		"TMPDIR":                   cacheRoot,
 		"GOTOOLCHAIN":              "local",
+		"GOTELEMETRY":              "off",
 		"GOPROXY":                  "off",
 		"GOSUMDB":                  "off",
 		"GONOSUMDB":                "*",
@@ -187,12 +189,12 @@ func analysisWorkerEnvironment(cacheRoot, selectedGo, selectedGoHash string, sec
 		"PKG_CONFIG":               unavailableToolPath(cacheRoot, "pkg-config"),
 		"GO2GS_SELECTED_GO":        selectedGo,
 		"GO2GS_SELECTED_GO_SHA256": selectedGoHash,
-		"GO2GS_EXEC_NAMESPACE":     boolString(secureExecutableNamespace),
+		"GO2GS_SELECTED_GOROOT":    selectedGOROOT,
 	}
 	return canonicalEnv(values)
 }
 
-func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory, cCompiler, compilerTarget, compilerArgv0 string) ([]string, error) {
+func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory string) ([]string, error) {
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
 		return nil, err
 	}
@@ -206,6 +208,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory, cCo
 		"GOCACHE":          cacheRoot + string(os.PathSeparator) + "build-cache",
 		"GOMODCACHE":       cacheRoot + string(os.PathSeparator) + "module-cache",
 		"GOTOOLCHAIN":      "local",
+		"GOTELEMETRY":      "off",
 		"GOPROXY":          "off",
 		"GOSUMDB":          "off",
 		"GONOSUMDB":        "*",
@@ -216,15 +219,9 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory, cCo
 		"PKG_CONFIG":       unavailableToolPath(cacheRoot, "pkg-config"),
 		"GOOS":             profile.GOOS,
 		"GOARCH":           profile.GOARCH,
-		"CGO_ENABLED":      boolString(profile.CGOEnabled),
+		"CGO_ENABLED":      "0",
 		"GOEXPERIMENT":     profile.GOEXPERIMENT,
 		"GOROOT":           goroot,
-	}
-	if cCompiler != "" {
-		values["CC"] = cCompiler
-		values[compilerTargetEnvironment] = compilerTarget
-		values[compilerArgv0Environment] = compilerArgv0
-		values[compilerPrefixEnvironment] = pathDirectory
 	}
 	flags := append([]string{}, profile.GOFLAGS...)
 	flags = append(flags, "-mod="+profile.ModuleMode)

@@ -220,6 +220,12 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	activeCgo := b.packageImportsC(pkg)
 	reachableHeaders, unsafeIncludes := selectedNativeIncludes(pkg, b.sourceSnapshot)
 	nativeConsumer := hasSelectedNativeConsumer(pkg, activeCgo)
+	for _, path := range b.selectedSnapshotFiles[packageInputKey(pkg)] {
+		if b.snapshotRoles[packageInputKey(pkg)][path] == "native" {
+			nativeConsumer = true
+			break
+		}
+	}
 	all := append([]string{}, pkg.CompiledGoFiles...)
 	all = append(all, pkg.GoFiles...)
 	all = append(all, pkg.IgnoredFiles...)
@@ -270,7 +276,12 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 				role, reason = "ignored", "no selected native source can consume this header"
 			}
 		case contains(pkg.IgnoredFiles, path):
-			role, reason = "ignored", "excluded by current build constraints or file naming"
+			key := packageInputKey(pkg)
+			if contains(b.selectedSnapshotFiles[key], path) && b.snapshotRoles[key][path] == "active" {
+				role, reason = "active", "selected from the immutable source mirror under the requested CGo profile"
+			} else {
+				role, reason = "ignored", "excluded by current build constraints or file naming"
+			}
 		case strings.HasSuffix(path, "_test.go"):
 			role, reason = "test", "selected test source for this package variant"
 		case compiled[path]:
@@ -338,7 +349,14 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 }
 
 func (b *inventoryBuilder) packageImportsC(pkg *packages.Package) bool {
-	return pathsImportC(pkg.GoFiles, b.sourceSnapshot)
+	key := packageInputKey(pkg)
+	for _, path := range b.selectedSnapshotFiles[packageInputKey(pkg)] {
+		role := b.snapshotRoles[key][path]
+		if (role == "active" || role == "compiled") && b.snapshotFileImportsC(path) {
+			return true
+		}
+	}
+	return false
 }
 
 func (b *inventoryBuilder) snapshotFileImportsC(path string) bool {

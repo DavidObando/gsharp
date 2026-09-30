@@ -4,12 +4,12 @@ package main
 
 import (
 	"bytes"
+	"debug/buildinfo"
 	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
-	"sort"
 )
 
 const maxToolExecutableBytes int64 = 256 << 20
@@ -26,6 +26,15 @@ type executableCapsule struct {
 	directory executableDirectory
 	entries   []capturedExecutable
 }
+
+type ordinaryExecutableDirectory struct {
+	path string
+}
+
+func (d *ordinaryExecutableDirectory) writePath() string     { return d.path }
+func (d *ordinaryExecutableDirectory) executionPath() string { return d.path }
+func (d *ordinaryExecutableDirectory) seal() error           { return nil }
+func (d *ordinaryExecutableDirectory) close() error          { return nil }
 
 type executableDirectory interface {
 	writePath() string
@@ -83,18 +92,31 @@ func captureSelectedExecutable(name, path string, expectedHash string, limit int
 	}, hash, nil
 }
 
+func captureSelectedGo(path, expectedHash string) (capturedExecutable, string, error) {
+	captured, hash, err := captureSelectedExecutable(
+		selectedGoName(), path, expectedHash, maxToolExecutableBytes, true,
+	)
+	if err != nil {
+		return capturedExecutable{}, "", err
+	}
+	info, err := buildinfo.Read(bytes.NewReader(captured.data))
+	if err != nil || info.Path != "cmd/go" {
+		return capturedExecutable{}, "", errors.New("selected Go must be a genuine native cmd/go executable")
+	}
+	return captured, hash, nil
+}
+
 func createExecutableCapsule(workRoot string, entries []capturedExecutable, immutable bool) (*executableCapsule, error) {
 	if len(entries) == 0 {
 		return nil, errors.New("executable capsule requires at least one entry")
 	}
+	if immutable {
+		return nil, errors.New("immutable executable capsules are obsolete in M0")
+	}
 	sorted := append([]capturedExecutable{}, entries...)
-	sort.Slice(sorted, func(i, j int) bool { return sorted[i].name < sorted[j].name })
-	for index := range sorted {
-		if !validCompilerHelperName(sorted[index].name) {
-			return nil, fmt.Errorf("invalid executable capsule name %q", sorted[index].name)
-		}
-		if index > 0 && compilerHelperNameKey(sorted[index-1].name) == compilerHelperNameKey(sorted[index].name) {
-			return nil, fmt.Errorf("executable capsule names collide: %q", sorted[index].name)
+	for _, entry := range sorted {
+		if entry.name == "" || filepath.Base(entry.name) != entry.name {
+			return nil, fmt.Errorf("invalid executable name %q", entry.name)
 		}
 	}
 	var totalBytes int64
@@ -105,10 +127,10 @@ func createExecutableCapsule(workRoot string, entries []capturedExecutable, immu
 		totalBytes += int64(len(entry.data))
 	}
 	path := filepath.Join(workRoot, "toolchain")
-	directory, err := prepareExecutableDirectory(path, immutable, totalBytes+(1<<20))
-	if err != nil {
+	if err := os.Mkdir(path, 0o700); err != nil {
 		return nil, err
 	}
+	directory := &ordinaryExecutableDirectory{path: path}
 	capsule := &executableCapsule{directory: directory, entries: sorted}
 	success := false
 	defer func() {

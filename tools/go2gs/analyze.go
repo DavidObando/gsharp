@@ -9,6 +9,8 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
+	"go/build/constraint"
 	"go/token"
 	"io"
 	"os"
@@ -16,6 +18,7 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -64,9 +67,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		}
 	}
 	expectedGoHash := os.Getenv("GO2GS_SELECTED_GO_SHA256")
-	goExecutable, goHash, err := captureSelectedExecutable(
-		selectedGoName(), selectedGo, expectedGoHash, maxToolExecutableBytes, true,
-	)
+	goExecutable, goHash, err := captureSelectedGo(selectedGo, expectedGoHash)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("capture Go executable: %w", err)
 	}
@@ -74,15 +75,11 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	compilerLauncher, helperHash, err := captureSelectedExecutable(
-		compilerLauncherName, self, "", maxToolExecutableBytes, true,
+	_, helperHash, err := captureSelectedExecutable(
+		filepath.Base(self), self, "", maxToolExecutableBytes, true,
 	)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("capture helper: %w", err)
-	}
-	cCompiler, cCompilerHash, err := captureCCompiler(profile)
-	if err != nil {
-		return Analysis{}, false, err
 	}
 
 	workDirectory, err := createOwnedTempDir(outRoot, ".go2gs-work-*")
@@ -97,21 +94,8 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	if err := os.Mkdir(blockedToolsRoot, 0o500); err != nil {
 		return Analysis{}, false, err
 	}
-	compilerHelpers, err := captureCompilerHelpers(profile)
-	if err != nil {
-		return Analysis{}, false, fmt.Errorf("capture C compiler helpers: %w", err)
-	}
-	compilerHelperIdentities := compilerHelperIdentityList(compilerHelpers)
 	executables := []capturedExecutable{goExecutable}
-	compilerName := ""
-	if cCompiler != nil {
-		compilerName = cCompiler.name
-		executables = append(executables, *cCompiler, compilerLauncher)
-	}
-	for _, helper := range compilerHelpers {
-		executables = append(executables, helper.executable)
-	}
-	capsule, err := createExecutableCapsule(workRoot, executables, profile.CGOEnabled)
+	capsule, err := createExecutableCapsule(workRoot, executables, false)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("create private executable capsule: %w", err)
 	}
@@ -119,33 +103,19 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		err = errors.Join(err, capsule.close())
 	}()
 	executable := capsule.path(goExecutable.name)
-	stagedCompiler := ""
-	stagedCompilerTarget := ""
-	compilerArgv0 := ""
-	if compilerName != "" {
-		stagedCompiler = capsule.path(compilerLauncher.name)
-		stagedCompilerTarget = capsule.path(compilerName)
-		compilerArgv0 = cCompiler.sourcePath
-	}
 	profileIdentity := profile
-	if cCompiler != nil {
-		profileIdentity.CCompiler = filepath.Base(profile.CCompiler) + "@sha256:" + cCompilerHash
-		profileIdentity.CCompilerHelpers = append([]CompilerHelper{}, profile.CCompilerHelpers...)
-		sort.Slice(profileIdentity.CCompilerHelpers, func(i, j int) bool {
-			return profileIdentity.CCompilerHelpers[i].Name < profileIdentity.CCompilerHelpers[j].Name
-		})
-		for index := range profileIdentity.CCompilerHelpers {
-			profileIdentity.CCompilerHelpers[index].Path = "helper://" + profileIdentity.CCompilerHelpers[index].Name
-		}
-	}
 	profileBytes, err := json.Marshal(profileIdentity)
 	if err != nil {
 		return Analysis{}, false, err
 	}
 
 	bootstrapEnv := bootstrapEnvironment(workRoot, capsule.directory.executionPath())
-	if inferredGOROOT := inferSelectedGOROOT(goExecutable.sourcePath); inferredGOROOT != "" {
-		bootstrapEnv = replaceEnvironment(bootstrapEnv, "GOROOT", inferredGOROOT)
+	selectedGOROOT := inferSelectedGOROOT(goExecutable.sourcePath)
+	if selectedGOROOT == "" {
+		selectedGOROOT = os.Getenv("GO2GS_SELECTED_GOROOT")
+	}
+	if selectedGOROOT != "" {
+		bootstrapEnv = replaceEnvironment(bootstrapEnv, "GOROOT", selectedGOROOT)
 	}
 	versionResult, err := runProcess(ctx, 15*time.Second, profile.Limits.MaxLogBytes, sourceRoot, executable, []string{"version"}, bootstrapEnv)
 	if err != nil {
@@ -173,10 +143,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("hash selected Go GOROOT VERSION: %w", err)
 	}
-	env, err := sanitizedEnvironment(
-		profile, workRoot, targetGOROOT, capsule.directory.executionPath(),
-		stagedCompiler, stagedCompilerTarget, compilerArgv0,
-	)
+	env, err := sanitizedEnvironment(profile, workRoot, targetGOROOT, capsule.directory.executionPath())
 	if err != nil {
 		return Analysis{}, false, err
 	}
@@ -190,11 +157,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		GOROOTSource:        "selected executable: go env GOROOT (path intentionally omitted)",
 		AutoDownload:        false,
 	}
-	if cCompiler != nil {
-		toolchain.CCompilerName = filepath.Base(profile.CCompiler)
-		toolchain.CCompilerSHA256 = cCompilerHash
-	}
-	toolchain.CCompilerHelpers = append([]CompilerHelperIdentity{}, compilerHelperIdentities...)
+	toolchain.CCompilerHelpers = []CompilerHelperIdentity{}
 	analysis := Analysis{
 		Schema: SchemaHandshake{Name: schemaName, Version: schemaVersion, RequiredRecordKinds: append([]string{}, requiredRecordKinds...)},
 		Tool:   VersionIdentity{Version: toolVersion, SHA256: helperHash},
@@ -204,7 +167,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 			ExpectedSourceCommit: profile.ExpectedSourceCommit, ActualSourceCommit: actualCommit,
 			EntryPatterns: append([]string{}, profile.EntryPatterns...), LoadTests: profile.LoadTests,
 			GOOS: profile.GOOS, GOARCH: profile.GOARCH,
-			CCompilerHelpers:     append([]CompilerHelperIdentity{}, compilerHelperIdentities...),
+			CCompilerHelpers:     []CompilerHelperIdentity{},
 			ArchitectureFeatures: append([]string{}, profile.ArchitectureFeatures...),
 			BuildTags:            append([]string{}, profile.BuildTags...), CGOEnabled: profile.CGOEnabled,
 			GOFLAGS: append([]string{}, profile.GOFLAGS...), GOEXPERIMENT: profile.GOEXPERIMENT,
@@ -212,7 +175,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 			VendorMode: profile.VendorMode, WorkspaceMode: profile.WorkspaceMode,
 			Offline: profile.Offline, AllowNetwork: profile.AllowNetwork,
 			GeneratorsExecuted: false, TargetBinariesExecuted: false,
-			TrustBoundary: "go/packages may execute the selected Go command, compiler, assembler, linker metadata tools, and CGo toolchain; target binaries, tests, init functions, generators, and scripts are never executed",
+			TrustBoundary: "go/packages may execute only the private selected cmd/go with CGO_ENABLED=0; compilers, linkers, assemblers, pkg-config, helpers, target binaries, tests, init functions, generators, and scripts are never executed",
 			Limits:        profile.Limits,
 		},
 		Toolchain: toolchain,
@@ -228,13 +191,6 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		capsule.directory.executionPath(),
 		goExecutable.sourcePath,
 	)
-	if cCompiler != nil {
-		builder.diagnosticRedactions = append(builder.diagnosticRedactions,
-			cCompiler.sourcePath,
-			stagedCompiler,
-			stagedCompilerTarget,
-		)
-	}
 	builder.collectManifests(mirror.manifests.records)
 	analysis.Profile.SourceRootIdentity = sourceIdentity(actualCommit, analysis.Manifests)
 	if sourceCommitErr != nil {
@@ -254,7 +210,7 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	}
 	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 		packages.NeedEmbedFiles | packages.NeedEmbedPatterns | packages.NeedImports | packages.NeedDeps |
-		packages.NeedExportFile | packages.NeedTypes | packages.NeedSyntax |
+		packages.NeedTypes | packages.NeedSyntax |
 		packages.NeedTypesInfo | packages.NeedTypesSizes | packages.NeedModule |
 		packages.NeedForTest
 	buildFlags := []string{}
@@ -269,6 +225,11 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		BuildFlags: buildFlags,
 		Tests:      profile.LoadTests,
 	}
+	cgoOnlyOverlay, err := cgoOnlyPackageOverlay(mirror.root, profile)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	config.Overlay = cgoOnlyOverlay
 	if afterSnapshot != nil {
 		afterSnapshot()
 	}
@@ -278,18 +239,14 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		packages.NeedDeps | packages.NeedModule | packages.NeedForTest
 	selectedPreflight, _ := packages.Load(&selectedConfig, profile.EntryPatterns...)
 	selectedPreflight = collectPackages(selectedPreflight)
-	capturePreflight := selectedPreflight
-	if !profile.CGOEnabled {
-		defensiveConfig := selectedConfig
-		defensiveConfig.Env = replaceEnvironment(config.Env, "CGO_ENABLED", "1")
-		defensive, _ := packages.Load(&defensiveConfig, profile.EntryPatterns...)
-		capturePreflight = collectPackages(append(selectedPreflight, defensive...))
-	}
-	sourceSnapshot, err := snapshotPackageInputs(selectedPreflight, capturePreflight, mirror.root, profile.Limits)
+	sourceSnapshot, err := snapshotPackageInputs(selectedPreflight, selectedPreflight, mirror.root, profile, profile.Limits)
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	config.Overlay = sourceSnapshot.overlay
+	config.Overlay = copyBytesMap(cgoOnlyOverlay)
+	for path, data := range sourceSnapshot.overlay {
+		config.Overlay[path] = data
+	}
 	builder.sourceSnapshot = sourceSnapshot.data
 	builder.snapshotPortable = sourceSnapshot.portable
 	loaded, loadErr := packages.Load(config, profile.EntryPatterns...)
@@ -299,14 +256,11 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	if err := capsule.verify(); err != nil {
 		return Analysis{}, false, fmt.Errorf("verify private executable capsule: %w", err)
 	}
-	pkgConfigPath := unavailableToolPath(workRoot, "pkg-config")
-	if sanitizeUnavailableToolFailure(loaded, pkgConfigPath) ||
-		(loadErr != nil && strings.Contains(loadErr.Error(), pkgConfigPath)) {
+	if selectedPkgConfigDirective(sourceSnapshot, profile) {
 		builder.block("pkg-config", "selected package requires #cgo pkg-config, but M0 has no approved pkg-config executable or provenance model", nil, nil)
 	}
 	if loadErr != nil {
-		message := strings.ReplaceAll(loadErr.Error(), pkgConfigPath, "<disabled-pkg-config>")
-		builder.block("loader", sanitizeMessage(message, mirror.root, profile.Limits.MaxStringBytes, builder.diagnosticRedactions...), nil, nil)
+		builder.block("loader", sanitizeMessage(loadErr.Error(), mirror.root, profile.Limits.MaxStringBytes, builder.diagnosticRedactions...), nil, nil)
 	}
 	if len(loaded) == 0 {
 		builder.block("loader", "the requested entry patterns selected no loadable packages under the pinned profile", nil, nil)
@@ -821,9 +775,10 @@ type packageInputSnapshot struct {
 	selectedOwners map[string]map[string]bool
 	packageDirs    map[string]string
 	portable       map[string]string
+	pkgConfig      bool
 }
 
-func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot string, limits Limits) (packageInputSnapshot, error) {
+func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot string, profile Profile, limits Limits) (packageInputSnapshot, error) {
 	result := packageInputSnapshot{
 		data:           map[string][]byte{},
 		overlay:        map[string][]byte{},
@@ -857,6 +812,14 @@ func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot st
 				directories[directory][key] = true
 			}
 		}
+		for path, role := range profileSelectedDirectoryInputs(pkg, sourceRoot, profile) {
+			result.packageFiles[key] = append(result.packageFiles[key], path)
+			result.packageRoles[key][path] = role
+			if result.fileOwners[path] == nil {
+				result.fileOwners[path] = map[string]bool{}
+			}
+			result.fileOwners[path][key] = true
+		}
 		result.packageFiles[key] = uniqueSorted(result.packageFiles[key])
 	}
 	for _, pkg := range selected {
@@ -866,6 +829,13 @@ func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot st
 			result.packageDirs[key] = pkg.Dir
 		}
 		result.selectedFiles[key] = packageInputPaths(pkg, sourceRoot)
+		for path, role := range profileSelectedDirectoryInputs(pkg, sourceRoot, profile) {
+			result.selectedFiles[key] = append(result.selectedFiles[key], path)
+			result.packageRoles[key][path] = role
+		}
+		if err := addProfileSelectedInputs(&result, pkg, sourceRoot, profile); err != nil {
+			return packageInputSnapshot{}, err
+		}
 	}
 	sortedDirectories := make([]string, 0, len(directories))
 	for directory := range directories {
@@ -878,7 +848,7 @@ func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot st
 			return packageInputSnapshot{}, fmt.Errorf("snapshot source directory: %w", err)
 		}
 		for _, entry := range entries {
-			if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+			if entry.IsDir() || (filepath.Ext(entry.Name()) != ".go" && !nativeIncludeCarrier(entry.Name())) {
 				continue
 			}
 			path := filepath.Join(directory, entry.Name())
@@ -887,6 +857,10 @@ func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot st
 			}
 			for owner := range directories[directory] {
 				result.fileOwners[path][owner] = true
+				result.packageFiles[owner] = append(result.packageFiles[owner], path)
+				if result.packageRoles[owner][path] == "" {
+					result.packageRoles[owner][path] = "ignored"
+				}
 			}
 		}
 	}
@@ -966,10 +940,38 @@ func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot st
 	for key, files := range result.selectedFiles {
 		pkg := selectedByKey[key]
 		activeCgo := pathsImportC(pkg.GoFiles, result.data)
+		if profile.CGOEnabled && !activeCgo {
+			context := profileBuildContext(profile)
+			context.CgoEnabled = true
+			for _, candidate := range result.packageFiles[key] {
+				if filepath.Ext(candidate) != ".go" {
+					continue
+				}
+				matched, _ := context.MatchFile(filepath.Dir(candidate), filepath.Base(candidate))
+				if (matched || plainProfileGoFile(filepath.Base(candidate), result.data[candidate], profile)) &&
+					pathsImportC([]string{candidate}, result.data) {
+					activeCgo = true
+					files = append(files, candidate)
+					result.packageRoles[key][candidate] = "active"
+					break
+				}
+			}
+			if activeCgo {
+				for _, candidate := range result.packageFiles[key] {
+					if nativeIncludeCarrier(candidate) && !contains(files, candidate) {
+						files = append(files, candidate)
+						result.packageRoles[key][candidate] = "native"
+					}
+				}
+			}
+		}
 		reachable, _ := selectedNativeIncludes(pkg, result.data)
 		refined := make([]string, 0, len(files))
 		for _, path := range files {
 			if nativeHeader(path) && !activeCgo && !reachable[path] {
+				continue
+			}
+			if !activeCgo && cgoNativeSource(path) {
 				continue
 			}
 			refined = append(refined, path)
@@ -992,6 +994,286 @@ func snapshotPackageInputs(selected, captured []*packages.Package, sourceRoot st
 	return result, nil
 }
 
+func cgoNativeSource(path string) bool {
+	switch strings.ToLower(filepath.Ext(path)) {
+	case ".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".f", ".f90", ".for", ".swig", ".swigcxx":
+		return true
+	default:
+		return false
+	}
+}
+
+func profileSelectedDirectoryInputs(pkg *packages.Package, sourceRoot string, profile Profile) map[string]string {
+	result := map[string]string{}
+	if !profile.CGOEnabled || pkg.Dir == "" || pkg.Module == nil ||
+		(!pkg.Module.Main && (pkg.Module.Replace == nil || pkg.Module.Replace.Version != "")) {
+		return result
+	}
+	context := build.Default
+	context.GOOS = profile.GOOS
+	context.GOARCH = profile.GOARCH
+	context.Compiler = "gc"
+	context.CgoEnabled = true
+	context.BuildTags = append([]string{}, profile.BuildTags...)
+	context.ToolTags = profileToolTags(profile)
+	entries, err := os.ReadDir(pkg.Dir)
+	if err != nil {
+		return result
+	}
+	activeCgo := false
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+			continue
+		}
+		path := filepath.Join(pkg.Dir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil || !pathsImportC([]string{path}, map[string][]byte{path: data}) {
+			continue
+		}
+		matched, _ := context.MatchFile(pkg.Dir, entry.Name())
+		if matched || plainProfileGoFile(entry.Name(), data, profile) {
+			result[path] = "active"
+			activeCgo = true
+		}
+	}
+	if !activeCgo {
+		return result
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || !nativeIncludeCarrier(entry.Name()) {
+			continue
+		}
+		matched, _ := context.MatchFile(pkg.Dir, entry.Name())
+		if matched || !strings.Contains(strings.TrimSuffix(entry.Name(), filepath.Ext(entry.Name())), "_") {
+			result[filepath.Join(pkg.Dir, entry.Name())] = "native"
+		}
+	}
+	return result
+}
+
+func plainProfileGoFile(name string, data []byte, profile Profile) bool {
+	if bytes.Contains(data, []byte("//go:build")) || bytes.Contains(data, []byte("// +build")) {
+		return false
+	}
+	stem := strings.TrimSuffix(name, ".go")
+	parts := strings.Split(stem, "_")
+	if len(parts) < 2 {
+		return true
+	}
+	last := parts[len(parts)-1]
+	previous := ""
+	if len(parts) > 2 {
+		previous = parts[len(parts)-2]
+	}
+	knownOS := map[string]bool{
+		"aix": true, "android": true, "darwin": true, "dragonfly": true, "freebsd": true,
+		"hurd": true, "illumos": true, "ios": true, "js": true, "linux": true,
+		"netbsd": true, "openbsd": true, "plan9": true, "solaris": true, "wasip1": true, "windows": true,
+	}
+	knownArch := map[string]bool{
+		"386": true, "amd64": true, "arm": true, "arm64": true, "loong64": true,
+		"mips": true, "mips64": true, "mips64le": true, "mipsle": true,
+		"ppc64": true, "ppc64le": true, "riscv64": true, "s390x": true, "wasm": true,
+	}
+	if knownOS[last] {
+		return last == profile.GOOS
+	}
+	if knownArch[last] {
+		return last == profile.GOARCH && (!knownOS[previous] || previous == profile.GOOS)
+	}
+	return true
+}
+
+func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Package, sourceRoot string, profile Profile) error {
+	if pkg.Dir == "" || !packageInputPathAllowed(pkg, sourceRoot, filepath.Join(pkg.Dir, "_go2gs_probe")) {
+		return nil
+	}
+	context := profileBuildContext(profile)
+	context.CgoEnabled = profile.CGOEnabled
+	selected, err := context.ImportDir(pkg.Dir, build.ImportComment)
+	if err != nil && selected == nil {
+		return fmt.Errorf("classify selected package inputs: %w", err)
+	}
+	snapshot.pkgConfig = snapshot.pkgConfig || len(selected.CgoPkgConfig) != 0
+	names := append([]string{}, selected.CgoFiles...)
+	names = append(names, selected.CFiles...)
+	names = append(names, selected.CXXFiles...)
+	names = append(names, selected.MFiles...)
+	names = append(names, selected.HFiles...)
+	names = append(names, selected.FFiles...)
+	names = append(names, selected.SFiles...)
+	names = append(names, selected.SwigFiles...)
+	names = append(names, selected.SwigCXXFiles...)
+	names = append(names, selected.SysoFiles...)
+	activeCgo := len(selected.CgoFiles) != 0
+	entries, err := os.ReadDir(pkg.Dir)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
+			continue
+		}
+		matched, err := context.MatchFile(pkg.Dir, entry.Name())
+		if err != nil || !matched {
+			continue
+		}
+		path := filepath.Join(pkg.Dir, entry.Name())
+		data, err := os.ReadFile(path)
+		if err != nil || !pathsImportC([]string{path}, map[string][]byte{path: data}) {
+			continue
+		}
+		activeCgo = true
+		names = append(names, entry.Name())
+	}
+	if activeCgo {
+		for _, entry := range entries {
+			extension := strings.ToLower(filepath.Ext(entry.Name()))
+			if entry.IsDir() || (!nativeSourceExtension(extension) && !nativeHeader(entry.Name())) {
+				continue
+			}
+			matched, err := context.MatchFile(pkg.Dir, entry.Name())
+			if err != nil {
+				return fmt.Errorf("classify native input %s: %w", entry.Name(), err)
+			}
+			if matched || !strings.Contains(strings.TrimSuffix(entry.Name(), extension), "_") {
+				names = append(names, entry.Name())
+			}
+		}
+	}
+	key := packageInputKey(pkg)
+	for _, name := range uniqueSorted(names) {
+		path := filepath.Join(pkg.Dir, name)
+		if snapshot.fileOwners[path] == nil {
+			snapshot.fileOwners[path] = map[string]bool{}
+		}
+		snapshot.fileOwners[path][key] = true
+		snapshot.packageFiles[key] = append(snapshot.packageFiles[key], path)
+		snapshot.selectedFiles[key] = append(snapshot.selectedFiles[key], path)
+		if filepath.Ext(path) == ".go" {
+			snapshot.packageRoles[key][path] = "active"
+		} else {
+			snapshot.packageRoles[key][path] = "native"
+		}
+	}
+	snapshot.packageFiles[key] = uniqueSorted(snapshot.packageFiles[key])
+	snapshot.selectedFiles[key] = uniqueSorted(snapshot.selectedFiles[key])
+	return nil
+}
+
+func profileToolTags(profile Profile) []string {
+	var tags []string
+	prefix := profile.GOARCH + "."
+	switch profile.GOARCH {
+	case "amd64":
+		tags = append(tags, "amd64.v1")
+	case "arm64":
+		tags = append(tags, "arm64.v8.0")
+	}
+	for _, feature := range profile.ArchitectureFeatures {
+		tags = append(tags, prefix+feature)
+	}
+	return uniqueSorted(tags)
+}
+
+func profileBuildContext(profile Profile) build.Context {
+	context := build.Default
+	context.GOOS = profile.GOOS
+	context.GOARCH = profile.GOARCH
+	context.Compiler = "gc"
+	context.BuildTags = append([]string{}, profile.BuildTags...)
+	context.ToolTags = profileToolTags(profile)
+	context.ReleaseTags = profileReleaseTags(profile.RequestedGoVersion)
+	return context
+}
+
+func profileReleaseTags(version string) []string {
+	parts := strings.Split(version, ".")
+	if len(parts) < 2 || parts[0] != "1" {
+		return nil
+	}
+	minor, err := strconv.Atoi(parts[1])
+	if err != nil || minor < 1 || minor > 1000 {
+		return nil
+	}
+	tags := make([]string, 0, minor)
+	for value := 1; value <= minor; value++ {
+		tags = append(tags, fmt.Sprintf("go1.%d", value))
+	}
+	return tags
+}
+
+func selectedPkgConfigDirective(snapshot packageInputSnapshot, profile Profile) bool {
+	if snapshot.pkgConfig {
+		return true
+	}
+	for path, data := range snapshot.data {
+		if filepath.Ext(path) != ".go" || !pathsImportC([]string{path}, snapshot.data) {
+			continue
+		}
+		for _, line := range strings.Split(string(data), "\n") {
+			line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "//"))
+			if !strings.HasPrefix(line, "#cgo ") {
+				continue
+			}
+			directive, _, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, "#cgo")), ":")
+			if !ok {
+				continue
+			}
+			fields := strings.Fields(directive)
+			if len(fields) == 0 || fields[len(fields)-1] != "pkg-config" {
+				continue
+			}
+			if len(fields) == 1 {
+				return true
+			}
+			for _, condition := range fields[:len(fields)-1] {
+				if matchCgoCondition(condition, profile) {
+					return true
+				}
+			}
+		}
+	}
+	return false
+}
+
+func matchCgoCondition(text string, profile Profile) bool {
+	line := "// +build " + text
+	if strings.ContainsAny(text, "&|()") {
+		line = "//go:build " + text
+	}
+	expression, err := constraint.Parse(line)
+	if err != nil {
+		return false
+	}
+	tags := map[string]bool{
+		"cgo": true, profile.GOOS: true, profile.GOARCH: true, "gc": true,
+	}
+	for _, tag := range profileReleaseTags(profile.RequestedGoVersion) {
+		tags[tag] = true
+	}
+	for _, tag := range profile.BuildTags {
+		tags[tag] = true
+	}
+	for _, tag := range profileToolTags(profile) {
+		tags[tag] = true
+	}
+	switch profile.GOOS {
+	case "aix", "android", "darwin", "dragonfly", "freebsd", "hurd", "illumos", "ios", "linux", "netbsd", "openbsd", "solaris":
+		tags["unix"] = true
+	}
+	if profile.GOOS == "android" {
+		tags["linux"] = true
+	}
+	if profile.GOOS == "ios" {
+		tags["darwin"] = true
+	}
+	if profile.GOOS == "illumos" {
+		tags["solaris"] = true
+	}
+	return expression.Eval(func(tag string) bool { return tags[tag] })
+}
+
 func packageInputKey(pkg *packages.Package) string {
 	return pkg.PkgPath + "\x00" + pkg.ForTest + "\x00" + packageVariant(pkg)
 }
@@ -1004,6 +1286,9 @@ func packageInputPaths(pkg *packages.Package, sourceRoot string) []string {
 	files = append(files, pkg.EmbedFiles...)
 	var result []string
 	for _, path := range uniqueSorted(files) {
+		if strings.HasPrefix(filepath.Base(path), "zz_go2gs_inventory_") {
+			continue
+		}
 		if packageInputPathAllowed(pkg, sourceRoot, path) {
 			result = append(result, path)
 		}
@@ -1020,6 +1305,46 @@ func packageInputPathAllowed(pkg *packages.Package, sourceRoot, path string) boo
 		_, err := pathWithin(pkg.Module.Replace.Dir, path)
 		return err == nil
 	}()
+}
+
+func cgoOnlyPackageOverlay(root string, profile Profile) (map[string][]byte, error) {
+	overlay := map[string][]byte{}
+	if !profile.CGOEnabled {
+		return overlay, nil
+	}
+	context := build.Default
+	context.GOOS = profile.GOOS
+	context.GOARCH = profile.GOARCH
+	context.Compiler = "gc"
+	context.CgoEnabled = true
+	context.BuildTags = append([]string{}, profile.BuildTags...)
+	context.ToolTags = profileToolTags(profile)
+	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if walkErr != nil {
+			return walkErr
+		}
+		if !entry.IsDir() {
+			return nil
+		}
+		if path != root && (entry.Name() == ".git" || entry.Name() == "vendor" || strings.HasPrefix(entry.Name(), ".")) {
+			return filepath.SkipDir
+		}
+		selected, err := context.ImportDir(path, build.ImportComment)
+		if err != nil || selected == nil || len(selected.CgoFiles) == 0 || len(selected.GoFiles) != 0 {
+			return nil
+		}
+		overlay[filepath.Join(path, "zz_go2gs_inventory_"+selected.Name+".go")] = []byte("package " + selected.Name + "\n")
+		return nil
+	})
+	return overlay, err
+}
+
+func copyBytesMap(source map[string][]byte) map[string][]byte {
+	result := make(map[string][]byte, len(source))
+	for key, value := range source {
+		result[key] = value
+	}
+	return result
 }
 
 func packageInputRoles(pkg *packages.Package) map[string]string {
@@ -1098,14 +1423,6 @@ func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Packa
 	return drift
 }
 
-func resolveCCompiler(profile Profile) (string, string, error) {
-	captured, hash, err := captureCCompiler(profile)
-	if err != nil || captured == nil {
-		return "", hash, err
-	}
-	return captured.sourcePath, hash, nil
-}
-
 func inferSelectedGOROOT(executable string) string {
 	candidate := filepath.Dir(filepath.Dir(executable))
 	info, err := os.Lstat(filepath.Join(candidate, "VERSION"))
@@ -1117,81 +1434,6 @@ func inferSelectedGOROOT(executable string) string {
 		return ""
 	}
 	return root
-}
-
-func captureCCompiler(profile Profile) (*capturedExecutable, string, error) {
-	if !profile.CGOEnabled {
-		if profile.CCompiler != "" {
-			return nil, "", errors.New("cCompiler is only valid when cgoEnabled is true")
-		}
-		return nil, "", nil
-	}
-	if err := validateCompilerPath(profile.CCompiler); err != nil {
-		return nil, "", err
-	}
-	captured, hash, err := captureSelectedExecutable(
-		filepath.Base(profile.CCompiler), profile.CCompiler, "", maxToolExecutableBytes, true,
-	)
-	if err != nil {
-		return nil, "", fmt.Errorf("capture C compiler: %w", err)
-	}
-	return &captured, hash, nil
-}
-
-const maxCompilerHelperBytes int64 = 64 << 20
-
-type capturedCompilerHelper struct {
-	spec       CompilerHelper
-	identity   CompilerHelperIdentity
-	executable capturedExecutable
-}
-
-func captureCompilerHelpers(profile Profile) ([]capturedCompilerHelper, error) {
-	if !profile.CGOEnabled {
-		if len(profile.CCompilerHelpers) != 0 {
-			return nil, errors.New("compiler helpers require cgoEnabled")
-		}
-		return []capturedCompilerHelper{}, nil
-	}
-	if profile.CCompilerHelpers == nil {
-		return nil, errors.New("cCompilerHelpers must be an array")
-	}
-	if err := validateCompilerHelpers(profile.CCompilerHelpers); err != nil {
-		return nil, err
-	}
-	helpers := append([]CompilerHelper{}, profile.CCompilerHelpers...)
-	sort.Slice(helpers, func(i, j int) bool { return helpers[i].Name < helpers[j].Name })
-	captured := make([]capturedCompilerHelper, 0, len(helpers))
-	var total int64
-	for _, helper := range helpers {
-		remaining := profile.Limits.MaxLocalHashBytes - total
-		limit := min(maxCompilerHelperBytes, remaining)
-		if limit <= 0 {
-			return nil, errors.New("C compiler helpers exceed maxLocalHashBytes")
-		}
-		executable, actualHash, err := captureSelectedExecutable(
-			helper.Name, helper.Path, helper.SHA256, limit, false,
-		)
-		if err != nil {
-			return nil, fmt.Errorf("capture helper %q: %w", helper.Name, err)
-		}
-		identity := CompilerHelperIdentity{
-			Name: helper.Name, SHA256: actualHash, Bytes: int64(len(executable.data)), ExecutableMode: uint32(executable.mode),
-		}
-		captured = append(captured, capturedCompilerHelper{
-			spec: helper, identity: identity, executable: executable,
-		})
-		total += int64(len(executable.data))
-	}
-	return captured, nil
-}
-
-func compilerHelperIdentityList(helpers []capturedCompilerHelper) []CompilerHelperIdentity {
-	identities := make([]CompilerHelperIdentity, len(helpers))
-	for index := range helpers {
-		identities[index] = helpers[index].identity
-	}
-	return identities
 }
 
 func replaceEnvironment(env []string, key, value string) []string {
@@ -1578,19 +1820,6 @@ func readBoundedRegularFileWithHooks(path string, limit int64, beforeOpen, after
 		return nil, errors.New("metadata file exceeds size limit")
 	}
 	return data, nil
-}
-
-func sanitizeUnavailableToolFailure(packages []*packages.Package, path string) bool {
-	found := false
-	for _, pkg := range packages {
-		for i := range pkg.Errors {
-			if strings.Contains(pkg.Errors[i].Msg, path) {
-				found = true
-				pkg.Errors[i].Msg = strings.ReplaceAll(pkg.Errors[i].Msg, path, "<disabled-pkg-config>")
-			}
-		}
-	}
-	return found
 }
 
 func validGitRef(value string) bool {
