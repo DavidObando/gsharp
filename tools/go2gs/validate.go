@@ -283,6 +283,9 @@ func validateAnalysis(a Analysis) error {
 		if err := requireMany(value.ID, "symbolIds", value.SymbolIDs, "symbol"); err != nil {
 			return err
 		}
+		if err := requireMany(value.ID, "labels", value.Labels, "symbol"); err != nil {
+			return err
+		}
 	}
 	for _, value := range a.Selections {
 		if err := require(value.ID, "nodeId", value.NodeID, "node"); err != nil {
@@ -460,6 +463,9 @@ func validateAnalysisHeader(a Analysis) error {
 		return fmt.Errorf("analysis profile limits: %w", err)
 	}
 	if err := validateGOFLAGS(p.GOFLAGS); err != nil {
+		return fmt.Errorf("analysis profile: %w", err)
+	}
+	if _, err := resolveArchitectureSettings(p.GOARCH, p.ArchitectureFeatures); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
 	for index, tag := range p.BuildTags {
@@ -886,14 +892,42 @@ func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 	if err := validateScopeParents(a.Scopes, scopes); err != nil {
 		return err
 	}
+	labelListings := map[string]int{}
 	for _, scope := range a.Scopes {
 		if err := validateSpanInPackage(scope.Span, scope.PackageID, fileListings, files, scope.ID+".span", positionMaps); err != nil {
 			return err
 		}
+		listed := make(map[string]bool, len(scope.SymbolIDs))
 		for _, symbolID := range scope.SymbolIDs {
 			if symbol, ok := symbols[symbolID]; !ok || symbol.PackageID != scope.PackageID {
 				return fmt.Errorf("scope %q symbol ownership is inconsistent", scope.ID)
 			}
+			if listed[symbolID] {
+				return fmt.Errorf("scope %q lists symbol %q more than once", scope.ID, symbolID)
+			}
+			listed[symbolID] = true
+		}
+		labels := make(map[string]bool, len(scope.Labels))
+		for _, labelID := range scope.Labels {
+			symbol, ok := symbols[labelID]
+			if !ok || symbol.PackageID != scope.PackageID || symbol.Kind != "label" || !listed[labelID] {
+				return fmt.Errorf("scope %q label %q relationship is inconsistent", scope.ID, labelID)
+			}
+			if labels[labelID] {
+				return fmt.Errorf("scope %q lists label %q more than once", scope.ID, labelID)
+			}
+			labels[labelID] = true
+			labelListings[labelID]++
+		}
+		for symbolID := range listed {
+			if symbols[symbolID].Kind == "label" && !labels[symbolID] {
+				return fmt.Errorf("scope %q label symbol %q is not listed as a label", scope.ID, symbolID)
+			}
+		}
+	}
+	for _, symbol := range a.Symbols {
+		if symbol.Kind == "label" && labelListings[symbol.ID] != 1 {
+			return fmt.Errorf("label symbol %q must be listed by exactly one scope", symbol.ID)
 		}
 	}
 	constantsBySymbol := map[string]int{}

@@ -33,6 +33,7 @@ type inventoryBuilder struct {
 	profile               Profile
 	packageIDs            map[*packages.Package]string
 	packagePathIDs        map[string]string
+	typeOwners            map[*types.Package]*packages.Package
 	typeIDs               map[types.Type]string
 	objectIDs             map[objectRef]string
 	fileIDs               map[string]string
@@ -61,7 +62,8 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 	return &inventoryBuilder{
 		analysis: analysis, sourceRoot: sourceRoot, goroot: goroot, profile: profile,
 		packageIDs: map[*packages.Package]string{}, packagePathIDs: map[string]string{}, typeIDs: map[types.Type]string{},
-		objectIDs: map[objectRef]string{}, fileIDs: map[string]string{},
+		typeOwners: map[*types.Package]*packages.Package{},
+		objectIDs:  map[objectRef]string{}, fileIDs: map[string]string{},
 		moduleIDs: map[string]string{}, seenModules: map[string]bool{},
 		seenFiles: map[string]bool{}, seenTypes: map[string]bool{}, seenSymbols: map[string]bool{},
 		seenMethodSets: map[string]bool{}, scopeIDs: map[*types.Scope]string{},
@@ -88,6 +90,12 @@ func (b *inventoryBuilder) indexPackages(packages []*packages.Package) {
 		b.packageIDs[pkg] = id
 		if packageVariant(pkg) == "ordinary" || b.packagePathIDs[pkg.PkgPath] == "" {
 			b.packagePathIDs[pkg.PkgPath] = id
+		}
+		if pkg.Types != nil {
+			owner := b.typeOwners[pkg.Types]
+			if owner == nil || packageCanonical(pkg) < packageCanonical(owner) {
+				b.typeOwners[pkg.Types] = pkg
+			}
 		}
 	}
 	b.indexDeclaredMembers(packages)
@@ -1272,7 +1280,9 @@ func (b *inventoryBuilder) addFeatureSites(pkg *packages.Package, pkgID, fileID 
 	if ident, ok := node.(*ast.Ident); ok {
 		switch ident.Name {
 		case "nil":
-			add("nil-value", "m1-typed-nil-interface")
+			if _, semanticNil := pkg.TypesInfo.Uses[ident].(*types.Nil); semanticNil {
+				add("nil-value", "m1-typed-nil-interface")
+			}
 		case "panic", "recover":
 			if _, builtin := pkg.TypesInfo.Uses[ident].(*types.Builtin); builtin {
 				add(ident.Name, "m1-panic-defer-recover")
@@ -1348,6 +1358,67 @@ func (b *inventoryBuilder) addScopes(pkg *packages.Package) {
 			}
 		}
 		b.analysis.Scopes = append(b.analysis.Scopes, record)
+	}
+	type labelEntry struct {
+		ident  *ast.Ident
+		object *types.Label
+		scope  *types.Scope
+	}
+	var labels []labelEntry
+	for _, file := range pkg.Syntax {
+		var functionScopes []*types.Scope
+		var enteredFunction []bool
+		ast.Inspect(file, func(node ast.Node) bool {
+			if node == nil {
+				if enteredFunction[len(enteredFunction)-1] {
+					functionScopes = functionScopes[:len(functionScopes)-1]
+				}
+				enteredFunction = enteredFunction[:len(enteredFunction)-1]
+				return true
+			}
+			entered := false
+			switch value := node.(type) {
+			case *ast.FuncDecl:
+				if scope := pkg.TypesInfo.Scopes[value.Type]; scope != nil {
+					functionScopes = append(functionScopes, scope)
+					entered = true
+				}
+			case *ast.FuncLit:
+				if scope := pkg.TypesInfo.Scopes[value.Type]; scope != nil {
+					functionScopes = append(functionScopes, scope)
+					entered = true
+				}
+			}
+			enteredFunction = append(enteredFunction, entered)
+			if statement, ok := node.(*ast.LabeledStmt); ok && len(functionScopes) != 0 {
+				if label, ok := pkg.TypesInfo.Defs[statement.Label].(*types.Label); ok {
+					labels = append(labels, labelEntry{
+						ident: statement.Label, object: label, scope: functionScopes[len(functionScopes)-1],
+					})
+				}
+			}
+			return true
+		})
+	}
+	sort.Slice(labels, func(i, j int) bool {
+		if labels[i].ident.Name != labels[j].ident.Name {
+			return labels[i].ident.Name < labels[j].ident.Name
+		}
+		return labels[i].ident.Pos() < labels[j].ident.Pos()
+	})
+	records := make(map[string]*ScopeRecord, len(scopes))
+	for index := range scopes {
+		record := &b.analysis.Scopes[recordStart+index]
+		records[record.ID] = record
+	}
+	for _, label := range labels {
+		record := records[b.scopeIDs[label.scope]]
+		if record == nil {
+			continue
+		}
+		symbolID := b.addObject(pkg, label.object, b.span(pkg, label.ident.Pos(), label.ident.End()))
+		record.SymbolIDs = append(record.SymbolIDs, symbolID)
+		record.Labels = append(record.Labels, symbolID)
 	}
 	for index, entry := range scopes {
 		if entry.scope.Parent() != nil {
@@ -1747,14 +1818,18 @@ func safeSize(sizes types.Sizes, t types.Type) (size, align int64) {
 	return size, align
 }
 
-func (b *inventoryBuilder) typeIdentity(pkg *packages.Package, t types.Type) string {
+func (b *inventoryBuilder) typeIdentity(_ *packages.Package, t types.Type) string {
 	return canonicalTypeIdentityWith(t, func(object *types.TypeName) string {
 		base := typeObjectIdentity(object)
-		if object == nil || object.Pkg() == nil || object.Parent() == object.Pkg().Scope() ||
-			!object.Pos().IsValid() || pkg == nil || pkg.Fset == nil {
+		if object == nil || object.Pkg() == nil ||
+			object.Pkg().Scope().Lookup(object.Name()) == object || !object.Pos().IsValid() {
 			return base
 		}
-		span := b.span(pkg, object.Pos(), object.Pos()+token.Pos(len(object.Name())))
+		owner := b.typeOwners[object.Pkg()]
+		if owner == nil || owner.Fset == nil {
+			return base
+		}
+		span := b.span(owner, object.Pos(), object.Pos()+token.Pos(len(object.Name())))
 		if span.Path == "" {
 			return base
 		}
@@ -1781,8 +1856,13 @@ func (b *inventoryBuilder) addObjectWithFallback(pkg *packages.Package, object t
 			pkgID = b.packageIDs[pkg]
 		}
 	}
-	if declaration.Path == "" && object.Pos().IsValid() && b.fileIDForPosition(pkg, object.Pos()) != "" {
-		declaration = b.span(pkg, object.Pos(), object.Pos()+token.Pos(len(object.Name())))
+	declarationPackage := pkg
+	if object.Pkg() != nil && object.Pkg() != pkg.Types {
+		declarationPackage = b.typeOwners[object.Pkg()]
+	}
+	if declaration.Path == "" && object.Pos().IsValid() && declarationPackage != nil &&
+		b.fileIDForPosition(declarationPackage, object.Pos()) != "" {
+		declaration = b.span(declarationPackage, object.Pos(), object.Pos()+token.Pos(len(object.Name())))
 	}
 	key := objectRef{object: object, packageID: pkgID}
 	if id := b.objectIDs[key]; id != "" {
