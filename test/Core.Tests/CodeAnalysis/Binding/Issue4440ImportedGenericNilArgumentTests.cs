@@ -295,7 +295,7 @@ public sealed class Issue4440ImportedGenericNilArgumentTests
                 public static void Put(T value) { }
             }
 
-            public sealed class StaticOuter<T>
+            public class StaticOuter<T>
             {
                 public sealed class Nested
                 {
@@ -315,16 +315,20 @@ public sealed class Issue4440ImportedGenericNilArgumentTests
             """
             import System.Collections.Generic
             import Issue4440.Library
+            class NullableDerived : StaticOuter[string?] { }
             StaticSink.Put[string](nil)
             StaticBox[string].Put(nil)
             StaticOuter[string].Nested.Put(nil)
+            NullableDerived.Nested.Put(nil)
             Extensions.Put[string](List[string](), nil)
             """,
             resolver));
 
-        Assert.Equal(new[] { "GS0155", "GS0155", "GS0155", "GS0155" }, diagnostics.Select(diagnostic => diagnostic.Id));
         Assert.Equal(
-            new[] { 3, 4, 5, 6 },
+            new[] { "GS0155", "GS0155", "GS0155", "GS0155" },
+            diagnostics.Select(diagnostic => diagnostic.Id));
+        Assert.Equal(
+            new[] { 4, 5, 6, 8 },
             diagnostics.Select(diagnostic => diagnostic.Location.StartLine + 1).Order());
     }
 
