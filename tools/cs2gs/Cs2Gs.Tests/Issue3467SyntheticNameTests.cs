@@ -141,76 +141,120 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
-        public void LiftedLocalFunctions_SuffixOnlyOnCollision()
+        public void ReadableLiftFallback_SuffixOnlyOnCollision()
         {
-            // Issue #4197 widened the capturing scheme to claim EVERY
-            // (non-generic, non-ref-returning) mutual-recursion cycle by real
-            // name, so a plain mutual pair no longer lifts. This fixture
-            // needs one of the two carve-outs that still force `__local_`
-            // (#4197/#4198 scope): this translator has no lowering to a G#
-            // ref-returning function literal for a ref-returning local
-            // function (#1900; gsc itself gained that literal form in
-            // #4219, but this translator does not emit it), so the whole
-            // cycle stays lifted — which is what exercises the collision
-            // suffix below.
+            // Issue #4302: gsc still deliberately rejects a mixed generic /
+            // non-generic direct-local group. The compatibility fallback uses
+            // the source local name and adds a suffix only on collision.
             string printed = Translate("""
-                public class C
+                public class Base
                 {
-                    public int Run(int[] xs, int value)
+                    protected static int Helper(int value) => -value;
+                }
+
+                public class C : Base
+                {
+                    public int Run(int value)
                     {
-                        return Helper(xs, value);
+                        return Helper(value);
 
-                        static ref int Helper(int[] a, int n)
+                        static int Helper(int n)
                         {
-                            if (n > 0)
-                            {
-                                Other(a, n - 1);
-                            }
-
-                            return ref a[0];
+                            return n == 0 ? 0 : Other<int>(n - 1);
                         }
 
-                        static ref int Other(int[] a, int n)
+                        static int Other<T>(int n)
                         {
-                            if (n > 0)
-                            {
-                                Helper(a, n - 1);
-                            }
-
-                            return ref a[1];
+                            return Helper(n);
                         }
                     }
 
-                    public int Run(int[] xs, string value)
+                    public int Run(string value)
                     {
-                        return Helper(xs, value.Length);
+                        return Helper(value.Length);
 
-                        static ref int Helper(int[] a, int n)
+                        static int Helper(int n)
                         {
-                            if (n > 0)
-                            {
-                                Other(a, n - 1);
-                            }
-
-                            return ref a[0];
+                            return n == 0 ? 0 : Other<int>(n - 1);
                         }
 
-                        static ref int Other(int[] a, int n)
+                        static int Other<T>(int n)
                         {
-                            if (n > 0)
-                            {
-                                Helper(a, n - 1);
-                            }
-
-                            return ref a[1];
+                            return Helper(n);
                         }
                     }
                 }
                 """);
 
-            Assert.Contains("__local_Run_Helper", printed, StringComparison.Ordinal);
-            Assert.Contains("__local_Run_Helper_2", printed, StringComparison.Ordinal);
-            Assert.DoesNotContain("__local_Run_Helper_3", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+            Assert.Contains("func Helper_2(", printed, StringComparison.Ordinal);
+            Assert.Contains("func Helper_3(", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("func Helper_4(", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_IsUniqueAcrossPartialTypeDocuments()
+        {
+            LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+                new[]
+                {
+                    ("C.First.cs", """
+                        public partial class C
+                        {
+                            public int First(int value)
+                            {
+                                return Helper(value);
+                                static int Helper(int n) => n == 0 ? 0 : Other<int>(n - 1);
+                                static int Other<T>(int n) => Helper(n);
+                            }
+                        }
+                        """),
+                    ("C.Second.cs", """
+                        public partial class C
+                        {
+                            public int Second(int value)
+                            {
+                                return Helper(value);
+                                static int Helper(int n) => n == 0 ? 0 : Other<int>(n - 1);
+                                static int Other<T>(int n) => Helper(n);
+                            }
+                        }
+                        """),
+                });
+            Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+
+            var printed = new List<string>();
+            var translator = new CSharpToGSharpTranslator();
+            foreach (LoadedDocument document in project.Documents)
+            {
+                var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+                printed.Add(GSharpPrinter.Print(translator.TranslateDocument(document, context)));
+            }
+
+            string combined = string.Join(Environment.NewLine, printed);
+            Assert.Contains("func Helper(", combined, StringComparison.Ordinal);
+            Assert.Contains("func Helper_2(", combined, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed.ToArray());
+        }
+
+        [Fact]
+        public void ReadableLiftFallback_AvoidsContainingTypeName()
+        {
+            string printed = Translate("""
+                public class C
+                {
+                    public int Run(int value)
+                    {
+                        return C(value);
+                        static int C(int n) => n == 0 ? 0 : Other<int>(n - 1);
+                        static int Other<T>(int n) => C(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("func C_2(", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 

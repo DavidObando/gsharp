@@ -1918,23 +1918,26 @@ public sealed partial class CSharpToGSharpTranslator
                 };
             }
 
-            // Issue #1900: a ref-returning local function (`static ref int
-            // Pick(...)`) has no G# canonical form. A C# local function lowers to
-            // a G# `func` LITERAL bound via `let` (ParseFunctionLiteralExpression
-            // has no `ref`-return-modifier slot at all — only a genuine top-level
-            // `func`/method declaration does, ADR-0060 §follow-up/issue #490), and
-            // gsc separately forbids a managed pointer as a function-literal
-            // return type outright (GS9004 "a managed pointer (*T) cannot be the
-            // return type of a function literal"). There is no lowering that
-            // preserves ref-aliasing through a func literal, so this gaps loudly
-            // rather than emitting a form that either drops the aliasing (a
-            // silent semantic change) or fails to compile.
             if (this.context.GetDeclaredSymbol(localFunction) is IMethodSymbol refLocalFunction
-                && (refLocalFunction.ReturnsByRef || refLocalFunction.ReturnsByRefReadonly))
+                && (refLocalFunction.ReturnsByRefReadonly
+                    || (refLocalFunction.ReturnsByRef
+                        && (!refLocalFunction.IsStatic
+                            || refLocalFunction.IsGenericMethod
+                            || (localFunction.Parent is BlockSyntax containingBlock
+                                && this.IsLocalFunctionReferencedAsValue(
+                                    refLocalFunction,
+                                    containingBlock.Statements))))))
             {
+                string reason = refLocalFunction.ReturnsByRefReadonly
+                    ? $"ref-readonly local function '{localFunction.Identifier.Text}' has no canonical G# function-literal form."
+                    : refLocalFunction.IsGenericMethod
+                        ? $"generic ref-returning local function '{localFunction.Identifier.Text}' is not supported by G#'s direct function-literal form."
+                        : refLocalFunction.IsStatic
+                            ? $"ref-returning local function '{localFunction.Identifier.Text}' cannot be used as a delegate or function value in G#."
+                        : $"capturing ref-returning local function '{localFunction.Identifier.Text}' cannot use G#'s direct function-literal form safely; declare it static or move it to a member.";
                 this.context.ReportUnsupported(
                     localFunction,
-                    $"ref-returning local function '{localFunction.Identifier.Text}' has no canonical G# form: a local function lowers to a `func` literal, and G#'s `ref` return modifier only exists on a genuine top-level/method function declaration (issue #1900).");
+                    reason);
                 return new GStatement[]
                 {
                     new RawStatement($"// unsupported: ref-returning local function '{localFunction.Identifier.Text}'"),
@@ -1981,7 +1984,13 @@ public sealed partial class CSharpToGSharpTranslator
                 if (localFunction.Body != null)
                 {
                     BlockStatement innerBody = this.WithParameterShadows(localFunction, this.TranslateBlock(localFunction.Body));
-                    lambda = new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                    lambda = new LambdaExpression(
+                        parameters,
+                        blockBody: innerBody,
+                        isAsync: isAsync,
+                        returnType: returnType,
+                        isFunctionLiteral: true,
+                        isRefReturn: localSymbol?.ReturnsByRef == true);
                 }
                 else if (localFunction.ExpressionBody != null)
                 {
@@ -1996,15 +2005,28 @@ public sealed partial class CSharpToGSharpTranslator
                             () => new List<GStatement>
                             {
                                 new ReturnStatement(
-                                    this.TranslateValueWithNullForgiveness(localFunction.ExpressionBody.Expression)),
+                                    this.TranslateValueWithNullForgiveness(localFunction.ExpressionBody.Expression),
+                                    isRef: localFunction.ExpressionBody.Expression is RefExpressionSyntax),
                             }).ToList())
                         : new BlockStatement(this.WithSpillSeam(
                             () => this.TranslateExpressionStatements(localFunction.ExpressionBody.Expression).ToList()).ToList());
-                    lambda = new LambdaExpression(parameters, blockBody: innerBody, isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                    lambda = new LambdaExpression(
+                        parameters,
+                        blockBody: innerBody,
+                        isAsync: isAsync,
+                        returnType: returnType,
+                        isFunctionLiteral: true,
+                        isRefReturn: localSymbol?.ReturnsByRef == true);
                 }
                 else
                 {
-                    lambda = new LambdaExpression(parameters, blockBody: new BlockStatement(new List<GStatement>()), isAsync: isAsync, returnType: returnType, isFunctionLiteral: true);
+                    lambda = new LambdaExpression(
+                        parameters,
+                        blockBody: new BlockStatement(new List<GStatement>()),
+                        isAsync: isAsync,
+                        returnType: returnType,
+                        isFunctionLiteral: true,
+                        isRefReturn: localSymbol?.ReturnsByRef == true);
                 }
             }
             finally

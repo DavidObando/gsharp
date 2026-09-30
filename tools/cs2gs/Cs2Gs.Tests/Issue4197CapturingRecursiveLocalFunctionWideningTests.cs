@@ -19,12 +19,10 @@ namespace Cs2Gs.Tests;
 /// SCC and lifted THEM too, rather than folding them into the same
 /// forward-declared group under their real name.
 ///
-/// This file adds the two positive regression cases described in the issue
-/// (a non-capturing mutual pair now uses the nullable scheme; a capturing
-/// cycle's non-recursive dependency folds into the same group) plus the two
-/// carve-out guards (a generic or ref-returning member of a cycle must still
-/// avoid the nullable scheme — see #4198 for the follow-up on actually
-/// making those categories lift cleanly end to end).
+/// The later #4302 coverage in this file also pins retirement of the
+/// <c>__local_</c> family: homogeneous excluded signatures use native
+/// direct-local groups, while compiler-deferred mixed groups keep readable
+/// source-named member helpers.
 /// </summary>
 public class Issue4197CapturingRecursiveLocalFunctionWideningTests
 {
@@ -145,7 +143,7 @@ namespace Demo
     }
 
     [Fact]
-    public void GenericMemberOfMutualRecursionCycle_StaysOffNullableScheme()
+    public void GenericMemberOfMutualRecursionCycle_UsesNativeGenericGroup()
     {
         // Carve-out guard (#4197 scope, #4198 follow-up): a generic local
         // function's type parameters cannot be expressed on a function-typed
@@ -174,24 +172,19 @@ namespace Demo
     }
 }");
 
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Helper[T] = func", printed, StringComparison.Ordinal);
+        Assert.Contains("let Other[T] = func", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("var Helper", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("var Other", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("Helper!!(", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("Other!!(", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Run_Helper", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Run_Other", printed, StringComparison.Ordinal);
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Console.WriteLine(C().Run(42))", "42");
     }
 
     [Fact]
-    public void RefReturningMemberOfMutualRecursionCycle_StillLiftsToSyntheticHelper()
+    public void RefReturningMemberOfMutualRecursionCycle_UsesNativeRefGroup()
     {
         // Carve-out regression guard (#4197 scope, #1900/#4198 follow-up):
-        // this translator has no lowering to a G# ref-returning function
-        // literal for a ref-returning local function (gsc gained that
-        // literal form in #4219; this translator does not emit it), so a
-        // mutual-recursion cycle that passes through one must still lift to
-        // `__local_` — #4197's widened gate must not touch it. The recursive
+        // #4302 emits native direct-local groups for static, non-generic
+        // ref-returning local functions. The recursive
         // step is a plain (non-ref) call rather than `return ref Other(...)`
         // to sidestep the unrelated, pre-existing #1987 "ref over a call
         // result" gap, isolating this test to the #4197 carve-out itself.
@@ -228,16 +221,177 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("__local_Run_Helper", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Run_Other", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("var Helper", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("var Other", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Helper = func (a []int32, n int32) ref int32", printed, StringComparison.Ordinal);
+        Assert.Contains("let Other = func (a []int32, n int32) ref int32", printed, StringComparison.Ordinal);
 
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "C().Run(2)");
     }
 
     [Fact]
-    public void DefaultParameterNonRecursiveDependency_StaysLiftedNotFolded()
+    public void ExpressionBodiedRefReturningLocalFunction_UsesNativeLiteral()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        static ref int At(int[] values, int index) => ref values[index];
+                        ref int alias = ref At(data, 0);
+                        alias = 42;
+                        return data[0];
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let At = func (values []int32, index int32) ref int32", printed, StringComparison.Ordinal);
+        Assert.Contains("return ref values[index]", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run())",
+            "42");
+    }
+
+    [Fact]
+    public void GenericRefReturningLocalFunction_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        static ref T At<T>(T[] values, int index) => ref values[index];
+                        return At<int>(data, 0);
+                    }
+                }
+            }
+            """, "generic ref-returning function literals remain deliberately unsupported");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At[T] = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void RefReturningLocalFunctionUsedAsDelegate_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public delegate ref int RefGetter(int[] values);
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        RefGetter getter = At;
+                        return getter(data);
+                        static ref int At(int[] values) => ref values[0];
+                    }
+                }
+            }
+            """, "G# does not convert ref-returning function literals to delegate values");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void AdjacentCapturingDelegateLocal_IsNotSwallowedByNativeGroup()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private static int Apply(System.Func<int, int> callback) => callback(2);
+
+                    public int Run(int seed) {
+                        int Callback(int value) => value + seed;
+                        static int First(int value, params int[] rest) =>
+                            value == 0 ? 0 : Second(value - 1);
+                        static int Second(int value) =>
+                            value == 0 ? 0 : First(value - 1);
+                        return Apply(Callback) + First(2);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Callback = func", printed, StringComparison.Ordinal);
+        Assert.Contains("func First(", printed, StringComparison.Ordinal);
+        Assert.Contains("func Second(", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(40))",
+            "42");
+    }
+
+    [Fact]
+    public void LeadingAdjacentDelegateLocal_IsNotSwallowedByNativeGroup()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    private static int Apply(System.Func<int, int> callback) => callback(2);
+
+                    public int Run(int seed) {
+                        int applied = Apply(Prefix);
+                        int Prefix(int value) => value + seed;
+                        static int First(int value, params int[] rest) =>
+                            value == 0 ? 0 : Second(value - 1);
+                        static int Second(int value) =>
+                            value == 0 ? 0 : First(value - 1);
+                        return applied + First(2);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Prefix = func", printed, StringComparison.Ordinal);
+        Assert.Contains("func First(", printed, StringComparison.Ordinal);
+        Assert.Contains("func Second(", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(40))",
+            "42");
+    }
+
+    [Fact]
+    public void ClaimedRecursiveGroup_StillLiftsUnsafeRefReturningDependency()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int seed) {
+                        int[] data = new int[] { 10 };
+                        int First(int value) =>
+                            value == 0 ? At(data) + seed : Second(value - 1);
+                        int Second(int value) =>
+                            value == 0 ? 0 : First(value - 1);
+                        ref int At(int[] values) => ref values[0];
+                        return First(2);
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("var First", printed, StringComparison.Ordinal);
+        Assert.Contains("var Second", printed, StringComparison.Ordinal);
+        Assert.Contains("func At(", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("unsupported: ref-returning local function 'At'", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(C().Run(2))",
+            "12");
+    }
+
+    [Fact]
+    public void DefaultParameterNonRecursiveDependency_FoldsIntoSameGroup()
     {
         // Carve-out regression guard found via PR #4200's own "hot-core
         // translation guard" CI job (a separate root cause from that PR's
@@ -255,10 +409,9 @@ namespace Demo
         // on the third parameter's default): folding it in produced
         // `GS0144: Function 'FindTopLevelBaseIndex!!' requires 3 arguments
         // but was given 2` at the `AddBaseFirst`-shaped call site. A
-        // default-parameter candidate must stay on the `__local_` lift path
-        // instead, which lifts to a REAL method declaration that natively
-        // supports default parameter values — both the 3-argument and the
-        // 2-argument (default-relying) call sites keep working.
+        // default value must therefore be materialized at nullable-group call
+        // sites. #4302 folds the helper into the group and performs that
+        // materialization explicitly.
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
 namespace Demo
 {
@@ -307,9 +460,9 @@ namespace Demo
         // `CollectLabel` — the default-parameter non-recursive dependency —
         // must NOT be folded into that group; it stays lifted to a synthetic
         // helper (a real method, defaults and all).
-        Assert.DoesNotContain("var CollectLabel", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("CollectLabel!!(", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Project_CollectLabel", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("var CollectLabel", printed, StringComparison.Ordinal);
+        Assert.Contains("CollectLabel!!(", printed, StringComparison.Ordinal);
 
         // Add(3): total += CollectLabel(3, 10)=16 -> AddPatternSwitch(2) ->
         // Add(1): total += CollectLabel(1, 10)=12 (total=28) ->
@@ -596,7 +749,7 @@ namespace Demo
     }
 
     [Fact]
-    public void VariadicCycleMember_StaysOnLiftPath()
+    public void VariadicCycleMember_UsesNativeGroup()
     {
         // PR #4211 review (Copilot), the other finding. cs2gs's
         // `ArrowTypeReference` carries parameter TYPES only — it has no
@@ -607,14 +760,9 @@ namespace Demo
         // ("Cannot convert type '(int32, ...int32) -> void' to
         // '((int32, int32) -> void)?'"), plus "Function 'Add!!' requires 2
         // arguments but was given 3" at every expanded call site. Unlike a
-        // default parameter value this is not repairable at the call site — the
-        // DECLARATION is already the wrong type — so a variadic member keeps its
-        // whole cycle on the `__local_` lift path, whose real method declaration
-        // carries `params` natively.
-        //
-        // (gsc itself is not the limitation: a hand-written
-        // `var f ((int32, ...int32) -> void)? = nil` declares, binds and runs.
-        // Teaching `ArrowTypeReference` variadic shape is the follow-up.)
+        // default parameter value this is not repairable at the nullable-group
+        // call site. #4302 routes the whole homogeneous cycle through native
+        // direct locals, whose declarations carry `params` natively.
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit(@"
 namespace Demo
 {
@@ -651,13 +799,12 @@ namespace Demo
     }
 }");
 
-        // The whole cycle stays on `__local_`, exactly as the generic and
-        // ref-returning carve-outs above do.
-        Assert.Contains("__local_Project_Add", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Project_AddPatternSwitch", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Add = func (depth int32, xs ...int32)", printed, StringComparison.Ordinal);
+        Assert.Contains("let AddPatternSwitch = func", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
 
-        // The lifted real method keeps the variadic parameter natively.
+        // The direct local keeps the variadic parameter natively.
         Assert.Contains("xs ...int32", printed, StringComparison.Ordinal);
 
         // Add(2, 3, 4) = 7 + AddPatternSwitch(1) -> Add(0, 1, 2) = 3. Total 10.
@@ -665,7 +812,7 @@ namespace Demo
     }
 
     [Fact]
-    public void RefParameterCycleMember_StaysOnLiftPath()
+    public void RefParameterCycleMember_UsesNativeGroup()
     {
         // PR #4211 review round 3 (Copilot), finding 1 — reported as an
         // evaluation-order hazard in the claimed-cycle argument reassembly
@@ -685,15 +832,12 @@ namespace Demo
         // for `ref`, `out` (`*?`) and `in` alike, with or without a default
         // parameter and with or without a named call site. There is
         // therefore no reachable "silently changing side effects": the program
-        // never compiles. The fix is the same carve-out `params` got, which
-        // additionally makes a ref-kind argument unreachable in
-        // `TranslateClaimedLocalFunctionArgumentsWithDefaults`.
+        // never compiles. #4302 routes these signatures through native direct
+        // locals instead.
         //
         // The call site below is Copilot's exact shape — a permuted named call
         // passing `ref slots[Idx()]` alongside an omitted default. On the
-        // `__local_` path it now takes, the lift keeps the `name:` wrappers
-        // (a real method HAS parameter names), so the emitted call is
-        // `__local_Project_Add(cell: &slots[Idx()], a: Val(), 100)` and the
+        // native direct-local path preserves the `name:` wrappers, so the
         // binding is right: cell aliases slots[1], a = 5, b = 100 => 105.
         //
         // `order` is 12, as in C#. It used to print 21, a separate gsc-side
@@ -750,11 +894,11 @@ namespace Demo
     }
 }");
 
-        // The whole cycle stays on `__local_`, whose REAL method declaration
-        // carries `ref` natively — nothing ever declares an arrow type for it.
-        Assert.Contains("__local_Project_Add", printed, StringComparison.Ordinal);
-        Assert.Contains("__local_Project_AddPatternSwitch", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Add = func (a int32, ref cell int32, b int32 = 100)", printed, StringComparison.Ordinal);
+        Assert.Contains("let AddPatternSwitch = func", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
+        Assert.Contains("Add(cell: &slots[Idx()], a: Val())", printed, StringComparison.Ordinal);
         Assert.Contains("ref cell int32", printed, StringComparison.Ordinal);
 
         // a = 5, b = 100 (default), cell = slots[1] = 105 — the binding this
@@ -763,7 +907,7 @@ namespace Demo
     }
 
     [Fact]
-    public void OutParameterCycleMember_StaysOnLiftPath()
+    public void OutParameterCycleMember_UsesNativeGroup()
     {
         // The `out` half of the carve-out above: the erased arrow type made the
         // call sites fail as "Cannot convert type '*?' to 'int32'" (the `out`
@@ -813,11 +957,39 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("__local_Project_Add", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Add = func (depth int32, out cell int32)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("Add!!(", printed, StringComparison.Ordinal);
 
         // Add(2) -> total 2 -> AddPatternSwitch(1) -> Add(0) -> total 2. c = 2.
         LocalFunctionHoistTranslationTests.CompileAndRun(printed, "Builder().Project(2)", "2:2");
+    }
+
+    [Fact]
+    public void InParameterCycleMember_UsesNativeGroup()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class Builder {
+                    public int Project(int seed) {
+                        int value = seed;
+                        int Add(int depth, in int cell) =>
+                            depth == 0 ? cell : Other(depth - 1, in cell);
+                        int Other(int depth, in int cell) =>
+                            depth == 0 ? cell : Add(depth - 1, in cell);
+                        return Add(2, in value);
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+        Assert.Contains("let Add = func (depth int32, in cell int32)", printed, StringComparison.Ordinal);
+        Assert.Contains("let Other = func (depth int32, in cell int32)", printed, StringComparison.Ordinal);
+        LocalFunctionHoistTranslationTests.CompileAndRun(
+            printed,
+            "Console.WriteLine(Builder().Project(7))",
+            "7");
     }
 
     [Fact]

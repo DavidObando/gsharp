@@ -83,6 +83,10 @@ public sealed partial class CSharpToGSharpTranslator
     // cheap and only resolves symbols for those nodes.
     private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, Dictionary<INamedTypeSymbol, HashSet<string>>> TypeOfReferencedTypesCache = new();
 
+    // Lifted helpers from separate partial-type documents share one CLR type.
+    // Keep their readable names unique across the whole compilation.
+    private static readonly System.Runtime.CompilerServices.ConditionalWeakTable<Compilation, LiftedLocalFunctionNameAllocator> LiftedLocalFunctionNames = new();
+
     // ADR-0145 (§C/§D) / issue #3410: preserve each C# `partial` declaration as
     // a standalone G# `partial` part by default. This keeps members in the G#
     // file corresponding to their declaring C# file and lets the G# compiler's
