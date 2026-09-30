@@ -1745,6 +1745,8 @@ internal sealed partial class StatementBinder
 
         public bool MayMutateGlobalRoots { get; private set; }
 
+        public bool MayMutateWritableReferenceRoots { get; private set; }
+
         public IEnumerable<VariableSymbol> DefinitelyExternalFunctionValues
             => externalFunctionValues.Except(unknownFunctionValues);
 
@@ -1883,6 +1885,12 @@ internal sealed partial class StatementBinder
 
         public bool InvalidatesNarrowing(VariableSymbol root, TypeSymbol narrowedType)
         {
+            if (MayMutateWritableReferenceRoots
+                && root is ParameterSymbol { RefKind: RefKind.Ref or RefKind.Out })
+            {
+                return true;
+            }
+
             if (!Roots.Contains(root))
             {
                 return AssignsRoot(root);
@@ -2277,6 +2285,7 @@ internal sealed partial class StatementBinder
                 || externalFunctionValues.Contains(variable))
             {
                 MarkMayMutateGlobalRoots();
+                MayMutateWritableReferenceRoots = true;
             }
         }
 

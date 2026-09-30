@@ -4880,6 +4880,36 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyExternalCallbackInvalidatesWritableRefParameter()
+    {
+        var result = Evaluate("""
+            func Run(ref text string?, callback (() -> void)) int32 {
+                text = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    callback()
+                }
+            Done:
+                return text.Length
+            }
+
+            func Outer() int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                return Run(ref text, clear)
+            }
+
+            Outer()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ImportedCallRecovery_DoesNotRebindInlineOutVariable()
     {
         var result = EmittedOracle.Evaluate(
