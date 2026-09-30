@@ -6242,8 +6242,14 @@ public sealed partial class CSharpToGSharpTranslator
 
             // The declaration omits an equal explicit type and lets G# infer
             // the projected initializer shape. Assignments remain fixed.
-            return projectedArray.WithNullableAnnotation(
+            ITypeSymbol effectiveType = projectedArray.WithNullableAnnotation(
                 destinationArray.NullableAnnotation);
+            return this.InferredLocalAssignmentsMatch(
+                    local,
+                    value,
+                    effectiveType)
+                ? effectiveType
+                : destinationType;
         }
 
         private bool ProjectionTypeFitsResultDestination(

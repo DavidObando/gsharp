@@ -5297,6 +5297,80 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ExplicitNestedGenericArrayDestinationRejectsFixedConsumer()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayExplicitNestedGenericDestination;
+            public sealed class Holder<T> {
+            }
+            public class Probe {
+                private static T[] Make<T>() => new T[1];
+                private static int Consume(Holder<ManagedRef<int>>[] values) => 42;
+
+                public static int Run() {
+                    Holder<ManagedRef<int>>[] values =
+                        Make<Holder<ManagedRef<int>>>();
+                    return Consume(values);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayExplicitNestedGenericDestination.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains("fixed destination storage", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            "Make[Holder[managed[int32]?]]()",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ExplicitArrayReassignmentRemainsFixedStorage()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayExplicitReassignment;
+            public class Probe {
+                private static T[] Make<T>() => new T[1];
+
+                public static int Run() {
+                    ManagedRef<int>[] values;
+                    values = Make<ManagedRef<int>>();
+                    return values.Length;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayExplicitReassignment.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains("fixed destination storage", StringComparison.Ordinal));
+        Assert.DoesNotContain("Make[managed[int32]?]()", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecursivePatternDesignationRetainsProjectedGenericType()
     {
         const string source = """
