@@ -6,6 +6,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"errors"
 	"net"
 	"os"
@@ -20,6 +21,115 @@ import (
 
 	"golang.org/x/sys/unix"
 )
+
+func TestWorkerPublicationCancellationUsesProductionBoundary(t *testing.T) {
+	if !enterExecutableNamespaceTest(t) {
+		return
+	}
+	realGo := filepath.Join(runtime.GOROOT(), "bin", selectedGoName())
+	data, err := os.ReadFile(realGo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedGo := filepath.Join(t.TempDir(), selectedGoName())
+	if err := os.WriteFile(selectedGo, data, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO2GS_SELECTED_GO", selectedGo)
+	t.Setenv("GO2GS_SELECTED_GO_SHA256", hashBytes(data))
+	t.Setenv("GO2GS_SELECTED_GOROOT", runtime.GOROOT())
+
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	publicationBoundaryTestHook = func(stage string) {
+		if stage == "worker" {
+			cancel()
+		}
+	}
+	t.Cleanup(func() { publicationBoundaryTestHook = nil })
+	out := t.TempDir()
+	err = runAnalyzeWorker(ctx, []string{
+		"--source", copyFixture(t, "complete"),
+		"--profile", writeTestProfile(t, testProfile()),
+		"--out", out,
+	})
+	assertCanceledExitTwoWithoutArtifacts(t, err, out)
+}
+
+func TestParentWorkerArtifactCancellationUsesProductionPath(t *testing.T) {
+	requireExecutableNamespaceTest(t)
+	for _, phase := range []string{"analysis-read", "run-read", "parent"} {
+		t.Run(phase, func(t *testing.T) {
+			runAnalysisWorkerProcessTestHook = func(
+				_ context.Context,
+				_ time.Duration,
+				_ int,
+				_ string,
+				_ string,
+				args []string,
+				_ []string,
+			) (processResult, error) {
+				_, _, out, err := parseAnalyzeArgs(args[1:])
+				if err != nil {
+					return processResult{}, err
+				}
+				analysisBytes, runBytes, err := encodeAnalysisArtifacts(
+					validIncompleteAnalysis(),
+					RunMetadata{SchemaVersion: schemaVersion},
+					1<<20,
+				)
+				if err != nil {
+					return processResult{}, err
+				}
+				if err := os.WriteFile(filepath.Join(out, "analysis.json"), analysisBytes, 0o600); err != nil {
+					return processResult{}, err
+				}
+				if err := os.WriteFile(filepath.Join(out, "run.json"), runBytes, 0o600); err != nil {
+					return processResult{}, err
+				}
+				return processResult{ExitCode: 1}, nil
+			}
+			t.Cleanup(func() { runAnalysisWorkerProcessTestHook = nil })
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			if phase == "parent" {
+				publicationBoundaryTestHook = func(stage string) {
+					if stage == phase {
+						cancel()
+					}
+				}
+				t.Cleanup(func() { publicationBoundaryTestHook = nil })
+			} else {
+				workerArtifactReadTestHook = func(stage string) {
+					if stage == phase {
+						cancel()
+					}
+				}
+				t.Cleanup(func() { workerArtifactReadTestHook = nil })
+			}
+			out := t.TempDir()
+			err := runAnalyze(ctx, []string{
+				"--source", copyFixture(t, "complete"),
+				"--profile", writeTestProfile(t, testProfile()),
+				"--out", out,
+			})
+			assertCanceledExitTwoWithoutArtifacts(t, err, out)
+		})
+	}
+}
+
+func assertCanceledExitTwoWithoutArtifacts(t *testing.T, err error, out string) {
+	t.Helper()
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 || !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation returned %v", err)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, statErr := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("cancelled production path retained %s: %v", name, statErr)
+		}
+	}
+}
 
 func TestImmutableExecutableCapsuleFailsClosedWithoutMountCapability(t *testing.T) {
 	if os.Getenv("GO2GS_NAMESPACE_FAIL_CLOSED_CONTROL") == t.Name() {

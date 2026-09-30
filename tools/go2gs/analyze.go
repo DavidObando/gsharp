@@ -43,6 +43,7 @@ var rootedReadAfterOpenHook func(string, string)
 var rootedWalkBeforeDescendHook func(string)
 var rootedDirectoryBeforeOpenHook func(string)
 var boundedReadChunkHook func()
+var postLoadContextTestHook func(string)
 
 func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (Analysis, bool, error) {
 	return analyzeWithSnapshotHook(ctx, sourceRoot, outRoot, profile, nil)
@@ -211,7 +212,10 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if err := ctx.Err(); err != nil {
 		return Analysis{}, false, err
 	}
-	actualCommit, sourceCommitErr := sourceCommit(sourceRoot)
+	actualCommit, sourceCommitErr := sourceCommitContext(ctx, sourceRoot)
+	if errors.Is(sourceCommitErr, context.Canceled) || errors.Is(sourceCommitErr, context.DeadlineExceeded) {
+		return Analysis{}, false, sourceCommitErr
+	}
 	if err := ctx.Err(); err != nil {
 		return Analysis{}, false, err
 	}
@@ -318,7 +322,10 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if packageLoadTestHook != nil {
 		packageLoadTestHook("preflight-after")
 	}
-	selectedPreflight = collectPackages(selectedPreflight)
+	selectedPreflight, err = collectPackagesContext(ctx, selectedPreflight)
+	if err != nil {
+		return Analysis{}, false, err
+	}
 	sourceSnapshot, err := snapshotPackageInputs(ctx, selectedPreflight, selectedPreflight, mirror, semanticProfile, profile.Limits)
 	if err != nil {
 		return Analysis{}, false, err
@@ -340,7 +347,10 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if afterLoad != nil {
 		afterLoad()
 	}
-	if err := capsule.verify(); err != nil {
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("capsule-verify")
+	}
+	if err := capsule.verifyContext(ctx); err != nil {
 		return Analysis{}, false, fmt.Errorf("verify private executable capsule: %w", err)
 	}
 	if selectedPkgConfigDirective(sourceSnapshot, semanticProfile) {
@@ -353,23 +363,63 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		builder.block("loader", "the requested entry patterns selected no loadable packages under the pinned profile", nil, nil)
 	}
 
-	all := collectPackages(loaded)
-	typedSources, externalTypedSources, typedSourceErr := captureTypedSources(all, sourceSnapshot.data, metadataConfig.Overlay, profile.Limits.MaxLocalHashBytes)
+	all, err := collectPackagesContext(ctx, loaded)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("typed-source-capture")
+	}
+	typedSources, externalTypedSources, typedSourceErr := captureTypedSourcesContext(
+		ctx, all, sourceSnapshot.data, metadataConfig.Overlay, profile.Limits.MaxLocalHashBytes)
 	if typedSourceErr != nil {
+		if ctx.Err() != nil {
+			return Analysis{}, false, ctx.Err()
+		}
 		builder.block("loader", sanitizeMessage(typedSourceErr.Error(), mirror.root, profile.Limits.MaxStringBytes, builder.diagnosticRedactions...), nil, nil)
 	} else {
-		typeCheckPackages(all, typedSources, semanticProfile)
+		if err := typeCheckPackages(ctx, all, typedSources, semanticProfile); err != nil {
+			return Analysis{}, false, err
+		}
 	}
-	if !verifyTypedSources(externalTypedSources) {
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("typed-source-verify")
+	}
+	typedSourcesMatch, err := verifyTypedSourcesContext(ctx, externalTypedSources)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	if !typedSourcesMatch {
 		builder.block("input-drift", "Go toolchain or dependency source changed while type checking", nil, nil)
 	}
-	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, mirror, semanticProfile)
-	for key := range verifyOriginalPackageInputs(mirror, sourceSnapshot) {
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("package-input-verify")
+	}
+	builder.inputDrift, err = verifyPackageInputsContext(ctx, sourceSnapshot, all, mirror, semanticProfile)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("original-input-verify")
+	}
+	originalDrift, err := verifyOriginalPackageInputsContext(ctx, mirror, sourceSnapshot)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	for key := range originalDrift {
 		builder.inputDrift[key] = true
 	}
 	manifestDrift := false
 	for _, root := range mirror.manifestRoots {
-		if !verifyManifestSnapshot(root.snapshot, root.root, profile.Limits.MaxLocalHashBytes) {
+		if postLoadContextTestHook != nil {
+			postLoadContextTestHook("manifest-verify")
+		}
+		matches, verifyErr := verifyManifestSnapshotContext(
+			ctx, root.snapshot, root.root, profile.Limits.MaxLocalHashBytes)
+		if verifyErr != nil {
+			return Analysis{}, false, verifyErr
+		}
+		if !matches {
 			manifestDrift = true
 		}
 	}
@@ -477,31 +527,37 @@ func snapshotManifests(sourceRoot string, limit int64) (manifestSnapshot, error)
 	return result, nil
 }
 
-func verifyManifestSnapshot(snapshot manifestSnapshot, sourceRoot string, limit int64) bool {
+func verifyManifestSnapshotContext(ctx context.Context, snapshot manifestSnapshot, sourceRoot string, limit int64) (bool, error) {
 	for _, name := range manifestNames {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		path, err := safeJoin(sourceRoot, name)
 		if err != nil {
-			return false
+			return false, nil
 		}
 		captured, existed := snapshot.files[path]
 		if !existed {
 			file, err := openRootedMetadataFile(sourceRoot, filepath.FromSlash(name))
 			if err == nil {
 				_ = file.Close()
-				return false
+				return false, nil
 			}
 			if !os.IsNotExist(err) {
-				return false
+				return false, nil
 			}
 			continue
 		}
-		data, info, err := readBoundedRegularFileWithinRoot(
-			sourceRoot, filepath.FromSlash(name), min(limit, int64(len(captured.data))+1))
+		data, info, err := readBoundedRegularFileWithinRootContext(
+			ctx, sourceRoot, filepath.FromSlash(name), min(limit, int64(len(captured.data))+1))
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
 		if err != nil || !os.SameFile(captured.info, info) || !bytes.Equal(data, captured.data) {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
 type mirrorBudget struct {
@@ -820,11 +876,22 @@ func (mirror sourceMirror) originalDirectory(path string) (string, bool) {
 	return "", false
 }
 
-func verifyOriginalPackageInputs(mirror sourceMirror, snapshot packageInputSnapshot) map[string]bool {
+func verifyOriginalPackageInputsContext(ctx context.Context, mirror sourceMirror, snapshot packageInputSnapshot) (map[string]bool, error) {
 	drift := map[string]bool{}
 	for path, owners := range snapshot.selectedOwners {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		root, relative, captured, ok := mirror.originalPath(path)
-		if !ok || !sameCapturedFile(root, relative, captured) {
+		same := false
+		if ok {
+			var err error
+			same, err = sameCapturedFileContext(ctx, root, relative, captured)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !ok || !same {
 			for owner := range owners {
 				drift[owner] = true
 			}
@@ -835,26 +902,43 @@ func verifyOriginalPackageInputs(mirror sourceMirror, snapshot packageInputSnaps
 			continue
 		}
 		originalDirectory, ok := mirror.originalDirectory(directory)
-		if !ok || !samePackageFileSet(originalDirectory, directory) {
+		same := false
+		if ok {
+			var err error
+			same, err = samePackageFileSetContext(ctx, originalDirectory, directory)
+			if err != nil {
+				return nil, err
+			}
+		}
+		if !ok || !same {
 			drift[key] = true
 		}
 	}
-	return drift
+	return drift, nil
 }
 
-func sameCapturedFile(root, relative string, captured snapshottedInput) bool {
-	data, info, err := readBoundedRegularFileWithinRoot(root, relative, int64(len(captured.data))+1)
-	return err == nil && os.SameFile(captured.info, info) && bytes.Equal(data, captured.data)
+func sameCapturedFileContext(ctx context.Context, root, relative string, captured snapshottedInput) (bool, error) {
+	data, info, err := readBoundedRegularFileWithinRootContext(ctx, root, relative, int64(len(captured.data))+1)
+	if ctx.Err() != nil {
+		return false, ctx.Err()
+	}
+	return err == nil && os.SameFile(captured.info, info) && bytes.Equal(data, captured.data), nil
 }
 
-func samePackageFileSet(originalDirectory, mirrorDirectory string) bool {
+func samePackageFileSetContext(ctx context.Context, originalDirectory, mirrorDirectory string) (bool, error) {
+	if err := ctx.Err(); err != nil {
+		return false, err
+	}
 	originalEntries, err := readRootedMetadataDirectory(originalDirectory)
 	if err != nil {
-		return false
+		return false, nil
+	}
+	if err := ctx.Err(); err != nil {
+		return false, err
 	}
 	mirrorEntries, err := readRootedMetadataDirectory(mirrorDirectory)
 	if err != nil {
-		return false
+		return false, nil
 	}
 	actual := map[string]bool{}
 	for _, entry := range originalEntries {
@@ -868,7 +952,7 @@ func samePackageFileSet(originalDirectory, mirrorDirectory string) bool {
 			expected[entry.Name()] = true
 		}
 	}
-	return mapsEqual(actual, expected)
+	return mapsEqual(actual, expected), ctx.Err()
 }
 
 func mapsEqual(left, right map[string]bool) bool {
@@ -1348,7 +1432,6 @@ func selectedPkgConfigDirective(snapshot packageInputSnapshot, profile Profile) 
 
 func importCCommentGroups(file *ast.File) []*ast.CommentGroup {
 	var result []*ast.CommentGroup
-	seen := map[*ast.CommentGroup]bool{}
 	for _, declaration := range file.Decls {
 		imports, ok := declaration.(*ast.GenDecl)
 		if !ok || imports.Tok != token.IMPORT {
@@ -1363,11 +1446,10 @@ func importCCommentGroups(file *ast.File) []*ast.CommentGroup {
 			if err != nil || path != "C" {
 				continue
 			}
-			for _, group := range []*ast.CommentGroup{imports.Doc, spec.Doc} {
-				if group != nil && !seen[group] {
-					seen[group] = true
-					result = append(result, group)
-				}
+			if spec.Doc != nil {
+				result = append(result, spec.Doc)
+			} else if len(imports.Specs) == 1 && imports.Doc != nil {
+				result = append(result, imports.Doc)
 			}
 		}
 	}
@@ -1521,11 +1603,14 @@ func packageInputRoles(pkg *packages.Package) map[string]string {
 	return roles
 }
 
-func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Package, mirror sourceMirror, profile Profile) map[string]bool {
+func verifyPackageInputsContext(ctx context.Context, snapshot packageInputSnapshot, loaded []*packages.Package, mirror sourceMirror, profile Profile) (map[string]bool, error) {
 	sourceRoot := mirror.root
 	drift := map[string]bool{}
 	actual := map[string][]string{}
 	for _, pkg := range loaded {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		files := packageInputPaths(pkg, sourceRoot)
 		selectedGo := append([]string{}, pkg.GoFiles...)
 		for path := range profileSelectedDirectoryInputs(pkg, sourceRoot, profile) {
@@ -1567,6 +1652,9 @@ func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Packa
 		}
 	}
 	for path, owners := range snapshot.selectedOwners {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		captured := snapshot.files[path]
 		root, relative, ok := mirror.rootedMirrorPath(path)
 		if !ok {
@@ -1575,15 +1663,18 @@ func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Packa
 			}
 			continue
 		}
-		data, info, err := readBoundedRegularFileWithinRoot(
-			root, relative, int64(len(captured.data))+1)
+		data, info, err := readBoundedRegularFileWithinRootContext(
+			ctx, root, relative, int64(len(captured.data))+1)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
 		if err != nil || !os.SameFile(captured.info, info) || !bytes.Equal(data, captured.data) {
 			for owner := range owners {
 				drift[owner] = true
 			}
 		}
 	}
-	return drift
+	return drift, nil
 }
 
 func selectedGoRoot(executable capturedExecutable, handoff string) (string, error) {
@@ -1631,11 +1722,16 @@ func replaceEnvironment(env []string, key, value string) []string {
 }
 
 func collectPackages(roots []*packages.Package) []*packages.Package {
+	result, _ := collectPackagesContext(context.Background(), roots)
+	return result
+}
+
+func collectPackagesContext(ctx context.Context, roots []*packages.Package) ([]*packages.Package, error) {
 	seen := map[*packages.Package]bool{}
 	var result []*packages.Package
 	var visit func(*packages.Package)
 	visit = func(pkg *packages.Package) {
-		if pkg == nil || seen[pkg] {
+		if ctx.Err() != nil || pkg == nil || seen[pkg] {
 			return
 		}
 		seen[pkg] = true
@@ -1652,13 +1748,16 @@ func collectPackages(roots []*packages.Package) []*packages.Package {
 	for _, root := range roots {
 		visit(root)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	sort.Slice(result, func(i, j int) bool {
 		return packageCanonical(result[i]) < packageCanonical(result[j])
 	})
-	return result
+	return result, ctx.Err()
 }
 
-func captureTypedSources(loaded []*packages.Package, captured, overlay map[string][]byte, limit int64) (map[string][]byte, map[string][]byte, error) {
+func captureTypedSourcesContext(ctx context.Context, loaded []*packages.Package, captured, overlay map[string][]byte, limit int64) (map[string][]byte, map[string][]byte, error) {
 	paths := map[string]bool{}
 	for _, pkg := range loaded {
 		for _, path := range pkg.GoFiles {
@@ -1674,6 +1773,9 @@ func captureTypedSources(loaded []*packages.Package, captured, overlay map[strin
 	external := map[string][]byte{}
 	var externalBytes int64
 	for _, path := range sorted {
+		if err := ctx.Err(); err != nil {
+			return nil, nil, err
+		}
 		if data, ok := overlay[path]; ok {
 			all[path] = data
 			continue
@@ -1686,7 +1788,7 @@ func captureTypedSources(loaded []*packages.Package, captured, overlay map[strin
 		if remaining < 0 {
 			return nil, nil, fmt.Errorf("typed dependency source exceeds limit %d", limit)
 		}
-		data, err := readBoundedRegularFile(path, remaining)
+		data, err := readBoundedRegularFileContext(ctx, path, remaining)
 		if err != nil {
 			return nil, nil, fmt.Errorf("capture typed dependency source: %w", err)
 		}
@@ -1697,21 +1799,32 @@ func captureTypedSources(loaded []*packages.Package, captured, overlay map[strin
 	return all, external, nil
 }
 
-func verifyTypedSources(captured map[string][]byte) bool {
+func verifyTypedSourcesContext(ctx context.Context, captured map[string][]byte) (bool, error) {
 	for path, expected := range captured {
-		actual, err := readBoundedRegularFile(path, int64(len(expected)))
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
+		actual, err := readBoundedRegularFileContext(ctx, path, int64(len(expected)))
+		if ctx.Err() != nil {
+			return false, ctx.Err()
+		}
 		if err != nil || !bytes.Equal(actual, expected) {
-			return false
+			return false, nil
 		}
 	}
-	return true
+	return true, nil
 }
 
-func typeCheckPackages(loaded []*packages.Package, sources map[string][]byte, profile Profile) {
+func typeCheckPackages(ctx context.Context, loaded []*packages.Package, sources map[string][]byte, profile Profile) error {
 	state := map[*packages.Package]uint8{}
+	var contextErr error
 	var check func(*packages.Package)
 	check = func(pkg *packages.Package) {
-		if pkg == nil || state[pkg] == 2 {
+		if contextErr != nil || pkg == nil || state[pkg] == 2 {
+			return
+		}
+		if err := ctx.Err(); err != nil {
+			contextErr = err
 			return
 		}
 		if state[pkg] == 1 {
@@ -1732,6 +1845,10 @@ func typeCheckPackages(loaded []*packages.Package, sources map[string][]byte, pr
 		fset := token.NewFileSet()
 		syntax := make([]*ast.File, 0, len(pkg.GoFiles))
 		for _, path := range pkg.GoFiles {
+			if err := ctx.Err(); err != nil {
+				contextErr = err
+				return
+			}
 			data, ok := sources[path]
 			if !ok {
 				pkg.Errors = append(pkg.Errors, packages.Error{
@@ -1780,6 +1897,10 @@ func typeCheckPackages(loaded []*packages.Package, sources map[string][]byte, pr
 			},
 		}
 		checked, _ := config.Check(pkg.PkgPath, fset, syntax, info)
+		if err := ctx.Err(); err != nil {
+			contextErr = err
+			return
+		}
 		pkg.Fset = fset
 		pkg.Syntax = syntax
 		pkg.Types = checked
@@ -1791,6 +1912,7 @@ func typeCheckPackages(loaded []*packages.Package, sources map[string][]byte, pr
 	for _, pkg := range loaded {
 		check(pkg)
 	}
+	return contextErr
 }
 
 type capturedPackageImporter struct {
@@ -1896,6 +2018,13 @@ func packageVariant(pkg *packages.Package) string {
 }
 
 func sourceCommit(root string) (string, error) {
+	return sourceCommitContext(context.Background(), root)
+}
+
+func sourceCommitContext(ctx context.Context, root string) (string, error) {
+	if err := ctx.Err(); err != nil {
+		return "", err
+	}
 	gitPath := filepath.Join(root, ".git")
 	info, err := os.Lstat(gitPath)
 	if err != nil {
@@ -1910,7 +2039,7 @@ func sourceCommit(root string) (string, error) {
 		if !info.Mode().IsRegular() {
 			return "", errors.New("repository .git metadata is neither a directory nor a regular gitdir file")
 		}
-		data, err := readBoundedRegularFile(gitPath, 4096)
+		data, err := readBoundedRegularFileContext(ctx, gitPath, 4096)
 		if err != nil {
 			return "", fmt.Errorf("read repository gitdir metadata: %w", err)
 		}
@@ -1936,14 +2065,14 @@ func sourceCommit(root string) (string, error) {
 		if err != nil || !targetInfo.IsDir() {
 			return "", errors.New("repository gitdir target is not a directory")
 		}
-		commonDir, err = validateGitDirIndirection(root, gitPath, gitDir)
+		commonDir, err = validateGitDirIndirectionContext(ctx, root, gitPath, gitDir)
 		if err != nil {
 			return "", err
 		}
 	} else if err := rejectSymlinkPath(gitDir); err != nil {
 		return "", fmt.Errorf("repository metadata: %w", err)
 	}
-	head, err := readBoundedRegularFile(filepath.Join(gitDir, "HEAD"), 4096)
+	head, err := readBoundedRegularFileContext(ctx, filepath.Join(gitDir, "HEAD"), 4096)
 	if err != nil {
 		return "", fmt.Errorf("read repository HEAD: %w", err)
 	}
@@ -1959,11 +2088,14 @@ func sourceCommit(root string) (string, error) {
 		return "", fmt.Errorf("repository HEAD contains invalid ref %q", ref)
 	}
 	for _, metadataRoot := range uniqueSorted([]string{gitDir, commonDir}) {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
 		refPath := filepath.Join(metadataRoot, filepath.FromSlash(ref))
 		if err := rejectSymlinkPath(refPath); err != nil {
 			return "", fmt.Errorf("repository ref %q: %w", ref, err)
 		}
-		if data, err := readBoundedRegularFile(refPath, 4096); err == nil {
+		if data, err := readBoundedRegularFileContext(ctx, refPath, 4096); err == nil {
 			if commit := strings.TrimSpace(string(data)); validCommitID(commit) {
 				return commit, nil
 			}
@@ -1971,7 +2103,7 @@ func sourceCommit(root string) (string, error) {
 		} else if !os.IsNotExist(err) {
 			return "", fmt.Errorf("read repository ref %q: %w", ref, err)
 		}
-		commit, found, err := packedGitReference(filepath.Join(metadataRoot, "packed-refs"), ref)
+		commit, found, err := packedGitReferenceContext(ctx, filepath.Join(metadataRoot, "packed-refs"), ref)
 		if err != nil {
 			return "", err
 		}
@@ -1983,7 +2115,11 @@ func sourceCommit(root string) (string, error) {
 }
 
 func validateGitDirIndirection(root, gitPath, gitDir string) (string, error) {
-	data, err := readBoundedRegularFile(filepath.Join(gitDir, "commondir"), 4096)
+	return validateGitDirIndirectionContext(context.Background(), root, gitPath, gitDir)
+}
+
+func validateGitDirIndirectionContext(ctx context.Context, root, gitPath, gitDir string) (string, error) {
+	data, err := readBoundedRegularFileContext(ctx, filepath.Join(gitDir, "commondir"), 4096)
 	if err != nil {
 		return "", errors.New("external gitdir target is not a supported linked worktree")
 	}
@@ -2005,7 +2141,7 @@ func validateGitDirIndirection(root, gitPath, gitDir string) (string, error) {
 		strings.Contains(relative, string(filepath.Separator)) {
 		return "", errors.New("repository gitdir target escapes the linked-worktree metadata area")
 	}
-	backlink, err := readBoundedRegularFile(filepath.Join(gitDir, "gitdir"), 4096)
+	backlink, err := readBoundedRegularFileContext(ctx, filepath.Join(gitDir, "gitdir"), 4096)
 	if err != nil {
 		return "", errors.New("linked-worktree gitdir backlink is missing or unsafe")
 	}
@@ -2024,7 +2160,11 @@ func validateGitDirIndirection(root, gitPath, gitDir string) (string, error) {
 }
 
 func packedGitReference(path, ref string) (string, bool, error) {
-	data, err := readBoundedRegularFile(path, 16<<20)
+	return packedGitReferenceContext(context.Background(), path, ref)
+}
+
+func packedGitReferenceContext(ctx context.Context, path, ref string) (string, bool, error) {
+	data, err := readBoundedRegularFileContext(ctx, path, 16<<20)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return "", false, nil
@@ -2045,6 +2185,9 @@ func packedGitReference(path, ref string) (string, bool, error) {
 	headerRegion := true
 	headerSeen := false
 	for _, line := range strings.Split(strings.TrimSuffix(string(data), "\n"), "\n") {
+		if err := ctx.Err(); err != nil {
+			return "", false, err
+		}
 		if line == "" {
 			return "", false, errors.New("repository packed-refs metadata contains an empty record")
 		}

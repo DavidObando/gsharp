@@ -141,11 +141,12 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 			WarmLoadMeasured: false,
 			WarmLoadReason:   "preload-only analysis returned before package loading on a platform without secure execution binding",
 		}
-		analysisBytes, runBytes, encodeErr := encodeAnalysisArtifacts(analysis, run, profile.Limits.MaxOutputBytes)
+		analysisBytes, runBytes, encodeErr := encodeAnalysisArtifactsContext(
+			ctx, analysis, run, profile.Limits.MaxOutputBytes)
 		if encodeErr != nil {
 			return &exitError{2, encodeErr}
 		}
-		if publishErr := publishWorkerArtifacts(output, analysisBytes, runBytes, nil); publishErr != nil {
+		if publishErr := publishWorkerArtifactsAtBoundary(ctx, "preload", output, analysisBytes, runBytes); publishErr != nil {
 			return &exitError{2, publishErr}
 		}
 		return &exitError{1, errors.New("inventory incomplete; see analysis.json diagnostics and blockers")}
@@ -225,14 +226,15 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if result.ExitCode != 0 && result.ExitCode != 1 {
 		return &exitError{2, fmt.Errorf("analysis worker failed: %s", strings.TrimSpace(result.Stderr))}
 	}
-	analysisBytes, runBytes, analysis, err := readWorkerArtifacts(workerRoot, profile.Limits.MaxOutputBytes)
+	analysisBytes, runBytes, analysis, err := readWorkerArtifactsContext(
+		ctx, workerRoot, profile.Limits.MaxOutputBytes)
 	if err != nil {
 		return &exitError{2, err}
 	}
 	if (result.ExitCode == 0) != analysis.InventoryComplete {
 		return &exitError{2, errors.New("analysis worker exit status disagrees with inventory completeness")}
 	}
-	if err := publishWorkerArtifacts(output, analysisBytes, runBytes, nil); err != nil {
+	if err := publishWorkerArtifactsAtBoundary(ctx, "parent", output, analysisBytes, runBytes); err != nil {
 		return &exitError{2, err}
 	}
 	if result.ExitCode == 1 {
@@ -241,7 +243,14 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	return nil
 }
 
+var runAnalysisWorkerProcessTestHook func(
+	context.Context, time.Duration, int, string, string, []string, []string,
+) (processResult, error)
+
 func runAnalysisWorkerProcess(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string) (processResult, error) {
+	if runAnalysisWorkerProcessTestHook != nil {
+		return runAnalysisWorkerProcessTestHook(parent, timeout, maxOutput, dir, executable, args, env)
+	}
 	return runProcessConfigured(
 		parent, timeout, maxOutput, dir, executable, args, env, processGroupOwn,
 		configureAnalysisWorkerNamespace,
@@ -306,12 +315,13 @@ func runAnalyzeWorker(parent context.Context, args []string) (err error) {
 		WarmLoadReason:      "M0 records the first isolated load only; a second load would mix Go build-cache effects with helper warmup",
 		PeakRSSBytes:        max64(before, peakRSS()),
 	}
-	analysisBytes, runBytes, err := encodeAnalysisArtifacts(analysis, run, profile.Limits.MaxOutputBytes)
+	analysisBytes, runBytes, err := encodeAnalysisArtifactsContext(
+		ctx, analysis, run, profile.Limits.MaxOutputBytes)
 	if err != nil {
-		return err
+		return &exitError{2, err}
 	}
-	if err := publishWorkerArtifacts(output, analysisBytes, runBytes, nil); err != nil {
-		return err
+	if err := publishWorkerArtifactsAtBoundary(ctx, "worker", output, analysisBytes, runBytes); err != nil {
+		return &exitError{2, err}
 	}
 	if !complete {
 		return &exitError{1, errors.New("inventory incomplete; see analysis.json diagnostics and blockers")}
