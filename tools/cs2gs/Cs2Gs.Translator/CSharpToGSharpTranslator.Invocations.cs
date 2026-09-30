@@ -5952,7 +5952,9 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     if (!this.LambdaResultFitsProjectedDestination(
                             result,
-                            targetResult))
+                            targetResult,
+                            lambda,
+                            invoke))
                     {
                         incompatibleParameter = parameter;
                         return false;

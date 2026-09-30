@@ -1522,7 +1522,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (results.Any(result =>
                 !this.LambdaResultFitsProjectedDestination(
                     result,
-                    projectedResult)))
+                    projectedResult,
+                    lambda,
+                    invoke)))
             {
                 this.context.ReportUnsupported(
                     lambda,
@@ -1538,7 +1540,9 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool LambdaResultFitsProjectedDestination(
             ExpressionSyntax result,
-            ITypeSymbol projectedDestination)
+            ITypeSymbol projectedDestination,
+            AnonymousFunctionExpressionSyntax lambda,
+            IMethodSymbol invoke)
         {
             if (this.IsNullCompositeArm(result))
             {
@@ -1550,12 +1554,61 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol effectiveResult =
                 this.GetManagedReferenceArrayProjectedExpressionType(result)
+                ?? this.GetProjectedLambdaParameterResultType(
+                    result,
+                    lambda,
+                    invoke)
                 ?? this.context.GetTypeInfo(result).Type
                 ?? this.context.GetTypeInfo(result).ConvertedType;
             return effectiveResult != null
                 && this.ProjectionTypeFitsCompositeDestination(
                     effectiveResult,
                     projectedDestination);
+        }
+
+        private ITypeSymbol GetProjectedLambdaParameterResultType(
+            ExpressionSyntax result,
+            AnonymousFunctionExpressionSyntax lambda,
+            IMethodSymbol invoke)
+        {
+            if (invoke == null
+                || Unparenthesize(result) is not IdentifierNameSyntax identifier
+                || this.context.GetSymbolInfo(identifier).Symbol
+                    is not IParameterSymbol returnedParameter)
+            {
+                return null;
+            }
+
+            IReadOnlyList<ParameterSyntax> parameters = lambda switch
+            {
+                SimpleLambdaExpressionSyntax simple =>
+                    new[] { simple.Parameter },
+                ParenthesizedLambdaExpressionSyntax parenthesized =>
+                    parenthesized.ParameterList.Parameters,
+                AnonymousMethodExpressionSyntax anonymous
+                    when anonymous.ParameterList != null =>
+                    anonymous.ParameterList.Parameters,
+                _ => Array.Empty<ParameterSyntax>(),
+            };
+            for (int index = 0;
+                index < parameters.Count && index < invoke.Parameters.Length;
+                index++)
+            {
+                if (SymbolEqualityComparer.Default.Equals(
+                        this.context.GetDeclaredSymbol(parameters[index]),
+                        returnedParameter)
+                    && !SymbolEqualityComparer.IncludeNullability.Equals(
+                        returnedParameter.Type,
+                        invoke.Parameters[index].Type)
+                    && TypeContainsRecognizedManagedReferenceConsumer(
+                        invoke.Parameters[index].Type,
+                        this.context.Compilation))
+                {
+                    return invoke.Parameters[index].Type;
+                }
+            }
+
+            return null;
         }
 
         private static ITypeSymbol GetProjectedLambdaInvocationReturnType(
