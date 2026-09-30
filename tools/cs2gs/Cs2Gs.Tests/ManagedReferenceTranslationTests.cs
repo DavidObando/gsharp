@@ -5261,6 +5261,42 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ExplicitArrayDestinationUsesProjectedGenericReturnElement()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayExplicitGenericProducerDestination;
+            public class Probe {
+                private static T[] Make<T>() => new T[1];
+
+                public static int Run() {
+                    ManagedRef<int>[] values = Make<ManagedRef<int>>();
+                    return values[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayExplicitGenericProducerDestination.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Make[managed[int32]?]()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void RecursivePatternDesignationRetainsProjectedGenericType()
     {
         const string source = """

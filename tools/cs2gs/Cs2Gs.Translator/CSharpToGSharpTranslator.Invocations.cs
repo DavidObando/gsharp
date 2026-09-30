@@ -6197,9 +6197,53 @@ public sealed partial class CSharpToGSharpTranslator
                     IMethodSymbol method => method.ReturnType,
                     _ => null,
                 };
+            if (sink is ILocalSymbol explicitDestinationLocal)
+            {
+                destinationType = this.GetProjectedArrayLocalDestinationType(
+                    value,
+                    explicitDestinationLocal,
+                    destinationType,
+                    projectedType);
+            }
+
             return this.ProjectionTypeFitsResultDestination(
                 projectedType,
                 destinationType);
+        }
+
+        private ITypeSymbol GetProjectedArrayLocalDestinationType(
+            ExpressionSyntax value,
+            ILocalSymbol local,
+            ITypeSymbol destinationType,
+            ITypeSymbol projectedType)
+        {
+            SyntaxNode initializer = value;
+            while (initializer.Parent is ParenthesizedExpressionSyntax)
+            {
+                initializer = initializer.Parent;
+            }
+
+            if (destinationType is not IArrayTypeSymbol destinationArray
+                || projectedType is not IArrayTypeSymbol projectedArray
+                || destinationArray.Rank != projectedArray.Rank
+                || IsImplicitlyTypedLocal(local)
+                || initializer.Parent is not EqualsValueClauseSyntax
+                    { Parent: VariableDeclaratorSyntax declarator }
+                || !SymbolEqualityComparer.Default.Equals(
+                    this.context.GetDeclaredSymbol(declarator),
+                    local)
+                || this.context.GetTypeInfo(value).Type is not IArrayTypeSymbol naturalArray
+                || !SymbolEqualityComparer.Default.Equals(
+                    destinationArray,
+                    naturalArray))
+            {
+                return destinationType;
+            }
+
+            // The declaration omits an equal explicit type and lets G# infer
+            // the projected initializer shape. Assignments remain fixed.
+            return projectedArray.WithNullableAnnotation(
+                destinationArray.NullableAnnotation);
         }
 
         private bool ProjectionTypeFitsResultDestination(
