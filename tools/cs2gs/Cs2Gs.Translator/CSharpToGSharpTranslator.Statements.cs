@@ -3419,9 +3419,11 @@ public sealed partial class CSharpToGSharpTranslator
                     var aliasPath = visited == null
                         ? null
                         : new HashSet<ISymbol>(visited, SymbolEqualityComparer.Default);
+
+                    // ResolveStableTupleAlias returns its input or a reaching value, never null;
+                    // self-migration types that result as nullable (issue #4578).
                     ExpressionSyntax source =
-                        this.ResolveStableTupleAlias(assignment.Right, aliasPath)
-                            ?? assignment.Right;
+                        this.ResolveStableTupleAlias(assignment.Right, aliasPath)!;
                     value = ProjectTupleElement(source, path);
                     assignedValues.Add(assignment, value);
                 }
@@ -3509,9 +3511,12 @@ public sealed partial class CSharpToGSharpTranslator
                     : new HashSet<ISymbol>(
                         visited,
                         SymbolEqualityComparer.Default);
+
+                // ResolveStableTupleAlias returns its input or a reaching value, never null;
+                // self-migration types that result as nullable (issue #4578).
                 ExpressionSyntax source = this.ResolveStableTupleAlias(
                     writtenValue,
-                    aliasPath) ?? writtenValue;
+                    aliasPath)!;
                 if (elementPath.Count == 0)
                 {
                     values.Clear();
