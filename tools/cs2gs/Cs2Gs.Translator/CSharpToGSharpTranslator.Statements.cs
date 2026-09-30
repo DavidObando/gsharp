@@ -1199,7 +1199,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            if (useBlock == null)
+            if (useBlock?.IsReachable != true)
             {
                 return Array.Empty<ExpressionSyntax>();
             }

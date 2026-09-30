@@ -26,6 +26,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         public static class Defaults
         {
             private static void Fill<T>(ref T? value, T replacement) => value = replacement;
+            private static void Keep<T>(ref T value) { }
 
             private static (string Text, System.Collections.Generic.List<string> Values) BuildPair() =>
                 ("pair", new System.Collections.Generic.List<string>());
@@ -345,6 +346,17 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 postCaptureLocalPair = (default(T), replacement);
                 PostCaptureLocal();
 
+                var deadCapturePair = (replacement, replacement);
+                System.Action deadCapture = () =>
+                {
+                    var (deadCaptureLeft, _) = deadCapturePair;
+                    Keep(ref deadCaptureLeft);
+                };
+                goto afterDeadCapture;
+                deadCapturePair = (default(T), replacement);
+                deadCapture();
+            afterDeadCapture:
+
                 var nestedCapturePair = (replacement, replacement);
                 System.Action outerCapture = () =>
                 {
@@ -630,6 +642,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("finalReplacementRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("deadLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("deadRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("deadCaptureLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingLeft T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("exitingRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("conditionalNarrowed T? =", printed, StringComparison.Ordinal);
