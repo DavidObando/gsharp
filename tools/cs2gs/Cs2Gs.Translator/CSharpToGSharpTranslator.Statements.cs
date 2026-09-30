@@ -1629,27 +1629,36 @@ public sealed partial class CSharpToGSharpTranslator
                 yield return invocation.ArgumentList.CloseParenToken.SpanStart;
             }
 
-            foreach (SyntaxNode escape in EagerExecutionNodes(executionBody)
-                .Where(node => node is ReturnStatementSyntax
-                    or YieldStatementSyntax
-                    or ArgumentSyntax))
+            foreach (SyntaxNode escapeNode in EagerExecutionNodes(executionBody))
             {
+                // Roslyn traversal elements are concrete; self-migration imports them as platform-typed.
+                var escape = escapeNode!;
                 ExpressionSyntax value;
                 int position;
                 bool includeLaterStates;
                 switch (escape)
                 {
-                    case ReturnStatementSyntax { Expression: { } returned }:
+                    case ReturnStatementSyntax returnedStatement:
+                        ExpressionSyntax returned = returnedStatement.Expression;
+                        if (returned == null)
+                        {
+                            continue;
+                        }
+
                         value = returned;
                         position = returned.Span.End - 1;
                         includeLaterStates = true;
                         break;
 
-                    case YieldStatementSyntax
-                    {
-                        RawKind: (int)SyntaxKind.YieldReturnStatement,
-                        Expression: { } yielded,
-                    }:
+                    case YieldStatementSyntax yieldedStatement
+                        when yieldedStatement.IsKind(
+                            SyntaxKind.YieldReturnStatement):
+                        ExpressionSyntax yielded = yieldedStatement.Expression;
+                        if (yielded == null)
+                        {
+                            continue;
+                        }
+
                         value = yielded;
                         position = yielded.Span.End - 1;
                         includeLaterStates = true;
@@ -1703,13 +1712,14 @@ public sealed partial class CSharpToGSharpTranslator
                     yield return position;
                     if (includeLaterStates)
                     {
-                        foreach (StatementSyntax later in
-                            EagerExecutionNodes(executionBody)
-                                .OfType<StatementSyntax>()
-                                .Where(statement =>
-                                    statement.SpanStart > escape.SpanStart))
+                        foreach (SyntaxNode laterNode in
+                            EagerExecutionNodes(executionBody))
                         {
-                            yield return later.Span.End - 1;
+                            if (laterNode is StatementSyntax later
+                                && later.SpanStart > escape.SpanStart)
+                            {
+                                yield return later.Span.End - 1;
+                            }
                         }
                     }
                 }
@@ -2106,9 +2116,11 @@ public sealed partial class CSharpToGSharpTranslator
                     foreach (ExpressionSyntax returned in
                         this.GetSourceCallableReturnExpressions(factory))
                     {
+                        // Source return expressions are concrete; self-migration imports sequence elements as nullable.
+                        var returnedExpression = returned!;
                         if (this.DelegateExpressionReachesLocalFunction(
-                            returned,
-                            returned.SpanStart,
+                            returnedExpression,
+                            returnedExpression.SpanStart,
                             localFunction,
                             new HashSet<ISymbol>(
                                 visited,
@@ -2173,9 +2185,11 @@ public sealed partial class CSharpToGSharpTranslator
                         foreach (ExpressionSyntax returned in
                             this.GetSourceCallableReturnExpressions(factory))
                         {
+                            // Source return expressions are concrete; self-migration imports sequence elements as nullable.
+                            var returnedExpression = returned!;
                             if (this.DelegateExpressionReachesLocalFunction(
-                                returned,
-                                returned.SpanStart,
+                                returnedExpression,
+                                returnedExpression.SpanStart,
                                 localFunction,
                                 new HashSet<ISymbol>(
                                     visited,
@@ -2244,11 +2258,13 @@ public sealed partial class CSharpToGSharpTranslator
                     foreach (ExpressionSyntax returned in
                         this.GetSourceCallableReturnExpressions(factory))
                     {
+                        // Source return expressions are concrete; self-migration imports sequence elements as nullable.
+                        var returnedExpression = returned!;
                         if (this.DelegateExpressionReachesAnonymousFunction(
-                            returned,
-                            returned.SpanStart,
+                            returnedExpression,
+                            returnedExpression.SpanStart,
                             anonymousFunction,
-                            FindEnclosingExecutable(returned),
+                            FindEnclosingExecutable(returnedExpression),
                             new HashSet<ISymbol>(
                                 visited,
                                 SymbolEqualityComparer.Default)))
@@ -3110,11 +3126,13 @@ public sealed partial class CSharpToGSharpTranslator
                         foreach (ExpressionSyntax returned in
                             this.GetSourceCallableReturnExpressions(factory))
                         {
+                            // Source return expressions are concrete; self-migration imports sequence elements as nullable.
+                            var returnedExpression = returned!;
                             if (this.DelegateExpressionReachesAnonymousFunction(
-                                returned,
-                                returned.SpanStart,
+                                returnedExpression,
+                                returnedExpression.SpanStart,
                                 anonymousFunction,
-                                FindEnclosingExecutable(returned),
+                                FindEnclosingExecutable(returnedExpression),
                                 new HashSet<ISymbol>(
                                     visited,
                                     SymbolEqualityComparer.Default)))
@@ -3376,7 +3394,8 @@ public sealed partial class CSharpToGSharpTranslator
                         ? null
                         : new HashSet<ISymbol>(visited, SymbolEqualityComparer.Default);
                     ExpressionSyntax source =
-                        this.ResolveStableTupleAlias(assignment.Right, aliasPath);
+                        this.ResolveStableTupleAlias(assignment.Right, aliasPath)
+                            ?? assignment.Right;
                     value = ProjectTupleElement(source, path);
                     assignedValues.Add(assignment, value);
                 }
@@ -3395,7 +3414,8 @@ public sealed partial class CSharpToGSharpTranslator
                     if (!priorAddition && values.Count == 1)
                     {
                         ExpressionSyntax existing =
-                            this.ResolveStableTupleAlias(values.Single());
+                            this.ResolveStableTupleAlias(values.Single())
+                                ?? values.Single();
                         if (SyntaxFactory.AreEquivalent(existing, value))
                         {
                             values.Clear();
@@ -3465,7 +3485,7 @@ public sealed partial class CSharpToGSharpTranslator
                         SymbolEqualityComparer.Default);
                 ExpressionSyntax source = this.ResolveStableTupleAlias(
                     writtenValue,
-                    aliasPath);
+                    aliasPath) ?? writtenValue;
                 if (elementPath.Count == 0)
                 {
                     values.Clear();
