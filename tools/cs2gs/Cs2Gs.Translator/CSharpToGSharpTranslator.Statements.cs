@@ -1580,9 +1580,11 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 if (anonymousFunction == null
-                    && invokedMethod?.MethodKind
-                        is not (MethodKind.LocalFunction
-                            or MethodKind.DelegateInvoke))
+                    && (invokedMethod == null
+                        || (invokedMethod.MethodKind
+                                != MethodKind.LocalFunction
+                            && invokedMethod.MethodKind
+                                != MethodKind.DelegateInvoke)))
                 {
                     continue;
                 }
@@ -1659,8 +1661,8 @@ public sealed partial class CSharpToGSharpTranslator
                             && (this.context.GetTypeInfo(argument.Expression)
                                     .ConvertedType
                                 ?? this.context.GetTypeInfo(
-                                    argument.Expression).Type)
-                            is { TypeKind: TypeKind.Delegate }:
+                                    argument.Expression).Type)?.TypeKind
+                                == TypeKind.Delegate:
                         DelegateArgumentBehavior behavior =
                             this.GetDelegateArgumentBehavior(argument);
                         if (behavior == DelegateArgumentBehavior.NotObserved)
@@ -2084,8 +2086,8 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
                 }
 
-                if (symbol is ILocalSymbol
-                    { Type.TypeKind: TypeKind.Delegate } delegateLocal
+                if (symbol is ILocalSymbol delegateLocal
+                    && delegateLocal.Type.TypeKind == TypeKind.Delegate
                     && this.DelegateLocalReachesLocalFunction(
                         delegateLocal,
                         usePosition,
@@ -2470,8 +2472,8 @@ public sealed partial class CSharpToGSharpTranslator
             return this.context.GetSymbolInfo(expression).Symbol
                     is IFieldSymbol or IPropertySymbol
                 || (expression is ElementAccessExpressionSyntax
-                    && this.context.GetTypeInfo(expression).Type
-                        is { TypeKind: TypeKind.Delegate });
+                        && this.context.GetTypeInfo(expression).Type?.TypeKind
+                            == TypeKind.Delegate);
         }
 
         private HashSet<int> ApplyDelegateReachingOperation(
@@ -3825,7 +3827,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree
                 || this.context.GetSymbolInfo(expression).Symbol
-                    is not ILocalSymbol { RefKind: not RefKind.None } alias
+                    is not ILocalSymbol alias
+                || alias.RefKind == RefKind.None
                 || (visited != null && !visited.Add(alias)))
             {
                 return Array.Empty<ExpressionSyntax>();
