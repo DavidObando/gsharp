@@ -1266,7 +1266,7 @@ internal sealed partial class StatementBinder
             }
             finally
             {
-                binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+                binderCtx.EndNarrowingProof();
             }
         }
         finally
@@ -1294,7 +1294,7 @@ internal sealed partial class StatementBinder
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            binderCtx.EndNarrowingProof();
         }
     }
 

@@ -766,6 +766,14 @@ internal sealed class BinderContext
     public void BeginNarrowingProof(IReadOnlyDictionary<AccessPath, TypeSymbol> frame)
         => narrowingProofGenerations[frame] = ++narrowingProofGeneration;
 
+    public void EndNarrowingProof()
+    {
+        var index = NarrowedVariables.Count - 1;
+        var frame = NarrowedVariables[index];
+        NarrowedVariables.RemoveAt(index);
+        narrowingProofGenerations.Remove(frame);
+    }
+
     public int GetNarrowingProofGeneration(IReadOnlyDictionary<AccessPath, TypeSymbol> frame)
         => narrowingProofGenerations.TryGetValue(frame, out var generation) ? generation : 0;
 

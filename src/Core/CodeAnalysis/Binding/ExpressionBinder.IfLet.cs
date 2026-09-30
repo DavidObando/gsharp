@@ -122,7 +122,7 @@ internal sealed partial class ExpressionBinder
         }
         finally
         {
-            binderCtx.NarrowedVariables.RemoveAt(binderCtx.NarrowedVariables.Count - 1);
+            binderCtx.EndNarrowingProof();
 
             scope = scope.Pop();
         }
