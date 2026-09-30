@@ -22,8 +22,12 @@ import (
 )
 
 func TestImmutableExecutableCapsuleFailsClosedWithoutMountCapability(t *testing.T) {
+	if os.Getenv("GO2GS_NAMESPACE_FAIL_CLOSED_CONTROL") == t.Name() {
+		return
+	}
 	if os.Getenv("GO2GS_NAMESPACE_FAIL_CLOSED_TEST") != t.Name() {
-		cmd := exec.Command(os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
+		args := []string{"-test.run=^" + regexp.QuoteMeta(t.Name()) + "$"}
+		cmd := exec.Command(os.Args[0], args...)
 		cmd.Env = append(os.Environ(), "GO2GS_NAMESPACE_FAIL_CLOSED_TEST="+t.Name(), "GO2GS_EXEC_NAMESPACE=1")
 		if err := configureAnalysisWorkerNamespace(cmd); err != nil {
 			t.Fatal(err)
@@ -32,12 +36,15 @@ func TestImmutableExecutableCapsuleFailsClosedWithoutMountCapability(t *testing.
 		cmd.Stdout = &output
 		cmd.Stderr = &output
 		if err := cmd.Start(); err != nil {
-			if namespaceChildStartUnavailable(err) {
+			control := exec.Command(os.Args[0], args...)
+			control.Env = append(os.Environ(), "GO2GS_NAMESPACE_FAIL_CLOSED_CONTROL="+t.Name())
+			unavailable, controlErr := confirmNamespaceStartUnavailable(err, control)
+			if unavailable {
 				t.Setenv("GO2GS_EXEC_NAMESPACE", "")
 				assertImmutableCapsuleFailsBeforeStaging(t, "analysis requires the private executable mount namespace")
 				return
 			}
-			t.Fatalf("start fail-closed namespace child: %v", err)
+			t.Fatalf("start fail-closed namespace child: %v; control: %v", err, controlErr)
 		}
 		err := cmd.Wait()
 		if err == nil {

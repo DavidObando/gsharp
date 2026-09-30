@@ -30,7 +30,8 @@ var executableNamespaceProbe struct {
 func requireExecutableNamespaceTest(t *testing.T) {
 	t.Helper()
 	executableNamespaceProbe.once.Do(func() {
-		cmd := exec.Command(os.Args[0], "-test.run=^TestExecutableNamespaceCapabilityProbe$")
+		args := []string{"-test.run=^TestExecutableNamespaceCapabilityProbe$"}
+		cmd := exec.Command(os.Args[0], args...)
 		cmd.Env = append(os.Environ(), "GO2GS_NAMESPACE_CAPABILITY_PROBE=1")
 		if err := configureAnalysisWorkerNamespace(cmd); err != nil {
 			executableNamespaceProbe.err = err
@@ -41,7 +42,13 @@ func requireExecutableNamespaceTest(t *testing.T) {
 		cmd.Stderr = &output
 		if err := cmd.Start(); err != nil {
 			executableNamespaceProbe.err = err
-			executableNamespaceProbe.unavailable = namespaceChildStartUnavailable(err)
+			control := exec.Command(os.Args[0], args...)
+			control.Env = append(os.Environ(), "GO2GS_NAMESPACE_CAPABILITY_CONTROL=1")
+			unavailable, controlErr := confirmNamespaceStartUnavailable(err, control)
+			if controlErr != nil {
+				executableNamespaceProbe.err = errors.Join(err, controlErr)
+			}
+			executableNamespaceProbe.unavailable = unavailable
 			return
 		}
 		err := cmd.Wait()
@@ -60,6 +67,9 @@ func requireExecutableNamespaceTest(t *testing.T) {
 }
 
 func TestExecutableNamespaceCapabilityProbe(t *testing.T) {
+	if os.Getenv("GO2GS_NAMESPACE_CAPABILITY_CONTROL") == "1" {
+		return
+	}
 	if os.Getenv("GO2GS_NAMESPACE_CAPABILITY_PROBE") != "1" {
 		t.Skip("internal executable namespace capability probe")
 	}
@@ -113,9 +123,6 @@ func enterExecutableNamespaceTest(t *testing.T) bool {
 	if err := cmd.Start(); err != nil {
 		_ = listener.Close()
 		<-attackDone
-		if namespaceChildStartUnavailable(err) {
-			t.Skipf("private executable namespace adversarial harness unavailable: %v", err)
-		}
 		t.Fatalf("start namespace child: %v", err)
 	}
 	runErr := cmd.Wait()
@@ -133,8 +140,15 @@ func enterExecutableNamespaceTest(t *testing.T) bool {
 	return false
 }
 
-func namespaceChildStartUnavailable(err error) bool {
-	return errors.Is(err, syscall.EPERM) || errors.Is(err, syscall.EACCES)
+func confirmNamespaceStartUnavailable(startErr error, control *exec.Cmd) (bool, error) {
+	if !errors.Is(startErr, syscall.EPERM) && !errors.Is(startErr, syscall.EACCES) {
+		return false, nil
+	}
+	output, err := control.CombinedOutput()
+	if err != nil {
+		return false, fmt.Errorf("control child is not launchable: %w: %s", err, strings.TrimSpace(string(output)))
+	}
+	return true, nil
 }
 
 func executableNamespaceMountUnavailable(message string) bool {
@@ -172,6 +186,30 @@ func TestExecutableNamespaceUnavailableClassifiers(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestNamespaceStartUnavailableRequiresLaunchableControl(t *testing.T) {
+	if os.Getenv("GO2GS_NAMESPACE_START_CONTROL") == "1" {
+		return
+	}
+	t.Run("namespace-only-denial", func(t *testing.T) {
+		control := exec.Command(os.Args[0], "-test.run=^TestNamespaceStartUnavailableRequiresLaunchableControl$")
+		control.Env = append(os.Environ(), "GO2GS_NAMESPACE_START_CONTROL=1")
+		unavailable, err := confirmNamespaceStartUnavailable(syscall.EPERM, control)
+		if err != nil || !unavailable {
+			t.Fatalf("namespace denial classification = %v, %v", unavailable, err)
+		}
+	})
+	t.Run("executable-denial", func(t *testing.T) {
+		path := filepath.Join(t.TempDir(), "not-executable")
+		if err := os.WriteFile(path, []byte("not executable"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		unavailable, err := confirmNamespaceStartUnavailable(syscall.EACCES, exec.Command(path))
+		if err == nil || unavailable {
+			t.Fatalf("executable denial classification = %v, %v", unavailable, err)
+		}
+	})
 }
 
 func serveNamespaceAttacks(listener net.Listener, done chan<- error) {
