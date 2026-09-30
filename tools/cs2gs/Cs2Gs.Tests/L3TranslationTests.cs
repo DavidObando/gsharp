@@ -196,6 +196,28 @@ namespace Demo
         Assert.Contains(".Select((n int32) -> n * n)", printed);
     }
 
+    [Fact]
+    public void QueryOverPatternProvider_UsesItsSingleTypeArgument()
+    {
+        string printed = TranslateUnit(@"
+namespace Demo
+{
+    using System;
+    public sealed class Query<T>
+    {
+        public Query<TResult> Select<TResult>(Func<T, TResult> selector) =>
+            new Query<TResult>();
+    }
+    public static class QueryPatternHost
+    {
+        public static Query<int> Increment(Query<int> numbers) =>
+            from n in numbers select n + 1;
+    }
+}");
+
+        Assert.Contains(".Select((n int32) -> n + 1)", printed);
+    }
+
     /// <summary>
     /// Issue #1738 originally required a <c>group ... by ...</c> feeding an
     /// <c>into</c> continuation to surface a visible <see

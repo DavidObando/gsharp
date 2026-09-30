@@ -407,17 +407,28 @@ public sealed partial class CSharpToGSharpTranslator
             return list?.IndexOf(parameter) ?? 0;
         }
 
+        private static IMethodSymbol GetDelegateInvokeMethod(ITypeSymbol targetType)
+        {
+            if (targetType is INamedTypeSymbol expression
+                && expression.OriginalDefinition.MetadataName == "Expression`1"
+                && expression.TypeArguments.Length == 1
+                && expression.DelegateInvokeMethod == null
+                && expression.ContainingNamespace?.ToDisplayString()
+                    == "System.Linq.Expressions")
+            {
+                targetType = expression.TypeArguments[0];
+            }
+
+            return (targetType as INamedTypeSymbol)?.DelegateInvokeMethod;
+        }
+
         // The <paramref name="index"/>th arrow-parameter type of a delegate-typed
         // (or `Expression<TDelegate>`-typed) callee parameter, or null when the
         // shape is not a delegate at all.
         private static ITypeSymbol DelegateParameterTypeAt(ITypeSymbol parameterType, int index)
         {
-            if (parameterType is INamedTypeSymbol { Name: "Expression", TypeArguments.Length: 1, DelegateInvokeMethod: null } expression)
-            {
-                parameterType = expression.TypeArguments[0];
-            }
-
-            return parameterType is INamedTypeSymbol { DelegateInvokeMethod: { } invoke }
+            IMethodSymbol invoke = GetDelegateInvokeMethod(parameterType);
+            return invoke != null
                 && index >= 0
                 && index < invoke.Parameters.Length
                 ? invoke.Parameters[index].Type
@@ -671,6 +682,33 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
+                if (node.Parent is ArgumentSyntax { Parent: TupleExpressionSyntax tuple })
+                {
+                    node = tuple;
+                    continue;
+                }
+
+                if (node.Parent is InitializerExpressionSyntax initializer)
+                {
+                    node = initializer;
+                    continue;
+                }
+
+                if (node is InitializerExpressionSyntax
+                    && node.Parent is (BaseObjectCreationExpressionSyntax
+                        or ArrayCreationExpressionSyntax
+                        or ImplicitArrayCreationExpressionSyntax))
+                {
+                    node = node.Parent;
+                    continue;
+                }
+
+                if (node.Parent is ExpressionElementSyntax element)
+                {
+                    node = element.Parent;
+                    continue;
+                }
+
                 break;
             }
 
@@ -688,8 +726,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return this.context.GetSymbolInfo(assignment.Left).Symbol;
 
                 case ArgumentSyntax argument:
-                    return (this.context.SemanticModel.GetOperation(argument) as IArgumentOperation)
-                        ?.Parameter;
+                    return this.GetArgumentParameter(argument);
 
                 case ReturnStatementSyntax returnStatement:
                     return this.context.SemanticModel
@@ -1107,8 +1144,18 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (ExpressionSyntax element in elements)
             {
+                ITypeSymbol projectedElement =
+                    literal is not ImplicitArrayCreationExpressionSyntax
+                    || element == null
+                    ? null
+                    : this.GetManagedReferenceArrayProjectedExpressionType(
+                        element);
                 if (element != null
-                    && (IsNullOrDefaultLiteral(element) || this.IsNullDataRowRead(element)))
+                    && (IsNullOrDefaultLiteral(element)
+                        || this.IsNullDataRowRead(element)
+                        || (projectedElement is { IsReferenceType: true }
+                            && projectedElement.NullableAnnotation
+                                == NullableAnnotation.Annotated)))
                 {
                     return MakeNullable(elementType);
                 }

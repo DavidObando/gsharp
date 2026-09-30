@@ -38,6 +38,45 @@ namespace Cs2Gs.Tests;
 public class Issue1902LinqQueryTranslationTests
 {
     [Fact]
+    public void SecondFromClauseUsesSelectManyResultSelectorParameterType()
+    {
+        string rendered = Render(@"
+using System;
+using System.Linq;
+
+namespace Corpus.Issue1902
+{
+    public class QuerySource<T>
+    {
+        public TResult[] SelectMany<TCollection, TResult>(
+            Func<T, TCollection[]> collectionSelector,
+            Func<T, long, TResult> resultSelector,
+            Func<int, string, int> unrelatedSelector = null) =>
+            new[] { resultSelector(default(T), 42L) };
+    }
+
+    public class Holder
+    {
+        public long[] Values(QuerySource<int> source)
+        {
+            return (from x in source
+                    from y in new[] { x }
+                    select y);
+        }
+    }
+}
+");
+
+        Assert.Contains(
+            "(x int32, y int64)",
+            rendered,
+            StringComparison.Ordinal);
+        AssertRoundTripParses(
+            rendered,
+            "The custom SelectMany result selector still requires explicit generic arguments in G#.");
+    }
+
+    [Fact]
     public void SecondFromClause_LowersToSelectManyWithTupleResultSelector()
     {
         string rendered = Render(@"
@@ -70,6 +109,47 @@ namespace Corpus.Issue1902
         // expression body with no `__qN` / `let` deconstruction at all.
         Assert.Contains("}).Select(((t int32, o int32)) -> t + o)", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("__q", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void CustomOrderByProviderDoesNotReceiveEnumerableCast()
+    {
+        string rendered = Render("""
+            #nullable enable
+            using System;
+
+            namespace Corpus.Issue1902
+            {
+                public sealed class Query<T>
+                {
+                    public Query<T> OrderBy<TKey>(Func<T, TKey> selector) => this;
+
+                    public Query<T> ThenBy<TKey>(Func<T, TKey> selector) => this;
+
+                    public Query<TResult> Select<TResult>(
+                        Func<T, TResult> selector) => new();
+                }
+
+                public class Holder
+                {
+                    public Query<(string? Value, int Key)> Sort(
+                        Query<(string? Value, int Key)> source)
+                    {
+                        return from pair in source
+                               orderby pair.Value, pair.Key
+                               select pair;
+                    }
+                }
+            }
+            """);
+
+        Assert.DoesNotContain(
+            "System.Linq.Enumerable.Cast",
+            rendered,
+            StringComparison.Ordinal);
+        Assert.Contains(".OrderBy(", rendered, StringComparison.Ordinal);
+        Assert.Contains(".ThenBy(", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -247,6 +327,47 @@ namespace Corpus.Issue1902
         Assert.Contains(".GroupBy((w string) -> w.Length)", rendered, StringComparison.Ordinal);
         Assert.Contains(".Where((g", rendered, StringComparison.Ordinal);
         Assert.Contains("g.Key > 3", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void InitialFromClause_UsesBoundQuerySelectorParameterType()
+    {
+        string rendered = Render("""
+            using System;
+            using System.Collections;
+            using System.Collections.Generic;
+
+            namespace Corpus.Issue4525
+            {
+                public sealed class Query : IEnumerable<int>
+                {
+                    public Result<TResult> Select<TResult>(Func<long, TResult> selector) => new();
+
+                    public IEnumerator<int> GetEnumerator()
+                    {
+                        yield return 0;
+                    }
+
+                    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+                }
+
+                public sealed class Result<T>
+                {
+                }
+
+                public class Holder
+                {
+                    public Result<long> Run(Query source)
+                    {
+                        return from item in source
+                               select item;
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("source.Select((item int64) -> item)", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 

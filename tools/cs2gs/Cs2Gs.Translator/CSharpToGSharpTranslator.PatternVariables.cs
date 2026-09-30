@@ -8,6 +8,7 @@ using Cs2Gs.CodeModel.Ast;
 using Microsoft.CodeAnalysis;
 using Microsoft.CodeAnalysis.CSharp;
 using Microsoft.CodeAnalysis.CSharp.Syntax;
+using Microsoft.CodeAnalysis.Operations;
 
 namespace Cs2Gs.Translator;
 
@@ -47,6 +48,14 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             GPattern native = this.BuildNativePattern(pattern, binders);
+            ITypeSymbol effectiveReceiverType =
+                this.GetManagedReferenceArrayProjectedExpressionType(
+                    isPattern.Expression)
+                ?? this.context.GetTypeInfo(isPattern.Expression).Type;
+            this.RegisterProjectedNativePatternBindings(
+                pattern,
+                effectiveReceiverType,
+                this.GetMappedArrayElementType(isPattern.Expression));
             foreach (ILocalSymbol binder in binders)
             {
                 this.state.PatternBindings[binder] =
@@ -58,6 +67,240 @@ public sealed partial class CSharpToGSharpTranslator
             return lowerNegation
                 ? new UnaryExpression("!", new ParenthesizedExpression(test))
                 : test;
+        }
+
+        private void RegisterProjectedNativePatternBindings(
+            PatternSyntax pattern,
+            ITypeSymbol receiverType,
+            ITypeSymbol mappedListElementType = null)
+        {
+            switch (pattern)
+            {
+                case VarPatternSyntax
+                {
+                    Designation: SingleVariableDesignationSyntax variable,
+                }:
+                    this.RegisterProjectedPatternBinding(
+                        this.context.GetDeclaredSymbol(variable),
+                        receiverType);
+                    break;
+
+                case ListPatternSyntax list:
+                    ITypeSymbol elementType = mappedListElementType
+                        ?? (receiverType is IArrayTypeSymbol array
+                        ? array.ElementType
+                        : this.GetListPatternElementType(list, receiverType));
+                    foreach (PatternSyntax element in list.Patterns)
+                    {
+                        if (element is SlicePatternSyntax slice)
+                        {
+                            if (slice.Pattern != null
+                                && PatternIntroducesBinding(slice.Pattern))
+                            {
+                                this.RegisterProjectedNativePatternBindings(
+                                    slice.Pattern,
+                                    this.GetProjectedSlicePatternType(
+                                        slice,
+                                        receiverType,
+                                        mappedListElementType));
+                            }
+                        }
+                        else
+                        {
+                            this.RegisterProjectedNativePatternBindings(
+                                element,
+                                elementType);
+                        }
+                    }
+
+                    break;
+
+                case RecursivePatternSyntax recursive:
+                    if (recursive.Designation
+                            is SingleVariableDesignationSyntax designation)
+                    {
+                        ITypeSymbol designationType = receiverType;
+                        if (recursive.Type != null
+                            && receiverType is INamedTypeSymbol projectedReceiver
+                            && this.context.GetTypeInfo(recursive.Type).Type
+                                is INamedTypeSymbol narrowedType)
+                        {
+                            designationType = ReceiverTypeHierarchy(projectedReceiver)
+                                .FirstOrDefault(candidate =>
+                                    SymbolEqualityComparer.Default.Equals(
+                                        candidate.OriginalDefinition,
+                                        narrowedType.OriginalDefinition))
+                                ?? narrowedType;
+                        }
+
+                        this.RegisterProjectedPatternBinding(
+                            this.context.GetDeclaredSymbol(designation),
+                            designationType);
+                    }
+
+                    if (recursive.PropertyPatternClause != null)
+                    {
+                        foreach (SubpatternSyntax subpattern
+                            in recursive.PropertyPatternClause.Subpatterns)
+                        {
+                            ITypeSymbol memberType = subpattern.NameColon != null
+                                ? this.GetProjectedPatternMemberType(
+                                    receiverType,
+                                    subpattern.NameColon.Name)
+                                : this.GetProjectedPatternMemberPathType(
+                                    receiverType,
+                                    subpattern.ExpressionColon?.Expression);
+                            this.RegisterProjectedNativePatternBindings(
+                                subpattern.Pattern,
+                                memberType);
+                        }
+                    }
+
+                    if (recursive.PositionalPatternClause != null
+                        && receiverType is INamedTypeSymbol
+                            { IsTupleType: true } tuple
+                        && recursive.PositionalPatternClause.Subpatterns.Count
+                            == tuple.TupleElements.Length)
+                    {
+                        for (int i = 0;
+                            i < recursive.PositionalPatternClause.Subpatterns.Count;
+                            i++)
+                        {
+                            this.RegisterProjectedNativePatternBindings(
+                                recursive.PositionalPatternClause.Subpatterns[i].Pattern,
+                                GetEffectiveTupleElementType(tuple, i));
+                        }
+                    }
+
+                    break;
+
+                case ParenthesizedPatternSyntax parenthesized:
+                    this.RegisterProjectedNativePatternBindings(
+                        parenthesized.Pattern,
+                        receiverType);
+                    break;
+
+                case BinaryPatternSyntax binary:
+                    this.RegisterProjectedNativePatternBindings(
+                        binary.Left,
+                        receiverType);
+                    this.RegisterProjectedNativePatternBindings(
+                        binary.Right,
+                        receiverType);
+                    break;
+            }
+        }
+
+        private void RegisterProjectedSwitchPatternBindings(
+            PatternSyntax pattern,
+            ExpressionSyntax receiver)
+        {
+            ITypeSymbol receiverType =
+                this.GetManagedReferenceArrayProjectedExpressionType(receiver)
+                ?? this.context.GetTypeInfo(receiver).Type;
+            this.RegisterProjectedNativePatternBindings(
+                pattern,
+                receiverType,
+                this.GetMappedArrayElementType(receiver));
+        }
+
+        private void RegisterProjectedPatternBinding(
+            ISymbol symbol,
+            ITypeSymbol effectiveType)
+        {
+            if (symbol is ILocalSymbol local
+                && effectiveType != null
+                && TypeContainsRecognizedManagedReferenceConsumer(
+                    effectiveType,
+                    this.context.Compilation))
+            {
+                this.state.ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedLocalType[local] =
+                    effectiveType;
+            }
+        }
+
+        private ITypeSymbol GetProjectedSlicePatternType(
+            SlicePatternSyntax slice,
+            ITypeSymbol receiverType,
+            ITypeSymbol mappedArrayElementType)
+        {
+            if (receiverType is IArrayTypeSymbol array)
+            {
+                return mappedArrayElementType == null
+                    ? receiverType
+                    : this.context.Compilation.CreateArrayTypeSymbol(
+                        mappedArrayElementType,
+                        array.Rank,
+                        array.NullableAnnotation);
+            }
+
+            ISymbol sliceSymbol =
+                (this.context.SemanticModel.GetOperation(slice)
+                    as ISlicePatternOperation)?.SliceSymbol;
+            if (receiverType is INamedTypeSymbol projectedReceiver
+                && sliceSymbol != null)
+            {
+                sliceSymbol = this.GetProjectedMember(
+                        projectedReceiver,
+                        sliceSymbol)
+                    ?? sliceSymbol;
+            }
+
+            return sliceSymbol switch
+            {
+                IPropertySymbol property => property.Type,
+                IMethodSymbol method => method.ReturnType,
+                _ => null,
+            };
+        }
+
+        private ITypeSymbol GetProjectedPatternMemberPathType(
+            ITypeSymbol receiverType,
+            ExpressionSyntax path)
+        {
+            return path switch
+            {
+                SimpleNameSyntax name =>
+                    this.GetProjectedPatternMemberType(receiverType, name),
+                MemberAccessExpressionSyntax access =>
+                    this.GetProjectedPatternMemberType(
+                        this.GetProjectedPatternMemberPathType(
+                            receiverType,
+                            access.Expression),
+                        access),
+                _ => null,
+            };
+        }
+
+        private ITypeSymbol GetProjectedPatternMemberType(
+            ITypeSymbol receiverType,
+            SyntaxNode memberSyntax)
+        {
+            ISymbol member = memberSyntax == null
+                ? null
+                : this.GetPatternMemberSymbol(memberSyntax);
+            return this.GetProjectedPatternMemberType(receiverType, member);
+        }
+
+        private ITypeSymbol GetProjectedPatternMemberType(
+            ITypeSymbol receiverType,
+            ISymbol member)
+        {
+            if (receiverType is INamedTypeSymbol projectedReceiver
+                && member != null)
+            {
+                member = this.GetProjectedMember(projectedReceiver, member)
+                    ?? member;
+            }
+
+            return member switch
+            {
+                IFieldSymbol field => field.Type,
+                IPropertySymbol property => property.Type,
+                IMethodSymbol method => method.ReturnType,
+                _ => null,
+            };
         }
 
         private static bool HasUnsupportedBindingUnderTopLevelNot(PatternSyntax pattern)

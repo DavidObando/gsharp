@@ -593,7 +593,12 @@ public sealed class CSharpTypeMapper
         if (type is IArrayTypeSymbol array)
         {
             GTypeReference explicitElement = this.MapExplicitType(array.ElementType, context, location);
-            return new ArrayTypeReference(explicitElement, array.Rank) { IsNullable = type.NullableAnnotation == NullableAnnotation.Annotated };
+            return CreateMappedArrayType(
+                array,
+                explicitElement,
+                context,
+                location,
+                type.NullableAnnotation == NullableAnnotation.Annotated);
         }
 
         if (type is INamedTypeSymbol genericNamed
@@ -1259,6 +1264,9 @@ public sealed class CSharpTypeMapper
         => IsRecognizedRuntimeType(type, names)
             && !SymbolEqualityComparer.Default.Equals(type.OriginalDefinition.ContainingAssembly, compilation.Assembly);
 
+    internal static bool IsRecognizedManagedReferenceConsumerType(ITypeSymbol type, Compilation compilation)
+        => IsRecognizedRuntimeConsumerType(type, compilation, "ManagedRef", "ReadOnlyManagedRef");
+
     /// <summary>
     /// ADR-0187 §6: whether <paramref name="type"/> has the assembly, namespace
     /// and generic name of a compiler-recognized <c>Gsharp.Runtime.Values</c>
@@ -1618,7 +1626,13 @@ public sealed class CSharpTypeMapper
 
         if (type is IArrayTypeSymbol array)
         {
-            return new ArrayTypeReference(this.Map(array.ElementType, context, location), array.Rank);
+            GTypeReference element = this.Map(array.ElementType, context, location);
+            return CreateMappedArrayType(
+                array,
+                element,
+                context,
+                location,
+                isNullable: false);
         }
 
         if (type is ITypeParameterSymbol typeParameter)
@@ -1628,11 +1642,13 @@ public sealed class CSharpTypeMapper
 
         if (type is INamedTypeSymbol named)
         {
-            if (IsRecognizedRuntimeConsumerType(named, context.Compilation, "ManagedRef", "ReadOnlyManagedRef"))
+            if (IsRecognizedManagedReferenceConsumerType(named, context.Compilation))
             {
                 var readOnly = named.Name == "ReadOnlyManagedRef";
                 var element = this.Map(named.TypeArguments[0], context, location);
-                if (!location.IsInSource || location.SourceTree != context.SemanticModel.SyntaxTree
+                if (location == null
+                    || !location.IsInSource
+                    || location.SourceTree != context.SemanticModel.SyntaxTree
                     || context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "managed").Any()
                     || (readOnly && context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "readonly").Any()))
                 {
@@ -1645,7 +1661,9 @@ public sealed class CSharpTypeMapper
             if (IsRecognizedRuntimeConsumerType(named, context.Compilation, "Slice", "ReadOnlySlice"))
             {
                 var element = this.Map(named.TypeArguments[0], context, location);
-                if (!location.IsInSource || location.SourceTree != context.SemanticModel.SyntaxTree
+                if (location == null
+                    || !location.IsInSource
+                    || location.SourceTree != context.SemanticModel.SyntaxTree
                     || context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "slice").Any())
                 {
                     return new NamedTypeReference("Gsharp.Values." + named.Name, new[] { element });
@@ -1778,6 +1796,137 @@ public sealed class CSharpTypeMapper
         }
 
         return new NamedTypeReference(this.Names(context).GetName(type));
+    }
+
+    private static ArrayTypeReference CreateMappedArrayType(
+        IArrayTypeSymbol array,
+        GTypeReference element,
+        TranslationContext context,
+        Location location,
+        bool isNullable)
+    {
+        element = ProjectDefaultInitializedManagedReferenceLeaves(
+            array.ElementType,
+            element,
+            context,
+            location);
+
+        return new ArrayTypeReference(element, array.Rank) { IsNullable = isNullable };
+    }
+
+    private static GTypeReference ProjectDefaultInitializedManagedReferenceLeaves(
+        ITypeSymbol type,
+        GTypeReference mapped,
+        TranslationContext context,
+        Location location)
+    {
+        if (IsRecognizedManagedReferenceConsumerType(
+                type,
+                context.Compilation))
+        {
+            return WithNullable(mapped, true);
+        }
+
+        if (type is IArrayTypeSymbol nested)
+        {
+            return ContainsManagedReferenceStorage(
+                    nested.ElementType,
+                    context.Compilation,
+                    new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default))
+                ? WithNullable(mapped, true)
+                : mapped;
+        }
+
+        if (type is INamedTypeSymbol { IsTupleType: true } tuple
+            && mapped is TupleTypeReference mappedTuple
+            && tuple.TupleElements.Length == mappedTuple.ElementTypes.Count)
+        {
+            bool changed = false;
+            var elements = new List<GTypeReference>(mappedTuple.ElementTypes.Count);
+            for (int i = 0; i < mappedTuple.ElementTypes.Count; i++)
+            {
+                GTypeReference projected =
+                    ProjectDefaultInitializedManagedReferenceLeaves(
+                        tuple.TupleElements[i].Type,
+                        mappedTuple.ElementTypes[i],
+                        context,
+                        location);
+                changed |= !ReferenceEquals(
+                    projected,
+                    mappedTuple.ElementTypes[i]);
+                elements.Add(projected);
+            }
+
+            return changed
+                ? new TupleTypeReference(elements, mappedTuple.ElementNames)
+                    { IsNullable = mappedTuple.IsNullable }
+                : mapped;
+        }
+
+        if (type is INamedTypeSymbol named
+            && named.IsValueType
+            && named.OriginalDefinition.SpecialType
+                != SpecialType.System_Nullable_T
+            && ContainsManagedReferenceStorage(
+                named,
+                context.Compilation,
+                new HashSet<ITypeSymbol>(SymbolEqualityComparer.Default)))
+        {
+            context.Report(new TranslationDiagnostic(
+                "ArrayElementType",
+                $"default-initialized array element type '{type.ToDisplayString()}' contains managed-reference storage outside a tuple; its nullable leaves have no exact G# type mapping.",
+                location,
+                TranslationSeverity.Unsupported));
+        }
+
+        return mapped;
+    }
+
+    private static bool ContainsManagedReferenceStorage(
+        ITypeSymbol type,
+        Compilation compilation,
+        HashSet<ITypeSymbol> visited)
+    {
+        if (type == null
+            || !visited.Add(type)
+            || type.TypeKind == TypeKind.Error)
+        {
+            return false;
+        }
+
+        if (IsRecognizedManagedReferenceConsumerType(type, compilation))
+        {
+            return true;
+        }
+
+        if (type is IArrayTypeSymbol array)
+        {
+            return ContainsManagedReferenceStorage(
+                array.ElementType,
+                compilation,
+                visited);
+        }
+
+        if (type is not INamedTypeSymbol named || !named.IsValueType)
+        {
+            return false;
+        }
+
+        if (named.OriginalDefinition.SpecialType == SpecialType.System_Nullable_T)
+        {
+            return ContainsManagedReferenceStorage(
+                named.TypeArguments[0],
+                compilation,
+                visited);
+        }
+
+        return named.GetMembers()
+            .OfType<IFieldSymbol>()
+            .Any(field => !field.IsStatic
+                && ContainsManagedReferenceStorage(
+                    field.Type,
+                    compilation,
+                    visited));
     }
 
     private string DelegateTypeName(

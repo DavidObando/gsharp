@@ -91,10 +91,43 @@ public sealed partial class CSharpToGSharpTranslator
                     && declarator.Initializer?.Value is { } initializerSyntax
                     && this.context.GetDeclaredSymbol(declarator) is ILocalSymbol localTarget)
                 {
+                    ITypeSymbol targetType = localTarget.Type;
+                    if (IsImplicitlyTypedLocal(localTarget)
+                        && this.GetManagedReferenceArrayProjectedExpressionType(
+                            initializerSyntax) is { } projectedType)
+                    {
+                        ExpressionSyntax unparenthesizedInitializer =
+                            Unparenthesize(initializerSyntax);
+                        bool compositeInitializer =
+                            unparenthesizedInitializer
+                                is ConditionalExpressionSyntax
+                                or SwitchExpressionSyntax;
+                        if (!compositeInitializer
+                            || this.InferredLocalAssignmentsMatch(
+                                localTarget,
+                                initializerSyntax,
+                                projectedType))
+                        {
+                            targetType = projectedType;
+                            this.state.ManagedReferenceArrayNullable
+                                .ManagedReferenceArrayProjectedLocalType[localTarget] =
+                                projectedType;
+                        }
+                        else if (this.IsRejectableManagedReferenceProjection(
+                            initializerSyntax,
+                            projectedType,
+                            localTarget.Type))
+                        {
+                            this.context.ReportUnsupported(
+                                initializerSyntax,
+                                "managed-reference array widening conflicts with a later assignment or consumer of this inferred local; no exact G# translation exists.");
+                        }
+                    }
+
                     initializer = this.ForgiveNullableReferenceValue(
                         initializerSyntax,
                         initializer,
-                        localTarget.Type,
+                        targetType,
                         localTarget);
                 }
 
@@ -4491,12 +4524,15 @@ public sealed partial class CSharpToGSharpTranslator
             AssignmentExpressionSyntax assignment)
         {
             if (!assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
-                || assignment.Left is not ElementAccessExpressionSyntax)
+                || assignment.Left is not ElementAccessExpressionSyntax
+                || this.IsNullableArrayElementAccess(assignment.Left))
             {
                 return false;
             }
 
-            ISymbol leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ISymbol leftSymbol = this.GetProjectedAssignmentTarget(
+                assignment.Left,
+                this.context.GetSymbolInfo(assignment.Left).Symbol);
             ITypeSymbol leftType = this.GetAssignmentTargetType(assignment.Left, leftSymbol);
             if (leftType is not { IsReferenceType: true }
                 || leftType.NullableAnnotation == NullableAnnotation.Annotated)
@@ -4545,7 +4581,9 @@ public sealed partial class CSharpToGSharpTranslator
                 return translatedRhs;
             }
 
-            ISymbol leftSymbol = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ISymbol leftSymbol = this.GetProjectedAssignmentTarget(
+                assignment.Left,
+                this.context.GetSymbolInfo(assignment.Left).Symbol);
             ITypeSymbol leftType = this.GetAssignmentTargetType(assignment.Left, leftSymbol);
             if (leftType is not { IsReferenceType: true }
                 || leftType.NullableAnnotation == NullableAnnotation.Annotated)
@@ -5749,14 +5787,11 @@ public sealed partial class CSharpToGSharpTranslator
                 assignment.Right,
                 this.CoercePointerConversion(assignment.Right, value));
 
-            // Issue #4500: a write into an element of an array whose element
-            // cs2gs widened to `T?` (IsWidenedArrayElementLocal) accepts nil,
-            // so none of the null-forgiveness bridges below may assert the
-            // value. The coercions above still apply.
+            // Issues #4500 and #4525: a write into an element of an array
+            // cs2gs emits as `T?` accepts nil, so none of the null-forgiveness
+            // bridges below may assert the value. The coercions above still apply.
             if (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
-                && assignment.Left is ElementAccessExpressionSyntax elementTarget
-                && this.context.GetSymbolInfo(elementTarget.Expression).Symbol is ILocalSymbol widenedArray
-                && this.IsWidenedArrayElementLocal(widenedArray))
+                && this.IsNullableArrayElementAccess(assignment.Left))
             {
                 return value;
             }
@@ -5768,8 +5803,39 @@ public sealed partial class CSharpToGSharpTranslator
                 return value;
             }
 
-            ISymbol assignmentTarget = this.context.GetSymbolInfo(assignment.Left).Symbol;
+            ISymbol assignmentTarget = this.GetProjectedAssignmentTarget(
+                assignment.Left,
+                this.context.GetSymbolInfo(assignment.Left).Symbol);
             ITypeSymbol assignmentTargetType = this.GetAssignmentTargetType(assignment.Left, assignmentTarget);
+            ITypeSymbol projectedValue =
+                this.GetManagedReferenceArrayProjectedArgumentType(
+                    assignment.Right);
+
+            // The rejectability check passes no destination: the generic
+            // member's fixed receiver type can never adopt the projection.
+            if (assignmentTarget is IFieldSymbol
+                    { ContainingType.IsGenericType: true }
+                    or IPropertySymbol
+                    { ContainingType.IsGenericType: true }
+                && assignmentTargetType != null
+                && projectedValue != null
+                && SymbolEqualityComparer.Default.Equals(
+                    assignmentTargetType,
+                    projectedValue)
+                && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    assignmentTargetType,
+                    projectedValue)
+                && this.IsRejectableManagedReferenceProjection(
+                    assignment.Right,
+                    projectedValue,
+                    null))
+            {
+                this.context.ReportUnsupported(
+                    assignment,
+                    "managed-reference array widening cannot change a generic member's fixed receiver type; no exact G# translation exists.");
+                return value;
+            }
+
             ISymbol promotionTarget = assignmentTarget;
             if (assignmentTarget is ILocalSymbol inferredAssignmentLocal
                 && inferredAssignmentLocal.DeclaringSyntaxReferences.FirstOrDefault()?.GetSyntax()
@@ -5807,8 +5873,9 @@ public sealed partial class CSharpToGSharpTranslator
 
         // Expression nullability is absent when warnings are disabled, even
         // when the declared indexer or array element explicitly permits null.
-        private ITypeSymbol GetAssignmentTargetType(ExpressionSyntax left, ISymbol target) =>
-            target switch
+        private ITypeSymbol GetAssignmentTargetType(ExpressionSyntax left, ISymbol target)
+        {
+            return target switch
             {
                 ILocalSymbol local => local.Type,
                 IParameterSymbol parameter => parameter.Type,
@@ -5818,6 +5885,31 @@ public sealed partial class CSharpToGSharpTranslator
                     && this.context.GetTypeInfo(element.Expression).Type is IArrayTypeSymbol array => array.ElementType,
                 _ => this.context.GetTypeInfo(left).Type,
             };
+        }
+
+        private ISymbol GetProjectedAssignmentTarget(
+            ExpressionSyntax left,
+            ISymbol target)
+        {
+            target ??= this.context.SemanticModel.GetOperation(left) switch
+            {
+                IFieldReferenceOperation field => field.Field,
+                IPropertyReferenceOperation property => property.Property,
+                _ => null,
+            };
+            ExpressionSyntax receiver = left switch
+            {
+                MemberAccessExpressionSyntax member => member.Expression,
+                ElementAccessExpressionSyntax element => element.Expression,
+                _ => null,
+            };
+            return receiver != null
+                && target != null
+                && this.GetManagedReferenceArrayProjectedExpressionType(receiver)
+                    is INamedTypeSymbol projectedReceiver
+                    ? this.GetProjectedMember(projectedReceiver, target) ?? target
+                    : target;
+        }
 
         // Translates the target (left-hand side) of an assignment. Two member-access
         // LHS shapes that gsc cannot bind through the usual receiver path are fixed

@@ -3609,10 +3609,69 @@ public sealed partial class CSharpToGSharpTranslator
                     // lowers to G#'s async-iteration form `await for x in seq`
                     // (spec AwaitForRangeStmt). Without it, iterating an
                     // `IAsyncEnumerable<T>` with a plain `for` is rejected (GS0116).
-                    string loopIdentifier = this.EmittedName(
-                        this.context.GetDeclaredSymbol(forEach),
-                        forEach.Identifier.ValueText);
-                    BlockStatement loopBody = this.TranslateStatementAsBlock(forEach.Statement);
+                    ISymbol loopSymbol = this.context.GetDeclaredSymbol(forEach);
+                    string loopIdentifier = this.EmittedName(loopSymbol, forEach.Identifier.ValueText);
+                    ForEachStatementInfo forEachInfo =
+                        this.context.SemanticModel.GetForEachStatementInfo(forEach);
+                    ITypeSymbol projectedElement =
+                        this.GetProjectedForEachElementType(forEach, forEachInfo);
+                    ITypeSymbol declaredBindingType =
+                        this.context.GetTypeInfo(forEach.Type).Type;
+                    ITypeSymbol forEachElement =
+                        this.GetProjectedBindingType(
+                            projectedElement,
+                            declaredBindingType,
+                            forEachInfo.ElementConversion)
+                        ?? declaredBindingType;
+                    bool projectedBindingType =
+                        forEachElement != null
+                        && projectedElement != null
+                        && (forEachInfo.ElementConversion.IsIdentity
+                            || !SymbolEqualityComparer.IncludeNullability.Equals(
+                                forEachElement,
+                                declaredBindingType));
+                    bool nullableElement = projectedBindingType
+                        && (this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression)
+                            || (this.IsReferenceLikeOrManagedReference(forEachElement)
+                                && forEachElement.NullableAnnotation == NullableAnnotation.Annotated));
+                    ILocalSymbol projectedLoopLocal =
+                        projectedBindingType ? loopSymbol as ILocalSymbol : null;
+                    bool projectedBinding = projectedLoopLocal != null
+                        && forEachElement != null
+                        && !SymbolEqualityComparer.IncludeNullability.Equals(
+                            projectedLoopLocal.Type,
+                            forEachElement);
+                    if (projectedBinding)
+                    {
+                        this.state.ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType[
+                            projectedLoopLocal] = forEachElement;
+                    }
+
+                    if (nullableElement && loopSymbol != null)
+                    {
+                        this.state.NullableForEachBindings.Add(loopSymbol);
+                    }
+
+                    BlockStatement loopBody;
+                    try
+                    {
+                        loopBody = this.TranslateStatementAsBlock(forEach.Statement);
+                    }
+                    finally
+                    {
+                        if (nullableElement && loopSymbol != null)
+                        {
+                            this.state.NullableForEachBindings.Remove(loopSymbol);
+                        }
+
+                        if (projectedBinding)
+                        {
+                            this.state.ManagedReferenceArrayNullable
+                                .ManagedReferenceArrayProjectedLocalType.Remove(
+                                projectedLoopLocal);
+                        }
+                    }
 
                     // Issue #3935: an IDENTITY element conversion means the
                     // declared type IS the sequence's element type, so a typed
@@ -3629,12 +3688,10 @@ public sealed partial class CSharpToGSharpTranslator
                     // is what #3925 replaced `__foreachN` synthesis with.
                     GTypeReference loopVariableType = null;
                     if (!forEach.Type.IsVar
-                        && !this.context.SemanticModel
-                            .GetForEachStatementInfo(forEach)
-                            .ElementConversion
-                            .IsIdentity)
+                        && !forEachInfo.ElementConversion.IsIdentity)
                     {
-                        ITypeSymbol targetSymbol = this.context.GetTypeInfo(forEach.Type).Type;
+                        ITypeSymbol targetSymbol = forEachElement
+                            ?? this.context.GetTypeInfo(forEach.Type).Type;
                         loopVariableType = targetSymbol != null
                             ? this.typeMapper.Map(targetSymbol, this.context, forEach.Type.GetLocation())
                             : new NamedTypeReference(forEach.Type.ToString());
@@ -3683,6 +3740,132 @@ public sealed partial class CSharpToGSharpTranslator
                         $"statement '{statement.Kind()}' has no canonical G# form yet; emitted a placeholder comment (ADR-0115 §B).");
                     return new[] { (GStatement)new RawStatement($"// unsupported: {statement.Kind()}") };
             }
+        }
+
+        private ITypeSymbol GetProjectedForEachElementType(
+            CommonForEachStatementSyntax forEach,
+            ForEachStatementInfo forEachInfo)
+        {
+            if (forEachInfo.ElementConversion.IsIdentity
+                && this.GetMappedArrayElementType(forEach.Expression)
+                    is { } mappedArrayElement)
+            {
+                return mappedArrayElement;
+            }
+
+            ITypeSymbol projectedCollection =
+                this.GetManagedReferenceArrayProjectedExpressionType(forEach.Expression);
+            if (!TypeContainsRecognizedManagedReferenceConsumer(
+                    projectedCollection,
+                    this.context.Compilation))
+            {
+                return null;
+            }
+
+            if (projectedCollection is INamedTypeSymbol projectedNamed)
+            {
+                if (forEachInfo.GetEnumeratorMethod is { } getEnumerator
+                    && this.GetProjectedMember(projectedNamed, getEnumerator)
+                        is IMethodSymbol projectedGetEnumerator
+                    && projectedGetEnumerator.ReturnType is INamedTypeSymbol
+                        projectedEnumerator
+                    && forEachInfo.CurrentProperty is { } current
+                    && this.GetProjectedMember(projectedEnumerator, current)
+                        is IPropertySymbol projectedCurrent)
+                {
+                    return projectedCurrent.Type;
+                }
+            }
+
+            return GetEnumerableElementType(
+                    projectedCollection,
+                    forEach.AwaitKeyword.RawKind != 0);
+        }
+
+        private ITypeSymbol GetProjectedBindingType(
+            ITypeSymbol projectedSource,
+            ITypeSymbol destination,
+            Microsoft.CodeAnalysis.CSharp.Conversion conversion)
+        {
+            if (projectedSource == null || destination == null)
+            {
+                return null;
+            }
+
+            if (!TypeContainsRecognizedManagedReferenceConsumer(
+                    projectedSource,
+                    this.context.Compilation))
+            {
+                return null;
+            }
+
+            if (conversion.IsIdentity)
+            {
+                return projectedSource;
+            }
+
+            if (!conversion.IsImplicit || conversion.MethodSymbol != null)
+            {
+                return null;
+            }
+
+            if (projectedSource is INamedTypeSymbol
+                    { IsTupleType: true } sourceTuple
+                && destination is INamedTypeSymbol
+                    { IsTupleType: true } destinationTuple
+                && sourceTuple.TupleElements.Length
+                    == destinationTuple.TupleElements.Length)
+            {
+                var arguments = ImmutableArray.CreateBuilder<ITypeSymbol>(
+                    sourceTuple.TupleElements.Length);
+                var annotations = ImmutableArray.CreateBuilder<NullableAnnotation>(
+                    sourceTuple.TupleElements.Length);
+                for (int i = 0; i < sourceTuple.TupleElements.Length; i++)
+                {
+                    ITypeSymbol sourceElement =
+                        GetEffectiveTupleElementType(sourceTuple, i);
+                    ITypeSymbol destinationElement =
+                        GetEffectiveTupleElementType(destinationTuple, i);
+                    ITypeSymbol projectedElement = this.GetProjectedBindingType(
+                        sourceElement,
+                        destinationElement,
+                        this.context.Compilation.ClassifyConversion(
+                            sourceElement,
+                            destinationElement));
+                    if (projectedElement == null)
+                    {
+                        if (TypeContainsRecognizedManagedReferenceConsumer(
+                                sourceElement,
+                                this.context.Compilation))
+                        {
+                            return null;
+                        }
+
+                        projectedElement = destinationElement;
+                    }
+
+                    arguments.Add(projectedElement);
+                    annotations.Add(projectedElement.NullableAnnotation);
+                }
+
+                return this.context.Compilation.CreateTupleTypeSymbol(
+                    arguments.ToImmutable(),
+                    destinationTuple.TupleElements
+                        .Select(element => element.Name)
+                        .ToImmutableArray(),
+                    default,
+                    annotations.ToImmutable());
+            }
+
+            if (!conversion.IsReference)
+            {
+                return null;
+            }
+
+            return projectedSource.NullableAnnotation == NullableAnnotation.Annotated
+                && this.IsReferenceLikeOrManagedReference(projectedSource)
+                ? destination.WithNullableAnnotation(NullableAnnotation.Annotated)
+                : destination;
         }
     }
 }

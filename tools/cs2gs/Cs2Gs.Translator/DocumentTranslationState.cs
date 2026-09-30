@@ -69,6 +69,51 @@ internal sealed class DocumentTranslationState
     public HashSet<ISymbol> HoistedNullableGuardLocals { get; } =
         new HashSet<ISymbol>(SymbolEqualityComparer.Default);
 
+    // Active foreach/query bindings treated as nullable in G# assertion
+    // decisions, whether from translated array widening or Roslyn's element
+    // annotation.
+    public HashSet<ISymbol> NullableForEachBindings { get; } =
+        new HashSet<ISymbol>(SymbolEqualityComparer.Default);
+
+    // Effective source-level type of query bindings after managed-reference
+    // projection. Query range symbols do not expose a Type through Roslyn.
+    public Dictionary<ISymbol, ITypeSymbol> ProjectedQueryBindingType { get; } =
+        new Dictionary<ISymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
+
+    public ManagedReferenceArrayNullableState ManagedReferenceArrayNullable { get; } =
+        new ManagedReferenceArrayNullableState();
+
+    public HashSet<ExpressionSyntax> ManagedReferenceArrayProjectedCallsInProgress { get; } =
+        new HashSet<ExpressionSyntax>(ReferenceEqualityComparer.Instance);
+
+    // Speculative nested projections enabled by an in-progress receiver
+    // projection. If the receiver projection fails, these cached child
+    // projections must be discarded with it.
+    public Dictionary<ExpressionSyntax, ExpressionSyntax>
+        ManagedReferenceArrayProjectionParentByCall { get; } =
+            new Dictionary<ExpressionSyntax, ExpressionSyntax>(
+                ReferenceEqualityComparer.Instance);
+
+    public Dictionary<ExpressionSyntax, HashSet<ExpressionSyntax>>
+        ManagedReferenceArrayProjectionChildrenByCall { get; } =
+            new Dictionary<ExpressionSyntax, HashSet<ExpressionSyntax>>(
+                ReferenceEqualityComparer.Instance);
+
+    // Built once per translated body. Each entry maps a symbol to value uses,
+    // member calls, and writes that can constrain its projected constructed type.
+    public Dictionary<SyntaxNode, Dictionary<ISymbol, List<SyntaxNode>>>
+        ProjectionConsumersByBody { get; } =
+            new Dictionary<SyntaxNode, Dictionary<ISymbol, List<SyntaxNode>>>(
+                ReferenceEqualityComparer.Instance);
+
+    public HashSet<ILocalSymbol> ManagedReferenceArrayProjectedLocalTypeInProgress { get; } =
+        new HashSet<ILocalSymbol>(SymbolEqualityComparer.Default);
+
+    // Active lambda parameters whose emitted type comes from a projected
+    // delegate Invoke signature rather than Roslyn's original target.
+    public Dictionary<IParameterSymbol, ITypeSymbol> ProjectedCallableParameterType { get; } =
+        new Dictionary<IParameterSymbol, ITypeSymbol>(SymbolEqualityComparer.Default);
+
     // C# post-increment/decrement (`i++`, `i--`) sub-expressions that the
     // surrounding statement seam has hoisted into trailing `i++` statements
     // (G# models inc/dec as statements, not expressions; spec §Statements).

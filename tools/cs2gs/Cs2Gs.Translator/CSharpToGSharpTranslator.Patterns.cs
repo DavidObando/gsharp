@@ -1633,6 +1633,9 @@ public sealed partial class CSharpToGSharpTranslator
                         this.context.GetDeclaredSymbol(varSingle) is { } varBound)
                     {
                         this.state.PatternBindings[varBound] = receiver;
+                        this.RegisterProjectedPatternBinding(
+                            varBound,
+                            receiverType);
                     }
                     else if (varPattern.Designation is ParenthesizedVariableDesignationSyntax)
                     {
@@ -1664,7 +1667,15 @@ public sealed partial class CSharpToGSharpTranslator
                         this.TranslatePatternTest(receiver, parenthesized.Pattern, receiverType, receiverSyntax, isNestedPatternMember));
 
                 case ListPatternSyntax listPattern:
-                    return this.TranslateListPatternTest(receiver, listPattern, receiverType, isNestedPatternMember);
+                    ITypeSymbol projectedListReceiver = receiverSyntax == null
+                        ? null
+                        : this.GetManagedReferenceArrayProjectedExpressionType(
+                            receiverSyntax);
+                    return this.TranslateListPatternTest(
+                        receiver,
+                        listPattern,
+                        projectedListReceiver ?? receiverType,
+                        isNestedPatternMember);
 
                 default:
                     this.context.ReportUnsupported(
@@ -1687,7 +1698,8 @@ public sealed partial class CSharpToGSharpTranslator
         {
             SeparatedSyntaxList<PatternSyntax> elements = listPattern.Patterns;
             int sliceIndex = FindSlicePatternIndex(elements);
-            ITypeSymbol elementType = GetEnumerableElementType(receiverType);
+            ITypeSymbol elementType =
+                this.GetListPatternElementType(listPattern, receiverType);
 
             // Issue #4356: the nil guard below tests `receiver`; every read under
             // it goes through `receiver!!` when it is a stored `var` capture,
@@ -1745,6 +1757,36 @@ public sealed partial class CSharpToGSharpTranslator
             return test;
         }
 
+        private ITypeSymbol GetListPatternElementType(
+            ListPatternSyntax listPattern,
+            ITypeSymbol receiverType)
+        {
+            if (this.context.SemanticModel.GetOperation(listPattern)
+                    is IListPatternOperation listOperation)
+            {
+                ISymbol indexer = listOperation.IndexerSymbol;
+                if (receiverType is INamedTypeSymbol projectedReceiver
+                    && indexer != null)
+                {
+                    indexer = this.GetProjectedMember(projectedReceiver, indexer)
+                        ?? indexer;
+                }
+
+                ITypeSymbol indexedElement = indexer switch
+                {
+                    IPropertySymbol property => property.Type,
+                    IMethodSymbol method => method.ReturnType,
+                    _ => null,
+                };
+                if (indexedElement != null)
+                {
+                    return indexedElement;
+                }
+            }
+
+            return GetEnumerableElementType(receiverType);
+        }
+
         // Issue #1889: a slice ("rest") subpattern either captures the middle
         // slice (`.. var rest`/`.. T rest`, a binder — registered as a
         // patternBindings substitution, same mechanism as a top-level `var`/
@@ -1763,6 +1805,12 @@ public sealed partial class CSharpToGSharpTranslator
                 case VarPatternSyntax { Designation: SingleVariableDesignationSyntax variable }
                     when this.context.GetDeclaredSymbol(variable) is { } boundSymbol:
                     this.state.PatternBindings[boundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
+                    this.RegisterProjectedPatternBinding(
+                        boundSymbol,
+                        this.GetProjectedSlicePatternType(
+                            slice,
+                            receiverType,
+                            (receiverType as IArrayTypeSymbol)?.ElementType));
                     return null;
 
                 case VarPatternSyntax { Designation: DiscardDesignationSyntax }:
@@ -1778,13 +1826,30 @@ public sealed partial class CSharpToGSharpTranslator
                     // the slice's own `[]T` type, so the (redundant) type check is
                     // dropped — same bind-only treatment as the `var` capture above.
                     this.state.PatternBindings[declBoundSymbol] = BuildSliceExpression(receiver, prefixCount, suffixCount);
+                    this.RegisterProjectedPatternBinding(
+                        declBoundSymbol,
+                        this.GetProjectedSlicePatternType(
+                            slice,
+                            receiverType,
+                            (receiverType as IArrayTypeSymbol)?.ElementType));
                     return null;
 
                 default:
+                    ITypeSymbol nestedSliceType =
+                        this.GetProjectedSlicePatternType(
+                            slice,
+                            receiverType,
+                            (receiverType as IArrayTypeSymbol)?.ElementType)
+                        ?? receiverType;
+
                     // A nested subpattern tested against the middle slice (e.g.
                     // `.. { Length: 0 }`, `.. [1, 2]`) — recurse the normal
                     // boolean-test lowering against the materialized slice value.
-                    return this.TranslatePatternTest(BuildSliceExpression(receiver, prefixCount, suffixCount), slice.Pattern, receiverType, isNestedPatternMember: isNestedPatternMember);
+                    return this.TranslatePatternTest(
+                        BuildSliceExpression(receiver, prefixCount, suffixCount),
+                        slice.Pattern,
+                        nestedSliceType,
+                        isNestedPatternMember: isNestedPatternMember);
             }
         }
 
@@ -2201,9 +2266,25 @@ public sealed partial class CSharpToGSharpTranslator
                 // nested member-access test a property subpattern uses.
                 SeparatedSyntaxList<SubpatternSyntax> subs = recursive.PositionalPatternClause.Subpatterns;
                 PositionalSlots positional = this.TryGetPositionalMembers(recursive, subs.Count, out string positionalFailure);
+                ITypeSymbol projectedReceiverType = receiverSyntax == null
+                    ? null
+                    : this.GetManagedReferenceArrayProjectedExpressionType(
+                        receiverSyntax);
                 ITypeSymbol positionalLookupType = recursive.Type != null
                     ? this.context.GetTypeInfo(recursive.Type).Type
-                    : receiverType;
+                    : projectedReceiverType ?? receiverType;
+                if ((projectedReceiverType ?? receiverType)
+                        is INamedTypeSymbol projectedReceiver
+                    && positionalLookupType is INamedTypeSymbol positionalType)
+                {
+                    positionalLookupType = ReceiverTypeHierarchy(projectedReceiver)
+                        .FirstOrDefault(candidate =>
+                            SymbolEqualityComparer.Default.Equals(
+                                candidate.OriginalDefinition,
+                                positionalType.OriginalDefinition))
+                        ?? positionalLookupType;
+                }
+
                 for (int i = 0; i < subs.Count; i++)
                 {
                     SubpatternSyntax sub = subs[i];
@@ -2237,7 +2318,14 @@ public sealed partial class CSharpToGSharpTranslator
                     // NULLABLE slot guard it and read it once, as C#'s single
                     // Deconstruct call does (TranslatePatternTest), exactly as
                     // the property-subpattern loop above passes its member type.
-                    ITypeSymbol slotType = this.RegisterPatternMemberSlot(memberSymbol, memberAccess);
+                    ITypeSymbol declaredSlotType =
+                        this.RegisterPatternMemberSlot(
+                            memberSymbol,
+                            memberAccess);
+                    ITypeSymbol slotType = this.GetProjectedPatternMemberType(
+                            positionalLookupType,
+                            memberSymbol)
+                        ?? declaredSlotType;
                     GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, slotType, isNestedPatternMember: true);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }
@@ -2927,13 +3015,13 @@ public sealed partial class CSharpToGSharpTranslator
 
                     GTypeReference leafElementType = this.PromoteElementTypeForNullElements(
                         elementType, elementTypeSymbol, leaves);
-                    bool leafPromoted = !ReferenceEquals(leafElementType, elementType);
+                    bool leafAcceptsNil = leafElementType.IsNullable;
                     return new ArrayAllocationExpression(
                         leafElementType,
                         dimensions,
                         leaves.Select(expression =>
                             this.TranslateArrayInitializerElement(
-                                expression, elementTypeSymbol, leafPromoted)).ToList());
+                                expression, elementTypeSymbol, leafAcceptsNil)).ToList());
                 }
 
                 return new ArrayAllocationExpression(
@@ -2949,13 +3037,13 @@ public sealed partial class CSharpToGSharpTranslator
                 // initializer) → the slice literal `[]T{a, b}`.
                 GTypeReference literalElementType = this.PromoteElementTypeForNullElements(
                     elementType, elementTypeSymbol, creation.Initializer.Expressions, creation);
-                bool literalPromoted = !ReferenceEquals(literalElementType, elementType);
+                bool literalAcceptsNil = literalElementType.IsNullable;
                 return new ArrayLiteralExpression(
                     literalElementType,
                     creation.Initializer.Expressions
                         .Select(expression =>
                             this.TranslateArrayInitializerElement(
-                                expression, elementTypeSymbol, literalPromoted))
+                                expression, elementTypeSymbol, literalAcceptsNil))
                         .ToList());
             }
 
@@ -3007,6 +3095,137 @@ public sealed partial class CSharpToGSharpTranslator
             return owner != null
                 && (this.ElementPassedToNullableByRefParameter(owner)
                     || this.ElementWrittenMaybeNil(owner));
+        }
+
+        private bool IsNullableArrayElementAccess(ExpressionSyntax expression)
+        {
+            return Unparenthesize(expression) is ElementAccessExpressionSyntax elementAccess
+                && this.ArrayExpressionHasNullableReferenceLikeElement(elementAccess.Expression);
+        }
+
+        private bool ArrayExpressionHasNullableReferenceLikeElement(ExpressionSyntax expression)
+            => this.ArrayExpressionHasNullableElement(
+                expression,
+                requireReferenceLikeElement: true);
+
+        private bool ArrayExpressionHasNullableElement(ExpressionSyntax expression)
+            => this.ArrayExpressionHasNullableElement(
+                expression,
+                requireReferenceLikeElement: false);
+
+        private bool IsReferenceLikeOrManagedReference(ITypeSymbol type) =>
+            type != null
+            && (type.IsReferenceType
+                || CSharpTypeMapper.IsRecognizedManagedReferenceConsumerType(
+                    type,
+                    this.context.Compilation));
+
+        private bool ArrayExpressionHasNullableElement(
+            ExpressionSyntax expression,
+            bool requireReferenceLikeElement)
+        {
+            expression = Unparenthesize(expression);
+            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
+            if ((typeInfo.Type ?? typeInfo.ConvertedType)
+                is not IArrayTypeSymbol array
+                || (requireReferenceLikeElement
+                    && !this.IsReferenceLikeOrManagedReference(array.ElementType)))
+            {
+                return false;
+            }
+
+            return this.GetMappedArrayElement(expression)?.IsNullable == true
+                || (this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
+                    && this.IsWidenedArrayElementLocal(local));
+        }
+
+        private ITypeSymbol GetMappedArrayElementType(ExpressionSyntax expression)
+        {
+            expression = Unparenthesize(expression);
+            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
+            if ((typeInfo.Type ?? typeInfo.ConvertedType)
+                is not IArrayTypeSymbol array)
+            {
+                return null;
+            }
+
+            GTypeReference mappedElement = this.GetMappedArrayElement(expression);
+            ITypeSymbol projectedElement = mappedElement == null
+                ? array.ElementType
+                : this.ApplyMappedArrayElementShape(
+                    array.ElementType,
+                    mappedElement);
+
+            return this.context.GetSymbolInfo(expression).Symbol is ILocalSymbol local
+                && this.IsWidenedArrayElementLocal(local)
+                    ? projectedElement.WithNullableAnnotation(
+                        NullableAnnotation.Annotated)
+                    : projectedElement;
+        }
+
+        private GTypeReference GetMappedArrayElement(ExpressionSyntax expression)
+        {
+            expression = Unparenthesize(expression);
+            TypeInfo typeInfo = this.context.GetTypeInfo(expression);
+            if ((typeInfo.Type ?? typeInfo.ConvertedType)
+                is not IArrayTypeSymbol array)
+            {
+                return null;
+            }
+
+            if (!this.state.ManagedReferenceArrayNullable
+                .MappedArrayElementByElementType.TryGetValue(
+                    array.ElementType,
+                    out var mappedElement))
+            {
+                mappedElement =
+                    (this.typeMapper.Map(array, this.context, expression.GetLocation())
+                        as ArrayTypeReference)?.ElementType;
+                this.state.ManagedReferenceArrayNullable.MappedArrayElementByElementType.Add(
+                    array.ElementType,
+                    mappedElement);
+            }
+
+            return mappedElement;
+        }
+
+        private ITypeSymbol ApplyMappedArrayElementShape(
+            ITypeSymbol source,
+            GTypeReference mapped)
+        {
+            if (source is INamedTypeSymbol { IsTupleType: true } tuple
+                && mapped is TupleTypeReference mappedTuple
+                && tuple.TupleElements.Length == mappedTuple.ElementTypes.Count)
+            {
+                ImmutableArray<ITypeSymbol> elements = tuple.TupleElements
+                    .Select((element, index) => this.ApplyMappedArrayElementShape(
+                        element.Type,
+                        mappedTuple.ElementTypes[index]))
+                    .ToImmutableArray();
+                if (elements.Select((element, index) => (element, index))
+                    .All(pair => SymbolEqualityComparer.IncludeNullability.Equals(
+                        pair.element,
+                        tuple.TupleElements[pair.index].Type)))
+                {
+                    return source;
+                }
+
+                ImmutableArray<string> names = tuple.TupleElements
+                    .Select(element => element.IsImplicitlyDeclared ? null : element.Name)
+                    .ToImmutableArray();
+                ImmutableArray<NullableAnnotation> annotations = elements
+                    .Select(element => element.NullableAnnotation)
+                    .ToImmutableArray();
+                return this.context.Compilation.CreateTupleTypeSymbol(
+                    elements,
+                    names,
+                    default,
+                    annotations);
+            }
+
+            return mapped.IsNullable
+                ? source.WithNullableAnnotation(NullableAnnotation.Annotated)
+                : source;
         }
 
         private ILocalSymbol GetArrayAllocationOwner(
@@ -3357,15 +3576,14 @@ public sealed partial class CSharpToGSharpTranslator
         private GExpression TranslateArrayInitializerElement(
             ExpressionSyntax expression,
             ITypeSymbol elementType,
-            bool elementTypePromotedToNullable = false)
+            bool elementTypeAcceptsNil = false)
         {
             GExpression translated = this.TranslateExpression(expression);
 
-            // Issue #3682: the literal's element type was widened to `T?`
-            // because the literal writes a `nil` into it, so no element needs
-            // (or may take) a `!!` bridge against a non-nullable element — the
-            // slot accepts nil by construction now.
-            if (elementTypePromotedToNullable)
+            // Issues #3682 and #4525: the effective translated element type
+            // accepts nil, so no initializer element needs (or may take) a
+            // `!!` bridge against the C# element annotation.
+            if (elementTypeAcceptsNil)
             {
                 return translated;
             }
@@ -3444,25 +3662,25 @@ public sealed partial class CSharpToGSharpTranslator
                     leaves);
                 GTypeReference leafElementType = this.PromoteElementTypeForNullElements(
                     elementType, elementTypeSymbol, leaves, creation);
-                bool leafPromoted = !ReferenceEquals(leafElementType, elementType);
+                bool leafAcceptsNil = leafElementType.IsNullable;
                 return new ArrayAllocationExpression(
                     leafElementType,
                     dims.Select(d => (GExpression)LiteralExpression.Int(
                         d.ToString(CultureInfo.InvariantCulture))).ToList(),
                     leaves.Select(expression =>
                         this.TranslateArrayInitializerElement(
-                            expression, elementTypeSymbol, leafPromoted)).ToList());
+                            expression, elementTypeSymbol, leafAcceptsNil)).ToList());
             }
 
             GTypeReference literalElementType = this.PromoteElementTypeForNullElements(
                 elementType, elementTypeSymbol, creation.Initializer.Expressions, creation);
-            bool literalPromoted = !ReferenceEquals(literalElementType, elementType);
+            bool literalAcceptsNil = literalElementType.IsNullable;
             return new ArrayLiteralExpression(
                 literalElementType,
                 creation.Initializer.Expressions
                     .Select(expression =>
                         this.TranslateArrayInitializerElement(
-                            expression, elementTypeSymbol, literalPromoted))
+                            expression, elementTypeSymbol, literalAcceptsNil))
                     .ToList());
         }
 
@@ -3518,7 +3736,10 @@ public sealed partial class CSharpToGSharpTranslator
                     dims.Select(d => (GExpression)LiteralExpression.Int(
                         d.ToString(CultureInfo.InvariantCulture))).ToList(),
                     leaves.Select(expression =>
-                        this.TranslateArrayInitializerElement(expression, arrayType.ElementType)).ToList());
+                        this.TranslateArrayInitializerElement(
+                            expression,
+                            arrayType.ElementType,
+                            rectangularElementType.IsNullable)).ToList());
             }
 
             // A bare `{ a, b, c }` array initializer (a field/local of array type
@@ -3533,7 +3754,10 @@ public sealed partial class CSharpToGSharpTranslator
                 elementType,
                 initializer.Expressions
                     .Select(expression =>
-                        this.TranslateArrayInitializerElement(expression, elementTypeSymbol))
+                        this.TranslateArrayInitializerElement(
+                            expression,
+                            elementTypeSymbol,
+                            elementType.IsNullable))
                     .ToList());
         }
 
@@ -3670,13 +3894,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             TypeInfo info = this.context.GetTypeInfo(arrayExpression);
             ITypeSymbol arrayType = info.Type ?? info.ConvertedType;
-            if (arrayType is IArrayTypeSymbol array)
-            {
-                GTypeReference mapped = this.typeMapper.Map(
-                    array.ElementType,
+            if (arrayType is IArrayTypeSymbol array
+                && this.typeMapper.Map(
+                    array,
                     this.context,
-                    arrayExpression.GetLocation());
-                return nullableElementSyntax ? MakeNullable(mapped) : mapped;
+                    arrayExpression.GetLocation()) is ArrayTypeReference mappedArray)
+            {
+                return nullableElementSyntax ? MakeNullable(mappedArray.ElementType) : mappedArray.ElementType;
             }
 
             if (arrayType is INamedTypeSymbol { IsGenericType: true } generic &&
@@ -3708,6 +3932,15 @@ public sealed partial class CSharpToGSharpTranslator
             // emitted into a malformed `[]KeyValuePair[…]{}` literal (ADR-0115 §B).
             ITypeSymbol target = this.context.GetTypeInfo(collection).ConvertedType
                 ?? this.context.GetTypeInfo(collection).Type;
+            ITypeSymbol originalElementType =
+                GetCollectionTargetElementType(target);
+            if (target is INamedTypeSymbol namedCollectionTarget)
+            {
+                target = this.GetManagedReferenceArrayProjectedCollectionType(
+                    collection,
+                    namedCollectionTarget);
+            }
+
             bool isConstructibleClassTarget =
                 target is INamedTypeSymbol namedTarget
                 && namedTarget.TypeKind == TypeKind.Class &&
@@ -3715,6 +3948,8 @@ public sealed partial class CSharpToGSharpTranslator
             NamedTypeReference targetRef = isConstructibleClassTarget
                 ? (NamedTypeReference)this.typeMapper.Map((INamedTypeSymbol)target, this.context, collection.GetLocation())
                 : null;
+            ICollectionExpressionOperation collectionOperation =
+                this.context.SemanticModel.GetOperation(collection) as ICollectionExpressionOperation;
 
             if (collection.Elements.Count == 0 && isConstructibleClassTarget)
             {
@@ -3724,10 +3959,22 @@ public sealed partial class CSharpToGSharpTranslator
                     targetRef.TypeArguments.Count > 0 ? targetRef.TypeArguments : null);
             }
 
-            ITypeSymbol elementTypeSymbol = GetEnumerableElementType(target);
-            GTypeReference elementType = elementTypeSymbol != null
-                ? this.typeMapper.Map(elementTypeSymbol, this.context, collection.GetLocation())
-                : this.GetCollectionElementType(collection);
+            ITypeSymbol elementTypeSymbol = GetCollectionTargetElementType(target);
+            GTypeReference elementType;
+            if (target is IArrayTypeSymbol targetArray
+                && this.typeMapper.Map(
+                    targetArray,
+                    this.context,
+                    collection.GetLocation()) is ArrayTypeReference mappedArray)
+            {
+                elementType = mappedArray.ElementType;
+            }
+            else
+            {
+                elementType = elementTypeSymbol != null
+                    ? this.typeMapper.Map(elementTypeSymbol, this.context, collection.GetLocation())
+                    : this.GetCollectionElementType(collection);
+            }
 
             // A `List<T>`/`HashSet<T>`/... collection-expression target maps to
             // the canonical G# collection-initializer form (`List[int32]{...}`,
@@ -3737,8 +3984,9 @@ public sealed partial class CSharpToGSharpTranslator
             if (isConstructibleClassTarget)
             {
                 var initElements = new List<CollectionInitializerElement>();
-                foreach (CollectionElementSyntax element in collection.Elements)
+                for (int i = 0; i < collection.Elements.Count; i++)
                 {
+                    CollectionElementSyntax element = collection.Elements[i];
                     if (element is SpreadElementSyntax spread)
                     {
                         initElements.Add(new CollectionInitializerElement(
@@ -3747,11 +3995,29 @@ public sealed partial class CSharpToGSharpTranslator
                     else
                     {
                         var expressionElement = (ExpressionElementSyntax)element;
+                        ITypeSymbol operationElementType =
+                            collectionOperation?.Elements[i].Type;
+                        ITypeSymbol boundElementType =
+                            operationElementType != null
+                                && originalElementType != null
+                                && !SymbolEqualityComparer.Default.Equals(
+                                    operationElementType,
+                                    originalElementType)
+                                    ? operationElementType
+                                    : this.GetCollectionAddParameterType(
+                                        collection,
+                                        target,
+                                        elementTypeSymbol ?? operationElementType)
+                                        ?? elementTypeSymbol
+                                        ?? operationElementType;
+                        GTypeReference boundElementRef = boundElementType != null
+                            ? this.typeMapper.Map(boundElementType, this.context, element.GetLocation())
+                            : elementType;
                         initElements.Add(new CollectionInitializerElement(
                             this.CoerceCollectionElement(
                                 expressionElement.Expression,
-                                elementType,
-                                elementTypeSymbol)));
+                                boundElementRef,
+                                boundElementType)));
                     }
                 }
 
@@ -3776,7 +4042,7 @@ public sealed partial class CSharpToGSharpTranslator
                 elementTypeSymbol,
                 collection.Elements.OfType<ExpressionElementSyntax>().Select(e => e.Expression),
                 collection);
-            bool slicePromoted = !ReferenceEquals(sliceElementType, elementType);
+            bool sliceAcceptsNil = sliceElementType.IsNullable;
 
             var elements = new List<GExpression>();
             foreach (CollectionElementSyntax element in collection.Elements)
@@ -3788,7 +4054,7 @@ public sealed partial class CSharpToGSharpTranslator
                 else
                 {
                     var expressionElement = (ExpressionElementSyntax)element;
-                    elements.Add(slicePromoted
+                    elements.Add(sliceAcceptsNil
                         ? this.TranslateExpression(expressionElement.Expression)
                         : this.CoerceCollectionElement(
                             expressionElement.Expression,
@@ -3911,9 +4177,10 @@ public sealed partial class CSharpToGSharpTranslator
                 translated = EnsureNonNullAssertion(translated);
             }
 
-            if (elementSymbol != null && convertedSymbol != null &&
-                !SymbolEqualityComparer.Default.Equals(elementSymbol, convertedSymbol) &&
-                IsPrimitiveNumeric(elementSymbol) && IsPrimitiveNumeric(convertedSymbol))
+            ITypeSymbol numericTarget = targetElementSymbol ?? convertedSymbol;
+            if (elementSymbol != null && numericTarget != null &&
+                !SymbolEqualityComparer.Default.Equals(elementSymbol, numericTarget) &&
+                IsPrimitiveNumeric(elementSymbol) && IsPrimitiveNumeric(numericTarget))
             {
                 return new ConversionExpression(elementType, translated);
             }
@@ -3936,7 +4203,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             ITypeSymbol target = this.context.GetTypeInfo(collection).ConvertedType
                 ?? this.context.GetTypeInfo(collection).Type;
-            ITypeSymbol elementType = GetEnumerableElementType(target);
+            ITypeSymbol elementType = GetCollectionTargetElementType(target);
             if (elementType != null)
             {
                 return this.typeMapper.Map(elementType, this.context, collection.GetLocation());
@@ -3957,7 +4224,211 @@ public sealed partial class CSharpToGSharpTranslator
             return new NamedTypeReference("object");
         }
 
-        private static ITypeSymbol GetEnumerableElementType(ITypeSymbol type)
+        private static ITypeSymbol GetCollectionTargetElementType(ITypeSymbol target) =>
+            IsSpanParamsCollectionType(target)
+                ? ((INamedTypeSymbol)target).TypeArguments[0]
+                : GetEnumerableElementType(target);
+
+        /// <summary>
+        /// Issue #4525: a constructible collection's elements are bound through
+        /// its <c>Add</c> method, so a nullable <c>Add(T?)</c> parameter keeps a
+        /// legitimately null element from being asserted. Roslyn does not expose
+        /// the bound Add method, and C# overload resolution (hiding, generic
+        /// inference, extension methods, candidate sets spanning the hierarchy) is
+        /// not modeled. The helper is therefore fail-safe: the nullable parameter
+        /// is used only when exactly one accessible, non-generic, instance Add
+        /// exists with no extension Add in scope. Any other shape with a nullable
+        /// or default element reports Unsupported instead of guessing.
+        /// </summary>
+        /// <returns>The nullable Add parameter type, or null when the element type stands.</returns>
+        private ITypeSymbol GetCollectionAddParameterType(
+            CollectionExpressionSyntax collection,
+            ITypeSymbol target,
+            ITypeSymbol elementType)
+        {
+            if (elementType == null || target == null)
+            {
+                return null;
+            }
+
+            bool nullableElement = collection.Elements
+                .OfType<ExpressionElementSyntax>()
+                .Any(item =>
+                    IsNullOrDefaultLiteral(item.Expression)
+                    || this.context.GetTypeInfo(item.Expression).Type?.NullableAnnotation
+                        == NullableAnnotation.Annotated);
+
+            ISymbol enclosing = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart);
+            ISymbol within = (ISymbol)enclosing?.ContainingType
+                ?? this.context.Compilation.Assembly;
+            var candidates = new List<IMethodSymbol>();
+            for (ITypeSymbol type = target; type != null; type = type.BaseType)
+            {
+                foreach (IMethodSymbol add in type.GetMembers("Add").OfType<IMethodSymbol>())
+                {
+                    if (!add.IsStatic
+                        && add.Parameters.Length == 1
+                        && this.context.Compilation.IsSymbolAccessibleWithin(add, within)
+                        && !candidates.Any(seen =>
+                            !add.IsGenericMethod
+                            && !seen.IsGenericMethod
+                            && SymbolEqualityComparer.Default.Equals(
+                                seen.Parameters[0].Type,
+                                add.Parameters[0].Type)))
+                    {
+                        candidates.Add(add);
+                    }
+                }
+            }
+
+            bool hasExtensionAdd = this.context.SemanticModel.LookupSymbols(
+                    collection.SpanStart,
+                    container: (INamespaceOrTypeSymbol)target,
+                    name: "Add",
+                    includeReducedExtensionMethods: true)
+                .OfType<IMethodSymbol>()
+                .Any(method => method.MethodKind == MethodKind.ReducedExtension);
+            bool decidable = !hasExtensionAdd
+                && candidates.Count == 1
+                && !candidates[0].IsGenericMethod
+                && SymbolEqualityComparer.Default.Equals(
+                    candidates[0].Parameters[0].Type,
+                    elementType);
+            if (!decidable)
+            {
+                if (nullableElement)
+                {
+                    this.context.ReportUnsupported(
+                        collection,
+                        "collection expression element binds through an Add overload set whose nullability cannot be decided; no exact G# translation exists.");
+                }
+
+                return null;
+            }
+
+            ITypeSymbol parameterType = candidates[0].Parameters[0].Type;
+            return parameterType.NullableAnnotation == NullableAnnotation.Annotated
+                ? parameterType
+                : null;
+        }
+
+        private INamedTypeSymbol GetManagedReferenceArrayProjectedCollectionType(
+            CollectionExpressionSyntax collection,
+            INamedTypeSymbol target)
+        {
+            ITypeSymbol originalElementType =
+                GetCollectionTargetElementType(target.OriginalDefinition);
+            if (originalElementType == null)
+            {
+                return target;
+            }
+
+            var replacements =
+                new Dictionary<ITypeParameterSymbol, ITypeSymbol>(
+                    SymbolEqualityComparer.Default);
+            foreach (CollectionElementSyntax collectionElement in collection.Elements)
+            {
+                // A spread contributes its projected enumerable element type
+                // exactly as a plain element contributes its own projected type.
+                ITypeSymbol projectedElement = collectionElement switch
+                {
+                    ExpressionElementSyntax item =>
+                        this.GetManagedReferenceArrayProjectedArgumentType(item.Expression),
+                    SpreadElementSyntax spread =>
+                        this.GetMappedArrayElementType(spread.Expression)
+                            ?? GetEnumerableElementType(
+                                this.GetManagedReferenceArrayProjectedArgumentType(spread.Expression)),
+                    _ => null,
+                };
+                if (projectedElement == null)
+                {
+                    continue;
+                }
+
+                foreach (ITypeParameterSymbol parameter in
+                    NamedTypeAndContainingTypes(target)
+                        .SelectMany(type =>
+                            type.OriginalDefinition.TypeParameters))
+                {
+                    if (!TryGetProjectedTypeArgument(
+                            originalElementType,
+                            projectedElement,
+                            parameter,
+                            this.context.Compilation,
+                            out ITypeSymbol replacement,
+                            out bool conflictingProjection))
+                    {
+                        continue;
+                    }
+
+                    if (conflictingProjection
+                        || (replacements.TryGetValue(
+                                parameter,
+                                out ITypeSymbol existing)
+                            && !SymbolEqualityComparer.IncludeNullability.Equals(
+                                existing,
+                                replacement)))
+                    {
+                        if (this.IsRejectableManagedReferenceProjection(
+                                collectionElement switch
+                                {
+                                    ExpressionElementSyntax item => item.Expression,
+                                    SpreadElementSyntax spread => spread.Expression,
+                                    _ => collection,
+                                },
+                                projectedElement,
+                                null))
+                        {
+                            this.context.ReportUnsupported(
+                                collection,
+                                "collection expression elements have conflicting managed-reference projections.");
+                        }
+
+                        return target;
+                    }
+
+                    replacements[parameter] = replacement;
+                }
+            }
+
+            if (replacements.Count == 0)
+            {
+                return target;
+            }
+
+            INamedTypeSymbol projected = ProjectNamedType(target, replacements);
+            if (this.ProjectedResultMatchesDestination(
+                    collection,
+                    projected,
+                    out _))
+            {
+                return projected;
+            }
+
+            if (this.ResolveValueSink(collection) is ILocalSymbol local
+                && this.IsLocalDeclarationInitializer(collection, local))
+            {
+                this.state.ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedLocalType[local] = projected;
+                return projected;
+            }
+
+            if (this.IsRejectableManagedReferenceProjection(
+                    collection,
+                    projected,
+                    target))
+            {
+                this.context.ReportUnsupported(
+                    collection,
+                    "collection expression managed-reference projection cannot change fixed destination storage; no exact G# translation exists.");
+            }
+
+            return target;
+        }
+
+        private static ITypeSymbol GetEnumerableElementType(
+            ITypeSymbol type,
+            bool asynchronous = false)
         {
             switch (type)
             {
@@ -3966,15 +4437,14 @@ public sealed partial class CSharpToGSharpTranslator
                 case IArrayTypeSymbol array:
                     return array.ElementType;
                 case INamedTypeSymbol named:
-                    if (named.IsGenericType && named.TypeArguments.Length == 1)
+                    if (IsEnumerableContract(named, asynchronous))
                     {
                         return named.TypeArguments[0];
                     }
 
                     foreach (INamedTypeSymbol iface in named.AllInterfaces)
                     {
-                        if (iface.OriginalDefinition.SpecialType == SpecialType.System_Collections_Generic_IEnumerable_T &&
-                            iface.TypeArguments.Length == 1)
+                        if (IsEnumerableContract(iface, asynchronous))
                         {
                             return iface.TypeArguments[0];
                         }
@@ -3984,6 +4454,27 @@ public sealed partial class CSharpToGSharpTranslator
                 default:
                     return null;
             }
+        }
+
+        private static bool IsEnumerableContract(
+            INamedTypeSymbol type,
+            bool asynchronous)
+        {
+            INamedTypeSymbol definition = type.OriginalDefinition;
+            if (!asynchronous)
+            {
+                return definition.SpecialType
+                    == SpecialType.System_Collections_Generic_IEnumerable_T;
+            }
+
+            INamespaceSymbol genericNamespace = definition.ContainingNamespace;
+            INamespaceSymbol collectionsNamespace = genericNamespace?.ContainingNamespace;
+            INamespaceSymbol systemNamespace = collectionsNamespace?.ContainingNamespace;
+            return definition.MetadataName == "IAsyncEnumerable`1"
+                && genericNamespace?.Name == "Generic"
+                && collectionsNamespace?.Name == "Collections"
+                && systemNamespace?.Name == "System"
+                && systemNamespace.ContainingNamespace.IsGlobalNamespace;
         }
 
         // Issue #1896: gsc has its OWN native range-index syntax

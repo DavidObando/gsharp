@@ -28,6 +28,7 @@ public sealed partial class CSharpToGSharpTranslator
             IMethodSymbol exactTargetInvoke = null)
         {
             var parameters = new List<Parameter>();
+            var projectedParameters = new List<IParameterSymbol>();
             ParameterListSyntax parameterList = lambda switch
             {
                 ParenthesizedLambdaExpressionSyntax paren => paren.ParameterList,
@@ -37,13 +38,24 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (lambda is SimpleLambdaExpressionSyntax simple)
             {
-                parameters.Add(this.MapLambdaParameter(simple.Parameter));
+                parameters.Add(this.MapLambdaParameter(
+                    simple.Parameter,
+                    exactTargetInvoke?.Parameters.FirstOrDefault(),
+                    projectedParameters));
             }
             else if (parameterList != null)
             {
-                foreach (ParameterSyntax parameter in parameterList.Parameters)
+                for (int index = 0; index < parameterList.Parameters.Count; index++)
                 {
-                    parameters.Add(this.MapLambdaParameter(parameter));
+                    IParameterSymbol exactParameter =
+                        exactTargetInvoke != null
+                            && index < exactTargetInvoke.Parameters.Length
+                                ? exactTargetInvoke.Parameters[index]
+                                : null;
+                    parameters.Add(this.MapLambdaParameter(
+                        parameterList.Parameters[index],
+                        exactParameter,
+                        projectedParameters));
                 }
             }
             else if (lambda is AnonymousMethodExpressionSyntax implicitParamsAnonymousMethod)
@@ -54,9 +66,12 @@ public sealed partial class CSharpToGSharpTranslator
                 // not reference them. G# function literals always name params
                 // explicitly, so synthesize them from the converted delegate
                 // type's Invoke signature; if that type can't be resolved, this is
-                // a genuine gap. Translation still has an empty parameter list,
-                // but the loud Unsupported diagnostic prevents silent acceptance.
-                if (this.context.GetTypeInfo(implicitParamsAnonymousMethod).ConvertedType is INamedTypeSymbol { DelegateInvokeMethod: { } invokeMethod })
+                // a genuine gap rather than a silent zero-arg guess.
+                IMethodSymbol invokeMethod = exactTargetInvoke
+                    ?? GetDelegateInvokeMethod(
+                        this.context.GetTypeInfo(
+                            implicitParamsAnonymousMethod).ConvertedType);
+                if (invokeMethod != null)
                 {
                     // The body can never reference these params (C# gives them no
                     // source names here), so use G#'s repeatable, non-referenceable
@@ -78,7 +93,8 @@ public sealed partial class CSharpToGSharpTranslator
 
             bool isAsync = lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword);
             IMethodSymbol lambdaSymbol = this.context.GetSymbolInfo(lambda).Symbol as IMethodSymbol
-                ?? (this.context.GetTypeInfo(lambda).ConvertedType as INamedTypeSymbol)?.DelegateInvokeMethod;
+                ?? GetDelegateInvokeMethod(
+                    this.context.GetTypeInfo(lambda).ConvertedType);
             GTypeReference exactReturnType = exactTargetInvoke != null
                 ? this.MapDelegateLikeReturnType(
                     exactTargetInvoke,
@@ -304,6 +320,11 @@ public sealed partial class CSharpToGSharpTranslator
             }
             finally
             {
+                foreach (IParameterSymbol projectedParameter in projectedParameters)
+                {
+                    this.state.ProjectedCallableParameterType.Remove(projectedParameter);
+                }
+
                 this.state.PendingSpillPrologue = outerSpillPrologue;
                 this.state.FunctionArgumentOutDeclarations = outerOutDeclarations;
                 this.state.CurrentBodyScope = previousBodyScope;
@@ -360,13 +381,45 @@ public sealed partial class CSharpToGSharpTranslator
             return this.PromoteReturnIfTainted(mapped, symbol);
         }
 
-        private Parameter MapLambdaParameter(ParameterSyntax parameter)
+        private Parameter MapLambdaParameter(
+            ParameterSyntax parameter,
+            IParameterSymbol exactTargetParameter = null,
+            List<IParameterSymbol> projectedParameters = null)
         {
             // A lambda parameter's type is inferred by Roslyn from the delegate
             // target even when the C# spelling omits it (`n => …`); the canonical
             // G# arrow lambda always names the parameter type (ADR-0074).
             if (this.context.GetDeclaredSymbol(parameter) is IParameterSymbol symbol)
             {
+                if (exactTargetParameter != null
+                    && !SymbolEqualityComparer.IncludeNullability.Equals(
+                        symbol.Type,
+                        exactTargetParameter.Type))
+                {
+                    if (parameter.Type != null)
+                    {
+                        this.context.ReportUnsupported(
+                            parameter,
+                            "projected delegate parameter type differs from an explicitly typed lambda parameter; no exact G# adaptation exists.");
+                    }
+
+                    Parameter mappedTarget = this.MapParameter(
+                        exactTargetParameter,
+                        parameter,
+                        promoteNullability: false);
+                    this.state.ProjectedCallableParameterType[symbol] =
+                        exactTargetParameter.Type;
+                    projectedParameters?.Add(symbol);
+                    return new Parameter(
+                        this.EmittedName(
+                            parameter,
+                            parameter.Identifier,
+                            GSharpIdentifierNameContext.Parameter),
+                        mappedTarget.Type,
+                        mappedTarget.IsVariadic,
+                        mappedTarget.RefKind);
+                }
+
                 // Issue #3855: the #1072 promotion is safe for a lambda
                 // parameter whose type is FIXED by the target delegate —
                 // widening an input position is contravariance, and a
@@ -533,6 +586,13 @@ public sealed partial class CSharpToGSharpTranslator
             // model; emit the explicit constructed type (`List[T]()`) so the G#
             // construction names the type (ADR-0115 §B.7/§B.16).
             ITypeSymbol typeSymbol = this.context.GetTypeInfo(creation).Type;
+            if (this.TryGetManagedReferenceArrayProjectedMethod(
+                    creation,
+                    out IMethodSymbol projectedConstructor))
+            {
+                typeSymbol = projectedConstructor.ContainingType;
+            }
+
             GTypeReference type = typeSymbol != null
                 ? this.typeMapper.Map(typeSymbol, this.context, creation.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
@@ -569,6 +629,9 @@ public sealed partial class CSharpToGSharpTranslator
                 var guards = new List<GExpression>();
                 var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
+                this.RegisterProjectedSwitchPatternBindings(
+                    arm.Pattern,
+                    node.GoverningExpression);
                 GPattern pattern = this.TranslateSwitchPattern(
                     arm.Pattern,
                     subject,
@@ -884,6 +947,9 @@ public sealed partial class CSharpToGSharpTranslator
                 var guards = new List<GExpression>();
                 var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
+                this.RegisterProjectedSwitchPatternBindings(
+                    arm.Pattern,
+                    node.GoverningExpression);
                 GPattern pattern = this.TranslateSwitchPattern(
                     arm.Pattern,
                     subject,
@@ -1056,6 +1122,9 @@ public sealed partial class CSharpToGSharpTranslator
                             var guards = new List<GExpression>();
                             var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
+                            this.RegisterProjectedSwitchPatternBindings(
+                                patternLabel.Pattern,
+                                node.Expression);
                             GPattern pattern = this.TranslateSwitchPattern(
                                 patternLabel.Pattern,
                                 subject,
@@ -1456,18 +1525,45 @@ public sealed partial class CSharpToGSharpTranslator
             List<string> names = new List<string>();
             CollectForEachVariableNames(node.Variable, names);
 
-            // Issue #1967: `foreach (var (i, r) in pairs)` declares each element
-            // via a designation nested in `node.Variable` — check every one here,
-            // this method's single entry point for deconstructing foreach.
-            foreach (SingleVariableDesignationSyntax designation in
-                node.Variable.DescendantNodesAndSelf().OfType<SingleVariableDesignationSyntax>())
+            ForEachStatementInfo forEachInfo =
+                this.context.SemanticModel.GetForEachStatementInfo(node);
+            ITypeSymbol projectedElement =
+                this.GetProjectedForEachElementType(node, forEachInfo);
+            var nullableBindings = new List<ISymbol>();
+            var projectedBindings = new List<ILocalSymbol>();
+            if (projectedElement != null && forEachInfo.ElementType != null)
             {
+                this.CollectProjectedForEachVariableBindings(
+                    node.Variable,
+                    projectedElement,
+                    forEachInfo.ElementType,
+                    nullableBindings,
+                    projectedBindings);
             }
 
             if (names.Count >= 2)
             {
                 bool isAwait = !node.AwaitKeyword.IsKind(SyntaxKind.None);
-                BlockStatement body = this.TranslateStatementAsBlock(node.Statement);
+                BlockStatement body;
+                try
+                {
+                    body = this.TranslateStatementAsBlock(node.Statement);
+                }
+                finally
+                {
+                    foreach (ISymbol binding in nullableBindings)
+                    {
+                        this.state.NullableForEachBindings.Remove(binding);
+                    }
+
+                    foreach (ILocalSymbol binding in projectedBindings)
+                    {
+                        this.state.ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType.Remove(
+                            binding);
+                    }
+                }
+
                 var iterable = this.TranslateReceiverWithNullForgiveness(node.Expression);
 
                 if (!isAwait)
@@ -1492,10 +1588,124 @@ public sealed partial class CSharpToGSharpTranslator
                 return new ForInStatement(pair, iterable, new BlockStatement(statements), isAwait: true);
             }
 
+            foreach (ISymbol binding in nullableBindings)
+            {
+                this.state.NullableForEachBindings.Remove(binding);
+            }
+
+            foreach (ILocalSymbol binding in projectedBindings)
+            {
+                this.state.ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedLocalType.Remove(binding);
+            }
+
             this.context.ReportUnsupported(
                 node,
                 "foreach tuple deconstruction with arity < 2 has no canonical G# form yet (ADR-0115 §B).");
             return new RawStatement("// unsupported: foreach variable deconstruction");
+        }
+
+        private void CollectProjectedForEachVariableBindings(
+            ExpressionSyntax variable,
+            ITypeSymbol projectedSource,
+            ITypeSymbol destination,
+            List<ISymbol> nullableBindings,
+            List<ILocalSymbol> projectedBindings)
+        {
+            switch (variable)
+            {
+                case DeclarationExpressionSyntax declaration:
+                    this.CollectProjectedForEachVariableBindings(
+                        declaration.Designation,
+                        projectedSource,
+                        destination,
+                        nullableBindings,
+                        projectedBindings);
+                    break;
+
+                case TupleExpressionSyntax tuple
+                    when projectedSource is INamedTypeSymbol
+                        { IsTupleType: true } sourceTuple
+                    && destination is INamedTypeSymbol
+                        { IsTupleType: true } destinationTuple
+                    && tuple.Arguments.Count
+                        == sourceTuple.TupleElements.Length
+                    && tuple.Arguments.Count
+                        == destinationTuple.TupleElements.Length:
+                    for (int i = 0; i < tuple.Arguments.Count; i++)
+                    {
+                        this.CollectProjectedForEachVariableBindings(
+                            tuple.Arguments[i].Expression,
+                            GetEffectiveTupleElementType(sourceTuple, i),
+                            GetEffectiveTupleElementType(destinationTuple, i),
+                            nullableBindings,
+                            projectedBindings);
+                    }
+
+                    break;
+            }
+        }
+
+        private void CollectProjectedForEachVariableBindings(
+            VariableDesignationSyntax designation,
+            ITypeSymbol projectedSource,
+            ITypeSymbol destination,
+            List<ISymbol> nullableBindings,
+            List<ILocalSymbol> projectedBindings)
+        {
+            switch (designation)
+            {
+                case SingleVariableDesignationSyntax single
+                    when this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol:
+                    destination = symbol.Type;
+                    ITypeSymbol projectedType = this.GetProjectedBindingType(
+                            projectedSource,
+                            destination,
+                            this.context.Compilation.ClassifyConversion(
+                                projectedSource,
+                                destination))
+                        ?? destination;
+                    if (!SymbolEqualityComparer.IncludeNullability.Equals(
+                            symbol.Type,
+                            projectedType))
+                    {
+                        this.state.ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType[symbol] =
+                            projectedType;
+                        projectedBindings.Add(symbol);
+                    }
+
+                    if (projectedType?.NullableAnnotation
+                            == NullableAnnotation.Annotated
+                        && this.IsReferenceLikeOrManagedReference(projectedType)
+                        && this.state.NullableForEachBindings.Add(symbol))
+                    {
+                        nullableBindings.Add(symbol);
+                    }
+
+                    break;
+
+                case ParenthesizedVariableDesignationSyntax tuple
+                    when projectedSource is INamedTypeSymbol
+                        { IsTupleType: true } sourceTuple
+                    && destination is INamedTypeSymbol
+                        { IsTupleType: true } destinationTuple
+                    && tuple.Variables.Count
+                        == sourceTuple.TupleElements.Length
+                    && tuple.Variables.Count
+                        == destinationTuple.TupleElements.Length:
+                    for (int i = 0; i < tuple.Variables.Count; i++)
+                    {
+                        this.CollectProjectedForEachVariableBindings(
+                            tuple.Variables[i],
+                            GetEffectiveTupleElementType(sourceTuple, i),
+                            GetEffectiveTupleElementType(destinationTuple, i),
+                            nullableBindings,
+                            projectedBindings);
+                    }
+
+                    break;
+            }
         }
 
         private void CollectForEachVariableNames(ExpressionSyntax variable, List<string> names)
@@ -2427,7 +2637,13 @@ public sealed partial class CSharpToGSharpTranslator
             // select …` → `.Where(…).OrderBy(…).Select(…)`, ADR-0115 §B LINQ).
             FromClauseSyntax from = query.FromClause;
             GExpression current = this.TranslateExpression(from.Expression);
-            GTypeReference rangeType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
+            GTypeReference rangeType = this.ResolveRangeVariableType(
+                from.Type,
+                from.Expression,
+                from,
+                out ITypeSymbol rangeTypeSymbol);
+            ISymbol rangeSymbol = this.context.GetDeclaredSymbol(from);
+            this.RecordProjectedQueryBinding(rangeSymbol, rangeTypeSymbol);
 
             // The query's "scope" is the set of range variables in play, in
             // declaration order — the C# spec's transparent identifier (§12.19.3).
@@ -2441,7 +2657,7 @@ public sealed partial class CSharpToGSharpTranslator
             // parameter under the real range-variable names directly.
             var scope = new List<(string Name, GTypeReference Type, ISymbol Symbol)>
             {
-                (from.Identifier.ValueText, rangeType, this.context.GetDeclaredSymbol(from)),
+                (from.Identifier.ValueText, rangeType, rangeSymbol),
             };
 
             // Issue #1998: track the enclosing query node so a scope that grows
@@ -2464,44 +2680,156 @@ public sealed partial class CSharpToGSharpTranslator
             return current;
         }
 
-        // Determines a query range variable's element type. An explicit type
-        // (`from T x in xs`) wins; otherwise the type is derived from the source
-        // collection the same way C#'s foreach/query-from does: array element
-        // type, `IEnumerable<T>`'s `T`, or (for a dictionary) the `T` in the
-        // `IEnumerable<KeyValuePair<K,V>>` the dictionary implements — via the
-        // shared `GetEnumerableElementType` helper (issue #1738), not the former
-        // narrow "first generic type argument" guess that mistyped arrays
-        // (`object`) and dictionaries (the key type instead of `KeyValuePair`).
+        // Determines a query range variable's element type. The emitted
+        // projected collection type wins when an explicit range type has an
+        // identity conversion; a real conversion keeps the explicit target.
+        // The selected query operator, enumeration, and single-type-argument
+        // query-provider fallback cover shapes without a projection.
         private GTypeReference ResolveRangeVariableType(
-            TypeSyntax explicitType, ExpressionSyntax source, SyntaxNode anchor)
+            TypeSyntax explicitType,
+            ExpressionSyntax source,
+            SyntaxNode anchor,
+            out ITypeSymbol effectiveType)
         {
+            ITypeSymbol elementType =
+                this.ResolveRangeVariableElementTypeSymbol(source, anchor);
             if (explicitType != null)
             {
+                ITypeSymbol explicitTypeSymbol =
+                    this.context.GetTypeInfo(explicitType).Type;
+                ITypeSymbol projectedBinding = elementType == null
+                    || explicitTypeSymbol == null
+                    ? null
+                    : this.GetProjectedBindingType(
+                        elementType,
+                        explicitTypeSymbol,
+                        this.context.Compilation.ClassifyConversion(
+                            elementType,
+                            explicitTypeSymbol));
+                if (projectedBinding != null)
+                {
+                    effectiveType = projectedBinding;
+                    return this.typeMapper.Map(
+                        projectedBinding,
+                        this.context,
+                        anchor.GetLocation());
+                }
+
+                effectiveType = explicitTypeSymbol;
                 return this.MapTypeSyntax(explicitType);
             }
 
-            ITypeSymbol elementType = this.ResolveRangeVariableElementTypeSymbol(source);
             if (elementType != null)
             {
+                effectiveType = elementType;
                 return this.typeMapper.Map(elementType, this.context, anchor.GetLocation());
             }
 
+            effectiveType = null;
             this.context.ReportUnsupported(
                 anchor,
                 "query range variable's element type could not be determined from its source collection (ADR-0115 §B).");
             return new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
         }
 
-        // Shared by `ResolveRangeVariableType` (above) and the issue #1967
-        // Index/Range loud-gap check below: the source collection's element
-        // type, the same way C#'s foreach/query-from infers an implicit range
-        // variable's type (array element type, `IEnumerable<T>`'s `T`, or a
-        // dictionary's `KeyValuePair<K,V>`) via `GetEnumerableElementType`.
-        private ITypeSymbol ResolveRangeVariableElementTypeSymbol(ExpressionSyntax source)
+        private void RecordProjectedQueryBinding(
+            ISymbol symbol,
+            ITypeSymbol effectiveType)
         {
+            if (symbol != null && effectiveType != null)
+            {
+                this.state.ProjectedQueryBindingType[symbol] = effectiveType;
+            }
+        }
+
+        private ITypeSymbol ResolveRangeVariableElementTypeSymbol(
+            ExpressionSyntax source,
+            SyntaxNode anchor)
+        {
+            ITypeSymbol mappedArrayElement =
+                this.GetMappedArrayElementType(source);
+            if (anchor is FromClauseSyntax { Parent: QueryBodySyntax } additionalFrom
+                && this.context.SemanticModel.GetQueryClauseInfo(additionalFrom)
+                    .OperationInfo.Symbol is IMethodSymbol selectMany)
+            {
+                IMethodSymbol resultSelector = selectMany.Parameters
+                    .Select(parameter => GetDelegateInvokeMethod(parameter.Type))
+                    .Where(invoke => invoke != null)
+                    .Skip(1)
+                    .FirstOrDefault();
+                if (resultSelector is { Parameters.Length: >= 2 })
+                {
+                    ITypeSymbol selectorElement = resultSelector.Parameters[1].Type;
+
+                    // Preserve a custom provider contract; replace only the
+                    // original managed-array element with its projected form.
+                    return mappedArrayElement != null
+                        && SymbolEqualityComparer.Default.Equals(
+                            mappedArrayElement,
+                            selectorElement)
+                            ? mappedArrayElement
+                            : selectorElement;
+                }
+            }
+
+            if (mappedArrayElement != null)
+            {
+                return mappedArrayElement;
+            }
+
+            ITypeSymbol projectedSource =
+                this.GetManagedReferenceArrayProjectedExpressionType(source);
+            ITypeSymbol projectedElement = GetEnumerableElementType(projectedSource);
+            if (projectedElement != null)
+            {
+                return this.ArrayExpressionHasNullableReferenceLikeElement(source)
+                    ? projectedElement.WithNullableAnnotation(NullableAnnotation.Annotated)
+                    : projectedElement;
+            }
+
             ITypeSymbol sourceType = this.context.GetTypeInfo(source).Type
                 ?? this.context.GetTypeInfo(source).ConvertedType;
-            return GetEnumerableElementType(sourceType);
+            if (this.ArrayExpressionHasNullableReferenceLikeElement(source)
+                && GetEnumerableElementType(sourceType) is { } nullableElement)
+            {
+                return nullableElement.WithNullableAnnotation(NullableAnnotation.Annotated);
+            }
+
+            if (anchor is FromClauseSyntax { Parent: QueryExpressionSyntax } initialFrom)
+            {
+                QueryExpressionSyntax query = (QueryExpressionSyntax)initialFrom.Parent;
+                IMethodSymbol queryOperator =
+                    this.context.SemanticModel.GetQueryClauseInfo(initialFrom)
+                        .OperationInfo.Symbol as IMethodSymbol
+                    ?? (query.Body.Clauses.FirstOrDefault() is QueryClauseSyntax firstClause
+                        ? this.context.SemanticModel.GetQueryClauseInfo(firstClause)
+                            .OperationInfo.Symbol as IMethodSymbol
+                        : this.context.GetSymbolInfo(query.Body.SelectOrGroup)
+                            .Symbol as IMethodSymbol);
+                foreach (IParameterSymbol parameter in queryOperator?.Parameters
+                    ?? ImmutableArray<IParameterSymbol>.Empty)
+                {
+                    if (parameter.Type is INamedTypeSymbol
+                        {
+                            DelegateInvokeMethod.Parameters: [{ Type: { } rangeType }, ..],
+                        })
+                    {
+                        return rangeType;
+                    }
+                }
+            }
+
+            ITypeSymbol enumerableElement = GetEnumerableElementType(sourceType);
+            if (enumerableElement != null)
+            {
+                return enumerableElement;
+            }
+
+            return sourceType is INamedTypeSymbol queryProvider
+                && queryProvider.IsGenericType
+                && queryProvider.TypeArguments.Length == 1
+                ? queryProvider.TypeArguments[0]
+                : null;
         }
 
         private GExpression LowerQueryBody(
@@ -2576,18 +2904,36 @@ public sealed partial class CSharpToGSharpTranslator
                     if (scope.Count == 1 && select.Expression is IdentifierNameSyntax id
                         && id.Identifier.ValueText == scope[0].Name && body.Clauses.Count > 0)
                     {
+                        if (scope[0].Symbol != null)
+                        {
+                            this.state.ProjectedQueryBindingType.TryGetValue(
+                                scope[0].Symbol,
+                                out resultTypeSymbol);
+                        }
+
                         break;
                     }
 
-                    current = this.QueryCall(current, "Select", scope, select.Expression);
-                    resultTypeSymbol = this.context.GetTypeInfo(select.Expression).Type;
+                    current = this.QueryCall(
+                        current,
+                        "Select",
+                        scope,
+                        select.Expression,
+                        out ITypeSymbol effectiveSelectType);
+                    resultTypeSymbol = effectiveSelectType
+                        ?? this.context.GetTypeInfo(select.Expression).Type;
                     resultType = resultTypeSymbol is { } projected
                         ? this.typeMapper.Map(projected, this.context, select.GetLocation())
                         : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
                     break;
 
                 case GroupClauseSyntax group:
-                    current = this.LowerGroupClause(group, scope, current, out resultType);
+                    current = this.LowerGroupClause(
+                        group,
+                        scope,
+                        current,
+                        out resultType,
+                        out resultTypeSymbol);
                     break;
 
                 default:
@@ -2605,12 +2951,17 @@ public sealed partial class CSharpToGSharpTranslator
             // re-starts the scope as a single range variable over the projection.
             if (body.Continuation != null)
             {
+                ISymbol continuationSymbol =
+                    this.context.GetDeclaredSymbol(body.Continuation);
+                this.RecordProjectedQueryBinding(
+                    continuationSymbol,
+                    resultTypeSymbol);
                 var continuationScope = new List<(string Name, GTypeReference Type, ISymbol Symbol)>
                 {
                     (
                         body.Continuation.Identifier.ValueText,
                         resultType,
-                        this.context.GetDeclaredSymbol(body.Continuation)),
+                        continuationSymbol),
                 };
                 current = this.LowerQueryBody(body.Continuation.Body, continuationScope, current);
             }
@@ -2636,8 +2987,12 @@ public sealed partial class CSharpToGSharpTranslator
             // Issue #3348: as in `BuildScopeLambda`, the `let` value is evaluated
             // inside this Select lambda — hoist into its own prologue, not the
             // enclosing statement's.
-            GExpression letValue = this.TranslateQueryLambdaBody(let.Expression, prologue);
-            GTypeReference letType = this.context.GetTypeInfo(let.Expression).Type is { } t
+            GExpression letValue = this.TranslateQueryLambdaBody(
+                let.Expression,
+                prologue,
+                scope,
+                out ITypeSymbol effectiveLetType);
+            GTypeReference letType = effectiveLetType is { } t
                 ? this.typeMapper.Map(t, this.context, let.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
@@ -2657,6 +3012,9 @@ public sealed partial class CSharpToGSharpTranslator
                 let.Identifier.ValueText,
                 letType,
                 this.context.GetDeclaredSymbol(let)));
+            this.RecordProjectedQueryBinding(
+                scope[^1].Symbol,
+                effectiveLetType);
             return current;
         }
 
@@ -2671,11 +3029,16 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression current)
         {
             LambdaExpression collectionSelector = this.BuildScopeLambda(scope, from.Expression);
-            GTypeReference newVarType = this.ResolveRangeVariableType(from.Type, from.Expression, from);
+            GTypeReference newVarType = this.ResolveRangeVariableType(
+                from.Type,
+                from.Expression,
+                from,
+                out ITypeSymbol newVarTypeSymbol);
             (string Name, GTypeReference Type, ISymbol Symbol) newVar = (
                 from.Identifier.ValueText,
                 newVarType,
                 this.context.GetDeclaredSymbol(from));
+            this.RecordProjectedQueryBinding(newVar.Symbol, newVarTypeSymbol);
             LambdaExpression resultSelector = this.BuildTransparentResultSelector(scope, newVar);
 
             current = new InvocationExpression(
@@ -2696,11 +3059,16 @@ public sealed partial class CSharpToGSharpTranslator
             GExpression current)
         {
             GExpression inner = this.TranslateExpression(join.InExpression);
-            GTypeReference innerVarType = this.ResolveRangeVariableType(join.Type, join.InExpression, join);
+            GTypeReference innerVarType = this.ResolveRangeVariableType(
+                join.Type,
+                join.InExpression,
+                join,
+                out ITypeSymbol innerVarTypeSymbol);
             var innerVar = (
                 Name: join.Identifier.ValueText,
                 Type: innerVarType,
                 Symbol: this.context.GetDeclaredSymbol(join));
+            this.RecordProjectedQueryBinding(innerVar.Symbol, innerVarTypeSymbol);
 
             LambdaExpression outerKeySelector = this.BuildScopeLambda(scope, join.LeftExpression);
             LambdaExpression innerKeySelector = this.BuildScopeLambda(
@@ -2728,6 +3096,15 @@ public sealed partial class CSharpToGSharpTranslator
                 Name: join.Into.Identifier.ValueText,
                 Type: (GTypeReference)new NamedTypeReference("sequence", new List<GTypeReference> { innerVarType }),
                 Symbol: this.context.GetDeclaredSymbol(join.Into));
+            ITypeSymbol groupVarTypeSymbol =
+                innerVarTypeSymbol != null
+                && this.context.Compilation.GetTypeByMetadataName(
+                    "System.Collections.Generic.IEnumerable`1") is { } enumerableType
+                    ? enumerableType.Construct(innerVarTypeSymbol)
+                    : null;
+            this.RecordProjectedQueryBinding(
+                groupVar.Symbol,
+                groupVarTypeSymbol);
             LambdaExpression groupResultSelector = this.BuildTransparentResultSelector(scope, groupVar);
             current = new InvocationExpression(
                 new MemberAccessExpression(current, "GroupJoin"),
@@ -2745,11 +3122,15 @@ public sealed partial class CSharpToGSharpTranslator
             GroupClauseSyntax group,
             List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             GExpression current,
-            out GTypeReference resultType)
+            out GTypeReference resultType,
+            out ITypeSymbol resultTypeSymbol)
         {
-            LambdaExpression keySelector = this.BuildScopeLambda(scope, group.ByExpression);
-            GTypeReference keyType = this.context.GetTypeInfo(group.ByExpression).Type is { } k
-                ? this.typeMapper.Map(k, this.context, group.GetLocation())
+            LambdaExpression keySelector =
+                this.BuildScopeLambda(scope, group.ByExpression, out ITypeSymbol effectiveKeyType);
+            ITypeSymbol keyTypeSymbol =
+                effectiveKeyType ?? this.context.GetTypeInfo(group.ByExpression).Type;
+            GTypeReference keyType = keyTypeSymbol is { } key
+                ? this.typeMapper.Map(key, this.context, group.GetLocation())
                 : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
 
             bool isIdentity = scope.Count == 1
@@ -2758,20 +3139,41 @@ public sealed partial class CSharpToGSharpTranslator
 
             var args = new List<GExpression> { keySelector };
             GTypeReference elementType;
+            ITypeSymbol elementTypeSymbol;
             if (isIdentity)
             {
                 elementType = scope[0].Type;
+                elementTypeSymbol =
+                    scope[0].Symbol != null
+                    && this.state.ProjectedQueryBindingType.TryGetValue(
+                        scope[0].Symbol,
+                        out ITypeSymbol projectedElement)
+                        ? projectedElement
+                        : this.context.GetTypeInfo(group.GroupExpression).Type;
             }
             else
             {
-                args.Add(this.BuildScopeLambda(scope, group.GroupExpression));
-                elementType = this.context.GetTypeInfo(group.GroupExpression).Type is { } e
-                    ? this.typeMapper.Map(e, this.context, group.GetLocation())
+                args.Add(this.BuildScopeLambda(
+                    scope,
+                    group.GroupExpression,
+                    out ITypeSymbol effectiveElementType));
+                elementTypeSymbol =
+                    effectiveElementType
+                    ?? this.context.GetTypeInfo(group.GroupExpression).Type;
+                elementType = elementTypeSymbol is { } element
+                    ? this.typeMapper.Map(element, this.context, group.GetLocation())
                     : new NamedTypeReference(CSharpTypeMapper.UnsupportedPlaceholderType);
             }
 
             current = new InvocationExpression(new MemberAccessExpression(current, "GroupBy"), args);
             resultType = new NamedTypeReference("IGrouping", new List<GTypeReference> { keyType, elementType });
+            resultTypeSymbol =
+                keyTypeSymbol != null
+                && elementTypeSymbol != null
+                && this.context.Compilation.GetTypeByMetadataName("System.Linq.IGrouping`2")
+                    is { } groupingType
+                    ? groupingType.Construct(keyTypeSymbol, elementTypeSymbol)
+                    : null;
             return current;
         }
 
@@ -2780,11 +3182,59 @@ public sealed partial class CSharpToGSharpTranslator
             string method,
             List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             ExpressionSyntax lambdaBody)
+            => this.QueryCall(receiver, method, scope, lambdaBody, out _);
+
+        private GExpression QueryCall(
+            GExpression receiver,
+            string method,
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
+            ExpressionSyntax lambdaBody,
+            out ITypeSymbol effectiveType)
         {
-            LambdaExpression lambda = this.BuildScopeLambda(scope, lambdaBody);
+            GTypeReference sourceType = scope.Count == 1
+                ? scope[0].Type
+                : new TupleTypeReference(scope.Select(v => v.Type).ToList());
+
+            // Casting before ThenBy would erase the IOrderedEnumerable returned
+            // by the projected OrderBy call.
+            if (sourceType is TupleTypeReference
+                && ContainsNullableLeaf(sourceType)
+                && !method.StartsWith("ThenBy", System.StringComparison.Ordinal)
+                && UsesSystemLinqEnumerable(lambdaBody))
+            {
+                // Query lowering has no Roslyn invocation node for the shared
+                // callable-projection funnel. Cast supplies its projected
+                // recursive tuple element type to LINQ before method binding.
+                receiver = new InvocationExpression(
+                    new MemberAccessExpression(new IdentifierExpression("System.Linq.Enumerable"), "Cast"),
+                    new List<GExpression> { receiver },
+                    new List<GTypeReference> { sourceType });
+            }
+
+            LambdaExpression lambda =
+                this.BuildScopeLambda(scope, lambdaBody, out effectiveType);
             return new InvocationExpression(
                 new MemberAccessExpression(receiver, method),
                 new List<GExpression> { lambda });
+
+            static bool ContainsNullableLeaf(GTypeReference type) =>
+                type.IsNullable
+                || (type is TupleTypeReference tuple
+                    && tuple.ElementTypes.Any(ContainsNullableLeaf));
+
+            bool UsesSystemLinqEnumerable(ExpressionSyntax body) =>
+                (body.Parent switch
+                {
+                    QueryClauseSyntax clause =>
+                        this.context.SemanticModel.GetQueryClauseInfo(clause)
+                            .OperationInfo.Symbol as IMethodSymbol,
+                    OrderingSyntax ordering =>
+                        this.context.GetSymbolInfo(ordering).Symbol
+                            as IMethodSymbol,
+                    SelectOrGroupClauseSyntax selectOrGroup =>
+                        this.context.GetSymbolInfo(selectOrGroup).Symbol as IMethodSymbol,
+                    _ => null,
+                })?.ContainingType.ToDisplayString() == "System.Linq.Enumerable";
         }
 
         // Builds a lambda over the current query scope: a single scope variable
@@ -2795,6 +3245,12 @@ public sealed partial class CSharpToGSharpTranslator
         private LambdaExpression BuildScopeLambda(
             List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
             ExpressionSyntax lambdaBody)
+            => this.BuildScopeLambda(scope, lambdaBody, out _);
+
+        private LambdaExpression BuildScopeLambda(
+            List<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
+            ExpressionSyntax lambdaBody,
+            out ITypeSymbol effectiveType)
         {
             var prologue = new List<GStatement>();
             Parameter param = this.BuildScopeParameter(scope);
@@ -2806,7 +3262,11 @@ public sealed partial class CSharpToGSharpTranslator
             // once per element inside the lambda. Left on the enclosing statement's
             // ambient seam it would instead be emitted before the whole query, where
             // the range variable it references is not in scope.
-            GExpression body = this.TranslateQueryLambdaBody(lambdaBody, prologue);
+            GExpression body = this.TranslateQueryLambdaBody(
+                lambdaBody,
+                prologue,
+                scope,
+                out effectiveType);
             if (prologue.Count == 0)
             {
                 return new LambdaExpression(new List<Parameter> { param }, expressionBody: body);
@@ -2824,8 +3284,43 @@ public sealed partial class CSharpToGSharpTranslator
         // reused verbatim rather than duplicated. `CollectEmbeddedAssignments` no
         // longer descends into a query clause (see <see cref="EagerQuerySources"/>),
         // so the enclosing statement leaves these assignments for this call to hoist.
-        private GExpression TranslateQueryLambdaBody(ExpressionSyntax lambdaBody, List<GStatement> prologue) =>
-            this.TranslateConditionWithHoist(lambdaBody, prologue);
+        private GExpression TranslateQueryLambdaBody(
+            ExpressionSyntax lambdaBody,
+            List<GStatement> prologue,
+            IReadOnlyList<(string Name, GTypeReference Type, ISymbol Symbol)> scope,
+            out ITypeSymbol effectiveType)
+        {
+            var addedNullableBindings = new List<ISymbol>();
+            foreach ((_, GTypeReference type, ISymbol symbol) in scope)
+            {
+                if (type.IsNullable
+                    && symbol != null
+                    && this.state.ProjectedQueryBindingType.TryGetValue(
+                        symbol,
+                        out ITypeSymbol bindingType)
+                    && this.IsReferenceLikeOrManagedReference(bindingType)
+                    && this.state.NullableForEachBindings.Add(symbol))
+                {
+                    addedNullableBindings.Add(symbol);
+                }
+            }
+
+            try
+            {
+                GExpression result =
+                    this.TranslateConditionWithHoist(lambdaBody, prologue);
+                effectiveType =
+                    this.GetManagedReferenceArrayProjectedArgumentType(lambdaBody);
+                return result;
+            }
+            finally
+            {
+                foreach (ISymbol symbol in addedNullableBindings)
+                {
+                    this.state.NullableForEachBindings.Remove(symbol);
+                }
+            }
+        }
 
         // Builds the `(x1, x2) => new{x1, x2}` result-selector shape shared by
         // SelectMany/Join/GroupJoin (spec §12.19.3.3/.7/.8): one parameter for

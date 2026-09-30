@@ -139,6 +139,78 @@ namespace Corpus.Issue1889
     }
 
     [Fact]
+    public void IsPattern_PatternProviderUsesBoundIndexerElementType()
+    {
+        string rendered = Render(@"
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Corpus.Issue1889
+{
+    public sealed class Buffer : IEnumerable<int>
+    {
+        public int Length => 1;
+        public long this[int index] => 1L;
+
+        public IEnumerator<int> GetEnumerator()
+        {
+            yield return 0;
+        }
+
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Holder
+    {
+        public bool Describe(Buffer values) => values is [1];
+    }
+}
+");
+
+        Assert.Contains("values[0] == int64(1)", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
+    public void IsPattern_ProjectedGenericIndexerGuardsNullableElementMember()
+    {
+        string rendered = Render(@"
+#nullable enable
+namespace Corpus.Issue1889
+{
+    public sealed class Node
+    {
+        public int Value => 1;
+    }
+
+    public sealed class Buffer<T>
+    {
+        private readonly T[] values;
+        public Buffer(T[] values) { this.values = values; }
+        public int Length => this.values.Length;
+        public T this[int index] => this.values[index];
+    }
+
+    public class Holder
+    {
+        private static Buffer<T> Create<T>(T[] values) => new Buffer<T>(values);
+
+        public bool Describe()
+        {
+            var values = new Node[1];
+            var buffer = Create(values);
+            return buffer is [{ Value: 1 }];
+        }
+    }
+}
+");
+
+        Assert.Contains("buffer[0] != nil", rendered, StringComparison.Ordinal);
+        Assert.Contains("buffer[0].Value == 1", rendered, StringComparison.Ordinal);
+        AssertRoundTripParses(rendered);
+    }
+
+    [Fact]
     public void IsPattern_HeadAndRestBinders_BindHeadByIndexAndRestBySlice()
     {
         string rendered = Render(@"
