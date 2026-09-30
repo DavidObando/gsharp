@@ -1730,6 +1730,82 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) virtualLeft T\? =", printed);
     }
 
+    [Fact]
+    public void Translation_TracksWrappedReturnedAndRecursiveCallbacks()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class CallbackShapes
+            {
+                private static void Fill<T>(ref T? value, T replacement) =>
+                    value = replacement;
+
+                private static void InvokeNested(System.Action callback)
+                {
+                    void Run() => callback();
+                    Run();
+                }
+
+                public static void M<T>(T replacement, bool choose)
+                {
+                    var wrappedPair = (replacement, replacement);
+                    System.Action wrapped = () =>
+                    {
+                        var (wrappedLeft, _) = wrappedPair;
+                        Fill(ref wrappedLeft, replacement);
+                    };
+                    wrappedPair = (default(T), replacement);
+                    ((System.Action)wrapped)();
+
+                    var nestedPair = (replacement, replacement);
+                    System.Action nested = () =>
+                    {
+                        var (nestedHelperLeft, _) = nestedPair;
+                        Fill(ref nestedHelperLeft, replacement);
+                    };
+                    nestedPair = (default(T), replacement);
+                    InvokeNested(nested);
+
+                    var returnedPair = (replacement, replacement);
+                    void Returned()
+                    {
+                        var (returnedLeft, _) = returnedPair;
+                        Fill(ref returnedLeft, replacement);
+                    }
+
+                    System.Action Make() => Returned;
+                    System.Action escaped = Make();
+                    returnedPair = (default(T), replacement);
+                    escaped();
+
+                    var recursivePair = (replacement, replacement);
+                    void Recursive(bool recurse)
+                    {
+                        if (recurse)
+                        {
+                            recursivePair = (default(T), replacement);
+                            Recursive(false);
+                            return;
+                        }
+
+                        var (recursiveLeft, _) = recursivePair;
+                        Fill(ref recursiveLeft, replacement);
+                    }
+
+                    Recursive(choose);
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) wrappedLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) nestedHelperLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) returnedLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) recursiveLeft T\? =", printed);
+    }
+
     private static ILocalSymbol Local(SyntaxNode root, SemanticModel model, string name)
     {
         SyntaxNode declaration = root.DescendantNodes()

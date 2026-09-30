@@ -1260,6 +1260,34 @@ public sealed partial class CSharpToGSharpTranslator
                             preserveDelegateCompoundAssignments));
                     }
 
+                    bool recursiveChanged;
+                    do
+                    {
+                        recursiveChanged = false;
+                        foreach (int invocationPosition in
+                            this.GetInvocationPositions(
+                                nestedExecutable,
+                                nestedExecutable))
+                        {
+                            int before = nestedInitialValues.Count;
+                            HashSet<ISymbol> invocationVisited = visited == null
+                                ? null
+                                : new HashSet<ISymbol>(
+                                    visited,
+                                    SymbolEqualityComparer.Default);
+                            nestedInitialValues.UnionWith(
+                                this.GetReachingLocalValues(
+                                    local,
+                                    invocationPosition,
+                                    invocationVisited,
+                                    nestedExecutable,
+                                    nestedInitialValues.ToList(),
+                                    preserveDelegateCompoundAssignments));
+                            recursiveChanged |= nestedInitialValues.Count != before;
+                        }
+                    }
+                    while (recursiveChanged);
+
                     initialValues = nestedInitialValues.ToList();
                     executable = nestedExecutable;
                 }
@@ -1516,7 +1544,6 @@ public sealed partial class CSharpToGSharpTranslator
                     target = conditional.Expression;
                 }
 
-                ISymbol targetSymbol = this.context.GetSymbolInfo(target).Symbol;
                 if (anonymousFunction == null)
                 {
                     if (callable is not IMethodSymbol callableLocalFunction
@@ -1530,23 +1557,13 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
                 }
-                else if (targetSymbol is ILocalSymbol delegateLocal)
-                {
-                    if (!this.DelegateLocalReachesAnonymousFunction(
-                        delegateLocal,
-                        invocation.SpanStart,
-                        anonymousFunction,
-                        new HashSet<ISymbol>(SymbolEqualityComparer.Default)))
-                    {
-                        continue;
-                    }
-                }
-                else if (!this.IsNonLocalDelegateStorage(target)
-                    || !this.NonLocalDelegateMayReferenceAnonymousFunction(
+                else if (!this.DelegateExpressionReachesAnonymousFunction(
                         target,
                         invocation.SpanStart,
                         anonymousFunction,
-                        enclosingExecutable))
+                        enclosingExecutable,
+                        new HashSet<ISymbol>(
+                            SymbolEqualityComparer.Default)))
                 {
                     continue;
                 }
@@ -1750,12 +1767,14 @@ public sealed partial class CSharpToGSharpTranslator
                     AnonymousFunctionExpressionSyntax anonymous => anonymous.Body,
                     _ => executable,
                 };
-                foreach (IdentifierNameSyntax use in EagerExecutionNodes(body)
+                var eagerUses = EagerExecutionNodes(body)
                     .OfType<IdentifierNameSyntax>()
                     .Where(identifier =>
                         SymbolEqualityComparer.Default.Equals(
                             model.GetSymbolInfo(identifier).Symbol,
-                            parameter)))
+                            parameter))
+                    .ToList();
+                foreach (IdentifierNameSyntax use in eagerUses)
                 {
                     if (!DelegateParameterUseIsInvocation(use))
                     {
@@ -1763,6 +1782,21 @@ public sealed partial class CSharpToGSharpTranslator
                     }
 
                     invoked = true;
+                }
+
+                var eagerUseStarts = eagerUses
+                    .Select(use => use.SpanStart)
+                    .ToHashSet();
+                bool capturedByNestedExecutable = body.DescendantNodes()
+                    .OfType<IdentifierNameSyntax>()
+                    .Any(identifier =>
+                        !eagerUseStarts.Contains(identifier.SpanStart)
+                            && SymbolEqualityComparer.Default.Equals(
+                                model.GetSymbolInfo(identifier).Symbol,
+                                parameter));
+                if (capturedByNestedExecutable)
+                {
+                    return DelegateArgumentBehavior.Escapes;
                 }
             }
 
@@ -1866,6 +1900,26 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     return true;
                 }
+
+                if (candidate is InvocationExpressionSyntax
+                    && symbol is IMethodSymbol factory
+                    && visited.Add(factory.OriginalDefinition))
+                {
+                    foreach (ExpressionSyntax returned in
+                        this.GetSourceCallableReturnExpressions(factory))
+                    {
+                        if (this.DelegateExpressionReachesLocalFunction(
+                            returned,
+                            returned.SpanStart,
+                            localFunction,
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default)))
+                        {
+                            return true;
+                        }
+                    }
+                }
             }
 
             return false;
@@ -1912,6 +1966,26 @@ public sealed partial class CSharpToGSharpTranslator
                                 SymbolEqualityComparer.Default)))
                     {
                         return true;
+                    }
+
+                    if (expression is InvocationExpressionSyntax
+                        && symbol is IMethodSymbol factory
+                        && visited.Add(factory.OriginalDefinition))
+                    {
+                        foreach (ExpressionSyntax returned in
+                            this.GetSourceCallableReturnExpressions(factory))
+                        {
+                            if (this.DelegateExpressionReachesLocalFunction(
+                                returned,
+                                returned.SpanStart,
+                                localFunction,
+                                new HashSet<ISymbol>(
+                                    visited,
+                                    SymbolEqualityComparer.Default)))
+                            {
+                                return true;
+                            }
+                        }
                     }
                 }
             }
@@ -1964,9 +2038,75 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     return true;
                 }
+
+                if (candidate is InvocationExpressionSyntax
+                    && symbol is IMethodSymbol factory
+                    && visited.Add(factory.OriginalDefinition))
+                {
+                    foreach (ExpressionSyntax returned in
+                        this.GetSourceCallableReturnExpressions(factory))
+                    {
+                        if (this.DelegateExpressionReachesAnonymousFunction(
+                            returned,
+                            returned.SpanStart,
+                            anonymousFunction,
+                            FindEnclosingExecutable(returned),
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default)))
+                        {
+                            return true;
+                        }
+                    }
+                }
             }
 
             return false;
+        }
+
+        private IEnumerable<ExpressionSyntax> GetSourceCallableReturnExpressions(
+            IMethodSymbol method)
+        {
+            foreach (SyntaxReference reference
+                in method.OriginalDefinition.DeclaringSyntaxReferences)
+            {
+                SyntaxNode declaration = reference.GetSyntax();
+                if (declaration.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+                {
+                    continue;
+                }
+
+                switch (declaration)
+                {
+                    case MethodDeclarationSyntax
+                    { ExpressionBody.Expression: { } expression }:
+                        yield return expression;
+                        continue;
+
+                    case LocalFunctionStatementSyntax
+                    { ExpressionBody.Expression: { } expression }:
+                        yield return expression;
+                        continue;
+                }
+
+                SyntaxNode body = declaration switch
+                {
+                    BaseMethodDeclarationSyntax { Body: { } block } => block,
+                    LocalFunctionStatementSyntax { Body: { } block } => block,
+                    _ => null,
+                };
+                if (body == null)
+                {
+                    continue;
+                }
+
+                foreach (ReturnStatementSyntax returned in EagerExecutionNodes(body)
+                    .OfType<ReturnStatementSyntax>()
+                    .Where(statement => statement.Expression != null))
+                {
+                    yield return returned.Expression;
+                }
+            }
         }
 
         private bool NonLocalDelegateMayReferenceAnonymousFunction(
@@ -2527,6 +2667,30 @@ public sealed partial class CSharpToGSharpTranslator
                                 SymbolEqualityComparer.Default)))
                     {
                         return true;
+                    }
+
+                    if (expression.SyntaxTree
+                            == this.context.SemanticModel.SyntaxTree
+                        && expression is InvocationExpressionSyntax
+                        && this.context.GetSymbolInfo(expression).Symbol
+                            is IMethodSymbol factory
+                        && visited.Add(factory.OriginalDefinition))
+                    {
+                        foreach (ExpressionSyntax returned in
+                            this.GetSourceCallableReturnExpressions(factory))
+                        {
+                            if (this.DelegateExpressionReachesAnonymousFunction(
+                                returned,
+                                returned.SpanStart,
+                                anonymousFunction,
+                                FindEnclosingExecutable(returned),
+                                new HashSet<ISymbol>(
+                                    visited,
+                                    SymbolEqualityComparer.Default)))
+                            {
+                                return true;
+                            }
+                        }
                     }
                 }
             }
