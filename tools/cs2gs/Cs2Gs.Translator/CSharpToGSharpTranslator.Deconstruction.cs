@@ -1374,7 +1374,8 @@ public sealed partial class CSharpToGSharpTranslator
                         designation,
                         this.TranslateExpression(right),
                         preserveValue: false,
-                        statements);
+                        statements,
+                        inferredType: false);
                     return statements;
                 });
         }
