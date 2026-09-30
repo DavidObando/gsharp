@@ -1133,8 +1133,12 @@ public sealed partial class CSharpToGSharpTranslator
                 body,
                 out HashSet<string> occupied))
             {
+                bool DescendIntoVisibleScope(SyntaxNode node) =>
+                    ReferenceEquals(node, body) ||
+                    node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax);
+
                 occupied = new HashSet<string>(StringComparer.Ordinal);
-                foreach (SyntaxToken token in body.DescendantTokens())
+                foreach (SyntaxToken token in body.DescendantTokens(DescendIntoVisibleScope))
                 {
                     if (token.IsKind(SyntaxKind.IdentifierToken))
                     {
@@ -1269,13 +1273,19 @@ public sealed partial class CSharpToGSharpTranslator
             ParenthesizedVariableDesignationSyntax designation,
             ExpressionSyntax right)
         {
-            var statements = new List<GStatement>();
-            this.LowerDeconstructionDeclaration(
-                designation,
-                this.TranslateExpression(right),
-                preserveValue: false,
-                statements);
-            return statements;
+            return this.WithHoistedAssignments(
+                right,
+                includeSelf: true,
+                () =>
+                {
+                    var statements = new List<GStatement>();
+                    this.LowerDeconstructionDeclaration(
+                        designation,
+                        this.TranslateExpression(right),
+                        preserveValue: false,
+                        statements);
+                    return statements;
+                });
         }
 
         private bool IsAllDiscardDesignation(VariableDesignationSyntax designation) =>
@@ -1327,7 +1337,11 @@ public sealed partial class CSharpToGSharpTranslator
 
             // `(var a, var b) = e`.
             if (left is TupleExpressionSyntax tuple &&
-                tuple.Arguments.All(a => a.Expression is DeclarationExpressionSyntax))
+                tuple.Arguments.All(a =>
+                    a.Expression is DeclarationExpressionSyntax
+                    {
+                        Designation: SingleVariableDesignationSyntax or DiscardDesignationSyntax,
+                    }))
             {
                 var collected = new List<string>();
                 foreach (ArgumentSyntax argument in tuple.Arguments)

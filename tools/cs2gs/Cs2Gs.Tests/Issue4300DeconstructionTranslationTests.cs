@@ -111,6 +111,124 @@ public sealed class Issue4300DeconstructionTranslationTests
         TranslationTestValidation.AssertBinds(printed);
     }
 
+    [Fact]
+    public void NestedDeclaration_RhsDeconstructionAssignment_PreservesWritesAndValue()
+    {
+        string printed = Translate("""
+            public sealed class Runner
+            {
+                public int Run()
+                {
+                    int x = 0;
+                    int y = 0;
+                    int z = 0;
+                    var (a, (b, c)) = ((x, (y, z)) = (1, (2, 3)));
+                    return (x * 100000) + (y * 10000) + (z * 1000) + (a * 100) + (b * 10) + c;
+                }
+            }
+            """);
+
+        Assert.Contains("let (xValue, yTuple) = (1, (2, 3))", printed, StringComparison.Ordinal);
+        Assert.Contains("x = xValue", printed, StringComparison.Ordinal);
+        Assert.Contains("let (yValue, zValue) = yTuple", printed, StringComparison.Ordinal);
+        Assert.Contains("y = yValue", printed, StringComparison.Ordinal);
+        Assert.Contains("z = zValue", printed, StringComparison.Ordinal);
+        Assert.Contains(
+            "let (a, bTuple) = ((xValue, (yValue, zValue)))",
+            printed,
+            StringComparison.Ordinal);
+        Assert.Contains("let (b, c) = bTuple", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "Runner().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(123123, result.Value);
+    }
+
+    [Fact]
+    public void TupleExpressionNestedDeclaration_UsesRecursiveLowering()
+    {
+        string printed = Translate("""
+            public sealed class Runner
+            {
+                public int Run()
+                {
+                    (var first, var (second, third)) = (1, (2, 3));
+                    return (first * 100) + (second * 10) + third;
+                }
+            }
+            """);
+
+        Assert.Contains("let (first, secondTuple) = (1, (2, 3))", printed, StringComparison.Ordinal);
+        Assert.Contains("let (second, third) = secondTuple", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let (first, _)", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "Runner().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(123, result.Value);
+    }
+
+    [Fact]
+    public void NestedBodyLocals_DoNotReserveOuterCarrierNames()
+    {
+        string printed = Translate("""
+            using System;
+
+            public sealed class Runner
+            {
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    int c = 0;
+                    ((a, b), c) = ((1, 2), 3);
+
+                    Func<int> lambda = () =>
+                    {
+                        int aTuple = 4;
+                        return aTuple;
+                    };
+
+                    int Local()
+                    {
+                        int aTuple = 5;
+                        return aTuple;
+                    }
+
+                    return a + b + c + lambda() + Local();
+                }
+
+                public int Other()
+                {
+                    int a = 0;
+                    int b = 0;
+                    int c = 0;
+                    ((a, b), c) = ((1, 2), 3);
+
+                    int aTuple() => 4;
+                    return a + b + c + aTuple();
+                }
+            }
+            """);
+
+        Assert.Contains("let (aTuple, cValue) = ((1, 2), 3)", printed, StringComparison.Ordinal);
+        Assert.Contains("let (aTuple2, cValue) = ((1, 2), 3)", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed
+                + Environment.NewLine
+                + "(Runner().Run() * 100) + Runner().Other()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(1510, result.Value);
+    }
+
     private static int CountOccurrences(string text, string value)
     {
         int count = 0;
