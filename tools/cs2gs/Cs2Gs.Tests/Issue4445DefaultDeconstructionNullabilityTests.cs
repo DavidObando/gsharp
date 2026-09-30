@@ -1387,6 +1387,66 @@ public class Issue4445DefaultDeconstructionNullabilityTests
     }
 
     [Fact]
+    public void Translation_MutuallyAssignedTupleAliasesTerminate()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class Program
+            {
+                public static string Run(bool choose)
+                {
+                    var first = (default(string), default(string));
+                    var second = first;
+                    if (choose)
+                    {
+                        first = second;
+                    }
+                    else
+                    {
+                        second = first;
+                    }
+
+                    var (left, right) = choose ? first : second;
+                    return left ?? right ?? "";
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) left string\? =", printed);
+        Assert.Matches(@"\b(let|var) right string\? =", printed);
+    }
+
+    [Fact]
+    public void Translation_KeepsProjectedNestedTupleDefaultsThroughConditionalAssignment()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class Program
+            {
+                public static T? Run<T>(bool choose, T replacement)
+                {
+                    (T, T) pair = (replacement, replacement);
+                    T other = replacement;
+                    (pair, other) = choose
+                        ? ((default(T), default(T)), replacement)
+                        : ((replacement, replacement), replacement);
+                    var (projectedLeft, projectedRight) = pair;
+                    return projectedLeft ?? projectedRight;
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) projectedLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) projectedRight T\? =", printed);
+    }
+
+    [Fact]
     public void Translation_TopLevelAliasKeepsDefaultProvenance()
     {
         const string source = """
