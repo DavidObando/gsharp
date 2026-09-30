@@ -1210,10 +1210,8 @@ public sealed partial class CSharpToGSharpTranslator
             var assignedValues = new Dictionary<AssignmentExpressionSyntax, ExpressionSyntax>();
             var elementAssignedValues =
                 new Dictionary<
-                    (string Write, ExpressionSyntax Previous),
+                    (string Write, string Previous),
                     ExpressionSyntax>();
-            var appliedElementWrites =
-                new Dictionary<ExpressionSyntax, HashSet<string>>();
             ExpressionSyntax unknownTuple = CreateUnknownTuple(local.Type);
             bool changed;
             do
@@ -1252,7 +1250,6 @@ public sealed partial class CSharpToGSharpTranslator
                             values,
                             assignedValues,
                             elementAssignedValues,
-                            appliedElementWrites,
                             visited,
                             unknownTuple);
                     }
@@ -1267,7 +1264,6 @@ public sealed partial class CSharpToGSharpTranslator
                             values,
                             assignedValues,
                             elementAssignedValues,
-                            appliedElementWrites,
                             visited,
                             unknownTuple);
                     }
@@ -1302,7 +1298,6 @@ public sealed partial class CSharpToGSharpTranslator
                     reaching,
                     assignedValues,
                     elementAssignedValues,
-                    appliedElementWrites,
                     visited,
                     unknownTuple);
             }
@@ -1317,7 +1312,6 @@ public sealed partial class CSharpToGSharpTranslator
                     reaching,
                     assignedValues,
                     elementAssignedValues,
-                    appliedElementWrites,
                     visited,
                     unknownTuple,
                     usePosition);
@@ -1332,7 +1326,6 @@ public sealed partial class CSharpToGSharpTranslator
                     reaching,
                     assignedValues,
                     elementAssignedValues,
-                    appliedElementWrites,
                     visited,
                     unknownTuple,
                     usePosition);
@@ -1352,14 +1345,30 @@ public sealed partial class CSharpToGSharpTranslator
             }
             else if (nestedExecutable is AnonymousFunctionExpressionSyntax anonymousFunction)
             {
-                if (anonymousFunction.Parent is EqualsValueClauseSyntax
+                SyntaxNode owner = anonymousFunction;
+                while (owner.Parent switch
+                {
+                    ParenthesizedExpressionSyntax parenthesized
+                        when parenthesized.Expression == owner => true,
+                    CastExpressionSyntax cast when cast.Expression == owner => true,
+                    PostfixUnaryExpressionSyntax suppression
+                        when suppression.IsKind(
+                            SyntaxKind.SuppressNullableWarningExpression)
+                            && suppression.Operand == owner => true,
+                    _ => false,
+                })
+                {
+                    owner = owner.Parent;
+                }
+
+                if (owner.Parent is EqualsValueClauseSyntax
                     {
                         Parent: VariableDeclaratorSyntax declarator,
                     })
                 {
                     callable = this.context.SemanticModel.GetDeclaredSymbol(declarator);
                 }
-                else if (anonymousFunction.Parent
+                else if (owner.Parent
                     is AssignmentExpressionSyntax assignment)
                 {
                     callable = this.context.GetSymbolInfo(assignment.Left).Symbol;
@@ -1386,7 +1395,7 @@ public sealed partial class CSharpToGSharpTranslator
                     this.context.GetSymbolInfo(target).Symbol,
                     callable))
                 {
-                    yield return invocation.SpanStart;
+                    yield return invocation.ArgumentList.CloseParenToken.SpanStart;
                 }
             }
         }
@@ -1504,11 +1513,9 @@ public sealed partial class CSharpToGSharpTranslator
             HashSet<ExpressionSyntax> values,
             Dictionary<AssignmentExpressionSyntax, ExpressionSyntax> assignedValues,
             Dictionary<
-                (string Write, ExpressionSyntax Previous),
+                (string Write, string Previous),
                 ExpressionSyntax>
                 elementAssignedValues,
-            Dictionary<ExpressionSyntax, HashSet<string>>
-                appliedElementWrites,
             HashSet<ISymbol> visited,
             ExpressionSyntax unknownTuple,
             int beforePosition = int.MaxValue)
@@ -1555,7 +1562,6 @@ public sealed partial class CSharpToGSharpTranslator
                             local,
                             values,
                             elementAssignedValues,
-                            appliedElementWrites,
                             visited,
                             unknownTuple);
                         continue;
@@ -1596,7 +1602,6 @@ public sealed partial class CSharpToGSharpTranslator
                         local,
                         values,
                         elementAssignedValues,
-                        appliedElementWrites,
                         visited,
                         unknownTuple);
 
@@ -1661,9 +1666,8 @@ public sealed partial class CSharpToGSharpTranslator
             IReadOnlyList<(IReadOnlyList<int> Path, ExpressionSyntax Value)> writes,
             ILocalSymbol local,
             HashSet<ExpressionSyntax> values,
-            Dictionary<(string Write, ExpressionSyntax Previous), ExpressionSyntax>
+            Dictionary<(string Write, string Previous), ExpressionSyntax>
                 elementAssignedValues,
-            Dictionary<ExpressionSyntax, HashSet<string>> appliedElementWrites,
             HashSet<ISymbol> visited,
             ExpressionSyntax unknownTuple)
         {
@@ -1689,7 +1693,6 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     values.Clear();
                     values.Add(source);
-                    appliedElementWrites.Remove(source);
                     continue;
                 }
 
@@ -1708,16 +1711,7 @@ public sealed partial class CSharpToGSharpTranslator
 
                 foreach (ExpressionSyntax previous in previousValues)
                 {
-                    if (appliedElementWrites.TryGetValue(
-                        previous,
-                        out HashSet<string> previousWrites)
-                        && previousWrites.Contains(write))
-                    {
-                        values.Add(previous);
-                        continue;
-                    }
-
-                    var key = (write, previous);
+                    var key = (write, previous.ToString());
                     if (!elementAssignedValues.TryGetValue(
                         key,
                         out ExpressionSyntax updated))
@@ -1729,11 +1723,6 @@ public sealed partial class CSharpToGSharpTranslator
                             0,
                             source);
                         elementAssignedValues.Add(key, updated);
-                        var updatedWrites = previousWrites == null
-                            ? new HashSet<string>()
-                            : new HashSet<string>(previousWrites);
-                        updatedWrites.Add(write);
-                        appliedElementWrites.Add(updated, updatedWrites);
                     }
 
                     values.Add(updated);

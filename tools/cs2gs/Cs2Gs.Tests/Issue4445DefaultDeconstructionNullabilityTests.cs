@@ -346,6 +346,15 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 postCaptureLocalPair = (default(T), replacement);
                 PostCaptureLocal();
 
+                var wrappedCapturePair = (replacement, replacement);
+                System.Action wrappedCapture = (System.Action)(() =>
+                {
+                    var (wrappedCaptureLeft, _) = wrappedCapturePair;
+                    Fill(ref wrappedCaptureLeft, replacement);
+                });
+                wrappedCapturePair = (default(T), replacement);
+                wrappedCapture();
+
                 var deadCapturePair = (replacement, replacement);
                 System.Action deadCapture = () =>
                 {
@@ -609,6 +618,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "capturedLocalLeft", "capturedLocalRight",
             "postCaptureLambdaLeft",
             "postCaptureLocalLeft",
+            "wrappedCaptureLeft",
             "nestedCaptureLeft", "nestedCaptureRight",
             "lambdaLeft", "lambdaRight", "localLeft", "localRight",
             "coalesced", "left", "right",
@@ -676,6 +686,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static void Fill<T>(ref T? value, T replacement) =>
                     value = replacement;
 
+                private static void Keep<T>(ref T value)
+                {
+                }
+
+                [return: System.Diagnostics.CodeAnalysis.MaybeNull]
+                private static T Maybe<T>(T replacement) => replacement;
+
                 private static (T First, T Second) Pair<T>(T replacement) =>
                     (replacement, replacement);
 
@@ -711,6 +728,16 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
                     var (loopLeft, loopRight) = loopPair;
                     Fill(ref loopLeft, replacement);
+
+                    var markerPair =
+                        (First: replacement, Second: replacement);
+                    for (var iteration = 0; iteration < 2; iteration++)
+                    {
+                        markerPair.First = Maybe(replacement);
+                        var (markerLeft, _) = markerPair;
+                        Keep(ref markerLeft);
+                        markerPair.First = default;
+                    }
 
                     var callPair = Pair(replacement);
                     callPair.First = default;
@@ -816,6 +843,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
         Assert.Matches(@"\b(let|var) left T\? =", printed);
         Assert.Matches(@"\b(let|var) loopLeft T\? =", printed);
+        Assert.DoesNotContain("markerLeft T? =", printed, StringComparison.Ordinal);
         Assert.Matches(@"\b(let|var) callLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) deconstructionWriteLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) untouchedDefaultRight T\? =", printed);
@@ -837,6 +865,35 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotContain("loopRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("callRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("deconstructionWriteRight T? =", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Translation_CapturesArgumentWritesBeforeCallback()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class ArgumentCapture
+            {
+                private static void Fill<T>(ref T? value, T replacement) =>
+                    value = replacement;
+
+                private static void M<T>(T replacement)
+                {
+                    var pair = (First: replacement, Second: replacement);
+                    System.Action<T> callback = ignored =>
+                    {
+                        var (left, _) = pair;
+                        Fill(ref left, replacement);
+                    };
+                    callback(pair.First = default(T));
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) left T\? =", printed);
         Assert.DoesNotContain("inRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("combinedRight T? =", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("duplicateWriteRight T? =", printed, StringComparison.Ordinal);
