@@ -2000,7 +2000,6 @@ public sealed partial class CSharpToGSharpTranslator
                 ?? Enumerable.Empty<string>());
             occupied.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
                 ?? Enumerable.Empty<string>());
-            occupied.UnionWith(this.state.UsedLiftedLocalFunctionNames);
 
             string candidate = LiftedLocalFunctionNames
                 .GetValue(
@@ -2012,7 +2011,6 @@ public sealed partial class CSharpToGSharpTranslator
                     localName,
                     candidate => this.typeMapper.ClaimsDocumentScopeName(candidate, this.context));
 
-            this.state.UsedLiftedLocalFunctionNames.Add(candidate);
             return candidate;
         }
 
@@ -2042,6 +2040,25 @@ public sealed partial class CSharpToGSharpTranslator
             return switchStatement.Sections
                 .Where(section => section != declaringSection)
                 .SelectMany(section => section.DescendantNodes().OfType<SimpleNameSyntax>())
+                .Any(name =>
+                    this.context.GetSymbolInfo(name).Symbol is IMethodSymbol referencedMethod
+                    && SymbolEqualityComparer.Default.Equals(
+                        referencedMethod.OriginalDefinition,
+                        localFunction));
+        }
+
+        private bool IsLocalFunctionReferencedBeforeDeclarationInSwitchSection(
+            IMethodSymbol localFunction,
+            LocalFunctionStatementSyntax declaration)
+        {
+            if (declaration.Parent is not SwitchSectionSyntax section)
+            {
+                return false;
+            }
+
+            return section.Statements
+                .TakeWhile(statement => statement != declaration)
+                .SelectMany(statement => statement.DescendantNodes().OfType<SimpleNameSyntax>())
                 .Any(name =>
                     this.context.GetSymbolInfo(name).Symbol is IMethodSymbol referencedMethod
                     && SymbolEqualityComparer.Default.Equals(

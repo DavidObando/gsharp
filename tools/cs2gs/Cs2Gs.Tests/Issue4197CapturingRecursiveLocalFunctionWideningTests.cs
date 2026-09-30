@@ -383,6 +383,34 @@ namespace Demo
     }
 
     [Fact]
+    public void RefReturningLocalFunctionCalledBeforeDeclarationInSwitchSection_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int[] data = new int[] { 10 };
+                        switch (value) {
+                            case 0:
+                                int result = At(data);
+                                static ref int At(int[] values) => ref values[0];
+                                return result;
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "switch sections do not hoist direct ref-returning function literals");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AdjacentCapturingDelegateLocal_IsNotSwallowedByNativeGroup()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""

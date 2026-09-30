@@ -1928,6 +1928,9 @@ public sealed partial class CSharpToGSharpTranslator
                                 GetLocalFunctionSiblingStatements(localFunction))
                             || this.IsLocalFunctionReferencedFromAnotherSwitchSection(
                                 refLocalFunction,
+                                localFunction)
+                            || this.IsLocalFunctionReferencedBeforeDeclarationInSwitchSection(
+                                refLocalFunction,
                                 localFunction)))))
             {
                 string reason = refLocalFunction.ReturnsByRefReadonly
