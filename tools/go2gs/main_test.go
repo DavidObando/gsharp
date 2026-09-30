@@ -89,7 +89,12 @@ func validIncompleteAnalysis() Analysis {
 		}},
 		RecordCounts: RecordCounts{Blockers: 1, Total: 1},
 	}
+	refreshSourceIdentity(&analysis)
 	return analysis
+}
+
+func refreshSourceIdentity(analysis *Analysis) {
+	analysis.Profile.SourceRootIdentity = sourceIdentity(analysis.Profile.ActualSourceCommit, analysis.Manifests)
 }
 
 func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
@@ -306,28 +311,55 @@ func TestCgoDisabledIgnoresDefensivelyDiscoveredInputs(t *testing.T) {
 	}
 }
 
-func TestDefensiveNativeMutationDoesNotCreateDrift(t *testing.T) {
-	root := copyFixture(t, "cgo")
-	path := filepath.Join(root, "native.c")
-	original, err := os.ReadFile(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
-		if writeErr := os.WriteFile(path, []byte("changed defensive input"), 0o644); writeErr != nil {
-			t.Fatal(writeErr)
+func TestGoPackageInputClassifierMatchesGo127(t *testing.T) {
+	for _, extension := range []string{
+		".go", ".c", ".cc", ".cpp", ".cxx", ".m",
+		".h", ".hh", ".hpp", ".hxx",
+		".f", ".F", ".for", ".f90",
+		".s", ".S", ".sx", ".swig", ".swigcxx", ".syso",
+	} {
+		if !recognizedGoPackageInput("input" + extension) {
+			t.Errorf("Go 1.27 package input %s was not recognized", extension)
 		}
-	})
-	if err != nil || !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "input-drift") {
-		t.Fatalf("defensive-only mutation affected completeness: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
 	}
-	index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == "source://native.c" })
-	if index < 0 || analysis.Files[index].Role != "ignored" {
-		t.Fatalf("defensive C input was not retained as ignored: %#v", analysis.Files)
+	for _, extension := range []string{".C", ".H", ".mm", ".txt", ""} {
+		if recognizedGoPackageInput("input" + extension) {
+			t.Errorf("non-Go 1.27 package input %s was recognized", extension)
+		}
 	}
-	data, err := base64.StdEncoding.DecodeString(analysis.Files[index].ContentBase64)
-	if err != nil || !bytes.Equal(data, original) {
-		t.Fatalf("defensive input did not use captured bytes: %q, %v", data, err)
+}
+
+func TestDefensiveNativeMutationDoesNotCreateDrift(t *testing.T) {
+	for _, name := range []string{"native.c", "inactive.S", "inactive.sx"} {
+		t.Run(name, func(t *testing.T) {
+			root := copyFixture(t, "cgo")
+			path := filepath.Join(root, name)
+			if name != "native.c" {
+				if err := os.WriteFile(path, []byte("#include \"native.h\"\n"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			original, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				if writeErr := os.WriteFile(path, []byte("changed defensive input"), 0o644); writeErr != nil {
+					t.Fatal(writeErr)
+				}
+			})
+			if err != nil || !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("defensive-only mutation affected completeness: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+			}
+			index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == "source://"+name })
+			if index < 0 || analysis.Files[index].Role != "ignored" {
+				t.Fatalf("defensive input was not retained as ignored: %#v", analysis.Files)
+			}
+			data, err := base64.StdEncoding.DecodeString(analysis.Files[index].ContentBase64)
+			if err != nil || !bytes.Equal(data, original) {
+				t.Fatalf("defensive input did not use captured bytes: %q, %v", data, err)
+			}
+		})
 	}
 }
 
@@ -1090,6 +1122,36 @@ func TestNativeRequirementIsIncomplete(t *testing.T) {
 	}
 }
 
+func TestSelectedHXXAndSXIncludesAreCaptured(t *testing.T) {
+	root := copyFixture(t, "cgo")
+	for name, content := range map[string]string{
+		"carrier.hxx":  "#include \"nested_hxx.h\"\n",
+		"carrier.sx":   "#include \"nested_sx.h\"\n",
+		"nested_hxx.h": "#define HXX_VALUE 1\n",
+		"nested_sx.h":  "#define SX_VALUE 2\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	analysis, _, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasBlockerCategory(analysis, "native-include") {
+		t.Fatalf("valid .hxx/.sx include closure produced a blocker: %#v", analysis.Blockers)
+	}
+	for _, name := range []string{"carrier.hxx", "carrier.sx", "nested_hxx.h", "nested_sx.h"} {
+		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+			return file.Path == "source://"+name && file.Role == "native"
+		}) {
+			t.Fatalf("selected native include %s was not captured: %#v", name, analysis.Files)
+		}
+	}
+}
+
 func TestUnsafeNativeIncludeFailsClosed(t *testing.T) {
 	root := copyFixture(t, "native")
 	if err := os.WriteFile(filepath.Join(filepath.Dir(root), "outside.h"), []byte("#define OUTSIDE 1\n"), 0o644); err != nil {
@@ -1128,7 +1190,7 @@ func TestNativeIncludeGraphHandlesNestedCycle(t *testing.T) {
 		otherFiles = append(otherFiles, path)
 	}
 	pkg := &packages.Package{Dir: root, OtherFiles: otherFiles}
-	reachable, unsafe := selectedNativeIncludes(pkg, snapshot)
+	reachable, unsafe := selectedNativeIncludes(pkg, nil, snapshot)
 	if unsafe || len(reachable) != 2 {
 		t.Fatalf("nested cyclic include graph mismatch: reachable=%v unsafe=%v", reachable, unsafe)
 	}
@@ -2365,6 +2427,55 @@ func TestImmutableInputSnapshotDetectsLoadTimeDrift(t *testing.T) {
 	}
 }
 
+func TestPackageInputSetDriftCoversAllRecognizedExtensions(t *testing.T) {
+	for _, cgoEnabled := range []bool{false, true} {
+		for _, operation := range []string{"add", "remove", "rename"} {
+			t.Run(fmt.Sprintf("cgo=%t/%s", cgoEnabled, operation), func(t *testing.T) {
+				root := copyFixture(t, "complete")
+				var mutate func()
+				switch operation {
+				case "add":
+					path := filepath.Join(root, "added.hxx")
+					mutate = func() {
+						if err := os.WriteFile(path, []byte("#define ADDED 1\n"), 0o644); err != nil {
+							t.Fatal(err)
+						}
+					}
+				case "remove":
+					path := filepath.Join(root, "removed.sx")
+					if err := os.WriteFile(path, []byte("#include \"textflag.h\"\n"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					mutate = func() {
+						if err := os.Remove(path); err != nil {
+							t.Fatal(err)
+						}
+					}
+				case "rename":
+					path := filepath.Join(root, "renamed.syso")
+					if err := os.WriteFile(path, []byte("object"), 0o644); err != nil {
+						t.Fatal(err)
+					}
+					mutate = func() {
+						if err := os.Rename(path, filepath.Join(root, "replacement.syso")); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+				profile := testProfile()
+				profile.CGOEnabled = cgoEnabled
+				analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), profile, mutate)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "input-drift") {
+					t.Fatalf("recognized input %s was not detected with CGO_ENABLED=%t: %#v", operation, cgoEnabled, analysis.Blockers)
+				}
+			})
+		}
+	}
+}
+
 func TestManifestSnapshotRejectsSymlinks(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("controlled symlink fixture")
@@ -2977,6 +3088,7 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 	complete = withBlockers(complete)
 	complete.Profile.ExpectedSourceCommit = expected
 	complete.Profile.ActualSourceCommit = expected
+	refreshSourceIdentity(&complete)
 	if err := validateAnalysis(complete); err != nil {
 		t.Fatalf("matching complete provenance was rejected: %v", err)
 	}
@@ -2992,6 +3104,7 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 				value := complete
 				value.Profile.ExpectedSourceCommit = expected
 				value.Profile.ActualSourceCommit = actual
+				refreshSourceIdentity(&value)
 				return value
 			}(),
 			want: "source commit mismatch",
@@ -3002,6 +3115,7 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 				value := validIncompleteAnalysis()
 				value.Profile.ExpectedSourceCommit = expected
 				value.Profile.ActualSourceCommit = actual
+				refreshSourceIdentity(&value)
 				return value
 			}(),
 			want: "source commit mismatch",
@@ -3020,6 +3134,7 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 				value := withBlockers(validIncompleteAnalysis(), blocker("source", "migration"))
 				value.Profile.ExpectedSourceCommit = expected
 				value.Profile.ActualSourceCommit = actual
+				refreshSourceIdentity(&value)
 				return value
 			}(),
 			want: "source commit mismatch",
@@ -3030,6 +3145,7 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 				value := validIncompleteAnalysis()
 				value.Profile.ExpectedSourceCommit = expected
 				value.Profile.ActualSourceCommit = ""
+				refreshSourceIdentity(&value)
 				return value
 			}(),
 			want: "missing actual source commit",
@@ -3064,12 +3180,14 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 	mismatch := withBlockers(validIncompleteAnalysis(), blocker("source", "inventory"))
 	mismatch.Profile.ExpectedSourceCommit = expected
 	mismatch.Profile.ActualSourceCommit = actual
+	refreshSourceIdentity(&mismatch)
 	if err := validateAnalysis(mismatch); err != nil {
 		t.Fatalf("consistent source mismatch was rejected: %v", err)
 	}
 	missing := withBlockers(validIncompleteAnalysis(), blocker("source-metadata", "inventory"))
 	missing.Profile.ExpectedSourceCommit = expected
 	missing.Profile.ActualSourceCommit = ""
+	refreshSourceIdentity(&missing)
 	if err := validateAnalysis(missing); err != nil {
 		t.Fatalf("consistent missing actual source commit was rejected: %v", err)
 	}
@@ -3093,6 +3211,61 @@ func TestValidateAnalysisRejectsForgedCompletePreloadArtifact(t *testing.T) {
 	if err := validateAnalysis(analysis); err == nil ||
 		!strings.Contains(err.Error(), "loaded modules, packages, and source files") {
 		t.Fatalf("forged complete preload artifact was accepted: %v", err)
+	}
+}
+
+func TestPreloadAnalysisEnforcesFinalRecordLimit(t *testing.T) {
+	profile := testProfile()
+	profile.RequestedGoVersion = "1.26.6"
+	if profile.RequestedGoVersion == strings.TrimPrefix(runtime.Version(), "go") {
+		profile.RequestedGoVersion = "1.26.7"
+	}
+	profile.ExpectedSourceCommit = strings.Repeat("a", 40)
+	root := copyFixture(t, "complete")
+	analysis, complete, err := analyzePreload(t.Context(), root, t.TempDir(), profile)
+	if err != nil || complete || len(analysis.Blockers) < 2 {
+		t.Fatalf("expected multiple preload blockers: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	profile.Limits.MaxRecords = analysis.RecordCounts.Total
+	if _, _, err := analyzePreload(t.Context(), root, t.TempDir(), profile); err != nil {
+		t.Fatalf("exact preload record limit was rejected: %v", err)
+	}
+	profile.Limits.MaxRecords--
+	rejected, complete, err := analyzePreload(t.Context(), root, t.TempDir(), profile)
+	if err == nil || !strings.Contains(err.Error(), "record count exceeds limit") {
+		t.Fatalf("over-limit preload analysis was accepted: complete=%v err=%v", complete, err)
+	}
+	if rejected.Schema.Name != "" || len(rejected.Blockers) != 0 {
+		t.Fatalf("over-limit preload analysis returned a publishable artifact: %#v", rejected)
+	}
+}
+
+func TestValidateAnalysisRejectsSourceRootIdentityMutation(t *testing.T) {
+	analysis := validIncompleteAnalysis()
+	analysis.Profile.SourceRootIdentity = stableID("source", "forged")
+	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "source root identity") {
+		t.Fatalf("forged source root identity was accepted: %v", err)
+	}
+}
+
+func TestValidateAnalysisRejectsUTF8FlagMutation(t *testing.T) {
+	root := copyFixture(t, "complete")
+	appendInvalidUTF8(t, filepath.Join(root, "ignored_windows.go"))
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("fixture analysis failed: complete=%v err=%v", complete, err)
+	}
+	for _, valid := range []bool{true, false} {
+		index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.ValidUTF8 == valid })
+		if index < 0 {
+			t.Fatalf("fixture has no validUtf8=%t file", valid)
+		}
+		mutated := analysis
+		mutated.Files = append([]FileRecord{}, analysis.Files...)
+		mutated.Files[index].ValidUTF8 = !valid
+		if err := validateAnalysis(mutated); err == nil || !strings.Contains(err.Error(), "content identity") {
+			t.Fatalf("validUtf8=%t mutation was accepted: %v", valid, err)
+		}
 	}
 }
 
@@ -3276,6 +3449,26 @@ func TestScopeIndexLookupWorkIsSublinear(t *testing.T) {
 	}
 	if steps >= count*40 {
 		t.Fatalf("scope lookup performed %d indexed comparisons for %d scopes", steps, count)
+	}
+}
+
+func TestScopeParentValidationCompletesLargeChainWithinLinearBudget(t *testing.T) {
+	const count = 100_000
+	scopes := make([]ScopeRecord, count)
+	byID := make(map[string]ScopeRecord, count)
+	for index := range scopes {
+		scopes[index] = ScopeRecord{ID: strconv.Itoa(index), PackageID: "package:test"}
+		if index > 0 {
+			scopes[index].ParentID = strconv.Itoa(index - 1)
+		}
+		byID[scopes[index].ID] = scopes[index]
+	}
+	start := time.Now()
+	if err := validateScopeParents(scopes, byID); err != nil {
+		t.Fatal(err)
+	}
+	if elapsed := time.Since(start); elapsed > 2*time.Second {
+		t.Fatalf("scope parent validation took %s for %d scopes; indexed validation must remain near-linear", elapsed, count)
 	}
 }
 

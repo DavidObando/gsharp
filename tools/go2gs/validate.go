@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode/utf8"
 )
 
 func validateAnalysis(a Analysis) error {
@@ -52,6 +53,7 @@ func validateAnalysis(a Analysis) error {
 		}
 	}
 	ids := map[string]string{}
+	scopes := make(map[string]ScopeRecord, len(a.Scopes))
 	add := func(id, kind string) error {
 		if id == "" {
 			return fmt.Errorf("%s record has empty id", kind)
@@ -98,9 +100,13 @@ func validateAnalysis(a Analysis) error {
 		}
 	}
 	for _, value := range a.Scopes {
+		if _, duplicate := scopes[value.ID]; duplicate {
+			return fmt.Errorf("duplicate scope id %q", value.ID)
+		}
 		if err := add(value.ID, "scope"); err != nil {
 			return err
 		}
+		scopes[value.ID] = value
 	}
 	for _, value := range a.Selections {
 		if err := add(value.ID, "selection"); err != nil {
@@ -379,7 +385,7 @@ func validateAnalysis(a Analysis) error {
 			return err
 		}
 	}
-	if err := validateOwnership(a); err != nil {
+	if err := validateOwnership(a, scopes); err != nil {
 		return err
 	}
 	expectedCounts := RecordCounts{
@@ -467,6 +473,9 @@ func validateAnalysisHeader(a Analysis) error {
 	if (p.ExpectedSourceCommit != "" && !validCommitID(p.ExpectedSourceCommit)) ||
 		(p.ActualSourceCommit != "" && !validCommitID(p.ActualSourceCommit)) {
 		return errors.New("analysis source commits must be lowercase 40- or 64-character Git object IDs")
+	}
+	if p.SourceRootIdentity != sourceIdentity(p.ActualSourceCommit, a.Manifests) {
+		return errors.New("analysis source root identity is inconsistent with the source commit and manifests")
 	}
 	if (p.ModuleMode != "readonly" && p.ModuleMode != "vendor") ||
 		p.VendorMode != (p.ModuleMode == "vendor") || p.WorkspaceMode != "off" {
@@ -594,7 +603,8 @@ func validateRecordFields(a Analysis) error {
 		if value.ID == "" || value.PackageID == "" || !validPortableLocation(value.Path) ||
 			value.Role == "" || value.Provenance == "" ||
 			!validSHA256(value.SHA256) || value.Bytes < 0 || err != nil ||
-			int64(len(data)) != value.Bytes || hashBytes(data) != value.SHA256 {
+			int64(len(data)) != value.Bytes || hashBytes(data) != value.SHA256 ||
+			value.ValidUTF8 != utf8.Valid(data) {
 			return fmt.Errorf("file %q has invalid required fields or content identity", value.ID)
 		}
 	}
@@ -736,7 +746,7 @@ func validateSourceSpan(span SourceSpan, owner string) error {
 	return nil
 }
 
-func validateOwnership(a Analysis) error {
+func validateOwnership(a Analysis, scopes map[string]ScopeRecord) error {
 	packages := make(map[string]PackageRecord, len(a.Packages))
 	files := make(map[string]FileRecord, len(a.Files))
 	nodes := make(map[string]NodeRecord, len(a.Nodes))
@@ -873,13 +883,10 @@ func validateOwnership(a Analysis) error {
 			}
 		}
 	}
+	if err := validateScopeParents(a.Scopes, scopes); err != nil {
+		return err
+	}
 	for _, scope := range a.Scopes {
-		if scope.ParentID != "" {
-			parent := findScope(a.Scopes, scope.ParentID)
-			if parent == nil || parent.PackageID != scope.PackageID {
-				return fmt.Errorf("scope %q parent ownership is inconsistent", scope.ID)
-			}
-		}
 		if err := validateSpanInPackage(scope.Span, scope.PackageID, fileListings, files, scope.ID+".span", positionMaps); err != nil {
 			return err
 		}
@@ -953,10 +960,14 @@ func validateOwnership(a Analysis) error {
 	return nil
 }
 
-func findScope(scopes []ScopeRecord, id string) *ScopeRecord {
-	for i := range scopes {
-		if scopes[i].ID == id {
-			return &scopes[i]
+func validateScopeParents(values []ScopeRecord, scopes map[string]ScopeRecord) error {
+	for _, scope := range values {
+		if scope.ParentID == "" {
+			continue
+		}
+		parent, ok := scopes[scope.ParentID]
+		if !ok || parent.PackageID != scope.PackageID {
+			return fmt.Errorf("scope %q parent ownership is inconsistent", scope.ID)
 		}
 	}
 	return nil

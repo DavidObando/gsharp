@@ -248,7 +248,9 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		preloadBlocked = true
 	}
 	if preloadBlocked {
-		builder.finish()
+		if err := finishInventory(builder, profile.Limits.MaxRecords); err != nil {
+			return Analysis{}, false, err
+		}
 		return analysis, false, nil
 	}
 	if preloadOnly {
@@ -330,7 +332,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		builder.block("input-drift", "Go toolchain or dependency source changed while type checking", nil, nil)
 	}
 	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, mirror)
-	for key := range verifyOriginalPackageInputs(mirror, sourceSnapshot, semanticProfile) {
+	for key := range verifyOriginalPackageInputs(mirror, sourceSnapshot) {
 		builder.inputDrift[key] = true
 	}
 	manifestDrift := false
@@ -363,8 +365,18 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 			return Analysis{}, false, fmt.Errorf("record count exceeds limit %d", profile.Limits.MaxRecords)
 		}
 	}
-	builder.finish()
+	if err := finishInventory(builder, profile.Limits.MaxRecords); err != nil {
+		return Analysis{}, false, err
+	}
 	return analysis, analysis.InventoryComplete, nil
+}
+
+func finishInventory(builder *inventoryBuilder, maxRecords int) error {
+	builder.finish()
+	if builder.recordCount() > maxRecords {
+		return fmt.Errorf("record count exceeds limit %d", maxRecords)
+	}
+	return nil
 }
 
 type snapshottedInput struct {
@@ -743,7 +755,7 @@ func (mirror sourceMirror) originalDirectory(path string) (string, bool) {
 	return "", false
 }
 
-func verifyOriginalPackageInputs(mirror sourceMirror, snapshot packageInputSnapshot, profile Profile) map[string]bool {
+func verifyOriginalPackageInputs(mirror sourceMirror, snapshot packageInputSnapshot) map[string]bool {
 	drift := map[string]bool{}
 	for path, owners := range snapshot.selectedOwners {
 		root, relative, captured, ok := mirror.originalPath(path)
@@ -758,7 +770,7 @@ func verifyOriginalPackageInputs(mirror sourceMirror, snapshot packageInputSnaps
 			continue
 		}
 		originalDirectory, ok := mirror.originalDirectory(directory)
-		if !ok || !samePackageFileSet(originalDirectory, directory, profile) {
+		if !ok || !samePackageFileSet(originalDirectory, directory) {
 			drift[key] = true
 		}
 	}
@@ -770,7 +782,7 @@ func sameCapturedFile(root, relative string, captured snapshottedInput) bool {
 	return err == nil && os.SameFile(captured.info, info) && bytes.Equal(data, captured.data)
 }
 
-func samePackageFileSet(originalDirectory, mirrorDirectory string, profile Profile) bool {
+func samePackageFileSet(originalDirectory, mirrorDirectory string) bool {
 	originalEntries, err := readRootedMetadataDirectory(originalDirectory)
 	if err != nil {
 		return false
@@ -781,28 +793,17 @@ func samePackageFileSet(originalDirectory, mirrorDirectory string, profile Profi
 	}
 	actual := map[string]bool{}
 	for _, entry := range originalEntries {
-		extension := strings.ToLower(filepath.Ext(entry.Name()))
-		if extension == ".go" || (profile.CGOEnabled && nativeSourceExtension(extension)) {
+		if recognizedGoPackageInput(entry.Name()) {
 			actual[entry.Name()] = true
 		}
 	}
 	expected := map[string]bool{}
 	for _, entry := range mirrorEntries {
-		extension := strings.ToLower(filepath.Ext(entry.Name()))
-		if extension == ".go" || (profile.CGOEnabled && nativeSourceExtension(extension)) {
+		if recognizedGoPackageInput(entry.Name()) {
 			expected[entry.Name()] = true
 		}
 	}
 	return mapsEqual(actual, expected)
-}
-
-func nativeSourceExtension(extension string) bool {
-	switch extension {
-	case ".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".s", ".sx":
-		return true
-	default:
-		return false
-	}
 }
 
 func mapsEqual(left, right map[string]bool) bool {
@@ -902,7 +903,7 @@ func snapshotPackageInputs(selected, captured []*packages.Package, mirror source
 			return packageInputSnapshot{}, fmt.Errorf("snapshot source directory: %w", err)
 		}
 		for _, entry := range entries {
-			if entry.IsDir() || (filepath.Ext(entry.Name()) != ".go" && !nativeIncludeCarrier(entry.Name())) {
+			if entry.IsDir() || !recognizedGoPackageInput(entry.Name()) {
 				continue
 			}
 			path := filepath.Join(directory, entry.Name())
@@ -1014,7 +1015,7 @@ func snapshotPackageInputs(selected, captured []*packages.Package, mirror source
 				}
 			}
 		}
-		reachable, _ := selectedNativeIncludes(pkg, result.data)
+		reachable, _ := selectedNativeIncludes(pkg, selectedNativePaths(files, result.packageRoles[key]), result.data)
 		refined := make([]string, 0, len(files))
 		for _, path := range files {
 			if nativeHeader(path) && !activeCgo && !reachable[path] {
@@ -1044,12 +1045,7 @@ func snapshotPackageInputs(selected, captured []*packages.Package, mirror source
 }
 
 func cgoNativeSource(path string) bool {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".c", ".cc", ".cpp", ".cxx", ".m", ".mm", ".f", ".f90", ".for", ".swig", ".swigcxx":
-		return true
-	default:
-		return false
-	}
+	return classifyGoPackageInput(path)&goPackageInputCgoOnly != 0
 }
 
 func profileSelectedDirectoryInputs(pkg *packages.Package, sourceRoot string, profile Profile) map[string]string {
@@ -1089,7 +1085,7 @@ func profileSelectedDirectoryInputs(pkg *packages.Package, sourceRoot string, pr
 		return result
 	}
 	for _, entry := range entries {
-		if entry.IsDir() || !nativeIncludeCarrier(entry.Name()) {
+		if entry.IsDir() || !recognizedNativePackageInput(entry.Name()) {
 			continue
 		}
 		matched, _ := context.MatchFile(pkg.Dir, entry.Name())
@@ -1144,8 +1140,7 @@ func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Pack
 	}
 	if activeCgo {
 		for _, entry := range entries {
-			extension := strings.ToLower(filepath.Ext(entry.Name()))
-			if entry.IsDir() || (!nativeSourceExtension(extension) && !nativeHeader(entry.Name())) {
+			if entry.IsDir() || !recognizedNativePackageInput(entry.Name()) {
 				continue
 			}
 			matched, err := context.MatchFile(pkg.Dir, entry.Name())
@@ -1381,9 +1376,13 @@ func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Packa
 	for _, pkg := range loaded {
 		files := packageInputPaths(pkg, sourceRoot)
 		activeCgo := pathsImportC(pkg.GoFiles, snapshot.data)
-		reachable, _ := selectedNativeIncludes(pkg, snapshot.data)
+		key := packageInputKey(pkg)
+		reachable, _ := selectedNativeIncludes(pkg, selectedNativePaths(snapshot.selectedFiles[key], snapshot.packageRoles[key]), snapshot.data)
 		for _, path := range files {
 			if nativeHeader(path) && !activeCgo && !reachable[path] {
+				continue
+			}
+			if !activeCgo && cgoNativeSource(path) {
 				continue
 			}
 			actual[packageInputKey(pkg)] = append(actual[packageInputKey(pkg)], path)
