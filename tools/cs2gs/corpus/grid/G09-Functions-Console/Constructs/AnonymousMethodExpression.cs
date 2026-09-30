@@ -3,6 +3,11 @@ using System;
 
 namespace Corpus.Grid09
 {
+    internal delegate void CollisionHandler(string obj, int generated, bool init);
+    internal delegate int RefAnonymousMethodHandler(ref int value);
+    internal delegate int InAnonymousMethodHandler(in int value);
+    internal delegate int VariadicAnonymousMethodHandler(params int[] values);
+
     public static class AnonymousMethodExpressionFixture
     {
         public static void Run()
@@ -43,6 +48,26 @@ namespace Corpus.Grid09
                 Console.WriteLine($"AnonymousMethodExpression: shoutObj={obj}");
             };
             shoutObj("ignored");
+
+            // Driver coverage: the inferred slots become repeatable G# `_`
+            // parameters that bind, compile, and run. Focused unit tests
+            // discriminate collision and shadowing behavior.
+            int generated = 42;
+            bool init = true;
+            CollisionHandler collisions = delegate
+            {
+                Console.WriteLine($"AnonymousMethodExpression: collisions={obj}/{generated}/{init}");
+            };
+            collisions("ignored", 0, false);
+
+            // C# permits omitted anonymous-method parameter lists for ref, in,
+            // and params-array delegate slots. The body cannot name any slot.
+            RefAnonymousMethodHandler byRef = delegate { return generated; };
+            InAnonymousMethodHandler readOnly = delegate { return generated + 1; };
+            VariadicAnonymousMethodHandler variadic = delegate { return generated + 2; };
+            int value = 5;
+            Console.WriteLine(
+                $"AnonymousMethodExpression: modifiers={byRef(ref value)}/{readOnly(in value)}/{variadic(1, 2, 3)}/{value}");
         }
     }
 }
