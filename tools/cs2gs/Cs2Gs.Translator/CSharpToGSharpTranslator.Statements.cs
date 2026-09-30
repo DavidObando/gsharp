@@ -3424,7 +3424,9 @@ public sealed partial class CSharpToGSharpTranslator
                     // self-migration types that result as nullable (issue #4578).
                     ExpressionSyntax source =
                         this.ResolveStableTupleAlias(assignment.Right, aliasPath)!;
-                    value = ProjectTupleElement(source, path);
+                    // ProjectTupleElement never returns null; self-migration types
+                    // the result as nullable (issue #4578).
+                    value = ProjectTupleElement(source, path)!;
                     assignedValues.Add(assignment, value);
                 }
 
@@ -3544,12 +3546,14 @@ public sealed partial class CSharpToGSharpTranslator
                         key,
                         out ExpressionSyntax updated))
                     {
+                        // ReplaceTupleElement never returns null; self-migration types
+                        // the result as nullable (issue #4578).
                         updated = this.ReplaceTupleElement(
                             previous,
                             local.Type,
                             elementPath,
                             0,
-                            source);
+                            source)!;
                         elementAssignedValues.Add(key, updated);
                     }
 
