@@ -132,8 +132,51 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("nil", printed, StringComparison.Ordinal);
+        Assert.Contains("default(string)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericCallTarget_NullLiteralUsesTypedDefault()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public class C
+    {
+        public void F(TaskCompletionSource<string>? challengeTcs)
+        {
+            challengeTcs?.TrySetResult(null);
+        }
+    }
+}");
+
+        Assert.Contains("challengeTcs?.TrySetResult(default(string))", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericNullableCallTarget_NullLiteralRemainsNil()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public class C
+    {
+        public void F(TaskCompletionSource<string?> challengeTcs)
+        {
+            challengeTcs.TrySetResult(null);
+        }
+    }
+}");
+
+        Assert.Contains("challengeTcs.TrySetResult(nil)", printed, StringComparison.Ordinal);
     }
 
     [Fact]

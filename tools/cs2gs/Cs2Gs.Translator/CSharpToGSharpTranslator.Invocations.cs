@@ -2067,9 +2067,12 @@ public sealed partial class CSharpToGSharpTranslator
                 && targetRequiresNonNull
                 && argumentOperation is { Parameter: { } parameter })
             {
+                // A warning-level C# null passed through a substituted generic
+                // slot needs the target's static type without a runtime check.
                 translated = IsNullOrSuppressedNull(argument.Expression)
                     && parameter.Type.IsReferenceType
-                    && parameter.ContainingAssembly?.Name == "Gsharp.Runtime.Values"
+                    && (parameter.ContainingAssembly?.Name == "Gsharp.Runtime.Values"
+                        || parameter.OriginalDefinition.Type is ITypeParameterSymbol)
                         ? new DefaultValueExpression(this.typeMapper.Map(
                             parameter.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                             this.context,

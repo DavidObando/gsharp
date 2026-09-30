@@ -3890,6 +3890,15 @@ public sealed partial class CSharpToGSharpTranslator
                 element,
                 translated,
                 elementType);
+            if (IsNullOrSuppressedNull(element)
+                && targetElementSymbol?.IsReferenceType == true
+                && targetElementSymbol.NullableAnnotation != NullableAnnotation.Annotated)
+            {
+                // C# permits this warning-level write. A typed default retains
+                // the target's static type and the nil value without `!!`.
+                return new DefaultValueExpression(elementType);
+            }
+
             if (!IsNullOrSuppressedNull(element)
                 && !this.IsWithinExpressionTreeLambda(element)
                 && targetElementSymbol?.IsReferenceType == true

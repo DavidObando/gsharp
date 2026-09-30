@@ -228,6 +228,55 @@ public sealed class Issue4440ImportedGenericNilArgumentTests
     }
 
     [Fact]
+    public void ImportedExtensionPreservesExplicitNullableMethodTypeArgument()
+    {
+        const string librarySource = """
+            #nullable enable
+            namespace Issue4440.Library;
+
+            public static class Extensions
+            {
+                public static void Put<T>(this T? receiver, T value) { }
+            }
+            """;
+        using var library = new CSharpFixture(librarySource);
+        using var resolver = ReferenceResolver.WithReferences(new[] { library.AssemblyPath });
+
+        Assert.Empty(Errors(Compile(
+            """
+            import Issue4440.Library
+            "x".Put[string?](nil)
+            """,
+            resolver)));
+    }
+
+    [Fact]
+    public void ImportedExtensionExplicitNonNullMethodTypeArgumentStillRejectsNil()
+    {
+        const string librarySource = """
+            #nullable enable
+            namespace Issue4440.Library;
+
+            public static class Extensions
+            {
+                public static void Put<T>(this T? receiver, T value) { }
+            }
+            """;
+        using var library = new CSharpFixture(librarySource);
+        using var resolver = ReferenceResolver.WithReferences(new[] { library.AssemblyPath });
+
+        var diagnostic = Assert.Single(Errors(Compile(
+            """
+            import Issue4440.Library
+            "x".Put[string](nil)
+            """,
+            resolver)));
+
+        Assert.Equal("GS0155", diagnostic.Id);
+        Assert.Equal(2, diagnostic.Location.StartLine + 1);
+    }
+
+    [Fact]
     public void ImportedStaticCallsProjectGenericArguments()
     {
         const string librarySource = """

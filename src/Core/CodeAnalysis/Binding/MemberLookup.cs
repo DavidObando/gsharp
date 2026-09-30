@@ -5778,42 +5778,54 @@ internal sealed class MemberLookup
             return null;
         }
 
-        var effectiveMethodTypeArguments = methodTypeArguments.IsDefaultOrEmpty
-            ? BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod)
-            : methodTypeArguments;
-        if (!effectiveMethodTypeArguments.IsDefaultOrEmpty
-            && !closedMethod.IsGenericMethodDefinition
-            && effectiveMethodTypeArguments.Any(static type => type == null || type == TypeSymbol.Error))
-        {
-            var closedTypeArguments = BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod);
-            var merged = ImmutableArray.CreateBuilder<TypeSymbol?>(effectiveMethodTypeArguments.Length);
-            for (var i = 0; i < effectiveMethodTypeArguments.Length; i++)
-            {
-                var symbolicType = effectiveMethodTypeArguments[i];
-                merged.Add(symbolicType != null && symbolicType != TypeSymbol.Error
-                    ? symbolicType
-                    : i < closedTypeArguments.Length
-                        ? closedTypeArguments[i]
-                        : null);
-            }
-
-            effectiveMethodTypeArguments = merged.MoveToImmutable();
-        }
+        var effectiveMethodTypeArguments = methodTypeArguments;
 
         if (isExtension && targetType != null && openMethod.IsGenericMethod)
         {
             var receiverTypeArguments = InferSymbolicMethodTypeArguments(
                 openMethod,
                 ImmutableArray.Create<TypeSymbol?>(targetType));
+            var methodTypeArgumentCount = effectiveMethodTypeArguments.IsDefault
+                ? 0
+                : effectiveMethodTypeArguments.Length;
             var merged = ImmutableArray.CreateBuilder<TypeSymbol?>(
                 receiverTypeArguments.Length);
             for (var i = 0; i < receiverTypeArguments.Length; i++)
             {
-                merged.Add(
-                    receiverTypeArguments[i]
-                    ?? (i < effectiveMethodTypeArguments.Length
-                        ? effectiveMethodTypeArguments[i]
-                        : null));
+                var methodTypeArgument = i < methodTypeArgumentCount
+                    ? effectiveMethodTypeArguments[i]
+                    : null;
+                merged.Add(methodTypeArgument != null && methodTypeArgument != TypeSymbol.Error
+                    ? methodTypeArgument
+                    : receiverTypeArguments[i]);
+            }
+
+            effectiveMethodTypeArguments = merged.MoveToImmutable();
+        }
+
+        if ((effectiveMethodTypeArguments.IsDefaultOrEmpty
+                || effectiveMethodTypeArguments.Any(static type => type == null || type == TypeSymbol.Error))
+            && !closedMethod.IsGenericMethodDefinition)
+        {
+            var closedTypeArguments = BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod);
+            var effectiveCount = effectiveMethodTypeArguments.IsDefault
+                ? 0
+                : effectiveMethodTypeArguments.Length;
+            var closedCount = closedTypeArguments.IsDefault
+                ? 0
+                : closedTypeArguments.Length;
+            var count = Math.Max(effectiveCount, closedCount);
+            var merged = ImmutableArray.CreateBuilder<TypeSymbol?>(count);
+            for (var i = 0; i < count; i++)
+            {
+                var symbolicType = i < effectiveCount
+                    ? effectiveMethodTypeArguments[i]
+                    : null;
+                merged.Add(symbolicType != null && symbolicType != TypeSymbol.Error
+                    ? symbolicType
+                    : i < closedCount
+                        ? closedTypeArguments[i]
+                        : null);
             }
 
             effectiveMethodTypeArguments = merged.MoveToImmutable();
