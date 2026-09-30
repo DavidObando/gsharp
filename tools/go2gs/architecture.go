@@ -100,10 +100,15 @@ func resolveArchitectureSettings(goarch string, features []string) (architecture
 			return tags
 		})
 	case "wasm":
+		seen := map[string]bool{}
 		for _, feature := range features {
 			if feature != "satconv" && feature != "signext" {
 				return architectureSettings{}, fmt.Errorf("invalid GOWASM feature %q", feature)
 			}
+			if seen[feature] {
+				return architectureSettings{}, fmt.Errorf("duplicate GOWASM feature %q", feature)
+			}
+			seen[feature] = true
 		}
 		return architectureSettings{
 			variable: "GOWASM", value: strings.Join(uniqueSorted(features), ","),
