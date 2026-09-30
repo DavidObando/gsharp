@@ -1375,29 +1375,20 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            INamedTypeSymbol matchingTemplate =
-                ReceiverTypeHierarchy(sourceNamed.OriginalDefinition)
-                    .FirstOrDefault(candidate =>
-                        SymbolEqualityComparer.Default.Equals(
-                            candidate.OriginalDefinition,
-                            destinationNamed.OriginalDefinition));
             for (int i = 0;
                 i < destinationNamed.TypeParameters.Length
                     && i < matchingSource.TypeArguments.Length;
                 i++)
             {
-                ITypeSymbol sourceArgument = matchingTemplate == null
-                    ? GetEffectiveTypeArgument(matchingSource, i)
-                    : this.SubstituteProjectedReceiverTypeArguments(
-                        matchingTemplate.TypeArguments[i],
-                        sourceNamed);
+                ITypeSymbol sourceArgument =
+                    GetEffectiveTypeArgument(matchingSource, i);
                 ITypeSymbol destinationArgument =
                     GetEffectiveTypeArgument(destinationNamed, i);
                 bool argumentFits =
                     destinationNamed.TypeParameters[i].Variance switch
                     {
                         VarianceKind.Out =>
-                            this.NestedProjectionFitsDestination(
+                            this.CovariantProjectionArgumentFitsDestination(
                                 sourceArgument,
                                 destinationArgument),
                         VarianceKind.In =>
@@ -1421,63 +1412,19 @@ public sealed partial class CSharpToGSharpTranslator
                     destinationNamed.ContainingType);
         }
 
-        private ITypeSymbol SubstituteProjectedReceiverTypeArguments(
-            ITypeSymbol type,
-            INamedTypeSymbol receiver)
+        private bool CovariantProjectionArgumentFitsDestination(
+            ITypeSymbol sourceType,
+            ITypeSymbol destinationType)
         {
-            if (type is ITypeParameterSymbol parameter)
-            {
-                for (INamedTypeSymbol current = receiver;
-                    current != null;
-                    current = current.ContainingType)
-                {
-                    INamedTypeSymbol definition = current.OriginalDefinition;
-                    for (int i = 0; i < definition.TypeParameters.Length; i++)
-                    {
-                        if (SymbolEqualityComparer.Default.Equals(
-                            definition.TypeParameters[i],
-                            parameter.OriginalDefinition))
-                        {
-                            return GetEffectiveTypeArgument(current, i);
-                        }
-                    }
-                }
-
-                return type;
-            }
-
-            if (type is IArrayTypeSymbol array)
-            {
-                return this.context.Compilation.CreateArrayTypeSymbol(
-                    this.SubstituteProjectedReceiverTypeArguments(
-                        array.ElementType,
-                        receiver),
-                    array.Rank,
-                    array.NullableAnnotation);
-            }
-
-            if (type is not INamedTypeSymbol named
-                || named.TypeArguments.Length == 0)
-            {
-                return type;
-            }
-
-            var arguments = named.TypeArguments
-                .Select(argument =>
-                    this.SubstituteProjectedReceiverTypeArguments(
-                        argument,
-                        receiver))
-                .ToImmutableArray();
-            var annotations = arguments
-                .Select((argument, index) =>
-                    named.TypeArgumentNullableAnnotations[index]
-                        == NullableAnnotation.Annotated
-                            ? NullableAnnotation.Annotated
-                            : argument.NullableAnnotation)
-                .ToImmutableArray();
-            return named.ConstructedFrom
-                .Construct(arguments, annotations)
-                .WithNullableAnnotation(named.NullableAnnotation);
+            return (!TypeContainsRecognizedManagedReferenceConsumer(
+                        sourceType,
+                        this.context.Compilation)
+                    || SymbolEqualityComparer.Default.Equals(
+                        sourceType,
+                        destinationType))
+                && this.NestedProjectionFitsDestination(
+                    sourceType,
+                    destinationType);
         }
 
         private static ITypeSymbol GetEffectiveTypeArgument(
