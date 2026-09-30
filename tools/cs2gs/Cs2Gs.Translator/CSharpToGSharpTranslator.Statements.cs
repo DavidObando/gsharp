@@ -1579,7 +1579,9 @@ public sealed partial class CSharpToGSharpTranslator
                         break;
 
                     case ArgumentSyntax argument
-                        when this.context.GetTypeInfo(argument.Expression).Type
+                        when !argument.RefOrOutKeyword.IsKind(
+                                SyntaxKind.OutKeyword)
+                            && this.context.GetTypeInfo(argument.Expression).Type
                             is { TypeKind: TypeKind.Delegate }:
                         value = argument.Expression;
                         position = argument.Parent?.Parent

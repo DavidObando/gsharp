@@ -1574,6 +1574,41 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotMatch(@"\b(let|var) freshLeft T\? =", printed);
     }
 
+    [Fact]
+    public void Translation_DoesNotEscapeIncomingOutDelegate()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class OutDelegate
+            {
+                private static void Keep<T>(ref T value)
+                {
+                }
+
+                private static void Overwrite(out System.Action callback) =>
+                    callback = () => { };
+
+                public static void M<T>(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action callback = () =>
+                    {
+                        var (deadLeft, _) = pair;
+                        Keep(ref deadLeft);
+                    };
+                    Overwrite(out callback);
+                    pair = (default(T), replacement);
+                    callback();
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.DoesNotMatch(@"\b(let|var) deadLeft T\? =", printed);
+    }
+
     private static ILocalSymbol Local(SyntaxNode root, SemanticModel model, string name)
     {
         SyntaxNode declaration = root.DescendantNodes()
