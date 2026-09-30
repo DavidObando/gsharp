@@ -39,6 +39,43 @@ internal sealed partial class StatementBinder
         externalCallableAliases.UnionWith(saved);
     }
 
+    private HashSet<VariableSymbol> CaptureExternalCallableAliases()
+        => new(externalCallableAliases);
+
+    private void RestoreJoinedExternalCallableAliases(
+        HashSet<VariableSymbol> left,
+        IReadOnlyCollection<VariableSymbol> right)
+    {
+        left.IntersectWith(right);
+        RestoreExternalCallableAliases(left);
+    }
+
+    private HashSet<VariableSymbol> ComputeLoopEntryExternalCallableAliases(
+        BoundStatement body,
+        BoundStatement? backEdgeTail,
+        BoundLabel breakLabel,
+        BoundLabel continueLabel,
+        IReadOnlyCollection<VariableSymbol> entryAliases)
+    {
+        var iteration = ImmutableArray.CreateBuilder<BoundStatement>();
+        iteration.Add(body);
+        iteration.Add(new BoundLabelStatement(null, continueLabel));
+        if (backEdgeTail != null)
+        {
+            iteration.Add(backEdgeTail);
+        }
+
+        iteration.Add(new BoundLabelStatement(null, breakLabel));
+        var loop = new BoundForInfiniteStatement(
+            null,
+            new BoundBlockStatement(null, iteration.ToImmutable()),
+            breakLabel,
+            continueLabel);
+        var collector = new AssignedRootsCollector(null, entryAliases);
+        collector.Visit(loop);
+        return collector.DefinitelyExternalFunctionValues.ToHashSet();
+    }
+
     /// <summary>
     /// If <paramref name="statement"/> is a call expression statement whose
     /// called function carries <c>[MemberNotNull("_f", …)]</c>, narrows each

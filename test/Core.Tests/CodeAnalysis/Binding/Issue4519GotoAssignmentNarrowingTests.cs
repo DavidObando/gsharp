@@ -4942,6 +4942,72 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_ElseCleanupDoesNotInheritThenOnlyExternalAlias()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), useCallback bool) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = clear
+                if useCallback {
+                    action = callback
+                }
+                else {
+                    try {
+                        goto Done
+                    }
+                    finally {
+                        action()
+                    }
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { }, false)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_LoopCleanupUsesLoopCarriedCallableAlias()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = callback
+                var iteration = 0
+                for _ in []int32{0, 1} {
+                    try {
+                        if iteration > 0 {
+                            goto Done
+                        }
+                    }
+                    finally {
+                        action()
+                    }
+                    action = clear
+                    iteration++
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { })
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_NonCompletingInfiniteFinallyDoesNotActivateEdge()
     {
         AssertRuns("""

@@ -51,12 +51,15 @@ internal sealed partial class StatementBinder
             // match dominates: when-true in the then-branch, when-false in the
             // else-branch (`if !(x is T t) { ... } else { use(t) }`).
             var (patternThen, patternElse) = PatternVariables.Classify(condition);
+            var callableEntry = CaptureExternalCallableAliases();
             var thenStatement = BindWithPatternVariables(
                 patternThen,
                 () =>
                 {
                     return BindStatementWithNarrowing(syntax.ThenStatement, thenNarrow);
                 });
+            var callableThenExit = CaptureExternalCallableAliases();
+            RestoreExternalCallableAliases(callableEntry);
             var elseStatement = syntax.ElseClause == null
                 ? null
                 : BindWithPatternVariables(
@@ -65,6 +68,10 @@ internal sealed partial class StatementBinder
                     {
                         return BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, elseNarrow);
                     });
+            var callableElseExit = syntax.ElseClause == null
+                ? callableEntry
+                : CaptureExternalCallableAliases();
+            RestoreJoinedExternalCallableAliases(callableThenExit, callableElseExit);
             var result = new BoundIfStatement(syntax, condition, thenStatement, elseStatement);
 
             // ADR-0069 / issue #700: record the else-frame so `BindBlockStatements`
@@ -109,12 +116,15 @@ internal sealed partial class StatementBinder
         initElseNarrow = MergeNarrowingFrames(initElseNarrow, initTypeElse);
 
         var (initPatternThen, initPatternElse) = PatternVariables.Classify(initCondition);
+        var initCallableEntry = CaptureExternalCallableAliases();
         var initThen = BindWithPatternVariables(
             initPatternThen,
             () =>
             {
                 return BindStatementWithNarrowing(syntax.ThenStatement, initThenNarrow);
             });
+        var initCallableThenExit = CaptureExternalCallableAliases();
+        RestoreExternalCallableAliases(initCallableEntry);
         var initElse = syntax.ElseClause == null
             ? null
             : BindWithPatternVariables(
@@ -123,6 +133,10 @@ internal sealed partial class StatementBinder
                 {
                     return BindStatementWithNarrowing(syntax.ElseClause.ElseStatement, initElseNarrow);
                 });
+        var initCallableElseExit = syntax.ElseClause == null
+            ? initCallableEntry
+            : CaptureExternalCallableAliases();
+        RestoreJoinedExternalCallableAliases(initCallableThenExit, initCallableElseExit);
 
         scope = scope.Pop();
 

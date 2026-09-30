@@ -526,12 +526,19 @@ internal sealed partial class StatementBinder
             firstContinueLabel,
             backEdgeTail,
             backEdgeCondition);
+        var loopEntryExternalCallableAliases = ComputeLoopEntryExternalCallableAliases(
+            firstBody,
+            backEdgeTail,
+            firstBreakLabel,
+            firstContinueLabel,
+            externalCallableAliasesSnapshot);
         var narrowingInvalidations = CollectInheritedNarrowingInvalidations(
             mutations,
             mutations.MayMutateMemberPaths,
             inheritedNarrowingFrameCount,
             narrowingSnapshots);
-        if (narrowingInvalidations.Count == 0)
+        if (narrowingInvalidations.Count == 0
+            && loopEntryExternalCallableAliases.SetEquals(externalCallableAliasesSnapshot))
         {
             breakLabel = firstBreakLabel;
             continueLabel = firstContinueLabel;
@@ -612,6 +619,7 @@ internal sealed partial class StatementBinder
         binderCtx.SyntheticLocalCounter = syntheticLocalCounter;
 
         InvalidateInheritedNarrowings(narrowingInvalidations);
+        RestoreSet(externalCallableAliases, loopEntryExternalCallableAliases.ToArray());
         return BindCore(out breakLabel, out continueLabel);
 
         BoundStatement BindCore(out BoundLabel localBreakLabel, out BoundLabel localContinueLabel)
