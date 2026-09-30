@@ -2026,7 +2026,28 @@ public sealed partial class CSharpToGSharpTranslator
                     && SymbolEqualityComparer.Default.Equals(
                         referencedMethod.OriginalDefinition,
                         localFunction)
-                    && name.Parent is not InvocationExpressionSyntax);
+                    && name.Parent is not InvocationExpressionSyntax
+                    && !(name.Parent is ArgumentSyntax argument && IsNameOfArgument(argument)));
+
+        private bool IsLocalFunctionReferencedFromAnotherSwitchSection(
+            IMethodSymbol localFunction,
+            LocalFunctionStatementSyntax declaration)
+        {
+            if (declaration.Parent is not SwitchSectionSyntax declaringSection
+                || declaringSection.Parent is not SwitchStatementSyntax switchStatement)
+            {
+                return false;
+            }
+
+            return switchStatement.Sections
+                .Where(section => section != declaringSection)
+                .SelectMany(section => section.DescendantNodes().OfType<SimpleNameSyntax>())
+                .Any(name =>
+                    this.context.GetSymbolInfo(name).Symbol is IMethodSymbol referencedMethod
+                    && SymbolEqualityComparer.Default.Equals(
+                        referencedMethod.OriginalDefinition,
+                        localFunction));
+        }
 
         private static IEnumerable<SyntaxNode> GetLocalFunctionSiblingStatements(
             LocalFunctionStatementSyntax localFunction) =>
