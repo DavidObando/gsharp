@@ -112,7 +112,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	}
 	defer func() {
 		if releaseErr := output.release(); releaseErr != nil {
-			err = errors.Join(err, &exitError{2, fmt.Errorf("release output lock: %w", releaseErr)})
+			err = joinOutputReleaseError(err, releaseErr)
 		}
 	}()
 
@@ -272,13 +272,13 @@ func runAnalyzeWorker(parent context.Context, args []string) (err error) {
 	if err := rejectSymlinkPath(outRoot); err != nil {
 		return fmt.Errorf("output root: %w", err)
 	}
-	output, err := openBoundOutputRoot(outRoot)
+	output, err := lockAndInvalidateOutput(outRoot)
 	if err != nil {
 		return err
 	}
 	defer func() {
 		if releaseErr := output.release(); releaseErr != nil {
-			err = errors.Join(err, &exitError{2, fmt.Errorf("release output lock: %w", releaseErr)})
+			err = joinOutputReleaseError(err, releaseErr)
 		}
 	}()
 
@@ -336,4 +336,11 @@ func max64(a, b int64) int64 {
 		return a
 	}
 	return b
+}
+
+func joinOutputReleaseError(commandErr, releaseErr error) error {
+	return errors.Join(
+		&exitError{2, fmt.Errorf("release output lock: %w", releaseErr)},
+		commandErr,
+	)
 }
