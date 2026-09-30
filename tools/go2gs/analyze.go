@@ -1072,12 +1072,13 @@ func profileSelectedDirectoryInputs(pkg *packages.Package, sourceRoot string, pr
 		}
 		path := filepath.Join(pkg.Dir, entry.Name())
 		data, err := os.ReadFile(path)
-		if err != nil || !pathsImportC([]string{path}, map[string][]byte{path: data}) {
+		if err != nil || !packageVariantSelectsGoFile(pkg, entry.Name(), data) ||
+			!pathsImportC([]string{path}, map[string][]byte{path: data}) {
 			continue
 		}
 		matched, _ := context.MatchFile(pkg.Dir, entry.Name())
 		if matched {
-			result[path] = "active"
+			result[path] = selectedGoRole(entry.Name())
 			activeCgo = true
 		}
 	}
@@ -1132,7 +1133,8 @@ func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Pack
 		}
 		path := filepath.Join(pkg.Dir, entry.Name())
 		data, err := os.ReadFile(path)
-		if err != nil || !pathsImportC([]string{path}, map[string][]byte{path: data}) {
+		if err != nil || !packageVariantSelectsGoFile(pkg, entry.Name(), data) ||
+			!pathsImportC([]string{path}, map[string][]byte{path: data}) {
 			continue
 		}
 		activeCgo = true
@@ -1162,7 +1164,7 @@ func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Pack
 		snapshot.packageFiles[key] = append(snapshot.packageFiles[key], path)
 		snapshot.selectedFiles[key] = append(snapshot.selectedFiles[key], path)
 		if filepath.Ext(path) == ".go" {
-			snapshot.packageRoles[key][path] = "active"
+			snapshot.packageRoles[key][path] = selectedGoRole(name)
 		} else {
 			snapshot.packageRoles[key][path] = "native"
 		}
@@ -1170,6 +1172,24 @@ func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Pack
 	snapshot.packageFiles[key] = uniqueSorted(snapshot.packageFiles[key])
 	snapshot.selectedFiles[key] = uniqueSorted(snapshot.selectedFiles[key])
 	return nil
+}
+
+func packageVariantSelectsGoFile(pkg *packages.Package, name string, data []byte) bool {
+	if !strings.HasSuffix(name, "_test.go") {
+		return true
+	}
+	if pkg.ForTest == "" || packageVariant(pkg) == "synthetic-test-main" {
+		return false
+	}
+	file, err := parser.ParseFile(token.NewFileSet(), name, data, parser.PackageClauseOnly)
+	return err == nil && file.Name.Name == pkg.Name
+}
+
+func selectedGoRole(name string) string {
+	if strings.HasSuffix(name, "_test.go") {
+		return "test"
+	}
+	return "active"
 }
 
 func profileToolTags(profile Profile) []string {
@@ -1209,7 +1229,8 @@ func selectedPkgConfigDirective(snapshot packageInputSnapshot, profile Profile) 
 		return true
 	}
 	for path, data := range snapshot.data {
-		if filepath.Ext(path) != ".go" || !pathsImportC([]string{path}, snapshot.data) {
+		if !selectedGoSource(snapshot, path) ||
+			filepath.Ext(path) != ".go" || !pathsImportC([]string{path}, snapshot.data) {
 			continue
 		}
 		for _, line := range strings.Split(string(data), "\n") {
@@ -1233,6 +1254,16 @@ func selectedPkgConfigDirective(snapshot packageInputSnapshot, profile Profile) 
 					return true
 				}
 			}
+		}
+	}
+	return false
+}
+
+func selectedGoSource(snapshot packageInputSnapshot, path string) bool {
+	for owner := range snapshot.selectedOwners[path] {
+		role := snapshot.packageRoles[owner][path]
+		if role == "active" || role == "test" {
+			return true
 		}
 	}
 	return false
