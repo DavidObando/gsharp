@@ -5508,6 +5508,7 @@ func TestCgoDiscoveryCancellationStopsCurrentProductionScan(t *testing.T) {
 	}{
 		{"overlay-traversal", "cgo-overlay", "walk", "preflight-before"},
 		{"overlay-import", "cgo-overlay", "import-before", "preflight-before"},
+		{"overlay-import-after", "cgo-overlay", "import-after", "preflight-before"},
 		{"directory-classification", "package-input-classification", "go-file", "typed-before"},
 		{"import-parse", "cgo-import-parse", "before", "typed-before"},
 		{"native-include", "native-include-scan", "after-parse", "typed-before"},
@@ -5615,38 +5616,51 @@ func TestSourcePositionParserCancellationStopsBeforePositionUse(t *testing.T) {
 }
 
 func TestPkgConfigFallbackCancellationStopsInsideProductionParse(t *testing.T) {
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	hit := false
-	completed := false
-	selectedPkgConfigSnapshotTestHook = func(snapshot *packageInputSnapshot) {
-		snapshot.pkgConfig = false
-	}
-	t.Cleanup(func() { selectedPkgConfigSnapshotTestHook = nil })
-	analysisOperationTestHook = func(operation, point string) {
-		if operation == "pkg-config-scan" && point == "parse-before" && !hit {
-			hit = true
-			cancel()
-		}
-	}
-	t.Cleanup(func() { analysisOperationTestHook = nil })
-	postLoadContextTestHook = func(phase string) {
-		if phase == "pkg-config-scan-complete" {
-			completed = true
-		}
-	}
-	t.Cleanup(func() { postLoadContextTestHook = nil })
-	profile := testProfile()
-	profile.CGOEnabled = true
-	_, _, err := analyze(ctx, copyFixture(t, "cgo"), t.TempDir(), profile)
-	if !errors.Is(err, context.Canceled) {
-		t.Fatalf("pkg-config parse cancellation returned %v", err)
-	}
-	if !hit {
-		t.Fatal("pkg-config fallback parser hook was not reached")
-	}
-	if completed {
-		t.Fatal("pkg-config fallback completed after parser cancellation")
+	for _, point := range []string{"parse-before", "parse-after"} {
+		t.Run(point, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			hit := false
+			resultConsumed := false
+			completed := false
+			selectedPkgConfigSnapshotTestHook = func(snapshot *packageInputSnapshot) {
+				snapshot.pkgConfig = false
+			}
+			t.Cleanup(func() { selectedPkgConfigSnapshotTestHook = nil })
+			analysisOperationTestHook = func(operation, actualPoint string) {
+				if operation != "pkg-config-scan" {
+					return
+				}
+				if actualPoint == point && !hit {
+					hit = true
+					cancel()
+				} else if hit && actualPoint == "parse-result" {
+					resultConsumed = true
+				}
+			}
+			t.Cleanup(func() { analysisOperationTestHook = nil })
+			postLoadContextTestHook = func(phase string) {
+				if phase == "pkg-config-scan-complete" {
+					completed = true
+				}
+			}
+			t.Cleanup(func() { postLoadContextTestHook = nil })
+			profile := testProfile()
+			profile.CGOEnabled = true
+			_, _, err := analyze(ctx, copyFixture(t, "cgo"), t.TempDir(), profile)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("pkg-config %s cancellation returned %v", point, err)
+			}
+			if !hit {
+				t.Fatalf("pkg-config %s hook was not reached", point)
+			}
+			if resultConsumed {
+				t.Fatalf("pkg-config parse result was consumed after %s cancellation", point)
+			}
+			if completed {
+				t.Fatalf("pkg-config fallback completed after %s cancellation", point)
+			}
+		})
 	}
 }
 
