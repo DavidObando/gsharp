@@ -1715,6 +1715,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return DelegateArgumentBehavior.Escapes;
             }
 
+            if (DelegateCalleeMayDispatchDynamically(argument, parameter))
+            {
+                return DelegateArgumentBehavior.Escapes;
+            }
+
             bool invoked = false;
             foreach (SyntaxReference reference in parameter.DeclaringSyntaxReferences)
             {
@@ -1764,6 +1769,35 @@ public sealed partial class CSharpToGSharpTranslator
             return invoked
                 ? DelegateArgumentBehavior.InvokedDuringCall
                 : DelegateArgumentBehavior.NotObserved;
+        }
+
+        private static bool DelegateCalleeMayDispatchDynamically(
+            ArgumentSyntax argument,
+            IParameterSymbol parameter)
+        {
+            if (parameter.ContainingSymbol is not IMethodSymbol method
+                || method.IsStatic
+                || method.MethodKind == MethodKind.LocalFunction
+                || method.IsSealed
+                || method.ContainingType?.IsSealed == true
+                || method is
+                    {
+                        IsAbstract: false,
+                        IsVirtual: false,
+                        IsOverride: false,
+                    })
+            {
+                return false;
+            }
+
+            return argument.Parent?.Parent
+                is not InvocationExpressionSyntax
+                {
+                    Expression: MemberAccessExpressionSyntax
+                    {
+                        Expression: BaseExpressionSyntax,
+                    },
+                };
         }
 
         private static bool DelegateParameterUseIsInvocation(

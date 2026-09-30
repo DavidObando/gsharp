@@ -1696,6 +1696,40 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotMatch(@"\b(let|var) observedLeft T\? =", printed);
     }
 
+    [Fact]
+    public void Translation_TreatsVirtualDelegateCalleeAsEscape()
+    {
+        const string source = """
+            #nullable enable
+
+            public class VirtualDelegateCallee<T>
+            {
+                private static void Fill(ref T? value, T replacement) =>
+                    value = replacement;
+
+                protected virtual void Observe(System.Action callback)
+                {
+                }
+
+                public void M(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action callback = () =>
+                    {
+                        var (virtualLeft, _) = pair;
+                        Fill(ref virtualLeft, replacement);
+                    };
+                    Observe(callback);
+                    pair = (default(T), replacement);
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) virtualLeft T\? =", printed);
+    }
+
     private static ILocalSymbol Local(SyntaxNode root, SemanticModel model, string name)
     {
         SyntaxNode declaration = root.DescendantNodes()
