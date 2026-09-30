@@ -3477,13 +3477,36 @@ internal sealed class ConversionClassifier
         for (var i = 0; i < arguments.Length; i++)
         {
             var paramIndex = parameterMapping.IsDefault ? i : parameterMapping[i];
+            var location = !parameterArgumentLocations.IsDefault
+                && paramIndex < parameterArgumentLocations.Length
+                && parameterArgumentLocations[paramIndex] is { } mappedLocation
+                    ? mappedLocation
+                    : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
+            var parameterType = paramIndex < parameters.Length
+                && parameters[paramIndex].ParameterType is { IsByRef: false }
+                && method != null
+                && receiverType != null
+                    ? MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex)
+                    : null;
+            if (parameterType != null
+                && binderCtx.TryGetBackwardGotoNarrowingPath(arguments[i], out var path, out var narrowedType)
+                && (Invariant.Required(path, "a narrowed constrained-call argument has an access path").HasMembers
+                    || !BinderContext.NarrowedReadChangesRuntimeType(
+                        path.Root.Type,
+                        Invariant.Required(narrowedType, "a narrowed constrained-call argument has a narrowed type")))
+                && parameterType is not NullableTypeSymbol
+                && parameterType is not PlatformTypeSymbol)
+            {
+                binderCtx.TrackBackwardGotoNarrowingUse(
+                    path,
+                    location,
+                    string.Empty,
+                    BackwardGotoNarrowingUseKind.Conversion,
+                    parameterType);
+            }
+
             if (paramIndex < parameters.Length && IsImplicitInClrArgument(arguments[i], parameters[paramIndex]))
             {
-                var location = !parameterArgumentLocations.IsDefault
-                    && paramIndex < parameterArgumentLocations.Length
-                    && parameterArgumentLocations[paramIndex] is { } mappedLocation
-                        ? mappedLocation
-                        : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
                 var pointeeType = GetImplicitInClrPointeeType(
                     parameters[paramIndex],
                     paramIndex,
@@ -3504,32 +3527,8 @@ internal sealed class ConversionClassifier
             else if (paramIndex < parameters.Length
                 && (Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
                     || TypeSymbol.ContainsNullLiteralType(arguments[i].Type))
-                && parameters[paramIndex].ParameterType is { IsByRef: false }
-                && method != null
-                && receiverType != null
-                && MemberLookup.GetClrMethodParameterTypeSymbol(receiverType, method, paramIndex) is { } parameterType)
+                && parameterType != null)
             {
-                var location = !parameterArgumentLocations.IsDefault
-                    && paramIndex < parameterArgumentLocations.Length
-                    && parameterArgumentLocations[paramIndex] is { } mappedLocation
-                        ? mappedLocation
-                        : i < call.Arguments.Count ? call.Arguments[i].Location : call.Location;
-                if (binderCtx.TryGetBackwardGotoNarrowingPath(arguments[i], out var path, out var narrowedType)
-                    && (Invariant.Required(path, "a narrowed constrained-call argument has an access path").HasMembers
-                        || !BinderContext.NarrowedReadChangesRuntimeType(
-                            path.Root.Type,
-                            Invariant.Required(narrowedType, "a narrowed constrained-call argument has a narrowed type")))
-                    && parameterType is not NullableTypeSymbol
-                    && parameterType is not PlatformTypeSymbol)
-                {
-                    binderCtx.TrackBackwardGotoNarrowingUse(
-                        path,
-                        location,
-                        string.Empty,
-                        BackwardGotoNarrowingUseKind.Conversion,
-                        parameterType);
-                }
-
                 if (Conversion.ContainsPlatformTypeInStructure(arguments[i].Type)
                     && TryRejectClrPlatformContainerArgument(
                         arguments[i],
