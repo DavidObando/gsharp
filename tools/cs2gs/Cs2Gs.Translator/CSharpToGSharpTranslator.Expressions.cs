@@ -1152,6 +1152,18 @@ public sealed partial class CSharpToGSharpTranslator
                             invocation.Expression))?.ReturnType;
             }
 
+            if (expression is AwaitExpressionSyntax awaited
+                && this.GetManagedReferenceArrayProjectedExpressionType(
+                    awaited.Expression)
+                    is INamedTypeSymbol
+                    { IsGenericType: true, TypeArguments.Length: 1 } projectedAwaitable
+                && projectedAwaitable.Name is "Task" or "ValueTask"
+                && projectedAwaitable.ContainingNamespace?.ToDisplayString()
+                    == "System.Threading.Tasks")
+            {
+                return GetEffectiveTypeArgument(projectedAwaitable, 0);
+            }
+
             if (expression is BaseObjectCreationExpressionSyntax creation
                 && this.TryGetManagedReferenceArrayProjectedMethod(
                     creation,
@@ -1476,7 +1488,9 @@ public sealed partial class CSharpToGSharpTranslator
                 ? null
                 : GetLambdaResultTargetType(lambda, invoke);
             ITypeSymbol projectedResult = null;
-            foreach (ExpressionSyntax result in GetLambdaResultExpressions(lambda))
+            ExpressionSyntax[] results =
+                GetLambdaResultExpressions(lambda).ToArray();
+            foreach (ExpressionSyntax result in results)
             {
                 ITypeSymbol candidate =
                     this.GetManagedReferenceArrayProjectedExpressionType(result);
@@ -1498,6 +1512,66 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 projectedResult = candidate;
+            }
+
+            if (projectedResult == null)
+            {
+                return null;
+            }
+
+            if (results.Any(result =>
+                !this.LambdaResultFitsProjectedDestination(
+                    result,
+                    projectedResult)))
+            {
+                this.context.ReportUnsupported(
+                    lambda,
+                    "lambda return arms have incompatible managed-reference projections.");
+                return null;
+            }
+
+            return GetProjectedLambdaInvocationReturnType(
+                lambda,
+                invoke,
+                projectedResult);
+        }
+
+        private bool LambdaResultFitsProjectedDestination(
+            ExpressionSyntax result,
+            ITypeSymbol projectedDestination)
+        {
+            if (this.IsNullCompositeArm(result))
+            {
+                return projectedDestination.NullableAnnotation
+                        == NullableAnnotation.Annotated
+                    && this.IsReferenceLikeOrManagedReference(
+                        projectedDestination);
+            }
+
+            ITypeSymbol effectiveResult =
+                this.GetManagedReferenceArrayProjectedExpressionType(result)
+                ?? this.context.GetTypeInfo(result).Type
+                ?? this.context.GetTypeInfo(result).ConvertedType;
+            return effectiveResult != null
+                && this.ProjectionTypeFitsCompositeDestination(
+                    effectiveResult,
+                    projectedDestination);
+        }
+
+        private static ITypeSymbol GetProjectedLambdaInvocationReturnType(
+            AnonymousFunctionExpressionSyntax lambda,
+            IMethodSymbol invoke,
+            ITypeSymbol projectedResult)
+        {
+            if (lambda.AsyncKeyword.IsKind(SyntaxKind.AsyncKeyword)
+                && invoke.ReturnType is INamedTypeSymbol
+                    { Name: "Task", IsGenericType: true, TypeArguments.Length: 1 } task
+                && task.ContainingNamespace?.ToDisplayString()
+                    == "System.Threading.Tasks")
+            {
+                return task.ConstructedFrom
+                    .Construct(projectedResult)
+                    .WithNullableAnnotation(task.NullableAnnotation);
             }
 
             return projectedResult;

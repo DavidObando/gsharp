@@ -3970,6 +3970,88 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void InferredAsyncDelegateInvocationKeepsTaskEnvelope()
+    {
+        const string source = """
+            using System.Threading.Tasks;
+            using Gsharp.Values;
+            namespace ManagedArrayInferredAsyncDelegateReturn;
+            public class Probe {
+                public static async Task<int> Run() {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    var get = async () => {
+                        await Task.Yield();
+                        return source[0];
+                    };
+                    return (await get()).Borrow();
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayInferredAsyncDelegateReturn.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("(await get())!!.Borrow()", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionRejectsMixedCallbackReturnArms()
+    {
+        const string source = """
+            using System;
+            using Gsharp.Values;
+            namespace ManagedArrayMixedLambdaReturns;
+            public class Probe {
+                private static (T Reference, int Value) Apply<T>(
+                    T[] source,
+                    Func<bool, (T Reference, int Value)> factory) =>
+                    factory(true);
+
+                public static void Run() {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    var projectedResults =
+                        new (ManagedRef<int> Reference, int Value)[1];
+                    var fixedResult =
+                        (ManagedRef<int>.FromArray(values, 0), 0);
+                    _ = Apply(source, projected => {
+                        if (projected) return projectedResults[0];
+                        return fixedResult;
+                    });
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayMixedLambdaReturns.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "callback return storage",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ContainingTypeProjectionIncludesGenericOuterType()
     {
         const string source = """

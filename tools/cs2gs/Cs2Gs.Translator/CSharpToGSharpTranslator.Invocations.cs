@@ -5948,11 +5948,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                 foreach (ExpressionSyntax result in GetLambdaResultExpressions(lambda))
                 {
-                    ITypeSymbol projectedResult =
-                        this.GetManagedReferenceArrayProjectedExpressionType(result);
-                    if (projectedResult != null
-                        && !this.ProjectionTypeFitsCompositeDestination(
-                            projectedResult,
+                    if (!this.LambdaResultFitsProjectedDestination(
+                            result,
                             targetResult))
                     {
                         incompatibleParameter = parameter;
