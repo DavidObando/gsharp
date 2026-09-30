@@ -5354,27 +5354,63 @@ internal sealed class MemberLookup
         return receiverType;
 
         static TypeSymbol? FindSourceFieldType(TypeSymbol receiver, FieldSymbol selected)
-            => receiver is StructSymbol structType
-                ? structType.GetHierarchy().SelectMany(type => type.Fields).FirstOrDefault(candidate =>
-                    ReferenceEquals(candidate, selected)
-                    || (selected.Declaration != null
-                        && ReferenceEquals(candidate.Declaration, selected.Declaration)))?.Type
-                : null;
+        {
+            if (receiver is not StructSymbol structType)
+            {
+                return null;
+            }
+
+            foreach (var owner in structType.GetHierarchy())
+            {
+                foreach (var candidate in owner.Definition.Fields)
+                {
+                    if (ReferenceEquals(candidate, selected)
+                        || (selected.Declaration != null
+                            && ReferenceEquals(candidate.Declaration, selected.Declaration)))
+                    {
+                        return owner.SubstituteMemberType(candidate.Type);
+                    }
+                }
+            }
+
+            return null;
+        }
 
         static TypeSymbol? FindSourcePropertyType(TypeSymbol receiver, PropertySymbol selected)
         {
-            IEnumerable<PropertySymbol> candidates = receiver switch
+            if (receiver is StructSymbol structType)
             {
-                StructSymbol structType => structType.GetHierarchy().SelectMany(type => type.Properties),
-                InterfaceSymbol interfaceType => interfaceType
-                    .SelfAndAllBaseInterfaces()
-                    .SelectMany(type => type.Properties),
-                _ => Enumerable.Empty<PropertySymbol>(),
-            };
-            return candidates.FirstOrDefault(candidate =>
-                ReferenceEquals(candidate, selected)
-                || (selected.Declaration != null
-                    && ReferenceEquals(candidate.Declaration, selected.Declaration)))?.Type;
+                foreach (var owner in structType.GetHierarchy())
+                {
+                    foreach (var candidate in owner.Definition.Properties)
+                    {
+                        if (ReferenceEquals(candidate, selected)
+                            || (selected.Declaration != null
+                                && ReferenceEquals(candidate.Declaration, selected.Declaration)))
+                        {
+                            return owner.SubstituteMemberType(candidate.Type);
+                        }
+                    }
+                }
+            }
+            else if (receiver is InterfaceSymbol interfaceType)
+            {
+                foreach (var owner in interfaceType.SelfAndAllBaseInterfaces())
+                {
+                    owner.EnsureMembersResolved();
+                    foreach (var candidate in owner.Definition.Properties)
+                    {
+                        if (ReferenceEquals(candidate, selected)
+                            || (selected.Declaration != null
+                                && ReferenceEquals(candidate.Declaration, selected.Declaration)))
+                        {
+                            return owner.SubstituteMemberType(candidate.Type);
+                        }
+                    }
+                }
+            }
+
+            return null;
         }
     }
 

@@ -3,7 +3,13 @@
 // </copyright>
 
 using System;
+using System.Collections.Immutable;
 using System.Linq;
+using GSharp.Core.CodeAnalysis.Binding;
+using GSharp.Core.CodeAnalysis.Compilation;
+using GSharp.Core.CodeAnalysis.Symbols;
+using GSharp.Core.CodeAnalysis.Syntax;
+using GSharp.Core.CodeAnalysis.Text;
 using GSharp.Tests;
 using Xunit;
 
@@ -5869,6 +5875,70 @@ public class Issue4519GotoAssignmentNarrowingTests
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
         Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
         Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_ConstructedGenericInterfacePropertyGuardRetainsNullableType()
+    {
+        var result = Evaluate("""
+            interface IBox[T] {
+                prop Value T { get; set; }
+            }
+            class Box : IBox[string?] {
+                var Stored string?
+                public prop Value string? {
+                    get { return Stored }
+                    set { Stored = value }
+                }
+            }
+
+            func Run() int32 {
+                var box IBox[string?] = Box{Stored: "safe"}
+                var count = 0
+                if box.Value != nil {
+                Again:
+                    let length = box.Value.Length
+                    if count == 0 {
+                        count++
+                        box.Value = nil
+                        goto Again
+                    }
+                    return length
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void DeclaredAccessPathProjectsConstructedInterfacePropertyType()
+    {
+        var tree = SyntaxTree.Parse(SourceText.From("""
+            interface IBox[T] {
+                prop Value T { get; }
+            }
+            """));
+        var compilation = new Compilation(tree);
+        Assert.Empty(compilation.BoundProgram.Diagnostics.Where(d => d.IsError));
+
+        var definition = Assert.Single(compilation.GlobalScope.Interfaces);
+        var property = Assert.Single(definition.Properties);
+        var nullableString = NullableTypeSymbol.Get(TypeSymbol.String);
+        var constructed = InterfaceSymbol.Construct(
+            definition,
+            ImmutableArray.Create<TypeSymbol>(nullableString));
+        var root = new LocalVariableSymbol("box", isReadOnly: false, constructed);
+        var path = AccessPath.ForVariable(root).Append(property);
+
+        Assert.Same(
+            nullableString,
+            MemberLookup.GetDeclaredAccessPathType(path, TypeSymbol.Error));
     }
 
     [Fact]
