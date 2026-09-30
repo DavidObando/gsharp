@@ -191,6 +191,19 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
+        private void RegisterProjectedSwitchPatternBindings(
+            PatternSyntax pattern,
+            ExpressionSyntax receiver)
+        {
+            ITypeSymbol receiverType =
+                this.GetManagedReferenceArrayProjectedExpressionType(receiver)
+                ?? this.context.GetTypeInfo(receiver).Type;
+            this.RegisterProjectedNativePatternBindings(
+                pattern,
+                receiverType,
+                this.GetMappedArrayElementType(receiver));
+        }
+
         private void RegisterProjectedPatternBinding(
             ISymbol symbol,
             ITypeSymbol effectiveType)

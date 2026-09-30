@@ -629,6 +629,9 @@ public sealed partial class CSharpToGSharpTranslator
                 var guards = new List<GExpression>();
                 var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
+                this.RegisterProjectedSwitchPatternBindings(
+                    arm.Pattern,
+                    node.GoverningExpression);
                 GPattern pattern = this.TranslateSwitchPattern(
                     arm.Pattern,
                     subject,
@@ -944,6 +947,9 @@ public sealed partial class CSharpToGSharpTranslator
                 var guards = new List<GExpression>();
                 var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
+                this.RegisterProjectedSwitchPatternBindings(
+                    arm.Pattern,
+                    node.GoverningExpression);
                 GPattern pattern = this.TranslateSwitchPattern(
                     arm.Pattern,
                     subject,
@@ -1116,6 +1122,9 @@ public sealed partial class CSharpToGSharpTranslator
                             var guards = new List<GExpression>();
                             var mutableBindings = new List<(ILocalSymbol Symbol, GExpression MatchedValue)>();
 
+                            this.RegisterProjectedSwitchPatternBindings(
+                                patternLabel.Pattern,
+                                node.Expression);
                             GPattern pattern = this.TranslateSwitchPattern(
                                 patternLabel.Pattern,
                                 subject,

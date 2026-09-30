@@ -6146,6 +6146,53 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void SwitchPatternBindersRetainProjectedManagedReferenceType()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedSwitchPatternBinders;
+            public class Probe {
+                private static int FromExpression(ManagedRef<int>[] source) =>
+                    source[0] switch {
+                        var expressionItem => expressionItem == null ? 20 : 0,
+                    };
+
+                private static int FromStatement(ManagedRef<int>[] source) {
+                    switch (source[0]) {
+                        case var statementItem:
+                            return statementItem == null ? 22 : 0;
+                    }
+                }
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return FromExpression(source) + FromStatement(source);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedSwitchPatternBinders.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("expressionItem!!", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("statementItem!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionFlowsThroughConstructionArgument()
     {
         const string source = """
