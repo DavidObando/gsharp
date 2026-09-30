@@ -361,11 +361,6 @@ internal sealed class DocumentTranslationState
     public Dictionary<(SyntaxNode Scope, string Prefix), int> SyntheticLabelCounters { get; } =
         new Dictionary<(SyntaxNode Scope, string Prefix), int>();
 
-    // Issue #4302: readable member-lift fallback names already allocated in
-    // this document; genuine collisions take a short ordinal suffix.
-    public HashSet<string> UsedLiftedLocalFunctionNames { get; } =
-        new HashSet<string>(StringComparer.Ordinal);
-
     public Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction> LiftedRecursiveLocalFunctions { get; } =
         new Dictionary<IMethodSymbol, LiftedRecursiveLocalFunction>(SymbolEqualityComparer.Default);
 
