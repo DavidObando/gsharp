@@ -2449,6 +2449,7 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     ITypeParameterSymbol typeParameter =
                         containingParameters[typeIndex];
+                    ITypeSymbol observedProjection = null;
                     for (int parameterIndex = 0;
                         parameterIndex < method.Parameters.Length;
                         parameterIndex++)
@@ -2468,29 +2469,46 @@ public sealed partial class CSharpToGSharpTranslator
                             return null;
                         }
 
-                        if (!hasProjectedArgument
-                            || SymbolEqualityComparer.IncludeNullability.Equals(
-                                containingArguments[typeIndex],
-                                projectedArgument))
+                        if (!hasProjectedArgument)
                         {
                             continue;
                         }
 
-                        if (projectedArgument.NullableAnnotation
-                                == NullableAnnotation.Annotated
-                            && NullableTypeArgumentViolatesTranslatedConstraints(
-                                typeParameter))
+                        if (observedProjection != null
+                            && !SymbolEqualityComparer.IncludeNullability.Equals(
+                                observedProjection,
+                                projectedArgument))
                         {
                             this.context.ReportUnsupported(
                                 argument,
-                                $"projected delegate adaptation requires nullable type parameter '{typeParameter.Name}', but its translated constraints do not admit nullable type arguments.");
+                                $"projected delegate adaptation found conflicting types for type parameter '{typeParameter.Name}'.");
                             return null;
                         }
 
-                        containingArguments[typeIndex] = projectedArgument;
-                        changed = true;
-                        break;
+                        observedProjection = projectedArgument;
                     }
+
+                    if (observedProjection == null
+                        || SymbolEqualityComparer.IncludeNullability.Equals(
+                            containingArguments[typeIndex],
+                            observedProjection))
+                    {
+                        continue;
+                    }
+
+                    if (observedProjection.NullableAnnotation
+                                == NullableAnnotation.Annotated
+                        && NullableTypeArgumentViolatesTranslatedConstraints(
+                            typeParameter))
+                    {
+                        this.context.ReportUnsupported(
+                            argument,
+                            $"projected delegate adaptation requires nullable type parameter '{typeParameter.Name}', but its translated constraints do not admit nullable type arguments.");
+                        return null;
+                    }
+
+                    containingArguments[typeIndex] = observedProjection;
+                    changed = true;
                 }
 
                 if (changed)
@@ -2522,6 +2540,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ITypeParameterSymbol typeParameter =
                     projectedMethod.ConstructedFrom.TypeParameters[typeIndex];
+                ITypeSymbol observedProjection = null;
                 for (int parameterIndex = 0;
                     parameterIndex < method.Parameters.Length;
                     parameterIndex++)
@@ -2541,29 +2560,46 @@ public sealed partial class CSharpToGSharpTranslator
                         return null;
                     }
 
-                    if (!hasProjectedArgument
-                        || SymbolEqualityComparer.IncludeNullability.Equals(
-                            typeArguments[typeIndex],
-                            projectedArgument))
+                    if (!hasProjectedArgument)
                     {
                         continue;
                     }
 
-                    if (projectedArgument.NullableAnnotation
-                            == NullableAnnotation.Annotated
-                        && NullableTypeArgumentViolatesTranslatedConstraints(
-                            typeParameter))
+                    if (observedProjection != null
+                        && !SymbolEqualityComparer.IncludeNullability.Equals(
+                            observedProjection,
+                            projectedArgument))
                     {
                         this.context.ReportUnsupported(
                             argument,
-                            $"projected delegate adaptation requires nullable type parameter '{typeParameter.Name}', but its translated constraints do not admit nullable type arguments.");
+                            $"projected delegate adaptation found conflicting types for type parameter '{typeParameter.Name}'.");
                         return null;
                     }
 
-                    typeArguments[typeIndex] = projectedArgument;
-                    changed = true;
-                    break;
+                    observedProjection = projectedArgument;
                 }
+
+                if (observedProjection == null
+                    || SymbolEqualityComparer.IncludeNullability.Equals(
+                        typeArguments[typeIndex],
+                        observedProjection))
+                {
+                    continue;
+                }
+
+                if (observedProjection.NullableAnnotation
+                            == NullableAnnotation.Annotated
+                    && NullableTypeArgumentViolatesTranslatedConstraints(
+                        typeParameter))
+                {
+                    this.context.ReportUnsupported(
+                        argument,
+                        $"projected delegate adaptation requires nullable type parameter '{typeParameter.Name}', but its translated constraints do not admit nullable type arguments.");
+                    return null;
+                }
+
+                typeArguments[typeIndex] = observedProjection;
+                changed = true;
             }
 
             return changed
@@ -5487,6 +5523,45 @@ public sealed partial class CSharpToGSharpTranslator
                 RecordWidenedArguments(argument.Expression, parameterType);
             }
 
+            if (method.IsGenericMethod
+                && method.ReturnType is IArrayTypeSymbol returnArray
+                && TypeContainsRecognizedManagedReferenceConsumer(
+                    returnArray.ElementType,
+                    this.context.Compilation))
+            {
+                RecordWidenedTypeParameters(
+                    method.TypeArguments,
+                    method.TypeParameters,
+                    projectedMethodArguments,
+                    observedMethodArguments,
+                    observedMethodArgumentsRequireExactMatch,
+                    method.OriginalDefinition.ReturnType,
+                    method.ReturnType,
+                    apply: true,
+                    nullableArrayArgument: true);
+            }
+
+            if (method.ContainingType != null
+                && method.ReturnType is IArrayTypeSymbol containingReturnArray
+                && TypeContainsRecognizedManagedReferenceConsumer(
+                    containingReturnArray.ElementType,
+                    this.context.Compilation))
+            {
+                bool needsContainingProjection = RecordWidenedTypeParameters(
+                    containingTypeArguments,
+                    containingTypeParameters,
+                    projectedContainingArguments,
+                    observedContainingArguments,
+                    observedContainingArgumentsRequireExactMatch,
+                    method.OriginalDefinition.ReturnType,
+                    method.ReturnType,
+                    canProjectContainingTypeFromArguments,
+                    nullableArrayArgument: true);
+                fixedStorageNeedsNullableArgument |=
+                    needsContainingProjection
+                    && !canProjectContainingTypeFromArguments;
+            }
+
             if (call is BaseObjectCreationExpressionSyntax creationSyntax
                 && canProjectContainingTypeFromArguments
                 && containingTypeArguments.Any(argument =>
@@ -6049,6 +6124,11 @@ public sealed partial class CSharpToGSharpTranslator
                 return ProjectionTypeFitsDestination(
                     projectedType,
                     destinationType);
+            }
+
+            if (IsConditionalOrSwitchArm(value))
+            {
+                return true;
             }
 
             SyntaxNode directParent = value;

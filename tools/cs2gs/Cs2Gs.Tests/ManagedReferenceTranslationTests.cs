@@ -4930,6 +4930,172 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceArrayProjectionRejectsConflictingMethodGroupParameters()
+    {
+        const string source = """
+            using System;
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayConflictingMethodGroupParameters;
+            public static class Holder<T> {
+                public static bool Match(List<T> projected, List<T> fixedValue) => true;
+            }
+            public class Probe {
+                private static bool Apply<T>(
+                    T[] source,
+                    Func<List<T>, List<ManagedRef<int>>, bool> callback) =>
+                    callback(new List<T>(), new List<ManagedRef<int>>());
+
+                public static bool Run() {
+                    var source = new ManagedRef<int>[1];
+                    return Apply(source, Holder<ManagedRef<int>>.Match);
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayConflictingMethodGroupParameters.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "conflicting types for type parameter",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayProjectionRejectsArrayCovarianceErasure()
+    {
+        const string source = """
+            #nullable enable
+            using Gsharp.Values;
+            namespace ManagedArrayCovarianceErasure;
+            public class Probe {
+                public static object[] Run(bool flag) {
+                    var managedRefArray = new ManagedRef<int>[1];
+                    var selected = flag
+                        ? managedRefArray
+                        : new object[1];
+                    return selected;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayCovarianceErasure.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "incompatible managed-reference projections",
+                    StringComparison.Ordinal));
+    }
+
+    [Fact]
+    public void ZeroArgumentGenericProducerUsesProjectedReturnArrayElement()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayZeroArgumentGenericProducer;
+            public sealed class Factory<T> {
+                public static T[] Make() => new T[1];
+            }
+            public class Probe {
+                private static T[] Make<T>() => new T[1];
+
+                public static int Run() {
+                    var methodProduced = Make<ManagedRef<int>>();
+                    var containingProduced = Factory<ManagedRef<int>>.Make();
+                    return methodProduced[0] == null
+                        && containingProduced[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayZeroArgumentGenericProducer.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Make[managed[int32]?]()", text, StringComparison.Ordinal);
+        Assert.Contains(
+            "Factory[managed[int32]?].Make()",
+            text,
+            StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void RecursivePatternDesignationRetainsProjectedGenericType()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayRecursivePatternDesignation;
+            public sealed class Holder<T> {
+                public Holder(T value) { Value = value; }
+                public T Value { get; }
+            }
+            public class Probe {
+                private static Holder<T> Wrap<T>(T[] source) => new Holder<T>(source[0]);
+
+                public static int Run() {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    var wrapped = Wrap(source);
+                    return wrapped is { } captured ? captured.Value.Borrow() : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayRecursivePatternDesignation.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("captured.Value!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionFlowsThroughConstructionArgument()
     {
         const string source = """

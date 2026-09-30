@@ -116,6 +116,28 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
 
                 case RecursivePatternSyntax recursive:
+                    if (recursive.Designation
+                            is SingleVariableDesignationSyntax designation)
+                    {
+                        ITypeSymbol designationType = receiverType;
+                        if (recursive.Type != null
+                            && receiverType is INamedTypeSymbol projectedReceiver
+                            && this.context.GetTypeInfo(recursive.Type).Type
+                                is INamedTypeSymbol narrowedType)
+                        {
+                            designationType = ReceiverTypeHierarchy(projectedReceiver)
+                                .FirstOrDefault(candidate =>
+                                    SymbolEqualityComparer.Default.Equals(
+                                        candidate.OriginalDefinition,
+                                        narrowedType.OriginalDefinition))
+                                ?? narrowedType;
+                        }
+
+                        this.RegisterProjectedPatternBinding(
+                            this.context.GetDeclaredSymbol(designation),
+                            designationType);
+                    }
+
                     if (recursive.PropertyPatternClause != null)
                     {
                         foreach (SubpatternSyntax subpattern

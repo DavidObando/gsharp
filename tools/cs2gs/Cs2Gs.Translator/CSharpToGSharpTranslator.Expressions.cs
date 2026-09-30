@@ -1100,9 +1100,10 @@ public sealed partial class CSharpToGSharpTranslator
             if (this.context.GetTypeInfo(expression).Type is IArrayTypeSymbol array
                 && this.GetMappedArrayElementType(expression)
                     is { } projectedArrayElement
-                && !SymbolEqualityComparer.IncludeNullability.Equals(
-                    array.ElementType,
-                    projectedArrayElement))
+                && (this.ArrayExpressionHasNullableElement(expression)
+                    || !SymbolEqualityComparer.IncludeNullability.Equals(
+                        array.ElementType,
+                        projectedArrayElement)))
             {
                 return this.context.Compilation.CreateArrayTypeSymbol(
                     projectedArrayElement,
@@ -1311,13 +1312,38 @@ public sealed partial class CSharpToGSharpTranslator
             return this.context.Compilation.ClassifyConversion(
                     projectedType,
                     destinationType).IsImplicit
-                && InvariantTypeArgumentsMatch(projectedType, destinationType);
+                && this.NestedProjectionFitsDestination(
+                    projectedType,
+                    destinationType);
         }
 
-        private static bool InvariantTypeArgumentsMatch(
+        private bool NestedProjectionFitsDestination(
             ITypeSymbol sourceType,
             ITypeSymbol destinationType)
         {
+            if (sourceType.NullableAnnotation == NullableAnnotation.Annotated
+                && destinationType.NullableAnnotation
+                    != NullableAnnotation.Annotated
+                && this.IsReferenceLikeOrManagedReference(sourceType))
+            {
+                return false;
+            }
+
+            if (sourceType is IArrayTypeSymbol sourceArray
+                && destinationType is IArrayTypeSymbol destinationArray)
+            {
+                return sourceArray.Rank == destinationArray.Rank
+                    && (!TypeContainsRecognizedManagedReferenceConsumer(
+                            sourceArray.ElementType,
+                            this.context.Compilation)
+                        || SymbolEqualityComparer.IncludeNullability.Equals(
+                            sourceArray.ElementType,
+                            destinationArray.ElementType))
+                    && this.NestedProjectionFitsDestination(
+                        sourceArray.ElementType,
+                        destinationArray.ElementType);
+            }
+
             if (sourceType is not INamedTypeSymbol sourceNamed
                 || destinationType is not INamedTypeSymbol destinationNamed)
             {
@@ -1351,7 +1377,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             return destinationNamed.ContainingType == null
                 || matchingSource.ContainingType == null
-                || InvariantTypeArgumentsMatch(
+                || this.NestedProjectionFitsDestination(
                     matchingSource.ContainingType,
                     destinationNamed.ContainingType);
         }
