@@ -3,6 +3,7 @@
 package main
 
 import (
+	"context"
 	"errors"
 	"go/parser"
 	"go/token"
@@ -18,6 +19,10 @@ type sourcePositionMap struct {
 }
 
 func newSourcePositionMap(portable string, data []byte) (*sourcePositionMap, error) {
+	return newSourcePositionMapContext(context.Background(), portable, data)
+}
+
+func newSourcePositionMapContext(ctx context.Context, portable string, data []byte) (*sourcePositionMap, error) {
 	scheme, payload, ok := strings.Cut(portable, "://")
 	if !ok || payload == "" {
 		return nil, errors.New("source position path has no portable scheme")
@@ -40,7 +45,13 @@ func newSourcePositionMap(portable string, data []byte) (*sourcePositionMap, err
 	}
 	filename := filepath.Join(logicalRoot, relative)
 	fset := token.NewFileSet()
+	if err := checkAnalysisOperation(ctx, "source-position-parse", "before"); err != nil {
+		return nil, err
+	}
 	_, _ = parser.ParseFile(fset, filename, data, parser.AllErrors|parser.SkipObjectResolution)
+	if err := checkAnalysisOperation(ctx, "source-position-parse", "after"); err != nil {
+		return nil, err
+	}
 	var file *token.File
 	fset.Iterate(func(candidate *token.File) bool {
 		file = candidate

@@ -304,6 +304,7 @@ func decodeAnalysis(data []byte) (Analysis, error) {
 
 var workerArtifactReadTestHook func(string)
 var publicationBoundaryTestHook func(string)
+var publicationAfterBoundaryTestHook func(string)
 var artifactEncodingTestHook func(string)
 
 func readWorkerArtifacts(root string, maxBytes int64) ([]byte, []byte, Analysis, error) {
@@ -518,6 +519,9 @@ func publishWorkerArtifactsAtBoundary(
 ) error {
 	if err := checkPublicationContext(ctx, stage); err != nil {
 		return err
+	}
+	if publicationAfterBoundaryTestHook != nil {
+		publicationAfterBoundaryTestHook(stage)
 	}
 	return publishWorkerArtifactsContext(ctx, out, analysisBytes, runBytes, nil)
 }
