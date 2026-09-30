@@ -53,10 +53,10 @@ namespace Corpus.Issue1974
 }
 ");
 
-        Assert.Contains("let (__decon0, __decon1) = (1, 2)", rendered, StringComparison.Ordinal);
-        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
-        Assert.Contains("y = __decon1", rendered, StringComparison.Ordinal);
-        Assert.Contains("let r = (__decon0, __decon1)", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (xValue, yValue) = (1, 2)", rendered, StringComparison.Ordinal);
+        Assert.Contains("x = xValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("y = yValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("let r = (xValue, yValue)", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -82,10 +82,10 @@ namespace Corpus.Issue1974
 }
 ");
 
-        Assert.Contains("let (__decon0, __decon1) = (1, 2)", rendered, StringComparison.Ordinal);
-        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
-        Assert.Contains("y = __decon1", rendered, StringComparison.Ordinal);
-        Assert.Contains("Accept((__decon0, __decon1))", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (xValue, yValue) = (1, 2)", rendered, StringComparison.Ordinal);
+        Assert.Contains("x = xValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("y = yValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("Accept((xValue, yValue))", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -111,10 +111,10 @@ namespace Corpus.Issue1974
 }
 ");
 
-        Assert.Contains("let (__decon0, __decon1) = (1, 2)", rendered, StringComparison.Ordinal);
-        Assert.Contains("a = __decon0", rendered, StringComparison.Ordinal);
-        Assert.Contains("b = __decon1", rendered, StringComparison.Ordinal);
-        Assert.Contains("x = (__decon0, __decon1)", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (aValue, bValue) = (1, 2)", rendered, StringComparison.Ordinal);
+        Assert.Contains("a = aValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("b = bValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("x = (aValue, bValue)", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -139,15 +139,15 @@ namespace Corpus.Issue1974
 }
 ");
 
-        Assert.Contains("let (__decon0, __decon1) = (1, 2)", rendered, StringComparison.Ordinal);
-        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
-        Assert.Contains("let r = (__decon0, __decon1)", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("(__decon0, _)", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (xValue, deconstructedValue) = (1, 2)", rendered, StringComparison.Ordinal);
+        Assert.Contains("x = xValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("let r = (xValue, deconstructedValue)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("(xValue, _)", rendered, StringComparison.Ordinal);
 
         // Issue #2099: the discard still gets a real temp to feed the
         // expression's value, but `_` isn't a real assignable location — no
-        // stray `_ = __decon1;` write-back should be emitted for it.
-        Assert.DoesNotContain("_ = __decon", rendered, StringComparison.Ordinal);
+        // stray discard write-back should be emitted for it.
+        Assert.DoesNotContain("_ = deconstructedValue", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -174,12 +174,13 @@ namespace Corpus.Issue1974
 }
 ");
 
-        Assert.Contains("let (__decon0, __decon1) = ((1, 2), 3)", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (__decon2, __decon3) = __decon0", rendered, StringComparison.Ordinal);
-        Assert.Contains("a = __decon2", rendered, StringComparison.Ordinal);
-        Assert.Contains("b = __decon3", rendered, StringComparison.Ordinal);
-        Assert.Contains("c = __decon1", rendered, StringComparison.Ordinal);
-        Assert.Contains("let r = ((__decon2, __decon3), __decon1)", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (aTuple, cValue) = ((1, 2), 3)", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (aValue, bValue) = aTuple", rendered, StringComparison.Ordinal);
+        Assert.Contains("a = aValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("b = bValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("c = cValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("let r = ((aValue, bValue), cValue)", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
