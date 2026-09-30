@@ -67,7 +67,7 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           go mod verify
-          go test -count=1 -run '^(TestWindowsRootedMetadata.*|TestBoundOutputRoot.*|TestIdentityBoundRemoval.*|TestFailedPublicationCleanup.*|TestArtifactPair.*|TestReleaseLockLoss.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$' .
+          go test -count=1 -run '^(TestWindowsRootedMetadata.*|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$' .
           go vet ./...
 
   build:

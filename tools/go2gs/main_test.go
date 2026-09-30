@@ -1646,519 +1646,79 @@ func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 	}
 }
 
-func TestArtifactPairRejectsAnalysisReplacementBeforeRun(t *testing.T) {
+func TestStaleInvalidationRejectsObservedIdentityDrift(t *testing.T) {
+	out := t.TempDir()
+	path := filepath.Join(out, "analysis.json")
+	displaced := filepath.Join(out, "displaced-analysis")
+	if err := os.WriteFile(path, []byte("stale"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	outputBeforeStaleRemoveHook = func(name string) {
+		if name != "analysis.json" {
+			return
+		}
+		outputBeforeStaleRemoveHook = nil
+		if err := os.Rename(path, displaced); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte("replacement"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { outputBeforeStaleRemoveHook = nil })
+	if _, err := lockAndInvalidateOutput(out); err == nil {
+		t.Fatal("stale invalidation succeeded after observed identity drift")
+	}
+	if data, err := os.ReadFile(path); err != nil || string(data) != "replacement" {
+		t.Fatalf("mismatched replacement changed: %q, %v", data, err)
+	}
+}
+
+func TestBoundOutputRootRejectsStaleSymlinks(t *testing.T) {
+	out := t.TempDir()
+	target := filepath.Join(out, "target")
+	path := filepath.Join(out, "analysis.json")
+	if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, path); err != nil {
+		t.Skipf("symlinks unavailable: %v", err)
+	}
+	if _, err := lockAndInvalidateOutput(out); err == nil {
+		t.Fatal("stale symlink was accepted")
+	}
+	if destination, err := os.Readlink(path); err != nil || destination != target {
+		t.Fatalf("stale symlink changed: %q, %v", destination, err)
+	}
+	if data, err := os.ReadFile(target); err != nil || string(data) != "keep" {
+		t.Fatalf("symlink target changed: %q, %v", data, err)
+	}
+}
+
+func TestArtifactPairRejectsObservedAnalysisReplacement(t *testing.T) {
 	out := t.TempDir()
 	output, err := lockAndInvalidateOutput(out)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer output.release()
 	err = publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), func() {
-		if removeErr := os.Remove(filepath.Join(out, "analysis.json")); removeErr != nil {
-			t.Fatal(removeErr)
+		path := filepath.Join(out, "analysis.json")
+		if err := os.Rename(path, path+".owned"); err != nil {
+			t.Fatal(err)
 		}
-		if writeErr := os.WriteFile(filepath.Join(out, "analysis.json"), []byte("attacker analysis"), 0o644); writeErr != nil {
-			t.Fatal(writeErr)
+		if err := os.WriteFile(path, []byte("replacement"), 0o644); err != nil {
+			t.Fatal(err)
 		}
 	})
 	if err == nil {
-		t.Fatal("publication succeeded after analysis identity replacement")
+		t.Fatal("publication succeeded after observed analysis identity drift")
 	}
-	if data, readErr := os.ReadFile(filepath.Join(out, "analysis.json")); readErr != nil || string(data) != "attacker analysis" {
-		t.Fatalf("replacement analysis changed: %q, %v", data, readErr)
+	if data, err := os.ReadFile(filepath.Join(out, "analysis.json")); err != nil || string(data) != "replacement" {
+		t.Fatalf("mismatched analysis replacement changed: %q, %v", data, err)
 	}
-	if _, statErr := os.Lstat(filepath.Join(out, "run.json")); !os.IsNotExist(statErr) {
-		t.Fatalf("run metadata survived failed pair publication: %v", statErr)
-	}
-	if err := output.release(); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestIdentityBoundRemovalPreservesReplacementAtOriginalPath(t *testing.T) {
-	for _, name := range []string{".go2gs-lock", "analysis.json", "run.json"} {
-		t.Run(name, func(t *testing.T) {
-			out := t.TempDir()
-			output, err := lockAndInvalidateOutput(out)
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := filepath.Join(out, name)
-			if name != ".go2gs-lock" {
-				if err := os.WriteFile(path, []byte("owned"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			expected, err := os.Lstat(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			displaced := filepath.Join(out, strings.TrimPrefix(name, ".")+".owned")
-			outputBeforeDestructiveHook = func(candidate string) {
-				if candidate != name {
-					return
-				}
-				outputBeforeDestructiveHook = nil
-				if err := os.Rename(path, displaced); err != nil {
-					t.Fatal(err)
-				}
-				if name == ".go2gs-lock" {
-					if err := os.Mkdir(path, 0o700); err != nil {
-						t.Fatal(err)
-					}
-					if err := os.WriteFile(filepath.Join(path, "competitor"), []byte("keep"), 0o600); err != nil {
-						t.Fatal(err)
-					}
-				} else if err := os.WriteFile(path, []byte("competitor"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			t.Cleanup(func() { outputBeforeDestructiveHook = nil })
-			_, _ = removeOutputEntryIfSame(output, name, expected)
-			if name == ".go2gs-lock" {
-				if data, err := os.ReadFile(filepath.Join(path, "competitor")); err != nil || string(data) != "keep" {
-					t.Fatalf("competitor lock changed: %q, %v", data, err)
-				}
-				if err := output.release(); err == nil {
-					t.Fatal("release succeeded after lock replacement")
-				}
-				if data, err := os.ReadFile(filepath.Join(path, "competitor")); err != nil || string(data) != "keep" {
-					t.Fatalf("release changed competitor lock: %q, %v", data, err)
-				}
-				return
-			}
-			if data, err := os.ReadFile(path); err != nil || string(data) != "competitor" {
-				t.Fatalf("competitor %s changed: %q, %v", name, data, err)
-			}
-			if err := output.release(); err != nil {
-				t.Fatal(err)
-			}
-		})
-	}
-}
-
-func TestIdentityBoundRemovalPreservesSecondCanonicalOccupant(t *testing.T) {
-	for _, name := range []string{".go2gs-lock", "analysis.json", "run.json"} {
-		t.Run(name, func(t *testing.T) {
-			out := t.TempDir()
-			output, err := lockAndInvalidateOutput(out)
-			if err != nil {
-				t.Fatal(err)
-			}
-			path := filepath.Join(out, name)
-			if name != ".go2gs-lock" {
-				if err := os.WriteFile(path, []byte("owned"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			expected, err := os.Lstat(path)
-			if err != nil {
-				t.Fatal(err)
-			}
-			displaced := filepath.Join(out, strings.TrimPrefix(name, ".")+".owned")
-			outputBeforeDestructiveHook = func(candidate string) {
-				if candidate != name {
-					return
-				}
-				outputBeforeDestructiveHook = nil
-				if err := os.Rename(path, displaced); err != nil {
-					t.Fatal(err)
-				}
-				if name == ".go2gs-lock" {
-					if err := os.Mkdir(path, 0o700); err != nil {
-						t.Fatal(err)
-					}
-					if err := os.WriteFile(filepath.Join(path, "first"), []byte("competitor one"), 0o600); err != nil {
-						t.Fatal(err)
-					}
-				} else if err := os.WriteFile(path, []byte("competitor one"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			outputAfterDestructiveMoveHook = func(candidate string) {
-				if candidate != name {
-					return
-				}
-				outputAfterDestructiveMoveHook = nil
-				if name == ".go2gs-lock" {
-					if err := os.Mkdir(path, 0o700); err != nil {
-						t.Fatal(err)
-					}
-					if err := os.WriteFile(filepath.Join(path, "second"), []byte("competitor two"), 0o600); err != nil {
-						t.Fatal(err)
-					}
-				} else if err := os.WriteFile(path, []byte("competitor two"), 0o644); err != nil {
-					t.Fatal(err)
-				}
-			}
-			t.Cleanup(func() {
-				outputBeforeDestructiveHook = nil
-				outputAfterDestructiveMoveHook = nil
-			})
-			if removed, err := removeOutputEntryIfSame(output, name, expected); err == nil || removed {
-				t.Fatalf("second occupant did not fail closed: removed=%v err=%v", removed, err)
-			}
-			if name == ".go2gs-lock" {
-				if data, err := os.ReadFile(filepath.Join(path, "first")); err != nil || string(data) != "competitor one" {
-					t.Fatalf("first competitor lock changed: %q, %v", data, err)
-				}
-			} else if data, err := os.ReadFile(path); err != nil || string(data) != "competitor one" {
-				t.Fatalf("first competitor %s changed: %q, %v", name, data, err)
-			}
-			if err := output.release(); err == nil {
-				t.Fatal("release succeeded with a preserved second occupant")
-			}
-			var foundSecond bool
-			err = filepath.WalkDir(out, func(path string, entry os.DirEntry, err error) error {
-				if err != nil || entry.IsDir() {
-					return err
-				}
-				data, readErr := os.ReadFile(path)
-				if readErr != nil {
-					return readErr
-				}
-				if string(data) == "competitor two" {
-					foundSecond = true
-				}
-				return nil
-			})
-			if err != nil {
-				t.Fatal(err)
-			}
-			if !foundSecond {
-				t.Fatal("second competitor was not preserved")
-			}
-			if name != ".go2gs-lock" {
-				if _, err := lockAndInvalidateOutput(out); err == nil ||
-					!strings.Contains(err.Error(), "preserved output quarantine") {
-					t.Fatalf("preserved quarantine was not surfaced on restart: %v", err)
-				}
-			}
-		})
-	}
-}
-
-func TestIdentityBoundRemovalHandlesHardlinksAndRejectsSymlinks(t *testing.T) {
-	t.Run("hardlink", func(t *testing.T) {
-		out := t.TempDir()
-		output, err := lockAndInvalidateOutput(out)
-		if err != nil {
-			t.Fatal(err)
-		}
-		path := filepath.Join(out, "analysis.json")
-		other := filepath.Join(out, "other-link")
-		if err := os.WriteFile(path, []byte("owned"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Link(path, other); err != nil {
-			t.Skipf("hard links unavailable: %v", err)
-		}
-		expected, err := os.Lstat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		removed, err := removeOutputEntryIfSame(output, "analysis.json", expected)
-		if err != nil || !removed {
-			t.Fatalf("remove hard link: removed=%v err=%v", removed, err)
-		}
-		if _, err := os.Lstat(path); !os.IsNotExist(err) {
-			t.Fatalf("removed hard-link name remains: %v", err)
-		}
-		if data, err := os.ReadFile(other); err != nil || string(data) != "owned" {
-			t.Fatalf("other hard link changed: %q, %v", data, err)
-		}
-		if err := output.release(); err != nil {
-			t.Fatal(err)
-		}
-	})
-
-	t.Run("symlink", func(t *testing.T) {
-		out := t.TempDir()
-		output, err := lockAndInvalidateOutput(out)
-		if err != nil {
-			t.Fatal(err)
-		}
-		target := filepath.Join(out, "target")
-		path := filepath.Join(out, "analysis.json")
-		if err := os.WriteFile(target, []byte("keep"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-		if err := os.Symlink(target, path); err != nil {
-			t.Skipf("symlinks unavailable: %v", err)
-		}
-		expected, err := os.Lstat(path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if removed, err := removeOutputEntryIfSame(output, "analysis.json", expected); err == nil || removed {
-			t.Fatalf("symlink removal did not fail closed: removed=%v err=%v", removed, err)
-		}
-		if destination, err := os.Readlink(path); err != nil || destination != target {
-			t.Fatalf("symlink changed: %q, %v", destination, err)
-		}
-		if err := output.release(); err != nil {
-			t.Fatal(err)
-		}
-	})
-}
-
-func TestFailedPublicationCleanupPreservesExternalHardlinks(t *testing.T) {
-	t.Run("published artifact", func(t *testing.T) {
-		out := t.TempDir()
-		output, err := lockAndInvalidateOutput(out)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err != nil {
-			t.Fatal(err)
-		}
-		other := filepath.Join(out, "external-analysis-link")
-		if err := os.Link(filepath.Join(out, "analysis.json"), other); err != nil {
-			t.Skipf("hard links unavailable: %v", err)
-		}
-		if err := os.Remove(filepath.Join(out, ".go2gs-lock")); err != nil {
-			t.Fatal(err)
-		}
-		if err := output.release(); err == nil {
-			t.Fatal("release succeeded after lock loss")
-		}
-		if data, err := os.ReadFile(other); err != nil || string(data) != "owned analysis" {
-			t.Fatalf("external artifact hard link changed: %q, %v", data, err)
-		}
-	})
-
-	t.Run("staged artifact", func(t *testing.T) {
-		out := t.TempDir()
-		output, err := lockAndInvalidateOutput(out)
-		if err != nil {
-			t.Fatal(err)
-		}
-		other := filepath.Join(out, "external-staged-link")
-		_, err = atomicWriteRoot(output, "analysis.json", []byte("owned analysis"), 0o644, nil, func(path string) {
-			if err := os.Link(path, other); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.Remove(filepath.Join(out, ".go2gs-lock")); err != nil {
-				t.Fatal(err)
-			}
-		})
-		if err == nil {
-			t.Fatal("staged publication succeeded after lock loss")
-		}
-		if data, err := os.ReadFile(other); err != nil || string(data) != "owned analysis" {
-			t.Fatalf("external staged hard link changed: %q, %v", data, err)
-		}
-		if err := output.release(); err == nil {
-			t.Fatal("release succeeded after lock loss")
-		}
-	})
-}
-
-func TestArtifactPairRejectsLockLossBeforeEachPublication(t *testing.T) {
-	for _, artifact := range []string{"analysis.json", "run.json"} {
-		for _, replace := range []bool{false, true} {
-			name := strings.TrimSuffix(artifact, ".json") + "-remove"
-			if replace {
-				name = strings.TrimSuffix(artifact, ".json") + "-replace"
-			}
-			t.Run(name, func(t *testing.T) {
-				out := t.TempDir()
-				output, err := lockAndInvalidateOutput(out)
-				if err != nil {
-					t.Fatal(err)
-				}
-				outputPublicationBoundaryHook = func(name string) {
-					if name != artifact {
-						return
-					}
-					outputPublicationBoundaryHook = nil
-					lock := filepath.Join(out, ".go2gs-lock")
-					if removeErr := os.Remove(lock); removeErr != nil {
-						t.Fatal(removeErr)
-					}
-					if replace {
-						if mkdirErr := os.Mkdir(lock, 0o700); mkdirErr != nil {
-							t.Fatal(mkdirErr)
-						}
-					}
-				}
-				t.Cleanup(func() { outputPublicationBoundaryHook = nil })
-				if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err == nil {
-					t.Fatal("publication succeeded after output lock loss")
-				}
-				for _, name := range []string{"analysis.json", "run.json"} {
-					if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
-						t.Fatalf("owned %s survived lock loss: %v", name, err)
-					}
-				}
-				if err := output.release(); err == nil {
-					t.Fatal("release succeeded after output lock loss")
-				}
-			})
-		}
-	}
-}
-
-func TestArtifactPairCleanupPreservesCompetitorAfterLockReplacement(t *testing.T) {
-	out := t.TempDir()
-	output, err := lockAndInvalidateOutput(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	err = publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), func() {
-		lock := filepath.Join(out, ".go2gs-lock")
-		if removeErr := os.Remove(lock); removeErr != nil {
-			t.Fatal(removeErr)
-		}
-		if mkdirErr := os.Mkdir(lock, 0o700); mkdirErr != nil {
-			t.Fatal(mkdirErr)
-		}
-		if removeErr := os.Remove(filepath.Join(out, "analysis.json")); removeErr != nil {
-			t.Fatal(removeErr)
-		}
-		for name, content := range map[string]string{
-			"analysis.json": "competitor analysis",
-			"run.json":      "competitor run",
-		} {
-			if writeErr := os.WriteFile(filepath.Join(out, name), []byte(content), 0o644); writeErr != nil {
-				t.Fatal(writeErr)
-			}
-		}
-	})
-	if err == nil {
-		t.Fatal("publication succeeded after competitor replaced the lock")
-	}
-	if err := output.release(); err == nil {
-		t.Fatal("release succeeded after competitor replaced the lock")
-	}
-	for name, want := range map[string]string{
-		"analysis.json": "competitor analysis",
-		"run.json":      "competitor run",
-	} {
-		if data, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(data) != want {
-			t.Fatalf("competitor %s changed: %q, %v", name, data, err)
-		}
-	}
-}
-
-func TestArtifactPairSuccessRetainsFinalOwnership(t *testing.T) {
-	out := t.TempDir()
-	output, err := lockAndInvalidateOutput(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err != nil {
-		t.Fatal(err)
-	}
-	if output.publishedAnalysis == nil || output.publishedRun == nil {
-		t.Fatal("successful publication did not retain artifact identities")
-	}
-	if err := output.verifyPublication(output.publishedAnalysis, output.publishedRun); err != nil {
-		t.Fatal(err)
-	}
-	if err := output.release(); err != nil {
-		t.Fatal(err)
-	}
-	entries, err := os.ReadDir(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, entry := range entries {
-		if strings.HasPrefix(entry.Name(), ".go2gs-quarantine-") {
-			t.Fatalf("successful release leaked quarantine directory %q", entry.Name())
-		}
-	}
-	for name, want := range map[string]string{
-		"analysis.json": "owned analysis",
-		"run.json":      "owned run",
-	} {
-		if data, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(data) != want {
-			t.Fatalf("published %s = %q, %v", name, data, err)
-		}
-	}
-}
-
-func TestArtifactPairRejectsInPlaceContentMutation(t *testing.T) {
-	for _, name := range []string{"analysis.json", "run.json"} {
-		t.Run(name, func(t *testing.T) {
-			out := t.TempDir()
-			output, err := lockAndInvalidateOutput(out)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(filepath.Join(out, name), []byte("mutated"), 0o644); err != nil {
-				t.Fatal(err)
-			}
-			if err := output.release(); err == nil {
-				t.Fatal("release succeeded after in-place artifact mutation")
-			}
-			for _, artifact := range []string{"analysis.json", "run.json"} {
-				if _, err := os.Lstat(filepath.Join(out, artifact)); !os.IsNotExist(err) {
-					t.Fatalf("%s survived failed content verification: %v", artifact, err)
-				}
-			}
-		})
-	}
-}
-
-func TestReleaseLockLossInvalidatesOwnedArtifactPair(t *testing.T) {
-	out := t.TempDir()
-	output, err := lockAndInvalidateOutput(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(filepath.Join(out, ".go2gs-lock")); err != nil {
-		t.Fatal(err)
-	}
-	if err := output.release(); err == nil {
-		t.Fatal("release succeeded after output lock loss")
-	}
-	for _, name := range []string{"analysis.json", "run.json"} {
-		if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
-			t.Fatalf("owned %s survived release-time lock loss: %v", name, err)
-		}
-	}
-}
-
-func TestReleaseRevalidatesArtifactsAfterRetiringLock(t *testing.T) {
-	out := t.TempDir()
-	output, err := lockAndInvalidateOutput(out)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := publishWorkerArtifacts(output, []byte("owned analysis"), []byte("owned run"), nil); err != nil {
-		t.Fatal(err)
-	}
-	outputLockReleasedHook = func() {
-		outputLockReleasedHook = nil
-		if err := os.WriteFile(filepath.Join(out, "analysis.json"), []byte("mutated after lock release"), 0o644); err != nil {
-			t.Fatal(err)
-		}
-	}
-	t.Cleanup(func() { outputLockReleasedHook = nil })
-	if err := output.release(); err == nil {
-		t.Fatal("release succeeded after post-lock artifact mutation")
-	}
-	for _, name := range []string{"analysis.json", "run.json"} {
-		if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
-			t.Fatalf("%s survived post-lock ownership failure: %v", name, err)
-		}
-	}
-}
-
-func TestOutputReleaseFailureOverridesIncompleteExit(t *testing.T) {
-	err := joinOutputReleaseError(
-		&exitError{1, errors.New("inventory incomplete")},
-		errors.New("output ownership lost"),
-	)
-	var exitErr *exitError
-	if !errors.As(err, &exitErr) || exitErr.code != 2 {
-		t.Fatalf("release failure did not take exit-code precedence: %v", err)
+	if _, err := os.Lstat(filepath.Join(out, "run.json")); !os.IsNotExist(err) {
+		t.Fatalf("run.json was published after analysis drift: %v", err)
 	}
 }
 
@@ -2258,7 +1818,23 @@ func TestBoundOutputRootReleaseFailsAfterLockLoss(t *testing.T) {
 			if err := output.release(); err == nil {
 				t.Fatal("release succeeded after output lock identity loss")
 			}
+			if test.name == "replaced" {
+				if info, err := os.Lstat(filepath.Join(out, ".go2gs-lock")); err != nil || !info.IsDir() {
+					t.Fatalf("mismatched replacement lock changed: %v, %v", info, err)
+				}
+			}
 		})
+	}
+}
+
+func TestOutputReleaseFailureOverridesIncompleteExit(t *testing.T) {
+	err := joinOutputReleaseError(
+		&exitError{1, errors.New("inventory incomplete")},
+		errors.New("output ownership lost"),
+	)
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("release failure did not take exit-code precedence: %v", err)
 	}
 }
 

@@ -54,12 +54,12 @@ Source and local-replacement capture and verification use descriptor-relative
 reads that reject symlinks in every path component.
 Output locking, stale-artifact invalidation, and atomic publication remain
 relative to one held directory descriptor/handle, so replacing an output-root
-ancestor cannot redirect them. Open artifact handles and content hashes remain
-bound through lock release; ownership loss invalidates only that invocation's
-outputs. Unix uses atomic no-replace moves into a private descriptor-bound
-quarantine; Windows targets held non-reparse NT handles. If either identity-
-If concurrent Unix occupants cannot all be restored to their prior names, they
-are preserved for inspection and later invocations fail closed.
+ancestor cannot redirect them. Keep the selected output directory exclusively
+controlled by go2gs until the command exits. The lock excludes cooperating
+invocations, and observed identity drift fails closed. An actively mutating
+same-UID peer with equal filesystem authority is outside M0's portable threat
+boundary; hashes and schema validation detect provenance drift but do not
+authenticate or mediate that peer.
 
 The selected native `cmd/go` is captured into a parent bootstrap capsule only
 for handoff. Linux first validates the captured bytes as a supported static ELF

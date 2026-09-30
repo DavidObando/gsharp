@@ -80,15 +80,12 @@ after loading. The loader sees only those captured bytes; emitted manifest
 hashes remain those of the originals.
 Output locking, stale-artifact invalidation, and atomic publication stay
 relative to one held directory descriptor/handle, so replacing an output-root
-ancestor cannot redirect owned output operations. Publication retains open
-artifact handles and verifies the lock, file identities, and content hashes
-through release; ownership loss invalidates only the invocation's files. Unix
-removal atomically moves the held entry without replacement into a private
-descriptor-bound quarantine; Windows removal targets the held non-reparse NT
-handle. Unix restoration uses atomic exchange when another occupant appears;
-any occupant that cannot be restored is preserved for inspection and blocks
-the next invocation. Unsupported identity-bound operations fail before moving
-the name.
+ancestor cannot redirect owned output operations. The selected output directory
+must remain under go2gs's exclusive control until the command exits. The lock
+excludes cooperating invocations, and observed identity drift fails closed;
+an actively mutating same-UID peer with equal filesystem authority is outside
+M0's portable threat boundary. Hashes and schema validation detect provenance
+drift but do not authenticate or mediate that peer.
 On Linux and macOS, private temporary trees are removed recursively through
 verified directory descriptors and atomic name exchanges without following
 links; an exchange failure or retained entry makes the command fail. Other
