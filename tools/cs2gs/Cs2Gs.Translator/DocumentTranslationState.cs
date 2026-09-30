@@ -361,10 +361,8 @@ internal sealed class DocumentTranslationState
     public Dictionary<(SyntaxNode Scope, string Prefix), int> SyntheticLabelCounters { get; } =
         new Dictionary<(SyntaxNode Scope, string Prefix), int>();
 
-    // Issue #3467: lifted local-function helper names already allocated in
-    // this document, so a name collision (same enclosing member name + same
-    // local-function name) takes an ordinal suffix instead of embedding
-    // SpanStart.
+    // Issue #4302: readable member-lift fallback names already allocated in
+    // this document; genuine collisions take a short ordinal suffix.
     public HashSet<string> UsedLiftedLocalFunctionNames { get; } =
         new HashSet<string>(StringComparer.Ordinal);
 

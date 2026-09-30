@@ -1980,23 +1980,49 @@ public sealed partial class CSharpToGSharpTranslator
             }
         }
 
-        // Issue #3467: lifted local-function helper names used to embed the
-        // local function's SpanStart, producing 50+ character identifiers that
-        // shift on any upstream edit. The name is now just
-        // `__local_{owner}_{name}`; only a genuine collision (an overload of
-        // the enclosing member declaring a same-named local function, or
-        // same-named locals in sibling scopes) takes an ordinal suffix.
-        private string AllocateLiftedLocalFunctionName(string ownerName, string localName)
+        private string AllocateLiftedLocalFunctionName(IMethodSymbol localFunction, string localName)
         {
-            string baseName = $"__local_{ownerName}_{localName}";
-            string candidate = baseName;
-            for (int suffix = 2; !this.state.UsedLiftedLocalFunctionNames.Add(candidate); suffix++)
+            var occupied = new HashSet<string>(StringComparer.Ordinal);
+            for (INamedTypeSymbol type = localFunction.ContainingType; type != null; type = type.BaseType)
             {
-                candidate = $"{baseName}_{suffix}";
+                occupied.Add(this.EmittedName(type, type.Name));
+                occupied.UnionWith(type.GetMembers().Select(member => this.EmittedName(member, member.Name)));
             }
 
+            if (localFunction.ContainingType != null)
+            {
+                occupied.UnionWith(localFunction.ContainingType.AllInterfaces
+                    .SelectMany(type => type.GetMembers())
+                    .Select(member => this.EmittedName(member, member.Name)));
+            }
+
+            occupied.UnionWith(this.state.PendingInstanceSynthHelpers?.Select(helper => helper.Name)
+                ?? Enumerable.Empty<string>());
+            occupied.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
+                ?? Enumerable.Empty<string>());
+            occupied.UnionWith(this.state.UsedLiftedLocalFunctionNames);
+
+            string candidate = LiftedLocalFunctionNames
+                .GetValue(
+                    this.context.Compilation,
+                    static _ => new LiftedLocalFunctionNameAllocator())
+                .Allocate(localFunction, occupied, localName);
+
+            this.state.UsedLiftedLocalFunctionNames.Add(candidate);
             return candidate;
         }
+
+        private bool IsLocalFunctionReferencedAsValue(
+            IMethodSymbol localFunction,
+            IEnumerable<SyntaxNode> roots) =>
+            roots
+                .SelectMany(root => root.DescendantNodes().OfType<SimpleNameSyntax>())
+                .Any(name =>
+                    this.context.GetSymbolInfo(name).Symbol is IMethodSymbol referencedMethod
+                    && SymbolEqualityComparer.Default.Equals(
+                        referencedMethod.OriginalDefinition,
+                        localFunction)
+                    && name.Parent is not InvocationExpressionSyntax);
 
         // Issue #1278 / ADR-0131: a C# expression-bodied member (`=> expr`)
         // translates to the idiomatic G# arrow form (`-> expr`) when the
@@ -2262,16 +2288,8 @@ public sealed partial class CSharpToGSharpTranslator
             var statements = new List<GStatement>();
             IReadOnlyList<StatementSyntax> ordered = this.HoistCallBeforeDeclLocalFunctions(block);
 
-            // Issue #3399 / #4197: registering the capturing recursive local
-            // function groups first lets `RegisterRecursiveLocalFunctionLifts`
-            // skip everything the capturing pass claims — every mutual-
-            // recursion SCC member (`group.Count > 1`, capturing or not, since
-            // #4197 widened the gate) plus any non-recursive callee folded into
-            // that SCC's group (`RegisterCapturingRecursiveLocalFunctions`'s
-            // fold-BFS) — via `IsCapturingRecursiveGroupMember`'s direct lookup
-            // into `state.RecursiveLocalFunctionGroups`. Those lower to nullable
-            // function locals with their real names instead of synthesized
-            // `__local_` instance/static helpers.
+            // Register structural nullable groups first; the fallback pass then
+            // handles only signatures that cannot use that representation.
             this.RegisterCapturingRecursiveLocalFunctions(ordered);
             this.RegisterRecursiveLocalFunctionLifts(ordered);
 
@@ -2310,8 +2328,9 @@ public sealed partial class CSharpToGSharpTranslator
             bool IsCapturingRecursiveGroupMember(IMethodSymbol symbol) =>
                 this.state.RecursiveLocalFunctionGroups.ContainsKey(symbol);
 
+            var statementList = statements.ToList();
             var localFunctions = new List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)>();
-            foreach (LocalFunctionStatementSyntax localFunction in statements
+            foreach (LocalFunctionStatementSyntax localFunction in statementList
                 .OfType<LocalFunctionStatementSyntax>())
             {
                 using IDisposable modelScope = this.context.UseSemanticModelFor(localFunction.SyntaxTree);
@@ -2366,6 +2385,52 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
+            bool CanUseNativeLocalFunctionGroup(IMethodSymbol member)
+            {
+                var component = localFunctions
+                    .Where(candidate =>
+                        IsRecursive(
+                            member,
+                            candidate.Symbol,
+                            new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { candidate.Symbol })
+                        && IsRecursive(
+                            candidate.Symbol,
+                            member,
+                            new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default) { member }))
+                    .ToList();
+                if (component.Count < 2)
+                {
+                    return false;
+                }
+
+                bool generic = component[0].Syntax.TypeParameterList != null;
+                bool refReturn = component[0].Symbol.ReturnsByRef;
+                if (component.Any(candidate =>
+                        candidate.Symbol.ReturnsByRefReadonly
+                        || (candidate.Syntax.TypeParameterList != null) != generic
+                        || candidate.Symbol.ReturnsByRef != refReturn)
+                    || (generic && refReturn)
+                    || (refReturn && component.Any(candidate => !candidate.Symbol.IsStatic))
+                    || component.Any(candidate =>
+                        this.IsLocalFunctionReferencedAsValue(candidate.Symbol, statementList)))
+                {
+                    return false;
+                }
+
+                var indexes = component
+                    .Select(candidate => statementList.IndexOf(candidate.Syntax))
+                    .OrderBy(index => index)
+                    .ToList();
+                if (indexes[^1] - indexes[0] + 1 != indexes.Count)
+                {
+                    return false;
+                }
+
+                return (indexes[0] == 0 || statementList[indexes[0] - 1] is not LocalFunctionStatementSyntax)
+                    && (indexes[^1] == statementList.Count - 1
+                        || statementList[indexes[^1] + 1] is not LocalFunctionStatementSyntax);
+            }
+
             var toLift = new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
             foreach (var pair in localFunctions)
             {
@@ -2388,7 +2453,9 @@ public sealed partial class CSharpToGSharpTranslator
                 // forces a lift — only a recursion cycle through ANOTHER local
                 // function does (the partner would be forward-referenced
                 // before its `let` declaration).
-                if (recursiveThroughOthers)
+                if (recursiveThroughOthers
+                    && (IsCapturingRecursiveGroupMember(pair.Symbol)
+                        || !CanUseNativeLocalFunctionGroup(pair.Symbol)))
                 {
                     toLift.Add(pair.Symbol);
                 }
@@ -2421,12 +2488,9 @@ public sealed partial class CSharpToGSharpTranslator
                     continue;
                 }
 
-                string ownerName = this.EmittedName(
-                    pair.Symbol.ContainingSymbol,
-                    pair.Symbol.ContainingSymbol?.Name ?? "scope");
                 string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
                 this.state.LiftedStaticLocalFunctions[pair.Symbol] =
-                    this.AllocateLiftedLocalFunctionName(ownerName, localName);
+                    this.AllocateLiftedLocalFunctionName(pair.Symbol, localName);
             }
 
             var capturingLocals = localFunctions
@@ -2529,117 +2593,25 @@ public sealed partial class CSharpToGSharpTranslator
                     containingMethod = containingMethod.ContainingSymbol as IMethodSymbol;
                 }
 
-                string ownerName = this.EmittedName(
-                    pair.Symbol.ContainingSymbol,
-                    pair.Symbol.ContainingSymbol?.Name ?? "scope");
                 string localName = this.EmittedName(pair.Symbol, pair.Syntax.Identifier.ValueText);
                 this.state.LiftedRecursiveLocalFunctions[pair.Symbol] =
                     new LiftedRecursiveLocalFunction(
-                        this.AllocateLiftedLocalFunctionName(ownerName, localName),
+                        this.AllocateLiftedLocalFunctionName(pair.Symbol, localName),
                         containingMethod?.IsStatic != false,
                         captures);
             }
         }
 
-        // Issue #3399: mutually recursive C# local functions that CAPTURE
-        // locals cannot be lifted as static helpers (they need the captured
-        // values), and G#'s non-recursive `let` binding fails when the body
-        // calls the binding itself (GS0130 "Function 'Foo' doesn't exist" /
-        // GS0125). Each strongly-connected component with more than one
-        // member is instead registered so <see cref="TranslateLocalFunction"/>
-        // lowers it to G#'s nullable-function-local scheme: every member is
-        // first declared nil-initialized as `var Name (… -> R)? = nil` (a G#
-        // closure body cannot reference a sibling local that is not yet
-        // declared, so the whole SCC's declarations must precede its first
-        // assignment), then each member binds its function literal
-        // (`Name = func …`); SCC partners are reached from a closure body
-        // through the nullable local via a null assertion (`Partner!!(…)` —
-        // ADR-0069/ADR-0137). G#'s capture-by-reference closures preserve C#'s
-        // shared mutation of the captured sibling locals.
-        //
-        // Issue #4197: this scheme is no longer gated on capturing — every
-        // `group.Count > 1` SCC uses it, because nothing about the mechanism
-        // above actually requires a capture (a plain closure with no free
-        // variables lowers the same way). A non-recursive callee reachable
-        // ONLY from a claimed SCC also folds into that SAME group with its
-        // real name (see the fold-BFS below) instead of being lifted to
-        // `__local_` by `RegisterRecursiveLocalFunctionLifts` purely because
-        // it happened to be reachable. Only a cycle (or fold candidate) that
-        // itself passes through a generic, ref-returning, or VARIADIC
-        // (`params`) local function stays on the `__local_` path (those
-        // members never enter the `functions`/`edges` graph below, so this
-        // pass never even sees the cycle — see the carve-out further down).
-        //
-        // A DEFAULT PARAMETER VALUE is deliberately NOT one of those graph
-        // carve-outs, and the distinction is the point (issue #4197
-        // follow-up). Generic and ref-returning are DECLARATION-side
-        // impossibilities: the arrow type `((Params) -> R)?` cannot express a
-        // type parameter or a `ref` return at all, so the whole cycle has to
-        // stay off the scheme. A default is declaration-EXPRESSIBLE — the
-        // arrow type simply drops it — and only breaks at a CALL SITE that
-        // omitted the defaulted argument, since the rewritten `Name!!(args)`
-        // is a delegate-typed invocation that cannot fall back to a default
-        // the way a real method call can (PR #4200's CI run found exactly
-        // that: GS0144 "requires 3 arguments but was given 2"). Call sites of
-        // a claimed member are entirely translator-controlled, so that gap is
-        // closed where it lives — `TranslateCallArguments` materializes the
-        // omitted default explicitly, exactly as the `__local_` lift path
-        // already does for its own rewritten call sites. Excluding a
-        // default-carrying local function from this graph instead would erase
-        // it from cycle detection, and with it any cycle it is a CORE MEMBER
-        // of: `ControlFlowGraph.cs`'s `ProjectRegionsForDefiniteReturn` lost
-        // its whole `Add`/`AddPatternSwitch`/`AddTry` group (7 lifted helpers
-        // where 0 were wanted) that way. The fold-BFS below still skips a
-        // default-carrying candidate, because THERE the `__local_` lift is a
-        // strictly better answer — a real method declaration carries the
-        // default natively — and no cycle is sacrificed by declining it.
-        //
-        // A `params` PARAMETER, by contrast, IS a declaration-side carve-out —
-        // PR #4211's review found it, and the gap predates that PR (the old
-        // exclusion keyed on `HasExplicitDefaultValue` alone, so a
-        // `params`-only member was already admitted). gsc itself models a
-        // variadic function type fine (`((int32, ...int32) -> void)?` declares,
-        // binds and runs), but cs2gs's `ArrowTypeReference` carries parameter
-        // TYPES only and has no variadic flag, while `MapParameter` maps a
-        // `params T[]` to the ELEMENT type behind a `...` carrier. So
-        // `AddGroupMember` would declare `Add ((int32, int32) -> void)?` for a
-        // literal that is really `func (depth int32, xs ...int32)` — two
-        // distinct gsc function types ("Cannot convert type
-        // '(int32, ...int32) -> void' to '((int32, int32) -> void)?'"), and
-        // every expanded call site would overflow the declared arity
-        // ("Function 'Add!!' requires 2 arguments but was given 3"). Unlike the
-        // default-value case there is no call-site-only repair: the DECLARATION
-        // is already wrong. Until `ArrowTypeReference` models variadic shape,
-        // a variadic member keeps its whole cycle on the `__local_` path, whose
-        // real method declaration carries `params` natively.
-        //
-        // A `ref`/`out`/`in` PARAMETER is a third declaration-side carve-out,
-        // for exactly the same reason and found the same way (PR #4211's third
-        // review round). `ArrowTypeReference` carries parameter
-        // types only and has no ref-kind, so `AddGroupMember` declares
-        // `var Add ((int32, int32) -> void)?` for a literal that is really
-        // `func (depth int32, ref cell int32)`, i.e. `(int32, *int32) -> void`.
-        // gsc rejects the whole shape loudly and unconditionally — "Cannot
-        // convert type '(int32, int32) -> void' to '((int32, int32) -> void)?'"
-        // on the assignment plus "Cannot convert type '*int32' to 'int32'" at
-        // every `&x` call site (`*?` for `out`) — for `ref`, `out` and `in`
-        // alike, with or without a default parameter and with or without a
-        // named call site.
-        //
-        // Half of that is older than this PR and half is this PR's own: a
-        // ref-kind member WITHOUT a default was already claimed (and already
-        // broken) at e815bb76, while one WITH a default used to be kept out of
-        // the whole scheme by the blanket `HasExplicitDefaultValue` exclusion
-        // that #4197's fix (e1c4c1d9) correctly removed — so removing it
-        // exposed this shape for the first time. Either way the answer is the
-        // same, and it is the one `params` got: there is no call-site-only
-        // repair, because the DECLARATION is already the wrong function type.
-        // Such a member keeps its whole cycle on the `__local_` lift path,
-        // whose real method declaration carries the ref-kind natively. That
-        // path also preserves the `name:` wrappers (a real method HAS parameter
-        // names), so the call site binds correctly. Claimed-local callers of
-        // <see cref="TranslateFunctionTypeArguments"/> therefore only need
-        // by-value spills; delegate callers also use its ref/out/in handling.
+        // Issues #3399/#4197: ordinary mutual recursion uses nullable
+        // function locals so every member is declared before any body binds.
+        // Generic, ref-returning, variadic, and ref-kind signatures cannot be
+        // represented by that structural arrow type, so this pass excludes
+        // them. Issue #4302 routes a consecutive homogeneous excluded group
+        // through gsc's native direct-local-function group instead; only
+        // compiler-deferred mixed groups use readable source-named member
+        // helpers. Non-recursive callees reached solely from a claimed group
+        // fold into that group, including optional-parameter helpers whose
+        // omitted defaults are materialized at translated call sites.
         private void RegisterCapturingRecursiveLocalFunctions(IReadOnlyList<StatementSyntax> statements)
         {
             // `DescendantNodes()` excludes the node itself — local functions that
@@ -2662,20 +2634,9 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
-                    // A generic local function's type parameters cannot be
-                    // expressed on a function-typed local, a ref-returning
-                    // local is an unsupported gap either way, and neither a
-                    // `params` parameter nor a `ref`/`out`/`in` parameter has
-                    // any representation on cs2gs's `ArrowTypeReference`
-                    // (which carries parameter types only), so the forward
-                    // declaration and the function literal assigned to it
-                    // would be two different gsc function types. All four
-                    // carve-outs stay on the existing `__local_` lift path,
-                    // which lifts to a REAL method declaration. A default
-                    // parameter value is NOT a carve-out here — see the header
-                    // comment: it is expressible on the declaration side and
-                    // only constrains call sites, which this scheme fully
-                    // controls.
+                    // These signatures cannot use the nullable structural
+                    // arrow declaration. Native homogeneous groups and the
+                    // readable mixed-group fallback are selected later.
                     if (localFunction.TypeParameterList != null
                         || symbol.ReturnsByRef
                         || symbol.Parameters.Any(IsVariadicCarrierParameter)
@@ -2788,15 +2749,9 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // Issue #4197: a non-recursive callee reached only from a claimed
-            // SCC (e.g. `ControlFlowGraph.cs`'s `ProjectRegionsForDefiniteReturn`
-            // — the cycle `Add`/`AddPatternSwitch`/`AddTry` calls the
-            // non-recursive `CollectLabels`/`NewLabel`/`NewChoice`) folds into
-            // the SAME forward-declared group with its real name instead of
-            // diverting to `RegisterRecursiveLocalFunctionLifts`'s `__local_`
-            // path. Folding must stay safe for a `__local_`-lifted caller,
-            // which is emitted as a real class member with NO visibility into
-            // this block's locals (including the group's own nullable
-            // function-typed locals): a candidate is only folded when EVERY
+            // SCC folds into the same forward-declared group. Folding must
+            // stay safe for a member-lifted caller, which has no visibility
+            // into this block's function locals: a candidate joins only when every
             // caller of it — computed over the FULL local-function inventory
             // of this block, generic/ref-returning callers included — is
             // itself already inside the group (core member or previously
@@ -2916,25 +2871,6 @@ public sealed partial class CSharpToGSharpTranslator
                             || foldSymbols.Contains(symbol)
                             || sccMembers.Contains(symbol)
                             || this.state.RecursiveLocalFunctionGroups.ContainsKey(symbol))
-                        {
-                            continue;
-                        }
-
-                        // PR #4200's CI run: a fold candidate that declares a
-                        // DEFAULT PARAMETER VALUE is left on the `__local_`
-                        // lift path on purpose (`Binder.cs`'s
-                        // `FindTopLevelBaseIndex`, whose `AddBaseFirst` call
-                        // site omits the third argument). Folding is an
-                        // optional readability win, never a correctness
-                        // requirement, and the lift produces a REAL method
-                        // declaration that carries the default natively —
-                        // strictly better than a delegate-typed local whose
-                        // every call site has to have the default
-                        // materialized back in. A cycle member is the
-                        // opposite case and stays claimed: declining it would
-                        // cost the whole cycle its real names (see the header
-                        // comment).
-                        if (symbol.Parameters.Any(parameter => parameter.HasExplicitDefaultValue))
                         {
                             continue;
                         }

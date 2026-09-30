@@ -139,49 +139,32 @@ namespace Cs2Gs.Tests
         [Fact]
         public void LiftedStaticLocalFunction_SameTypeCall_EmitsBare()
         {
-            // Issue #3501: only a recursion cycle through ANOTHER local
-            // function still lifts (ref-kind signatures now stay native
-            // literals). Issue #4197 widened the capturing scheme to claim
-            // EVERY such mutual-recursion cycle by real name, so a plain
-            // (non-generic, non-ref-returning) mutual pair no longer lifts —
-            // this fixture must keep one of the two carve-outs
-            // (#4197/#4198 scope) that still forces the `__local_` path: this
-            // translator has no lowering to a G# ref-returning function
-            // literal for a ref-returning local function (#1900; gsc itself
-            // gained that literal form in #4219, but this translator does not
-            // emit it), so it (and its whole cycle) stays lifted.
+            // Issue #4302: a mixed generic/non-generic recursion group keeps
+            // the readable member-lift fallback, and same-type calls remain
+            // bare rather than acquiring a redundant owner qualification.
             string printed = Translate("""
                 public class Labels
                 {
-                    public int Make(int[] xs)
+                    public int Make(int value)
                     {
-                        return NewLabel(xs, 2);
+                        return NewLabel(value);
 
-                        static ref int NewLabel(int[] a, int i)
+                        static int NewLabel(int i)
                         {
-                            if (i > 0)
-                            {
-                                Other(a, i - 1);
-                            }
-
-                            return ref a[0];
+                            return i == 0 ? 0 : Other<int>(i - 1);
                         }
 
-                        static ref int Other(int[] a, int i)
+                        static int Other<T>(int i)
                         {
-                            if (i > 0)
-                            {
-                                NewLabel(a, i - 1);
-                            }
-
-                            return ref a[1];
+                            return NewLabel(i);
                         }
                     }
                 }
                 """);
 
-            Assert.Contains("__local_", printed, StringComparison.Ordinal);
-            Assert.DoesNotContain("Labels.__local_", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+            Assert.Contains("return NewLabel(value)", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("Labels.NewLabel(value)", printed, StringComparison.Ordinal);
             TranslationTestValidation.AssertBinds(printed);
         }
 
