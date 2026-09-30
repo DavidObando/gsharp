@@ -32,6 +32,9 @@ var requiredRecordKinds = []string{
 	"scope", "selection", "symbol", "type",
 }
 
+var executableCapsuleTestHook func(*executableCapsule)
+var packageLoadTestHook func(string)
+
 func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (Analysis, bool, error) {
 	return analyzeWithSnapshotHook(ctx, sourceRoot, outRoot, profile, nil)
 }
@@ -95,13 +98,30 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 		return Analysis{}, false, err
 	}
 	executables := []capturedExecutable{goExecutable}
-	capsule, err := createExecutableCapsule(workRoot, executables, false)
+	secureExecution := os.Getenv("GO2GS_EXEC_NAMESPACE") == "1"
+	capsule, err := createExecutableCapsule(workRoot, executables, secureExecution)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("create private executable capsule: %w", err)
 	}
 	defer func() {
 		err = errors.Join(err, capsule.close())
 	}()
+	if executableCapsuleTestHook != nil {
+		executableCapsuleTestHook(capsule)
+	}
+	if secureExecution {
+		previousPath, hadPath := os.LookupEnv("PATH")
+		if err := os.Setenv("PATH", capsule.directory.executionPath()); err != nil {
+			return Analysis{}, false, fmt.Errorf("bind worker PATH to executable capsule: %w", err)
+		}
+		defer func() {
+			if hadPath {
+				err = errors.Join(err, os.Setenv("PATH", previousPath))
+			} else {
+				err = errors.Join(err, os.Unsetenv("PATH"))
+			}
+		}()
+	}
 	executable := capsule.path(goExecutable.name)
 	profileIdentity := profile
 	profileBytes, err := json.Marshal(profileIdentity)
@@ -237,7 +257,13 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	selectedConfig.Mode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
 		packages.NeedEmbedFiles | packages.NeedEmbedPatterns | packages.NeedImports |
 		packages.NeedDeps | packages.NeedModule | packages.NeedForTest
+	if packageLoadTestHook != nil {
+		packageLoadTestHook("preflight-before")
+	}
 	selectedPreflight, _ := packages.Load(&selectedConfig, profile.EntryPatterns...)
+	if packageLoadTestHook != nil {
+		packageLoadTestHook("preflight-after")
+	}
 	selectedPreflight = collectPackages(selectedPreflight)
 	sourceSnapshot, err := snapshotPackageInputs(selectedPreflight, selectedPreflight, mirror.root, profile, profile.Limits)
 	if err != nil {
@@ -249,7 +275,13 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 	}
 	builder.sourceSnapshot = sourceSnapshot.data
 	builder.snapshotPortable = sourceSnapshot.portable
+	if packageLoadTestHook != nil {
+		packageLoadTestHook("typed-before")
+	}
 	loaded, loadErr := packages.Load(config, profile.EntryPatterns...)
+	if packageLoadTestHook != nil {
+		packageLoadTestHook("typed-after")
+	}
 	if afterLoad != nil {
 		afterLoad()
 	}

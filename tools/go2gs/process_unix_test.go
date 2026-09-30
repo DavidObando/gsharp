@@ -55,13 +55,13 @@ func TestAnalysisWorkerCleansNestedProcessTree(t *testing.T) {
 			state := t.TempDir()
 			pidPath := state + "/child.pid"
 			marker := state + "/grandchild-survived"
-			result, err := runAnalysisWorkerProcess(t.Context(), 5*time.Second, 4096, "", executable,
+			result, err := runProcessWithMode(t.Context(), 5*time.Second, 4096, "", executable,
 				[]string{"-test.run=TestProcessHelper"}, []string{
 					"GO2GS_PROCESS_HELPER=" + mode,
 					"GO2GS_CHILD_PID=" + pidPath,
 					"GO2GS_CHILD_MARKER=" + marker,
 					"GO2GS_CHILD_DELAY=5s",
-				})
+				}, processGroupOwn)
 			if err != nil {
 				t.Fatal(err)
 			}

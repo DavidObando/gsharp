@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"sort"
 )
 
 const maxToolExecutableBytes int64 = 256 << 20
@@ -25,16 +26,8 @@ type capturedExecutable struct {
 type executableCapsule struct {
 	directory executableDirectory
 	entries   []capturedExecutable
+	immutable bool
 }
-
-type ordinaryExecutableDirectory struct {
-	path string
-}
-
-func (d *ordinaryExecutableDirectory) writePath() string     { return d.path }
-func (d *ordinaryExecutableDirectory) executionPath() string { return d.path }
-func (d *ordinaryExecutableDirectory) seal() error           { return nil }
-func (d *ordinaryExecutableDirectory) close() error          { return nil }
 
 type executableDirectory interface {
 	writePath() string
@@ -110,13 +103,14 @@ func createExecutableCapsule(workRoot string, entries []capturedExecutable, immu
 	if len(entries) == 0 {
 		return nil, errors.New("executable capsule requires at least one entry")
 	}
-	if immutable {
-		return nil, errors.New("immutable executable capsules are obsolete in M0")
-	}
 	sorted := append([]capturedExecutable{}, entries...)
-	for _, entry := range sorted {
+	sort.Slice(sorted, func(i, j int) bool { return sorted[i].name < sorted[j].name })
+	for index, entry := range sorted {
 		if entry.name == "" || filepath.Base(entry.name) != entry.name {
 			return nil, fmt.Errorf("invalid executable name %q", entry.name)
+		}
+		if index > 0 && sorted[index-1].name == entry.name {
+			return nil, fmt.Errorf("duplicate executable name %q", entry.name)
 		}
 	}
 	var totalBytes int64
@@ -127,11 +121,11 @@ func createExecutableCapsule(workRoot string, entries []capturedExecutable, immu
 		totalBytes += int64(len(entry.data))
 	}
 	path := filepath.Join(workRoot, "toolchain")
-	if err := os.Mkdir(path, 0o700); err != nil {
+	directory, err := prepareExecutableDirectory(path, immutable, totalBytes+(1<<20))
+	if err != nil {
 		return nil, err
 	}
-	directory := &ordinaryExecutableDirectory{path: path}
-	capsule := &executableCapsule{directory: directory, entries: sorted}
+	capsule := &executableCapsule{directory: directory, entries: sorted, immutable: immutable}
 	success := false
 	defer func() {
 		if !success {
@@ -169,14 +163,16 @@ func (c *executableCapsule) verify() error {
 		if entries[index].Name() != entry.name {
 			return errors.New("executable capsule ordering or contents changed")
 		}
-		sourceInfo, err := os.Lstat(entry.sourcePath)
-		if err != nil || !sourceInfo.Mode().IsRegular() ||
-			!os.SameFile(entry.sourceInfo, sourceInfo) || sourceInfo.Mode() != entry.sourceInfo.Mode() {
-			return fmt.Errorf("executable %q source identity changed", entry.name)
-		}
-		sourceData, err := readBoundedRegularFile(entry.sourcePath, int64(len(entry.data)))
-		if err != nil || !bytes.Equal(sourceData, entry.data) {
-			return fmt.Errorf("executable %q source content changed", entry.name)
+		if !c.immutable {
+			sourceInfo, err := os.Lstat(entry.sourcePath)
+			if err != nil || !sourceInfo.Mode().IsRegular() ||
+				!os.SameFile(entry.sourceInfo, sourceInfo) || sourceInfo.Mode() != entry.sourceInfo.Mode() {
+				return fmt.Errorf("executable %q source identity changed", entry.name)
+			}
+			sourceData, err := readBoundedRegularFile(entry.sourcePath, int64(len(entry.data)))
+			if err != nil || !bytes.Equal(sourceData, entry.data) {
+				return fmt.Errorf("executable %q source content changed", entry.name)
+			}
 		}
 		stagedPath := c.path(entry.name)
 		stagedInfo, err := os.Lstat(stagedPath)

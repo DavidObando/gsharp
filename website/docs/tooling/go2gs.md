@@ -37,11 +37,17 @@ Profile, output, and toolchain bootstrap failures—including a missing `go`
 executable or unusable GOROOT—exit 2 and may produce no artifact. Once
 bootstrap succeeds, exact-version or source-commit mismatches produce an
 incomplete artifact and exit 1.
-The selected Go executable is captured and staged under the canonical `go` or
-`go.exe` name. Child `PATH` contains only private staged directories, never the
-selected executable's original parent directory or its mutable siblings. The
-captured bytes must identify as a native `cmd/go`; scripts and wrappers are
-rejected before execution.
+Public `analyze` is supported only on Linux. Non-Linux platforms fail closed
+before artifact publication because the required descriptor-bound executable
+launch cannot be provided securely.
+
+The selected native `cmd/go` is captured into a parent bootstrap capsule only
+for handoff. The Linux worker enters a private user and mount namespace,
+recaptures the handoff by expected SHA-256, and places only `go` in a read-only
+tmpfs. It holds the directory descriptor and sets both process `PATH` and
+`packages.Config.Env` `PATH` to `/proc/<worker-pid>/fd/<dir-fd>`. Both package
+loads therefore execute the worker's immutable object and do not depend on the
+original path, bootstrap pathname, or ambient sibling tools after launch.
 
 M0 forces `CGO_ENABLED=0` for every `go/packages` load and never executes cgo,
 a C/C++ compiler, linker, assembler, pkg-config, or helper. Profile-v1
