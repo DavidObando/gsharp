@@ -6317,6 +6317,46 @@ public sealed partial class CSharpToGSharpTranslator
                     projectedType);
             }
 
+            if (destinationType != null
+                && projectedType != null
+                && SymbolEqualityComparer.Default.Equals(
+                    destinationType,
+                    projectedType)
+                && !SymbolEqualityComparer.IncludeNullability.Equals(
+                    destinationType,
+                    projectedType))
+            {
+                Location canonicalLocation = value.GetLocation();
+                string mappedDestination = GSharpPrinter.RenderTypeReference(
+                    this.typeMapper.Map(
+                        destinationType,
+                        this.context,
+                        canonicalLocation));
+                string mappedProjected = GSharpPrinter.RenderTypeReference(
+                    this.typeMapper.Map(
+                        projectedType,
+                        this.context,
+                        canonicalLocation));
+                if (string.Equals(
+                        mappedDestination,
+                        mappedProjected,
+                        StringComparison.Ordinal))
+                {
+                    ITypeSymbol canonicalEffectiveType =
+                        projectedType.WithNullableAnnotation(
+                            destinationType.NullableAnnotation);
+                    if (sink is ILocalSymbol canonicalLocal)
+                    {
+                        this.state.ManagedReferenceArrayNullable
+                            .ManagedReferenceArrayProjectedLocalType[
+                                canonicalLocal] =
+                            canonicalEffectiveType;
+                    }
+
+                    return canonicalEffectiveType;
+                }
+            }
+
             if (destinationType is not IArrayTypeSymbol destinationArray
                 || projectedType is not IArrayTypeSymbol projectedArray
                 || destinationArray.Rank != projectedArray.Rank

@@ -2156,10 +2156,18 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol projectedValue =
                 this.GetManagedReferenceArrayProjectedArgumentType(
                     assignment.Right);
+            INamedTypeSymbol enclosingType =
+                this.context.SemanticModel.GetEnclosingSymbol(
+                    assignment.SpanStart)
+                    ?.ContainingType;
             if (assignmentTarget is IFieldSymbol
                     { ContainingType.IsGenericType: true }
                     or IPropertySymbol
                     { ContainingType.IsGenericType: true }
+                && (enclosingType == null
+                    || !SymbolEqualityComparer.Default.Equals(
+                        enclosingType.OriginalDefinition,
+                        assignmentTarget.ContainingType.OriginalDefinition))
                 && assignmentTargetType != null
                 && projectedValue != null
                 && SymbolEqualityComparer.Default.Equals(
