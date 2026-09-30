@@ -790,22 +790,6 @@ internal sealed class BinderContext
         TypeSymbol? targetType = null,
         TypeSymbol? requiredType = null)
     {
-        static TypeSymbol GetDeclaredType(AccessPath accessPath, TypeSymbol narrowedType)
-        {
-            if (!accessPath.HasMembers)
-            {
-                return accessPath.Root.Type;
-            }
-
-            return accessPath.Members[^1].SourceSymbol switch
-            {
-                FieldSymbol field => field.Type,
-                PropertySymbol property => property.Type,
-                VariableSymbol variable => variable.Type,
-                _ => narrowedType,
-            };
-        }
-
         var frameIndex = -1;
         for (var i = NarrowedVariables.Count - 1; i >= 0; i--)
         {
@@ -830,7 +814,7 @@ internal sealed class BinderContext
             memberName,
             kind,
             operationRequiredType,
-            GetDeclaredType(path, narrowedType),
+            MemberLookup.GetDeclaredAccessPathType(path, narrowedType),
             targetType);
         foreach (var entry in BackwardGotoNarrowingStates)
         {

@@ -275,7 +275,7 @@ internal sealed partial class StatementBinder
             foreach (var path in frames[i].Keys)
             {
                 if ((mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path))
-                    || (mutations.MayMutateGlobalRoots && path.Root is GlobalVariableSymbol)
+                    || mutations.MayMutateGlobalRoot(path.Root, frames[i][path])
                     || mutations.InvalidatesNarrowing(path.Root, frames[i][path])
                     || (path.HasMembers && mayMutateMemberPaths))
                 {
@@ -858,7 +858,8 @@ internal sealed partial class StatementBinder
                 {
                     var mutations = new AssignedRootsCollector(
                         AssignmentPreservesNarrowing,
-                        externalReadOnlyCallableAliases);
+                        externalReadOnlyCallableAliases,
+                        trackSourceCallGlobalMutations: true);
                     mutations.Visit(cleanup);
                     summary = new FinallyFlowSummary(
                         mutations,
@@ -893,7 +894,8 @@ internal sealed partial class StatementBinder
 
         var mutations = new AssignedRootsCollector(
             AssignmentPreservesNarrowing,
-            externalReadOnlyCallableAliases);
+            externalReadOnlyCallableAliases,
+            trackSourceCallGlobalMutations: true);
         mutations.Visit(finallyBlock);
         var nonNullOnNormalExit = ContainsUserGotoOrLabel(finallyClause.Body)
             ? EndsInUnconditionalExit(finallyBlock)
@@ -934,7 +936,7 @@ internal sealed partial class StatementBinder
             foreach (var entry in frame.ToArray())
             {
                 if ((summary.Mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
-                    || (summary.Mutations.MayMutateGlobalRoots && entry.Key.Root is GlobalVariableSymbol)
+                    || summary.Mutations.MayMutateGlobalRoot(entry.Key.Root, entry.Value)
                     || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
                     || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
                 {
@@ -959,7 +961,7 @@ internal sealed partial class StatementBinder
         foreach (var entry in snapshot.NarrowedVariables.ToArray())
         {
             if ((summary.Mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
-                || (summary.Mutations.MayMutateGlobalRoots && entry.Key.Root is GlobalVariableSymbol)
+                || summary.Mutations.MayMutateGlobalRoot(entry.Key.Root, entry.Value)
                 || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
                 || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
             {
@@ -1645,6 +1647,7 @@ internal sealed partial class StatementBinder
     private class AssignedRootsCollector : BoundTreeWalker
     {
         private readonly Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing;
+        private readonly bool trackSourceCallGlobalMutations;
         private readonly HashSet<AssignedField> assignedFields = new();
         private readonly HashSet<AssignedProperty> assignedProperties = new();
         private readonly Dictionary<VariableSymbol, List<BoundAssignmentExpression>> assignments = new();
@@ -1654,13 +1657,17 @@ internal sealed partial class StatementBinder
         private readonly HashSet<BoundFunctionLiteralExpression> visitedFunctionLiterals = new();
         private readonly HashSet<BoundLabel> pendingConditionalTargets = new();
         private readonly HashSet<BoundLabel> visitedLabels = new();
+        private readonly Stack<VariableSymbol> enclosingGlobalAssignments = new();
+        private HashSet<VariableSymbol>? globalMutationProtectedRoots;
         private HashSet<VariableSymbol>? tryAssignedVariables;
 
         public AssignedRootsCollector(
             Func<BoundAssignmentExpression, TypeSymbol, bool>? assignmentPreservesNarrowing,
-            IEnumerable<VariableSymbol>? externalFunctionValues = null)
+            IEnumerable<VariableSymbol>? externalFunctionValues = null,
+            bool trackSourceCallGlobalMutations = false)
         {
             this.assignmentPreservesNarrowing = assignmentPreservesNarrowing;
+            this.trackSourceCallGlobalMutations = trackSourceCallGlobalMutations;
             if (externalFunctionValues != null)
             {
                 this.externalFunctionValues.UnionWith(externalFunctionValues);
@@ -1711,7 +1718,11 @@ internal sealed partial class StatementBinder
                     Arguments: var arguments,
                 })
             {
-                MayMutateGlobalRoots = true;
+                if (trackSourceCallGlobalMutations)
+                {
+                    MarkMayMutateGlobalRoots();
+                }
+
                 if (function.HasCaptures)
                 {
                     MayMutateAnyRoot = true;
@@ -1760,6 +1771,13 @@ internal sealed partial class StatementBinder
                 || !assignments.TryGetValue(root, out var rootAssignments)
                 || rootAssignments.Any(assignment => !assignmentPreservesNarrowing(assignment, narrowedType));
         }
+
+        public bool MayMutateGlobalRoot(VariableSymbol root, TypeSymbol narrowedType)
+            => MayMutateGlobalRoots
+                && root is GlobalVariableSymbol
+                && (globalMutationProtectedRoots == null
+                    || !globalMutationProtectedRoots.Contains(root)
+                    || InvalidatesNarrowing(root, narrowedType));
 
         protected override void VisitIndirectCallExpression(BoundIndirectCallExpression node)
         {
@@ -1824,7 +1842,7 @@ internal sealed partial class StatementBinder
                 var isExternal = IsExternalCallable(argument);
                 if (isExternal)
                 {
-                    MayMutateGlobalRoots = true;
+                    MarkMayMutateGlobalRoots();
                 }
                 else if (IsUnknownCallable(argument) || !hasKnownTargets)
                 {
@@ -2102,8 +2120,25 @@ internal sealed partial class StatementBinder
                 || (variable.Variable is not ParameterSymbol { IsReadOnly: true }
                     && !externalFunctionValues.Contains(variable.Variable)
                     && !functionLiterals.ContainsKey(variable.Variable));
-            MayMutateGlobalRoots |= variable.Variable is ParameterSymbol { IsReadOnly: true }
-                || externalFunctionValues.Contains(variable.Variable);
+            if (variable.Variable is ParameterSymbol { IsReadOnly: true }
+                || externalFunctionValues.Contains(variable.Variable))
+            {
+                MarkMayMutateGlobalRoots();
+            }
+        }
+
+        private void MarkMayMutateGlobalRoots()
+        {
+            MayMutateGlobalRoots = true;
+            var protectedRoots = enclosingGlobalAssignments.ToHashSet();
+            if (globalMutationProtectedRoots == null)
+            {
+                globalMutationProtectedRoots = protectedRoots;
+            }
+            else
+            {
+                globalMutationProtectedRoots.IntersectWith(protectedRoots);
+            }
         }
 
         private static bool IsCallableType(TypeSymbol? type)
@@ -2234,7 +2269,18 @@ internal sealed partial class StatementBinder
                 rootAssignments.Add(node);
             }
 
+            var protectedGlobalRoot = node.Variable as GlobalVariableSymbol;
+            if (protectedGlobalRoot != null)
+            {
+                enclosingGlobalAssignments.Push(protectedGlobalRoot);
+            }
+
             base.VisitAssignmentExpression(node);
+
+            if (protectedGlobalRoot != null)
+            {
+                enclosingGlobalAssignments.Pop();
+            }
         }
 
         protected override void VisitAddressOfExpression(BoundAddressOfExpression node)

@@ -1696,6 +1696,39 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_ImportedMemberPathConversionRetainsDeclaredNullability()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            func Run() string {
+                var box = Issue4519ImportedGenericHolder[string?]("safe")
+                if box.Value != nil {
+                Again:
+                    let value string = box.Value
+                    box = Issue4519ImportedGenericHolder[string?](nil)
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """,
+            new[] { typeof(Issue4519ImportedGenericHolder<>).Assembly.Location });
+
+        var diagnostics = result.Diagnostics.Where(d => d.Id == "GS0155").ToArray();
+        Assert.Equal(2, diagnostics.Length);
+        Assert.All(
+            diagnostics,
+            diagnostic => Assert.Contains("'string?'", diagnostic.Message, StringComparison.Ordinal));
+        Assert.Contains(
+            diagnostics,
+            diagnostic => diagnostic.Location.Text.ToString(diagnostic.Location.Span) == "box.Value");
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_InvalidatesNarrowedMemberPathIndex()
     {
         var result = Evaluate("""
@@ -4835,4 +4868,18 @@ public sealed class Issue4519ImportedRefCat : Issue4519ImportedRefBase
         : base(22)
     {
     }
+}
+
+/// <summary>Imported generic property used by declared-type diagnostic tests.</summary>
+#nullable enable
+public sealed class Issue4519ImportedGenericHolder<T>
+{
+    /// <summary>Initializes the holder.</summary>
+    public Issue4519ImportedGenericHolder(T value)
+    {
+        Value = value;
+    }
+
+    /// <summary>Gets the value.</summary>
+    public T Value { get; }
 }
