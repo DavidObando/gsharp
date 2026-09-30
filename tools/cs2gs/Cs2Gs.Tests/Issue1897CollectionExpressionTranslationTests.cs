@@ -310,6 +310,50 @@ namespace Corpus.Issue4525
     }
 
     [Fact]
+    public void ConstructibleTarget_GenericDerivedAddOverNullableBaseAddIsReportedUnsupported()
+    {
+        LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Source.cs", @"
+#nullable enable
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Corpus.Issue4525
+{
+    public class BaseBag : IEnumerable<string>
+    {
+        public void Add(string? item) { }
+        public IEnumerator<string> GetEnumerator() => throw new System.NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Bag : BaseBag
+    {
+        public void Add<U>(U item) { }
+    }
+
+    public class Holder
+    {
+        public Bag Make(string? x)
+        {
+            Bag b = [x];
+            return b;
+        }
+    }
+}
+") });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        LoadedDocument document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains("Add overload set", StringComparison.Ordinal));
+    }
+
+    [Fact]
     public void ConstructibleTarget_GenericAddWithDefaultElementIsReportedUnsupported()
     {
         LoadedCSharpProject project = CSharpProjectLoader.LoadInMemory(

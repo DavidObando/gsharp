@@ -4233,11 +4233,12 @@ public sealed partial class CSharpToGSharpTranslator
         /// Issue #4525: a constructible collection's elements are bound through
         /// its <c>Add</c> method, so a nullable <c>Add(T?)</c> parameter keeps a
         /// legitimately null element from being asserted. Roslyn does not expose
-        /// the bound Add method of a collection expression, so the candidate set
-        /// is rebuilt with C# rules: only instance methods accessible from the
-        /// use site, with a derived declaration hiding a base one of the same
-        /// signature. When the candidates disagree about nullability, or a generic
-        /// Add could be the bound one, no guess is made and Unsupported is reported.
+        /// the bound Add method, and C# overload resolution (hiding, generic
+        /// inference, extension methods, candidate sets spanning the hierarchy) is
+        /// not modeled. The helper is therefore fail-safe: the nullable parameter
+        /// is used only when exactly one accessible, non-generic, instance Add
+        /// exists with no extension Add in scope. Any other shape with a nullable
+        /// or default element reports Unsupported instead of guessing.
         /// </summary>
         /// <returns>The nullable Add parameter type, or null when the element type stands.</returns>
         private ITypeSymbol GetCollectionAddParameterType(
@@ -4250,59 +4251,6 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
-            ISymbol enclosing = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart);
-            ISymbol within = (ISymbol)enclosing?.ContainingType
-                ?? this.context.Compilation.Assembly;
-            var seenSignatures = new List<IMethodSymbol>();
-            var matching = new List<ITypeSymbol>();
-            bool hasGenericAdd = false;
-            for (ITypeSymbol type = target; type != null; type = type.BaseType)
-            {
-                foreach (IMethodSymbol add in type.GetMembers("Add").OfType<IMethodSymbol>())
-                {
-                    if (add.IsStatic
-                        || add.Parameters.Length != 1
-                        || !this.context.Compilation.IsSymbolAccessibleWithin(add, within))
-                    {
-                        continue;
-                    }
-
-                    // A method in a more derived type with the same parameter
-                    // type hides (or overrides) this one, even if inaccessible.
-                    if (seenSignatures.Any(seen =>
-                            SymbolEqualityComparer.Default.Equals(
-                                seen.Parameters[0].Type,
-                                add.Parameters[0].Type)))
-                    {
-                        continue;
-                    }
-
-                    if (add.IsGenericMethod)
-                    {
-                        hasGenericAdd = true;
-                    }
-                    else if (SymbolEqualityComparer.Default.Equals(
-                        add.Parameters[0].Type,
-                        elementType))
-                    {
-                        matching.Add(add.Parameters[0].Type);
-                    }
-                }
-
-                // Hiding applies to every declared Add, accessible or not.
-                foreach (IMethodSymbol add in type.GetMembers("Add").OfType<IMethodSymbol>())
-                {
-                    if (!add.IsStatic && add.Parameters.Length == 1)
-                    {
-                        seenSignatures.Add(add);
-                    }
-                }
-            }
-
-            bool anyAnnotated = matching.Any(candidate =>
-                candidate.NullableAnnotation == NullableAnnotation.Annotated);
-            bool anyUnannotated = matching.Any(candidate =>
-                candidate.NullableAnnotation != NullableAnnotation.Annotated);
             bool nullableElement = collection.Elements
                 .OfType<ExpressionElementSyntax>()
                 .Any(item =>
@@ -4310,35 +4258,58 @@ public sealed partial class CSharpToGSharpTranslator
                     || this.context.GetTypeInfo(item.Expression).Type?.NullableAnnotation
                         == NullableAnnotation.Annotated);
 
-            // An in-scope extension Add applicable to the target may be the
-            // bound method; its nullability is not modeled here, so fail safe.
-            if (nullableElement
-                && this.context.SemanticModel.LookupSymbols(
-                        collection.SpanStart,
-                        container: (INamespaceOrTypeSymbol)target,
-                        name: "Add",
-                        includeReducedExtensionMethods: true)
-                    .OfType<IMethodSymbol>()
-                    .Any(method => method.MethodKind == MethodKind.ReducedExtension))
+            ISymbol enclosing = this.context.SemanticModel.GetEnclosingSymbol(collection.SpanStart);
+            ISymbol within = (ISymbol)enclosing?.ContainingType
+                ?? this.context.Compilation.Assembly;
+            var candidates = new List<IMethodSymbol>();
+            for (ITypeSymbol type = target; type != null; type = type.BaseType)
             {
-                this.context.ReportUnsupported(
-                    collection,
-                    "collection expression element binds through an Add overload set whose nullability cannot be decided; no exact G# translation exists.");
+                foreach (IMethodSymbol add in type.GetMembers("Add").OfType<IMethodSymbol>())
+                {
+                    if (!add.IsStatic
+                        && add.Parameters.Length == 1
+                        && this.context.Compilation.IsSymbolAccessibleWithin(add, within)
+                        && !candidates.Any(seen =>
+                            !add.IsGenericMethod
+                            && !seen.IsGenericMethod
+                            && SymbolEqualityComparer.Default.Equals(
+                                seen.Parameters[0].Type,
+                                add.Parameters[0].Type)))
+                    {
+                        candidates.Add(add);
+                    }
+                }
+            }
+
+            bool hasExtensionAdd = this.context.SemanticModel.LookupSymbols(
+                    collection.SpanStart,
+                    container: (INamespaceOrTypeSymbol)target,
+                    name: "Add",
+                    includeReducedExtensionMethods: true)
+                .OfType<IMethodSymbol>()
+                .Any(method => method.MethodKind == MethodKind.ReducedExtension);
+            bool decidable = !hasExtensionAdd
+                && candidates.Count == 1
+                && !candidates[0].IsGenericMethod
+                && SymbolEqualityComparer.Default.Equals(
+                    candidates[0].Parameters[0].Type,
+                    elementType);
+            if (!decidable)
+            {
+                if (nullableElement)
+                {
+                    this.context.ReportUnsupported(
+                        collection,
+                        "collection expression element binds through an Add overload set whose nullability cannot be decided; no exact G# translation exists.");
+                }
+
                 return null;
             }
 
-            // A generic Add is only the bound method when no non-generic one
-            // matches; then a nullable element cannot be judged here.
-            if ((anyAnnotated && anyUnannotated)
-                || (hasGenericAdd && matching.Count == 0 && nullableElement))
-            {
-                this.context.ReportUnsupported(
-                    collection,
-                    "collection expression element binds through an Add overload set whose nullability cannot be decided; no exact G# translation exists.");
-                return null;
-            }
-
-            return anyAnnotated ? matching[0] : null;
+            ITypeSymbol parameterType = candidates[0].Parameters[0].Type;
+            return parameterType.NullableAnnotation == NullableAnnotation.Annotated
+                ? parameterType
+                : null;
         }
 
         private INamedTypeSymbol GetManagedReferenceArrayProjectedCollectionType(
