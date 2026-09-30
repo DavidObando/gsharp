@@ -4612,6 +4612,44 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void CallableArgumentWithExternalAndUnknownTargetsRemainsUnsafe()
+    {
+        var result = Evaluate("""
+            data class Holder(Callback (() -> void)) {
+            }
+
+            func Invoke(action (() -> void)) {
+                action()
+            }
+
+            func Run(callback (() -> void), chooseUnknown bool) int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                let holder = Holder{Callback: clear}
+                try {
+                    goto Done
+                }
+                finally {
+                    var action = callback
+                    if chooseUnknown {
+                        action = holder.Callback
+                    }
+                    Invoke(action)
+                }
+            Done:
+                return x.Length
+            }
+
+            Run(func() { }, true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ImportedCallRecovery_DoesNotRebindInlineOutVariable()
     {
         var result = EmittedOracle.Evaluate(
@@ -4692,6 +4730,78 @@ public class Issue4519GotoAssignmentNarrowingTests
                 if x is Dog {
                 Again:
                     let value = x.Value
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("public", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_PublicPropertyDoesNotAliasInheritedExplicitInterfaceProperty()
+    {
+        var result = Evaluate("""
+            interface View {
+                prop Value string { get; }
+            }
+            open class Base : View {
+                private prop (View) Value string -> "explicit"
+            }
+            class Dog : Base {
+                prop Value string -> "public"
+            }
+
+            func Run() string {
+                var x View = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x.Value
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("public", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_PublicIndexerDoesNotAliasInheritedExplicitInterfaceIndexer()
+    {
+        var result = Evaluate("""
+            interface View {
+                prop this[index int32] string { get; }
+            }
+            open class Base : View {
+                private prop (View) this[index int32] string -> "explicit"
+            }
+            class Dog : Base {
+                prop this[index int32] string -> "public"
+            }
+
+            func Run() string {
+                var x View = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x[0]
                     if count == 0 {
                         count++
                         goto Again

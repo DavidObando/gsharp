@@ -1926,7 +1926,8 @@ internal sealed partial class StatementBinder
                 {
                     MarkMayMutateGlobalRoots();
                 }
-                else if (IsUnknownCallable(argument) || !hasKnownTargets)
+
+                if (IsUnknownCallable(argument) || (!hasKnownTargets && !isExternal))
                 {
                     MayMutateAnyRoot = true;
                 }

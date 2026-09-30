@@ -446,7 +446,7 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        return !implementationType.Properties.Any(property =>
+        return !implementationType.GetHierarchy().SelectMany(type => type.Properties).Any(property =>
             !ReferenceEquals(property, selected)
             && (ReferenceEquals(property.ExplicitInterfaceMember, declared)
                 || (operation == MemberOperation.Read
