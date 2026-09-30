@@ -4295,7 +4295,9 @@ public sealed partial class CSharpToGSharpTranslator
                 && (parameter.Type is IArrayTypeSymbol
                     || (parameter.Type is INamedTypeSymbol collection
                         && IsSupportedParamsCollectionType(collection)))
-                && IsNullOrDefaultLiteral(values[^1]);
+                && (IsNullOrDefaultLiteral(values[^1])
+                    || this.context.SemanticModel.GetConstantValue(values[^1])
+                        is { HasValue: true, Value: null });
         }
 
         // Lowers a collection initializer containing an N-ary (N != 2) complex

@@ -3332,10 +3332,15 @@ public sealed class ManagedReferenceTranslationTests
     [InlineData("T[]", "null")]
     [InlineData("T[]", "default")]
     [InlineData("T[]", "default(ManagedRef<int>[])")]
+    [InlineData("T[]", "(ManagedRef<int>[])null")]
+    [InlineData("T[]", "(ManagedRef<int>[])default")]
     [InlineData("IEnumerable<T>", "default")]
     [InlineData(
         "IEnumerable<T>",
         "default(IEnumerable<ManagedRef<int>>)")]
+    [InlineData(
+        "IEnumerable<T>",
+        "(IEnumerable<ManagedRef<int>>)null")]
     public void ManagedReferenceArrayParamsInitializerRejectsNullOrDefaultCarrier(
         string carrierType,
         string carrier)
@@ -3798,6 +3803,7 @@ public sealed class ManagedReferenceTranslationTests
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Empty(context.Diagnostics);
         Assert.Contains("Wrap(Source)", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("factory()!!.", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
             new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
