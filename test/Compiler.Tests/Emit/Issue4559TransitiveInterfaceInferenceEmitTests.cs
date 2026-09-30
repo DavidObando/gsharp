@@ -129,7 +129,7 @@ public sealed class Issue4559TransitiveInterfaceInferenceEmitTests
             """;
 
         var ex = Assert.ThrowsAny<Exception>(() => CompileAndRun(source, library, "i4559conflictlib"));
-        Assert.Contains("infer", ex.Message, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("GS0151", ex.Message, StringComparison.Ordinal);
     }
 
     private static string CompileAndRun(string source, string library = null, string libraryAssemblyName = null)
@@ -201,9 +201,16 @@ public sealed class Issue4559TransitiveInterfaceInferenceEmitTests
 
             using var proc = Process.Start(psi)
                 ?? throw new InvalidOperationException("Failed to start dotnet exec");
-            var stdout = proc.StandardOutput.ReadToEnd();
-            var stderr = proc.StandardError.ReadToEnd();
-            Assert.True(proc.WaitForExit(30_000), "dotnet exec timed out");
+            var stdoutTask = proc.StandardOutput.ReadToEndAsync();
+            var stderrTask = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(30_000))
+            {
+                proc.Kill(entireProcessTree: true);
+                Assert.Fail("dotnet exec timed out");
+            }
+
+            var stdout = stdoutTask.GetAwaiter().GetResult();
+            var stderr = stderrTask.GetAwaiter().GetResult();
             Assert.True(
                 proc.ExitCode == 0,
                 $"exited {proc.ExitCode}\nstdout:\n{stdout}\nstderr:\n{stderr}");
