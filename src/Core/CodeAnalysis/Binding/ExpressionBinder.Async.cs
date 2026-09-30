@@ -813,8 +813,17 @@ internal sealed partial class ExpressionBinder
                 }
             }
 
+            // Issue #4354: a stated-nullable receiver (`T?`) has no CLR member
+            // surface until it is narrowed, exactly as on the plain read and write
+            // paths (`CanBindClrInstanceMember`). `NullableTypeSymbol.ClrType`
+            // relays to the underlying type, so without this test the compound
+            // write bound clean and failed at run time with an unattributed
+            // NullReferenceException. The same gate covers event subscription,
+            // which shares this binder.
             importedEventTarget = boundReceiver.Type;
-            receiverClrType = importedEventTarget?.ClrType;
+            receiverClrType = CanBindClrInstanceMember(boundReceiver)
+                ? importedEventTarget?.ClrType
+                : null;
             if (receiverClrType == null
                 && boundReceiver.Type is StructSymbol sourceReceiver
                 && TypeMemberModel.GetNearestImportedBase(sourceReceiver) is TypeSymbol importedBase)
