@@ -197,12 +197,14 @@ namespace Demo
         {
             PutList<string>(null);
             PutArray<string>(null);
+            PutArray<string>(null, ""x"");
         }
     }
 }");
 
         Assert.Contains("default(List[string])", printed, StringComparison.Ordinal);
         Assert.Contains("default([]string)", printed, StringComparison.Ordinal);
+        Assert.Contains("PutArray[string](default(string), \"x\")", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
     }
 

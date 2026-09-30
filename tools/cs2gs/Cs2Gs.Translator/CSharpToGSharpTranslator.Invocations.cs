@@ -2103,12 +2103,21 @@ public sealed partial class CSharpToGSharpTranslator
                 // element slot bare (GS0154/GS0155, the migrated
                 // Cs2Gs.Pipeline `FindNupkgForVersion` wall). Bridge against
                 // the params ELEMENT contract instead.
-                translated = this.ForgiveNullableReferenceValue(
-                    argument.Expression,
-                    translated,
-                    paramsElementType,
-                    paramsParameter,
-                    includePromotedValue: true);
+                translated = IsNullOrSuppressedNull(argument.Expression)
+                    && paramsElementType.IsReferenceType
+                    && this.TargetWillRemainNonNullableReference(
+                        paramsElementType,
+                        paramsParameter)
+                        ? new DefaultValueExpression(this.typeMapper.Map(
+                            paramsElementType.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
+                            this.context,
+                            argument.Expression.GetLocation()))
+                        : this.ForgiveNullableReferenceValue(
+                            argument.Expression,
+                            translated,
+                            paramsElementType,
+                            paramsParameter,
+                            includePromotedValue: true);
             }
 
             return translated;
