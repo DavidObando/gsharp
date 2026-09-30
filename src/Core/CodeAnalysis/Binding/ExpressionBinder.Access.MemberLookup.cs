@@ -165,21 +165,21 @@ internal sealed partial class ExpressionBinder
             receiverSyntax,
             receiverStart);
         var unwrappedResult = UnwrapTransparentMemberResult(result);
+        var recoveredDeclaredReceiver = false;
         if (receiver != null
             && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var receiverPath, out _)
-            && !receiverPath.HasMembers
-            && receiverPath.Root.Type is not NullableTypeSymbol
+            && TryGetDeclaredReceiver(receiverPath, receiver) is { } declaredCallReceiver
             && rightPart is CallExpressionSyntax callSyntax
             && unwrappedResult is BoundUserInstanceCallExpression call
             && FindDeclaredMethod(
-                receiverPath.Root.Type,
+                declaredCallReceiver.Type,
                 callSyntax.Identifier.ValueText,
                 call.Method) is { } declaredMethod)
         {
             binderCtx.UntrackBackwardGotoNarrowingConversion(
                 receiverPath,
                 receiverSyntax?.Location ?? rightPart.Location);
-            receiver = DeclaredReceiver(receiverPath.Root, receiver.Syntax);
+            receiver = declaredCallReceiver;
             result = RewrapTransparentMemberResult(result, new BoundUserInstanceCallExpression(
                 call.Syntax,
                 receiver,
@@ -191,26 +191,25 @@ internal sealed partial class ExpressionBinder
             {
                 MethodTypeArguments = call.MethodTypeArguments,
             });
+            recoveredDeclaredReceiver = true;
         }
         else if (receiver != null
             && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out receiverPath, out _)
-            && !receiverPath.HasMembers
-            && receiverPath.Root.Type is not NullableTypeSymbol
+            && TryGetDeclaredReceiver(receiverPath, receiver) is { } declaredClrReceiver
             && rightPart is CallExpressionSyntax
             && unwrappedResult is BoundImportedInstanceCallExpression importedCall
             && FindDeclaredClrMethod(
-                receiverPath.Root.Type,
+                declaredClrReceiver.Type,
                 importedCall.Method,
                 importedCall.Type) is { } declaredClrMethod)
         {
-            var declaredReceiver = DeclaredReceiver(receiverPath.Root, receiver.Syntax);
             binderCtx.UntrackBackwardGotoNarrowingConversion(
                 receiverPath,
                 receiverSyntax?.Location ?? rightPart.Location);
-            receiver = declaredReceiver;
+            receiver = declaredClrReceiver;
             result = RewrapTransparentMemberResult(result, new BoundImportedInstanceCallExpression(
                 importedCall.Syntax,
-                declaredReceiver,
+                declaredClrReceiver,
                 declaredClrMethod,
                 importedCall.Type,
                 importedCall.Arguments,
@@ -219,17 +218,16 @@ internal sealed partial class ExpressionBinder
                 importedCall.ConstrainedReceiverTypeParameter,
                 importedCall.ConstrainedInterfaceType,
                 importedCall.IsNonVirtualBaseCall));
+            recoveredDeclaredReceiver = true;
         }
         else if (receiver != null
             && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out receiverPath, out _)
-            && !receiverPath.HasMembers
-            && receiverPath.Root.Type is not NullableTypeSymbol
+            && TryGetDeclaredReceiver(receiverPath, receiver) is { } declaredMemberReceiver
             && rightPart is NameExpressionSyntax)
         {
-            var declaredReceiver = DeclaredReceiver(receiverPath.Root, receiver.Syntax);
             var diagnosticCount = Diagnostics.Count;
             var declaredResult = BindAccessorStepAfterPlatformReceiverCheck(
-                declaredReceiver,
+                declaredMemberReceiver,
                 classSymbol == null ? null : WithFamilyAccess(classSymbol),
                 rightPart,
                 receiverSyntax,
@@ -241,13 +239,81 @@ internal sealed partial class ExpressionBinder
                 binderCtx.UntrackBackwardGotoNarrowingConversion(
                     receiverPath,
                     receiverSyntax?.Location ?? rightPart.Location);
-                receiver = declaredReceiver;
+                receiver = declaredMemberReceiver;
                 result = declaredResult;
+                recoveredDeclaredReceiver = true;
             }
         }
 
-        TrackBackwardGotoNarrowingAccess(receiver, rightPart, result);
+        if (!recoveredDeclaredReceiver)
+        {
+            TrackBackwardGotoNarrowingAccess(receiver, rightPart, result);
+        }
+
         return result;
+    }
+
+    private BoundExpression? TryGetDeclaredReceiver(
+        AccessPath path,
+        BoundExpression receiver)
+    {
+        if (!path.HasMembers)
+        {
+            return path.Root.Type is NullableTypeSymbol
+                ? null
+                : DeclaredReceiver(path.Root, receiver.Syntax);
+        }
+
+        var declaredType = MemberLookup.GetDeclaredAccessPathType(path, receiver.Type);
+        if (declaredType is NullableTypeSymbol)
+        {
+            return null;
+        }
+
+        switch (receiver)
+        {
+            case BoundFieldAccessExpression field:
+                return new BoundFieldAccessExpression(
+                    field.Syntax,
+                    field.Receiver,
+                    field.StructType,
+                    field.Field,
+                    field.SubstitutedType,
+                    narrowedType: null);
+
+            case BoundPropertyAccessExpression property:
+                return new BoundPropertyAccessExpression(
+                    property.Syntax,
+                    property.Receiver,
+                    property.StructType,
+                    property.Property,
+                    property.SubstitutedType,
+                    narrowedType: null,
+                    property.InterfaceType);
+
+            case BoundClrPropertyAccessExpression property:
+                return new BoundClrPropertyAccessExpression(
+                    property.Syntax,
+                    property.Receiver,
+                    property.Member,
+                    declaredType,
+                    property.StaticContainerType,
+                    property.ConstrainedReceiverTypeParameter,
+                    property.ConstrainedInterfaceType);
+        }
+
+        for (var candidate = receiver;
+             candidate is BoundConversionExpression conversion;
+             candidate = conversion.Expression)
+        {
+            if (Equals(conversion.Expression.Type, declaredType)
+                && Equals(SmartCastStability.TryGetStablePath(conversion.Expression), path))
+            {
+                return conversion.Expression;
+            }
+        }
+
+        return null;
     }
 
     private static bool RefersToSameMemberSlot(BoundExpression selected, BoundExpression declared)

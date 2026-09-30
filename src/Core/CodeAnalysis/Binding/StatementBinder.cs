@@ -845,22 +845,19 @@ internal sealed partial class StatementBinder
                 // assignment narrowing above.
                 ApplyIfJoinNarrowings(statement, memberNotNullFrame);
                 ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame);
-                currentStatementListFallsThrough =
-                    (currentStatementListFallsThrough || HasInternallyReachableFallthrough(statement))
-                    && !EndsInUnconditionalExit(statement);
-                var mayGainDeferredFallthrough = statement switch
+                var hasInternallyReachableFallthrough =
+                    HasInternallyReachableFallthrough(statement);
+                var canCompleteNormally = statement switch
                 {
-                    BoundTryStatement { FinallyBlock: null } => true,
-                    BoundTryStatement { FinallyBlock: { } finallyBlock } =>
-                        !EndsInUnconditionalExit(finallyBlock),
-                    BoundPatternSwitchStatement
-                        or BoundForInfiniteStatement
-                        or BoundForEllipsisStatement
-                        or BoundForRangeStatement
-                        or BoundAwaitForRangeStatement => true,
-                    _ => false,
+                    BoundForInfiniteStatement infiniteLoop =>
+                        internallyReachableLoopExits.Contains(infiniteLoop.BreakLabel),
+                    _ => !EndsInUnconditionalExit(statement),
                 };
-                if (EndsInUnconditionalExit(statement) && !mayGainDeferredFallthrough)
+                currentStatementListFallsThrough =
+                    (currentStatementListFallsThrough || hasInternallyReachableFallthrough)
+                    && canCompleteNormally;
+                if (!canCompleteNormally
+                    && !hasInternallyReachableFallthrough)
                 {
                     binderCtx.PotentialReachabilityLabel = null;
                 }

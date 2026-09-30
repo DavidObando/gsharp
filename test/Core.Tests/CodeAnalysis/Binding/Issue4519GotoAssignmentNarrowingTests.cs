@@ -3958,6 +3958,89 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void UnreachableBackedgeAfterInfiniteLoopDoesNotInvalidateNarrowing()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+            Again:
+                let length = x.Length
+                for {
+                }
+                x = nil
+                goto Again
+                return length
+            }
+
+            0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void UnreachableBackedgeAfterExhaustiveSwitchDoesNotInvalidateNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(value object) int32 {
+                var x string? = nil
+                x = "safe"
+            Again:
+                let length = x.Length
+                switch value {
+                    case _ {
+                        return length
+                    }
+                }
+                x = nil
+                goto Again
+            }
+
+            0
+            """);
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void BackwardGoto_MemberPathRecoversDeclaredBaseMethod()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                open func Read() string -> "animal"
+            }
+            class Dog : Animal {
+            }
+            class Cat : Animal {
+            }
+            data class Holder(Value Animal) {
+            }
+
+            func Run() string {
+                var holder = Holder(Dog{})
+                var count = 0
+                if holder.Value is Dog {
+                Again:
+                    let value = holder.Value.Read()
+                    if count == 0 {
+                        count++
+                        holder = Holder(Cat{})
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("animal", result.Value);
+    }
+
+    [Fact]
     public void BackwardGoto_DoesNotReuseSiblingMemberPathProof()
     {
         var result = Evaluate("""
