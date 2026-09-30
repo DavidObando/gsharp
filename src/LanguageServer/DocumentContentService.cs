@@ -4,6 +4,7 @@
 
 using System.Collections.Concurrent;
 using System.Collections.Generic;
+using System.Diagnostics.CodeAnalysis;
 
 namespace GSharp.LanguageServer;
 
@@ -37,7 +38,7 @@ public class DocumentContentService
     /// <param name="content">Document content.</param>
     /// <returns>Whether or not the operation succeeded.</returns>
     /// <seealso cref="DocumentContent"/>
-    public virtual bool TryGet(string key, out DocumentContent? content)
+    public virtual bool TryGet(string key, [NotNullWhen(true)] out DocumentContent? content)
     {
         return this.documentContents.TryGetValue(key, out content);
     }
