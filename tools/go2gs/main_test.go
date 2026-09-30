@@ -4486,11 +4486,59 @@ func TestArchitectureFeatureValidationRejectsInvalidValues(t *testing.T) {
 		{"arm", []string{"8"}},
 		{"ppc64", []string{"power11"}},
 		{"wasm", []string{"simd"}},
+		{"wasm", []string{"satconv", "satconv"}},
+		{"wasm", []string{"signext", "signext"}},
 		{"loong64", []string{"v1"}},
 	}
 	for _, test := range tests {
 		if _, err := resolveArchitectureSettings(test.goarch, test.features); err == nil {
 			t.Errorf("accepted GOARCH=%s features=%v", test.goarch, test.features)
+		}
+	}
+}
+
+func TestWASMArchitectureProfileCanonicalization(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		features []string
+		want     []string
+		value    string
+	}{
+		{"empty", nil, []string{}, ""},
+		{"satconv", []string{"satconv"}, []string{"satconv"}, "satconv"},
+		{"signext", []string{"signext"}, []string{"signext"}, "signext"},
+		{"both-forward", []string{"satconv", "signext"}, []string{"satconv", "signext"}, "satconv,signext"},
+		{"both-reverse", []string{"signext", "satconv"}, []string{"satconv", "signext"}, "satconv,signext"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			profile := testProfile()
+			profile.GOOS = "js"
+			profile.GOARCH = "wasm"
+			profile.ArchitectureFeatures = test.features
+			loaded, err := readProfile(writeTestProfile(t, profile))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !slices.Equal(loaded.ArchitectureFeatures, test.want) {
+				t.Fatalf("canonical features = %v, want %v", loaded.ArchitectureFeatures, test.want)
+			}
+			settings, err := resolveArchitectureSettings(loaded.GOARCH, loaded.ArchitectureFeatures)
+			if err != nil || settings.value != test.value {
+				t.Fatalf("canonical GOWASM = %q, %v; want %q", settings.value, err, test.value)
+			}
+		})
+	}
+	for _, features := range [][]string{
+		{"satconv", "satconv"},
+		{"signext", "signext"},
+		{"simd"},
+	} {
+		profile := testProfile()
+		profile.GOOS = "js"
+		profile.GOARCH = "wasm"
+		profile.ArchitectureFeatures = features
+		if _, err := readProfile(writeTestProfile(t, profile)); err == nil {
+			t.Fatalf("invalid GOWASM profile was accepted: %v", features)
 		}
 	}
 }
@@ -4507,6 +4555,14 @@ func TestValidateAnalysisRechecksArchitectureFeatures(t *testing.T) {
 		{"invalid-amd64-level", "amd64", []string{"v5"}, false},
 		{"mismatched-feature-family", "arm64", []string{"v3"}, false},
 		{"duplicate-level", "amd64", []string{"v2", "v2"}, false},
+		{"wasm-empty", "wasm", []string{}, true},
+		{"wasm-satconv", "wasm", []string{"satconv"}, true},
+		{"wasm-signext", "wasm", []string{"signext"}, true},
+		{"wasm-both-forward", "wasm", []string{"satconv", "signext"}, true},
+		{"wasm-both-reverse", "wasm", []string{"signext", "satconv"}, true},
+		{"wasm-duplicate-satconv", "wasm", []string{"satconv", "satconv"}, false},
+		{"wasm-duplicate-signext", "wasm", []string{"signext", "signext"}, false},
+		{"wasm-unsupported", "wasm", []string{"simd"}, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			analysis := validIncompleteAnalysis()
