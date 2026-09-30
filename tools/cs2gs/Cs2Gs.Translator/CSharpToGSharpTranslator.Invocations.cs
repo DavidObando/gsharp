@@ -2127,7 +2127,10 @@ public sealed partial class CSharpToGSharpTranslator
         {
             ITypeParameterSymbol => true,
             IArrayTypeSymbol array => ContainsTypeParameter(array.ElementType),
-            INamedTypeSymbol named => named.TypeArguments.Any(ContainsTypeParameter),
+            INamedTypeSymbol named =>
+                named.TypeArguments.Any(ContainsTypeParameter)
+                || (named.ContainingType != null
+                    && ContainsTypeParameter(named.ContainingType)),
             IPointerTypeSymbol pointer => ContainsTypeParameter(pointer.PointedAtType),
             _ => false,
         };

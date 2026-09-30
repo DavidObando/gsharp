@@ -190,14 +190,21 @@ namespace Demo
 {
     public static class C
     {
+        public class Outer<T>
+        {
+            public class Inner { }
+        }
+
         public static void PutList<T>(List<T> value) { }
         public static void PutArray<T>(params T[] value) { }
+        public static void PutNested<T>(Outer<T>.Inner value) { }
 
         public static void F()
         {
             PutList<string>(null);
             PutArray<string>(null);
             PutArray<string>(null, ""x"");
+            PutNested<string>(null);
         }
     }
 }");
@@ -205,6 +212,7 @@ namespace Demo
         Assert.Contains("default(List[string])", printed, StringComparison.Ordinal);
         Assert.Contains("default([]string)", printed, StringComparison.Ordinal);
         Assert.Contains("PutArray[string](default(string), \"x\")", printed, StringComparison.Ordinal);
+        Assert.Contains("default(Outer[string].Inner)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
     }
 
