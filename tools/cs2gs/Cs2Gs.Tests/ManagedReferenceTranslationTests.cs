@@ -3999,7 +3999,7 @@ public sealed class ManagedReferenceTranslationTests
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Empty(context.Diagnostics);
         Assert.Contains(
-            "__anon0 Gsharp.Values.ManagedRef[int32]?",
+            "_ Gsharp.Values.ManagedRef[int32]?",
             text,
             StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
