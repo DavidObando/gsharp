@@ -5708,6 +5708,138 @@ internal sealed class MemberLookup
     }
 
     /// <summary>
+    /// Resolves an imported method parameter as a call-argument conversion
+    /// target through both the receiver and method type arguments.
+    /// </summary>
+    /// <param name="targetType">The symbolic imported receiver type.</param>
+    /// <param name="closedMethod">The reflected method selected by overload resolution.</param>
+    /// <param name="parameterIndex">The zero-based parameter index.</param>
+    /// <param name="methodTypeArguments">The method's symbolic type arguments.</param>
+    /// <returns>
+    /// The projected, declaration-merged conversion target, or <c>null</c>
+    /// when no receiver/method generic slot is substituted.
+    /// </returns>
+    [NullabilityFunnel]
+    internal static TypeSymbol? GetClrMethodParameterConversionTargetTypeSymbol(
+        TypeSymbol? targetType,
+        MethodInfo closedMethod,
+        int parameterIndex,
+        ImmutableArray<TypeSymbol?> methodTypeArguments)
+    {
+        Type? openDefinition = null;
+        ImmutableArray<TypeSymbol> declaringTypeArguments = default;
+        MethodInfo? openMethod = null;
+        var isExtension = HasExtensionAttribute(closedMethod);
+        if (isExtension)
+        {
+            openMethod = closedMethod.IsGenericMethod
+                ? closedMethod.GetGenericMethodDefinition()
+                : closedMethod;
+        }
+        else if (targetType != null
+            && GetProjectionReceiverImportedType(targetType) is ImportedTypeSymbol imported
+            && TryGetSymbolicDeclaringContext(
+                imported,
+                closedMethod.DeclaringType,
+                out openDefinition,
+                out declaringTypeArguments)
+            && openDefinition != null)
+        {
+            openMethod = TryGetOpenMethodOnDeclaringType(openDefinition, closedMethod);
+        }
+        else if (closedMethod.IsGenericMethod)
+        {
+            openMethod = closedMethod.IsGenericMethodDefinition
+                ? closedMethod
+                : closedMethod.GetGenericMethodDefinition();
+        }
+        else
+        {
+            return null;
+        }
+
+        var openParameters = openMethod?.GetParameters();
+        if (openMethod == null
+            || openParameters == null
+            || (uint)parameterIndex >= (uint)openParameters.Length)
+        {
+            return null;
+        }
+
+        var openParameter = openParameters[parameterIndex];
+        var openParameterType = openParameter.ParameterType;
+        var layout = openParameterType.IsByRef
+            ? Invariant.Required(
+                openParameterType.GetElementType(),
+                "a by-ref parameter type has an element type")
+            : openParameterType;
+        if (!layout.ContainsGenericParameters)
+        {
+            return null;
+        }
+
+        var effectiveMethodTypeArguments = methodTypeArguments;
+
+        if (isExtension && targetType != null && openMethod.IsGenericMethod)
+        {
+            var receiverTypeArguments = InferSymbolicMethodTypeArguments(
+                openMethod,
+                ImmutableArray.Create<TypeSymbol?>(targetType));
+            var methodTypeArgumentCount = effectiveMethodTypeArguments.IsDefault
+                ? 0
+                : effectiveMethodTypeArguments.Length;
+            var merged = ImmutableArray.CreateBuilder<TypeSymbol?>(
+                receiverTypeArguments.Length);
+            for (var i = 0; i < receiverTypeArguments.Length; i++)
+            {
+                var methodTypeArgument = i < methodTypeArgumentCount
+                    ? effectiveMethodTypeArguments[i]
+                    : null;
+                merged.Add(methodTypeArgument != null && methodTypeArgument != TypeSymbol.Error
+                    ? methodTypeArgument
+                    : receiverTypeArguments[i]);
+            }
+
+            effectiveMethodTypeArguments = merged.MoveToImmutable();
+        }
+
+        if ((effectiveMethodTypeArguments.IsDefaultOrEmpty
+                || effectiveMethodTypeArguments.Any(static type => type == null || type == TypeSymbol.Error))
+            && !closedMethod.IsGenericMethodDefinition)
+        {
+            var closedTypeArguments = BuildMethodTypeArgSymbolsFromClosedMethod(closedMethod);
+            var effectiveCount = effectiveMethodTypeArguments.IsDefault
+                ? 0
+                : effectiveMethodTypeArguments.Length;
+            var closedCount = closedTypeArguments.IsDefault
+                ? 0
+                : closedTypeArguments.Length;
+            var count = Math.Max(effectiveCount, closedCount);
+            var merged = ImmutableArray.CreateBuilder<TypeSymbol?>(count);
+            for (var i = 0; i < count; i++)
+            {
+                var symbolicType = i < effectiveCount
+                    ? effectiveMethodTypeArguments[i]
+                    : null;
+                merged.Add(symbolicType != null && symbolicType != TypeSymbol.Error
+                    ? symbolicType
+                    : i < closedCount
+                        ? closedTypeArguments[i]
+                        : null);
+            }
+
+            effectiveMethodTypeArguments = merged.MoveToImmutable();
+        }
+
+        return GetClrOpenParameterPointeeTypeSymbol(
+            openParameter,
+            openDefinition,
+            declaringTypeArguments,
+            openMethod,
+            effectiveMethodTypeArguments);
+    }
+
+    /// <summary>
     /// Issue #794 / ADR-0193 Phase 2: the receiver-projected return accessor
     /// (formerly <c>ExpressionBinder.ResolveInstanceReturnTypeFromReceiver</c>,
     /// moved into this family so every signature-position producer lives in

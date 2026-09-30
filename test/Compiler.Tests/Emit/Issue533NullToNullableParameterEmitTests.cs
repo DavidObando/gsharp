@@ -151,9 +151,9 @@ public class Issue533NullToNullableParameterEmitTests
     }
 
     [Fact]
-    public void Nil_To_CLR_Instance_Method_StringParam()
+    public void Nil_To_CLR_Instance_Method_Nullable_StringParam()
     {
-        // List<string>.Contains takes a `string?` / `string` parameter.
+        // List<string?>.Contains takes a nullable substituted parameter.
         // Passing nil should compile and emit valid IL.
         var source = """
             package P
@@ -161,7 +161,7 @@ public class Issue533NullToNullableParameterEmitTests
             import System
             import System.Collections.Generic
 
-            var xs = List[string]()
+            var xs = List[string?]()
             xs.Add("hello")
             var result = xs.Contains(nil)
             Console.WriteLine(result)

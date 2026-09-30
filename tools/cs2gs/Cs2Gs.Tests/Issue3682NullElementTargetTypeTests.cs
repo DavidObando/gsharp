@@ -132,7 +132,87 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("nil", printed, StringComparison.Ordinal);
+        Assert.Contains("default(string)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericCallTarget_NullLiteralUsesTypedDefault()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public class C
+    {
+        public void F(TaskCompletionSource<string>? challengeTcs)
+        {
+            challengeTcs?.TrySetResult(null);
+        }
+    }
+}");
+
+        Assert.Contains("challengeTcs?.TrySetResult(default(string))", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericNullableCallTarget_NullLiteralRemainsNil()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Threading.Tasks;
+
+namespace Demo
+{
+    public class C
+    {
+        public void F(TaskCompletionSource<string?> challengeTcs)
+        {
+            challengeTcs.TrySetResult(null);
+        }
+    }
+}");
+
+        Assert.Contains("challengeTcs.TrySetResult(nil)", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void NestedGenericCallTargets_NullLiteralUsesTypedDefault()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public static class C
+    {
+        public class Outer<T>
+        {
+            public class Inner { }
+        }
+
+        public static void PutList<T>(List<T> value) { }
+        public static void PutArray<T>(params T[] value) { }
+        public static void PutNested<T>(Outer<T>.Inner value) { }
+
+        public static void F()
+        {
+            PutList<string>(null);
+            PutArray<string>(null);
+            PutArray<string>(null, ""x"");
+            PutNested<string>(null);
+        }
+    }
+}");
+
+        Assert.Contains("default(List[string])", printed, StringComparison.Ordinal);
+        Assert.Contains("default([]string)", printed, StringComparison.Ordinal);
+        Assert.Contains("PutArray[string](default(string), \"x\")", printed, StringComparison.Ordinal);
+        Assert.Contains("default(Outer[string].Inner)", printed, StringComparison.Ordinal);
         Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
     }
 

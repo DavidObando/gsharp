@@ -35,17 +35,23 @@ public sealed class ImportedClassSymbol : Symbol
     /// <c>Comparer&lt;object&gt;</c>. <c>null</c> for an ordinary imported class.
     /// </param>
     /// <param name="references">The active reference resolver for imported-assembly visibility checks.</param>
+    /// <param name="constructedReceiver">
+    /// The source-level constructed receiver, including ordinary CLR-backed
+    /// type arguments whose nullability reflection erases.
+    /// </param>
     public ImportedClassSymbol(
         Type type,
         ExpressionSyntax? declaration,
         ImportedTypeSymbol? symbolicReceiver = null,
-        ReferenceResolver? references = null)
+        ReferenceResolver? references = null,
+        ImportedTypeSymbol? constructedReceiver = null)
         : base(type.FullName ?? type.Name)
     {
         ClassType = type;
         Declaration = declaration;
         SymbolicReceiver = symbolicReceiver;
         References = references;
+        ConstructedReceiver = constructedReceiver ?? symbolicReceiver;
     }
 
     /// <inheritdoc/>
@@ -65,6 +71,12 @@ public sealed class ImportedClassSymbol : Symbol
     /// static member references at the constructed generic TypeSpec.
     /// </summary>
     public ImportedTypeSymbol? SymbolicReceiver { get; }
+
+    /// <summary>
+    /// Gets the source-level constructed receiver, including nullability-only
+    /// distinctions that do not require symbolic emission.
+    /// </summary>
+    public ImportedTypeSymbol? ConstructedReceiver { get; }
 
     /// <summary>
     /// Gets the active reference resolver for the current compilation, when
@@ -102,7 +114,12 @@ public sealed class ImportedClassSymbol : Symbol
             return this;
         }
 
-        return new ImportedClassSymbol(ClassType, Declaration, SymbolicReceiver, References)
+        return new ImportedClassSymbol(
+            ClassType,
+            Declaration,
+            SymbolicReceiver,
+            References,
+            ConstructedReceiver)
         {
             FamilyAccessBase = familyAccessBase,
         };

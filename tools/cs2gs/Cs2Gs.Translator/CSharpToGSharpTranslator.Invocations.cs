@@ -2067,9 +2067,12 @@ public sealed partial class CSharpToGSharpTranslator
                 && targetRequiresNonNull
                 && argumentOperation is { Parameter: { } parameter })
             {
+                // A warning-level C# null passed through a substituted generic
+                // slot needs the target's static type without a runtime check.
                 translated = IsNullOrSuppressedNull(argument.Expression)
                     && parameter.Type.IsReferenceType
-                    && parameter.ContainingAssembly?.Name == "Gsharp.Runtime.Values"
+                    && (parameter.ContainingAssembly?.Name == "Gsharp.Runtime.Values"
+                        || ContainsTypeParameter(parameter.OriginalDefinition.Type))
                         ? new DefaultValueExpression(this.typeMapper.Map(
                             parameter.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                             this.context,
@@ -2100,16 +2103,37 @@ public sealed partial class CSharpToGSharpTranslator
                 // element slot bare (GS0154/GS0155, the migrated
                 // Cs2Gs.Pipeline `FindNupkgForVersion` wall). Bridge against
                 // the params ELEMENT contract instead.
-                translated = this.ForgiveNullableReferenceValue(
-                    argument.Expression,
-                    translated,
-                    paramsElementType,
-                    paramsParameter,
-                    includePromotedValue: true);
+                translated = IsNullOrSuppressedNull(argument.Expression)
+                    && paramsElementType.IsReferenceType
+                    && this.TargetWillRemainNonNullableReference(
+                        paramsElementType,
+                        paramsParameter)
+                        ? new DefaultValueExpression(this.typeMapper.Map(
+                            paramsElementType.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
+                            this.context,
+                            argument.Expression.GetLocation()))
+                        : this.ForgiveNullableReferenceValue(
+                            argument.Expression,
+                            translated,
+                            paramsElementType,
+                            paramsParameter,
+                            includePromotedValue: true);
             }
 
             return translated;
         }
+
+        private static bool ContainsTypeParameter(ITypeSymbol type) => type switch
+        {
+            ITypeParameterSymbol => true,
+            IArrayTypeSymbol array => ContainsTypeParameter(array.ElementType),
+            INamedTypeSymbol named =>
+                named.TypeArguments.Any(ContainsTypeParameter)
+                || (named.ContainingType != null
+                    && ContainsTypeParameter(named.ContainingType)),
+            IPointerTypeSymbol pointer => ContainsTypeParameter(pointer.PointedAtType),
+            _ => false,
+        };
 
         // Issue #3644: resolves the element contract an argument binds to when
         // it sits in the EXPANDED tail of a `params T[]` /

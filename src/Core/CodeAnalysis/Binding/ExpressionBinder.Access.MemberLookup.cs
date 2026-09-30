@@ -1211,7 +1211,8 @@ internal sealed partial class ExpressionBinder
                     classSymbol.ClassType,
                     nested,
                     nameExpr,
-                    classSymbol.SymbolicReceiver);
+                    classSymbol.SymbolicReceiver,
+                    classSymbol.ConstructedReceiver);
                 return true;
             }
 
@@ -1232,7 +1233,16 @@ internal sealed partial class ExpressionBinder
                 var innerNameText = innerName.IdentifierToken.ValueText;
                 if (scope.References.TryResolveNestedType(intermediateSymbol.ClassType, innerNameText, out var deepNested))
                 {
-                    nestedClassSymbol = new ImportedClassSymbol(deepNested, innerName, references: scope.References);
+                    var nested = new ImportedClassSymbol(
+                        deepNested,
+                        innerName,
+                        references: scope.References);
+                    nestedClassSymbol = CloseImportedNestedType(
+                        intermediateSymbol.ClassType,
+                        nested,
+                        innerName,
+                        intermediateSymbol.SymbolicReceiver,
+                        intermediateSymbol.ConstructedReceiver);
                     return true;
                 }
             }

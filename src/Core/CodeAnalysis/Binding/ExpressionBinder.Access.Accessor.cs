@@ -938,27 +938,46 @@ internal sealed partial class ExpressionBinder
             sourceType = genericStruct;
         }
 
-        if (sourceType == null
-            || TypeMemberModel.GetNearestImportedBase(sourceType)?.ClrType is not Type importedBase)
+        var importedBaseType = sourceType == null
+            ? null
+            : TypeMemberModel.GetNearestImportedBase(sourceType);
+        if (importedBaseType?.ClrType is not Type importedBase)
         {
             return false;
         }
 
-        var importedBaseSymbol = new ImportedClassSymbol(importedBase, syntax.LeftPart, references: scope.References);
+        var importedBaseSymbol = CreateInheritedImportedClassSymbol(
+            importedBaseType,
+            syntax.LeftPart);
         if (!TryResolveNestedTypeFromAccessorLeft(importedBaseSymbol, syntax.RightPart, out nestedClassSymbol))
         {
             return false;
         }
 
-        nestedClassSymbol = CloseImportedNestedType(importedBase, nestedClassSymbol, syntax.RightPart, symbolicOuter: null);
+        nestedClassSymbol = CloseImportedNestedType(
+            importedBase,
+            nestedClassSymbol,
+            syntax.RightPart,
+            importedBaseSymbol.SymbolicReceiver,
+            importedBaseSymbol.ConstructedReceiver);
         return true;
     }
+
+    private ImportedClassSymbol CreateInheritedImportedClassSymbol(
+        TypeSymbol importedType,
+        ExpressionSyntax syntax)
+        => new(
+            Invariant.Required(importedType.ClrType, "an imported base has a CLR type"),
+            syntax,
+            references: scope.References,
+            constructedReceiver: MemberLookup.GetProjectionReceiverImportedType(importedType));
 
     private ImportedClassSymbol CloseImportedNestedType(
         Type constructedOuter,
         ImportedClassSymbol nested,
         ExpressionSyntax syntax,
-        ImportedTypeSymbol? symbolicOuter)
+        ImportedTypeSymbol? symbolicOuter,
+        ImportedTypeSymbol? constructedOuterSymbol)
     {
         var nestedType = nested.ClassType;
         if (!constructedOuter.IsConstructedGenericType
@@ -986,7 +1005,19 @@ internal sealed partial class ExpressionBinder
                     symbolicOuter.TypeArguments);
             }
 
-            return new ImportedClassSymbol(closedType, syntax, symbolicNested, scope.References);
+            var constructedNested = constructedOuterSymbol != null
+                && constructedOuterSymbol.TypeArguments.Length == nestedType.GetGenericArguments().Length
+                    ? ImportedTypeSymbol.GetConstructed(
+                        closedType,
+                        nestedType,
+                        constructedOuterSymbol.TypeArguments)
+                    : symbolicNested;
+            return new ImportedClassSymbol(
+                closedType,
+                syntax,
+                symbolicNested,
+                scope.References,
+                constructedNested);
         }
         catch (ArgumentException)
         {
@@ -2581,12 +2612,20 @@ internal sealed partial class ExpressionBinder
                         : new BoundErrorExpression(null);
                 }
 
-                if (TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is Type importedBase)
+                var importedBaseType = TypeMemberModel.GetNearestImportedBase(structSym);
+                if (importedBaseType?.ClrType is Type importedBase)
                 {
-                    var importedBaseSymbol = new ImportedClassSymbol(importedBase, nested.LeftPart, references: scope.References);
+                    var importedBaseSymbol = CreateInheritedImportedClassSymbol(
+                        importedBaseType,
+                        nested.LeftPart);
                     if (TryResolveNestedTypeFromAccessorLeft(importedBaseSymbol, nested.LeftPart, out var importedNested))
                     {
-                        importedNested = CloseImportedNestedType(importedBase, importedNested, nested.LeftPart, symbolicOuter: null);
+                        importedNested = CloseImportedNestedType(
+                            importedBase,
+                            importedNested,
+                            nested.LeftPart,
+                            importedBaseSymbol.SymbolicReceiver,
+                            importedBaseSymbol.ConstructedReceiver);
                         return BindAccessorStep(receiver: null, importedNested, nested.RightPart);
                     }
                 }
@@ -3683,13 +3722,19 @@ internal sealed partial class ExpressionBinder
             // Issue #4024: the SLICE spelling `[]T` shares that backing and is
             // retained by the same gate, so `EqualityComparer[[]int32].Default`
             // no longer reads as a metadata-only `EqualityComparer<int32[]>`.
+            var constructedReceiver = ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs);
             var symbolicReceiver = NativeSliceTypes.IsDefinition(closed, out _) || ManagedReferenceTypes.IsDefinition(closed, out _) || typeArgs.Any(static a =>
                 TypeSymbol.RequiresSymbolicProjection(a)
                 || TypeSymbol.ContainsNamedTupleElements(a)
                 || TypeSymbol.ContainsSourceArrayShape(a))
-                ? ImportedTypeSymbol.GetConstructed(closed, openClrType, typeArgs)
+                ? constructedReceiver
                 : null;
-            constructedImported = new ImportedClassSymbol(closed, receiverSyntax, symbolicReceiver, scope.References);
+            constructedImported = new ImportedClassSymbol(
+                closed,
+                receiverSyntax,
+                symbolicReceiver,
+                scope.References,
+                constructedReceiver);
             return true;
         }
         catch (ArgumentException)
@@ -4086,9 +4131,10 @@ internal sealed partial class ExpressionBinder
             return staticGroup;
         }
 
-        if (TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is System.Type importedBase)
+        var inheritedImportedType = TypeMemberModel.GetNearestImportedBase(structSym);
+        if (inheritedImportedType?.ClrType is System.Type)
         {
-            var imported = new ImportedClassSymbol(importedBase, ne, references: scope.References);
+            var imported = CreateInheritedImportedClassSymbol(inheritedImportedType, ne);
             return BindAccessorStep(receiver: null, imported, ne);
         }
 
@@ -4728,10 +4774,12 @@ internal sealed partial class ExpressionBinder
             return delegateMemberCall;
         }
 
-        if (structSym != null
-            && TypeMemberModel.GetNearestImportedBase(structSym)?.ClrType is System.Type importedBase)
+        var inheritedImportedType = structSym == null
+            ? null
+            : TypeMemberModel.GetNearestImportedBase(structSym);
+        if (inheritedImportedType?.ClrType is System.Type)
         {
-            var imported = new ImportedClassSymbol(importedBase, ce, references: scope.References);
+            var imported = CreateInheritedImportedClassSymbol(inheritedImportedType, ce);
             return BindAccessorCall(receiver: null, imported, ce);
         }
 
