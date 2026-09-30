@@ -258,7 +258,17 @@ internal sealed partial class StatementBinder
 
         var collector = new AssignedRootsCollector(null, externalCallableAliases);
         collector.Visit(statement);
-        externalCallableAliases.ExceptWith(collector.Roots);
+        if (statement is BoundBlockStatement
+            && statement.Syntax != null
+            && !ContainsUserGotoOrLabel(statement.Syntax))
+        {
+            externalCallableAliases.Clear();
+            externalCallableAliases.UnionWith(collector.ExternalFunctionValues);
+        }
+        else
+        {
+            externalCallableAliases.ExceptWith(collector.Roots);
+        }
 
         if (assignsExternalCallable)
         {
@@ -1705,6 +1715,8 @@ internal sealed partial class StatementBinder
         public bool MayMutateAnyRoot { get; private set; }
 
         public bool MayMutateGlobalRoots { get; private set; }
+
+        public IReadOnlyCollection<VariableSymbol> ExternalFunctionValues => externalFunctionValues;
 
         protected override void VisitIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
         {

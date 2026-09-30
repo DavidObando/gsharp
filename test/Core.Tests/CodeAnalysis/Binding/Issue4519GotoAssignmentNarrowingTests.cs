@@ -2800,6 +2800,36 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyPreservesExternalCallableAliasAssignedInNestedBlock()
+    {
+        AssertRuns("""
+            import System
+
+            func Noop() {
+            }
+
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                text = "safe"
+                var action = Noop
+                {
+                    action = callback
+                }
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return text.Length
+            }
+
+            Console.WriteLine(Run(Noop))
+            """, "4");
+    }
+
+    [Fact]
     public void ForwardGoto_FinallyIncludesWritableRefMutation()
     {
         var result = Evaluate("""
