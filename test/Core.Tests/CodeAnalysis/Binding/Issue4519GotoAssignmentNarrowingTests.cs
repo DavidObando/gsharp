@@ -4650,6 +4650,81 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_LabelJoinIntersectsExternalCallableAliases()
+    {
+        var result = Evaluate("""
+            func Noop() {
+            }
+
+            func Run(takeJump bool) int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                var action = clear
+                if takeJump {
+                    goto Joined
+                }
+                action = Noop
+            Joined:
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run(true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_LabelJoinIncludesCleanupCallableReassignment()
+    {
+        var result = Evaluate("""
+            func Noop() {
+            }
+
+            func Run(takeJump bool) int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                var action = Noop
+                if takeJump {
+                    try {
+                        goto Joined
+                    }
+                    finally {
+                        action = clear
+                    }
+                }
+                action = Noop
+            Joined:
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run(true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ImportedCallRecovery_DoesNotRebindInlineOutVariable()
     {
         var result = EmittedOracle.Evaluate(

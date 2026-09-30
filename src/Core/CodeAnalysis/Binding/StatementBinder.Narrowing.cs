@@ -263,7 +263,7 @@ internal sealed partial class StatementBinder
             && !ContainsUserGotoOrLabel(statement.Syntax))
         {
             externalCallableAliases.Clear();
-            externalCallableAliases.UnionWith(collector.ExternalFunctionValues);
+            externalCallableAliases.UnionWith(collector.DefinitelyExternalFunctionValues);
         }
         else
         {
@@ -634,6 +634,8 @@ internal sealed partial class StatementBinder
             return incomingSnapshots;
         }
 
+        JoinExternalCallableAliases(incomingSnapshots, fallthroughReachesLabel);
+
         if (!fallthroughReachesLabel)
         {
             var commonIncoming = new Dictionary<AccessPath, TypeSymbol>();
@@ -752,6 +754,22 @@ internal sealed partial class StatementBinder
         }
 
         return incomingSnapshots;
+    }
+
+    private void JoinExternalCallableAliases(
+        IReadOnlyList<GotoNarrowingSnapshot> incomingSnapshots,
+        bool fallthroughReachesLabel)
+    {
+        if (!fallthroughReachesLabel)
+        {
+            externalCallableAliases.Clear();
+            externalCallableAliases.UnionWith(incomingSnapshots[0].ExternalCallableAliases);
+        }
+
+        foreach (var snapshot in incomingSnapshots)
+        {
+            externalCallableAliases.IntersectWith(snapshot.ExternalCallableAliases);
+        }
     }
 
     private static TypeSymbol? FindCommonImplicitSupertype(
@@ -1011,6 +1029,8 @@ internal sealed partial class StatementBinder
                 snapshot.SetNarrowing(entry.Key, entry.Value);
             }
         }
+
+        snapshot.ReplaceExternalCallableAliases(summary.Mutations.DefinitelyExternalFunctionValues);
     }
 
     /// <summary>
@@ -1716,7 +1736,8 @@ internal sealed partial class StatementBinder
 
         public bool MayMutateGlobalRoots { get; private set; }
 
-        public IReadOnlyCollection<VariableSymbol> ExternalFunctionValues => externalFunctionValues;
+        public IEnumerable<VariableSymbol> DefinitelyExternalFunctionValues
+            => externalFunctionValues.Except(unknownFunctionValues);
 
         protected override void VisitIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
         {
@@ -3237,21 +3258,6 @@ internal sealed partial class StatementBinder
             declaredVariable,
             convertedInitializer,
             constValue);
-    }
-
-    private static VariableSymbol? GetCallableSourceVariable(BoundExpression expression)
-    {
-        while (expression is BoundConversionExpression conversion)
-        {
-            expression = conversion.Expression;
-        }
-
-        while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
-        {
-            expression = assertion.Operand;
-        }
-
-        return expression is BoundVariableExpression variable ? variable.Variable : null;
     }
 
     private bool IsExternalCallableSource(BoundExpression expression)
