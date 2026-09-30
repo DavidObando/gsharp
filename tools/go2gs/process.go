@@ -175,7 +175,7 @@ func bootstrapEnvironment(cacheRoot string, pathDirectories ...string) []string 
 
 func analysisWorkerEnvironment(cacheRoot, selectedGo, selectedGoHash, selectedGOROOT string) []string {
 	values := map[string]string{
-		"PATH":                     filepath.Dir(selectedGo),
+		"PATH":                     unavailableToolPath(cacheRoot, "path"),
 		"HOME":                     cacheRoot,
 		"TMPDIR":                   cacheRoot,
 		"GOTOOLCHAIN":              "local",
@@ -190,6 +190,7 @@ func analysisWorkerEnvironment(cacheRoot, selectedGo, selectedGoHash, selectedGO
 		"GO2GS_SELECTED_GO":        selectedGo,
 		"GO2GS_SELECTED_GO_SHA256": selectedGoHash,
 		"GO2GS_SELECTED_GOROOT":    selectedGOROOT,
+		"GO2GS_EXEC_NAMESPACE":     "1",
 	}
 	return canonicalEnv(values)
 }

@@ -94,6 +94,9 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if err != nil {
 		return &exitError{2, err}
 	}
+	if err := publicAnalysisBindingSupported(); err != nil {
+		return &exitError{2, err}
+	}
 	outRoot, err := filepath.Abs(out)
 	if err != nil {
 		return &exitError{2, err}
@@ -220,15 +223,19 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 }
 
 func runAnalysisWorkerProcess(parent context.Context, timeout time.Duration, maxOutput int, dir, executable string, args, env []string) (processResult, error) {
-	return runProcessConfigured(parent, timeout, maxOutput, dir, executable, args, env, processGroupOwn, nil)
+	return runProcessConfigured(
+		parent, timeout, maxOutput, dir, executable, args, env, processGroupOwn,
+		configureAnalysisWorkerNamespace,
+	)
 }
 
 func runAnalyzeWorker(parent context.Context, args []string) error {
 	parent = inheritProcessGroup(parent)
 	if os.Getenv("GO2GS_SELECTED_GO") == "" ||
 		os.Getenv("GO2GS_SELECTED_GO_SHA256") == "" ||
-		os.Getenv("GO2GS_SELECTED_GOROOT") == "" {
-		return &exitError{2, errors.New("analysis worker requires the private selected Go handoff")}
+		os.Getenv("GO2GS_SELECTED_GOROOT") == "" ||
+		os.Getenv("GO2GS_EXEC_NAMESPACE") != "1" {
+		return &exitError{2, errors.New("analysis worker requires the private descriptor-bound selected Go handoff")}
 	}
 	source, profilePath, out, err := parseAnalyzeArgs(args)
 	if err != nil {

@@ -69,12 +69,19 @@ links; an exchange failure or retained entry makes the command fail. Other
 platforms intentionally leave non-empty private trees behind rather than risk
 deleting a path that another process replaced.
 
-The selected Go executable is captured with a bounded no-follow read and
-required by Go build metadata to identify itself as native `cmd/go`, then
-staged under the canonical `go` or `go.exe` name. Scripts, interpreted
-wrappers, and native delegate wrappers are rejected before execution. Child
-`PATH` contains only the private staged Go directory; the selected executable's
-original parent directory and its siblings are never exposed.
+Public `analyze` is supported only on Linux. Other platforms fail closed before
+publishing artifacts because Go does not expose a portable execution primitive
+that binds a child launch to already-verified executable bytes.
+
+The parent captures the selected native `cmd/go` into a bootstrap capsule only
+for handoff. Every analysis worker runs in a private user and mount namespace,
+captures that handoff by expected SHA-256, and copies only `go` into a read-only
+tmpfs. The worker holds the tmpfs directory descriptor and gives both process
+`PATH` and `packages.Config.Env` the descriptor path
+`/proc/<worker-pid>/fd/<dir-fd>`. Both package-load phases therefore execute the
+worker's immutable object, not the original selected path or parent bootstrap
+pathname. Scripts, wrappers, ambient sibling tools, and pathname replacement
+are rejected or unreachable.
 
 M0 always invokes `go/packages` with `CGO_ENABLED=0`. It never executes a C/C++
 compiler, linker, assembler, cgo, pkg-config, or helper. `cCompiler` and

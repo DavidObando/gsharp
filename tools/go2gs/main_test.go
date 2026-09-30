@@ -1197,8 +1197,8 @@ func TestMissingGoBootstrapProducesNoArtifact(t *testing.T) {
 }
 
 func TestPublicAnalyzeNeedsNoAmbientGoAfterStaging(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("executable staging fixture")
+	if runtime.GOOS != "linux" {
+		t.Skip("public analyze requires Linux execution binding")
 	}
 	binary := buildGo2gsBinary(t)
 	toolDir := t.TempDir()
@@ -1222,8 +1222,8 @@ func TestPublicAnalyzeNeedsNoAmbientGoAfterStaging(t *testing.T) {
 }
 
 func TestPublicCgoAnalysisExecutesNoNativeTools(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("hostile executable fixture")
+	if runtime.GOOS != "linux" {
+		t.Skip("public analyze requires Linux execution binding")
 	}
 	binary := buildGo2gsBinary(t)
 	ambient := t.TempDir()
@@ -1757,6 +1757,9 @@ func TestOwnedTemporaryDirectoryCleanupErrorsReachOwners(t *testing.T) {
 	}
 
 	t.Run("bootstrap", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("public analyze requires Linux execution binding")
+		}
 		root := copyFixture(t, "complete")
 		hookErr := installFailure(t, ".go2gs-bootstrap-", "bootstrap-probe", nil)
 		out, err := secureRoot(t.TempDir())
@@ -1775,6 +1778,9 @@ func TestOwnedTemporaryDirectoryCleanupErrorsReachOwners(t *testing.T) {
 	})
 
 	t.Run("worker", func(t *testing.T) {
+		if runtime.GOOS != "linux" {
+			t.Skip("public analyze requires Linux execution binding")
+		}
 		root := copyFixture(t, "complete")
 		var prepareErr error
 		hookErr := installFailure(t, ".go2gs-worker-", "worker-probe", func(directory ownedTempDir) {
@@ -1852,12 +1858,19 @@ func TestLoadFailureReplacesStaleSuccessfulArtifacts(t *testing.T) {
 	t.Setenv("GO2GS_SELECTED_GO", goExecutable)
 	t.Setenv("GO2GS_SELECTED_GO_SHA256", hashBytes(goData))
 	t.Setenv("GO2GS_SELECTED_GOROOT", runtime.GOROOT())
-	err = runAnalyzeWorker(t.Context(), []string{"--source", root, "--profile", profilePath, "--out", out})
-	var exitErr *exitError
-	if !errors.As(err, &exitErr) || exitErr.code != 1 {
-		t.Fatalf("invalid package should produce an incomplete inventory, got %v", err)
+	analysis, complete, err := analyze(t.Context(), root, out, profile)
+	if err != nil || complete {
+		t.Fatalf("invalid package should produce an incomplete inventory, complete=%v err=%v", complete, err)
 	}
-	analysis, err := readAnalysis(filepath.Join(out, "analysis.json"))
+	analysisBytes, err := writeAnalysis(filepath.Join(out, "analysis.json"), analysis, profile.Limits.MaxOutputBytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	run := RunMetadata{SchemaVersion: schemaVersion, AnalysisBytes: int64(analysisBytes)}
+	if err := writeJSON(filepath.Join(out, "run.json"), run, profile.Limits.MaxOutputBytes); err != nil {
+		t.Fatal(err)
+	}
+	analysis, err = readAnalysis(filepath.Join(out, "analysis.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -3449,8 +3462,8 @@ func TestAnalysisWorkerRunnerBoundsLogsAndKillsDescendants(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	result, err := runAnalysisWorkerProcess(t.Context(), 5*time.Second, 1024, "", executable,
-		[]string{"-test.run=TestProcessHelper"}, []string{"GO2GS_PROCESS_HELPER=output"})
+	result, err := runProcessWithMode(t.Context(), 5*time.Second, 1024, "", executable,
+		[]string{"-test.run=TestProcessHelper"}, []string{"GO2GS_PROCESS_HELPER=output"}, processGroupOwn)
 	if err != nil || !result.StdoutTruncated || !result.StderrTruncated {
 		t.Fatalf("worker logs were not bounded: result=%#v err=%v", result, err)
 	}
@@ -3459,12 +3472,12 @@ func TestAnalysisWorkerRunnerBoundsLogsAndKillsDescendants(t *testing.T) {
 	}
 	stateDir := t.TempDir()
 	marker := filepath.Join(stateDir, "descendant-survived")
-	_, err = runAnalysisWorkerProcess(t.Context(), 50*time.Millisecond, 1024, "", executable,
+	_, err = runProcessWithMode(t.Context(), 50*time.Millisecond, 1024, "", executable,
 		[]string{"-test.run=TestProcessHelper"}, []string{
 			"GO2GS_PROCESS_HELPER=tree",
 			"GO2GS_CHILD_MARKER=" + marker,
 			"GO2GS_CHILD_PID=" + filepath.Join(stateDir, "child.pid"),
-		})
+		}, processGroupOwn)
 	if err == nil || !strings.Contains(err.Error(), "timed out") {
 		t.Fatalf("worker tree was not cancelled: %v", err)
 	}
