@@ -25,6 +25,19 @@ internal sealed partial class StatementBinder
 {
     private readonly HashSet<VariableSymbol> externalCallableAliases = new();
 
+    internal HashSet<VariableSymbol> IsolateExternalCallableAliases()
+    {
+        var saved = new HashSet<VariableSymbol>(externalCallableAliases);
+        externalCallableAliases.Clear();
+        return saved;
+    }
+
+    internal void RestoreExternalCallableAliases(HashSet<VariableSymbol> saved)
+    {
+        externalCallableAliases.Clear();
+        externalCallableAliases.UnionWith(saved);
+    }
+
     /// <summary>
     /// If <paramref name="statement"/> is a call expression statement whose
     /// called function carries <c>[MemberNotNull("_f", …)]</c>, narrows each
@@ -718,13 +731,12 @@ internal sealed partial class StatementBinder
                 if (joinedTypes.TryGetValue(path, out var joinedType))
                 {
                     frame[path] = joinedType;
+                    break;
                 }
                 else
                 {
                     frame.Remove(path);
                 }
-
-                break;
             }
         }
 

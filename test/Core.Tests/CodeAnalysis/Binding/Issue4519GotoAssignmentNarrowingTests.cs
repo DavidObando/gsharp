@@ -3626,6 +3626,36 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_IntoNestedGuardsRemovesAllStaleProofs()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                var Name string = "animal"
+            }
+            class Dog : Animal {
+            }
+
+            func Run(jump bool) string {
+                var x Animal? = nil
+                if jump { goto Use }
+                if x != nil {
+                    if x is Dog {
+                    Use:
+                        return x.Name
+                    }
+                }
+                return ""
+            }
+
+            Run(true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Name", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void AssignmentBeforeEveryForwardJump_RemainsNarrowedAtLabel()
     {
         AssertRuns("""
@@ -4277,6 +4307,36 @@ public class Issue4519GotoAssignmentNarrowingTests
             }
 
             Run(func() { })
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void UninvokedNestedFunction_DoesNotLeakCallableAliasState()
+    {
+        var result = Evaluate("""
+            func Noop() {
+            }
+
+            func Run() int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                var action = clear
+                let unused = func() { action = Noop }
+                try {
+                    goto Done
+                } finally {
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Run()
             """);
 
         var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");

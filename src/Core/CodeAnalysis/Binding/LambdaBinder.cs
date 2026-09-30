@@ -82,6 +82,8 @@ internal sealed class LambdaBinder
     private readonly Action<FunctionSymbol?> setCurrentFunction;
     private readonly Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes;
     private readonly Action reportUnsafeBackwardGotoNarrowings;
+    private readonly Func<HashSet<VariableSymbol>> isolateExternalCallableAliases;
+    private readonly Action<HashSet<VariableSymbol>> restoreExternalCallableAliases;
     private readonly Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression;
     private readonly Func<TypeParameterListSyntax, ImmutableArray<TypeParameterSymbol>>? bindTypeParameterList;
 
@@ -176,6 +178,10 @@ internal sealed class LambdaBinder
     /// <param name="reportUnsafeBackwardGotoNarrowings">Callback that reports
     /// deferred backward-goto narrowing diagnostics before nested-frame state
     /// is restored.</param>
+    /// <param name="isolateExternalCallableAliases">Callback that snapshots and
+    /// clears the enclosing function's callable-alias provenance.</param>
+    /// <param name="restoreExternalCallableAliases">Callback that restores the
+    /// enclosing function's callable-alias provenance.</param>
     /// <param name="bindLambdaBodyExpression">ADR-0074 / issue #714:
     /// optional callback that binds an arrow-lambda body expression, with the
     /// contextual return type available for nested lambda bodies.
@@ -210,6 +216,8 @@ internal sealed class LambdaBinder
         Action<FunctionSymbol?> setCurrentFunction,
         Func<ParameterSyntax, ImmutableArray<BoundAttribute>> bindParameterAttributes,
         Action reportUnsafeBackwardGotoNarrowings,
+        Func<HashSet<VariableSymbol>> isolateExternalCallableAliases,
+        Action<HashSet<VariableSymbol>> restoreExternalCallableAliases,
         Func<SyntaxToken, bool, TypeSymbol, VariableSymbol> bindLocalVariable,
         Func<SeparatedSyntaxList<SyntaxToken>, TextLocation, TextLocation, VariableSymbol, ImmutableArray<BoundStatement>> bindTupleDestructuringPrelude,
         Func<ExpressionSyntax, TypeSymbol?, BoundExpression>? bindLambdaBodyExpression = null,
@@ -230,6 +238,10 @@ internal sealed class LambdaBinder
         this.bindParameterAttributes = bindParameterAttributes ?? throw new ArgumentNullException(nameof(bindParameterAttributes));
         this.reportUnsafeBackwardGotoNarrowings = reportUnsafeBackwardGotoNarrowings
             ?? throw new ArgumentNullException(nameof(reportUnsafeBackwardGotoNarrowings));
+        this.isolateExternalCallableAliases = isolateExternalCallableAliases
+            ?? throw new ArgumentNullException(nameof(isolateExternalCallableAliases));
+        this.restoreExternalCallableAliases = restoreExternalCallableAliases
+            ?? throw new ArgumentNullException(nameof(restoreExternalCallableAliases));
         this.bindLambdaBodyExpression = bindLambdaBodyExpression;
         this.bindTypeParameterList = bindTypeParameterList;
     }
@@ -2324,7 +2336,7 @@ internal sealed class LambdaBinder
     /// <param name="bodySyntax">The nested function-literal or arrow-lambda body being entered.</param>
     private NestedFrameState EnterNestedFrame(SyntaxNode bodySyntax)
     {
-        var saved = new NestedFrameState(binderCtx);
+        var saved = new NestedFrameState(binderCtx, isolateExternalCallableAliases());
         binderCtx.UserLabels.Clear();
         binderCtx.DefinedUserLabels.Clear();
         binderCtx.UnresolvedGotoLabels.Clear();
@@ -2435,6 +2447,7 @@ internal sealed class LambdaBinder
 
         binderCtx.CurrentFallthroughTarget = saved.FallthroughTarget;
         binderCtx.CurrentFallthroughAnchor = saved.FallthroughAnchor;
+        restoreExternalCallableAliases(saved.ExternalCallableAliases);
 
         // Issue #4285: restore the ENCLOSING function's goto/label flag now
         // that the nested body's own bind session (and its own guard checks
@@ -3059,7 +3072,9 @@ internal sealed class LambdaBinder
     /// </summary>
     private readonly struct NestedFrameState
     {
-        public NestedFrameState(BinderContext ctx)
+        public NestedFrameState(
+            BinderContext ctx,
+            HashSet<VariableSymbol> externalCallableAliases)
         {
             UserLabels = new Dictionary<string, BoundLabel>(ctx.UserLabels);
             DefinedUserLabels = new HashSet<string>(ctx.DefinedUserLabels);
@@ -3082,6 +3097,7 @@ internal sealed class LambdaBinder
             LoopStack = ctx.LoopStack.ToArray();
             FallthroughTarget = ctx.CurrentFallthroughTarget;
             FallthroughAnchor = ctx.CurrentFallthroughAnchor;
+            ExternalCallableAliases = new HashSet<VariableSymbol>(externalCallableAliases);
             FunctionContainsUserGotoOrLabel = ctx.FunctionContainsUserGotoOrLabel;
         }
 
@@ -3114,6 +3130,8 @@ internal sealed class LambdaBinder
         public BoundLabel? FallthroughTarget { get; }
 
         public Syntax.StatementSyntax? FallthroughAnchor { get; }
+
+        public HashSet<VariableSymbol> ExternalCallableAliases { get; }
 
         // Issue #4285.
         public bool FunctionContainsUserGotoOrLabel { get; }

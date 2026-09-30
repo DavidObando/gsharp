@@ -4151,7 +4151,7 @@ internal sealed partial class ExpressionBinder
         if (!binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var path, out _)
             || path.HasMembers
             || path.Root.Type is NullableTypeSymbol
-            || !Conversion.IsRepresentationPreservingImplicit(path.Root.Type, requiredType))
+            || !CanRecoverDeclaredMemberWriteReceiver(path.Root.Type, requiredType))
         {
             return receiver;
         }
@@ -4160,6 +4160,9 @@ internal sealed partial class ExpressionBinder
         binderCtx.UntrackBackwardGotoNarrowingMemberUse(path, location);
         return DeclaredReceiver(path.Root, receiver.Syntax);
     }
+
+    internal static bool CanRecoverDeclaredMemberWriteReceiver(TypeSymbol declaredType, TypeSymbol requiredType)
+        => Conversion.IsRepresentationPreservingImplicit(declaredType, requiredType);
 
     private BoundExpression RecoverDeclaredPropertyWriteReceiver(
         BoundExpression receiver,

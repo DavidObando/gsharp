@@ -59,7 +59,7 @@ let source = Source{Name: ""Ada"", Age: 36, Extra: true}
         var targetType = compilation.GlobalScope.Structs.Single(s => s.Name == "Target");
 
         Assert.True(Conversion.Classify(sourceType, targetType).IsStructuralProjection);
-        Assert.False(Conversion.IsRepresentationPreservingImplicit(sourceType, targetType));
+        Assert.False(ExpressionBinder.CanRecoverDeclaredMemberWriteReceiver(sourceType, targetType));
     }
 
     [Fact]
