@@ -703,11 +703,11 @@ func resolveLocalInclude(packageDir, includingPath, include string) (string, boo
 }
 
 func nativeHeader(path string) bool {
-	return classifyGoPackageInput(path)&goPackageInputHeader != 0
+	return classifyGoPackageInputExtension(path)&goPackageInputHeader != 0
 }
 
 func nativeIncludeCarrier(path string) bool {
-	return classifyGoPackageInput(path)&goPackageInputIncludeCarrier != 0
+	return classifyGoPackageInputExtension(path)&goPackageInputIncludeCarrier != 0
 }
 
 type goPackageInputKind uint8
@@ -721,6 +721,14 @@ const (
 )
 
 func classifyGoPackageInput(path string) goPackageInputKind {
+	name := filepath.Base(path)
+	if name == "" || name[0] == '.' || name[0] == '_' {
+		return 0
+	}
+	return classifyGoPackageInputExtension(path)
+}
+
+func classifyGoPackageInputExtension(path string) goPackageInputKind {
 	switch filepath.Ext(path) {
 	case ".go":
 		return goPackageInputGo
