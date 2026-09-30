@@ -67,6 +67,29 @@ public sealed partial class CSharpToGSharpTranslator
                                 compilation)))));
     }
 
+    private static bool TypeContainsRecognizedManagedReferenceArray(
+        ITypeSymbol type,
+        Compilation compilation)
+    {
+        return type is IArrayTypeSymbol array
+            ? TypeContainsRecognizedManagedReferenceConsumer(
+                array.ElementType,
+                compilation)
+            : type is IPointerTypeSymbol pointer
+                ? TypeContainsRecognizedManagedReferenceArray(
+                    pointer.PointedAtType,
+                    compilation)
+                : type is INamedTypeSymbol named
+                    && (named.TypeArguments.Any(argument =>
+                            TypeContainsRecognizedManagedReferenceArray(
+                                argument,
+                                compilation))
+                        || (named.ContainingType is { } containing
+                            && TypeContainsRecognizedManagedReferenceArray(
+                                containing,
+                                compilation)));
+    }
+
     private sealed partial class DeclarationVisitor
     {
         private GExpression TranslateInvocation(InvocationExpressionSyntax invocation)
@@ -2437,12 +2460,20 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             IMethodSymbol projectedMethod = method;
-            if (method.ContainingType is { IsGenericType: true } containingType)
+            if (method.ContainingType is { } containingType)
             {
-                ITypeSymbol[] containingArguments =
-                    containingType.TypeArguments.ToArray();
+                ImmutableArray<INamedTypeSymbol> containingTypes =
+                    NamedTypeAndContainingTypes(containingType).ToImmutableArray();
+                ImmutableArray<ITypeSymbol> containingArguments =
+                    containingTypes.SelectMany(type => type.TypeArguments)
+                        .ToImmutableArray();
                 ImmutableArray<ITypeParameterSymbol> containingParameters =
-                    containingType.OriginalDefinition.TypeParameters;
+                    containingTypes.SelectMany(
+                            type => type.OriginalDefinition.TypeParameters)
+                        .ToImmutableArray();
+                var replacements =
+                    new Dictionary<ITypeParameterSymbol, ITypeSymbol>(
+                        SymbolEqualityComparer.Default);
                 for (int typeIndex = 0;
                     typeIndex < containingParameters.Length;
                     typeIndex++)
@@ -2507,14 +2538,14 @@ public sealed partial class CSharpToGSharpTranslator
                         return null;
                     }
 
-                    containingArguments[typeIndex] = observedProjection;
+                    replacements.Add(typeParameter, observedProjection);
                     changed = true;
                 }
 
                 if (changed)
                 {
                     INamedTypeSymbol projectedContainingType =
-                        containingType.ConstructedFrom.Construct(containingArguments);
+                        ProjectNamedType(containingType, replacements);
                     projectedMethod =
                         this.GetProjectedMember(projectedContainingType, method)
                             as IMethodSymbol;
@@ -5533,9 +5564,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (method.IsGenericMethod
-                && method.ReturnType is IArrayTypeSymbol returnArray
-                && TypeContainsRecognizedManagedReferenceConsumer(
-                    returnArray.ElementType,
+                && TypeContainsRecognizedManagedReferenceArray(
+                    method.ReturnType,
                     this.context.Compilation))
             {
                 RecordWidenedTypeParameters(
@@ -5551,9 +5581,8 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             if (method.ContainingType != null
-                && method.ReturnType is IArrayTypeSymbol containingReturnArray
-                && TypeContainsRecognizedManagedReferenceConsumer(
-                    containingReturnArray.ElementType,
+                && TypeContainsRecognizedManagedReferenceArray(
+                    method.ReturnType,
                     this.context.Compilation))
             {
                 bool needsContainingProjection = RecordWidenedTypeParameters(

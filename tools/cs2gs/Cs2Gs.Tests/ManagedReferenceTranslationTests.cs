@@ -5101,6 +5101,53 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ManagedReferenceArrayProjectionUpdatesOuterMethodGroupContainingType()
+    {
+        const string source = """
+            using System.Linq;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedOuterMethodGroupContainingType;
+            public static class Outer<T> {
+                public static class Inner {
+                    public static bool IsNil(T item) => item == null;
+                }
+            }
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    return source.Select(Outer<ManagedRef<int>>.Inner.IsNil).First()
+                        ? 42
+                        : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedOuterMethodGroupContainingType.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.DoesNotContain(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported);
+        Assert.Contains(
+            "Outer[managed[int32]?].Inner.IsNil",
+            text,
+            StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionRejectsConflictingMethodGroupParameters()
     {
         const string source = """
@@ -5281,6 +5328,46 @@ public sealed class ManagedReferenceTranslationTests
         };
         var project = CSharpProjectLoader.LoadInMemory(
             new[] { ("ManagedArrayExplicitGenericProducerDestination.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Make[managed[int32]?]()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ZeroArgumentGenericProducerUsesProjectedNestedReturnArrayElement()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayZeroArgumentNestedGenericProducer;
+            public sealed class Box<T> {
+                public Box(T value) { Value = value; }
+                public T Value { get; }
+            }
+            public class Probe {
+                private static Box<T[]> Make<T>() => new Box<T[]>(new T[1]);
+
+                public static int Run() {
+                    var produced = Make<ManagedRef<int>>();
+                    return produced.Value[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayZeroArgumentNestedGenericProducer.cs", source) },
             references);
         Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
         var document = Assert.Single(project.Documents);
