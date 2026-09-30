@@ -743,6 +743,7 @@ func validateOwnership(a Analysis) error {
 	symbols := make(map[string]SymbolRecord, len(a.Symbols))
 	packagePaths := make(map[string]bool, len(a.Packages))
 	fileListings := map[string]map[string]int{}
+	positionMaps := map[string]*sourcePositionMap{}
 	for _, pkg := range a.Packages {
 		packages[pkg.ID] = pkg
 		packagePaths[pkg.ImportPath] = true
@@ -786,7 +787,7 @@ func validateOwnership(a Analysis) error {
 		if !ok || file.PackageID != node.PackageID {
 			return fmt.Errorf("node %q package/file ownership is inconsistent", node.ID)
 		}
-		if err := validateSpanForFile(node.Span, file, node.ID+".span"); err != nil {
+		if err := validateSpanForFile(node.Span, file, node.ID+".span", positionMaps); err != nil {
 			return err
 		}
 		nodes[node.ID] = node
@@ -823,7 +824,7 @@ func validateOwnership(a Analysis) error {
 			return fmt.Errorf("symbol %q has unknown package %q", symbol.ID, symbol.PackageID)
 		}
 		if symbol.Declaration != nil {
-			if err := validateSpanInPackage(*symbol.Declaration, symbol.PackageID, fileListings, files, symbol.ID+".declaration"); err != nil {
+			if err := validateSpanInPackage(*symbol.Declaration, symbol.PackageID, fileListings, files, symbol.ID+".declaration", positionMaps); err != nil {
 				return err
 			}
 		}
@@ -879,7 +880,7 @@ func validateOwnership(a Analysis) error {
 				return fmt.Errorf("scope %q parent ownership is inconsistent", scope.ID)
 			}
 		}
-		if err := validateSpanInPackage(scope.Span, scope.PackageID, fileListings, files, scope.ID+".span"); err != nil {
+		if err := validateSpanInPackage(scope.Span, scope.PackageID, fileListings, files, scope.ID+".span", positionMaps); err != nil {
 			return err
 		}
 		for _, symbolID := range scope.SymbolIDs {
@@ -918,7 +919,7 @@ func validateOwnership(a Analysis) error {
 	}
 
 	for _, generate := range a.GenerateDirectives {
-		if err := validateSpanForFile(generate.Span, files[generate.FileID], generate.ID+".span"); err != nil {
+		if err := validateSpanForFile(generate.Span, files[generate.FileID], generate.ID+".span", positionMaps); err != nil {
 			return err
 		}
 	}
@@ -938,7 +939,7 @@ func validateOwnership(a Analysis) error {
 				return fmt.Errorf("diagnostic %q is not listed by package %q", diagnostic.ID, diagnostic.PackageID)
 			}
 			if diagnostic.Span != nil {
-				if err := validateSpanInPackage(*diagnostic.Span, diagnostic.PackageID, fileListings, files, diagnostic.ID+".span"); err != nil {
+				if err := validateSpanInPackage(*diagnostic.Span, diagnostic.PackageID, fileListings, files, diagnostic.ID+".span", positionMaps); err != nil {
 					return err
 				}
 			}
@@ -961,47 +962,43 @@ func findScope(scopes []ScopeRecord, id string) *ScopeRecord {
 	return nil
 }
 
-func validateSpanInPackage(span SourceSpan, packageID string, listings map[string]map[string]int, files map[string]FileRecord, owner string) error {
+func validateSpanInPackage(span SourceSpan, packageID string, listings map[string]map[string]int, files map[string]FileRecord, owner string, positionMaps map[string]*sourcePositionMap) error {
 	for fileID := range listings[packageID] {
 		file := files[fileID]
 		if file.Path == span.Path {
-			return validateSpanForFile(span, file, owner)
+			return validateSpanForFile(span, file, owner, positionMaps)
 		}
 	}
 	return fmt.Errorf("%s path %q does not belong to package %q", owner, span.Path, packageID)
 }
 
-func validateSpanForFile(span SourceSpan, file FileRecord, owner string) error {
+func validateSpanForFile(span SourceSpan, file FileRecord, owner string, positionMaps map[string]*sourcePositionMap) error {
 	if span.Path != file.Path || int64(span.StartByte) > file.Bytes || int64(span.EndByte) > file.Bytes {
 		return fmt.Errorf("%s does not match file %q or exceeds its byte bounds", owner, file.ID)
 	}
-	data, err := base64.StdEncoding.DecodeString(file.ContentBase64)
-	if err != nil {
-		return fmt.Errorf("%s references file %q with invalid content", owner, file.ID)
+	positions := positionMaps[file.ID]
+	if positions == nil {
+		data, err := base64.StdEncoding.DecodeString(file.ContentBase64)
+		if err != nil {
+			return fmt.Errorf("%s references file %q with invalid content", owner, file.ID)
+		}
+		positions, err = newSourcePositionMap(file.Path, data)
+		if err != nil {
+			return fmt.Errorf("%s cannot reconstruct file %q positions: %w", owner, file.ID, err)
+		}
+		positionMaps[file.ID] = positions
 	}
-	startLine, startColumn := sourceCoordinate(data, span.StartByte)
-	endLine, endColumn := sourceCoordinate(data, span.EndByte)
-	if span.StartLine != startLine || span.StartColumn != startColumn ||
-		span.EndLine != endLine || span.EndColumn != endColumn {
+	rawStart, rawEnd, displayPath, displayLine, displayColumn, lineDirective :=
+		positions.span(span.StartByte, span.EndByte)
+	if span.StartLine != rawStart.Line || span.StartColumn != rawStart.Column ||
+		span.EndLine != rawEnd.Line || span.EndColumn != rawEnd.Column {
 		return fmt.Errorf("%s raw coordinates do not match file %q byte offsets", owner, file.ID)
 	}
-	if !span.LineDirective && (span.DisplayPath != span.Path ||
-		span.DisplayLine != span.StartLine || span.DisplayColumn != span.StartColumn) {
-		return fmt.Errorf("%s display coordinates differ without //line provenance", owner)
+	if span.DisplayPath != displayPath || span.DisplayLine != displayLine ||
+		span.DisplayColumn != displayColumn || span.LineDirective != lineDirective {
+		return fmt.Errorf("%s display coordinates do not match file %q line directives", owner, file.ID)
 	}
 	return nil
-}
-
-func sourceCoordinate(data []byte, offset int) (line, column int) {
-	line, column = 1, 1
-	for index := 0; index < offset; index++ {
-		if data[index] == '\n' {
-			line, column = line+1, 1
-		} else {
-			column++
-		}
-	}
-	return line, column
 }
 
 func validPortableLocation(value string) bool {

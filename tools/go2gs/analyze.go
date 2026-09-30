@@ -60,6 +60,9 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 }
 
 func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot, afterLoad func(), preloadOnly bool, gorootHandoff string) (_ Analysis, _ bool, err error) {
+	if _, err := resolveArchitectureSettings(profile.GOARCH, profile.ArchitectureFeatures); err != nil {
+		return Analysis{}, false, err
+	}
 	if err := validateProfileSemanticAuthority(profile); err != nil {
 		return Analysis{}, false, err
 	}
@@ -104,7 +107,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		return Analysis{}, false, fmt.Errorf("capture helper: %w", err)
 	}
 
-	workDirectory, err := createOwnedTempDir(outRoot, ".go2gs-work-*")
+	workDirectory, err := createOwnedTempDir("", ".go2gs-work-*")
 	if err != nil {
 		return Analysis{}, false, err
 	}
@@ -1175,18 +1178,8 @@ func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Pack
 }
 
 func profileToolTags(profile Profile) []string {
-	var tags []string
-	prefix := profile.GOARCH + "."
-	switch profile.GOARCH {
-	case "amd64":
-		tags = append(tags, "amd64.v1")
-	case "arm64":
-		tags = append(tags, "arm64.v8.0")
-	}
-	for _, feature := range profile.ArchitectureFeatures {
-		tags = append(tags, prefix+feature)
-	}
-	return uniqueSorted(tags)
+	settings, _ := resolveArchitectureSettings(profile.GOARCH, profile.ArchitectureFeatures)
+	return append([]string{}, settings.toolTags...)
 }
 
 func profileBuildContext(profile Profile) build.Context {

@@ -231,8 +231,12 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory stri
 	flags = append(flags, "-mod="+profile.ModuleMode)
 	values["GOFLAGS"] = joinArgs(flags)
 	values["GODEBUG"] = joinMap(profile.GODEBUG)
-	for _, feature := range profile.ArchitectureFeatures {
-		values[architectureVariable(profile.GOARCH)] = appendCSV(values[architectureVariable(profile.GOARCH)], feature)
+	architecture, err := resolveArchitectureSettings(profile.GOARCH, profile.ArchitectureFeatures)
+	if err != nil {
+		return nil, err
+	}
+	if architecture.variable != "" {
+		values[architecture.variable] = architecture.value
 	}
 	return canonicalEnv(values), nil
 }
@@ -284,34 +288,4 @@ func joinMap(values map[string]string) string {
 		buf.WriteString(entry)
 	}
 	return buf.String()
-}
-
-func appendCSV(current, value string) string {
-	if current == "" {
-		return value
-	}
-	return current + "," + value
-}
-
-func architectureVariable(goarch string) string {
-	switch goarch {
-	case "amd64":
-		return "GOAMD64"
-	case "arm64":
-		return "GOARM64"
-	case "386":
-		return "GO386"
-	case "mips", "mipsle":
-		return "GOMIPS"
-	case "mips64", "mips64le":
-		return "GOMIPS64"
-	case "ppc64", "ppc64le":
-		return "GOPPC64"
-	case "riscv64":
-		return "GORISCV64"
-	case "wasm":
-		return "GOWASM"
-	default:
-		return "GOARCH_FEATURES"
-	}
 }

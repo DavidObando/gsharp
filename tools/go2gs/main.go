@@ -106,11 +106,15 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if err := rejectSymlinkPath(outRoot); err != nil {
 		return &exitError{2, fmt.Errorf("output root: %w", err)}
 	}
-	release, err := lockAndInvalidateOutput(outRoot)
+	output, err := lockAndInvalidateOutput(outRoot)
 	if err != nil {
 		return &exitError{2, err}
 	}
-	defer release()
+	defer func() {
+		if releaseErr := output.release(); releaseErr != nil {
+			err = errors.Join(err, &exitError{2, fmt.Errorf("release output lock: %w", releaseErr)})
+		}
+	}()
 
 	profile, err := readProfile(profilePath)
 	if err != nil {
@@ -137,7 +141,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 		if encodeErr != nil {
 			return &exitError{2, encodeErr}
 		}
-		if publishErr := publishWorkerArtifacts(outRoot, analysisBytes, runBytes, nil); publishErr != nil {
+		if publishErr := publishWorkerArtifacts(output, analysisBytes, runBytes, nil); publishErr != nil {
 			return &exitError{2, publishErr}
 		}
 		return &exitError{1, errors.New("inventory incomplete; see analysis.json diagnostics and blockers")}
@@ -151,7 +155,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 		return &exitError{2, err}
 	}
 	timeout := time.Duration(profile.Limits.MaxDurationSeconds) * time.Second
-	bootstrapDirectory, err := createOwnedTempDir(outRoot, ".go2gs-bootstrap-*")
+	bootstrapDirectory, err := createOwnedTempDir("", ".go2gs-bootstrap-*")
 	if err != nil {
 		return &exitError{2, err}
 	}
@@ -181,7 +185,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if err != nil {
 		return &exitError{2, err}
 	}
-	workerDirectory, err := createOwnedTempDir(outRoot, ".go2gs-worker-*")
+	workerDirectory, err := createOwnedTempDir("", ".go2gs-worker-*")
 	if err != nil {
 		return &exitError{2, err}
 	}
@@ -222,7 +226,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if (result.ExitCode == 0) != analysis.InventoryComplete {
 		return &exitError{2, errors.New("analysis worker exit status disagrees with inventory completeness")}
 	}
-	if err := publishWorkerArtifacts(outRoot, analysisBytes, runBytes, nil); err != nil {
+	if err := publishWorkerArtifacts(output, analysisBytes, runBytes, nil); err != nil {
 		return &exitError{2, err}
 	}
 	if result.ExitCode == 1 {
@@ -238,7 +242,7 @@ func runAnalysisWorkerProcess(parent context.Context, timeout time.Duration, max
 	)
 }
 
-func runAnalyzeWorker(parent context.Context, args []string) error {
+func runAnalyzeWorker(parent context.Context, args []string) (err error) {
 	parent = inheritProcessGroup(parent)
 	if os.Getenv("GO2GS_SELECTED_GO") == "" ||
 		os.Getenv("GO2GS_SELECTED_GO_SHA256") == "" ||
@@ -268,6 +272,15 @@ func runAnalyzeWorker(parent context.Context, args []string) error {
 	if err := rejectSymlinkPath(outRoot); err != nil {
 		return fmt.Errorf("output root: %w", err)
 	}
+	output, err := openBoundOutputRoot(outRoot)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if releaseErr := output.release(); releaseErr != nil {
+			err = errors.Join(err, &exitError{2, fmt.Errorf("release output lock: %w", releaseErr)})
+		}
+	}()
 
 	timeout := time.Duration(profile.Limits.MaxDurationSeconds) * time.Second
 	ctx, cancel := context.WithTimeout(parent, timeout)
@@ -290,7 +303,7 @@ func runAnalyzeWorker(parent context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	if err := publishWorkerArtifacts(outRoot, analysisBytes, runBytes, nil); err != nil {
+	if err := publishWorkerArtifacts(output, analysisBytes, runBytes, nil); err != nil {
 		return err
 	}
 	if !complete {

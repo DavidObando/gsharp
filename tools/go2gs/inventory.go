@@ -54,6 +54,7 @@ type inventoryBuilder struct {
 	diagnosticRedactions  []string
 	memberIdentity        map[types.Object]string
 	skipSemantics         map[*packages.Package]bool
+	positionMaps          map[string]*sourcePositionMap
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
@@ -68,7 +69,7 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		inputDrift:   map[string]bool{}, snapshotFiles: map[string][]string{},
 		selectedSnapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
 		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
-		skipSemantics: map[*packages.Package]bool{},
+		skipSemantics: map[*packages.Package]bool{}, positionMaps: map[string]*sourcePositionMap{},
 	}
 }
 
@@ -1927,7 +1928,6 @@ func hashTree(root string, maxBytes int64) (string, error) {
 func (b *inventoryBuilder) span(pkg *packages.Package, start, end token.Pos) SourceSpan {
 	rawStart := tokenPositionFor(pkg.Fset, start, false)
 	rawEnd := tokenPositionFor(pkg.Fset, end, false)
-	display := tokenPositionFor(pkg.Fset, start, true)
 	path := ""
 	portable := ""
 	if rawStart.Filename != "" {
@@ -1936,26 +1936,28 @@ func (b *inventoryBuilder) span(pkg *packages.Package, start, end token.Pos) Sou
 			path = value
 		}
 	}
-	displayPath := portable
-	lineDirective := display.Filename != rawStart.Filename || display.Line != rawStart.Line || display.Column != rawStart.Column
-	if lineDirective {
-		displayPath = "line://" + b.logicalDisplayPath(display.Filename)
+	displayPath, displayLine, displayColumn := portable, rawStart.Line, rawStart.Column
+	lineDirective := false
+	positions := b.positionMaps[rawStart.Filename]
+	if positions == nil {
+		if data := b.sourceSnapshot[rawStart.Filename]; data != nil {
+			positions, _ = newSourcePositionMap(portable, data)
+			b.positionMaps[rawStart.Filename] = positions
+		}
+	}
+	if positions != nil {
+		mappedStart, mappedEnd, mappedPath, mappedLine, mappedColumn, mappedDirective :=
+			positions.span(rawStart.Offset, rawEnd.Offset)
+		rawStart, rawEnd = mappedStart, mappedEnd
+		displayPath, displayLine, displayColumn, lineDirective =
+			mappedPath, mappedLine, mappedColumn, mappedDirective
 	}
 	return SourceSpan{
 		Path: path, StartByte: rawStart.Offset, EndByte: rawEnd.Offset,
 		StartLine: rawStart.Line, StartColumn: rawStart.Column, EndLine: rawEnd.Line, EndColumn: rawEnd.Column,
-		DisplayPath: displayPath, DisplayLine: display.Line, DisplayColumn: display.Column,
+		DisplayPath: displayPath, DisplayLine: displayLine, DisplayColumn: displayColumn,
 		LineDirective: lineDirective,
 	}
-}
-
-func (b *inventoryBuilder) logicalDisplayPath(path string) string {
-	if relative, err := filepath.Rel(b.sourceRoot, path); err == nil &&
-		relative != ".." && !strings.HasPrefix(relative, ".."+string(filepath.Separator)) &&
-		!filepath.IsAbs(relative) {
-		return slash(relative)
-	}
-	return slash(filepath.Base(path))
 }
 
 func (b *inventoryBuilder) fileIDForPosition(pkg *packages.Package, pos token.Pos) string {

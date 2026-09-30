@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"go/ast"
+	"go/build"
 	"go/parser"
 	"go/token"
 	"go/types"
@@ -1604,7 +1605,7 @@ func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 	if err := os.WriteFile(userData, []byte("valuable"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	release, err := lockAndInvalidateOutput(out)
+	output, err := lockAndInvalidateOutput(out)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1627,7 +1628,7 @@ func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 			t.Fatalf("unowned prefixed data was changed: %s: %q, %v", path, data, err)
 		}
 	}
-	if err := publishWorkerArtifacts(out, []byte("new analysis"), []byte("new run"), func() {
+	if err := publishWorkerArtifacts(output, []byte("new analysis"), []byte("new run"), func() {
 		if mkdirErr := os.Mkdir(filepath.Join(out, "run.json"), 0o755); mkdirErr != nil {
 			t.Fatal(mkdirErr)
 		}
@@ -1637,9 +1638,111 @@ func TestOutputInvalidationAndFailedPublishLeaveNoStaleArtifacts(t *testing.T) {
 	if _, err := os.Lstat(filepath.Join(out, "analysis.json")); !os.IsNotExist(err) {
 		t.Fatalf("failed publish retained analysis.json: %v", err)
 	}
-	release()
+	if err := output.release(); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := os.Lstat(filepath.Join(out, ".go2gs-lock")); !os.IsNotExist(err) {
 		t.Fatalf("output lock was not released: %v", err)
+	}
+}
+
+func TestBoundOutputRootResistsAncestorReplacement(t *testing.T) {
+	base := t.TempDir()
+	ancestor := filepath.Join(base, "ancestor")
+	out := filepath.Join(ancestor, "out")
+	displaced := filepath.Join(base, "displaced")
+	if err := os.MkdirAll(out, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if err := os.WriteFile(filepath.Join(out, name), []byte("original stale"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	outputRootBoundHook = func() {
+		outputRootBoundHook = nil
+		if err := os.Rename(ancestor, displaced); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(out, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"analysis.json", "run.json"} {
+			if err := os.WriteFile(filepath.Join(out, name), []byte("attacker"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	t.Cleanup(func() { outputRootBoundHook = nil })
+	output, err := lockAndInvalidateOutput(out)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := filepath.Join(displaced, "out")
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, err := os.Lstat(filepath.Join(original, name)); !os.IsNotExist(err) {
+			t.Fatalf("bound stale output %s remains: %v", name, err)
+		}
+		if data, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(data) != "attacker" {
+			t.Fatalf("replacement output %s changed: %q, %v", name, data, err)
+		}
+	}
+	if err := publishWorkerArtifacts(output, []byte("bound analysis"), []byte("bound run"), nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := output.release(); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{
+		"analysis.json": "bound analysis",
+		"run.json":      "bound run",
+	} {
+		if data, err := os.ReadFile(filepath.Join(original, name)); err != nil || string(data) != want {
+			t.Fatalf("bound output %s = %q, %v", name, data, err)
+		}
+		if data, err := os.ReadFile(filepath.Join(out, name)); err != nil || string(data) != "attacker" {
+			t.Fatalf("replacement output %s changed after publish: %q, %v", name, data, err)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(original, ".go2gs-lock")); !os.IsNotExist(err) {
+		t.Fatalf("bound lock was not released: %v", err)
+	}
+}
+
+func TestBoundOutputRootReleaseFailsAfterLockLoss(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		attack func(string) error
+	}{
+		{
+			name: "removed",
+			attack: func(lock string) error {
+				return os.Remove(lock)
+			},
+		},
+		{
+			name: "replaced",
+			attack: func(lock string) error {
+				if err := os.Remove(lock); err != nil {
+					return err
+				}
+				return os.Mkdir(lock, 0o700)
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			out := t.TempDir()
+			output, err := lockAndInvalidateOutput(out)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := test.attack(filepath.Join(out, ".go2gs-lock")); err != nil {
+				t.Fatal(err)
+			}
+			if err := output.release(); err == nil {
+				t.Fatal("release succeeded after output lock identity loss")
+			}
+		})
 	}
 }
 
@@ -2029,11 +2132,11 @@ func TestLoadFailureReplacesStaleSuccessfulArtifacts(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	release, err := lockAndInvalidateOutput(out)
+	output, err := lockAndInvalidateOutput(out)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer release()
+	defer output.release()
 	goExecutable := filepath.Join(runtime.GOROOT(), "bin", selectedGoName())
 	goData, err := os.ReadFile(goExecutable)
 	if err != nil {
@@ -3217,6 +3320,30 @@ func TestValidateAnalysisCommandRejectsMalformedNestedRecords(t *testing.T) {
 			span["startLine"] = span["startLine"].(float64) + 1
 			return true
 		}},
+		{"line-directive-display-path", func(root map[string]any) bool {
+			span := directiveSpan(root)
+			if span == nil {
+				return false
+			}
+			span["displayPath"] = "line://forged.go"
+			return true
+		}},
+		{"line-directive-display-line", func(root map[string]any) bool {
+			span := directiveSpan(root)
+			if span == nil {
+				return false
+			}
+			span["displayLine"] = span["displayLine"].(float64) + 1
+			return true
+		}},
+		{"line-directive-display-column", func(root map[string]any) bool {
+			span := directiveSpan(root)
+			if span == nil {
+				return false
+			}
+			span["displayColumn"] = span["displayColumn"].(float64) + 1
+			return true
+		}},
 		{"module-count-add", func(root map[string]any) bool {
 			root["modules"] = append(root["modules"].([]any), map[string]any{
 				"id": "module:added", "path": "example.com/added", "main": false,
@@ -3523,9 +3650,155 @@ func TestLocalReplacementInventoryIsRootIndependent(t *testing.T) {
 }
 
 func TestSourceCoordinateCountsBytes(t *testing.T) {
-	line, column := sourceCoordinate([]byte("é\nx"), len("é"))
-	if line != 1 || column != 3 {
-		t.Fatalf("UTF-8 byte coordinate mismatch: line=%d column=%d", line, column)
+	positions, err := newSourcePositionMap("source://main.go", []byte("é\nx"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _, _, _, _, _ := positions.span(len("é"), len("é"))
+	if raw.Line != 1 || raw.Column != 3 {
+		t.Fatalf("UTF-8 byte coordinate mismatch: line=%d column=%d", raw.Line, raw.Column)
+	}
+}
+
+func TestSourcePositionMapHandlesLineDirectiveGrammar(t *testing.T) {
+	tests := []struct {
+		name      string
+		source    string
+		marker    string
+		path      string
+		line      int
+		column    int
+		directive bool
+	}{
+		{
+			name: "line-crlf", source: "package p\r\n//line logical/generated.go:40\r\nvar X int\r\n",
+			marker: "var X", path: "line://dir/logical/generated.go", line: 40, column: 0, directive: true,
+		},
+		{
+			name: "block-column", source: "package p\nvar _ = /*line block.go:7:9*/ 1\n",
+			marker: " 1", path: "line://dir/block.go", line: 7, column: 9, directive: true,
+		},
+		{
+			name: "default", source: "package p\nvar X int\n",
+			marker: "var X", path: "source://dir/main.go", line: 2, column: 1, directive: false,
+		},
+		{
+			name: "module-relative", source: "package p\n//line logical/generated.go:12\nvar X int\n",
+			marker: "var X", path: "line://dir/logical/generated.go", line: 12, column: 0, directive: true,
+		},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			portable := "source://dir/main.go"
+			if test.name == "module-relative" {
+				portable = "module://example.com/replacement@local/dir/main.go"
+			}
+			positions, err := newSourcePositionMap(portable, []byte(test.source))
+			if err != nil {
+				t.Fatal(err)
+			}
+			offset := strings.Index(test.source, test.marker)
+			if offset < 0 {
+				t.Fatal("marker not found")
+			}
+			_, _, path, line, column, directive := positions.span(offset, offset)
+			if path != test.path || line != test.line || column != test.column || directive != test.directive {
+				t.Fatalf("display position = %s:%d:%d directive=%v", path, line, column, directive)
+			}
+		})
+	}
+}
+
+func TestArchitectureFeatureTagsMatchGoCommand(t *testing.T) {
+	tests := []struct {
+		name, goos, goarch string
+		features           []string
+		tag                string
+		selected           bool
+	}{
+		{"amd64-cumulative", "linux", "amd64", []string{"v3"}, "amd64.v2", true},
+		{"amd64-future", "linux", "amd64", []string{"v3"}, "amd64.v4", false},
+		{"arm-cumulative", "linux", "arm", []string{"7"}, "arm.6", true},
+		{"arm64-v9-correspondence", "linux", "arm64", []string{"v9.1"}, "arm64.v8.6", true},
+		{"arm64-too-new", "linux", "arm64", []string{"v9.1"}, "arm64.v8.7", false},
+		{"ppc64-cumulative", "linux", "ppc64le", []string{"power10"}, "ppc64le.power9", true},
+		{"riscv64-cumulative", "linux", "riscv64", []string{"rva23u64"}, "riscv64.rva22u64", true},
+		{"386-exact", "linux", "386", []string{"softfloat"}, "386.sse2", false},
+		{"wasm-always-enabled", "js", "wasm", nil, "wasm.signext", true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			settings, err := resolveArchitectureSettings(test.goarch, test.features)
+			if err != nil {
+				t.Fatal(err)
+			}
+			root := t.TempDir()
+			if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/featuretest\n\ngo 1.27.0\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(root, "base.go"), []byte("package featuretest\n"), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			const featureFile = "feature.go"
+			source := "//go:build " + test.tag + "\n\npackage featuretest\n"
+			if err := os.WriteFile(filepath.Join(root, featureFile), []byte(source), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			context := build.Default
+			context.GOOS, context.GOARCH = test.goos, test.goarch
+			context.ToolTags = settings.toolTags
+			matched, err := context.MatchFile(root, featureFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", selectedGoName()), "list", "-json", ".")
+			cmd.Dir = root
+			cmd.Env = os.Environ()
+			for _, setting := range [][2]string{
+				{"GOOS", test.goos},
+				{"GOARCH", test.goarch},
+				{"CGO_ENABLED", "0"},
+				{"GOTOOLCHAIN", "local"},
+				{settings.variable, settings.value},
+			} {
+				cmd.Env = replaceEnvironment(cmd.Env, setting[0], setting[1])
+			}
+			output, err := cmd.Output()
+			if err != nil {
+				t.Fatalf("go list: %v", err)
+			}
+			var listed struct {
+				GoFiles []string
+			}
+			if err := json.Unmarshal(output, &listed); err != nil {
+				t.Fatal(err)
+			}
+			commandSelected := slices.Contains(listed.GoFiles, featureFile)
+			if matched != test.selected || commandSelected != test.selected {
+				t.Fatalf("selection: go/build=%v cmd/go=%v want=%v tags=%v", matched, commandSelected, test.selected, settings.toolTags)
+			}
+		})
+	}
+}
+
+func TestArchitectureFeatureValidationRejectsInvalidValues(t *testing.T) {
+	tests := []struct {
+		goarch   string
+		features []string
+	}{
+		{"amd64", []string{"v5"}},
+		{"amd64", []string{"v2", "v3"}},
+		{"arm64", []string{"v9.6"}},
+		{"arm64", []string{"v8.1", "v9.0"}},
+		{"arm", []string{"8"}},
+		{"ppc64", []string{"power11"}},
+		{"wasm", []string{"simd"}},
+		{"loong64", []string{"v1"}},
+	}
+	for _, test := range tests {
+		if _, err := resolveArchitectureSettings(test.goarch, test.features); err == nil {
+			t.Errorf("accepted GOARCH=%s features=%v", test.goarch, test.features)
+		}
 	}
 }
 
@@ -3759,6 +4032,16 @@ func hasLineDirective(analysis Analysis) bool {
 		}
 	}
 	return false
+}
+
+func directiveSpan(root map[string]any) map[string]any {
+	for _, raw := range root["nodes"].([]any) {
+		span := raw.(map[string]any)["span"].(map[string]any)
+		if directive, _ := span["lineDirective"].(bool); directive {
+			return span
+		}
+	}
+	return nil
 }
 
 func hasBlockerCategory(analysis Analysis, category string) bool {

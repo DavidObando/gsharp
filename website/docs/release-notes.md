@@ -126,8 +126,12 @@ Before moving an application to a different compiler version, pin the intended S
   `GOEXPERIMENT`/`DefaultGODEBUG` overrides fail bootstrap rather than silently
   using different in-process parser/type-checker semantics. Source capture and
   verification reject symlinks in every path component, profile and `goFlags`
-  tags share one canonical selection set, and complete artifacts require a
-  typed `*ast.File` root for every compiled file. Diagnostics
+  tags share one canonical selection set, architecture feature levels expand
+  to cmd/go-equivalent cumulative tool tags, and complete artifacts require a
+  typed `*ast.File` root for every compiled file. Output locking, invalidation,
+  and publication stay relative to one held directory handle across ancestor
+  renames. Span validation reparses captured bytes to verify exact raw and
+  line-directive-adjusted paths, lines, and columns. Diagnostics
   are path-stable, initialization order is explicit, and schema validation
   rejects missing fields, count mismatches, and complete artifacts without a
   loaded main-module package/source ownership graph. The pinned
