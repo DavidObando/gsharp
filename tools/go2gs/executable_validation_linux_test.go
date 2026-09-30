@@ -6,6 +6,7 @@ package main
 
 import (
 	"bytes"
+	"debug/buildinfo"
 	"debug/elf"
 	"errors"
 	"os"
@@ -253,6 +254,72 @@ func TestPublicAnalyzeRejectsExternallyLinkedCmdGoBeforeConstructor(t *testing.T
 	for _, name := range []string{"analysis.json", "run.json"} {
 		if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
 			t.Fatalf("bootstrap rejection wrote %s: %v", name, err)
+		}
+	}
+}
+
+func TestPublicAnalyzeRejectsCmdGoClaimingDifferentHelperVersion(t *testing.T) {
+	const claimedVersion = "1.26.6"
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	selectedGo := filepath.Join(root, "bin", selectedGoName())
+	build := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"), "build",
+		"-o", selectedGo, "-ldflags=-X=runtime.buildVersion=go"+claimedVersion, "cmd/go")
+	build.Env = replaceEnvironment(os.Environ(), "CGO_ENABLED", "0")
+	if output, err := build.CombinedOutput(); err != nil {
+		t.Fatalf("build selected cmd/go mutant: %v\n%s", err, output)
+	}
+	info, err := buildinfo.ReadFile(selectedGo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.GoVersion != "go"+claimedVersion {
+		t.Fatalf("cmd/go mutant claims %q, want %q", info.GoVersion, "go"+claimedVersion)
+	}
+	if err := os.WriteFile(filepath.Join(root, "VERSION"), []byte("go"+claimedVersion+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	selectedData, err := os.ReadFile(selectedGo)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO2GS_SELECTED_GO", selectedGo)
+	t.Setenv("GO2GS_SELECTED_GO_SHA256", hashBytes(selectedData))
+	t.Setenv("GO2GS_SELECTED_GOROOT", root)
+	loads := 0
+	packageLoadTestHook = func(string) { loads++ }
+	t.Cleanup(func() { packageLoadTestHook = nil })
+	profile := testProfile()
+	profile.RequestedGoVersion = claimedVersion
+	if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile); err == nil ||
+		!strings.Contains(err.Error(), "semantic Go version mismatch") {
+		t.Fatalf("cmd/go/helper semantic mismatch was accepted: %v", err)
+	}
+	if loads != 0 {
+		t.Fatalf("semantic mismatch reached packages.Load %d times", loads)
+	}
+
+	binary := buildGo2gsBinary(t)
+	out, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(binary, "analyze",
+		"--source", copyFixture(t, "complete"),
+		"--profile", writeTestProfile(t, profile),
+		"--out", out)
+	command.Env = replaceEnvironment(os.Environ(), "PATH", filepath.Join(root, "bin"))
+	output, runErr := command.CombinedOutput()
+	var exitErr *exec.ExitError
+	if !errors.As(runErr, &exitErr) || exitErr.ExitCode() != 2 ||
+		!strings.Contains(string(output), "semantic Go version mismatch") {
+		t.Fatalf("public semantic mismatch should exit 2: %v\n%s", runErr, output)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, err := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(err) {
+			t.Fatalf("semantic mismatch wrote %s: %v", name, err)
 		}
 	}
 }

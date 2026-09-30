@@ -17,6 +17,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -68,8 +69,11 @@ func validIncompleteAnalysis() Analysis {
 			Offline: true, TrustBoundary: "test", Limits: testProfile().Limits,
 		},
 		Toolchain: ToolchainProvenance{
-			RequestedVersion: "1.0", ActualVersion: "1.0", ExecutableSHA256: hash,
-			ExecutableName: "go", GOROOTIdentity: "goroot:test", GOROOTVersionSHA256: hash, GOROOTSource: "test",
+			RequestedVersion: "1.0", ActualVersion: "1.0",
+			HelperSemanticVersion: "1.0", GOROOTVersion: "1.0", ExecutableSHA256: hash,
+			ExecutableName:      "go",
+			GOROOTIdentity:      stableID("goroot", "1.0\x001.0\x001.0\x00"+hash+"\x00"+hash),
+			GOROOTVersionSHA256: hash, GOROOTSource: "test",
 			CCompilerHelpers: []CompilerHelperIdentity{},
 		},
 		Manifests: []ManifestRecord{}, Modules: []ModuleRecord{}, Packages: []PackageRecord{},
@@ -379,6 +383,158 @@ func TestProfileRejectsObsoleteCompilerConfiguration(t *testing.T) {
 				t.Fatalf("obsolete compiler configuration was accepted: %v", err)
 			}
 		})
+	}
+}
+
+func TestProfileRejectsUnsupportedSemanticSettings(t *testing.T) {
+	for name, mutate := range map[string]func(*Profile){
+		"goexperiment": func(profile *Profile) { profile.GOEXPERIMENT = "boringcrypto" },
+		"gotypesalias": func(profile *Profile) { profile.GODEBUG = map[string]string{"gotypesalias": "0"} },
+		"case-variant": func(profile *Profile) { profile.GODEBUG = map[string]string{"GOTYPESALIAS": "0"} },
+		"malformed":    func(profile *Profile) { profile.GODEBUG = map[string]string{"gotypesalias": "maybe"} },
+	} {
+		t.Run(name, func(t *testing.T) {
+			profile := testProfile()
+			mutate(&profile)
+			path := writeTestProfile(t, profile)
+			if _, err := readProfile(path); err == nil ||
+				(!strings.Contains(err.Error(), "goExperiment") && !strings.Contains(err.Error(), "goDebug")) {
+				t.Fatalf("unsupported semantic setting was accepted: %v", err)
+			}
+		})
+	}
+
+	profileBytes, err := json.Marshal(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	duplicate := bytes.Replace(profileBytes, []byte(`"moduleMode"`),
+		[]byte(`"goDebug":{"gotypesalias":"0","gotypesalias":"1"},"moduleMode"`), 1)
+	path := filepath.Join(t.TempDir(), "profile.json")
+	if err := os.WriteFile(path, duplicate, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readProfile(path); err == nil || !strings.Contains(err.Error(), "goDebug") {
+		t.Fatalf("duplicate semantic debug setting was accepted: %v", err)
+	}
+}
+
+func TestOfficialGoVersionNormalization(t *testing.T) {
+	for _, test := range []struct {
+		value         string
+		requirePrefix bool
+		want          string
+	}{
+		{"1.27", false, "1.27"},
+		{"1.27.1", false, "1.27.1"},
+		{"go1.27", true, "1.27"},
+		{"go1.27.1", true, "1.27.1"},
+	} {
+		if got, err := normalizeOfficialGoVersion(test.value, test.requirePrefix); err != nil || got != test.want {
+			t.Fatalf("normalize %q = %q, %v; want %q", test.value, got, err, test.want)
+		}
+	}
+	for _, value := range []string{
+		"go1.27rc1", "go1.27beta1", "devel go1.28-abc", "go1.27.1-custom",
+		"go1.027.1", "go1.27.01", "1.27.1", "go2.0",
+	} {
+		if got, err := normalizeOfficialGoVersion(value, true); err == nil {
+			t.Fatalf("unsupported Go version %q normalized to %q", value, got)
+		}
+	}
+	for _, data := range [][]byte{
+		[]byte("go1.27.1\n"),
+		[]byte("go1.27.1\ntime 2026-08-28T16:20:06Z\n"),
+	} {
+		if got, err := parseGOROOTVersion(data); err != nil || got != "1.27.1" {
+			t.Fatalf("parse GOROOT VERSION = %q, %v", got, err)
+		}
+	}
+	for _, data := range [][]byte{
+		[]byte("go1.27rc1\n"),
+		[]byte("devel go1.28\n"),
+		[]byte("go1.27.1\ncustom\n"),
+	} {
+		if got, err := parseGOROOTVersion(data); err == nil {
+			t.Fatalf("unsupported GOROOT VERSION normalized to %q", got)
+		}
+	}
+}
+
+func TestSemanticGoVersionAgreement(t *testing.T) {
+	if err := validateSemanticGoVersions("1.27.1", "1.27.1", "1.27.1"); err != nil {
+		t.Fatalf("matching semantic versions were rejected: %v", err)
+	}
+	for _, test := range []struct {
+		selected string
+		goroot   string
+		helper   string
+	}{
+		{"1.27.1", "1.27.2", "1.27.1"},
+		{"1.27.1", "1.27.1", "1.27.2"},
+		{"1.27.2", "1.27.1", "1.27.1"},
+	} {
+		if err := validateSemanticGoVersions(test.selected, test.goroot, test.helper); err == nil {
+			t.Fatalf("semantic mismatch was accepted: %#v", test)
+		}
+	}
+}
+
+func TestHelperSemanticBuildSettingsRejectOverrides(t *testing.T) {
+	if err := validateHelperBuildSettings(nil); err != nil {
+		t.Fatalf("empty helper build settings were rejected: %v", err)
+	}
+	for _, setting := range []debug.BuildSetting{
+		{Key: "GOEXPERIMENT", Value: "boringcrypto"},
+		{Key: "DefaultGODEBUG", Value: "gotypesalias=0"},
+	} {
+		if err := validateHelperBuildSettings([]debug.BuildSetting{setting}); err == nil {
+			t.Fatalf("helper semantic build setting was accepted: %#v", setting)
+		}
+	}
+}
+
+func TestSelectedGoGOROOTVersionMismatchFailsBeforePackageLoad(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Mkdir(filepath.Join(root, "bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	goData, err := os.ReadFile(filepath.Join(runtime.GOROOT(), "bin", selectedGoName()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	selectedGo := filepath.Join(root, "bin", selectedGoName())
+	if err := os.WriteFile(selectedGo, goData, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	actual, err := normalizeOfficialGoVersion(runtime.Version(), true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := actual + ".1"
+	if strings.Count(actual, ".") == 2 {
+		parts := strings.Split(actual, ".")
+		patch, parseErr := strconv.Atoi(parts[2])
+		if parseErr != nil {
+			t.Fatal(parseErr)
+		}
+		other = parts[0] + "." + parts[1] + "." + strconv.Itoa(patch+1)
+	}
+	if err := os.WriteFile(filepath.Join(root, "VERSION"), []byte("go"+other+"\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GO2GS_SELECTED_GO", selectedGo)
+	t.Setenv("GO2GS_SELECTED_GO_SHA256", hashBytes(goData))
+	t.Setenv("GO2GS_SELECTED_GOROOT", root)
+	loads := 0
+	packageLoadTestHook = func(string) { loads++ }
+	t.Cleanup(func() { packageLoadTestHook = nil })
+	if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile()); err == nil ||
+		!strings.Contains(err.Error(), "semantic Go version mismatch") {
+		t.Fatalf("selected/GOROOT mismatch was accepted: %v", err)
+	}
+	if loads != 0 {
+		t.Fatalf("semantic mismatch reached packages.Load %d times", loads)
 	}
 }
 
@@ -2478,7 +2634,7 @@ func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing
 		t.Fatalf("valid incomplete inventory was rejected: %v", err)
 	}
 	mismatch := validIncompleteAnalysis()
-	mismatch.Toolchain.ActualVersion = "different"
+	mismatch.Toolchain.RequestedVersion = "1.1"
 	mismatch.Blockers[0].Category = "toolchain"
 	if err := writeJSON(path, mismatch, 1<<20); err != nil {
 		t.Fatal(err)
@@ -2540,6 +2696,24 @@ func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing
 		err = runValidate([]string{"--analysis", path})
 		if !errors.As(err, &exitErr) || exitErr.code != 2 {
 			t.Fatalf("missing %s compiler helper provenance should exit 2, got %v", owner, err)
+		}
+	}
+	for _, field := range []string{"helperSemanticVersion", "gorootVersion"} {
+		var provenanceRaw map[string]any
+		if err := json.Unmarshal(validData, &provenanceRaw); err != nil {
+			t.Fatal(err)
+		}
+		delete(provenanceRaw["toolchain"].(map[string]any), field)
+		missingProvenance, err := json.Marshal(provenanceRaw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, missingProvenance, 0o644); err != nil {
+			t.Fatal(err)
+		}
+		err = runValidate([]string{"--analysis", path})
+		if !errors.As(err, &exitErr) || exitErr.code != 2 {
+			t.Fatalf("missing %s should exit 2, got %v", field, err)
 		}
 	}
 }
@@ -2696,6 +2870,37 @@ func TestValidateAnalysisRejectsForgedCompletePreloadArtifact(t *testing.T) {
 	if err := validateAnalysis(analysis); err == nil ||
 		!strings.Contains(err.Error(), "loaded modules, packages, and source files") {
 		t.Fatalf("forged complete preload artifact was accepted: %v", err)
+	}
+}
+
+func TestValidateAnalysisRejectsSemanticVersionProvenanceMutation(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		mutate func(*Analysis)
+	}{
+		{"helper", func(analysis *Analysis) { analysis.Toolchain.HelperSemanticVersion = "1.1" }},
+		{"goroot", func(analysis *Analysis) { analysis.Toolchain.GOROOTVersion = "1.1" }},
+		{"prerelease", func(analysis *Analysis) {
+			analysis.Toolchain.ActualVersion = "1.0rc1"
+			analysis.Toolchain.HelperSemanticVersion = "1.0rc1"
+			analysis.Toolchain.GOROOTVersion = "1.0rc1"
+		}},
+		{"coordinated-version-forgery", func(analysis *Analysis) {
+			analysis.Toolchain.RequestedVersion = "1.1"
+			analysis.Toolchain.ActualVersion = "1.1"
+			analysis.Toolchain.HelperSemanticVersion = "1.1"
+			analysis.Toolchain.GOROOTVersion = "1.1"
+		}},
+		{"goexperiment", func(analysis *Analysis) { analysis.Profile.GOEXPERIMENT = "boringcrypto" }},
+		{"godebug", func(analysis *Analysis) { analysis.Profile.GODEBUG = map[string]string{"gotypesalias": "0"} }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			analysis := validIncompleteAnalysis()
+			test.mutate(&analysis)
+			if err := validateAnalysis(analysis); err == nil {
+				t.Fatal("semantic provenance mutation was accepted")
+			}
+		})
 	}
 }
 

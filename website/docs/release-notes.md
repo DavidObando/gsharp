@@ -116,7 +116,13 @@ Before moving an application to a different compiler version, pin the intended S
   requests. It never executes the GOROOT compiler, assembler, linker, cgo, vet,
   a C/C++ compiler, pkg-config, or helper. It independently records
   profile-selected CGo/native source inputs and emits deterministic blockers;
-  legacy profile compiler fields must be empty. Diagnostics
+  legacy profile compiler fields must be empty. The selected `cmd/go`,
+  captured GOROOT, and helper runtime/build information must name the same
+  exact official Go release before preload; all three values are recorded and
+  validated. Prerelease/development/custom identities and nonempty
+  `goExperiment`/`goDebug` settings or helper build-time
+  `GOEXPERIMENT`/`DefaultGODEBUG` overrides fail bootstrap rather than silently
+  using different in-process parser/type-checker semantics. Diagnostics
   are path-stable, initialization order is explicit, and schema validation
   rejects missing fields, count mismatches, and complete artifacts without a
   loaded main-module package/source ownership graph. The pinned

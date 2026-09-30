@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
-	"strings"
 )
 
 const maxToolExecutableBytes int64 = 256 << 20
@@ -104,7 +103,10 @@ func captureSelectedGo(path, expectedHash string) (capturedExecutable, string, e
 	if info.GoVersion == "" {
 		return capturedExecutable{}, "", errors.New("selected Go build metadata has no Go version")
 	}
-	captured.goVersion = strings.TrimPrefix(info.GoVersion, "go")
+	captured.goVersion, err = normalizeOfficialGoVersion(info.GoVersion, true)
+	if err != nil {
+		return capturedExecutable{}, "", errors.New("selected Go build metadata must name an exact official Go release")
+	}
 	return captured, hash, nil
 }
 

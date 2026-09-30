@@ -35,6 +35,8 @@ The selected Go executable's build metadata supplies its version. Its verified
 path or parent handoff supplies GOROOT, whose bounded `VERSION` file is hashed;
 bootstrap does not run `go version` or `go env`. Profile `goFlags` are
 allowlisted; tool execution and path overrides are rejected.
+`goExperiment` and `goDebug` must be empty because the in-process semantic
+engine cannot authoritatively apply selected-toolchain overrides.
 Profile, output, and toolchain bootstrap failures—including a missing `go`
 executable, unusable GOROOT, or dynamically linked Linux `cmd/go`—exit 2 and
 may produce no artifact. Exact-version or source-commit mismatches produce an
@@ -60,6 +62,13 @@ file or export request. Captured source is parsed and type-checked in-process,
 so the GOROOT compiler, assembler, linker, cgo, vet, C/C++ compilers,
 pkg-config, and helpers are never executed. Profile-v1 `cCompiler` and
 `cCompilerHelpers` fields are accepted only when empty.
+The selected `cmd/go` build-info version, bounded captured `GOROOT/VERSION`,
+and helper runtime/build-info version must normalize to the same exact
+official release before preload or package loading. All three values are
+recorded in toolchain provenance and schema validation requires equality.
+Prerelease, development, custom, missing, and contradictory identities fail
+bootstrap without an artifact, as do helpers built with nonempty
+`GOEXPERIMENT` or `DefaultGODEBUG` semantic overrides.
 Requested CGo selection is instead classified from the immutable source mirror
 with Go build constraints and file naming rules. Selected CGo files, native
 sources, assembly, and reachable headers are recorded with deterministic

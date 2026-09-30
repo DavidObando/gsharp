@@ -456,7 +456,7 @@ func validateAnalysisHeader(a Analysis) error {
 	if err := validateGOFLAGS(p.GOFLAGS); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
-	if err := validateGODEBUG(p.GODEBUG); err != nil {
+	if err := validateSemanticProfile(Profile{GOEXPERIMENT: p.GOEXPERIMENT, GODEBUG: p.GODEBUG}); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
 	if (p.ExpectedSourceCommit != "" && !validCommitID(p.ExpectedSourceCommit)) ||
@@ -468,10 +468,31 @@ func validateAnalysisHeader(a Analysis) error {
 		return errors.New("analysis profile has inconsistent module or workspace mode")
 	}
 	t := a.Toolchain
-	if t.RequestedVersion == "" || t.ActualVersion == "" || !validSHA256(t.ExecutableSHA256) ||
+	if t.RequestedVersion == "" || t.ActualVersion == "" || t.HelperSemanticVersion == "" ||
+		t.GOROOTVersion == "" || !validSHA256(t.ExecutableSHA256) ||
 		t.ExecutableName == "" || t.GOROOTIdentity == "" || !validSHA256(t.GOROOTVersionSHA256) ||
 		t.GOROOTSource == "" || t.AutoDownload || t.CCompilerHelpers == nil {
 		return errors.New("analysis toolchain provenance is missing mandatory or fail-closed fields")
+	}
+	for name, version := range map[string]string{
+		"requested": t.RequestedVersion,
+		"actual":    t.ActualVersion,
+		"helper":    t.HelperSemanticVersion,
+		"goroot":    t.GOROOTVersion,
+	} {
+		normalized, err := normalizeOfficialGoVersion(version, false)
+		if err != nil || normalized != version {
+			return fmt.Errorf("analysis %s Go version is not an exact official release", name)
+		}
+	}
+	if t.ActualVersion != t.HelperSemanticVersion || t.ActualVersion != t.GOROOTVersion {
+		return errors.New("analysis selected, GOROOT, and helper semantic Go versions must exactly agree")
+	}
+	expectedGOROOTIdentity := stableID("goroot",
+		t.ActualVersion+"\x00"+t.GOROOTVersion+"\x00"+t.HelperSemanticVersion+"\x00"+
+			t.ExecutableSHA256+"\x00"+t.GOROOTVersionSHA256)
+	if t.GOROOTIdentity != expectedGOROOTIdentity {
+		return errors.New("analysis GOROOT identity does not match semantic versions and hashes")
 	}
 	if t.RequestedVersion != t.ActualVersion {
 		if a.InventoryComplete || !slices.ContainsFunc(a.Blockers, func(blocker BlockerRecord) bool {

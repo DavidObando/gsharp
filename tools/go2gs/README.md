@@ -60,8 +60,9 @@ than inherited wholesale. The selected `go` executable's build metadata supplies
 handoff, and the bounded `VERSION` file is hashed. Bootstrap never runs
 `go version` or `go env`. `goFlags` accepts only `-tags`, `-trimpath`, and
 `-buildvcs=false`; execution and path override flags such as `-toolexec`,
-`-overlay`, and `-modfile` are rejected. The only accepted `goDebug` key is
-`gotypesalias`, with value `0` or `1`.
+`-overlay`, and `-modfile` are rejected. `goExperiment` and `goDebug` must be
+empty because the in-process parser and type checker cannot authoritatively
+apply selected-toolchain semantic overrides.
 Before loading, source inputs and authorized local replacements are copied
 with bounded, no-follow reads into a private mirror. The loader sees only
 those captured bytes; emitted manifest hashes remain those of the originals.
@@ -96,7 +97,14 @@ compiled-file or export requests. It parses the captured source and runs the
 standard-library Go type checker in-process, so it never executes the GOROOT
 compiler, assembler, linker, cgo, vet, a C/C++ compiler, pkg-config, or helpers.
 `cCompiler` and `cCompilerHelpers` remain profile-v1 compatibility fields only:
-they must be empty. When `cgoEnabled` requests CGo selection, go2gs independently applies Go
+they must be empty. Before preload or package loading, the selected `cmd/go`
+build-info version, bounded captured `GOROOT/VERSION`, and helper
+runtime/build-info version must name the same exact official Go release. The
+artifact records all three values; prerelease, development, custom, missing,
+or contradictory identities fail bootstrap without an artifact. Helpers built
+with nonempty `GOEXPERIMENT` or `DefaultGODEBUG` semantic overrides are also
+rejected. A requested version mismatch remains an inventory blocker only after
+that agreement succeeds. When `cgoEnabled` requests CGo selection, go2gs independently applies Go
 file/build-tag selection to the immutable source mirror, records selected CGo,
 native, assembly, and reachable header inputs, and emits deterministic
 `cgo`/`native` blockers. Active `#cgo pkg-config:` directives are parsed from
