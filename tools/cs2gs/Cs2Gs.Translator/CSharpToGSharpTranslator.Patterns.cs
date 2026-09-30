@@ -3150,13 +3150,22 @@ public sealed partial class CSharpToGSharpTranslator
                 return null;
             }
 
+            return this.GetMappedArrayElement(
+                array,
+                expression.GetLocation());
+        }
+
+        private GTypeReference GetMappedArrayElement(
+            IArrayTypeSymbol array,
+            Location location)
+        {
             if (!this.state.ManagedReferenceArrayNullable
                 .MappedArrayElementByElementType.TryGetValue(
                     array.ElementType,
                     out var mappedElement))
             {
                 mappedElement =
-                    (this.typeMapper.Map(array, this.context, expression.GetLocation())
+                    (this.typeMapper.Map(array, this.context, location)
                         as ArrayTypeReference)?.ElementType;
                 this.state.ManagedReferenceArrayNullable.MappedArrayElementByElementType.Add(
                     array.ElementType,

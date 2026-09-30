@@ -6155,6 +6155,11 @@ public sealed partial class CSharpToGSharpTranslator
                     value,
                     out destinationType))
             {
+                destinationType = this.GetEmittedArrayDestinationType(
+                    value,
+                    sink: null,
+                    destinationType,
+                    projectedType);
                 return this.ProjectionTypeFitsResultDestination(
                     projectedType,
                     destinationType);
@@ -6179,7 +6184,13 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
                 }
 
-                destinationType = this.GetArgumentParameter(argument)?.Type;
+                IParameterSymbol parameter = this.GetArgumentParameter(argument);
+                destinationType = parameter?.Type;
+                destinationType = this.GetEmittedArrayDestinationType(
+                    value,
+                    parameter,
+                    destinationType,
+                    projectedType);
                 return this.ProjectionTypeFitsResultDestination(
                     projectedType,
                     destinationType);
@@ -6226,18 +6237,60 @@ public sealed partial class CSharpToGSharpTranslator
                     IMethodSymbol method => method.ReturnType,
                     _ => null,
                 };
-            if (sink is ILocalSymbol explicitDestinationLocal)
-            {
-                destinationType = this.GetProjectedArrayLocalDestinationType(
-                    value,
-                    explicitDestinationLocal,
-                    destinationType,
-                    projectedType);
-            }
+            destinationType = this.GetEmittedArrayDestinationType(
+                value,
+                sink,
+                destinationType,
+                projectedType);
 
             return this.ProjectionTypeFitsResultDestination(
                 projectedType,
                 destinationType);
+        }
+
+        private ITypeSymbol GetEmittedArrayDestinationType(
+            ExpressionSyntax value,
+            ISymbol sink,
+            ITypeSymbol destinationType,
+            ITypeSymbol projectedType)
+        {
+            if (sink is ILocalSymbol local)
+            {
+                return this.GetProjectedArrayLocalDestinationType(
+                    value,
+                    local,
+                    destinationType,
+                    projectedType);
+            }
+
+            if (destinationType is not IArrayTypeSymbol destinationArray
+                || projectedType is not IArrayTypeSymbol projectedArray
+                || destinationArray.Rank != projectedArray.Rank)
+            {
+                return destinationType;
+            }
+
+            GTypeReference mappedDestinationElement = this.GetMappedArrayElement(
+                destinationArray,
+                value.GetLocation());
+            GTypeReference mappedProjectedElement = this.GetMappedArrayElement(
+                projectedArray,
+                value.GetLocation());
+
+            // Roslyn cannot express intrinsic managed-reference array widening,
+            // so compare the canonical element types cs2gs will actually emit.
+            if (mappedDestinationElement == null
+                || mappedProjectedElement == null
+                || !string.Equals(
+                    GSharpPrinter.RenderTypeReference(mappedDestinationElement),
+                    GSharpPrinter.RenderTypeReference(mappedProjectedElement),
+                    StringComparison.Ordinal))
+            {
+                return destinationType;
+            }
+
+            return projectedArray.WithNullableAnnotation(
+                destinationArray.NullableAnnotation);
         }
 
         private ITypeSymbol GetProjectedArrayLocalDestinationType(

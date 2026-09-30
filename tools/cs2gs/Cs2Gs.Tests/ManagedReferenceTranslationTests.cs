@@ -5458,6 +5458,123 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void StaticFieldInitializerUsesEmittedArrayElementProjection()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayStaticFieldInitializer;
+            public class Probe {
+                private static ManagedRef<int>[] Values =
+                    Produce<ManagedRef<int>>();
+
+                private static T[] Produce<T>() => new T[1];
+
+                public static int Run() {
+                    return Values[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayStaticFieldInitializer.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Produce[managed[int32]?]()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void StaticPropertyInitializerUsesEmittedArrayElementProjection()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayStaticPropertyInitializer;
+            public class Probe {
+                private static ManagedRef<int>[] Values { get; } =
+                    Produce<ManagedRef<int>>();
+
+                private static T[] Produce<T>() => new T[1];
+
+                public static int Run() {
+                    return Values[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayStaticPropertyInitializer.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("Produce[managed[int32]?]()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void NestedGenericFieldReassignmentRemainsFixedStorage()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayNestedGenericFieldReassignment;
+            public sealed class Holder<T> {
+            }
+            public class Probe {
+                private static Holder<ManagedRef<int>>[] Values =
+                    new Holder<ManagedRef<int>>[0];
+
+                private static T[] Produce<T>() => new T[1];
+
+                public static int Run() {
+                    Values = Produce<Holder<ManagedRef<int>>>();
+                    return 42;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayNestedGenericFieldReassignment.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains("fixed destination storage", StringComparison.Ordinal));
+        Assert.DoesNotContain(
+            "Produce[Holder[managed[int32]?]]()",
+            text,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RecursivePatternDesignationRetainsProjectedGenericType()
     {
         const string source = """
