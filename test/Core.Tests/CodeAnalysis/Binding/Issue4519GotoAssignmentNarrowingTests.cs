@@ -4628,6 +4628,43 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_SiblingInterfacePropertySlotsDoNotAlias()
+    {
+        var result = Evaluate("""
+            interface Left {
+                prop Value string { get; }
+            }
+            interface Right {
+                prop Value string { get; }
+            }
+            class Dog : Left, Right {
+                private prop (Left) Value string -> "left"
+                prop Value string -> "right"
+            }
+            class Cat : Left {
+                prop Value string -> "cat"
+            }
+
+            func Run() string {
+                var x Left = Dog{}
+                if x is Right {
+                Again:
+                    let value = x.Value
+                    x = Cat{}
+                    goto Again
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Value", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_ImportedPublicMethodDoesNotAliasExplicitInterfaceMethod()
     {
         var result = EmittedOracle.Evaluate(

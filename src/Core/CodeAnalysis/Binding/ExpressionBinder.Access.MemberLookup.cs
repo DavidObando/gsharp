@@ -443,7 +443,7 @@ internal sealed partial class ExpressionBinder
         var selectedOwner = selected.ContainingType ?? selectedAccessor?.ContainingType;
         if (selectedOwner is not StructSymbol implementationType)
         {
-            return true;
+            return false;
         }
 
         return !implementationType.Properties.Any(property =>
@@ -591,7 +591,7 @@ internal sealed partial class ExpressionBinder
 
         if (selected.ContainingType is not StructSymbol implementationType)
         {
-            return true;
+            return false;
         }
 
         return !implementationType.GetHierarchy().SelectMany(type => type.Methods).Any(method =>
