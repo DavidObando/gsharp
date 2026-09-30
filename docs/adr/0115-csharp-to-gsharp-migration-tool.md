@@ -652,12 +652,12 @@ empirically (gsc **0.2.137+31ced6cfb7**) before adoption.
   `unsafe func`). A C# `unsafe { }` block maps to a G# `unsafe { }` block. This
   mapping is required for `fixed`, pointer-target `stackalloc`, and pointer code
   to be legal.
-- **Tuple-deconstruction assignment `(a, b) = (x, y)` → element-wise
-  assignment.** G# has no tuple-assignment form, so an assignment whose left side
-  is a tuple of existing variables is lowered to element-wise assignments through
-  fresh temporaries (`var __decon0 = x; var __decon1 = y; a = __decon0; b =
-  __decon1`), preserving C#'s evaluate-all-then-assign order (and aliasing such as
-  `(a, b) = (b, a)`).
+- **Tuple-deconstruction assignment `(a, b) = (x, y)` → native
+  multi-assignment.** Flat tuple assignments use G#'s native `a, b = x, y`,
+  whose evaluate-all-then-assign ordering preserves aliasing such as
+  `(a, b) = (b, a)`. Nested targets recurse through flat tuple bindings; the
+  unavoidable structural carriers derive readable, collision-safe names from
+  their source leaves rather than exposing `__deconN` identifiers.
 - **`yield break` → iterator-exit jump.** G# has no `yield break`; cs2gs jumps
   to a synthesized label at the end of the nearest iterator body so termination
   is independent of surrounding loop/switch topology.

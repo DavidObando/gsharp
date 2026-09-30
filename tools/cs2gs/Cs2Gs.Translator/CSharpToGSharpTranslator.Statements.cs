@@ -2365,6 +2365,14 @@ public sealed partial class CSharpToGSharpTranslator
                 // statement, and nothing stops chaining several of them. A
                 // storage target inside a fallback shape is captured before the
                 // RHS by `LowerTupleAssignment`, preserving issue #2234 order.
+                if (assignment.Left is DeclarationExpressionSyntax
+                    {
+                        Designation: ParenthesizedVariableDesignationSyntax nestedDeclaration,
+                    })
+                {
+                    return this.LowerTupleDeclaration(nestedDeclaration, assignment.Right);
+                }
+
                 if (assignment.Left is TupleExpressionSyntax leftTuple)
                 {
                     return this.LowerTupleAssignment(leftTuple, assignment.Right);

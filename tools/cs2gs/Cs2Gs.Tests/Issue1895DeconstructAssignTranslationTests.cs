@@ -37,9 +37,9 @@ namespace Cs2Gs.Tests;
 /// Spilling the RHS as a single statement (rather than one assignment per
 /// element) also preserves C#'s evaluate-then-assign-all semantics, so an
 /// aliasing swap (<c>(a, b) = (b, a)</c>) is lowered correctly. A NESTED
-/// target (<c>((a, b), c) = ...</c>) recurses: the nested arm gets its own
-/// temp, which a SECOND <c>let (...) = temp</c> statement then further
-/// deconstructs (issue #1974).
+/// target (<c>((a, b), c) = ...</c>) recurses: the nested arm gets a
+/// source-derived carrier, which a SECOND <c>let (...) = carrier</c>
+/// statement then further deconstructs (issues #1974/#4300).
 /// </summary>
 public class Issue1895DeconstructAssignTranslationTests
 {
@@ -219,11 +219,12 @@ namespace Corpus.Issue1895
 }
 ");
 
-        Assert.Contains("let (__decon0, __decon1) = ((4, 5), 6)", rendered, StringComparison.Ordinal);
-        Assert.Contains("let (__decon2, __decon3) = __decon0", rendered, StringComparison.Ordinal);
-        Assert.Contains("a = __decon2", rendered, StringComparison.Ordinal);
-        Assert.Contains("b = __decon3", rendered, StringComparison.Ordinal);
-        Assert.Contains("c = __decon1", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (aTuple, cValue) = ((4, 5), 6)", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (aValue, bValue) = aTuple", rendered, StringComparison.Ordinal);
+        Assert.Contains("a = aValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("b = bValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("c = cValue", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }
 
@@ -245,9 +246,11 @@ namespace Corpus.Issue1895
 }
 ");
 
-        Assert.Contains("let x = __decon", rendered, StringComparison.Ordinal);
-        Assert.Contains("let y = __decon", rendered, StringComparison.Ordinal);
-        Assert.DoesNotContain("let _ = __decon", rendered, StringComparison.Ordinal);
+        Assert.Contains("existingValue", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (x, y) =", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("let x =", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("let y =", rendered, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
 
         EmittedOracleResult result = EmittedOracle.Evaluate(
@@ -288,7 +291,7 @@ namespace Corpus.Issue1895
     {
         // `(x, (_, _)) = e` (issue #2099, item 3): the nested arm is entirely
         // discards, so it must not allocate a real temp for itself or emit a
-        // pointless inner `let (_, _) = __deconN` binding.
+        // pointless inner discard-only binding.
         string rendered = Render(@"
 namespace Corpus.Issue1895
 {
@@ -304,8 +307,8 @@ namespace Corpus.Issue1895
 }
 ");
 
-        Assert.Contains("let (__decon0, _) = (2, (3, 4))", rendered, StringComparison.Ordinal);
-        Assert.Contains("x = __decon0", rendered, StringComparison.Ordinal);
+        Assert.Contains("let (xValue, _) = (2, (3, 4))", rendered, StringComparison.Ordinal);
+        Assert.Contains("x = xValue", rendered, StringComparison.Ordinal);
         Assert.DoesNotContain("let (_, _)", rendered, StringComparison.Ordinal);
         AssertRoundTripParses(rendered);
     }

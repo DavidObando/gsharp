@@ -13,7 +13,7 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Issue #3501 (__decon retirement): a single-variable declaration element of
 /// a C# deconstruction assignment binds its REAL name directly in the native
-/// G# `let (…)` — no `__deconN` temp plus re-declaration — when the local is
+/// G# `let (…)` — no structural temp plus re-declaration — when the local is
 /// never reassigned and its declared type matches the deconstructed element.
 /// </summary>
 public class Issue3501DirectDeconstructionNamesTests
@@ -67,7 +67,10 @@ public class Issue3501DirectDeconstructionNamesTests
             }
             """);
 
-        Assert.Contains("__decon", printed, StringComparison.Ordinal);
+        Assert.Contains("let (totalValue, _) = this.RunDotnet", printed, StringComparison.Ordinal);
+        Assert.Contains("let total", printed, StringComparison.Ordinal);
+        Assert.Contains("totalValue", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
 

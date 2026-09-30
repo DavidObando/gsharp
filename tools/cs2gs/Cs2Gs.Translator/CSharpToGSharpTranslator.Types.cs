@@ -1475,7 +1475,11 @@ public sealed partial class CSharpToGSharpTranslator
                     return new ForTupleInStatement(names, iterable, body);
                 }
 
-                string pair = $"__decon{this.state.DeconCounter++}";
+                string firstName = names.FirstOrDefault(name => name != "_");
+                string preferredName = firstName is not null
+                    ? firstName + "Item"
+                    : "deconstructedItem";
+                string pair = this.AllocateDeconstructionTempName(node.Variable, preferredName);
                 var statements = new List<GStatement>(body.Statements.Count + 1)
                 {
                     new TupleDeconstructionStatement(

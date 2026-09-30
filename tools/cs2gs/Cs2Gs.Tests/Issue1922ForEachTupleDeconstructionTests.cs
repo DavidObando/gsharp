@@ -155,8 +155,9 @@ namespace Demo
     }
 }");
 
-        Assert.Contains("await for __decon", printed);
-        Assert.Contains("let (name, score) = __decon", printed);
+        Assert.Contains("await for nameItem", printed);
+        Assert.Contains("let (name, score) = nameItem", printed);
+        Assert.DoesNotContain("__decon", printed);
     }
 
     private static string TranslateUnit(string source)
