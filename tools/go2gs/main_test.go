@@ -2573,8 +2573,13 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 		analysis.Blockers = blockers
 		return analysis
 	}
-	complete := withBlockers(validIncompleteAnalysis())
-	complete.InventoryComplete = true
+	complete, loaded, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !loaded {
+		t.Fatalf("build complete validation fixture: loaded=%v err=%v", loaded, err)
+	}
+	complete = withBlockers(complete)
+	complete.Profile.ExpectedSourceCommit = expected
+	complete.Profile.ActualSourceCommit = expected
 	if err := validateAnalysis(complete); err != nil {
 		t.Fatalf("matching complete provenance was rejected: %v", err)
 	}
@@ -2670,6 +2675,102 @@ func TestValidateAnalysisSourceCommitBlockerConsistency(t *testing.T) {
 	missing.Profile.ActualSourceCommit = ""
 	if err := validateAnalysis(missing); err != nil {
 		t.Fatalf("consistent missing actual source commit was rejected: %v", err)
+	}
+}
+
+func TestValidateAnalysisRejectsForgedCompletePreloadArtifact(t *testing.T) {
+	profile := testProfile()
+	profile.RequestedGoVersion = "1.26.6"
+	if profile.RequestedGoVersion == strings.TrimPrefix(runtime.Version(), "go") {
+		profile.RequestedGoVersion = "1.26.7"
+	}
+	analysis, complete, err := analyzePreload(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile)
+	if err != nil || complete || !hasBlockerCategory(analysis, "toolchain") {
+		t.Fatalf("build preload artifact: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	analysis.Toolchain.RequestedVersion = analysis.Toolchain.ActualVersion
+	analysis.RecordCounts.Total -= len(analysis.Blockers)
+	analysis.RecordCounts.Blockers = 0
+	analysis.Blockers = []BlockerRecord{}
+	analysis.InventoryComplete = true
+	if err := validateAnalysis(analysis); err == nil ||
+		!strings.Contains(err.Error(), "loaded modules, packages, and source files") {
+		t.Fatalf("forged complete preload artifact was accepted: %v", err)
+	}
+}
+
+func TestValidateAnalysisRequiresCompleteLoadedOwnershipGraph(t *testing.T) {
+	analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("build complete artifact: complete=%v err=%v", complete, err)
+	}
+	tests := []struct {
+		name   string
+		mutate func(*Analysis)
+		want   string
+	}{
+		{"modules", func(value *Analysis) {
+			value.Modules = []ModuleRecord{}
+			value.RecordCounts.Total -= value.RecordCounts.Modules
+			value.RecordCounts.Modules = 0
+		}, ""},
+		{"packages", func(value *Analysis) {
+			value.Packages = []PackageRecord{}
+			value.RecordCounts.Total -= value.RecordCounts.Packages
+			value.RecordCounts.Packages = 0
+		}, ""},
+		{"files", func(value *Analysis) {
+			value.Files = []FileRecord{}
+			value.RecordCounts.Total -= value.RecordCounts.Files
+			value.RecordCounts.Files = 0
+		}, ""},
+		{"main-module", func(value *Analysis) {
+			value.Modules = append([]ModuleRecord{}, value.Modules...)
+			for index := range value.Modules {
+				value.Modules[index].Main = false
+			}
+		}, "main module"},
+		{"compiled-ownership", func(value *Analysis) {
+			mainModules := map[string]bool{}
+			for _, module := range value.Modules {
+				if module.Main {
+					mainModules[module.ID] = true
+				}
+			}
+			value.Packages = append([]PackageRecord{}, value.Packages...)
+			for index := range value.Packages {
+				if mainModules[value.Packages[index].ModuleID] {
+					value.Packages[index].CompiledFileIDs = []string{}
+				}
+			}
+		}, "owned source and compiled files"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := analysis
+			test.mutate(&mutated)
+			if err := validateAnalysis(mutated); err == nil ||
+				(test.want != "" && !strings.Contains(err.Error(), test.want)) {
+				t.Fatalf("invalid complete artifact was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestValidateAnalysisAllowsMinimalLoadedEmptyPackage(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/empty\n\ngo 1.27\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "empty.go"), []byte("package empty\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("minimal empty package did not load: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("minimal empty package artifact was rejected: %v", err)
 	}
 }
 

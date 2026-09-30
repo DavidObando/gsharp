@@ -91,10 +91,12 @@ worker's immutable object, not the original selected path or parent bootstrap
 pathname. Scripts, wrappers, ambient sibling tools, and pathname replacement
 are rejected or unreachable.
 
-M0 always invokes `go/packages` with `CGO_ENABLED=0`. It never executes a C/C++
-compiler, linker, assembler, cgo, pkg-config, or helper. `cCompiler` and
-`cCompilerHelpers` remain profile-v1 compatibility fields only: they must be
-empty. When `cgoEnabled` requests CGo selection, go2gs independently applies Go
+M0 uses `go/packages` only for metadata with `CGO_ENABLED=0` and without
+compiled-file or export requests. It parses the captured source and runs the
+standard-library Go type checker in-process, so it never executes the GOROOT
+compiler, assembler, linker, cgo, vet, a C/C++ compiler, pkg-config, or helpers.
+`cCompiler` and `cCompilerHelpers` remain profile-v1 compatibility fields only:
+they must be empty. When `cgoEnabled` requests CGo selection, go2gs independently applies Go
 file/build-tag selection to the immutable source mirror, records selected CGo,
 native, assembly, and reachable header inputs, and emits deterministic
 `cgo`/`native` blockers. Active `#cgo pkg-config:` directives are parsed from
@@ -103,11 +105,12 @@ inactive directives do not block.
 Source commit provenance is read directly from bounded `.git` metadata; the
 analyzer never discovers or executes an ambient `git` command.
 
-Package records preserve both the exact compiled-file order and the execution
+Package records preserve both the exact typed-source order and the execution
 order of variable initializers followed by `init` functions. Diagnostic
 positions use portable source/module/GOROOT identities. Schema validation
 requires the complete v1 handshake, mandatory fields and collections, exact
-record counts, and valid references.
+record counts, valid references, and loaded main-module package/file ownership
+before `inventoryComplete` may be true.
 
 ## Validate an inventory
 

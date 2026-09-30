@@ -11,7 +11,10 @@ import (
 	"go/ast"
 	"go/build"
 	"go/build/constraint"
+	"go/parser"
+	"go/scanner"
 	"go/token"
+	"go/types"
 	"io"
 	"os"
 	"os/exec"
@@ -223,11 +226,9 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if preloadOnly {
 		return Analysis{}, false, errors.New(unsupportedExecutionBinding)
 	}
-	mode := packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
+	mode := packages.NeedName | packages.NeedFiles |
 		packages.NeedEmbedFiles | packages.NeedEmbedPatterns | packages.NeedImports | packages.NeedDeps |
-		packages.NeedTypes | packages.NeedSyntax |
-		packages.NeedTypesInfo | packages.NeedTypesSizes | packages.NeedModule |
-		packages.NeedForTest
+		packages.NeedModule | packages.NeedForTest
 	buildFlags := []string{}
 	if len(profile.BuildTags) > 0 {
 		buildFlags = append(buildFlags, "-tags="+strings.Join(profile.BuildTags, ","))
@@ -248,14 +249,10 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if afterSnapshot != nil {
 		afterSnapshot()
 	}
-	selectedConfig := *config
-	selectedConfig.Mode = packages.NeedName | packages.NeedFiles | packages.NeedCompiledGoFiles |
-		packages.NeedEmbedFiles | packages.NeedEmbedPatterns | packages.NeedImports |
-		packages.NeedDeps | packages.NeedModule | packages.NeedForTest
 	if packageLoadTestHook != nil {
 		packageLoadTestHook("preflight-before")
 	}
-	selectedPreflight, _ := packages.Load(&selectedConfig, profile.EntryPatterns...)
+	selectedPreflight, _ := packages.Load(config, profile.EntryPatterns...)
 	if packageLoadTestHook != nil {
 		packageLoadTestHook("preflight-after")
 	}
@@ -264,16 +261,17 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	config.Overlay = copyBytesMap(cgoOnlyOverlay)
+	metadataConfig := *config
+	metadataConfig.Overlay = copyBytesMap(cgoOnlyOverlay)
 	for path, data := range sourceSnapshot.overlay {
-		config.Overlay[path] = data
+		metadataConfig.Overlay[path] = data
 	}
 	builder.sourceSnapshot = sourceSnapshot.data
 	builder.snapshotPortable = sourceSnapshot.portable
 	if packageLoadTestHook != nil {
 		packageLoadTestHook("typed-before")
 	}
-	loaded, loadErr := packages.Load(config, profile.EntryPatterns...)
+	loaded, loadErr := packages.Load(&metadataConfig, profile.EntryPatterns...)
 	if packageLoadTestHook != nil {
 		packageLoadTestHook("typed-after")
 	}
@@ -294,6 +292,15 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	}
 
 	all := collectPackages(loaded)
+	typedSources, externalTypedSources, typedSourceErr := captureTypedSources(all, sourceSnapshot.data, metadataConfig.Overlay, profile.Limits.MaxLocalHashBytes)
+	if typedSourceErr != nil {
+		builder.block("loader", sanitizeMessage(typedSourceErr.Error(), mirror.root, profile.Limits.MaxStringBytes, builder.diagnosticRedactions...), nil, nil)
+	} else {
+		typeCheckPackages(all, typedSources, profile)
+	}
+	if !verifyTypedSources(externalTypedSources) {
+		builder.block("input-drift", "Go toolchain or dependency source changed while type checking", nil, nil)
+	}
 	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, mirror.root)
 	for key := range verifyOriginalPackageInputs(mirror, sourceSnapshot, profile) {
 		builder.inputDrift[key] = true
@@ -1307,7 +1314,6 @@ func packageInputKey(pkg *packages.Package) string {
 
 func packageInputPaths(pkg *packages.Package, sourceRoot string) []string {
 	files := append([]string{}, pkg.GoFiles...)
-	files = append(files, pkg.CompiledGoFiles...)
 	files = append(files, pkg.IgnoredFiles...)
 	files = append(files, pkg.OtherFiles...)
 	files = append(files, pkg.EmbedFiles...)
@@ -1378,9 +1384,6 @@ func packageInputRoles(pkg *packages.Package) map[string]string {
 	roles := map[string]string{}
 	for _, path := range pkg.GoFiles {
 		roles[path] = "active"
-	}
-	for _, path := range pkg.CompiledGoFiles {
-		roles[path] = "compiled"
 	}
 	for _, path := range pkg.IgnoredFiles {
 		roles[path] = "ignored"
@@ -1522,8 +1525,168 @@ func collectPackages(roots []*packages.Package) []*packages.Package {
 	return result
 }
 
+func captureTypedSources(loaded []*packages.Package, captured, overlay map[string][]byte, limit int64) (map[string][]byte, map[string][]byte, error) {
+	paths := map[string]bool{}
+	for _, pkg := range loaded {
+		for _, path := range pkg.GoFiles {
+			paths[path] = true
+		}
+	}
+	sorted := make([]string, 0, len(paths))
+	for path := range paths {
+		sorted = append(sorted, path)
+	}
+	sort.Strings(sorted)
+	all := make(map[string][]byte, len(sorted))
+	external := map[string][]byte{}
+	var externalBytes int64
+	for _, path := range sorted {
+		if data, ok := overlay[path]; ok {
+			all[path] = data
+			continue
+		}
+		if data, ok := captured[path]; ok {
+			all[path] = data
+			continue
+		}
+		remaining := limit - externalBytes
+		if remaining < 0 {
+			return nil, nil, fmt.Errorf("typed dependency source exceeds limit %d", limit)
+		}
+		data, err := readBoundedRegularFile(path, remaining)
+		if err != nil {
+			return nil, nil, fmt.Errorf("capture typed dependency source: %w", err)
+		}
+		externalBytes += int64(len(data))
+		all[path] = data
+		external[path] = data
+	}
+	return all, external, nil
+}
+
+func verifyTypedSources(captured map[string][]byte) bool {
+	for path, expected := range captured {
+		actual, err := readBoundedRegularFile(path, int64(len(expected)))
+		if err != nil || !bytes.Equal(actual, expected) {
+			return false
+		}
+	}
+	return true
+}
+
+func typeCheckPackages(loaded []*packages.Package, sources map[string][]byte, profile Profile) {
+	state := map[*packages.Package]uint8{}
+	var check func(*packages.Package)
+	check = func(pkg *packages.Package) {
+		if pkg == nil || state[pkg] == 2 {
+			return
+		}
+		if state[pkg] == 1 {
+			pkg.Errors = append(pkg.Errors, packages.Error{Kind: packages.TypeError, Msg: "import cycle while type checking captured source"})
+			pkg.IllTyped = true
+			return
+		}
+		state[pkg] = 1
+		importPaths := make([]string, 0, len(pkg.Imports))
+		for path := range pkg.Imports {
+			importPaths = append(importPaths, path)
+		}
+		sort.Strings(importPaths)
+		for _, path := range importPaths {
+			check(pkg.Imports[path])
+		}
+
+		fset := token.NewFileSet()
+		syntax := make([]*ast.File, 0, len(pkg.GoFiles))
+		for _, path := range pkg.GoFiles {
+			data, ok := sources[path]
+			if !ok {
+				pkg.Errors = append(pkg.Errors, packages.Error{
+					Kind: packages.ParseError,
+					Pos:  path,
+					Msg:  "captured source is unavailable for type checking",
+				})
+				continue
+			}
+			file, err := parser.ParseFile(fset, path, data, parser.ParseComments|parser.SkipObjectResolution|parser.AllErrors)
+			if err != nil {
+				position := path
+				if list, ok := err.(scanner.ErrorList); ok && len(list) != 0 {
+					position = list[0].Pos.String()
+				}
+				pkg.Errors = append(pkg.Errors, packages.Error{Kind: packages.ParseError, Pos: position, Msg: err.Error()})
+			}
+			if file != nil {
+				syntax = append(syntax, file)
+			}
+		}
+		info := &types.Info{
+			Types:      map[ast.Expr]types.TypeAndValue{},
+			Defs:       map[*ast.Ident]types.Object{},
+			Uses:       map[*ast.Ident]types.Object{},
+			Implicits:  map[ast.Node]types.Object{},
+			Selections: map[*ast.SelectorExpr]*types.Selection{},
+			Scopes:     map[ast.Node]*types.Scope{},
+			Instances:  map[*ast.Ident]types.Instance{},
+		}
+		sizes := types.SizesFor("gc", profile.GOARCH)
+		if sizes == nil {
+			pkg.Errors = append(pkg.Errors, packages.Error{Kind: packages.TypeError, Msg: "unsupported target type sizes for " + profile.GOARCH})
+		}
+		config := types.Config{
+			GoVersion: packageGoVersion(pkg, profile.RequestedGoVersion),
+			Importer:  capturedPackageImporter{imports: pkg.Imports},
+			Sizes:     sizes,
+			Error: func(err error) {
+				entry := packages.Error{Kind: packages.TypeError, Msg: err.Error()}
+				if typed, ok := err.(types.Error); ok {
+					entry.Pos = typed.Fset.Position(typed.Pos).String()
+					entry.Msg = typed.Msg
+				}
+				pkg.Errors = append(pkg.Errors, entry)
+			},
+		}
+		checked, _ := config.Check(pkg.PkgPath, fset, syntax, info)
+		pkg.Fset = fset
+		pkg.Syntax = syntax
+		pkg.Types = checked
+		pkg.TypesInfo = info
+		pkg.TypesSizes = sizes
+		pkg.IllTyped = len(pkg.Errors) != 0
+		state[pkg] = 2
+	}
+	for _, pkg := range loaded {
+		check(pkg)
+	}
+}
+
+type capturedPackageImporter struct {
+	imports map[string]*packages.Package
+}
+
+func (importer capturedPackageImporter) Import(path string) (*types.Package, error) {
+	if path == "unsafe" {
+		return types.Unsafe, nil
+	}
+	if pkg := importer.imports[path]; pkg != nil && pkg.Types != nil {
+		return pkg.Types, nil
+	}
+	return nil, fmt.Errorf("captured import %q is unavailable", path)
+}
+
+func packageGoVersion(pkg *packages.Package, fallback string) string {
+	version := moduleGoVersion(pkg.Module)
+	if version == "" {
+		version = fallback
+	}
+	if version != "" && !strings.HasPrefix(version, "go") {
+		version = "go" + version
+	}
+	return version
+}
+
 func packageCanonical(pkg *packages.Package) string {
-	files := append([]string{}, pkg.CompiledGoFiles...)
+	files := append([]string{}, pkg.GoFiles...)
 	for i := range files {
 		files[i] = filepath.Base(files[i])
 	}
