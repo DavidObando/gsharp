@@ -6019,11 +6019,7 @@ public sealed partial class CSharpToGSharpTranslator
                 return true;
             }
 
-            ISymbol sink = this.ResolveValueSink(creation);
-            return !HasFixedElementContext(creation)
-                && (sink == null
-                || (sink is ILocalSymbol local
-                    && IsImplicitlyTypedLocal(local)));
+            return !HasFixedElementContext(creation);
         }
 
         private bool IsValueAssignedToProjectableReceiver(
@@ -6130,7 +6126,7 @@ public sealed partial class CSharpToGSharpTranslator
                     value,
                     out destinationType))
             {
-                return ProjectionTypeFitsDestination(
+                return this.ProjectionTypeFitsResultDestination(
                     projectedType,
                     destinationType);
             }
@@ -6155,14 +6151,18 @@ public sealed partial class CSharpToGSharpTranslator
                 }
 
                 destinationType = this.GetArgumentParameter(argument)?.Type;
-                return ProjectionTypeFitsDestination(projectedType, destinationType);
+                return this.ProjectionTypeFitsResultDestination(
+                    projectedType,
+                    destinationType);
             }
 
             ISymbol sink = this.ResolveValueSink(value);
             destinationType = this.GetFixedElementDestinationType(value, sink);
             if (destinationType != null)
             {
-                return ProjectionTypeFitsDestination(projectedType, destinationType);
+                return this.ProjectionTypeFitsResultDestination(
+                    projectedType,
+                    destinationType);
             }
 
             if (sink is ILocalSymbol local
@@ -6197,8 +6197,18 @@ public sealed partial class CSharpToGSharpTranslator
                     IMethodSymbol method => method.ReturnType,
                     _ => null,
                 };
-            return ProjectionTypeFitsDestination(projectedType, destinationType);
+            return this.ProjectionTypeFitsResultDestination(
+                projectedType,
+                destinationType);
         }
+
+        private bool ProjectionTypeFitsResultDestination(
+            ITypeSymbol projectedType,
+            ITypeSymbol destinationType) =>
+            ProjectionTypeFitsDestination(projectedType, destinationType)
+            || this.ProjectionTypeFitsCompositeDestination(
+                projectedType,
+                destinationType);
 
         private static bool IsConditionalOrSwitchArm(ExpressionSyntax value)
         {
