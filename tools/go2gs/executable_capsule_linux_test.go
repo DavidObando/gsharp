@@ -9,13 +9,70 @@ import (
 	"errors"
 	"net"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"syscall"
 	"testing"
 	"time"
+
+	"golang.org/x/sys/unix"
 )
+
+func TestImmutableExecutableCapsuleFailsClosedWithoutMountCapability(t *testing.T) {
+	if os.Getenv("GO2GS_NAMESPACE_FAIL_CLOSED_TEST") != t.Name() {
+		cmd := exec.Command(os.Args[0], "-test.run=^"+regexp.QuoteMeta(t.Name())+"$")
+		cmd.Env = append(os.Environ(), "GO2GS_NAMESPACE_FAIL_CLOSED_TEST="+t.Name(), "GO2GS_EXEC_NAMESPACE=1")
+		if err := configureAnalysisWorkerNamespace(cmd); err != nil {
+			t.Fatal(err)
+		}
+		var output strings.Builder
+		cmd.Stdout = &output
+		cmd.Stderr = &output
+		if err := cmd.Start(); err != nil {
+			if namespaceChildStartUnavailable(err) {
+				t.Setenv("GO2GS_EXEC_NAMESPACE", "")
+				assertImmutableCapsuleFailsBeforeStaging(t, "analysis requires the private executable mount namespace")
+				return
+			}
+			t.Fatalf("start fail-closed namespace child: %v", err)
+		}
+		err := cmd.Wait()
+		if err == nil {
+			return
+		}
+		t.Fatalf("fail-closed namespace child failed unexpectedly: %v\n%s", err, output.String())
+	}
+	header := unix.CapUserHeader{Version: unix.LINUX_CAPABILITY_VERSION_3}
+	data := [2]unix.CapUserData{}
+	if err := unix.Capset(&header, &data[0]); err != nil {
+		t.Fatal(err)
+	}
+	assertImmutableCapsuleFailsBeforeStaging(t, "make executable mount namespace private")
+}
+
+func assertImmutableCapsuleFailsBeforeStaging(t *testing.T, wantError string) {
+	t.Helper()
+	root, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	capsule, err := createExecutableCapsule(root, []capturedExecutable{{
+		name: "helper", data: []byte("#!/bin/sh\nexit 0\n"), mode: 0o755,
+	}}, true)
+	if err == nil {
+		_ = capsule.close()
+		t.Fatal("immutable capsule silently bypassed unavailable mount isolation")
+	}
+	if !strings.Contains(err.Error(), wantError) {
+		t.Fatalf("unexpected fail-closed diagnostic: %v", err)
+	}
+	if _, statErr := os.Lstat(filepath.Join(root, "toolchain", "helper")); !os.IsNotExist(statErr) {
+		t.Fatalf("failed capsule staged an executable: %v", statErr)
+	}
+}
 
 func TestImmutableExecutableCapsuleResistsPathAttacks(t *testing.T) {
 	if !enterExecutableNamespaceTest(t) {

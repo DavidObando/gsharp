@@ -224,7 +224,10 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory stri
 		"GOEXPERIMENT":     profile.GOEXPERIMENT,
 		"GOROOT":           goroot,
 	}
-	flags := append([]string{}, profile.GOFLAGS...)
+	flags, _, err := splitGOFLAGS(profile.GOFLAGS)
+	if err != nil {
+		return nil, err
+	}
 	flags = append(flags, "-mod="+profile.ModuleMode)
 	values["GOFLAGS"] = joinArgs(flags)
 	values["GODEBUG"] = joinMap(profile.GODEBUG)

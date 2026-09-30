@@ -361,6 +361,32 @@ func TestCgoInventoryUsesSourceWithoutNativeToolchain(t *testing.T) {
 	}
 }
 
+func TestCgoInventoryHonorsNativeAndTestBuildConstraints(t *testing.T) {
+	root := copyFixture(t, "cgo")
+	for name, content := range map[string]string{
+		"native.s":            "//go:build windows\n\nTEXT ·ignored(SB),$0\n",
+		"cgo_windows_test.go": "package cgofixture\n\n/* int ignored(void); */\nimport \"C\"\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	profile.GOOS = "linux"
+	analysis, _, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"native.s", "cgo_windows_test.go"} {
+		path := "source://" + name
+		index := slices.IndexFunc(analysis.Files, func(file FileRecord) bool { return file.Path == path })
+		if index < 0 || analysis.Files[index].Role != "ignored" || analysis.Files[index].Native {
+			t.Fatalf("build-rejected input %s was selected: %#v", path, analysis.Files)
+		}
+	}
+}
+
 func TestProfileRejectsObsoleteCompilerConfiguration(t *testing.T) {
 	for name, mutate := range map[string]func(*Profile){
 		"compiler": func(profile *Profile) { profile.CCompiler = "/usr/bin/cc" },
@@ -1356,6 +1382,7 @@ func TestPublicAnalyzeNeedsNoAmbientGoAfterStaging(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("public analyze requires Linux execution binding")
 	}
+	requireExecutableNamespaceTest(t)
 	binary := buildGo2gsBinary(t)
 	toolDir := t.TempDir()
 	if err := os.Symlink(filepath.Join(runtime.GOROOT(), "bin", "go"), filepath.Join(toolDir, selectedGoName())); err != nil {
@@ -1381,6 +1408,7 @@ func TestPublicCgoAnalysisExecutesNoNativeTools(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("public analyze requires Linux execution binding")
 	}
+	requireExecutableNamespaceTest(t)
 	binary := buildGo2gsBinary(t)
 	ambient := t.TempDir()
 	selected := t.TempDir()
@@ -2949,6 +2977,35 @@ func TestValidateAnalysisRequiresCompleteLoadedOwnershipGraph(t *testing.T) {
 				}
 			}
 		}, "owned source and compiled files"},
+		{"typed-file-root", func(value *Analysis) {
+			for index := range value.Packages {
+				value.Packages[index].InitializationOrder = []InitializationRecord{}
+			}
+			value.RecordCounts.Total -= value.RecordCounts.Types + value.RecordCounts.Symbols +
+				value.RecordCounts.Nodes + value.RecordCounts.Constants + value.RecordCounts.Scopes +
+				value.RecordCounts.Selections + value.RecordCounts.Calls + value.RecordCounts.MethodSets +
+				value.RecordCounts.Instances + value.RecordCounts.FeatureSites
+			value.RecordCounts.Types = 0
+			value.RecordCounts.Symbols = 0
+			value.RecordCounts.Nodes = 0
+			value.RecordCounts.Constants = 0
+			value.RecordCounts.Scopes = 0
+			value.RecordCounts.Selections = 0
+			value.RecordCounts.Calls = 0
+			value.RecordCounts.MethodSets = 0
+			value.RecordCounts.Instances = 0
+			value.RecordCounts.FeatureSites = 0
+			value.Types = []TypeRecord{}
+			value.Symbols = []SymbolRecord{}
+			value.Nodes = []NodeRecord{}
+			value.Constants = []ConstantRecord{}
+			value.Scopes = []ScopeRecord{}
+			value.Selections = []SelectionRecord{}
+			value.Calls = []CallRecord{}
+			value.MethodSets = []MethodSetRecord{}
+			value.Instances = []InstanceRecord{}
+			value.FeatureSites = []FeatureSite{}
+		}, "*ast.File node"},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -3516,6 +3573,67 @@ func TestGOFLAGSAllowlistRejectsExecutionAndPathOverrides(t *testing.T) {
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
 		t.Fatalf("toolexec payload ran or marker check failed: %v", err)
+	}
+}
+
+func TestEffectiveBuildTagsMergeProfileAndGOFLAGS(t *testing.T) {
+	profile := testProfile()
+	profile.BuildTags = []string{"profile_tag", "duplicate"}
+	profile.GOFLAGS = []string{"-tags=flag_tag,duplicate", "-trimpath", "-tags", "second_flag"}
+	tags, err := effectiveBuildTags(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"duplicate", "flag_tag", "profile_tag", "second_flag"}; !slices.Equal(tags, want) {
+		t.Fatalf("effective tags = %v, want %v", tags, want)
+	}
+	remaining, _, err := splitGOFLAGS(profile.GOFLAGS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"-trimpath"}; !slices.Equal(remaining, want) {
+		t.Fatalf("non-tag GOFLAGS = %v, want %v", remaining, want)
+	}
+	for _, flags := range [][]string{{"-tags", "two words"}, {"-tags=x,,y"}, {"-tags="}, {"-tags"}} {
+		if _, _, err := splitGOFLAGS(flags); err == nil {
+			t.Fatalf("malformed tag flags accepted: %v", flags)
+		}
+	}
+}
+
+func TestGOFLAGSTagsSelectPackagesAndInProcessSyntaxConsistently(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod":     "module example.com/tags\n\ngo 1.27\n",
+		"base.go":    "package tags\n",
+		"profile.go": "//go:build profile_tag\n\npackage tags\n\nvar Profile = 1\n",
+		"flag.go":    "//go:build flag_tag\n\npackage tags\n\nvar Flag = 1\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	profile := testProfile()
+	profile.BuildTags = []string{"profile_tag"}
+	profile.GOFLAGS = []string{"-tags", "flag_tag,profile_tag"}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil || !complete {
+		t.Fatalf("tagged analysis failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	for _, name := range []string{"profile.go", "flag.go"} {
+		path := "source://" + name
+		fileIndex := slices.IndexFunc(analysis.Files, func(file FileRecord) bool {
+			return file.Path == path && file.Role == "compiled"
+		})
+		if fileIndex < 0 {
+			t.Fatalf("effective tag did not compile %s: %#v", path, analysis.Files)
+		}
+		fileID := analysis.Files[fileIndex].ID
+		if !slices.ContainsFunc(analysis.Nodes, func(node NodeRecord) bool {
+			return node.FileID == fileID && node.Kind == "*ast.File"
+		}) {
+			t.Fatalf("compiled tagged file %s lacks typed syntax", path)
+		}
 	}
 }
 

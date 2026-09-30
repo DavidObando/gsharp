@@ -21,6 +21,12 @@ go test -count=1 ./...
 The helper pins `golang.org/x/tools` in `go.mod`. Tests use local modules and
 must pass with no network.
 
+Linux tests probe the private mount-namespace and read-only tmpfs capability.
+Hosted sandboxes that deny those mount operations skip only the successful
+capsule and host-path attack tests; an unprivileged fail-closed test still
+requires capsule creation to stop before staging an executable. Privileged
+Linux runs execute the full adversarial suite.
+
 ## Analyze
 
 ```sh
@@ -60,12 +66,16 @@ than inherited wholesale. The selected `go` executable's build metadata supplies
 handoff, and the bounded `VERSION` file is hashed. Bootstrap never runs
 `go version` or `go env`. `goFlags` accepts only `-tags`, `-trimpath`, and
 `-buildvcs=false`; execution and path override flags such as `-toolexec`,
-`-overlay`, and `-modfile` are rejected. `goExperiment` and `goDebug` must be
+`-overlay`, and `-modfile` are rejected. Profile `buildTags` and allowed
+`goFlags -tags` values are merged into one canonical tag set used by package
+loading and in-process source classification. `goExperiment` and `goDebug` must be
 empty because the in-process parser and type checker cannot authoritatively
 apply selected-toolchain semantic overrides.
 Before loading, source inputs and authorized local replacements are copied
-with bounded, no-follow reads into a private mirror. The loader sees only
-those captured bytes; emitted manifest hashes remain those of the originals.
+with bounded, descriptor-relative reads that reject symlinks in every path
+component into a private mirror. The same rooted reads verify the originals
+after loading. The loader sees only those captured bytes; emitted manifest
+hashes remain those of the originals.
 On Linux and macOS, private temporary trees are removed recursively through
 verified directory descriptors and atomic name exchanges without following
 links; an exchange failure or retained entry makes the command fail. Other
