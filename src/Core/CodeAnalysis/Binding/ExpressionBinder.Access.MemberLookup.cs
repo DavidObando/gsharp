@@ -235,8 +235,16 @@ internal sealed partial class ExpressionBinder
                 receiverSyntax,
                 receiverStart);
             Diagnostics.TruncateTo(diagnosticCount);
+
+            // Rebind through the declared receiver only when the declared
+            // lookup preserves the result type: a covariant override yields a
+            // more derived type than the base slot, and replacing the bound
+            // result would widen it (fail-safe: keep the original binding).
             if (declaredResult is not BoundErrorExpression
-                && RefersToSameMemberSlot(result, declaredResult, receiver.Type))
+                && RefersToSameMemberSlot(result, declaredResult, receiver.Type)
+                && Equals(
+                    UnwrapTransparentMemberResult(result).Type,
+                    UnwrapTransparentMemberResult(declaredResult).Type))
             {
                 binderCtx.UntrackBackwardGotoNarrowingConversion(
                     receiverPath,
@@ -2690,7 +2698,10 @@ internal sealed partial class ExpressionBinder
                 || (overridden.Declaration != null
                     && ReferenceEquals(candidate.Indexer.Declaration, overridden.Declaration)))
                 {
+                    // A covariant override has a different result type than the
+                    // declared slot; keep the original binding (fail-safe).
                     return SamePropertySlot(indexer, candidate.Indexer, operation, receiverType)
+                        && Equals(SubstituteIndexerType(candidate.Indexer.Type, candidate.Substitution), indexer.Type)
                         ? candidate
                         : null;
                 }

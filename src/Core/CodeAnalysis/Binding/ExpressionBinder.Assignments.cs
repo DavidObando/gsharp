@@ -4272,7 +4272,8 @@ internal sealed partial class ExpressionBinder
                 selectedProperty.Name,
                 out declaredProperty,
                 out declaredStructOwner)
-            && SamePropertySlot(selectedProperty, declaredProperty, MemberOperation.Write, receiverType))
+            && SamePropertySlot(selectedProperty, declaredProperty, MemberOperation.Write, receiverType)
+            && Equals(declaredProperty.Type, selectedProperty.Type))
         {
             declaredInterfaceOwner = null;
             return true;

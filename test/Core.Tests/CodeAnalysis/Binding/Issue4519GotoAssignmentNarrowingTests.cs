@@ -6026,6 +6026,68 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void CovariantPropertyOverride_ReadThroughNarrowedReceiverKeepsDerivedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                func Bark() string -> "woof"
+            }
+            open class Owner {
+                open prop Pet Animal -> Animal{}
+            }
+            class DogOwner : Owner {
+                override prop Pet Dog -> Dog{}
+            }
+
+            func Run() string {
+                var x Owner = DogOwner{}
+                if x is DogOwner {
+                    return x.Pet.Bark()
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("woof", result.Value);
+    }
+
+    [Fact]
+    public void CovariantIndexerOverride_ReadThroughNarrowedReceiverKeepsDerivedType()
+    {
+        var result = Evaluate("""
+            open class Animal {
+            }
+            class Dog : Animal {
+                func Bark() string -> "woof"
+            }
+            open class Owner {
+                open prop this[index int32] Animal -> Animal{}
+            }
+            class DogOwner : Owner {
+                override prop this[index int32] Dog -> Dog{}
+            }
+
+            func Run() string {
+                var x Owner = DogOwner{}
+                if x is DogOwner {
+                    return x[0].Bark()
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("woof", result.Value);
+    }
+
+    [Fact]
     public void BackwardGoto_SiblingInterfacePropertySlotsDoNotAlias()
     {
         var result = Evaluate("""
