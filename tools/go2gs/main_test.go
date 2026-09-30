@@ -4571,7 +4571,13 @@ func TestArchitectureFeatureTagsMatchGoCommand(t *testing.T) {
 		{"ppc64-cumulative", "linux", "ppc64le", []string{"power10"}, "ppc64le.power9", true},
 		{"riscv64-cumulative", "linux", "riscv64", []string{"rva23u64"}, "riscv64.rva22u64", true},
 		{"386-exact", "linux", "386", []string{"softfloat"}, "386.sse2", false},
-		{"wasm-always-enabled", "js", "wasm", nil, "wasm.signext", true},
+		// Go 1.27.1 accepts legacy GOWASM values but always enables both legacy features.
+		{"wasm-default-satconv", "js", "wasm", nil, "wasm.satconv", true},
+		{"wasm-default-signext", "js", "wasm", nil, "wasm.signext", true},
+		{"wasm-satconv-included", "js", "wasm", []string{"satconv"}, "wasm.satconv", true},
+		{"wasm-satconv-retains-signext", "js", "wasm", []string{"satconv"}, "wasm.signext", true},
+		{"wasm-signext-included", "js", "wasm", []string{"signext"}, "wasm.signext", true},
+		{"wasm-signext-retains-satconv", "js", "wasm", []string{"signext"}, "wasm.satconv", true},
 	}
 	for _, test := range tests {
 		t.Run(test.name, func(t *testing.T) {
@@ -4657,12 +4663,13 @@ func TestWASMArchitectureProfileCanonicalization(t *testing.T) {
 		features []string
 		want     []string
 		value    string
+		toolTags []string
 	}{
-		{"empty", nil, []string{}, ""},
-		{"satconv", []string{"satconv"}, []string{"satconv"}, "satconv"},
-		{"signext", []string{"signext"}, []string{"signext"}, "signext"},
-		{"both-forward", []string{"satconv", "signext"}, []string{"satconv", "signext"}, "satconv,signext"},
-		{"both-reverse", []string{"signext", "satconv"}, []string{"satconv", "signext"}, "satconv,signext"},
+		{"empty", nil, []string{}, "", []string{"wasm.satconv", "wasm.signext"}},
+		{"satconv", []string{"satconv"}, []string{"satconv"}, "satconv", []string{"wasm.satconv", "wasm.signext"}},
+		{"signext", []string{"signext"}, []string{"signext"}, "signext", []string{"wasm.satconv", "wasm.signext"}},
+		{"both-forward", []string{"satconv", "signext"}, []string{"satconv", "signext"}, "satconv,signext", []string{"wasm.satconv", "wasm.signext"}},
+		{"both-reverse", []string{"signext", "satconv"}, []string{"satconv", "signext"}, "satconv,signext", []string{"wasm.satconv", "wasm.signext"}},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			profile := testProfile()
@@ -4677,8 +4684,9 @@ func TestWASMArchitectureProfileCanonicalization(t *testing.T) {
 				t.Fatalf("canonical features = %v, want %v", loaded.ArchitectureFeatures, test.want)
 			}
 			settings, err := resolveArchitectureSettings(loaded.GOARCH, loaded.ArchitectureFeatures)
-			if err != nil || settings.value != test.value {
-				t.Fatalf("canonical GOWASM = %q, %v; want %q", settings.value, err, test.value)
+			if err != nil || settings.value != test.value || !slices.Equal(settings.toolTags, test.toolTags) {
+				t.Fatalf("canonical GOWASM = %q tags=%v, %v; want %q tags=%v",
+					settings.value, settings.toolTags, err, test.value, test.toolTags)
 			}
 		})
 	}
