@@ -1312,7 +1312,9 @@ public sealed partial class CSharpToGSharpTranslator
                 if (!preserveValue
                     && child is SingleVariableDesignationSyntax childSingle
                     && this.context.GetDeclaredSymbol(childSingle) is ILocalSymbol local
-                    && !this.IsLocalReassigned(local))
+                    && !this.IsLocalReassigned(local)
+                    && !(inferredType
+                        && this.InferredLocalDefaultRequiresTypedDeclaration(local)))
                 {
                     temps.Add(this.EmittedName(childSingle, childSingle.Identifier));
                     directNames[i] = true;
@@ -1362,7 +1364,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private IEnumerable<GStatement> LowerTupleDeclaration(
             ParenthesizedVariableDesignationSyntax designation,
-            ExpressionSyntax right)
+            ExpressionSyntax right,
+            bool inferredType)
         {
             return this.WithHoistedAssignments(
                 right,
@@ -1375,7 +1378,7 @@ public sealed partial class CSharpToGSharpTranslator
                         this.TranslateExpression(right),
                         preserveValue: false,
                         statements,
-                        inferredType: false);
+                        inferredType);
                     return statements;
                 });
         }

@@ -5959,22 +5959,6 @@ public sealed partial class CSharpToGSharpTranslator
                     };
                 }
 
-                if (assignment.Left is DeclarationExpressionSyntax
-                    {
-                        Type.IsVar: true,
-                        Designation: ParenthesizedVariableDesignationSyntax designation,
-                    })
-                {
-                    var statements = new List<GStatement>();
-                    this.LowerDeconstructionDeclaration(
-                        designation,
-                        this.TranslateExpression(assignment.Right),
-                        preserveValue: false,
-                        statements,
-                        inferredType: true);
-                    return statements;
-                }
-
                 // `(a, b) = (x, y)` deconstruction *assignment*. Flat existing
                 // targets now use G# native multi-assignment (issues #3353/#3358),
                 // including storage targets and tuple-valued calls. Mixed
@@ -5995,12 +5979,14 @@ public sealed partial class CSharpToGSharpTranslator
                 // statement, and nothing stops chaining several of them. A
                 // storage target inside a fallback shape is captured before the
                 // RHS by `LowerTupleAssignment`, preserving issue #2234 order.
-                if (assignment.Left is DeclarationExpressionSyntax
-                    {
-                        Designation: ParenthesizedVariableDesignationSyntax nestedDeclaration,
-                    })
+                if (assignment.Left is DeclarationExpressionSyntax nestedDeclarationExpression
+                    && nestedDeclarationExpression.Designation
+                        is ParenthesizedVariableDesignationSyntax nestedDeclaration)
                 {
-                    return this.LowerTupleDeclaration(nestedDeclaration, assignment.Right);
+                    return this.LowerTupleDeclaration(
+                        nestedDeclaration,
+                        assignment.Right,
+                        nestedDeclarationExpression.Type.IsVar);
                 }
 
                 if (assignment.Left is TupleExpressionSyntax leftTuple)
