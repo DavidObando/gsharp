@@ -1513,15 +1513,12 @@ public sealed partial class CSharpToGSharpTranslator
                 if (anonymousFunction == null)
                 {
                     if (callable is not IMethodSymbol callableLocalFunction
-                        || (!LocalFunctionMatches(targetSymbol, callableLocalFunction)
-                            && (targetSymbol is not ILocalSymbol
-                                { Type.TypeKind: TypeKind.Delegate } delegateLocal
-                                || !this.DelegateLocalReachesLocalFunction(
-                                    delegateLocal,
-                                    invocation.SpanStart,
-                                    callableLocalFunction,
-                                    new HashSet<ISymbol>(
-                                        SymbolEqualityComparer.Default)))))
+                        || !this.DelegateExpressionReachesLocalFunction(
+                            target,
+                            invocation.SpanStart,
+                            callableLocalFunction,
+                            new HashSet<ISymbol>(
+                                SymbolEqualityComparer.Default)))
                     {
                         continue;
                     }
@@ -1622,6 +1619,32 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (anonymousFunction == null)
             {
+                if (callable is IMethodSymbol escapedLocalFunction)
+                {
+                    foreach (AssignmentExpressionSyntax assignment in
+                        EagerExecutionNodes(executionBody)
+                            .OfType<AssignmentExpressionSyntax>()
+                            .Where(candidate =>
+                                this.IsNonLocalDelegateStorage(candidate.Left))
+                            .Where(candidate =>
+                                this.DelegateExpressionReachesLocalFunction(
+                                    candidate.Right,
+                                    candidate.Right.SpanStart,
+                                    escapedLocalFunction,
+                                    new HashSet<ISymbol>(
+                                        SymbolEqualityComparer.Default))))
+                    {
+                        foreach (StatementSyntax later in
+                            EagerExecutionNodes(executionBody)
+                                .OfType<StatementSyntax>()
+                                .Where(statement =>
+                                    statement.SpanStart >= assignment.Span.End))
+                        {
+                            yield return later.Span.End - 1;
+                        }
+                    }
+                }
+
                 yield break;
             }
 

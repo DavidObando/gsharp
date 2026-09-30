@@ -1089,13 +1089,15 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
             public static class LocalFunctionCallbacks
             {
+                private static System.Action stored = () => { };
+
                 private static void Fill<T>(ref T? value, T replacement) =>
                     value = replacement;
 
                 private static void Invoke(System.Action callback) =>
                     callback();
 
-                public static void M<T>(T replacement)
+                public static void M<T>(T replacement, bool choose)
                 {
                     var pair = (replacement, replacement);
                     void Local()
@@ -1106,6 +1108,27 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
                     pair = (default(T), replacement);
                     Invoke(Local);
+
+                    var composedPair = (replacement, replacement);
+                    void Composed()
+                    {
+                        var (composedLeft, _) = composedPair;
+                        Fill(ref composedLeft, replacement);
+                    }
+
+                    composedPair = (default(T), replacement);
+                    (choose ? (System.Action)Composed : () => { })();
+
+                    var storedPair = (replacement, replacement);
+                    void Stored()
+                    {
+                        var (storedLeft, _) = storedPair;
+                        Fill(ref storedLeft, replacement);
+                    }
+
+                    stored = Stored;
+                    storedPair = (default(T), replacement);
+                    stored();
                 }
             }
             """;
@@ -1113,6 +1136,8 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         string printed = Translate(source);
 
         Assert.Matches(@"\b(let|var) callbackLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) composedLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) storedLeft T\? =", printed);
     }
 
     [Fact]
