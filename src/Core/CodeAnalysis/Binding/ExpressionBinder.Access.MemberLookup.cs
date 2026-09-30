@@ -724,7 +724,7 @@ internal sealed partial class ExpressionBinder
             || HasExplicitClrInterfaceImplementation(selected, interfaceMethod)
             || selected.Name != interfaceMethod.Name
             || selected.GetGenericArguments().Length != interfaceMethod.GetGenericArguments().Length
-            || selected.ReturnType != interfaceMethod.ReturnType)
+            || !SameClrSignatureType(selected.ReturnType, interfaceMethod.ReturnType))
         {
             return false;
         }
@@ -733,7 +733,7 @@ internal sealed partial class ExpressionBinder
         var interfaceParameters = interfaceMethod.GetParameters();
         return selectedParameters.Length == interfaceParameters.Length
             && selectedParameters.Zip(interfaceParameters).All(pair =>
-                pair.First.ParameterType == pair.Second.ParameterType);
+                SameClrSignatureType(pair.First.ParameterType, pair.Second.ParameterType));
     }
 
     private static bool HasExplicitClrInterfaceImplementation(
@@ -759,11 +759,64 @@ internal sealed partial class ExpressionBinder
                 && candidate.IsFinal
                 && candidate.Name.EndsWith(suffix, StringComparison.Ordinal)
                 && candidate.GetGenericArguments().Length == interfaceMethod.GetGenericArguments().Length
-                && candidate.ReturnType == interfaceMethod.ReturnType
+                && SameClrSignatureType(candidate.ReturnType, interfaceMethod.ReturnType)
                 && candidate.GetParameters() is { } parameters
                 && parameters.Length == interfaceParameters.Length
                 && parameters.Zip(interfaceParameters).All(pair =>
-                    pair.First.ParameterType == pair.Second.ParameterType));
+                    SameClrSignatureType(pair.First.ParameterType, pair.Second.ParameterType)));
+    }
+
+    // Compares two signature types structurally. Under MetadataLoadContext the
+    // T of I.Map<T> and the T of an implementation are distinct reflection
+    // objects, so raw Type equality rejects valid generic methods. Generic
+    // parameters compare by kind and ordinal; compound types recurse.
+    private static bool SameClrSignatureType(Type left, Type right)
+    {
+        if (ReferenceEquals(left, right) || left == right)
+        {
+            return true;
+        }
+
+        if (left.IsGenericParameter || right.IsGenericParameter)
+        {
+            // Only method-level parameters match by ordinal; a type-level
+            // parameter of a different declaring type is a different type.
+            return left.IsGenericParameter
+                && right.IsGenericParameter
+                && left.DeclaringMethod != null
+                && right.DeclaringMethod != null
+                && left.GenericParameterPosition == right.GenericParameterPosition;
+        }
+
+        if (left.HasElementType || right.HasElementType)
+        {
+            return left.HasElementType
+                && right.HasElementType
+                && left.IsArray == right.IsArray
+                && left.IsByRef == right.IsByRef
+                && left.IsPointer == right.IsPointer
+                && (!left.IsArray || left.GetArrayRank() == right.GetArrayRank())
+                && left.GetElementType() is { } leftElement
+                && right.GetElementType() is { } rightElement
+                && SameClrSignatureType(leftElement, rightElement);
+        }
+
+        if (left.IsGenericType && right.IsGenericType)
+        {
+            var leftArguments = left.GetGenericArguments();
+            var rightArguments = right.GetGenericArguments();
+            return leftArguments.Length == rightArguments.Length
+                && left.GetGenericTypeDefinition() is { } leftDefinition
+                && right.GetGenericTypeDefinition() is { } rightDefinition
+                && (leftDefinition == rightDefinition
+                    || (leftDefinition.FullName != null
+                        && leftDefinition.FullName == rightDefinition.FullName
+                        && leftDefinition.Assembly.GetName().Name == rightDefinition.Assembly.GetName().Name))
+                && leftArguments.Zip(rightArguments).All(pair =>
+                    SameClrSignatureType(pair.First, pair.Second));
+        }
+
+        return false;
     }
 
     private static bool IsClrMethodAvailableOnSourceType(

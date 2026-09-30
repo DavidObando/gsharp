@@ -5593,6 +5593,37 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ImportedGenericInterfaceMethod_RecoversDeclaredSlotUnderMetadataLoadContext()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            func Run() int32 {
+                var x Issue4519ImportedGenericMapper = Issue4519ImportedGenericMapperDog()
+                var count = 0
+                if x is Issue4519ImportedGenericMapperDog {
+                Again:
+                    let mapped = x.Map[int32](5, func(v int32) int32 { return v + 1 })
+                    if count == 0 {
+                        count++
+                        x = Issue4519ImportedGenericMapperCat()
+                        goto Again
+                    }
+                    return mapped
+                }
+                return 0
+            }
+
+            Run()
+            """,
+            new[] { typeof(Issue4519ImportedGenericMapper).Assembly.Location });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(6, result.Value);
+    }
+
+    [Fact]
     public void ImportedCallRecovery_DoesNotRebindInlineOutVariable()
     {
         var result = EmittedOracle.Evaluate(
@@ -6523,6 +6554,27 @@ public sealed class Issue4519ImportedCallCat : Issue4519ImportedCallReceiver
 
     /// <inheritdoc/>
     public string Describe() => "cat";
+}
+
+/// <summary>Imported interface with a generic method whose signature mentions its own type parameter.</summary>
+public interface Issue4519ImportedGenericMapper
+{
+    /// <summary>Maps a value through a generic method with a constructed parameter type.</summary>
+    T Map<T>(T value, Func<T, T> selector);
+}
+
+/// <summary>First imported generic-method implementation used as the narrowed receiver.</summary>
+public sealed class Issue4519ImportedGenericMapperDog : Issue4519ImportedGenericMapper
+{
+    /// <inheritdoc/>
+    public T Map<T>(T value, Func<T, T> selector) => selector(value);
+}
+
+/// <summary>Second imported generic-method implementation reached by the backedge.</summary>
+public sealed class Issue4519ImportedGenericMapperCat : Issue4519ImportedGenericMapper
+{
+    /// <inheritdoc/>
+    public T Map<T>(T value, Func<T, T> selector) => selector(value);
 }
 
 /// <summary>Imported base with ref-returning members used by declared-slot recovery tests.</summary>
