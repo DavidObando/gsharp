@@ -86,6 +86,66 @@ func TestWindowsRootedMetadataRejectsAncestorReparsePoint(t *testing.T) {
 	})
 }
 
+func TestWindowsEnsureOutputRootRejectsAncestorReparsePointWithoutMutation(t *testing.T) {
+	parent := t.TempDir()
+	outside := t.TempDir()
+	link := filepath.Join(parent, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("directory symlink unavailable: %v", err)
+	}
+	if err := ensureOutputRoot(filepath.Join(link, "new", "output"), 0o700); err == nil {
+		t.Fatal("output creation followed an ancestor reparse point")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "new")); !os.IsNotExist(err) {
+		t.Fatalf("output rejection mutated the reparse target: %v", err)
+	}
+}
+
+func TestWindowsEnsureOutputRootCreatesMissingSuffix(t *testing.T) {
+	target := filepath.Join(t.TempDir(), "existing", "missing", "output")
+	if err := os.Mkdir(filepath.Dir(filepath.Dir(target)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureOutputRoot(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		t.Fatalf("safe output root was not created: %v, %v", info, err)
+	}
+}
+
+func TestWindowsEnsureOutputRootDetectsAncestorReplacement(t *testing.T) {
+	parent := t.TempDir()
+	inside := filepath.Join(parent, "inside")
+	original := filepath.Join(parent, "original")
+	outside := t.TempDir()
+	if err := os.Mkdir(inside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outputCreateBeforeComponentHook = func(path string) {
+		if path != inside {
+			return
+		}
+		outputCreateBeforeComponentHook = nil
+		if err := os.Rename(inside, original); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, inside); err != nil {
+			if restoreErr := os.Rename(original, inside); restoreErr != nil {
+				t.Fatalf("create directory symlink: %v; restore: %v", err, restoreErr)
+			}
+			t.Skipf("directory symlink unavailable: %v", err)
+		}
+	}
+	t.Cleanup(func() { outputCreateBeforeComponentHook = nil })
+	if err := ensureOutputRoot(filepath.Join(inside, "new", "output"), 0o700); err == nil {
+		t.Fatal("output creation accepted an ancestor replacement")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "new")); !os.IsNotExist(err) {
+		t.Fatalf("ancestor replacement redirected output creation: %v", err)
+	}
+}
+
 func windowsMetadataRaceFixture(t *testing.T) (root, inside, original, outside string) {
 	t.Helper()
 	root = t.TempDir()

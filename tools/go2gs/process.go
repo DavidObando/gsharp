@@ -157,20 +157,17 @@ func (b *boundedBuffer) Write(data []byte) (int, error) {
 func (b *boundedBuffer) String() string { return b.buf.String() }
 
 func bootstrapEnvironment(cacheRoot string, pathDirectories ...string) []string {
-	return canonicalEnv(map[string]string{
+	values := map[string]string{
 		"PATH":        selectedPath(pathDirectories...),
 		"HOME":        cacheRoot,
 		"TMPDIR":      cacheRoot,
 		"GOTOOLCHAIN": "local",
 		"GOTELEMETRY": "off",
-		"GOPROXY":     "off",
-		"GOSUMDB":     "off",
-		"GONOSUMDB":   "*",
-		"GOPRIVATE":   "",
-		"GONOPROXY":   "*",
 		"GOWORK":      "off",
 		"PKG_CONFIG":  unavailableToolPath(cacheRoot, "pkg-config"),
-	})
+	}
+	applyOfflineGoEnvironment(values)
+	return canonicalEnv(values)
 }
 
 func analysisWorkerEnvironment(cacheRoot, selectedGo, selectedGoHash, selectedGOROOT string) []string {
@@ -180,11 +177,6 @@ func analysisWorkerEnvironment(cacheRoot, selectedGo, selectedGoHash, selectedGO
 		"TMPDIR":                   cacheRoot,
 		"GOTOOLCHAIN":              "local",
 		"GOTELEMETRY":              "off",
-		"GOPROXY":                  "off",
-		"GOSUMDB":                  "off",
-		"GONOSUMDB":                "*",
-		"GOPRIVATE":                "",
-		"GONOPROXY":                "*",
 		"GOWORK":                   "off",
 		"PKG_CONFIG":               unavailableToolPath(cacheRoot, "pkg-config"),
 		"GO2GS_SELECTED_GO":        selectedGo,
@@ -192,6 +184,7 @@ func analysisWorkerEnvironment(cacheRoot, selectedGo, selectedGoHash, selectedGO
 		"GO2GS_SELECTED_GOROOT":    selectedGOROOT,
 		"GO2GS_EXEC_NAMESPACE":     "1",
 	}
+	applyOfflineGoEnvironment(values)
 	return canonicalEnv(values)
 }
 
@@ -210,11 +203,6 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory stri
 		"GOMODCACHE":       cacheRoot + string(os.PathSeparator) + "module-cache",
 		"GOTOOLCHAIN":      "local",
 		"GOTELEMETRY":      "off",
-		"GOPROXY":          "off",
-		"GOSUMDB":          "off",
-		"GONOSUMDB":        "*",
-		"GOPRIVATE":        "",
-		"GONOPROXY":        "*",
 		"GOWORK":           "off",
 		"GOPACKAGESDRIVER": "off",
 		"PKG_CONFIG":       unavailableToolPath(cacheRoot, "pkg-config"),
@@ -224,6 +212,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory stri
 		"GOEXPERIMENT":     profile.GOEXPERIMENT,
 		"GOROOT":           goroot,
 	}
+	applyOfflineGoEnvironment(values)
 	flags, _, err := splitGOFLAGS(profile.GOFLAGS)
 	if err != nil {
 		return nil, err
@@ -239,6 +228,18 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory stri
 		values[architecture.variable] = architecture.value
 	}
 	return canonicalEnv(values), nil
+}
+
+func applyOfflineGoEnvironment(values map[string]string) {
+	values["GOAUTH"] = "off"
+	values["GOENV"] = "off"
+	values["GOINSECURE"] = ""
+	values["GONOPROXY"] = "none"
+	values["GONOSUMDB"] = "none"
+	values["GOPRIVATE"] = ""
+	values["GOPROXY"] = "off"
+	values["GOSUMDB"] = "off"
+	values["GOVCS"] = "*:off"
 }
 
 func unavailableToolPath(cacheRoot, name string) string {

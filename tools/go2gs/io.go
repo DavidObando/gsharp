@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
@@ -1119,17 +1120,35 @@ func hashBytes(data []byte) string {
 }
 
 func hashFile(path string) (string, int64, error) {
+	return hashFileContext(context.Background(), path)
+}
+
+func hashFileContext(ctx context.Context, path string) (string, int64, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return "", 0, err
 	}
 	defer file.Close()
 	h := sha256.New()
-	n, err := io.Copy(h, file)
-	if err != nil {
-		return "", 0, err
+	var total int64
+	buffer := make([]byte, 32<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return "", 0, err
+		}
+		n, readErr := file.Read(buffer)
+		if n > 0 {
+			_, _ = h.Write(buffer[:n])
+			total += int64(n)
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return "", 0, readErr
+		}
 	}
-	return hex.EncodeToString(h.Sum(nil)), n, nil
+	return hex.EncodeToString(h.Sum(nil)), total, nil
 }
 
 func stableID(kind, canonical string) string {

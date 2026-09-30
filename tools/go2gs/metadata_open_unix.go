@@ -162,6 +162,40 @@ func openAbsoluteMetadataDirectory(path string) (int, error) {
 	return fd, nil
 }
 
+func ensureOutputRoot(path string, perm os.FileMode) error {
+	if !filepath.IsAbs(path) {
+		return errors.New("output root must be absolute")
+	}
+	fd, err := unix.Open(string(filepath.Separator),
+		unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+	if err != nil {
+		return err
+	}
+	current := string(filepath.Separator)
+	for _, component := range pathComponents(path) {
+		current = filepath.Join(current, component)
+		if outputCreateBeforeComponentHook != nil {
+			outputCreateBeforeComponentHook(current)
+		}
+		next, openErr := unix.Openat(fd, component,
+			unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+		if errors.Is(openErr, syscall.ENOENT) {
+			if mkdirErr := unix.Mkdirat(fd, component, uint32(perm.Perm())); mkdirErr != nil {
+				_ = unix.Close(fd)
+				return mkdirErr
+			}
+			next, openErr = unix.Openat(fd, component,
+				unix.O_RDONLY|unix.O_CLOEXEC|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_NONBLOCK, 0)
+		}
+		_ = unix.Close(fd)
+		if openErr != nil {
+			return openErr
+		}
+		fd = next
+	}
+	return unix.Close(fd)
+}
+
 func pathComponents(path string) []string {
 	path = strings.TrimPrefix(filepath.Clean(path), string(filepath.Separator))
 	if path == "" || path == "." {
