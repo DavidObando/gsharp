@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"fmt"
 	"go/ast"
@@ -60,6 +61,7 @@ type inventoryBuilder struct {
 	maxRecords            int
 	records               int
 	err                   error
+	ctx                   context.Context
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
@@ -77,6 +79,7 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
 		skipSemantics: map[*packages.Package]bool{}, positionMaps: map[string]*sourcePositionMap{},
 		maxRecords: profile.Limits.MaxRecords, records: analysisRecordCount(analysis),
+		ctx: context.Background(),
 	}
 }
 
@@ -2095,7 +2098,7 @@ func (b *inventoryBuilder) addModule(module *packages.Module) (string, error) {
 }
 
 func (b *inventoryBuilder) addLocalReplacement(logicalPath string, replacement *packages.Module) (string, error) {
-	hash, err := hashTree(replacement.Dir, b.profile.Limits.MaxLocalHashBytes)
+	hash, err := hashTreeContext(b.ctx, replacement.Dir, b.profile.Limits.MaxLocalHashBytes)
 	if err != nil {
 		return "", fmt.Errorf("hash local replacement for %s: %w", logicalPath, err)
 	}
@@ -2114,9 +2117,16 @@ func (b *inventoryBuilder) addLocalReplacement(logicalPath string, replacement *
 }
 
 func hashTree(root string, maxBytes int64) (string, error) {
+	return hashTreeContext(context.Background(), root, maxBytes)
+}
+
+func hashTreeContext(ctx context.Context, root string, maxBytes int64) (string, error) {
 	var entries []string
 	var total int64
 	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if walkErr != nil {
 			return walkErr
 		}
@@ -2133,7 +2143,7 @@ func hashTree(root string, maxBytes int64) (string, error) {
 		if err != nil {
 			return err
 		}
-		hash, size, err := hashFile(path)
+		hash, size, err := hashFileContext(ctx, path)
 		if err != nil {
 			return err
 		}

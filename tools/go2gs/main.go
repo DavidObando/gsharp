@@ -96,15 +96,27 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if err != nil {
 		return &exitError{2, err}
 	}
+	profile, err := readProfile(profilePath)
+	if err != nil {
+		return &exitError{2, err}
+	}
+	timeout := time.Duration(profile.Limits.MaxDurationSeconds) * time.Second
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
+	sourceRoot, err := secureRoot(source)
+	if err != nil {
+		return &exitError{2, fmt.Errorf("source root: %w", err)}
+	}
 	outRoot, err := filepath.Abs(out)
 	if err != nil {
 		return &exitError{2, err}
 	}
-	if err := os.MkdirAll(outRoot, 0o755); err != nil {
+	outRoot = normalizeSystemPathAliases(outRoot)
+	if err := validateOutputSourceRoots(sourceRoot, outRoot); err != nil {
 		return &exitError{2, err}
 	}
-	if err := rejectSymlinkPath(outRoot); err != nil {
-		return &exitError{2, fmt.Errorf("output root: %w", err)}
+	if err := ensureOutputRoot(outRoot, 0o755); err != nil {
+		return &exitError{2, err}
 	}
 	output, err := lockAndInvalidateOutput(outRoot)
 	if err != nil {
@@ -116,16 +128,8 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 		}
 	}()
 
-	profile, err := readProfile(profilePath)
-	if err != nil {
-		return &exitError{2, err}
-	}
-	sourceRoot, err := secureRoot(source)
-	if err != nil {
-		return &exitError{2, fmt.Errorf("source root: %w", err)}
-	}
 	if err := publicAnalysisBindingSupported(); err != nil {
-		analysis, complete, analyzeErr := analyzePreload(parent, sourceRoot, outRoot, profile)
+		analysis, complete, analyzeErr := analyzePreload(ctx, sourceRoot, outRoot, profile)
 		if analyzeErr != nil {
 			return &exitError{2, analyzeErr}
 		}
@@ -154,7 +158,6 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if err != nil {
 		return &exitError{2, err}
 	}
-	timeout := time.Duration(profile.Limits.MaxDurationSeconds) * time.Second
 	bootstrapDirectory, err := createOwnedTempDir("", ".go2gs-bootstrap-*")
 	if err != nil {
 		return &exitError{2, err}
@@ -165,12 +168,12 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 		}
 	}()
 	bootstrapRoot := bootstrapDirectory.path
-	goExecutableCapture, goExecutableHash, err := captureSelectedGo(goExecutable, "")
+	goExecutableCapture, goExecutableHash, err := captureSelectedGoContext(ctx, goExecutable, "")
 	if err != nil {
 		return &exitError{2, fmt.Errorf("capture Go executable: %w", err)}
 	}
-	bootstrapCapsule, err := createExecutableCapsule(
-		bootstrapRoot, []capturedExecutable{goExecutableCapture}, false,
+	bootstrapCapsule, err := createExecutableCapsuleContext(
+		ctx, bootstrapRoot, []capturedExecutable{goExecutableCapture}, false,
 	)
 	if err != nil {
 		return &exitError{2, err}
@@ -180,6 +183,9 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 			err = errors.Join(err, &exitError{2, cleanupErr})
 		}
 	}()
+	if err := ctx.Err(); err != nil {
+		return &exitError{2, err}
+	}
 	stagedGo := bootstrapCapsule.path(goExecutableCapture.name)
 	selectedGOROOT, err := selectedGoRoot(goExecutableCapture, "")
 	if err != nil {
@@ -207,7 +213,7 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if err != nil {
 		return &exitError{2, err}
 	}
-	result, err := runAnalysisWorkerProcess(parent, timeout, profile.Limits.MaxLogBytes, sourceRoot, self, []string{
+	result, err := runAnalysisWorkerProcess(ctx, timeout, profile.Limits.MaxLogBytes, sourceRoot, self, []string{
 		"internal-analyze-worker", "--source", sourceRoot, "--profile", workerProfile, "--out", workerRoot,
 	}, analysisWorkerEnvironment(bootstrapRoot, stagedGo, goExecutableHash, selectedGOROOT))
 	if err != nil {
@@ -258,6 +264,9 @@ func runAnalyzeWorker(parent context.Context, args []string) (err error) {
 	if err != nil {
 		return &exitError{2, err}
 	}
+	timeout := time.Duration(profile.Limits.MaxDurationSeconds) * time.Second
+	ctx, cancel := context.WithTimeout(parent, timeout)
+	defer cancel()
 	sourceRoot, err := secureRoot(source)
 	if err != nil {
 		return &exitError{2, fmt.Errorf("source root: %w", err)}
@@ -266,11 +275,12 @@ func runAnalyzeWorker(parent context.Context, args []string) (err error) {
 	if err != nil {
 		return err
 	}
-	if err := os.MkdirAll(outRoot, 0o700); err != nil {
+	outRoot = normalizeSystemPathAliases(outRoot)
+	if err := validateOutputSourceRoots(sourceRoot, outRoot); err != nil {
 		return err
 	}
-	if err := rejectSymlinkPath(outRoot); err != nil {
-		return fmt.Errorf("output root: %w", err)
+	if err := ensureOutputRoot(outRoot, 0o700); err != nil {
+		return err
 	}
 	output, err := openBoundOutputRoot(outRoot)
 	if err != nil {
@@ -282,9 +292,6 @@ func runAnalyzeWorker(parent context.Context, args []string) (err error) {
 		}
 	}()
 
-	timeout := time.Duration(profile.Limits.MaxDurationSeconds) * time.Second
-	ctx, cancel := context.WithTimeout(parent, timeout)
-	defer cancel()
 	started := time.Now()
 	before := peakRSS()
 

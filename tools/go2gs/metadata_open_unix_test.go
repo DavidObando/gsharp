@@ -156,6 +156,73 @@ func TestRootedDirectoryEnumerationRejectsAncestorSymlinkRaces(t *testing.T) {
 	})
 }
 
+func TestEnsureOutputRootRejectsSymlinkAncestorsWithoutOutsideMutation(t *testing.T) {
+	parent, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	outside := t.TempDir()
+	link := filepath.Join(parent, "link")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureOutputRoot(filepath.Join(link, "new", "output"), 0o700); err == nil {
+		t.Fatal("output creation followed an ancestor symlink")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "new")); !os.IsNotExist(err) {
+		t.Fatalf("output rejection mutated the symlink target: %v", err)
+	}
+}
+
+func TestEnsureOutputRootBindsExistingAncestorsAndDetectsReplacement(t *testing.T) {
+	parent, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	inside := filepath.Join(parent, "inside")
+	outside := t.TempDir()
+	if err := os.Mkdir(inside, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(inside, "new", "output")
+	outputCreateBeforeComponentHook = func(path string) {
+		if path != inside {
+			return
+		}
+		outputCreateBeforeComponentHook = nil
+		if err := os.Rename(inside, filepath.Join(parent, "original")); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Symlink(outside, inside); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Cleanup(func() { outputCreateBeforeComponentHook = nil })
+	if err := ensureOutputRoot(target, 0o700); err == nil {
+		t.Fatal("output creation accepted an ancestor replacement")
+	}
+	if _, err := os.Lstat(filepath.Join(outside, "new")); !os.IsNotExist(err) {
+		t.Fatalf("ancestor replacement redirected output creation: %v", err)
+	}
+}
+
+func TestEnsureOutputRootCreatesMissingSuffix(t *testing.T) {
+	parent, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	target := filepath.Join(parent, "existing", "missing", "output")
+	if err := os.Mkdir(filepath.Dir(filepath.Dir(target)), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := ensureOutputRoot(target, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(target); err != nil || !info.IsDir() {
+		t.Fatalf("safe output root was not created: %v, %v", info, err)
+	}
+}
+
 func assertMetadataReadFailsPromptly(t *testing.T, read func() error) {
 	t.Helper()
 	result := make(chan error, 1)

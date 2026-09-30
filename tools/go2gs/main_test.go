@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -13,6 +14,8 @@ import (
 	"go/parser"
 	"go/token"
 	"go/types"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -833,6 +836,35 @@ func TestPkgConfigFallbackScansOnlySelectedCgoFiles(t *testing.T) {
 			}
 			if got := hasBlockerCategory(analysis, "pkg-config"); got != test.blocked {
 				t.Fatalf("pkg-config blocker=%v, want %v: %#v", got, test.blocked, analysis.Blockers)
+			}
+		})
+	}
+}
+
+func TestPkgConfigFallbackReadsOnlyImportCPreamble(t *testing.T) {
+	tests := []struct {
+		name    string
+		source  string
+		blocked bool
+	}{
+		{"raw-string", "package p\nimport \"C\"\nvar _ = `#cgo pkg-config: raw`\n", false},
+		{"ordinary-comment", "package p\nimport \"C\"\n// #cgo pkg-config: ordinary\nvar _ = 1\n", false},
+		{"detached-comment", "package p\n// #cgo pkg-config: detached\n\nimport \"C\"\n", false},
+		{"other-import", "package p\n// #cgo pkg-config: other\nimport _ \"fmt\"\nimport \"C\"\n", false},
+		{"line-preamble", "package p\n// #cgo pkg-config: line\nimport \"C\"\n", true},
+		{"tab-preamble", "package p\n// #cgo\tpkg-config: tab\nimport \"C\"\n", true},
+		{"block-preamble", "package p\n/*\n#cgo pkg-config: block\n*/\nimport \"C\"\n", true},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "input.go")
+			snapshot := packageInputSnapshot{
+				data:           map[string][]byte{path: []byte(test.source)},
+				selectedOwners: map[string]map[string]bool{path: {"package": true}},
+				packageRoles:   map[string]map[string]string{"package": {path: "active"}},
+			}
+			if got := selectedPkgConfigDirective(snapshot, testProfile()); got != test.blocked {
+				t.Fatalf("pkg-config blocker=%v, want %v", got, test.blocked)
 			}
 		})
 	}
@@ -4452,6 +4484,66 @@ func TestLocalReplacementInventoryIsRootIndependent(t *testing.T) {
 	}
 }
 
+func TestSourceOutputRootRelationships(t *testing.T) {
+	parent := t.TempDir()
+	source := filepath.Join(parent, "source")
+	if err := os.Mkdir(source, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(source, "go.mod"), []byte("module example.com/roots\n\ngo 1.27.0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for name, out := range map[string]string{
+		"equal":    source,
+		"ancestor": parent,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if err := validateOutputSourceRoots(source, out); err == nil {
+				t.Fatal("invalid source/output relationship was accepted")
+			}
+		})
+	}
+	nested := filepath.Join(source, ".artifacts")
+	if err := validateOutputSourceRoots(source, nested); err != nil {
+		t.Fatalf("nested output was rejected: %v", err)
+	}
+	disjoint := t.TempDir()
+	if err := validateOutputSourceRoots(source, disjoint); err != nil {
+		t.Fatalf("disjoint output was rejected: %v", err)
+	}
+	if err := os.Mkdir(nested, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mirror, err := createSourceMirror(source, nested, t.TempDir(), testProfile().Limits)
+	if err != nil {
+		t.Fatalf("nested output mirror failed: %v", err)
+	}
+	if _, ok := mirror.trees[0].files[filepath.Join(mirror.trees[0].sourceRoot, "go.mod")]; !ok {
+		t.Fatal("nested output exclusion dropped unrelated source files")
+	}
+	if _, err := createSourceMirror(source, parent, t.TempDir(), testProfile().Limits); err == nil {
+		t.Fatal("mirror accepted output ancestor of source")
+	}
+	if runtime.GOOS == "darwin" {
+		aliasSource, err := os.MkdirTemp("/tmp", "go2gs-root-alias-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.RemoveAll(aliasSource) })
+		resolvedSource, err := secureRoot(aliasSource)
+		if err != nil {
+			t.Fatal(err)
+		}
+		aliasOutput := filepath.Join(aliasSource, ".artifacts")
+		if normalized := normalizeSystemPathAliases(aliasOutput); normalized != filepath.Join(resolvedSource, ".artifacts") {
+			t.Fatalf("Darwin /tmp alias normalized to %q", normalized)
+		}
+		if err := validateOutputSourceRoots(resolvedSource, aliasOutput); err != nil {
+			t.Fatalf("nested output through Darwin /tmp alias was rejected: %v", err)
+		}
+	}
+}
+
 func TestExternalReplacementCgoOnlyPackageUsesMirrorOverlay(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process-tree isolation intentionally fails closed on Windows")
@@ -5248,6 +5340,145 @@ func TestSanitizedEnvironmentDoesNotExposeAmbientPATH(t *testing.T) {
 	}
 	if result.ExitCode != 0 || !strings.HasPrefix(result.Stdout, "missing") {
 		t.Fatalf("ambient PATH helper was exposed: %#v", result)
+	}
+}
+
+func TestOfflineGoEnvironmentCannotSelectDirectResolution(t *testing.T) {
+	builders := map[string]func() ([]string, error){
+		"bootstrap": func() ([]string, error) { return bootstrapEnvironment(t.TempDir()), nil },
+		"worker": func() ([]string, error) {
+			return analysisWorkerEnvironment(t.TempDir(), "go", strings.Repeat("0", 64), runtime.GOROOT()), nil
+		},
+		"packages": func() ([]string, error) {
+			return sanitizedEnvironment(testProfile(), t.TempDir(), runtime.GOROOT(), filepath.Dir(runtime.GOROOT()))
+		},
+	}
+	expected := map[string]string{
+		"GOAUTH": "off", "GOENV": "off", "GOINSECURE": "", "GONOPROXY": "none",
+		"GONOSUMDB": "none", "GOPRIVATE": "", "GOPROXY": "off", "GOSUMDB": "off",
+		"GOVCS": "*:off",
+	}
+	for name, build := range builders {
+		t.Run(name, func(t *testing.T) {
+			environment, err := build()
+			if err != nil {
+				t.Fatal(err)
+			}
+			values := map[string]string{}
+			for _, entry := range environment {
+				key, value, _ := strings.Cut(entry, "=")
+				values[key] = value
+			}
+			for key, want := range expected {
+				if values[key] != want {
+					t.Errorf("%s=%q, want %q", key, values[key], want)
+				}
+			}
+		})
+	}
+}
+
+func TestOfflineGoEnvironmentMakesNoVanityNetworkAttempt(t *testing.T) {
+	requests := make(chan string, 1)
+	proxy := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, request *http.Request) {
+		select {
+		case requests <- request.Method + " " + request.Host:
+		default:
+		}
+	}))
+	defer proxy.Close()
+	goExecutable := filepath.Join(runtime.GOROOT(), "bin", selectedGoName())
+	cacheRoot, err := os.MkdirTemp("", "go2gs-offline-network-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		time.Sleep(100 * time.Millisecond)
+		_ = os.RemoveAll(cacheRoot)
+	}()
+	env, err := sanitizedEnvironment(testProfile(), cacheRoot, runtime.GOROOT(), filepath.Dir(goExecutable))
+	if err != nil {
+		t.Fatal(err)
+	}
+	env = append(env,
+		"HTTPS_PROXY="+proxy.URL,
+		"HTTP_PROXY="+proxy.URL,
+		"NO_PROXY=",
+	)
+	result, err := runProcess(t.Context(), 10*time.Second, 1<<20, t.TempDir(), goExecutable,
+		[]string{"list", "-m", "vanity.invalid/missing@v0.0.0"}, env)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if result.ExitCode == 0 {
+		t.Fatal("missing vanity module unexpectedly resolved")
+	}
+	select {
+	case request := <-requests:
+		t.Fatalf("offline Go environment attempted network access: %s", request)
+	default:
+	}
+}
+
+func TestAnalyzeDeadlineCoversExecutableCapture(t *testing.T) {
+	profile := testProfile()
+	profile.Limits.MaxDurationSeconds = 1
+	out := t.TempDir()
+	captureSelectedExecutableTestHook = func(ctx context.Context) { <-ctx.Done() }
+	t.Cleanup(func() { captureSelectedExecutableTestHook = nil })
+	started := time.Now()
+	err := runAnalyze(t.Context(), []string{
+		"--source", copyFixture(t, "complete"),
+		"--profile", writeTestProfile(t, profile),
+		"--out", out,
+	})
+	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("deadline did not stop executable capture: %v", err)
+	}
+	if time.Since(started) > 3*time.Second {
+		t.Fatal("deadline-bound capture returned too slowly")
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, statErr := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("timed-out analysis retained %s: %v", name, statErr)
+		}
+	}
+}
+
+func TestBoundedReadStopsOnCancellation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "large")
+	if err := os.WriteFile(path, bytes.Repeat([]byte("x"), 1<<20), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	chunks := 0
+	boundedReadChunkHook = func() {
+		chunks++
+		cancel()
+	}
+	t.Cleanup(func() { boundedReadChunkHook = nil })
+	if _, err := readBoundedRegularFileContext(ctx, path, 2<<20); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled bounded read returned %v", err)
+	}
+	if chunks != 1 {
+		t.Fatalf("cancelled bounded read processed %d chunks", chunks)
+	}
+}
+
+func TestExecutableCapsuleVerificationStopsOnCancellation(t *testing.T) {
+	source := filepath.Join(t.TempDir(), "tool")
+	if err := os.WriteFile(source, bytes.Repeat([]byte("x"), 1<<20), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	captured, _, err := captureSelectedExecutable("tool", source, "", 2<<20, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	boundedReadChunkHook = cancel
+	t.Cleanup(func() { boundedReadChunkHook = nil })
+	if _, err := createExecutableCapsuleContext(ctx, t.TempDir(), []capturedExecutable{captured}, false); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled executable verification returned %v", err)
 	}
 }
 

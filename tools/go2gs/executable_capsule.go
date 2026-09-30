@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"debug/buildinfo"
 	"errors"
 	"fmt"
@@ -14,6 +15,8 @@ import (
 )
 
 const maxToolExecutableBytes int64 = 256 << 20
+
+var captureSelectedExecutableTestHook func(context.Context)
 
 type capturedExecutable struct {
 	name       string
@@ -45,6 +48,19 @@ func selectedGoName() string {
 }
 
 func captureSelectedExecutable(name, path string, expectedHash string, limit int64, allowFinalSymlink bool) (capturedExecutable, string, error) {
+	return captureSelectedExecutableContext(context.Background(), name, path, expectedHash, limit, allowFinalSymlink)
+}
+
+func captureSelectedExecutableContext(ctx context.Context, name, path string, expectedHash string, limit int64, allowFinalSymlink bool) (capturedExecutable, string, error) {
+	if err := ctx.Err(); err != nil {
+		return capturedExecutable{}, "", err
+	}
+	if captureSelectedExecutableTestHook != nil {
+		captureSelectedExecutableTestHook(ctx)
+	}
+	if err := ctx.Err(); err != nil {
+		return capturedExecutable{}, "", err
+	}
 	if allowFinalSymlink {
 		resolved, err := filepath.EvalSymlinks(path)
 		if err != nil {
@@ -68,7 +84,7 @@ func captureSelectedExecutable(name, path string, expectedHash string, limit int
 	if !initialInfo.Mode().IsRegular() || initialInfo.Mode().Perm()&0o111 == 0 {
 		return capturedExecutable{}, "", errors.New("not a regular executable")
 	}
-	data, err := readBoundedRegularFile(path, limit)
+	data, err := readBoundedRegularFileContext(ctx, path, limit)
 	if err != nil {
 		return capturedExecutable{}, "", err
 	}
@@ -87,7 +103,12 @@ func captureSelectedExecutable(name, path string, expectedHash string, limit int
 }
 
 func captureSelectedGo(path, expectedHash string) (capturedExecutable, string, error) {
-	captured, hash, err := captureSelectedExecutable(
+	return captureSelectedGoContext(context.Background(), path, expectedHash)
+}
+
+func captureSelectedGoContext(ctx context.Context, path, expectedHash string) (capturedExecutable, string, error) {
+	captured, hash, err := captureSelectedExecutableContext(
+		ctx,
 		selectedGoName(), path, expectedHash, maxToolExecutableBytes, true,
 	)
 	if err != nil {
@@ -111,6 +132,13 @@ func captureSelectedGo(path, expectedHash string) (capturedExecutable, string, e
 }
 
 func createExecutableCapsule(workRoot string, entries []capturedExecutable, immutable bool) (*executableCapsule, error) {
+	return createExecutableCapsuleContext(context.Background(), workRoot, entries, immutable)
+}
+
+func createExecutableCapsuleContext(ctx context.Context, workRoot string, entries []capturedExecutable, immutable bool) (*executableCapsule, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	if len(entries) == 0 {
 		return nil, errors.New("executable capsule requires at least one entry")
 	}
@@ -144,6 +172,9 @@ func createExecutableCapsule(workRoot string, entries []capturedExecutable, immu
 		}
 	}()
 	for _, entry := range sorted {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if err := atomicWrite(filepath.Join(directory.writePath(), entry.name), entry.data, entry.mode); err != nil {
 			return nil, fmt.Errorf("stage executable %q: %w", entry.name, err)
 		}
@@ -151,7 +182,7 @@ func createExecutableCapsule(workRoot string, entries []capturedExecutable, immu
 	if err := directory.seal(); err != nil {
 		return nil, err
 	}
-	if err := capsule.verify(); err != nil {
+	if err := capsule.verifyContext(ctx); err != nil {
 		return nil, err
 	}
 	success = true
@@ -163,6 +194,13 @@ func (c *executableCapsule) path(name string) string {
 }
 
 func (c *executableCapsule) verify() error {
+	return c.verifyContext(context.Background())
+}
+
+func (c *executableCapsule) verifyContext(ctx context.Context) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(c.directory.executionPath())
 	if err != nil {
 		return err
@@ -171,6 +209,9 @@ func (c *executableCapsule) verify() error {
 		return errors.New("executable capsule contains unexpected entries")
 	}
 	for index, entry := range c.entries {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		if entries[index].Name() != entry.name {
 			return errors.New("executable capsule ordering or contents changed")
 		}
@@ -180,8 +221,11 @@ func (c *executableCapsule) verify() error {
 				!os.SameFile(entry.sourceInfo, sourceInfo) || sourceInfo.Mode() != entry.sourceInfo.Mode() {
 				return fmt.Errorf("executable %q source identity changed", entry.name)
 			}
-			sourceData, err := readBoundedRegularFile(entry.sourcePath, int64(len(entry.data)))
-			if err != nil || !bytes.Equal(sourceData, entry.data) {
+			sourceData, err := readBoundedRegularFileContext(ctx, entry.sourcePath, int64(len(entry.data)))
+			if err != nil {
+				return fmt.Errorf("verify executable %q source content: %w", entry.name, err)
+			}
+			if !bytes.Equal(sourceData, entry.data) {
 				return fmt.Errorf("executable %q source content changed", entry.name)
 			}
 		}
@@ -190,8 +234,11 @@ func (c *executableCapsule) verify() error {
 		if err != nil || !stagedInfo.Mode().IsRegular() || stagedInfo.Mode().Perm() != entry.mode {
 			return fmt.Errorf("executable %q staged identity changed", entry.name)
 		}
-		stagedData, err := readBoundedRegularFile(stagedPath, int64(len(entry.data)))
-		if err != nil || !bytes.Equal(stagedData, entry.data) {
+		stagedData, err := readBoundedRegularFileContext(ctx, stagedPath, int64(len(entry.data)))
+		if err != nil {
+			return fmt.Errorf("verify executable %q staged content: %w", entry.name, err)
+		}
+		if !bytes.Equal(stagedData, entry.data) {
 			return fmt.Errorf("executable %q staged content changed", entry.name)
 		}
 	}

@@ -42,6 +42,7 @@ var rootedReadBeforeOpenHook func(string, string)
 var rootedReadAfterOpenHook func(string, string)
 var rootedWalkBeforeDescendHook func(string)
 var rootedDirectoryBeforeOpenHook func(string)
+var boundedReadChunkHook func()
 
 func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (Analysis, bool, error) {
 	return analyzeWithSnapshotHook(ctx, sourceRoot, outRoot, profile, nil)
@@ -60,6 +61,9 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 }
 
 func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot, afterLoad func(), preloadOnly bool, gorootHandoff string) (_ Analysis, _ bool, err error) {
+	if err := ctx.Err(); err != nil {
+		return Analysis{}, false, err
+	}
 	if err := validateGoTarget(profile.GOOS, profile.GOARCH); err != nil {
 		return Analysis{}, false, err
 	}
@@ -77,15 +81,29 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	if filepath.Clean(outRoot) == filepath.Clean(sourceRoot) {
-		return Analysis{}, false, errors.New("output root must be outside the source root")
-	}
-	if err := os.MkdirAll(outRoot, 0o700); err != nil {
+	outRoot = normalizeSystemPathAliases(outRoot)
+	if err := validateOutputSourceRoots(sourceRoot, outRoot); err != nil {
 		return Analysis{}, false, err
 	}
-	outRoot, err = secureRoot(outRoot)
-	if err != nil {
-		return Analysis{}, false, fmt.Errorf("output root: %w", err)
+	if _, statErr := os.Lstat(outRoot); statErr == nil {
+		outRoot, err = secureRoot(outRoot)
+		if err != nil {
+			return Analysis{}, false, fmt.Errorf("output root: %w", err)
+		}
+	} else {
+		if !os.IsNotExist(statErr) {
+			return Analysis{}, false, statErr
+		}
+		if err := ensureOutputRoot(outRoot, 0o700); err != nil {
+			return Analysis{}, false, err
+		}
+		outRoot, err = secureRoot(outRoot)
+		if err != nil {
+			return Analysis{}, false, fmt.Errorf("output root: %w", err)
+		}
+	}
+	if err := validateResolvedOutputSourceRoots(sourceRoot, outRoot); err != nil {
+		return Analysis{}, false, err
 	}
 	selectedGo := os.Getenv("GO2GS_SELECTED_GO")
 	if selectedGo == "" {
@@ -95,7 +113,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		}
 	}
 	expectedGoHash := os.Getenv("GO2GS_SELECTED_GO_SHA256")
-	goExecutable, goHash, err := captureSelectedGo(selectedGo, expectedGoHash)
+	goExecutable, goHash, err := captureSelectedGoContext(ctx, selectedGo, expectedGoHash)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("capture Go executable: %w", err)
 	}
@@ -103,7 +121,8 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	_, helperHash, err := captureSelectedExecutable(
+	_, helperHash, err := captureSelectedExecutableContext(
+		ctx,
 		filepath.Base(self), self, "", maxToolExecutableBytes, true,
 	)
 	if err != nil {
@@ -124,7 +143,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	}
 	executables := []capturedExecutable{goExecutable}
 	secureExecution := os.Getenv("GO2GS_EXEC_NAMESPACE") == "1"
-	capsule, err := createExecutableCapsule(workRoot, executables, secureExecution)
+	capsule, err := createExecutableCapsuleContext(ctx, workRoot, executables, secureExecution)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("create private executable capsule: %w", err)
 	}
@@ -133,6 +152,9 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	}()
 	if executableCapsuleTestHook != nil {
 		executableCapsuleTestHook(capsule)
+	}
+	if err := ctx.Err(); err != nil {
+		return Analysis{}, false, err
 	}
 	if secureExecution {
 		previousPath, hadPath := os.LookupEnv("PATH")
@@ -163,7 +185,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if err != nil {
 		return Analysis{}, false, err
 	}
-	gorootVersion, err := readBoundedRegularFile(filepath.Join(targetGOROOT, "VERSION"), 1<<20)
+	gorootVersion, err := readBoundedRegularFileContext(ctx, filepath.Join(targetGOROOT, "VERSION"), 1<<20)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("hash selected Go GOROOT VERSION: %w", err)
 	}
@@ -186,7 +208,13 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	semanticProfile := profile
 	semanticProfile.BuildTags = effectiveTags
 
+	if err := ctx.Err(); err != nil {
+		return Analysis{}, false, err
+	}
 	actualCommit, sourceCommitErr := sourceCommit(sourceRoot)
+	if err := ctx.Err(); err != nil {
+		return Analysis{}, false, err
+	}
 	toolchain := ToolchainProvenance{
 		RequestedVersion: profile.RequestedGoVersion, ActualVersion: actualVersion,
 		HelperSemanticVersion: helperSemanticVersion, GOROOTVersion: gorootSemanticVersion,
@@ -221,11 +249,12 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		Toolchain: toolchain,
 	}
 
-	mirror, err := createSourceMirror(sourceRoot, outRoot, workRoot, profile.Limits)
+	mirror, err := createSourceMirrorContext(ctx, sourceRoot, outRoot, workRoot, profile.Limits)
 	if err != nil {
 		return Analysis{}, false, err
 	}
 	builder := newInventoryBuilder(&analysis, mirror.root, targetGOROOT, profile)
+	builder.ctx = ctx
 	builder.diagnosticRedactions = append(builder.diagnosticRedactions,
 		workRoot,
 		capsule.directory.executionPath(),
@@ -290,7 +319,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		packageLoadTestHook("preflight-after")
 	}
 	selectedPreflight = collectPackages(selectedPreflight)
-	sourceSnapshot, err := snapshotPackageInputs(selectedPreflight, selectedPreflight, mirror, semanticProfile, profile.Limits)
+	sourceSnapshot, err := snapshotPackageInputs(ctx, selectedPreflight, selectedPreflight, mirror, semanticProfile, profile.Limits)
 	if err != nil {
 		return Analysis{}, false, err
 	}
@@ -499,6 +528,13 @@ type manifestRootSnapshot struct {
 }
 
 func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (sourceMirror, error) {
+	return createSourceMirrorContext(context.Background(), sourceRoot, outRoot, workRoot, limits)
+}
+
+func createSourceMirrorContext(ctx context.Context, sourceRoot, outRoot, workRoot string, limits Limits) (sourceMirror, error) {
+	if err := ctx.Err(); err != nil {
+		return sourceMirror{}, err
+	}
 	var err error
 	sourceRoot, err = secureRoot(sourceRoot)
 	if err != nil {
@@ -512,10 +548,13 @@ func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (so
 	if err != nil {
 		return sourceMirror{}, fmt.Errorf("secure work root: %w", err)
 	}
+	if err := validateResolvedOutputSourceRoots(sourceRoot, outRoot); err != nil {
+		return sourceMirror{}, err
+	}
 	mirrorBase := filepath.Join(workRoot, "source-mirror")
 	root := filepath.Join(mirrorBase, "source")
 	budget := &mirrorBudget{}
-	tree, err := captureTree(sourceRoot, root, []string{outRoot, workRoot}, limits, budget)
+	tree, err := captureTreeContext(ctx, sourceRoot, root, []string{outRoot, workRoot}, limits, budget)
 	if err != nil {
 		return sourceMirror{}, fmt.Errorf("create immutable source mirror: %w", err)
 	}
@@ -540,12 +579,18 @@ func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (so
 	}
 	replacements := make([]replacementDirective, 0, len(parsed.Replace))
 	for _, replacement := range parsed.Replace {
+		if err := ctx.Err(); err != nil {
+			return sourceMirror{}, err
+		}
 		replacements = append(replacements, replacementDirective{
 			oldPath: replacement.Old.Path, oldVersion: replacement.Old.Version,
 			newPath: replacement.New.Path, newVersion: replacement.New.Version,
 		})
 	}
 	for _, replacement := range replacements {
+		if err := ctx.Err(); err != nil {
+			return sourceMirror{}, err
+		}
 		if replacement.newVersion != "" {
 			continue
 		}
@@ -569,7 +614,7 @@ func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (so
 			if destination == "" {
 				destination = filepath.Join(mirrorBase, "replacements", hashBytes([]byte(replacement.oldPath + "\x00" + replacement.newPath))[:16])
 				var captureErr error
-				replacementTree, captureErr = captureTree(replacementRoot, destination, nil, limits, budget)
+				replacementTree, captureErr = captureTreeContext(ctx, replacementRoot, destination, nil, limits, budget)
 				if captureErr != nil {
 					return sourceMirror{}, fmt.Errorf("mirror local replacement %s: %w", replacement.oldPath, captureErr)
 				}
@@ -608,11 +653,21 @@ func createSourceMirror(sourceRoot, outRoot, workRoot string, limits Limits) (so
 }
 
 func captureTree(sourceRoot, mirrorRoot string, excluded []string, limits Limits, budget *mirrorBudget) (mirroredTree, error) {
+	return captureTreeContext(context.Background(), sourceRoot, mirrorRoot, excluded, limits, budget)
+}
+
+func captureTreeContext(ctx context.Context, sourceRoot, mirrorRoot string, excluded []string, limits Limits, budget *mirrorBudget) (mirroredTree, error) {
+	if err := ctx.Err(); err != nil {
+		return mirroredTree{}, err
+	}
 	if err := os.MkdirAll(mirrorRoot, 0o700); err != nil {
 		return mirroredTree{}, err
 	}
 	result := mirroredTree{sourceRoot: sourceRoot, mirrorRoot: mirrorRoot, files: map[string]snapshottedInput{}}
 	err := walkRootedMetadataTree(sourceRoot, func(relative string, entry os.DirEntry) (bool, error) {
+		if err := ctx.Err(); err != nil {
+			return false, err
+		}
 		path := filepath.Join(sourceRoot, relative)
 		if relative == ".git" {
 			return false, nil
@@ -642,7 +697,8 @@ func captureTree(sourceRoot, mirrorRoot string, excluded []string, limits Limits
 		if budget.files >= limits.MaxFiles || budget.bytes >= limits.MaxLocalHashBytes {
 			return false, errors.New("source mirror exceeds configured limits")
 		}
-		data, rootedInfo, err := readBoundedRegularFileWithinRoot(sourceRoot, relative, limits.MaxLocalHashBytes-budget.bytes)
+		data, rootedInfo, err := readBoundedRegularFileWithinRootContext(
+			ctx, sourceRoot, relative, limits.MaxLocalHashBytes-budget.bytes)
 		if err != nil {
 			return false, fmt.Errorf("capture %s: %w", relative, err)
 		}
@@ -841,7 +897,10 @@ type packageInputSnapshot struct {
 	pkgConfig      bool
 }
 
-func snapshotPackageInputs(selected, captured []*packages.Package, mirror sourceMirror, profile Profile, limits Limits) (packageInputSnapshot, error) {
+func snapshotPackageInputs(ctx context.Context, selected, captured []*packages.Package, mirror sourceMirror, profile Profile, limits Limits) (packageInputSnapshot, error) {
+	if err := ctx.Err(); err != nil {
+		return packageInputSnapshot{}, err
+	}
 	sourceRoot := mirror.root
 	result := packageInputSnapshot{
 		data:           map[string][]byte{},
@@ -857,6 +916,9 @@ func snapshotPackageInputs(selected, captured []*packages.Package, mirror source
 	}
 	directories := map[string]map[string]bool{}
 	for _, pkg := range captured {
+		if err := ctx.Err(); err != nil {
+			return packageInputSnapshot{}, err
+		}
 		key := packageInputKey(pkg)
 		result.packageRoles[key] = packageInputRoles(pkg)
 		if pkg.Dir != "" {
@@ -887,6 +949,9 @@ func snapshotPackageInputs(selected, captured []*packages.Package, mirror source
 		result.packageFiles[key] = uniqueSorted(result.packageFiles[key])
 	}
 	for _, pkg := range selected {
+		if err := ctx.Err(); err != nil {
+			return packageInputSnapshot{}, err
+		}
 		key := packageInputKey(pkg)
 		result.packageRoles[key] = packageInputRoles(pkg)
 		if pkg.Dir != "" {
@@ -907,6 +972,9 @@ func snapshotPackageInputs(selected, captured []*packages.Package, mirror source
 	}
 	sort.Strings(sortedDirectories)
 	for _, directory := range sortedDirectories {
+		if err := ctx.Err(); err != nil {
+			return packageInputSnapshot{}, err
+		}
 		entries, err := os.ReadDir(directory)
 		if err != nil {
 			return packageInputSnapshot{}, fmt.Errorf("snapshot source directory: %w", err)
@@ -934,6 +1002,9 @@ func snapshotPackageInputs(selected, captured []*packages.Package, mirror source
 		pending[path] = true
 	}
 	for len(pending) > 0 {
+		if err := ctx.Err(); err != nil {
+			return packageInputSnapshot{}, err
+		}
 		paths := make([]string, 0, len(pending))
 		for path := range pending {
 			paths = append(paths, path)
@@ -951,7 +1022,8 @@ func snapshotPackageInputs(selected, captured []*packages.Package, mirror source
 		if !ok {
 			return packageInputSnapshot{}, fmt.Errorf("snapshot input %s: path escapes mirrored roots", filepath.Base(path))
 		}
-		data, rootedInfo, err := readBoundedRegularFileWithinRoot(root, relative, limits.MaxLocalHashBytes-total)
+		data, rootedInfo, err := readBoundedRegularFileWithinRootContext(
+			ctx, root, relative, limits.MaxLocalHashBytes-total)
 		if err != nil {
 			return packageInputSnapshot{}, fmt.Errorf("snapshot input %s: %w", filepath.Base(path), err)
 		}
@@ -1242,30 +1314,64 @@ func selectedPkgConfigDirective(snapshot packageInputSnapshot, profile Profile) 
 			filepath.Ext(path) != ".go" || !pathsImportC([]string{path}, snapshot.data) {
 			continue
 		}
-		for _, line := range strings.Split(string(data), "\n") {
-			line = strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(line), "//"))
-			if !strings.HasPrefix(line, "#cgo ") {
-				continue
-			}
-			directive, _, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, "#cgo")), ":")
-			if !ok {
-				continue
-			}
-			fields := strings.Fields(directive)
-			if len(fields) == 0 || fields[len(fields)-1] != "pkg-config" {
-				continue
-			}
-			if len(fields) == 1 {
-				return true
-			}
-			for _, condition := range fields[:len(fields)-1] {
-				if matchCgoCondition(condition, profile) {
+		file, err := parser.ParseFile(token.NewFileSet(), path, data, parser.ImportsOnly|parser.ParseComments)
+		if err != nil {
+			continue
+		}
+		for _, group := range importCCommentGroups(file) {
+			for _, line := range strings.Split(group.Text(), "\n") {
+				line = strings.TrimSpace(line)
+				if !strings.HasPrefix(line, "#cgo ") && !strings.HasPrefix(line, "#cgo\t") {
+					continue
+				}
+				directive, _, ok := strings.Cut(strings.TrimSpace(strings.TrimPrefix(line, "#cgo")), ":")
+				if !ok {
+					continue
+				}
+				fields := strings.Fields(directive)
+				if len(fields) == 0 || fields[len(fields)-1] != "pkg-config" {
+					continue
+				}
+				if len(fields) == 1 {
 					return true
+				}
+				for _, condition := range fields[:len(fields)-1] {
+					if matchCgoCondition(condition, profile) {
+						return true
+					}
 				}
 			}
 		}
 	}
 	return false
+}
+
+func importCCommentGroups(file *ast.File) []*ast.CommentGroup {
+	var result []*ast.CommentGroup
+	seen := map[*ast.CommentGroup]bool{}
+	for _, declaration := range file.Decls {
+		imports, ok := declaration.(*ast.GenDecl)
+		if !ok || imports.Tok != token.IMPORT {
+			continue
+		}
+		for _, candidate := range imports.Specs {
+			spec, ok := candidate.(*ast.ImportSpec)
+			if !ok || spec.Path == nil {
+				continue
+			}
+			path, err := strconv.Unquote(spec.Path.Value)
+			if err != nil || path != "C" {
+				continue
+			}
+			for _, group := range []*ast.CommentGroup{imports.Doc, spec.Doc} {
+				if group != nil && !seen[group] {
+					seen[group] = true
+					result = append(result, group)
+				}
+			}
+		}
+	}
+	return result
 }
 
 func selectedGoSource(snapshot packageInputSnapshot, path string) bool {
@@ -2006,14 +2112,25 @@ func packedGitReference(path, ref string) (string, bool, error) {
 }
 
 func readBoundedRegularFile(path string, limit int64) ([]byte, error) {
-	return readBoundedRegularFileWithHooks(path, limit, nil, nil)
+	return readBoundedRegularFileContext(context.Background(), path, limit)
+}
+
+func readBoundedRegularFileContext(ctx context.Context, path string, limit int64) ([]byte, error) {
+	return readBoundedRegularFileWithHooksContext(ctx, path, limit, nil, nil)
 }
 
 func readBoundedRegularFileAfterOpen(path string, limit int64, afterOpen func()) (data []byte, err error) {
-	return readBoundedRegularFileWithHooks(path, limit, nil, afterOpen)
+	return readBoundedRegularFileWithHooksContext(context.Background(), path, limit, nil, afterOpen)
 }
 
 func readBoundedRegularFileWithHooks(path string, limit int64, beforeOpen, afterOpen func()) (data []byte, err error) {
+	return readBoundedRegularFileWithHooksContext(context.Background(), path, limit, beforeOpen, afterOpen)
+}
+
+func readBoundedRegularFileWithHooksContext(ctx context.Context, path string, limit int64, beforeOpen, afterOpen func()) (data []byte, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
 	initialInfo, err := os.Lstat(path)
 	if err != nil {
 		return nil, err
@@ -2049,17 +2166,21 @@ func readBoundedRegularFileWithHooks(path string, limit int64, beforeOpen, after
 		openedInfo.Size() > limit {
 		return nil, errors.New("not a bounded regular file")
 	}
-	data, err = io.ReadAll(io.LimitReader(file, limit+1))
+	data, err = readBoundedContext(ctx, file, limit)
 	if err != nil {
 		return nil, fmt.Errorf("read metadata file: %w", err)
-	}
-	if int64(len(data)) > limit {
-		return nil, errors.New("metadata file exceeds size limit")
 	}
 	return data, nil
 }
 
 func readBoundedRegularFileWithinRoot(root, relative string, limit int64) (data []byte, info os.FileInfo, err error) {
+	return readBoundedRegularFileWithinRootContext(context.Background(), root, relative, limit)
+}
+
+func readBoundedRegularFileWithinRootContext(ctx context.Context, root, relative string, limit int64) (data []byte, info os.FileInfo, err error) {
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	if limit < 0 {
 		return nil, nil, errors.New("metadata file size limit is negative")
 	}
@@ -2098,14 +2219,37 @@ func readBoundedRegularFileWithinRoot(root, relative string, limit int64) (data 
 		!os.SameFile(openedInfo, verificationInfo) || openedInfo.Size() > limit {
 		return nil, nil, errors.New("not a bounded rooted regular file")
 	}
-	data, err = io.ReadAll(io.LimitReader(file, limit+1))
+	data, err = readBoundedContext(ctx, file, limit)
 	if err != nil {
 		return nil, nil, fmt.Errorf("read rooted metadata file: %w", err)
 	}
-	if int64(len(data)) > limit {
-		return nil, nil, errors.New("rooted metadata file exceeds size limit")
-	}
 	return data, openedInfo, nil
+}
+
+func readBoundedContext(ctx context.Context, reader io.Reader, limit int64) ([]byte, error) {
+	var result bytes.Buffer
+	buffer := make([]byte, 32<<10)
+	for {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if boundedReadChunkHook != nil {
+			boundedReadChunkHook()
+		}
+		n, err := reader.Read(buffer)
+		if n > 0 {
+			if int64(result.Len()+n) > limit {
+				return nil, errors.New("metadata file exceeds size limit")
+			}
+			_, _ = result.Write(buffer[:n])
+		}
+		if errors.Is(err, io.EOF) {
+			return result.Bytes(), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+	}
 }
 
 func validGitRef(value string) bool {
