@@ -774,6 +774,70 @@ func TestInactivePkgConfigDirectiveDoesNotBlock(t *testing.T) {
 	}
 }
 
+func TestPkgConfigFallbackScansOnlySelectedCgoFiles(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
+	}
+	for _, test := range []struct {
+		name    string
+		file    string
+		source  string
+		tests   bool
+		blocked bool
+	}{
+		{
+			name: "build-tag-excluded", file: "inactive_pkgconfig.go",
+			source:  "//go:build go2gs_never\n\npackage cgofixture\n/*\n#cgo pkg-config: inactive-package\n*/\nimport \"C\"\n",
+			tests:   true,
+			blocked: false,
+		},
+		{
+			name: "filename-excluded", file: "inactive_pkgconfig_windows.go",
+			source:  "package cgofixture\n/*\n#cgo pkg-config: inactive-package\n*/\nimport \"C\"\n",
+			tests:   true,
+			blocked: false,
+		},
+		{
+			name: "active-selected", file: "active_pkgconfig.go",
+			source:  "package cgofixture\n/*\n#cgo pkg-config: active-package\n*/\nimport \"C\"\n",
+			tests:   true,
+			blocked: true,
+		},
+		{
+			name: "test-not-loaded", file: "pkgconfig_test.go",
+			source:  "package cgofixture\n/*\n#cgo pkg-config: test-package\n*/\nimport \"C\"\n",
+			tests:   false,
+			blocked: false,
+		},
+		{
+			name: "test-loaded", file: "pkgconfig_test.go",
+			source:  "package cgofixture\n/*\n#cgo pkg-config: test-package\n*/\nimport \"C\"\n",
+			tests:   true,
+			blocked: true,
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := copyFixture(t, "cgo")
+			if err := os.WriteFile(filepath.Join(root, test.file), []byte(test.source), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			profile := testProfile()
+			profile.LoadTests = test.tests
+			profile.CGOEnabled = true
+			analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "cgo") {
+				t.Fatalf("CGo fixture did not fail closed: complete=%v blockers=%#v", complete, analysis.Blockers)
+			}
+			if got := hasBlockerCategory(analysis, "pkg-config"); got != test.blocked {
+				t.Fatalf("pkg-config blocker=%v, want %v: %#v", got, test.blocked, analysis.Blockers)
+			}
+		})
+	}
+}
+
 func TestCgoPkgConfigConstraintsUseSelectedGo(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("process-tree isolation intentionally fails closed on Windows")
