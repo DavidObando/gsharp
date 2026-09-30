@@ -1705,6 +1705,7 @@ internal sealed partial class StatementBinder
                     Arguments: var arguments,
                 })
             {
+                MayMutateGlobalRoots = true;
                 if (function.HasCaptures)
                 {
                     MayMutateAnyRoot = true;

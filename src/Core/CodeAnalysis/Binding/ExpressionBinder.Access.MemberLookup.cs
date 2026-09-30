@@ -467,16 +467,49 @@ internal sealed partial class ExpressionBinder
             overridden = overridden.OverriddenMethod;
         }
 
+        if (selected.ExplicitInterfaceMember is { } explicitInterfaceMember)
+        {
+            var exactInterfaceMatch = candidateArray.FirstOrDefault(candidate =>
+                SameMethodSlot(explicitInterfaceMember, candidate));
+            if (exactInterfaceMatch != null)
+            {
+                return exactInterfaceMatch;
+            }
+        }
+
         if (declaredType is not InterfaceSymbol)
         {
             return null;
         }
 
         var interfaceMatches = candidateArray
-            .Where(candidate => HasSameCallableSignature(candidate, selected))
+            .Where(candidate =>
+                HasSameCallableSignature(candidate, selected)
+                && CanRecoverInterfaceMethodSlot(selected, candidate))
             .Take(2)
             .ToArray();
         return interfaceMatches.Length == 1 ? interfaceMatches[0] : null;
+    }
+
+    private static bool CanRecoverInterfaceMethodSlot(
+        FunctionSymbol selected,
+        FunctionSymbol declared)
+    {
+        if (declared.ContainingType is not InterfaceSymbol
+            || selected.HasExplicitInterfaceClause)
+        {
+            return false;
+        }
+
+        if (selected.ContainingType is not StructSymbol implementationType)
+        {
+            return true;
+        }
+
+        return !implementationType.GetHierarchy().SelectMany(type => type.Methods).Any(method =>
+            !ReferenceEquals(method, selected)
+            && method.ExplicitInterfaceMember is { } explicitMember
+            && SameMethodSlot(explicitMember, declared));
     }
 
     private static System.Reflection.MethodInfo? FindDeclaredClrMethod(
@@ -550,6 +583,8 @@ internal sealed partial class ExpressionBinder
                     return WithCompatibleReturn(map.InterfaceMethods[i]);
                 }
             }
+
+            return null;
         }
         catch (Exception ex) when (ClrTypeUtilities.IsMetadataLoadFailure(ex) || ex is ArgumentException)
         {
@@ -593,6 +628,7 @@ internal sealed partial class ExpressionBinder
             || selected.IsStatic
             || selected.DeclaringType == null
             || !ClrTypeUtilities.IsAssignableByName(interfaceType, selected.DeclaringType)
+            || HasExplicitClrInterfaceImplementation(selected, interfaceMethod)
             || selected.Name != interfaceMethod.Name
             || selected.GetGenericArguments().Length != interfaceMethod.GetGenericArguments().Length
             || selected.ReturnType != interfaceMethod.ReturnType)
@@ -605,6 +641,36 @@ internal sealed partial class ExpressionBinder
         return selectedParameters.Length == interfaceParameters.Length
             && selectedParameters.Zip(interfaceParameters).All(pair =>
                 pair.First.ParameterType == pair.Second.ParameterType);
+    }
+
+    private static bool HasExplicitClrInterfaceImplementation(
+        System.Reflection.MethodInfo selected,
+        System.Reflection.MethodInfo interfaceMethod)
+    {
+        var declaringType = selected.DeclaringType;
+        if (declaringType == null)
+        {
+            return false;
+        }
+
+        var suffix = "." + interfaceMethod.Name;
+        var interfaceParameters = interfaceMethod.GetParameters();
+        const System.Reflection.BindingFlags flags = System.Reflection.BindingFlags.Instance
+            | System.Reflection.BindingFlags.NonPublic
+            | System.Reflection.BindingFlags.DeclaredOnly;
+        return ClrTypeUtilities.SafeGetMethods(declaringType, flags)
+            .Any(candidate =>
+                !ReferenceEquals(candidate, selected)
+                && candidate.IsPrivate
+                && candidate.IsVirtual
+                && candidate.IsFinal
+                && candidate.Name.EndsWith(suffix, StringComparison.Ordinal)
+                && candidate.GetGenericArguments().Length == interfaceMethod.GetGenericArguments().Length
+                && candidate.ReturnType == interfaceMethod.ReturnType
+                && candidate.GetParameters() is { } parameters
+                && parameters.Length == interfaceParameters.Length
+                && parameters.Zip(interfaceParameters).All(pair =>
+                    pair.First.ParameterType == pair.Second.ParameterType));
     }
 
     private static bool IsClrMethodAvailableOnSourceType(

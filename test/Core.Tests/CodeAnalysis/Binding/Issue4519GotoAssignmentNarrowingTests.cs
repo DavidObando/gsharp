@@ -4325,6 +4325,100 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_PublicMethodDoesNotAliasExplicitInterfaceMethod()
+    {
+        var result = Evaluate("""
+            interface View {
+                func Read() string;
+            }
+            class Dog : View {
+                func Read() string -> "public"
+                private func (View) Read() string -> "explicit"
+            }
+
+            func Run() string {
+                var x View = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x.Read()
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("public", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_ImportedPublicMethodDoesNotAliasExplicitInterfaceMethod()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            func Run() string {
+                var x Issue4519ImportedCallReceiver = Issue4519ImportedCallDog()
+                var count = 0
+                if x is Issue4519ImportedCallDog {
+                Again:
+                    let value = x.Describe()
+                    if count == 0 {
+                        count++
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """,
+            new[] { typeof(Issue4519ImportedCallReceiver).Assembly.Location });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("public", result.Value);
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyDirectSourceCallInvalidatesGlobalNarrowing()
+    {
+        var result = Evaluate("""
+            var text string? = nil
+
+            func Clear() {
+                text = nil
+            }
+
+            func Run() int32 {
+                text = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    Clear()
+                }
+            Done:
+                return text.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void BackwardGoto_ConstructedGenericPropertyGuardRetainsNullableType()
     {
         var result = Evaluate("""
@@ -4591,6 +4685,9 @@ public interface Issue4519ImportedCallReceiver
 
     /// <summary>Applies a callback to a deterministic value.</summary>
     int Apply(Func<int, int> selector);
+
+    /// <summary>Describes the selected dispatch slot.</summary>
+    string Describe();
 }
 
 /// <summary>First imported implementation used as the narrowed receiver.</summary>
@@ -4605,6 +4702,11 @@ public sealed class Issue4519ImportedCallDog : Issue4519ImportedCallReceiver
 
     /// <inheritdoc/>
     public int Apply(Func<int, int> selector) => selector(11);
+
+    /// <summary>Public method that ordinary concrete lookup must retain.</summary>
+    public string Describe() => "public";
+
+    string Issue4519ImportedCallReceiver.Describe() => "explicit";
 }
 
 /// <summary>Second imported implementation reached by the backedge.</summary>
@@ -4619,4 +4721,7 @@ public sealed class Issue4519ImportedCallCat : Issue4519ImportedCallReceiver
 
     /// <inheritdoc/>
     public int Apply(Func<int, int> selector) => selector(22);
+
+    /// <inheritdoc/>
+    public string Describe() => "cat";
 }
