@@ -9333,10 +9333,46 @@ internal sealed class MemberLookup
 
     private static IEnumerable<Type> EnumerateOpenInterfacesAndBases(Type openDef)
     {
+        // Issue #4559: sparse InterfaceImpl metadata (as G# emits it) lists only
+        // the DIRECT interfaces of a type, so GetInterfaces() on a class or
+        // interface omits interfaces inherited through them (IReadOnlyCollection<T>
+        // -> IEnumerable<T>). Close the set transitively, through every base type
+        // as well, so generic inference sees the same hierarchy it sees for a
+        // C#-emitted assembly. A constructed interface's GetInterfaces() already
+        // substitutes its type arguments.
+        var seen = new HashSet<Type>();
+        var pending = new Stack<Type>();
         yield return openDef;
-        foreach (var iface in openDef.GetInterfaces())
+
+        // Seed in reverse so popping visits the type's own interfaces first,
+        // in metadata order, then those of its base types.
+        var roots = new List<Type>(openDef.GetInterfaces());
+        for (Type? baseType = openDef.BaseType;
+            baseType != null && !baseType.IsSameAs(typeof(object));
+            baseType = baseType.BaseType)
         {
+            roots.AddRange(baseType.GetInterfaces());
+        }
+
+        for (var i = roots.Count - 1; i >= 0; i--)
+        {
+            pending.Push(roots[i]);
+        }
+
+        while (pending.Count > 0)
+        {
+            var iface = pending.Pop();
+            if (!seen.Add(iface))
+            {
+                continue;
+            }
+
             yield return iface;
+            var inherited = iface.GetInterfaces();
+            for (var i = inherited.Length - 1; i >= 0; i--)
+            {
+                pending.Push(inherited[i]);
+            }
         }
 
         for (Type? baseType = openDef.BaseType;
