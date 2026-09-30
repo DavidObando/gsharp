@@ -769,7 +769,8 @@ public sealed partial class CSharpToGSharpTranslator
             || this.IsGSharpNullableAnalyzerExpression(operandSyntax)
             || this.NullableReferenceValueMayBeNull(operandSyntax)
             || this.ReceiverValueIsObliviouslyReadAnnotatedResult(operandSyntax)
-            || this.ReceiverValueIsPromotedNullable(operandSyntax);
+            || this.ReceiverValueIsPromotedNullable(operandSyntax)
+            || this.ComposedReceiverMayBeNull(operandSyntax);
 
         // Issue #1960 item 2: true when `assignment` is a `+=`/`-=` whose LEFT
         // side is delegate-typed (TypeKind.Delegate covers both a named delegate
