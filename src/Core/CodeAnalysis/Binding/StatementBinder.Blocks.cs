@@ -457,7 +457,7 @@ internal sealed partial class StatementBinder
         {
             RestoreExternalCallableAliases(callableFinallyEntries);
             finallyEntryExternalCallableAliases[syntax.FinallyClause] =
-                externalCallableAliases.ToImmutableArray();
+                callableExits?.ToImmutableArray() ?? ImmutableArray<VariableSymbol>.Empty;
             var inheritedReachability = currentStatementListFallsThrough;
             currentStatementListFallsThrough = handlersReachable;
             exceptionHandlerRegions.Push(syntax.FinallyClause);

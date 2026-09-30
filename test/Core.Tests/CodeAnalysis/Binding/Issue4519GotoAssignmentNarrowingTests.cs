@@ -5257,6 +5257,59 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void TryFinallyFallthroughIgnoresReturningCallableState()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(callback (() -> void), exitEarly bool) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = callback
+                try {
+                    if exitEarly {
+                        action = clear
+                        return 0
+                    }
+                }
+                finally {
+                    text = "safe"
+                    action()
+                }
+                return text.Length
+            }
+
+            Console.WriteLine(Run(func() { }, false))
+            """, "4");
+    }
+
+    [Fact]
+    public void TryFinallyFallthroughUsesCallableStateAtEachStatement()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = callback
+                try {
+                }
+                finally {
+                    {
+                        text = "safe"
+                        action()
+                        action = clear
+                    }
+                }
+                return text.Length
+            }
+
+            Console.WriteLine(Run(func() { }))
+            """, "4");
+    }
+
+    [Fact]
     public void ForwardGoto_NonCompletingInfiniteFinallyDoesNotActivateEdge()
     {
         AssertRuns("""

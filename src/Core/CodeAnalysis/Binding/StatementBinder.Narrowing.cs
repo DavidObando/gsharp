@@ -1090,7 +1090,7 @@ internal sealed partial class StatementBinder
             : ImmutableArray.Create(cleanup);
         foreach (var statement in statements)
         {
-            if (!ProcessBranchStatement(statement, state))
+            if (!ProcessBranchStatement(statement, state, aliases))
             {
                 return null;
             }
@@ -1522,18 +1522,25 @@ internal sealed partial class StatementBinder
     /// </summary>
     private Dictionary<AccessPath, TypeSymbol>? ComputeIfJoinNonNull(
         BoundIfStatement ifStmt,
-        Dictionary<AccessPath, TypeSymbol>? entry)
+        Dictionary<AccessPath, TypeSymbol>? entry,
+        IReadOnlyCollection<VariableSymbol>? callableAliases = null)
     {
         var (thenNarrow, elseNarrow) = ComputeConditionNarrowing(ifStmt.Condition);
 
-        var thenState = ComputeBranchFallthroughNonNull(ifStmt.ThenStatement, MergeLocalNonNull(entry, thenNarrow));
+        var thenState = ComputeBranchFallthroughNonNull(
+            ifStmt.ThenStatement,
+            MergeLocalNonNull(entry, thenNarrow),
+            callableAliases);
 
         var elseState = ifStmt.ElseStatement == null
 
             // Implicit else: no statements run, so the only non-null facts are
             // the entry set plus whatever the negated condition narrows.
             ? MergeLocalNonNull(entry, elseNarrow)
-            : ComputeBranchFallthroughNonNull(ifStmt.ElseStatement, MergeLocalNonNull(entry, elseNarrow));
+            : ComputeBranchFallthroughNonNull(
+                ifStmt.ElseStatement,
+                MergeLocalNonNull(entry, elseNarrow),
+                callableAliases);
 
         if (thenState == null && elseState == null)
         {
@@ -1563,7 +1570,8 @@ internal sealed partial class StatementBinder
     /// </summary>
     private Dictionary<AccessPath, TypeSymbol>? ComputeBranchFallthroughNonNull(
         BoundStatement branch,
-        Dictionary<AccessPath, TypeSymbol>? entry)
+        Dictionary<AccessPath, TypeSymbol>? entry,
+        IReadOnlyCollection<VariableSymbol>? callableAliases = null)
     {
         switch (branch)
         {
@@ -1574,7 +1582,7 @@ internal sealed partial class StatementBinder
                 return null;
 
             case BoundIfStatement nested:
-                return ComputeIfJoinNonNull(nested, entry);
+                return ComputeIfJoinNonNull(nested, entry, callableAliases);
 
             case BoundBlockStatement block:
                 {
@@ -1586,7 +1594,7 @@ internal sealed partial class StatementBinder
 
                     foreach (var s in block.Statements)
                     {
-                        if (!ProcessBranchStatement(s, state))
+                        if (!ProcessBranchStatement(s, state, callableAliases))
                         {
                             return null;
                         }
@@ -1598,7 +1606,7 @@ internal sealed partial class StatementBinder
             default:
                 {
                     var state = entry ?? new Dictionary<AccessPath, TypeSymbol>();
-                    return ProcessBranchStatement(branch, state) ? state : null;
+                    return ProcessBranchStatement(branch, state, callableAliases) ? state : null;
                 }
         }
     }
@@ -1609,7 +1617,10 @@ internal sealed partial class StatementBinder
     /// statement unconditionally exits the branch (so later statements are
     /// unreachable).
     /// </summary>
-    private bool ProcessBranchStatement(BoundStatement stmt, Dictionary<AccessPath, TypeSymbol> state)
+    private bool ProcessBranchStatement(
+        BoundStatement stmt,
+        Dictionary<AccessPath, TypeSymbol> state,
+        IReadOnlyCollection<VariableSymbol>? callableAliases = null)
     {
         switch (stmt)
         {
@@ -1640,7 +1651,10 @@ internal sealed partial class StatementBinder
                     // The nested join is the exact post-if non-null set given the
                     // current state as entry, so it fully replaces the tracked
                     // state (it carries surviving entry facts through).
-                    var nestedResult = ComputeIfJoinNonNull(nested, new Dictionary<AccessPath, TypeSymbol>(state));
+                    var nestedResult = ComputeIfJoinNonNull(
+                        nested,
+                        new Dictionary<AccessPath, TypeSymbol>(state),
+                        callableAliases);
                     if (nestedResult == null)
                     {
                         return false;
@@ -1658,7 +1672,7 @@ internal sealed partial class StatementBinder
             case BoundBlockStatement inner:
                 foreach (var s in inner.Statements)
                 {
-                    if (!ProcessBranchStatement(s, state))
+                    if (!ProcessBranchStatement(s, state, callableAliases))
                     {
                         return false;
                     }
@@ -1672,7 +1686,7 @@ internal sealed partial class StatementBinder
                     return false;
                 }
 
-                ClearAssignedRoots(tryStatement, state);
+                ClearAssignedRoots(tryStatement, state, callableAliases);
                 if (tryStatement.FinallyBlock == null)
                 {
                     return true;
@@ -1682,7 +1696,10 @@ internal sealed partial class StatementBinder
                     ? EndsInUnconditionalExit(tryStatement.FinallyBlock)
                         ? null
                         : new Dictionary<AccessPath, TypeSymbol>()
-                    : ComputeBranchFallthroughNonNull(tryStatement.FinallyBlock, entry: null);
+                    : ComputeBranchFallthroughNonNull(
+                        tryStatement.FinallyBlock,
+                        entry: null,
+                        callableAliases);
                 if (finallyState == null)
                 {
                     return false;
@@ -1699,7 +1716,7 @@ internal sealed partial class StatementBinder
                 // Loops, switches, and any other construct that could reassign a
                 // tracked local: conservatively drop every narrowing on a local
                 // the statement's subtree assigns anywhere.
-                ClearAssignedRoots(stmt, state);
+                ClearAssignedRoots(stmt, state, callableAliases);
                 return true;
         }
     }
@@ -1827,14 +1844,19 @@ internal sealed partial class StatementBinder
     /// Issue #2159: conservatively drops every narrowing on a local that
     /// <paramref name="node"/>'s bound subtree assigns anywhere.
     /// </summary>
-    private void ClearAssignedRoots(BoundNode node, Dictionary<AccessPath, TypeSymbol> state)
+    private void ClearAssignedRoots(
+        BoundNode node,
+        Dictionary<AccessPath, TypeSymbol> state,
+        IReadOnlyCollection<VariableSymbol>? callableAliases = null)
     {
         if (state.Count == 0)
         {
             return;
         }
 
-        var collector = new AssignedRootsCollector(null, externalCallableAliases);
+        var collector = new AssignedRootsCollector(
+            null,
+            callableAliases ?? externalCallableAliases);
         collector.Visit(node);
         if (collector.MayMutateAnyRoot)
         {
