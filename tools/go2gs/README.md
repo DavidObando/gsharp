@@ -68,7 +68,9 @@ handoff, and the bounded `VERSION` file is hashed. Bootstrap never runs
 `-buildvcs=false`; execution and path override flags such as `-toolexec`,
 `-overlay`, and `-modfile` are rejected. Profile `buildTags` and allowed
 `goFlags -tags` values are merged into one canonical tag set used by package
-loading and in-process source classification. `goExperiment` and `goDebug` must be
+loading and in-process source classification. Architecture feature values are
+validated per GOARCH and expanded to cmd/go's cumulative tool tags.
+`goExperiment` and `goDebug` must be
 empty because the in-process parser and type checker cannot authoritatively
 apply selected-toolchain semantic overrides.
 Before loading, source inputs and authorized local replacements are copied
@@ -76,6 +78,9 @@ with bounded, descriptor-relative reads that reject symlinks in every path
 component into a private mirror. The same rooted reads verify the originals
 after loading. The loader sees only those captured bytes; emitted manifest
 hashes remain those of the originals.
+Output locking, stale-artifact invalidation, and atomic publication stay
+relative to one held directory descriptor/handle, so replacing an output-root
+ancestor cannot redirect owned output operations.
 On Linux and macOS, private temporary trees are removed recursively through
 verified directory descriptors and atomic name exchanges without following
 links; an exchange failure or retained entry makes the command fail. Other
@@ -127,6 +132,8 @@ analyzer never discovers or executes an ambient `git` command.
 Package records preserve both the exact typed-source order and the execution
 order of variable initializers followed by `init` functions. Diagnostic
 positions use portable source/module/GOROOT identities. Schema validation
+reparses captured bytes to verify raw and line-directive-adjusted paths, lines,
+and columns exactly. It
 requires the complete v1 handshake, mandatory fields and collections, exact
 record counts, valid references, and loaded main-module package/file ownership
 before `inventoryComplete` may be true. `validate-analysis` checks structural

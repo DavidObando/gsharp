@@ -37,6 +37,8 @@ bootstrap does not run `go version` or `go env`. Profile `goFlags` are
 allowlisted; tool execution and path overrides are rejected. Profile
 `buildTags` and `goFlags -tags` values are merged into one canonical tag set
 used by package loading and in-process source classification.
+Architecture feature values are validated per GOARCH and expanded to cmd/go's
+cumulative tool tags.
 `goExperiment` and `goDebug` must be empty because the in-process semantic
 engine cannot authoritatively apply selected-toolchain overrides.
 Profile, output, and toolchain bootstrap failures—including a missing `go`
@@ -50,6 +52,9 @@ without `go/packages`; a matching preload exits 2 without an artifact because
 the required descriptor-bound launch cannot be provided securely.
 Source and local-replacement capture and verification use descriptor-relative
 reads that reject symlinks in every path component.
+Output locking, stale-artifact invalidation, and atomic publication remain
+relative to one held directory descriptor/handle, so replacing an output-root
+ancestor cannot redirect them.
 
 The selected native `cmd/go` is captured into a parent bootstrap capsule only
 for handoff. Linux first validates the captured bytes as a supported static ELF
@@ -86,7 +91,9 @@ bounded no-follow mirror, so loader semantics and emitted inventory bytes
 come from the same captured snapshot.
 Schema validation permits `inventoryComplete: true` only when the artifact
 contains a loaded main module, package, owned source files, and typed-file
-ownership; blocker-free preload artifacts are rejected. Validation checks
+ownership; blocker-free preload artifacts are rejected. Validation reparses
+captured bytes to verify raw and `//line`/`/*line*/` display coordinates,
+including columns and CRLF handling. It checks
 artifact structure and relationships, not the authenticity of recorded
 executables or content.
 
