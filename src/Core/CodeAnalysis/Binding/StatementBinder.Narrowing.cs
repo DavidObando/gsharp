@@ -1066,6 +1066,15 @@ internal sealed partial class StatementBinder
             _ => !EndsInUnconditionalExit(statement),
         };
 
+    // Callable-alias flow must also join a path that leaves through a goto
+    // (a switch's own `break` reaches code after the switch), so a statement
+    // that ends only in a goto still contributes its state; return/throw do
+    // not (fail-safe).
+    private bool CanReachCallableJoin(BoundStatement statement)
+        => CanCompleteNormally(statement)
+            || (EndsInUnconditionalExit(statement)
+                && !EndsInUnconditionalExit(statement, gotoExits: false));
+
     private bool CanStatementListCompleteNormally(ImmutableArray<BoundStatement> statements)
     {
         var fallsThrough = true;
@@ -1928,8 +1937,13 @@ internal sealed partial class StatementBinder
 
         public bool MayMutateWritableReferenceRoots { get; private set; }
 
+        // A variable with a known local target on any branch is a mixed alias;
+        // the exported alias set forgets local bodies, so treat it as unknown
+        // rather than external-only (fail-safe).
         public IEnumerable<VariableSymbol> DefinitelyExternalFunctionValues
-            => externalFunctionValues.Except(unknownFunctionValues);
+            => externalFunctionValues
+                .Except(unknownFunctionValues)
+                .Where(variable => !functionLiterals.ContainsKey(variable));
 
         protected override void VisitIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
         {
@@ -2230,12 +2244,12 @@ internal sealed partial class StatementBinder
             VisitStatement(node.ElseStatement);
             var elseState = CaptureCallableState();
             (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined = null;
-            if (!EndsInUnconditionalExit(node.ThenStatement))
+            if (!EndsInUnconditionalExit(node.ThenStatement, gotoExits: false))
             {
                 joined = JoinCallableStates(joined, thenState);
             }
 
-            if (node.ElseStatement == null || !EndsInUnconditionalExit(node.ElseStatement))
+            if (node.ElseStatement == null || !EndsInUnconditionalExit(node.ElseStatement, gotoExits: false))
             {
                 joined = JoinCallableStates(joined, elseState);
             }
@@ -2287,7 +2301,7 @@ internal sealed partial class StatementBinder
                 VisitPattern(arm.Pattern);
                 VisitExpression(arm.Guard);
                 VisitStatement(arm.Body);
-                if (!EndsInUnconditionalExit(arm.Body))
+                if (!EndsInUnconditionalExit(arm.Body, gotoExits: false))
                 {
                     joined = JoinCallableStates(joined, CaptureCallableState());
                 }
@@ -2336,7 +2350,7 @@ internal sealed partial class StatementBinder
                 CloneCallableState(tryState),
                 exceptionalState);
             (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined =
-                EndsInUnconditionalExit(node.TryBlock) ? null : tryState;
+                EndsInUnconditionalExit(node.TryBlock, gotoExits: false) ? null : tryState;
 
             foreach (var clause in node.CatchClauses)
             {
@@ -2345,7 +2359,7 @@ internal sealed partial class StatementBinder
                 VisitStatement(clause.Body);
                 var catchState = CaptureCallableState();
                 finallyEntries = JoinCallableStates(finallyEntries, catchState);
-                if (!EndsInUnconditionalExit(clause.Body))
+                if (!EndsInUnconditionalExit(clause.Body, gotoExits: false))
                 {
                     joined = JoinCallableStates(joined, catchState);
                 }
@@ -2360,6 +2374,21 @@ internal sealed partial class StatementBinder
             {
                 RestoreCallableState(joined ?? branchStart);
             }
+        }
+
+        // An assignment reached only on some paths (pendingConditionalTargets
+        // is non-empty: a conditional goto to a later label is still pending) leaves the other paths with whatever
+        // the variable held before. Only a variable already known external
+        // stays external; anything else becomes unknown (fail-safe).
+        private void MarkExternalAssignment(VariableSymbol variable)
+        {
+            if (pendingConditionalTargets.Count > 0 && !externalFunctionValues.Contains(variable))
+            {
+                unknownFunctionValues.Add(variable);
+                return;
+            }
+
+            externalFunctionValues.Add(variable);
         }
 
         private void VisitPossiblySkippedBody(BoundStatement body)
@@ -2643,7 +2672,7 @@ internal sealed partial class StatementBinder
 
                     if (externalCallable)
                     {
-                        externalFunctionValues.Add(node.Variable);
+                        MarkExternalAssignment(node.Variable);
                     }
                     else if (pendingConditionalTargets.Count == 0)
                     {
@@ -2658,7 +2687,7 @@ internal sealed partial class StatementBinder
                         unknownFunctionValues.Remove(node.Variable);
                     }
 
-                    externalFunctionValues.Add(node.Variable);
+                    MarkExternalAssignment(node.Variable);
                 }
                 else
                 {
@@ -2932,7 +2961,14 @@ internal sealed partial class StatementBinder
     /// <see cref="BoundTryStatement"/> counts when its <c>finally</c> exits or
     /// its protected block and every handler exit.
     /// </summary>
-    private static bool EndsInUnconditionalExit(BoundStatement? statement)
+    /// <param name="statement">The statement to classify.</param>
+    /// <param name="gotoExits">
+    /// When <see langword="false"/>, a goto is not counted as an exit, so only
+    /// return/throw do. Callable-alias joins use this because a goto can still
+    /// reach code after the enclosing construct.
+    /// </param>
+    /// <returns><see langword="true"/> when the statement always leaves its block.</returns>
+    private static bool EndsInUnconditionalExit(BoundStatement? statement, bool gotoExits = true)
     {
         switch (statement)
         {
@@ -2947,8 +2983,11 @@ internal sealed partial class StatementBinder
             case BoundGotoStatement:
                 // `break`/`continue` lower to BoundGotoStatement before this
                 // helper runs; an explicit `goto` likewise transfers
-                // control unconditionally.
-                return true;
+                // control unconditionally. Callable-alias joins pass
+                // gotoExits: false because a goto (notably a switch's own
+                // break label) can still reach code after the construct, so
+                // only return/throw are proven to leave it (fail-safe).
+                return gotoExits;
 
             case BoundBlockStatement block:
                 if (block.Statements.IsDefaultOrEmpty)
@@ -2956,7 +2995,7 @@ internal sealed partial class StatementBinder
                     return false;
                 }
 
-                return EndsInUnconditionalExit(block.Statements[block.Statements.Length - 1]);
+                return EndsInUnconditionalExit(block.Statements[block.Statements.Length - 1], gotoExits);
 
             case BoundIfStatement nested:
                 if (nested.ElseStatement == null)
@@ -2964,18 +3003,18 @@ internal sealed partial class StatementBinder
                     return false;
                 }
 
-                return EndsInUnconditionalExit(nested.ThenStatement)
-                    && EndsInUnconditionalExit(nested.ElseStatement);
+                return EndsInUnconditionalExit(nested.ThenStatement, gotoExits)
+                    && EndsInUnconditionalExit(nested.ElseStatement, gotoExits);
 
             case BoundTryStatement nestedTry:
                 if (nestedTry.FinallyBlock != null
-                    && EndsInUnconditionalExit(nestedTry.FinallyBlock))
+                    && EndsInUnconditionalExit(nestedTry.FinallyBlock, gotoExits))
                 {
                     return true;
                 }
 
-                return EndsInUnconditionalExit(nestedTry.TryBlock)
-                    && nestedTry.CatchClauses.All(clause => EndsInUnconditionalExit(clause.Body));
+                return EndsInUnconditionalExit(nestedTry.TryBlock, gotoExits)
+                    && nestedTry.CatchClauses.All(clause => EndsInUnconditionalExit(clause.Body, gotoExits));
 
             case BoundPatternSwitchStatement nestedSwitch:
                 {
@@ -2992,7 +3031,7 @@ internal sealed partial class StatementBinder
                             hasDefault = true;
                         }
 
-                        if (!EndsInUnconditionalExit(arm.Body))
+                        if (!EndsInUnconditionalExit(arm.Body, gotoExits))
                         {
                             return false;
                         }

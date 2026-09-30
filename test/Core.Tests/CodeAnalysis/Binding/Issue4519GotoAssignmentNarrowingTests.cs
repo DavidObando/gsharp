@@ -5310,6 +5310,263 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void SwitchBreakArm_LocalCallableAliasDefeatsExternalFinallyNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), choose int32) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = callback
+                switch choose {
+                    case 0 {
+                        action = clear
+                        break
+                    }
+                    default {
+                        action = callback
+                    }
+                }
+                try {
+                }
+                finally {
+                    text = "safe"
+                    action()
+                }
+                return text.Length
+            }
+
+            Run(func() { }, 0)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void LoopAssignedExternalCallable_LocalAliasDefeatsFinallyNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), n int32) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = clear
+                var i = 0
+                for i < n {
+                    i++
+                    action = callback
+                }
+                try {
+                }
+                finally {
+                    text = "safe"
+                    action()
+                }
+                return text.Length
+            }
+
+            Run(func() { }, 3)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void LoopSkippedExternalAssignment_LocalCallableAliasIsNotExternal()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), n int32) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = clear
+                var i = 0
+                for i < n { i++
+                    action = callback }
+                text = "safe"
+                action()
+                return text.Length
+            }
+
+            Run(func() { }, 3)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+    }
+
+    [Fact]
+    public void LoopContinueBeforeExternalAssignment_LocalAliasDefeatsFinallyNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), n int32) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = clear
+                for var i = 0; i < n; i++ {
+                    if i == 1 { continue }
+                    action = callback
+                }
+                try {
+                }
+                finally {
+                    text = "safe"
+                    action()
+                }
+                return text.Length
+            }
+
+            Run(func() { }, 3)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void LoopBreakBeforeExternalAssignment_LocalAliasDefeatsFinallyNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), n int32) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = clear
+                for var i = 0; i < n; i++ {
+                    if i == 1 { break }
+                    action = callback
+                }
+                try {
+                }
+                finally {
+                    text = "safe"
+                    action()
+                }
+                return text.Length
+            }
+
+            Run(func() { }, 3)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void SwitchBreakInTryBody_LocalCallableAliasDefeatsExternalFinallyNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), choose int32) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = callback
+                switch choose {
+                    case 0 {
+                        try {
+                            action = clear
+                            break
+                        }
+                        finally {
+                        }
+                    }
+                    default {
+                        action = callback
+                    }
+                }
+                try {
+                }
+                finally {
+                    text = "safe"
+                    action()
+                }
+                return text.Length
+            }
+
+            Run(func() { }, 0)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void SwitchBreakInCatchBody_LocalCallableAliasDefeatsExternalFinallyNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), choose int32) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = callback
+                switch choose {
+                    case 0 {
+                        try {
+                        }
+                        catch {
+                            action = clear
+                            break
+                        }
+                    }
+                    default {
+                        action = callback
+                    }
+                }
+                try {
+                }
+                finally {
+                    text = "safe"
+                    action()
+                }
+                return text.Length
+            }
+
+            Run(func() { }, 0)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void NestedSwitchBreakArm_LocalCallableAliasDefeatsExternalFinallyNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), choose int32, flag bool) int32 {
+                var text string? = nil
+                let clear = func() { text = nil }
+                var action = callback
+                if flag {
+                    switch choose {
+                        case 0 {
+                            action = clear
+                            break
+                        }
+                        default {
+                            action = callback
+                        }
+                    }
+                }
+                try {
+                }
+                finally {
+                    text = "safe"
+                    action()
+                }
+                return text.Length
+            }
+
+            Run(func() { }, 0, true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_NonCompletingInfiniteFinallyDoesNotActivateEdge()
     {
         AssertRuns("""

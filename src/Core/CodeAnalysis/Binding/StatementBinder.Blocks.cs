@@ -108,7 +108,7 @@ internal sealed partial class StatementBinder
                 arms.Add(new BoundPatternSwitchArm(null, pattern: null, guard: null, defaultBody));
                 var callableDefaultExit = CaptureExternalCallableAliases();
                 callableFallthrough = endsInFallthrough ? callableDefaultExit : null;
-                if (!EndsInUnconditionalExit(defaultBody))
+                if (!EndsInUnconditionalExit(defaultBody, gotoExits: false))
                 {
                     callableExits = JoinExternalCallableAliases(callableExits, callableDefaultExit);
                 }
@@ -182,7 +182,7 @@ internal sealed partial class StatementBinder
             arms.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
             var callableArmExit = CaptureExternalCallableAliases();
             callableFallthrough = endsInFallthrough ? callableArmExit : null;
-            if (!EndsInUnconditionalExit(body))
+            if (!EndsInUnconditionalExit(body, gotoExits: false))
             {
                 callableExits = JoinExternalCallableAliases(callableExits, callableArmExit);
             }
@@ -350,7 +350,7 @@ internal sealed partial class StatementBinder
         var callableFinallyEntries = JoinExternalCallableAliases(
             new HashSet<VariableSymbol>(callableTryExit),
             callableExceptionalEntry);
-        HashSet<VariableSymbol>? callableExits = CanCompleteNormally(tryBlock)
+        HashSet<VariableSymbol>? callableExits = CanReachCallableJoin(tryBlock)
             ? new HashSet<VariableSymbol>(callableTryExit)
             : null;
         var handlersReachable = currentStatementListFallsThrough
@@ -446,7 +446,7 @@ internal sealed partial class StatementBinder
             callableFinallyEntries = JoinExternalCallableAliases(
                 callableFinallyEntries,
                 callableCatchExit);
-            if (CanCompleteNormally(body))
+            if (CanReachCallableJoin(body))
             {
                 callableExits = JoinExternalCallableAliases(callableExits, callableCatchExit);
             }
