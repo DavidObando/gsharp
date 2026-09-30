@@ -5008,6 +5008,173 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_SwitchCleanupDoesNotInheritSiblingExternalAlias()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), value int32) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = clear
+                switch value {
+                    case 1 {
+                        action = callback
+                    }
+                    default {
+                        try {
+                            goto Done
+                        }
+                        finally {
+                            action()
+                        }
+                    }
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { }, 0)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_CatchCleanupDoesNotInheritSiblingExternalAlias()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = clear
+                try {
+                    throw Exception()
+                }
+                catch (ArgumentException) {
+                    action = callback
+                }
+                catch {
+                    try {
+                        goto Done
+                    }
+                    finally {
+                        action()
+                    }
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { })
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_SwitchJoinIgnoresExitingCallableArm()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(callback (() -> void), value int32) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = callback
+                switch value {
+                    case 1 {
+                        action = clear
+                        return 0
+                    }
+                    default {
+                    }
+                }
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return text.Length
+            }
+
+            Console.WriteLine(Run(func() { }, 0))
+            """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_IfJoinIgnoresExitingCallableArm()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(callback (() -> void), exitEarly bool) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = callback
+                if exitEarly {
+                    action = clear
+                    return 0
+                }
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return text.Length
+            }
+
+            Console.WriteLine(Run(func() { }, false))
+            """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_TryJoinIgnoresExitingCallableCatch()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(callback (() -> void), fail bool) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = callback
+                try {
+                    if fail {
+                        throw Exception()
+                    }
+                }
+                catch {
+                    action = clear
+                    return 0
+                }
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return text.Length
+            }
+
+            Console.WriteLine(Run(func() { }, false))
+            """, "4");
+    }
+
+    [Fact]
     public void ForwardGoto_NonCompletingInfiniteFinallyDoesNotActivateEdge()
     {
         AssertRuns("""

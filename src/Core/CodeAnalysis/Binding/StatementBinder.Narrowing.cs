@@ -50,6 +50,19 @@ internal sealed partial class StatementBinder
         RestoreExternalCallableAliases(left);
     }
 
+    private static HashSet<VariableSymbol> JoinExternalCallableAliases(
+        HashSet<VariableSymbol>? joined,
+        IReadOnlyCollection<VariableSymbol> next)
+    {
+        if (joined == null)
+        {
+            return new HashSet<VariableSymbol>(next);
+        }
+
+        joined.IntersectWith(next);
+        return joined;
+    }
+
     private HashSet<VariableSymbol> ComputeLoopEntryExternalCallableAliases(
         BoundStatement body,
         BoundStatement? backEdgeTail,
@@ -2194,7 +2207,18 @@ internal sealed partial class StatementBinder
             RestoreCallableState(branchStart);
             VisitStatement(node.ElseStatement);
             var elseState = CaptureCallableState();
-            RestoreCallableState(JoinCallableStates(thenState, elseState));
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined = null;
+            if (!EndsInUnconditionalExit(node.ThenStatement))
+            {
+                joined = JoinCallableStates(joined, thenState);
+            }
+
+            if (node.ElseStatement == null || !EndsInUnconditionalExit(node.ElseStatement))
+            {
+                joined = JoinCallableStates(joined, elseState);
+            }
+
+            RestoreCallableState(joined ?? branchStart);
         }
 
         protected override void VisitConditionalGotoStatement(BoundConditionalGotoStatement node)
@@ -2233,7 +2257,7 @@ internal sealed partial class StatementBinder
             VisitExpression(node.Discriminant);
             var branchStart = CaptureCallableState();
             (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined =
-                node.IsExhaustive ? null : branchStart;
+                node.IsExhaustive ? null : CloneCallableState(branchStart);
 
             foreach (var arm in node.Arms)
             {
@@ -2241,7 +2265,10 @@ internal sealed partial class StatementBinder
                 VisitPattern(arm.Pattern);
                 VisitExpression(arm.Guard);
                 VisitStatement(arm.Body);
-                joined = JoinCallableStates(joined, CaptureCallableState());
+                if (!EndsInUnconditionalExit(arm.Body))
+                {
+                    joined = JoinCallableStates(joined, CaptureCallableState());
+                }
             }
 
             RestoreCallableState(joined ?? branchStart);
@@ -2274,20 +2301,34 @@ internal sealed partial class StatementBinder
             VisitStatement(node.TryBlock);
             tryAssignedVariables = outerTryAssignments;
             outerTryAssignments?.UnionWith(assignedInTry);
-            var joined = CaptureCallableState();
+            var tryState = CaptureCallableState();
+            var finallyEntries = CloneCallableState(tryState);
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined =
+                EndsInUnconditionalExit(node.TryBlock) ? null : tryState;
 
             foreach (var clause in node.CatchClauses)
             {
                 RestoreCallableState(branchStart);
-                MergeCallableState(joined);
                 unknownFunctionValues.UnionWith(assignedInTry);
                 VisitExpression(clause.Filter);
                 VisitStatement(clause.Body);
-                joined = JoinCallableStates(joined, CaptureCallableState());
+                var catchState = CaptureCallableState();
+                finallyEntries = JoinCallableStates(finallyEntries, catchState);
+                if (!EndsInUnconditionalExit(clause.Body))
+                {
+                    joined = JoinCallableStates(joined, catchState);
+                }
             }
 
-            RestoreCallableState(joined);
-            VisitStatement(node.FinallyBlock);
+            if (node.FinallyBlock != null)
+            {
+                RestoreCallableState(finallyEntries);
+                VisitStatement(node.FinallyBlock);
+            }
+            else
+            {
+                RestoreCallableState(joined ?? branchStart);
+            }
         }
 
         private void VisitPossiblySkippedBody(BoundStatement body)
@@ -2329,6 +2370,15 @@ internal sealed partial class StatementBinder
                     entry => new HashSet<BoundFunctionLiteralExpression>(entry.Value)),
                 new HashSet<VariableSymbol>(unknownFunctionValues),
                 new HashSet<VariableSymbol>(externalFunctionValues));
+
+        private static (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) CloneCallableState(
+            (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) state)
+            => (
+                state.Literals.ToDictionary(
+                    entry => entry.Key,
+                    entry => new HashSet<BoundFunctionLiteralExpression>(entry.Value)),
+                new HashSet<VariableSymbol>(state.Unknown),
+                new HashSet<VariableSymbol>(state.External));
 
         private void RestoreCallableState(
             (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External) state)

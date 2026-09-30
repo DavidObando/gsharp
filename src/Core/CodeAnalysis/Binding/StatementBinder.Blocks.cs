@@ -33,6 +33,9 @@ internal sealed partial class StatementBinder
 
         var arms = ImmutableArray.CreateBuilder<BoundPatternSwitchArm>(syntax.Cases.Length);
         var hasDefault = false;
+        var callableEntry = CaptureExternalCallableAliases();
+        HashSet<VariableSymbol>? callableExits = null;
+        HashSet<VariableSymbol>? callableFallthrough = null;
 
         // ADR-0069 addendum / issue #712: track each non-exiting arm's
         // discriminator narrowing so we can lift a common post-switch
@@ -62,6 +65,13 @@ internal sealed partial class StatementBinder
         for (var caseIndex = 0; caseIndex < syntax.Cases.Length; caseIndex++)
         {
             var caseSyntax = syntax.Cases[caseIndex];
+            var callableArmEntry = new HashSet<VariableSymbol>(callableEntry);
+            if (callableFallthrough != null)
+            {
+                callableArmEntry.IntersectWith(callableFallthrough);
+            }
+
+            RestoreExternalCallableAliases(callableArmEntry);
 
             // Issue #3501 A3: arm the fallthrough context for this arm. The
             // one legal position is the body's last statement; a trailing
@@ -96,6 +106,12 @@ internal sealed partial class StatementBinder
                 var defaultBody = BindBlockStatement(caseSyntax.Body);
                 defaultBody = PrependArmEntryLabel(defaultBody, armEntryLabels[caseIndex]);
                 arms.Add(new BoundPatternSwitchArm(null, pattern: null, guard: null, defaultBody));
+                var callableDefaultExit = CaptureExternalCallableAliases();
+                callableFallthrough = endsInFallthrough ? callableDefaultExit : null;
+                if (!EndsInUnconditionalExit(defaultBody))
+                {
+                    callableExits = JoinExternalCallableAliases(callableExits, callableDefaultExit);
+                }
 
                 if (!EndsInUnconditionalExit(defaultBody))
                 {
@@ -164,6 +180,12 @@ internal sealed partial class StatementBinder
             scope = scope.Pop();
             body = PrependArmEntryLabel(body, armEntryLabels[caseIndex]);
             arms.Add(new BoundPatternSwitchArm(null, pattern, guard, body));
+            var callableArmExit = CaptureExternalCallableAliases();
+            callableFallthrough = endsInFallthrough ? callableArmExit : null;
+            if (!EndsInUnconditionalExit(body))
+            {
+                callableExits = JoinExternalCallableAliases(callableExits, callableArmExit);
+            }
 
             // Issue #991: a guarded arm may not actually run even when its
             // pattern matches, so it cannot contribute a reliable post-switch
@@ -226,6 +248,13 @@ internal sealed partial class StatementBinder
             binderCtx.CurrentFallthroughTarget = savedFallthroughTarget;
             binderCtx.CurrentFallthroughAnchor = savedFallthroughAnchor;
         }
+
+        if (!hasDefault)
+        {
+            callableExits = JoinExternalCallableAliases(callableExits, callableEntry);
+        }
+
+        RestoreExternalCallableAliases(callableExits ?? callableEntry);
 
         var boundArms = arms.ToImmutable();
         var isExhaustive = ExhaustivenessAnalyzer.AnalyzeSwitchStatement(
@@ -308,10 +337,16 @@ internal sealed partial class StatementBinder
 
     private BoundStatement BindTryStatement(TryStatementSyntax syntax)
     {
+        var callableEntry = CaptureExternalCallableAliases();
         var reachabilityGeneration = internalReachabilityGeneration;
         var tryBlock = BindWithinFinallyScope(
             syntax.FinallyClause,
             () => BindBlockStatement(syntax.TryBlock));
+        var callableTryExit = CaptureExternalCallableAliases();
+        var callableFinallyEntries = new HashSet<VariableSymbol>(callableTryExit);
+        HashSet<VariableSymbol>? callableExits = CanCompleteNormally(tryBlock)
+            ? new HashSet<VariableSymbol>(callableTryExit)
+            : null;
         var handlersReachable = currentStatementListFallsThrough
             || internalReachabilityGeneration != reachabilityGeneration;
 
@@ -333,6 +368,7 @@ internal sealed partial class StatementBinder
 
         foreach (var catchSyntax in syntax.CatchClauses)
         {
+            RestoreExternalCallableAliases(callableEntry);
             var inheritedReachability = currentStatementListFallsThrough;
             currentStatementListFallsThrough = handlersReachable;
 
@@ -400,11 +436,20 @@ internal sealed partial class StatementBinder
             }
 
             catches.Add(new BoundCatchClause(catchType, variable, filter, body, exitsThroughFinally: false));
+            var callableCatchExit = CaptureExternalCallableAliases();
+            callableFinallyEntries = JoinExternalCallableAliases(
+                callableFinallyEntries,
+                callableCatchExit);
+            if (CanCompleteNormally(body))
+            {
+                callableExits = JoinExternalCallableAliases(callableExits, callableCatchExit);
+            }
         }
 
         BoundStatement? finallyBlock = null;
         if (syntax.FinallyClause != null)
         {
+            RestoreExternalCallableAliases(callableFinallyEntries);
             finallyEntryExternalCallableAliases[syntax.FinallyClause] =
                 externalCallableAliases.ToImmutableArray();
             var inheritedReachability = currentStatementListFallsThrough;
@@ -420,6 +465,10 @@ internal sealed partial class StatementBinder
                 exceptionHandlerRegions.Pop();
                 currentStatementListFallsThrough = inheritedReachability;
             }
+        }
+        else
+        {
+            RestoreExternalCallableAliases(callableExits ?? callableEntry);
         }
 
         if (catches.Count == 0 && finallyBlock == null)
