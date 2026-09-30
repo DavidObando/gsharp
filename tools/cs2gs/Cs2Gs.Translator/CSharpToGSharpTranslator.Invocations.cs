@@ -6254,31 +6254,38 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol destinationType,
             ITypeSymbol projectedType)
         {
-            if (sink is ILocalSymbol local)
+            if (sink is ILocalSymbol initializerLocal
+                && this.IsLocalDeclarationInitializer(
+                    value,
+                    initializerLocal))
             {
                 return this.GetProjectedArrayLocalDestinationType(
                     value,
-                    local,
+                    initializerLocal,
                     destinationType,
                     projectedType);
             }
 
             if (destinationType is not IArrayTypeSymbol destinationArray
                 || projectedType is not IArrayTypeSymbol projectedArray
-                || destinationArray.Rank != projectedArray.Rank)
+                || destinationArray.Rank != projectedArray.Rank
+                || !SymbolEqualityComparer.Default.Equals(
+                    destinationArray,
+                    projectedArray))
             {
                 return destinationType;
             }
 
-            GTypeReference mappedDestinationElement = this.GetMappedArrayElement(
-                destinationArray,
-                value.GetLocation());
-            GTypeReference mappedProjectedElement = this.GetMappedArrayElement(
-                projectedArray,
-                value.GetLocation());
+            Location location = value.GetLocation();
+            GTypeReference mappedDestinationElement =
+                (this.typeMapper.Map(destinationArray, this.context, location)
+                    as ArrayTypeReference)?.ElementType;
+            GTypeReference mappedProjectedElement =
+                (this.typeMapper.Map(projectedArray, this.context, location)
+                    as ArrayTypeReference)?.ElementType;
 
             // Roslyn cannot express intrinsic managed-reference array widening,
-            // so compare the canonical element types cs2gs will actually emit.
+            // so compare fresh canonical element types at this use site.
             if (mappedDestinationElement == null
                 || mappedProjectedElement == null
                 || !string.Equals(
@@ -6289,8 +6296,33 @@ public sealed partial class CSharpToGSharpTranslator
                 return destinationType;
             }
 
-            return projectedArray.WithNullableAnnotation(
+            ITypeSymbol effectiveType = projectedArray.WithNullableAnnotation(
                 destinationArray.NullableAnnotation);
+            if (sink is ILocalSymbol local)
+            {
+                this.state.ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedLocalType[local] =
+                    effectiveType;
+            }
+
+            return effectiveType;
+        }
+
+        private bool IsLocalDeclarationInitializer(
+            ExpressionSyntax value,
+            ILocalSymbol local)
+        {
+            SyntaxNode initializer = value;
+            while (initializer.Parent is ParenthesizedExpressionSyntax)
+            {
+                initializer = initializer.Parent;
+            }
+
+            return initializer.Parent is EqualsValueClauseSyntax
+                { Parent: VariableDeclaratorSyntax declarator }
+                && SymbolEqualityComparer.Default.Equals(
+                    this.context.GetDeclaredSymbol(declarator),
+                    local);
         }
 
         private ITypeSymbol GetProjectedArrayLocalDestinationType(
@@ -6323,7 +6355,7 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             // The declaration omits an equal explicit type and lets G# infer
-            // the projected initializer shape. Assignments remain fixed.
+            // the projected initializer shape; validate its later consumers.
             ITypeSymbol effectiveType = projectedArray.WithNullableAnnotation(
                 destinationArray.NullableAnnotation);
             return this.InferredLocalAssignmentsMatch(
