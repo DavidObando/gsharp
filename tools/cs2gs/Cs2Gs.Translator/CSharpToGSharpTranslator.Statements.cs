@@ -1478,7 +1478,7 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            if (callable == null)
+            if (callable == null && anonymousFunction == null)
             {
                 yield break;
             }

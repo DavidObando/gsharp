@@ -430,6 +430,18 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 conditionalCapturePair = (default(T), replacement);
                 conditionalCapture?.Invoke();
 
+                var conditionalDelegatePair = (replacement, replacement);
+                System.Action conditionalDelegate = choose
+                    ? () =>
+                    {
+                        var (conditionalDelegateLeft, _) =
+                            conditionalDelegatePair;
+                        Fill(ref conditionalDelegateLeft, replacement);
+                    }
+                    : () => { };
+                conditionalDelegatePair = (default(T), replacement);
+                conditionalDelegate();
+
                 System.Action MakeReturnedCapture()
                 {
                     var returnedCapturePair = (replacement, replacement);
@@ -729,6 +741,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
             "postCaptureLocalLeft",
             "wrappedCaptureLeft",
             "conditionalCaptureLeft",
+            "conditionalDelegateLeft",
             "returnedCaptureLeft",
             "aliasedCaptureLeft",
             "retainedFieldLeft",
