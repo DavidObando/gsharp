@@ -1125,6 +1125,16 @@ public sealed partial class CSharpToGSharpTranslator
                     switchExpression.Arms.Select(arm => arm.Expression));
             }
 
+            if (expression is CollectionExpressionSyntax collection
+                && (this.context.GetTypeInfo(collection).ConvertedType
+                        ?? this.context.GetTypeInfo(collection).Type)
+                    is INamedTypeSymbol collectionType)
+            {
+                return this.GetManagedReferenceArrayProjectedCollectionType(
+                    collection,
+                    collectionType);
+            }
+
             if (expression is ElementAccessExpressionSyntax arrayElement
                 && this.GetMappedArrayElementType(arrayElement.Expression)
                     is { } projectedElement

@@ -2157,9 +2157,9 @@ public sealed partial class CSharpToGSharpTranslator
                 this.GetManagedReferenceArrayProjectedArgumentType(
                     assignment.Right);
             if (assignmentTarget is IFieldSymbol
-                    { IsStatic: true, ContainingType.IsGenericType: true }
+                    { ContainingType.IsGenericType: true }
                     or IPropertySymbol
-                    { IsStatic: true, ContainingType.IsGenericType: true }
+                    { ContainingType.IsGenericType: true }
                 && assignmentTargetType != null
                 && projectedValue != null
                 && SymbolEqualityComparer.Default.Equals(
@@ -2171,7 +2171,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 this.context.ReportUnsupported(
                     assignment,
-                    "managed-reference array widening cannot change a static generic member's fixed receiver type; no exact G# translation exists.");
+                    "managed-reference array widening cannot change a generic member's fixed receiver type; no exact G# translation exists.");
                 return value;
             }
 

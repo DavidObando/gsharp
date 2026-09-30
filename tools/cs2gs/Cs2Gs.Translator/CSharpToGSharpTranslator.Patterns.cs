@@ -3932,6 +3932,15 @@ public sealed partial class CSharpToGSharpTranslator
             // emitted into a malformed `[]KeyValuePair[…]{}` literal (ADR-0115 §B).
             ITypeSymbol target = this.context.GetTypeInfo(collection).ConvertedType
                 ?? this.context.GetTypeInfo(collection).Type;
+            ITypeSymbol originalElementType =
+                GetCollectionTargetElementType(target);
+            if (target is INamedTypeSymbol namedCollectionTarget)
+            {
+                target = this.GetManagedReferenceArrayProjectedCollectionType(
+                    collection,
+                    namedCollectionTarget);
+            }
+
             bool isConstructibleClassTarget =
                 target is INamedTypeSymbol namedTarget
                 && namedTarget.TypeKind == TypeKind.Class &&
@@ -3986,8 +3995,16 @@ public sealed partial class CSharpToGSharpTranslator
                     else
                     {
                         var expressionElement = (ExpressionElementSyntax)element;
-                        ITypeSymbol boundElementType = collectionOperation?.Elements[i].Type
-                            ?? elementTypeSymbol;
+                        ITypeSymbol operationElementType =
+                            collectionOperation?.Elements[i].Type;
+                        ITypeSymbol boundElementType =
+                            operationElementType != null
+                                && originalElementType != null
+                                && !SymbolEqualityComparer.Default.Equals(
+                                    operationElementType,
+                                    originalElementType)
+                                    ? operationElementType
+                                    : elementTypeSymbol ?? operationElementType;
                         GTypeReference boundElementRef = boundElementType != null
                             ? this.typeMapper.Map(boundElementType, this.context, element.GetLocation())
                             : elementType;
@@ -4206,6 +4223,93 @@ public sealed partial class CSharpToGSharpTranslator
             IsSpanParamsCollectionType(target)
                 ? ((INamedTypeSymbol)target).TypeArguments[0]
                 : GetEnumerableElementType(target);
+
+        private INamedTypeSymbol GetManagedReferenceArrayProjectedCollectionType(
+            CollectionExpressionSyntax collection,
+            INamedTypeSymbol target)
+        {
+            ITypeSymbol originalElementType =
+                GetCollectionTargetElementType(target.OriginalDefinition);
+            if (originalElementType == null)
+            {
+                return target;
+            }
+
+            var replacements =
+                new Dictionary<ITypeParameterSymbol, ITypeSymbol>(
+                    SymbolEqualityComparer.Default);
+            foreach (ExpressionSyntax element in collection.Elements
+                .OfType<ExpressionElementSyntax>()
+                .Select(item => item.Expression))
+            {
+                ITypeSymbol projectedElement =
+                    this.GetManagedReferenceArrayProjectedArgumentType(element);
+                if (projectedElement == null)
+                {
+                    continue;
+                }
+
+                foreach (ITypeParameterSymbol parameter in
+                    NamedTypeAndContainingTypes(target)
+                        .SelectMany(type =>
+                            type.OriginalDefinition.TypeParameters))
+                {
+                    if (!TryGetProjectedTypeArgument(
+                            originalElementType,
+                            projectedElement,
+                            parameter,
+                            this.context.Compilation,
+                            out ITypeSymbol replacement,
+                            out bool conflictingProjection))
+                    {
+                        continue;
+                    }
+
+                    if (conflictingProjection
+                        || (replacements.TryGetValue(
+                                parameter,
+                                out ITypeSymbol existing)
+                            && !SymbolEqualityComparer.IncludeNullability.Equals(
+                                existing,
+                                replacement)))
+                    {
+                        this.context.ReportUnsupported(
+                            collection,
+                            "collection expression elements have conflicting managed-reference projections.");
+                        return target;
+                    }
+
+                    replacements[parameter] = replacement;
+                }
+            }
+
+            if (replacements.Count == 0)
+            {
+                return target;
+            }
+
+            INamedTypeSymbol projected = ProjectNamedType(target, replacements);
+            if (this.ProjectedResultMatchesDestination(
+                    collection,
+                    projected,
+                    out _))
+            {
+                return projected;
+            }
+
+            if (this.ResolveValueSink(collection) is ILocalSymbol local
+                && this.IsLocalDeclarationInitializer(collection, local))
+            {
+                this.state.ManagedReferenceArrayNullable
+                    .ManagedReferenceArrayProjectedLocalType[local] = projected;
+                return projected;
+            }
+
+            this.context.ReportUnsupported(
+                collection,
+                "collection expression managed-reference projection cannot change fixed destination storage; no exact G# translation exists.");
+            return target;
+        }
 
         private static ITypeSymbol GetEnumerableElementType(
             ITypeSymbol type,

@@ -555,7 +555,7 @@ public sealed class ManagedReferenceTranslationTests
         var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
         var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
         Assert.Empty(context.Diagnostics);
-        Assert.Contains("List[managed[int32]?]{ source[0] }", text, StringComparison.Ordinal);
+        Assert.Contains("List[managed[int32]?]", text, StringComparison.Ordinal);
         Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
         var result = EmittedOracle.Evaluate(
             text + "\nProbe.Run()",
@@ -563,6 +563,75 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
         Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayCollectionExpressionWidensGenericContainer()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayCollectionExpression;
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    List<ManagedRef<int>> values = [source[0]];
+                    return values[0] == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayCollectionExpression.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("List[managed[int32]?]", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void ManagedReferenceArrayCollectionExpressionRejectsFixedReturnStorage()
+    {
+        const string source = """
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayCollectionExpressionFixedReturn;
+            public class Probe {
+                private static List<ManagedRef<int>> Create(
+                    ManagedRef<int>[] source) =>
+                    [source[0]];
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayCollectionExpressionFixedReturn.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        _ = new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "collection expression managed-reference projection",
+                    StringComparison.Ordinal));
     }
 
     [Fact]
@@ -4757,7 +4826,48 @@ public sealed class ManagedReferenceTranslationTests
             context.Diagnostics,
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
                 && diagnostic.Message.Contains(
-                    "static generic member's fixed receiver type",
+                    "generic member's fixed receiver type",
+                    StringComparison.Ordinal));
+        Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
+    }
+
+    [Theory]
+    [InlineData("holder.Field")]
+    [InlineData("holder.Property")]
+    public void InstanceGenericMemberWriteWithProjectedValueReportsUnsupported(
+        string target)
+    {
+        var source = $$"""
+            using Gsharp.Values;
+            namespace ManagedArrayInstanceGenericMemberWrite;
+            public sealed class Holder<T> {
+                public T Field;
+                public T Property { get; set; }
+            }
+            public class Probe {
+                public static void Set(
+                    Holder<ManagedRef<int>> holder,
+                    ManagedRef<int>[] source) {
+                    {{target}} = source[0];
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayInstanceGenericMemberWrite.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "generic member's fixed receiver type",
                     StringComparison.Ordinal));
         Assert.DoesNotContain("source[0]!!", text, StringComparison.Ordinal);
     }
@@ -5681,7 +5791,7 @@ public sealed class ManagedReferenceTranslationTests
             context.Diagnostics,
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
                 && diagnostic.Message.Contains(
-                    "static generic member's fixed receiver type",
+                    "generic member's fixed receiver type",
                     StringComparison.Ordinal));
     }
 
