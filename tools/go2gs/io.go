@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"time"
 )
 
 func readProfile(path string) (Profile, error) {
@@ -67,11 +68,11 @@ func readProfile(path string) (Profile, error) {
 	if len(profile.CCompilerHelpers) != 0 {
 		return profile, errors.New("cCompilerHelpers are obsolete and are never executed in M0; use an empty array")
 	}
-
-	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
+	if err := validateProfileSemanticAuthority(profile); err != nil {
 		return profile, err
 	}
-	if err := validateGODEBUG(profile.GODEBUG); err != nil {
+
+	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
 		return profile, err
 	}
 	if err := validateLimits(profile.Limits); err != nil {
@@ -84,12 +85,78 @@ func readProfile(path string) (Profile, error) {
 }
 
 func validateGODEBUG(values map[string]string) error {
-	for key, value := range values {
-		if key != "gotypesalias" || (value != "0" && value != "1") {
-			return fmt.Errorf("goDebug setting %q=%q is not allowed in M0", key, value)
-		}
+	if len(values) != 0 {
+		return errors.New("goDebug must be empty because in-process parser/type-checker semantics cannot be changed")
 	}
 	return nil
+}
+
+func validateSemanticProfile(profile Profile) error {
+	if profile.GOEXPERIMENT != "" {
+		return errors.New("goExperiment must be empty because in-process parser/type-checker semantics cannot be changed")
+	}
+	return validateGODEBUG(profile.GODEBUG)
+}
+
+func validateProfileSemanticAuthority(profile Profile) error {
+	if normalized, err := normalizeOfficialGoVersion(profile.RequestedGoVersion, false); err != nil ||
+		normalized != profile.RequestedGoVersion {
+		return errors.New("requestedGoVersion must be an exact official Go release version without a go prefix")
+	}
+	return validateSemanticProfile(profile)
+}
+
+func normalizeOfficialGoVersion(value string, requirePrefix bool) (string, error) {
+	hasPrefix := strings.HasPrefix(value, "go")
+	if hasPrefix != requirePrefix {
+		return "", errors.New("invalid Go version prefix")
+	}
+	if hasPrefix {
+		value = strings.TrimPrefix(value, "go")
+	}
+	parts := strings.Split(value, ".")
+	if len(parts) != 2 && len(parts) != 3 {
+		return "", errors.New("invalid official Go release version")
+	}
+	if parts[0] != "1" || !canonicalDecimal(parts[1]) ||
+		(len(parts) == 3 && !canonicalDecimal(parts[2])) {
+		return "", errors.New("invalid official Go release version")
+	}
+	return strings.Join(parts, "."), nil
+}
+
+func canonicalDecimal(value string) bool {
+	if value == "" || (len(value) > 1 && value[0] == '0') {
+		return false
+	}
+	for _, character := range value {
+		if character < '0' || character > '9' {
+			return false
+		}
+	}
+	return true
+}
+
+func parseGOROOTVersion(data []byte) (string, error) {
+	text := strings.TrimSuffix(string(data), "\n")
+	lines := strings.Split(text, "\n")
+	if len(lines) == 0 || len(lines) > 2 {
+		return "", errors.New("GOROOT VERSION has unsupported formatting")
+	}
+	version, err := normalizeOfficialGoVersion(strings.TrimSuffix(lines[0], "\r"), true)
+	if err != nil {
+		return "", errors.New("GOROOT VERSION does not name an official Go release")
+	}
+	if len(lines) == 2 {
+		timestamp := strings.TrimSuffix(lines[1], "\r")
+		if !strings.HasPrefix(timestamp, "time ") {
+			return "", errors.New("GOROOT VERSION has unsupported metadata")
+		}
+		if _, err := time.Parse(time.RFC3339, strings.TrimPrefix(timestamp, "time ")); err != nil {
+			return "", errors.New("GOROOT VERSION has an invalid release timestamp")
+		}
+	}
+	return version, nil
 }
 
 func validateGOFLAGS(flags []string) error {
@@ -390,7 +457,8 @@ func validateAnalysisJSONShape(data []byte) error {
 			"generatorsExecuted", "targetBinariesExecuted", "trustBoundary", "limits",
 		}},
 		{"toolchain", []string{
-			"requestedVersion", "actualVersion", "executableSha256", "executableName",
+			"requestedVersion", "actualVersion", "helperSemanticVersion", "gorootVersion",
+			"executableSha256", "executableName",
 			"gorootIdentity", "gorootVersionSha256", "gorootSource", "cCompilerHelpers", "autoDownload",
 		}},
 		{"recordCounts", []string{

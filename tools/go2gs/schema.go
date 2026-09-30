@@ -124,17 +124,19 @@ type ProfileSnapshot struct {
 }
 
 type ToolchainProvenance struct {
-	RequestedVersion    string                   `json:"requestedVersion"`
-	ActualVersion       string                   `json:"actualVersion"`
-	ExecutableSHA256    string                   `json:"executableSha256"`
-	ExecutableName      string                   `json:"executableName"`
-	GOROOTIdentity      string                   `json:"gorootIdentity"`
-	GOROOTVersionSHA256 string                   `json:"gorootVersionSha256"`
-	GOROOTSource        string                   `json:"gorootSource"`
-	CCompilerName       string                   `json:"cCompilerName,omitempty"`
-	CCompilerSHA256     string                   `json:"cCompilerSha256,omitempty"`
-	CCompilerHelpers    []CompilerHelperIdentity `json:"cCompilerHelpers"`
-	AutoDownload        bool                     `json:"autoDownload"`
+	RequestedVersion      string                   `json:"requestedVersion"`
+	ActualVersion         string                   `json:"actualVersion"`
+	HelperSemanticVersion string                   `json:"helperSemanticVersion"`
+	GOROOTVersion         string                   `json:"gorootVersion"`
+	ExecutableSHA256      string                   `json:"executableSha256"`
+	ExecutableName        string                   `json:"executableName"`
+	GOROOTIdentity        string                   `json:"gorootIdentity"`
+	GOROOTVersionSHA256   string                   `json:"gorootVersionSha256"`
+	GOROOTSource          string                   `json:"gorootSource"`
+	CCompilerName         string                   `json:"cCompilerName,omitempty"`
+	CCompilerSHA256       string                   `json:"cCompilerSha256,omitempty"`
+	CCompilerHelpers      []CompilerHelperIdentity `json:"cCompilerHelpers"`
+	AutoDownload          bool                     `json:"autoDownload"`
 }
 
 type ManifestRecord struct {

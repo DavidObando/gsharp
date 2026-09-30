@@ -199,7 +199,7 @@ func sanitizedEnvironment(profile Profile, cacheRoot, goroot, pathDirectory stri
 	if err := validateGOFLAGS(profile.GOFLAGS); err != nil {
 		return nil, err
 	}
-	if err := validateGODEBUG(profile.GODEBUG); err != nil {
+	if err := validateSemanticProfile(profile); err != nil {
 		return nil, err
 	}
 	values := map[string]string{

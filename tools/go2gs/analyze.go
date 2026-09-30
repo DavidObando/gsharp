@@ -19,6 +19,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
+	"runtime/debug"
 	"slices"
 	"sort"
 	"strconv"
@@ -54,6 +56,9 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 }
 
 func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot, afterLoad func(), preloadOnly bool, gorootHandoff string) (_ Analysis, _ bool, err error) {
+	if err := validateProfileSemanticAuthority(profile); err != nil {
+		return Analysis{}, false, err
+	}
 	sourceRoot, err = secureRoot(sourceRoot)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("source root: %w", err)
@@ -140,8 +145,9 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	}
 
 	actualVersion := goExecutable.goVersion
-	if parseGoVersion("go version go"+actualVersion+" native") == "" {
-		return Analysis{}, false, errors.New("selected Go build metadata has an unrecognized Go version")
+	helperSemanticVersion, err := helperSemanticGoVersion()
+	if err != nil {
+		return Analysis{}, false, err
 	}
 	targetGOROOT, err := selectedGoRoot(goExecutable, gorootHandoff)
 	if err != nil {
@@ -150,6 +156,13 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	gorootVersion, err := readBoundedRegularFile(filepath.Join(targetGOROOT, "VERSION"), 1<<20)
 	if err != nil {
 		return Analysis{}, false, fmt.Errorf("hash selected Go GOROOT VERSION: %w", err)
+	}
+	gorootSemanticVersion, err := parseGOROOTVersion(gorootVersion)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	if err := validateSemanticGoVersions(actualVersion, gorootSemanticVersion, helperSemanticVersion); err != nil {
+		return Analysis{}, false, err
 	}
 	gorootVersionHash := hashBytes(gorootVersion)
 	env, err := sanitizedEnvironment(profile, workRoot, targetGOROOT, capsule.directory.executionPath())
@@ -160,8 +173,10 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	actualCommit, sourceCommitErr := sourceCommit(sourceRoot)
 	toolchain := ToolchainProvenance{
 		RequestedVersion: profile.RequestedGoVersion, ActualVersion: actualVersion,
+		HelperSemanticVersion: helperSemanticVersion, GOROOTVersion: gorootSemanticVersion,
 		ExecutableSHA256: goHash, ExecutableName: filepath.Base(executable),
-		GOROOTIdentity:      stableID("goroot", actualVersion+"\x00"+goHash+"\x00"+gorootVersionHash),
+		GOROOTIdentity: stableID("goroot",
+			actualVersion+"\x00"+gorootSemanticVersion+"\x00"+helperSemanticVersion+"\x00"+goHash+"\x00"+gorootVersionHash),
 		GOROOTVersionSHA256: gorootVersionHash,
 		GOROOTSource:        "selected executable path or verified parent handoff (path intentionally omitted)",
 		AutoDownload:        false,
@@ -1685,6 +1700,50 @@ func packageGoVersion(pkg *packages.Package, fallback string) string {
 	return version
 }
 
+func validateSemanticGoVersions(selected, goroot, helper string) error {
+	if selected != goroot || selected != helper {
+		return fmt.Errorf(
+			"semantic Go version mismatch: selected cmd/go=%s, GOROOT=%s, go2gs helper=%s",
+			selected, goroot, helper,
+		)
+	}
+	return nil
+}
+
+func helperSemanticGoVersion() (string, error) {
+	runtimeVersion, err := normalizeOfficialGoVersion(runtime.Version(), true)
+	if err != nil {
+		return "", errors.New("go2gs helper runtime must be built by an exact official Go release")
+	}
+	info, ok := debug.ReadBuildInfo()
+	if !ok {
+		return "", errors.New("go2gs helper has no authoritative Go build information")
+	}
+	buildVersion, err := normalizeOfficialGoVersion(info.GoVersion, true)
+	if err != nil || buildVersion != runtimeVersion {
+		return "", errors.New("go2gs helper runtime and build-info Go versions must exactly agree")
+	}
+	if err := validateHelperBuildSettings(info.Settings); err != nil {
+		return "", err
+	}
+	return runtimeVersion, nil
+}
+
+func validateHelperBuildSettings(settings []debug.BuildSetting) error {
+	for _, setting := range settings {
+		if setting.Value == "" {
+			continue
+		}
+		switch setting.Key {
+		case "GOEXPERIMENT":
+			return errors.New("go2gs helper was built with unsupported GOEXPERIMENT semantics")
+		case "DefaultGODEBUG":
+			return errors.New("go2gs helper was built with unsupported DefaultGODEBUG semantics")
+		}
+	}
+	return nil
+}
+
 func packageCanonical(pkg *packages.Package) string {
 	files := append([]string{}, pkg.GoFiles...)
 	for i := range files {
@@ -1716,49 +1775,6 @@ func packageVariant(pkg *packages.Package) string {
 	default:
 		return "in-package-test"
 	}
-}
-
-func parseGoVersion(output string) string {
-	fields := strings.Fields(output)
-	if len(fields) < 3 || fields[0] != "go" || fields[1] != "version" || !strings.HasPrefix(fields[2], "go1.") {
-		return ""
-	}
-	version := strings.TrimPrefix(fields[2], "go")
-	rest := version[2:]
-	minorLength := leadingDigits(rest)
-	if minorLength == 0 {
-		return ""
-	}
-	rest = rest[minorLength:]
-	if strings.HasPrefix(rest, ".") {
-		rest = rest[1:]
-		patchLength := leadingDigits(rest)
-		if patchLength == 0 {
-			return ""
-		}
-		rest = rest[patchLength:]
-	}
-	for _, prefix := range []string{"beta", "rc"} {
-		if strings.HasPrefix(rest, prefix) {
-			rest = rest[len(prefix):]
-			if leadingDigits(rest) != len(rest) || rest == "" {
-				return ""
-			}
-			return version
-		}
-	}
-	if rest != "" {
-		return ""
-	}
-	return version
-}
-
-func leadingDigits(value string) int {
-	index := 0
-	for index < len(value) && value[index] >= '0' && value[index] <= '9' {
-		index++
-	}
-	return index
 }
 
 func sourceCommit(root string) (string, error) {
