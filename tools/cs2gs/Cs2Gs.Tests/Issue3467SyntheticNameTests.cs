@@ -259,6 +259,28 @@ namespace Cs2Gs.Tests
         }
 
         [Fact]
+        public void ReadableLiftFallback_AvoidsImportedAlias()
+        {
+            string printed = Translate("""
+                using Helper = System.Math;
+
+                public class C
+                {
+                    public int Run(int value)
+                    {
+                        return Helper(value);
+                        static int Helper(int n) => n == 0 ? 0 : Other<int>(n - 1);
+                        static int Other<T>(int n) => Helper(n);
+                    }
+                }
+                """);
+
+            Assert.Contains("func Helper_2(", printed, StringComparison.Ordinal);
+            Assert.DoesNotContain("__local_", printed, StringComparison.Ordinal);
+            TranslationTestValidation.AssertBinds(printed);
+        }
+
+        [Fact]
         public void UnreferencedUnderscoreLambdaParameter_KeepsDiscardSpelling()
         {
             string printed = Translate("""

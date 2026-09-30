@@ -20,7 +20,8 @@ internal sealed class LiftedLocalFunctionNameAllocator
     public string Allocate(
         IMethodSymbol localFunction,
         IReadOnlyCollection<string> occupied,
-        string localName)
+        string localName,
+        Func<string, bool> unavailable)
     {
         lock (this.gate)
         {
@@ -37,7 +38,9 @@ internal sealed class LiftedLocalFunctionNameAllocator
             }
 
             string candidate = localName;
-            for (int suffix = 2; occupied.Contains(candidate) || used.Contains(candidate); suffix++)
+            for (int suffix = 2;
+                occupied.Contains(candidate) || used.Contains(candidate) || unavailable(candidate);
+                suffix++)
             {
                 candidate = $"{localName}_{suffix}";
             }

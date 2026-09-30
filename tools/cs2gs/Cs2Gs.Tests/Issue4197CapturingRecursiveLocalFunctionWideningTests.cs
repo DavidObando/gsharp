@@ -301,6 +301,35 @@ namespace Demo
     }
 
     [Fact]
+    public void RefReturningSwitchSectionLocalUsedAsDelegate_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public delegate ref int RefGetter(int[] values);
+                public class C {
+                    public int Run(int value) {
+                        int[] data = new int[] { 10 };
+                        switch (value) {
+                            case 0:
+                                RefGetter getter = At;
+                                return getter(data);
+                                static ref int At(int[] values) => ref values[0];
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "switch-section ref-returning function literals cannot become delegate values");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AdjacentCapturingDelegateLocal_IsNotSwallowedByNativeGroup()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
