@@ -99,9 +99,10 @@ compiler, assembler, linker, cgo, vet, a C/C++ compiler, pkg-config, or helpers.
 `cCompiler` and `cCompilerHelpers` remain profile-v1 compatibility fields only:
 they must be empty. Before preload or package loading, the selected `cmd/go`
 build-info version, bounded captured `GOROOT/VERSION`, and helper
-runtime/build-info version must name the same exact official Go release. The
-artifact records all three values; prerelease, development, custom, missing,
-or contradictory identities fail bootstrap without an artifact. Helpers built
+runtime/build-info version must self-report the same canonical final-release
+Go version label. These labels are provenance metadata, not authentication;
+the executable and captured-content hashes are the authoritative identities.
+Unsupported, missing, or contradictory labels fail bootstrap without an artifact. Helpers built
 with nonempty `GOEXPERIMENT` or `DefaultGODEBUG` semantic overrides are also
 rejected. A requested version mismatch remains an inventory blocker only after
 that agreement succeeds. When `cgoEnabled` requests CGo selection, go2gs independently applies Go
@@ -118,7 +119,9 @@ order of variable initializers followed by `init` functions. Diagnostic
 positions use portable source/module/GOROOT identities. Schema validation
 requires the complete v1 handshake, mandatory fields and collections, exact
 record counts, valid references, and loaded main-module package/file ownership
-before `inventoryComplete` may be true.
+before `inventoryComplete` may be true. `validate-analysis` checks structural
+and relational consistency; it does not authenticate the recorded binaries or
+captured content.
 
 ## Validate an inventory
 

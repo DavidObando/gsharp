@@ -101,7 +101,7 @@ func validateSemanticProfile(profile Profile) error {
 func validateProfileSemanticAuthority(profile Profile) error {
 	if normalized, err := normalizeOfficialGoVersion(profile.RequestedGoVersion, false); err != nil ||
 		normalized != profile.RequestedGoVersion {
-		return errors.New("requestedGoVersion must be an exact official Go release version without a go prefix")
+		return errors.New("requestedGoVersion must use canonical final-release form without a go prefix")
 	}
 	return validateSemanticProfile(profile)
 }
@@ -116,11 +116,11 @@ func normalizeOfficialGoVersion(value string, requirePrefix bool) (string, error
 	}
 	parts := strings.Split(value, ".")
 	if len(parts) != 2 && len(parts) != 3 {
-		return "", errors.New("invalid official Go release version")
+		return "", errors.New("invalid canonical final-release Go version label")
 	}
 	if parts[0] != "1" || !canonicalDecimal(parts[1]) ||
 		(len(parts) == 3 && !canonicalDecimal(parts[2])) {
-		return "", errors.New("invalid official Go release version")
+		return "", errors.New("invalid canonical final-release Go version label")
 	}
 	return strings.Join(parts, "."), nil
 }
@@ -145,7 +145,7 @@ func parseGOROOTVersion(data []byte) (string, error) {
 	}
 	version, err := normalizeOfficialGoVersion(strings.TrimSuffix(lines[0], "\r"), true)
 	if err != nil {
-		return "", errors.New("GOROOT VERSION does not name an official Go release")
+		return "", errors.New("GOROOT VERSION must self-report a canonical final-release Go version")
 	}
 	if len(lines) == 2 {
 		timestamp := strings.TrimSuffix(lines[1], "\r")

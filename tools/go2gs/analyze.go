@@ -1703,7 +1703,7 @@ func packageGoVersion(pkg *packages.Package, fallback string) string {
 func validateSemanticGoVersions(selected, goroot, helper string) error {
 	if selected != goroot || selected != helper {
 		return fmt.Errorf(
-			"semantic Go version mismatch: selected cmd/go=%s, GOROOT=%s, go2gs helper=%s",
+			"canonical Go version labels differ: selected cmd/go=%s, GOROOT=%s, go2gs helper=%s",
 			selected, goroot, helper,
 		)
 	}
@@ -1713,7 +1713,7 @@ func validateSemanticGoVersions(selected, goroot, helper string) error {
 func helperSemanticGoVersion() (string, error) {
 	runtimeVersion, err := normalizeOfficialGoVersion(runtime.Version(), true)
 	if err != nil {
-		return "", errors.New("go2gs helper runtime must be built by an exact official Go release")
+		return "", errors.New("go2gs helper must self-report a canonical final-release Go version")
 	}
 	info, ok := debug.ReadBuildInfo()
 	if !ok {
@@ -1721,7 +1721,7 @@ func helperSemanticGoVersion() (string, error) {
 	}
 	buildVersion, err := normalizeOfficialGoVersion(info.GoVersion, true)
 	if err != nil || buildVersion != runtimeVersion {
-		return "", errors.New("go2gs helper runtime and build-info Go versions must exactly agree")
+		return "", errors.New("go2gs helper runtime and build-info version labels must match")
 	}
 	if err := validateHelperBuildSettings(info.Settings); err != nil {
 		return "", err

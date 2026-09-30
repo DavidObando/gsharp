@@ -294,7 +294,7 @@ func TestPublicAnalyzeRejectsCmdGoClaimingDifferentHelperVersion(t *testing.T) {
 	profile := testProfile()
 	profile.RequestedGoVersion = claimedVersion
 	if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile); err == nil ||
-		!strings.Contains(err.Error(), "semantic Go version mismatch") {
+		!strings.Contains(err.Error(), "canonical Go version labels differ") {
 		t.Fatalf("cmd/go/helper semantic mismatch was accepted: %v", err)
 	}
 	if loads != 0 {
@@ -314,7 +314,7 @@ func TestPublicAnalyzeRejectsCmdGoClaimingDifferentHelperVersion(t *testing.T) {
 	output, runErr := command.CombinedOutput()
 	var exitErr *exec.ExitError
 	if !errors.As(runErr, &exitErr) || exitErr.ExitCode() != 2 ||
-		!strings.Contains(string(output), "semantic Go version mismatch") {
+		!strings.Contains(string(output), "canonical Go version labels differ") {
 		t.Fatalf("public semantic mismatch should exit 2: %v\n%s", runErr, output)
 	}
 	for _, name := range []string{"analysis.json", "run.json"} {

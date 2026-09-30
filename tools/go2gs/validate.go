@@ -482,17 +482,17 @@ func validateAnalysisHeader(a Analysis) error {
 	} {
 		normalized, err := normalizeOfficialGoVersion(version, false)
 		if err != nil || normalized != version {
-			return fmt.Errorf("analysis %s Go version is not an exact official release", name)
+			return fmt.Errorf("analysis %s Go version label is not canonical final-release form", name)
 		}
 	}
 	if t.ActualVersion != t.HelperSemanticVersion || t.ActualVersion != t.GOROOTVersion {
-		return errors.New("analysis selected, GOROOT, and helper semantic Go versions must exactly agree")
+		return errors.New("analysis selected, GOROOT, and helper Go version labels must match")
 	}
 	expectedGOROOTIdentity := stableID("goroot",
 		t.ActualVersion+"\x00"+t.GOROOTVersion+"\x00"+t.HelperSemanticVersion+"\x00"+
 			t.ExecutableSHA256+"\x00"+t.GOROOTVersionSHA256)
 	if t.GOROOTIdentity != expectedGOROOTIdentity {
-		return errors.New("analysis GOROOT identity does not match semantic versions and hashes")
+		return errors.New("analysis GOROOT identity is inconsistent with version labels and hashes")
 	}
 	if t.RequestedVersion != t.ActualVersion {
 		if a.InventoryComplete || !slices.ContainsFunc(a.Blockers, func(blocker BlockerRecord) bool {

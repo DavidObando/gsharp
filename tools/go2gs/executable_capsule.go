@@ -105,7 +105,7 @@ func captureSelectedGo(path, expectedHash string) (capturedExecutable, string, e
 	}
 	captured.goVersion, err = normalizeOfficialGoVersion(info.GoVersion, true)
 	if err != nil {
-		return capturedExecutable{}, "", errors.New("selected Go build metadata must name an exact official Go release")
+		return capturedExecutable{}, "", errors.New("selected cmd/go must self-report a canonical final-release Go version")
 	}
 	return captured, hash, nil
 }

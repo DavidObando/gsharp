@@ -530,7 +530,7 @@ func TestSelectedGoGOROOTVersionMismatchFailsBeforePackageLoad(t *testing.T) {
 	packageLoadTestHook = func(string) { loads++ }
 	t.Cleanup(func() { packageLoadTestHook = nil })
 	if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile()); err == nil ||
-		!strings.Contains(err.Error(), "semantic Go version mismatch") {
+		!strings.Contains(err.Error(), "canonical Go version labels differ") {
 		t.Fatalf("selected/GOROOT mismatch was accepted: %v", err)
 	}
 	if loads != 0 {

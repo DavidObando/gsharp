@@ -63,11 +63,12 @@ so the GOROOT compiler, assembler, linker, cgo, vet, C/C++ compilers,
 pkg-config, and helpers are never executed. Profile-v1 `cCompiler` and
 `cCompilerHelpers` fields are accepted only when empty.
 The selected `cmd/go` build-info version, bounded captured `GOROOT/VERSION`,
-and helper runtime/build-info version must normalize to the same exact
-official release before preload or package loading. All three values are
-recorded in toolchain provenance and schema validation requires equality.
-Prerelease, development, custom, missing, and contradictory identities fail
-bootstrap without an artifact, as do helpers built with nonempty
+and helper runtime/build-info version must self-report the same canonical
+final-release Go version label before preload or package loading. These labels
+are provenance metadata, not authentication; executable and captured-content
+hashes are the authoritative identities. All three labels are recorded and
+schema validation requires relational consistency. Unsupported, missing, or
+contradictory labels fail bootstrap without an artifact, as do helpers built with nonempty
 `GOEXPERIMENT` or `DefaultGODEBUG` semantic overrides.
 Requested CGo selection is instead classified from the immutable source mirror
 with Go build constraints and file naming rules. Selected CGo files, native
@@ -81,7 +82,9 @@ bounded no-follow mirror, so loader semantics and emitted inventory bytes
 come from the same captured snapshot.
 Schema validation permits `inventoryComplete: true` only when the artifact
 contains a loaded main module, package, owned source files, and typed-file
-ownership; blocker-free preload artifacts are rejected.
+ownership; blocker-free preload artifacts are rejected. Validation checks
+artifact structure and relationships, not the authenticity of recorded
+executables or content.
 
 Typed nil/interface values, byte strings, maps, panic/defer/recover, fixed
 value arrays, and concurrency are inventoried as typed syntax sites with
