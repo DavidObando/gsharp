@@ -399,7 +399,11 @@ public sealed partial class CSharpToGSharpTranslator
 
         private static bool AssignmentRequiresStatementLowering(
             AssignmentExpressionSyntax assignment) =>
-            assignment.Left is TupleExpressionSyntax;
+            assignment.Left is TupleExpressionSyntax
+            || assignment.Left is DeclarationExpressionSyntax
+            {
+                Designation: ParenthesizedVariableDesignationSyntax,
+            };
 
         // Issue #3348: the sub-expressions of `query` that are evaluated EAGERLY, in
         // the scope enclosing the query, rather than inside one of the lambdas its
@@ -832,7 +836,10 @@ public sealed partial class CSharpToGSharpTranslator
                 if (argument.Expression is TupleExpressionSyntax
                     || (argument.Expression is DeclarationExpressionSyntax declaration
                         && (!declaration.Type.IsVar
-                            || declaration.Designation is ParenthesizedVariableDesignationSyntax)))
+                            || declaration.Designation is ParenthesizedVariableDesignationSyntax
+                            || (declaration.Designation is SingleVariableDesignationSyntax single
+                                && this.context.GetDeclaredSymbol(single) is ILocalSymbol local
+                                && this.InferredLocalDefaultRequiresTypedDeclaration(local)))))
                 {
                     return false;
                 }
@@ -999,6 +1006,8 @@ public sealed partial class CSharpToGSharpTranslator
                 if (targetExpr is DeclarationExpressionSyntax { Designation: SingleVariableDesignationSyntax directSingle } directDecl
                     && this.context.GetDeclaredSymbol(directSingle) is ILocalSymbol directLocal
                     && !this.IsLocalReassigned(directLocal)
+                    && (!directDecl.Type.IsVar
+                        || !this.InferredLocalDefaultRequiresTypedDeclaration(directLocal))
                     && (directDecl.Type.IsVar
                         || (rhsTupleType is { IsTupleType: true }
                             && i < rhsTupleType.TupleElements.Length
@@ -1088,7 +1097,8 @@ public sealed partial class CSharpToGSharpTranslator
                         declaration.Designation,
                         tempRead,
                         forceRealTemps,
-                        statements);
+                        statements,
+                        declaration.Type.IsVar);
                     if (declaredValue is not null)
                     {
                         values.Add(declaredValue);
@@ -1263,7 +1273,8 @@ public sealed partial class CSharpToGSharpTranslator
             VariableDesignationSyntax designation,
             GExpression value,
             bool preserveValue,
-            List<GStatement> statements)
+            List<GStatement> statements,
+            bool inferredType)
         {
             if (designation is DiscardDesignationSyntax)
             {
@@ -1274,12 +1285,20 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 string name = this.EmittedName(single, single.Identifier);
                 ILocalSymbol local = this.context.GetDeclaredSymbol(single) as ILocalSymbol;
+                GTypeReference type = inferredType
+                    && local != null
+                    && this.InferredLocalDefaultRequiresTypedDeclaration(local)
+                        ? MakeNullable(this.typeMapper.MapEventType(
+                            local.Type,
+                            this.context,
+                            single.GetLocation()))
+                        : null;
                 statements.Add(new LocalDeclarationStatement(
                     local != null && this.IsLocalReassigned(local)
                         ? BindingKind.Var
                         : BindingKind.Let,
                     name,
-                    type: null,
+                    type,
                     initializer: value));
                 return new IdentifierExpression(name);
             }
@@ -1293,7 +1312,9 @@ public sealed partial class CSharpToGSharpTranslator
                 if (!preserveValue
                     && child is SingleVariableDesignationSyntax childSingle
                     && this.context.GetDeclaredSymbol(childSingle) is ILocalSymbol local
-                    && !this.IsLocalReassigned(local))
+                    && !this.IsLocalReassigned(local)
+                    && !(inferredType
+                        && this.InferredLocalDefaultRequiresTypedDeclaration(local)))
                 {
                     temps.Add(this.EmittedName(childSingle, childSingle.Identifier));
                     directNames[i] = true;
@@ -1326,7 +1347,8 @@ public sealed partial class CSharpToGSharpTranslator
                     parenthesized.Variables[i],
                     new IdentifierExpression(temps[i]),
                     preserveValue,
-                    statements);
+                    statements,
+                    inferredType);
                 if (declaredValue is not null)
                 {
                     values.Add(declaredValue);
@@ -1342,7 +1364,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private IEnumerable<GStatement> LowerTupleDeclaration(
             ParenthesizedVariableDesignationSyntax designation,
-            ExpressionSyntax right)
+            ExpressionSyntax right,
+            bool inferredType)
         {
             return this.WithHoistedAssignments(
                 right,
@@ -1354,7 +1377,8 @@ public sealed partial class CSharpToGSharpTranslator
                         designation,
                         this.TranslateExpression(right),
                         preserveValue: false,
-                        statements);
+                        statements,
+                        inferredType);
                     return statements;
                 });
         }
@@ -1379,6 +1403,11 @@ public sealed partial class CSharpToGSharpTranslator
                 var collected = new List<string>();
                 foreach (VariableDesignationSyntax designation in parenthesized.Variables)
                 {
+                    if (designation is ParenthesizedVariableDesignationSyntax)
+                    {
+                        return false;
+                    }
+
                     collected.Add(designation switch
                     {
                         SingleVariableDesignationSyntax single => this.EmittedName(single, single.Identifier),
@@ -1389,10 +1418,17 @@ public sealed partial class CSharpToGSharpTranslator
                     // designation, not a declarator.
                     if (designation is SingleVariableDesignationSyntax indexCheckSingle)
                     {
-                        if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local
-                            && this.IsLocalReassigned(local))
+                        if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local)
                         {
-                            binding = BindingKind.Var;
+                            if (this.InferredLocalDefaultRequiresTypedDeclaration(local))
+                            {
+                                return false;
+                            }
+
+                            if (this.IsLocalReassigned(local))
+                            {
+                                binding = BindingKind.Var;
+                            }
                         }
                     }
                 }
@@ -1413,6 +1449,11 @@ public sealed partial class CSharpToGSharpTranslator
                 foreach (ArgumentSyntax argument in tuple.Arguments)
                 {
                     var declaration = (DeclarationExpressionSyntax)argument.Expression;
+                    if (declaration.Designation is ParenthesizedVariableDesignationSyntax)
+                    {
+                        return false;
+                    }
+
                     collected.Add(declaration.Designation switch
                     {
                         SingleVariableDesignationSyntax single => this.EmittedName(single, single.Identifier),
@@ -1424,7 +1465,14 @@ public sealed partial class CSharpToGSharpTranslator
                     if (declaration.Designation is SingleVariableDesignationSyntax indexCheckSingle)
                     {
                         if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol local
-                            && this.IsLocalReassigned(local))
+                            && declaration.Type.IsVar
+                            && this.InferredLocalDefaultRequiresTypedDeclaration(local))
+                        {
+                            return false;
+                        }
+
+                        if (this.context.GetDeclaredSymbol(indexCheckSingle) is ILocalSymbol reassignedLocal
+                            && this.IsLocalReassigned(reassignedLocal))
                         {
                             binding = BindingKind.Var;
                         }
