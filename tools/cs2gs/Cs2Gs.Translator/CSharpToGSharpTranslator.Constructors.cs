@@ -2006,7 +2006,11 @@ public sealed partial class CSharpToGSharpTranslator
                 .GetValue(
                     this.context.Compilation,
                     static _ => new LiftedLocalFunctionNameAllocator())
-                .Allocate(localFunction, occupied, localName);
+                .Allocate(
+                    localFunction,
+                    occupied,
+                    localName,
+                    candidate => this.typeMapper.ClaimsDocumentScopeName(candidate, this.context));
 
             this.state.UsedLiftedLocalFunctionNames.Add(candidate);
             return candidate;
@@ -2023,6 +2027,17 @@ public sealed partial class CSharpToGSharpTranslator
                         referencedMethod.OriginalDefinition,
                         localFunction)
                     && name.Parent is not InvocationExpressionSyntax);
+
+        private static IEnumerable<SyntaxNode> GetLocalFunctionSiblingStatements(
+            LocalFunctionStatementSyntax localFunction) =>
+            localFunction.Parent switch
+            {
+                BlockSyntax block => block.Statements,
+                SwitchSectionSyntax section => section.Statements,
+                GlobalStatementSyntax { Parent: CompilationUnitSyntax unit } =>
+                    unit.Members.OfType<GlobalStatementSyntax>().Select(statement => statement.Statement),
+                _ => Enumerable.Repeat<SyntaxNode>(localFunction, 1),
+            };
 
         // Issue #1278 / ADR-0131: a C# expression-bodied member (`=> expr`)
         // translates to the idiomatic G# arrow form (`-> expr`) when the

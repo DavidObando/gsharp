@@ -23,6 +23,7 @@ namespace Corpus.Grid09
             ParenthesizedLambdaExpressionAsyncFixture.Run();
             ParenthesizedLambdaExpressionAttributedFixture.Run();
             ParenthesizedLambdaExpressionDefaultsFixture.Run();
+            RefExpressionLocalFunctionFixture.Run();
             SimpleLambdaExpressionFixture.Run();
         }
     }
