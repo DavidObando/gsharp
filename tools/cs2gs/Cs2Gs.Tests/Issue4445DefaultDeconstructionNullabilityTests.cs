@@ -1447,6 +1447,131 @@ public class Issue4445DefaultDeconstructionNullabilityTests
     }
 
     [Fact]
+    public void Translation_TracksEventDelegateStorage()
+    {
+        const string source = """
+            #nullable enable
+
+            public sealed class EventStorage<T>
+            {
+                public event System.Action? Changed;
+
+                private static void Fill(ref T? value, T replacement) =>
+                    value = replacement;
+
+                private static void Keep(ref T value)
+                {
+                }
+
+                public void Observed(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action callback = () =>
+                    {
+                        var (eventObservedLeft, _) = pair;
+                        Fill(ref eventObservedLeft, replacement);
+                    };
+                    Changed += callback;
+                    pair = (default(T), replacement);
+                    Changed?.Invoke();
+                }
+
+                public void Removed(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action callback = () =>
+                    {
+                        var (eventRemovedLeft, _) = pair;
+                        Keep(ref eventRemovedLeft);
+                    };
+                    Changed += callback;
+                    Changed -= callback;
+                    pair = (default(T), replacement);
+                    Changed?.Invoke();
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) eventObservedLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) eventRemovedLeft T\? =", printed);
+    }
+
+    [Fact]
+    public void Translation_TreatsDelegateValuedPropertiesAsOpaqueStorage()
+    {
+        const string source = """
+            #nullable enable
+
+            public sealed class PropertyStorage<T>
+            {
+                private System.Action? stored;
+
+                private System.Action? Callback
+                {
+                    get => stored;
+                    set => stored ??= value;
+                }
+
+                private static void Fill(ref T? value, T replacement) =>
+                    value = replacement;
+
+                public void M(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    Callback = () =>
+                    {
+                        var (propertyStorageLeft, _) = pair;
+                        Fill(ref propertyStorageLeft, replacement);
+                    };
+                    Callback = () => { };
+                    pair = (default(T), replacement);
+                    Callback?.Invoke();
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) propertyStorageLeft T\? =", printed);
+    }
+
+    [Fact]
+    public void Translation_MatchesEquivalentConstantIndexerOrigins()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class ConstantIndexer
+            {
+                private static void Keep<T>(ref T value)
+                {
+                }
+
+                public static void M<T>(T replacement)
+                {
+                    var callbacks = new System.Action[1];
+                    var pair = (replacement, replacement);
+                    callbacks[0] = () =>
+                    {
+                        var (constantIndexLeft, _) = pair;
+                        Keep(ref constantIndexLeft);
+                    };
+                    var index = 0;
+                    callbacks[index] = () => { };
+                    pair = (default(T), replacement);
+                    callbacks[0]();
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.DoesNotMatch(@"\b(let|var) constantIndexLeft T\? =", printed);
+    }
+
+    [Fact]
     public void Translation_TopLevelAliasKeepsDefaultProvenance()
     {
         const string source = """

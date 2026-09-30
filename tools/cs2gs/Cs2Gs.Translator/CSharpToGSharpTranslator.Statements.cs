@@ -2241,7 +2241,7 @@ public sealed partial class CSharpToGSharpTranslator
                     return true;
                 }
 
-                if (symbol is (IFieldSymbol or IPropertySymbol)
+                if (symbol is (IFieldSymbol or IPropertySymbol or IEventSymbol)
                     && this.NonLocalDelegateMayReferenceAnonymousFunction(
                         candidate,
                         usePosition,
@@ -2486,7 +2486,7 @@ public sealed partial class CSharpToGSharpTranslator
         {
             expression = Unwrap(expression);
             return this.context.GetSymbolInfo(expression).Symbol
-                    is IFieldSymbol or IPropertySymbol
+                    is IFieldSymbol or IPropertySymbol or IEventSymbol
                 || (expression is ElementAccessExpressionSyntax
                         && this.context.GetTypeInfo(expression).Type?.TypeKind
                             == TypeKind.Delegate);
@@ -2512,6 +2512,7 @@ public sealed partial class CSharpToGSharpTranslator
                     .OrderBy(candidate => candidate.Span.End))
             {
                 var next = new HashSet<int>();
+                bool opaqueStorage = this.IsOpaqueDelegateStorage(storage);
                 foreach (int state in states)
                 {
                     int rightCount =
@@ -2521,6 +2522,14 @@ public sealed partial class CSharpToGSharpTranslator
                             storage,
                             anonymousFunction,
                             storageUsePosition);
+                    if (opaqueStorage)
+                    {
+                        // A property's accessors may ignore or transform what is
+                        // stored, so a write never proves the earlier delegate
+                        // is gone: keep the prior state beside the written one.
+                        next.Add(state);
+                    }
+
                     next.Add(assignment.Kind() switch
                     {
                         SyntaxKind.AddAssignmentExpression =>
@@ -2621,6 +2630,12 @@ public sealed partial class CSharpToGSharpTranslator
                 _ => 0,
             };
         }
+
+        // Field-like storage (fields, events, array elements) holds exactly what
+        // was written; a property does not. Anything whose writes cannot be
+        // proven to replace the stored delegate is opaque and only ever widens.
+        private bool IsOpaqueDelegateStorage(ExpressionSyntax storage) =>
+            this.context.GetSymbolInfo(Unwrap(storage)).Symbol is IPropertySymbol;
 
         private static int AddDelegateCounts(int left, int right) =>
             Math.Min(2, left + right);
@@ -3034,6 +3049,17 @@ public sealed partial class CSharpToGSharpTranslator
                 && left.Span == right.Span)
             {
                 return true;
+            }
+
+            // Equivalent constants at different syntax locations (`0` in
+            // `xs[0]` and in `var i = 0; xs[i]`) are the same origin.
+            Optional<object> leftConstant =
+                this.context.SemanticModel.GetConstantValue(left);
+            Optional<object> rightConstant =
+                this.context.SemanticModel.GetConstantValue(right);
+            if (leftConstant.HasValue && rightConstant.HasValue)
+            {
+                return Equals(leftConstant.Value, rightConstant.Value);
             }
 
             ISymbol leftSymbol = this.context.GetSymbolInfo(left).Symbol;
