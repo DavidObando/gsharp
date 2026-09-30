@@ -465,6 +465,9 @@ func validateAnalysisHeader(a Analysis) error {
 	if err := validateGOFLAGS(p.GOFLAGS); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
+	if err := validateGoTarget(p.GOOS, p.GOARCH); err != nil {
+		return fmt.Errorf("analysis profile: %w", err)
+	}
 	if _, err := resolveArchitectureSettings(p.GOARCH, p.ArchitectureFeatures); err != nil {
 		return fmt.Errorf("analysis profile: %w", err)
 	}
@@ -583,7 +586,9 @@ func validateRecordFields(a Analysis) error {
 		}
 	}
 	for _, value := range a.Packages {
-		if value.ID == "" || value.ImportPath == "" || value.Name == "" || value.Variant == "" ||
+		validVariant := value.Variant == "ordinary" || value.Variant == "in-package-test" ||
+			value.Variant == "external-test" || value.Variant == "synthetic-test-main"
+		if value.ID == "" || value.ImportPath == "" || value.Name == "" || !validVariant ||
 			value.FileIDs == nil || value.CompiledFileIDs == nil || value.ImportPackageIDs == nil ||
 			value.InitializationOrder == nil || value.DiagnosticIDs == nil {
 			return fmt.Errorf("package %q has invalid required fields", value.ID)

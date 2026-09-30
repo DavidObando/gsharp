@@ -60,6 +60,9 @@ func analyzeWithSnapshotHooks(ctx context.Context, sourceRoot, outRoot string, p
 }
 
 func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot string, profile Profile, afterSnapshot, afterLoad func(), preloadOnly bool, gorootHandoff string) (_ Analysis, _ bool, err error) {
+	if err := validateGoTarget(profile.GOOS, profile.GOARCH); err != nil {
+		return Analysis{}, false, err
+	}
 	if _, err := resolveArchitectureSettings(profile.GOARCH, profile.ArchitectureFeatures); err != nil {
 		return Analysis{}, false, err
 	}
@@ -271,7 +274,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		BuildFlags: buildFlags,
 		Tests:      profile.LoadTests,
 	}
-	cgoOnlyOverlay, err := cgoOnlyPackageOverlay(mirror.root, semanticProfile)
+	cgoOnlyOverlay, err := cgoOnlyPackageOverlay(mirror, semanticProfile)
 	if err != nil {
 		return Analysis{}, false, err
 	}
@@ -331,7 +334,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if !verifyTypedSources(externalTypedSources) {
 		builder.block("input-drift", "Go toolchain or dependency source changed while type checking", nil, nil)
 	}
-	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, mirror)
+	builder.inputDrift = verifyPackageInputs(sourceSnapshot, all, mirror, semanticProfile)
 	for key := range verifyOriginalPackageInputs(mirror, sourceSnapshot) {
 		builder.inputDrift[key] = true
 	}
@@ -372,7 +375,13 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 }
 
 func finishInventory(builder *inventoryBuilder, maxRecords int) error {
+	if builder.err != nil {
+		return builder.err
+	}
 	builder.finish()
+	if builder.err != nil {
+		return builder.err
+	}
 	if builder.recordCount() > maxRecords {
 		return fmt.Errorf("record count exceeds limit %d", maxRecords)
 	}
@@ -1338,7 +1347,7 @@ func packageInputPathAllowed(pkg *packages.Package, sourceRoot, path string) boo
 	}()
 }
 
-func cgoOnlyPackageOverlay(root string, profile Profile) (map[string][]byte, error) {
+func cgoOnlyPackageOverlay(mirror sourceMirror, profile Profile) (map[string][]byte, error) {
 	overlay := map[string][]byte{}
 	if !profile.CGOEnabled {
 		return overlay, nil
@@ -1350,24 +1359,30 @@ func cgoOnlyPackageOverlay(root string, profile Profile) (map[string][]byte, err
 	context.CgoEnabled = true
 	context.BuildTags = append([]string{}, profile.BuildTags...)
 	context.ToolTags = profileToolTags(profile)
-	err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
-		if walkErr != nil {
-			return walkErr
-		}
-		if !entry.IsDir() {
+	for _, tree := range mirror.trees {
+		root := tree.mirrorRoot
+		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if walkErr != nil {
+				return walkErr
+			}
+			if !entry.IsDir() {
+				return nil
+			}
+			if path != root && (entry.Name() == ".git" || entry.Name() == "vendor" || strings.HasPrefix(entry.Name(), ".")) {
+				return filepath.SkipDir
+			}
+			selected, err := context.ImportDir(path, build.ImportComment)
+			if err != nil || selected == nil || len(selected.CgoFiles) == 0 || len(selected.GoFiles) != 0 {
+				return nil
+			}
+			overlay[filepath.Join(path, "zz_go2gs_inventory_"+selected.Name+".go")] = []byte("package " + selected.Name + "\n")
 			return nil
+		})
+		if err != nil {
+			return nil, err
 		}
-		if path != root && (entry.Name() == ".git" || entry.Name() == "vendor" || strings.HasPrefix(entry.Name(), ".")) {
-			return filepath.SkipDir
-		}
-		selected, err := context.ImportDir(path, build.ImportComment)
-		if err != nil || selected == nil || len(selected.CgoFiles) == 0 || len(selected.GoFiles) != 0 {
-			return nil
-		}
-		overlay[filepath.Join(path, "zz_go2gs_inventory_"+selected.Name+".go")] = []byte("package " + selected.Name + "\n")
-		return nil
-	})
-	return overlay, err
+	}
+	return overlay, nil
 }
 
 func copyBytesMap(source map[string][]byte) map[string][]byte {
@@ -1400,13 +1415,21 @@ func packageInputRoles(pkg *packages.Package) map[string]string {
 	return roles
 }
 
-func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Package, mirror sourceMirror) map[string]bool {
+func verifyPackageInputs(snapshot packageInputSnapshot, loaded []*packages.Package, mirror sourceMirror, profile Profile) map[string]bool {
 	sourceRoot := mirror.root
 	drift := map[string]bool{}
 	actual := map[string][]string{}
 	for _, pkg := range loaded {
 		files := packageInputPaths(pkg, sourceRoot)
-		activeCgo := pathsImportC(pkg.GoFiles, snapshot.data)
+		selectedGo := append([]string{}, pkg.GoFiles...)
+		for path := range profileSelectedDirectoryInputs(pkg, sourceRoot, profile) {
+			files = append(files, path)
+			if filepath.Ext(path) == ".go" {
+				selectedGo = append(selectedGo, path)
+			}
+		}
+		files = uniqueSorted(files)
+		activeCgo := pathsImportC(selectedGo, snapshot.data)
 		key := packageInputKey(pkg)
 		reachable, _ := selectedNativeIncludes(pkg, selectedNativePaths(snapshot.selectedFiles[key], snapshot.packageRoles[key]), snapshot.data)
 		for _, path := range files {

@@ -15,6 +15,49 @@ type architectureSettings struct {
 	toolTags []string
 }
 
+// Keep this list aligned with the pinned Go 1.27.1 helper's "go tool dist list".
+var supportedGoTargets = map[string]bool{
+	"aix/ppc64":   true,
+	"android/386": true, "android/amd64": true, "android/arm": true, "android/arm64": true,
+	"darwin/amd64": true, "darwin/arm64": true,
+	"dragonfly/amd64": true,
+	"freebsd/386":     true, "freebsd/amd64": true, "freebsd/arm": true, "freebsd/arm64": true,
+	"illumos/amd64": true,
+	"ios/amd64":     true, "ios/arm64": true,
+	"js/wasm":   true,
+	"linux/386": true, "linux/amd64": true, "linux/arm": true, "linux/arm64": true,
+	"linux/loong64": true, "linux/mips": true, "linux/mips64": true, "linux/mips64le": true,
+	"linux/mipsle": true, "linux/ppc64": true, "linux/ppc64le": true, "linux/riscv64": true,
+	"linux/s390x": true,
+	"netbsd/386":  true, "netbsd/amd64": true, "netbsd/arm": true, "netbsd/arm64": true,
+	"openbsd/386": true, "openbsd/amd64": true, "openbsd/arm": true, "openbsd/arm64": true,
+	"openbsd/ppc64": true, "openbsd/riscv64": true,
+	"plan9/386": true, "plan9/amd64": true, "plan9/arm": true,
+	"solaris/amd64": true,
+	"wasip1/wasm":   true,
+	"windows/386":   true, "windows/amd64": true, "windows/arm64": true,
+}
+
+func validateGoTarget(goos, goarch string) error {
+	if supportedGoTargets[goos+"/"+goarch] {
+		return nil
+	}
+	knownOS, knownArch := false, false
+	for target := range supportedGoTargets {
+		os, arch, _ := strings.Cut(target, "/")
+		knownOS = knownOS || os == goos
+		knownArch = knownArch || arch == goarch
+	}
+	switch {
+	case !knownOS:
+		return fmt.Errorf("unsupported GOOS %q for Go 1.27.1", goos)
+	case !knownArch:
+		return fmt.Errorf("unsupported GOARCH %q for Go 1.27.1", goarch)
+	default:
+		return fmt.Errorf("unsupported Go 1.27.1 target %s/%s", goos, goarch)
+	}
+}
+
 func resolveArchitectureSettings(goarch string, features []string) (architectureSettings, error) {
 	single := func(variable, fallback string, valid map[string]bool, tags func(string) []string) (architectureSettings, error) {
 		value := fallback

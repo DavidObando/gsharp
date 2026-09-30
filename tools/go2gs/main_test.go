@@ -3557,6 +3557,52 @@ func TestPreloadAnalysisEnforcesFinalRecordLimit(t *testing.T) {
 	}
 }
 
+func TestPackageInventoryEnforcesRecordLimitDuringInsertion(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "go.mod"), []byte("module example.com/recordlimit\n\ngo 1.27.0\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var source strings.Builder
+	source.WriteString("package recordlimit\n\n")
+	for index := range 2000 {
+		fmt.Fprintf(&source, "var V%d = %d + %d\n", index, index, index+1)
+	}
+	if err := os.WriteFile(filepath.Join(root, "large.go"), []byte(source.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	profile := testProfile()
+	baseline, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil || !complete {
+		t.Fatalf("baseline inventory failed: complete=%v err=%v", complete, err)
+	}
+	profile.Limits.MaxRecords = baseline.RecordCounts.Total
+	exact, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil || !complete || exact.RecordCounts.Total != profile.Limits.MaxRecords {
+		t.Fatalf("exact package record limit failed: complete=%v records=%d err=%v", complete, exact.RecordCounts.Total, err)
+	}
+
+	profile.Limits.MaxRecords--
+	rejected, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err == nil || !strings.Contains(err.Error(), "record count exceeds limit") || complete {
+		t.Fatalf("over-limit package inventory was accepted: complete=%v err=%v", complete, err)
+	}
+	if rejected.Schema.Name != "" {
+		t.Fatalf("over-limit package inventory returned a publishable artifact: %#v", rejected)
+	}
+
+	visited := 0
+	inventorySyntaxNodeTestHook = func() { visited++ }
+	t.Cleanup(func() { inventorySyntaxNodeTestHook = nil })
+	profile.Limits.MaxRecords = 16
+	if _, _, err := analyze(t.Context(), root, t.TempDir(), profile); err == nil {
+		t.Fatal("small record limit was accepted")
+	}
+	if visited == 0 || visited >= 100 {
+		t.Fatalf("record producer visited %d syntax nodes after reaching a limit of 16", visited)
+	}
+}
+
 func TestValidateAnalysisRejectsSourceRootIdentityMutation(t *testing.T) {
 	analysis := validIncompleteAnalysis()
 	analysis.Profile.SourceRootIdentity = stableID("source", "forged")
@@ -4406,6 +4452,50 @@ func TestLocalReplacementInventoryIsRootIndependent(t *testing.T) {
 	}
 }
 
+func TestExternalReplacementCgoOnlyPackageUsesMirrorOverlay(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("process-tree isolation intentionally fails closed on Windows")
+	}
+	root, dependency := externalReplacementFixture(t)
+	if err := os.Remove(filepath.Join(dependency, "value.go")); err != nil {
+		t.Fatal(err)
+	}
+	source := "package replacement\n\n/* int replacement_value = 42; */\nimport \"C\"\n\nconst Value = 42\n"
+	if err := os.WriteFile(filepath.Join(dependency, "value_cgo.go"), []byte(source), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dependency, "native.c"), []byte("int replacement_native = 42;\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	mainSource := "package replacementroot\n\nimport _ \"example.com/replacement\"\n\nvar Value = 42\n"
+	if err := os.WriteFile(filepath.Join(root, "main.go"), []byte(mainSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if complete || analysis.InventoryComplete || !hasBlockerCategory(analysis, "cgo") ||
+		!hasBlockerCategory(analysis, "native") {
+		t.Fatalf("CGo-only replacement did not fail closed for native migration: blockers=%#v diagnostics=%#v", analysis.Blockers, analysis.Diagnostics)
+	}
+	if hasBlockerCategory(analysis, "package-load") || hasBlockerCategory(analysis, "loader") {
+		t.Fatalf("CGo-only replacement caused a metadata loader blocker: blockers=%#v diagnostics=%#v", analysis.Blockers, analysis.Diagnostics)
+	}
+	if !slices.ContainsFunc(analysis.Packages, func(pkg PackageRecord) bool {
+		return pkg.ImportPath == "example.com/replacement" && pkg.Variant == "ordinary"
+	}) {
+		t.Fatalf("CGo-only external replacement package was lost: %#v", analysis.Packages)
+	}
+	if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+		return file.Path == "module://example.com/replacement@local/value_cgo.go" && file.Role == "active"
+	}) {
+		t.Fatalf("CGo-only external replacement source was not captured: %#v", analysis.Files)
+	}
+}
+
 func TestSourceCoordinateCountsBytes(t *testing.T) {
 	positions, err := newSourcePositionMap("source://main.go", []byte("é\nx"))
 	if err != nil {
@@ -4631,6 +4721,9 @@ func TestValidateAnalysisRechecksArchitectureFeatures(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			analysis := validIncompleteAnalysis()
 			analysis.Profile.GOARCH = test.goarch
+			if test.goarch == "wasm" {
+				analysis.Profile.GOOS = "js"
+			}
 			analysis.Profile.ArchitectureFeatures = test.features
 			err := validateAnalysis(analysis)
 			if test.valid && err != nil {
@@ -4640,6 +4733,80 @@ func TestValidateAnalysisRechecksArchitectureFeatures(t *testing.T) {
 				t.Fatal("invalid architecture profile was accepted")
 			}
 		})
+	}
+}
+
+func TestGoTargetValidationIsClosed(t *testing.T) {
+	for _, target := range []struct {
+		goos, goarch string
+	}{
+		{"linux", "amd64"},
+		{"windows", "arm64"},
+		{"freebsd", "arm64"},
+		{"js", "wasm"},
+		{"wasip1", "wasm"},
+	} {
+		profile := testProfile()
+		profile.GOOS, profile.GOARCH = target.goos, target.goarch
+		if _, err := readProfile(writeTestProfile(t, profile)); err != nil {
+			t.Errorf("valid target %s/%s rejected: %v", target.goos, target.goarch, err)
+		}
+		analysis := validIncompleteAnalysis()
+		analysis.Profile.GOOS, analysis.Profile.GOARCH = target.goos, target.goarch
+		if err := validateAnalysis(analysis); err != nil {
+			t.Errorf("valid artifact target %s/%s rejected: %v", target.goos, target.goarch, err)
+		}
+	}
+
+	for _, target := range []struct {
+		goos, goarch string
+	}{
+		{"linuz", "amd64"},
+		{"linux", "amd65"},
+		{"darwin", "386"},
+	} {
+		profile := testProfile()
+		profile.GOOS, profile.GOARCH = target.goos, target.goarch
+		if _, err := readProfile(writeTestProfile(t, profile)); err == nil {
+			t.Errorf("invalid profile target %s/%s accepted", target.goos, target.goarch)
+		}
+		if _, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile); err == nil {
+			t.Errorf("invalid direct target %s/%s accepted", target.goos, target.goarch)
+		}
+		analysis := validIncompleteAnalysis()
+		analysis.Profile.GOOS, analysis.Profile.GOARCH = target.goos, target.goarch
+		if err := validateAnalysis(analysis); err == nil {
+			t.Errorf("invalid artifact target %s/%s accepted", target.goos, target.goarch)
+		}
+	}
+}
+
+func TestPackageVariantsAreClosed(t *testing.T) {
+	for _, variant := range []string{"ordinary", "in-package-test", "external-test", "synthetic-test-main"} {
+		analysis := validIncompleteAnalysis()
+		analysis.Packages = []PackageRecord{{
+			ID: "package:" + variant, ImportPath: "example.com/test", Name: "test", Variant: variant,
+			FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{},
+			InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
+		}}
+		analysis.RecordCounts.Packages = 1
+		analysis.RecordCounts.Total++
+		if err := validateAnalysis(analysis); err != nil {
+			t.Errorf("valid package variant %q rejected: %v", variant, err)
+		}
+	}
+	for _, variant := range []string{"", "benchmark", "ordinary-test"} {
+		analysis := validIncompleteAnalysis()
+		analysis.Packages = []PackageRecord{{
+			ID: "package:invalid", ImportPath: "example.com/test", Name: "test", Variant: variant,
+			FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{},
+			InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
+		}}
+		analysis.RecordCounts.Packages = 1
+		analysis.RecordCounts.Total++
+		if err := validateAnalysis(analysis); err == nil {
+			t.Errorf("invalid package variant %q accepted", variant)
+		}
 	}
 }
 
