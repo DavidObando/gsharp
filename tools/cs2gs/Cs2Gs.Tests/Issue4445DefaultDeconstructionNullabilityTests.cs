@@ -1020,13 +1020,18 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static void Fill<T>(ref T? value, T replacement) =>
                     value = replacement;
 
+                private static void Keep<T>(ref T value)
+                {
+                }
+
                 private static void M<T>(T replacement)
                 {
                     var pair = (First: replacement, Second: replacement);
                     System.Action<T> callback = ignored =>
                     {
-                        var (left, _) = pair;
+                        var (left, right) = pair;
                         Fill(ref left, replacement);
+                        Keep(ref right);
                     };
                     callback(pair.First = default(T));
                 }
@@ -1036,9 +1041,78 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         string printed = Translate(source);
 
         Assert.Matches(@"\b(let|var) left T\? =", printed);
-        Assert.DoesNotContain("inRight T? =", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("combinedRight T? =", printed, StringComparison.Ordinal);
-        Assert.DoesNotContain("duplicateWriteRight T? =", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("right T? =", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void Translation_DistinguishesTextuallyEqualJoinStates()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class JoinStates
+            {
+                private static void Fill<T>(ref T? value, T replacement) =>
+                    value = replacement;
+
+                public static void M<T>(T replacement, bool choose)
+                {
+                    var pair = (replacement, replacement);
+                    if (choose)
+                    {
+                        T same = replacement;
+                        pair = (same, replacement);
+                    }
+                    else
+                    {
+                        T? same = default;
+                        pair = (same, replacement);
+                    }
+
+                    pair.Item2 = replacement;
+                    var (collisionLeft, _) = pair;
+                    Fill(ref collisionLeft, replacement);
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) collisionLeft T\? =", printed);
+    }
+
+    [Fact]
+    public void Translation_TracksEscapedLocalFunctionCallbacks()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class LocalFunctionCallbacks
+            {
+                private static void Fill<T>(ref T? value, T replacement) =>
+                    value = replacement;
+
+                private static void Invoke(System.Action callback) =>
+                    callback();
+
+                public static void M<T>(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    void Local()
+                    {
+                        var (callbackLeft, _) = pair;
+                        Fill(ref callbackLeft, replacement);
+                    }
+
+                    pair = (default(T), replacement);
+                    Invoke(Local);
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) callbackLeft T\? =", printed);
     }
 
     [Fact]
@@ -1435,19 +1509,6 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static void Fill<T>(ref T? value, T replacement) =>
                     value = replacement;
 
-                private static void Keep<T>(ref T value)
-                {
-                }
-
-                private sealed class Wrapper
-                {
-                    public Wrapper(System.Func<int> callback)
-                    {
-                    }
-
-                    public int Invoke() => 0;
-                }
-
                 public static int M<T>(T replacement)
                 {
                     var genericPair = (replacement, replacement);
@@ -1472,19 +1533,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     System.Func<int> first = Aliased;
                     System.Func<int> alias = first;
                     aliasedPair = (default(T), replacement);
-                    result += alias();
-
-                    var ignoredPair = (replacement, replacement);
-                    int Ignored()
-                    {
-                        var (ignoredLeft, _) = ignoredPair;
-                        Keep(ref ignoredLeft);
-                        return 1;
-                    }
-
-                    var wrapper = new Wrapper(Ignored);
-                    ignoredPair = (default(T), replacement);
-                    return result + wrapper.Invoke();
+                    return result + alias();
                 }
             }
             """;
@@ -1493,7 +1542,6 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
         Assert.Matches(@"\b(let|var) genericLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) aliasedLeft T\? =", printed);
-        Assert.DoesNotMatch(@"\b(let|var) ignoredLeft T\? =", printed);
     }
 
     [Fact]

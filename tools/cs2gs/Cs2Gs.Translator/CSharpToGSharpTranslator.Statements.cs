@@ -1550,11 +1550,6 @@ public sealed partial class CSharpToGSharpTranslator
                 yield return invocation.ArgumentList.CloseParenToken.SpanStart;
             }
 
-            if (anonymousFunction == null)
-            {
-                yield break;
-            }
-
             foreach (SyntaxNode escape in EagerExecutionNodes(executionBody)
                 .Where(node => node is ReturnStatementSyntax
                     or YieldStatementSyntax
@@ -1581,7 +1576,10 @@ public sealed partial class CSharpToGSharpTranslator
                     case ArgumentSyntax argument
                         when !argument.RefOrOutKeyword.IsKind(
                                 SyntaxKind.OutKeyword)
-                            && this.context.GetTypeInfo(argument.Expression).Type
+                            && (this.context.GetTypeInfo(argument.Expression)
+                                    .ConvertedType
+                                ?? this.context.GetTypeInfo(
+                                    argument.Expression).Type)
                             is { TypeKind: TypeKind.Delegate }:
                         value = argument.Expression;
                         position = argument.Parent?.Parent
@@ -1594,12 +1592,22 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                 }
 
-                if (this.DelegateExpressionReachesAnonymousFunction(
-                    value,
-                    value.SpanStart,
-                    anonymousFunction,
-                    enclosingExecutable,
-                    new HashSet<ISymbol>(SymbolEqualityComparer.Default)))
+                bool reachesCallable = anonymousFunction != null
+                    ? this.DelegateExpressionReachesAnonymousFunction(
+                        value,
+                        value.SpanStart,
+                        anonymousFunction,
+                        enclosingExecutable,
+                        new HashSet<ISymbol>(
+                            SymbolEqualityComparer.Default))
+                    : callable is IMethodSymbol escapedLocalFunction
+                        && this.DelegateExpressionReachesLocalFunction(
+                            value,
+                            value.SpanStart,
+                            escapedLocalFunction,
+                            new HashSet<ISymbol>(
+                                SymbolEqualityComparer.Default));
+                if (reachesCallable)
                 {
                     yield return position;
                     foreach (StatementSyntax later in
@@ -1610,6 +1618,11 @@ public sealed partial class CSharpToGSharpTranslator
                         yield return later.Span.End - 1;
                     }
                 }
+            }
+
+            if (anonymousFunction == null)
+            {
+                yield break;
             }
 
             foreach (AssignmentExpressionSyntax assignment in
@@ -1653,6 +1666,43 @@ public sealed partial class CSharpToGSharpTranslator
                 && SymbolEqualityComparer.Default.Equals(
                     method.OriginalDefinition,
                     localFunction.OriginalDefinition);
+
+        private bool DelegateExpressionReachesLocalFunction(
+            ExpressionSyntax expression,
+            int usePosition,
+            IMethodSymbol localFunction,
+            HashSet<ISymbol> visited)
+        {
+            foreach (ExpressionSyntax candidate in
+                expression.DescendantNodesAndSelf().OfType<ExpressionSyntax>())
+            {
+                if (candidate.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+                {
+                    continue;
+                }
+
+                ISymbol symbol = this.context.GetSymbolInfo(candidate).Symbol;
+                if (LocalFunctionMatches(symbol, localFunction))
+                {
+                    return true;
+                }
+
+                if (symbol is ILocalSymbol
+                    { Type.TypeKind: TypeKind.Delegate } delegateLocal
+                    && this.DelegateLocalReachesLocalFunction(
+                        delegateLocal,
+                        usePosition,
+                        localFunction,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default)))
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         private bool DelegateLocalReachesLocalFunction(
             ILocalSymbol local,
@@ -2916,7 +2966,19 @@ public sealed partial class CSharpToGSharpTranslator
                 .SelectMany(node =>
                     node.GetAnnotations(ReachingTupleProjectionAnnotation))
                 .Select(annotation => annotation.Data);
-            return expression + "|" + string.Join(";", projections);
+            IEnumerable<string> sourceNodes = expression.DescendantNodesAndSelf()
+                .Where(node => node.SyntaxTree != null)
+                .Select(node =>
+                    node.RawKind.ToString(CultureInfo.InvariantCulture)
+                    + ":"
+                    + node.SpanStart.ToString(CultureInfo.InvariantCulture)
+                    + ":"
+                    + node.Span.Length.ToString(CultureInfo.InvariantCulture));
+            return expression
+                + "|"
+                + string.Join(";", sourceNodes)
+                + "|"
+                + string.Join(";", projections);
         }
 
         private bool TryFindAssignedValuePath(
