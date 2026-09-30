@@ -103,9 +103,15 @@ Before moving an application to a different compiler version, pin the intended S
   panic/defer/recover, fixed-array, and concurrency sites without choosing
   their later G# representation. Profile flags are allowlisted against tool
   execution/path overrides, and the selected Go executable supplies its own
-  verified GOROOT. The captured executable must identify as native `cmd/go`;
-  scripts and wrappers are rejected, and child PATH contains only its private
-  stage. M0 now forces `CGO_ENABLED=0` and never executes cgo, a C/C++ compiler,
+  verified GOROOT. Version and GOROOT discovery use captured build metadata and
+  the verified path/handoff rather than executing `go version` or `go env`.
+  The captured executable must identify as native `cmd/go`; on Linux it must
+  also be static ELF (including an internally linked static PIE) with no
+  interpreter, dynamic imports, RPATH, or RUNPATH. Scripts and wrappers are
+  rejected, and child PATH contains only its private stage. Non-Linux preload
+  checks can publish deterministic toolchain/source mismatch blockers without
+  loading packages; a matching profile still fails closed before publication.
+  M0 now forces `CGO_ENABLED=0` and never executes cgo, a C/C++ compiler,
   linker, assembler, pkg-config, or helper. It independently records
   profile-selected CGo/native source inputs and emits deterministic blockers;
   legacy profile compiler fields must be empty. Diagnostics

@@ -23,6 +23,8 @@ const (
 	profileVersion = 1
 	helperVersion  = "0.1.0"
 	toolVersion    = "0.1.0"
+
+	unsupportedExecutionBinding = "public analyze requires Linux descriptor-bound immutable cmd/go execution; secure execution binding is unsupported on this platform"
 )
 
 func main() {
@@ -94,9 +96,6 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	if err != nil {
 		return &exitError{2, err}
 	}
-	if err := publicAnalysisBindingSupported(); err != nil {
-		return &exitError{2, err}
-	}
 	outRoot, err := filepath.Abs(out)
 	if err != nil {
 		return &exitError{2, err}
@@ -120,6 +119,28 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 	sourceRoot, err := secureRoot(source)
 	if err != nil {
 		return &exitError{2, fmt.Errorf("source root: %w", err)}
+	}
+	if err := publicAnalysisBindingSupported(); err != nil {
+		analysis, complete, analyzeErr := analyzePreload(parent, sourceRoot, outRoot, profile)
+		if analyzeErr != nil {
+			return &exitError{2, analyzeErr}
+		}
+		if complete {
+			return &exitError{2, errors.New("preload-only analysis unexpectedly completed")}
+		}
+		run := RunMetadata{
+			SchemaVersion:    schemaVersion,
+			WarmLoadMeasured: false,
+			WarmLoadReason:   "preload-only analysis returned before package loading on a platform without secure execution binding",
+		}
+		analysisBytes, runBytes, encodeErr := encodeAnalysisArtifacts(analysis, run, profile.Limits.MaxOutputBytes)
+		if encodeErr != nil {
+			return &exitError{2, encodeErr}
+		}
+		if publishErr := publishWorkerArtifacts(outRoot, analysisBytes, runBytes, nil); publishErr != nil {
+			return &exitError{2, publishErr}
+		}
+		return &exitError{1, errors.New("inventory incomplete; see analysis.json diagnostics and blockers")}
 	}
 	goExecutable, err := exec.LookPath("go")
 	if err != nil {
@@ -156,21 +177,9 @@ func runAnalyze(parent context.Context, args []string) (err error) {
 		}
 	}()
 	stagedGo := bootstrapCapsule.path(goExecutableCapture.name)
-	bootstrapEnv := bootstrapEnvironment(bootstrapRoot, bootstrapCapsule.directory.executionPath())
-	selectedGOROOT := inferSelectedGOROOT(goExecutableCapture.sourcePath)
-	if selectedGOROOT != "" {
-		bootstrapEnv = replaceEnvironment(bootstrapEnv, "GOROOT", selectedGOROOT)
-	}
-	versionResult, err := runProcess(parent, min(timeout, 15*time.Second), profile.Limits.MaxLogBytes,
-		sourceRoot, stagedGo, []string{"version"}, bootstrapEnv)
+	selectedGOROOT, err := selectedGoRoot(goExecutableCapture, "")
 	if err != nil {
 		return &exitError{2, err}
-	}
-	if versionResult.ExitCode != 0 {
-		return &exitError{2, fmt.Errorf("resolve selected Go version: %s", strings.TrimSpace(versionResult.Stderr))}
-	}
-	if parseGoVersion(versionResult.Stdout) == "" {
-		return &exitError{2, errors.New("selected Go executable returned an unrecognized version")}
 	}
 	workerDirectory, err := createOwnedTempDir(outRoot, ".go2gs-worker-*")
 	if err != nil {
@@ -270,21 +279,18 @@ func runAnalyzeWorker(parent context.Context, args []string) error {
 	if err != nil {
 		return &exitError{2, err}
 	}
-	analysisBytes, err := writeAnalysis(filepath.Join(outRoot, "analysis.json"), analysis, profile.Limits.MaxOutputBytes)
-	if err != nil {
-		return err
-	}
 	run := RunMetadata{
 		SchemaVersion:       schemaVersion,
 		ColdLoadNanoseconds: time.Since(started).Nanoseconds(),
 		WarmLoadMeasured:    false,
 		WarmLoadReason:      "M0 records the first isolated load only; a second load would mix Go build-cache effects with helper warmup",
 		PeakRSSBytes:        max64(before, peakRSS()),
-		AnalysisBytes:       int64(analysisBytes),
-		PackageCount:        len(analysis.Packages),
-		RecordCount:         analysis.RecordCounts.Total,
 	}
-	if err := writeJSON(filepath.Join(outRoot, "run.json"), run, profile.Limits.MaxOutputBytes); err != nil {
+	analysisBytes, runBytes, err := encodeAnalysisArtifacts(analysis, run, profile.Limits.MaxOutputBytes)
+	if err != nil {
+		return err
+	}
+	if err := publishWorkerArtifacts(outRoot, analysisBytes, runBytes, nil); err != nil {
 		return err
 	}
 	if !complete {

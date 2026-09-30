@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sort"
+	"strings"
 )
 
 const maxToolExecutableBytes int64 = 256 << 20
@@ -21,6 +22,7 @@ type capturedExecutable struct {
 	data       []byte
 	sourceInfo os.FileInfo
 	mode       os.FileMode
+	goVersion  string
 }
 
 type executableCapsule struct {
@@ -92,10 +94,17 @@ func captureSelectedGo(path, expectedHash string) (capturedExecutable, string, e
 	if err != nil {
 		return capturedExecutable{}, "", err
 	}
+	if err := validateSelectedGoPlatform(captured.data); err != nil {
+		return capturedExecutable{}, "", err
+	}
 	info, err := buildinfo.Read(bytes.NewReader(captured.data))
 	if err != nil || info.Path != "cmd/go" {
 		return capturedExecutable{}, "", errors.New("selected Go must be a genuine native cmd/go executable")
 	}
+	if info.GoVersion == "" {
+		return capturedExecutable{}, "", errors.New("selected Go build metadata has no Go version")
+	}
+	captured.goVersion = strings.TrimPrefix(info.GoVersion, "go")
 	return captured, hash, nil
 }
 

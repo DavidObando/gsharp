@@ -396,7 +396,7 @@ func TestSelectedGoScriptIsRejectedBeforeDelegateExecution(t *testing.T) {
 	t.Setenv("GO2GS_SELECTED_GO", selectedGo)
 	t.Setenv("GO2GS_SELECTED_GO_SHA256", hashBytes([]byte(body)))
 	_, _, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), testProfile())
-	if err == nil || !strings.Contains(err.Error(), "genuine native cmd/go") {
+	if err == nil {
 		t.Fatalf("selected Go script was accepted: %v", err)
 	}
 	if _, err := os.Stat(marker); !os.IsNotExist(err) {
