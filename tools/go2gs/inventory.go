@@ -270,11 +270,15 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	embed := stringSet(pkg.EmbedFiles)
 	activeCgo := b.packageImportsC(pkg)
 	key := packageInputKey(pkg)
-	reachableHeaders, unsafeIncludes := selectedNativeIncludes(
+	reachableHeaders, unsafeIncludes, err := selectedNativeIncludesContext(
+		b.ctx,
 		pkg,
 		selectedNativePaths(b.selectedSnapshotFiles[key], b.snapshotRoles[key]),
 		b.sourceSnapshot,
 	)
+	if err != nil {
+		return err
+	}
 	nativeConsumer := hasSelectedNativeConsumer(pkg, activeCgo)
 	for _, path := range b.selectedSnapshotFiles[packageInputKey(pkg)] {
 		if b.snapshotRoles[packageInputKey(pkg)][path] == "native" {
@@ -440,20 +444,16 @@ func (b *inventoryBuilder) snapshotFileImportsC(path string) bool {
 	if filepath.Ext(path) != ".go" {
 		return false
 	}
-	data, captured := b.sourceSnapshot[path]
+	_, captured := b.sourceSnapshot[path]
 	if !captured {
 		return false
 	}
-	file, err := parser.ParseFile(token.NewFileSet(), path, data, parser.ImportsOnly)
+	importsC, err := pathsImportCContext(b.ctx, []string{path}, b.sourceSnapshot)
 	if err != nil {
+		b.err = err
 		return false
 	}
-	for _, imported := range file.Imports {
-		if imported.Path.Value == `"C"` {
-			return true
-		}
-	}
-	return false
+	return importsC
 }
 
 func hasSelectedNativeConsumer(pkg *packages.Package, activeCgo bool) bool {
@@ -466,27 +466,52 @@ func hasSelectedNativeConsumer(pkg *packages.Package, activeCgo bool) bool {
 }
 
 func pathsImportC(paths []string, snapshot map[string][]byte) bool {
+	importsC, _ := pathsImportCContext(context.Background(), paths, snapshot)
+	return importsC
+}
+
+func pathsImportCContext(ctx context.Context, paths []string, snapshot map[string][]byte) (bool, error) {
 	for _, path := range paths {
+		if err := checkAnalysisOperation(ctx, "cgo-import-parse", "file"); err != nil {
+			return false, err
+		}
 		if filepath.Ext(path) != ".go" {
 			continue
 		}
+		if err := checkAnalysisOperation(ctx, "cgo-import-parse", "before"); err != nil {
+			return false, err
+		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, snapshot[path], parser.ImportsOnly)
+		if contextErr := checkAnalysisOperation(ctx, "cgo-import-parse", "after"); contextErr != nil {
+			return false, contextErr
+		}
 		if err != nil {
 			continue
 		}
 		for _, imported := range file.Imports {
+			if err := checkAnalysisOperation(ctx, "cgo-import-parse", "import"); err != nil {
+				return false, err
+			}
 			if imported.Path.Value == `"C"` {
-				return true
+				return true, nil
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 func selectedNativeIncludes(pkg *packages.Package, selected []string, snapshot map[string][]byte) (map[string]bool, bool) {
+	reachable, unsafe, _ := selectedNativeIncludesContext(context.Background(), pkg, selected, snapshot)
+	return reachable, unsafe
+}
+
+func selectedNativeIncludesContext(ctx context.Context, pkg *packages.Package, selected []string, snapshot map[string][]byte) (map[string]bool, bool, error) {
 	reachable := map[string]bool{}
 	pending := []string{}
 	for _, path := range append(append([]string{}, pkg.OtherFiles...), selected...) {
+		if err := checkAnalysisOperation(ctx, "native-include-scan", "root"); err != nil {
+			return nil, false, err
+		}
 		if nativeIncludeCarrier(path) {
 			pending = append(pending, path)
 		}
@@ -495,6 +520,9 @@ func selectedNativeIncludes(pkg *packages.Package, selected []string, snapshot m
 	visited := map[string]bool{}
 	unsafe := false
 	for len(pending) > 0 {
+		if err := checkAnalysisOperation(ctx, "native-include-scan", "file"); err != nil {
+			return nil, false, err
+		}
 		path := pending[0]
 		pending = pending[1:]
 		if visited[path] {
@@ -507,11 +535,17 @@ func selectedNativeIncludes(pkg *packages.Package, selected []string, snapshot m
 			continue
 		}
 		includes, malformed := localQuotedIncludes(data)
+		if err := checkAnalysisOperation(ctx, "native-include-scan", "after-parse"); err != nil {
+			return nil, false, err
+		}
 		if malformed {
 			unsafe = true
 			continue
 		}
 		for _, include := range includes {
+			if err := checkAnalysisOperation(ctx, "native-include-scan", "include"); err != nil {
+				return nil, false, err
+			}
 			target, ok := resolveLocalInclude(pkg.Dir, path, include)
 			if !ok {
 				unsafe = true
@@ -528,7 +562,7 @@ func selectedNativeIncludes(pkg *packages.Package, selected []string, snapshot m
 			}
 		}
 	}
-	return reachable, unsafe
+	return reachable, unsafe, nil
 }
 
 func selectedNativePaths(paths []string, roles map[string]string) []string {
@@ -2177,11 +2211,19 @@ func (b *inventoryBuilder) span(pkg *packages.Package, start, end token.Pos) Sou
 	positions := b.positionMaps[rawStart.Filename]
 	if positions == nil {
 		if data := b.sourceSnapshot[rawStart.Filename]; data != nil {
-			positions, _ = newSourcePositionMap(portable, data)
+			var err error
+			positions, err = newSourcePositionMapContext(b.ctx, portable, data)
+			if err != nil && b.ctx.Err() != nil {
+				b.err = err
+			}
 			b.positionMaps[rawStart.Filename] = positions
 		}
 	}
 	if positions != nil {
+		if err := checkAnalysisOperation(b.ctx, "source-position-parse", "use"); err != nil {
+			b.err = err
+			return SourceSpan{}
+		}
 		mappedStart, mappedEnd, mappedPath, mappedLine, mappedColumn, mappedDirective :=
 			positions.span(rawStart.Offset, rawEnd.Offset)
 		rawStart, rawEnd = mappedStart, mappedEnd

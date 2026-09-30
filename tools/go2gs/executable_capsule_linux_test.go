@@ -26,6 +26,54 @@ func TestWorkerPublicationCancellationUsesProductionBoundary(t *testing.T) {
 	if !enterExecutableNamespaceTest(t) {
 		return
 	}
+	configureWorkerTestGo(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	publicationBoundaryTestHook = func(stage string) {
+		if stage == "worker" {
+			cancel()
+		}
+	}
+	t.Cleanup(func() { publicationBoundaryTestHook = nil })
+	out := t.TempDir()
+	err := runAnalyzeWorker(ctx, []string{
+		"--source", copyFixture(t, "complete"),
+		"--profile", writeTestProfile(t, testProfile()),
+		"--out", out,
+	})
+	assertCanceledExitTwoWithoutArtifacts(t, err, out)
+}
+
+func TestWorkerEncodingCancellationUsesProductionContext(t *testing.T) {
+	if !enterExecutableNamespaceTest(t) {
+		return
+	}
+	configureWorkerTestGo(t)
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	publicationEntered := false
+	artifactEncodingTestHook = func(stage string) {
+		if stage == "start" {
+			cancel()
+		}
+	}
+	t.Cleanup(func() { artifactEncodingTestHook = nil })
+	publicationBoundaryTestHook = func(string) { publicationEntered = true }
+	t.Cleanup(func() { publicationBoundaryTestHook = nil })
+	out := t.TempDir()
+	err := runAnalyzeWorker(ctx, []string{
+		"--source", copyFixture(t, "complete"),
+		"--profile", writeTestProfile(t, testProfile()),
+		"--out", out,
+	})
+	assertCanceledExitTwoWithoutArtifacts(t, err, out)
+	if publicationEntered {
+		t.Fatal("worker publication entered after encoding cancellation")
+	}
+}
+
+func configureWorkerTestGo(t *testing.T) {
+	t.Helper()
 	realGo := filepath.Join(runtime.GOROOT(), "bin", selectedGoName())
 	data, err := os.ReadFile(realGo)
 	if err != nil {
@@ -38,22 +86,6 @@ func TestWorkerPublicationCancellationUsesProductionBoundary(t *testing.T) {
 	t.Setenv("GO2GS_SELECTED_GO", selectedGo)
 	t.Setenv("GO2GS_SELECTED_GO_SHA256", hashBytes(data))
 	t.Setenv("GO2GS_SELECTED_GOROOT", runtime.GOROOT())
-
-	ctx, cancel := context.WithCancel(t.Context())
-	t.Cleanup(cancel)
-	publicationBoundaryTestHook = func(stage string) {
-		if stage == "worker" {
-			cancel()
-		}
-	}
-	t.Cleanup(func() { publicationBoundaryTestHook = nil })
-	out := t.TempDir()
-	err = runAnalyzeWorker(ctx, []string{
-		"--source", copyFixture(t, "complete"),
-		"--profile", writeTestProfile(t, testProfile()),
-		"--out", out,
-	})
-	assertCanceledExitTwoWithoutArtifacts(t, err, out)
 }
 
 func TestParentWorkerArtifactCancellationUsesProductionPath(t *testing.T) {
@@ -92,9 +124,24 @@ func TestParentWorkerArtifactCancellationUsesProductionPath(t *testing.T) {
 			t.Cleanup(func() { runAnalysisWorkerProcessTestHook = nil })
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
+			targetEntered := false
+			laterEntered := false
+			readChunks := 0
+			readArmed := false
+			if phase != "parent" {
+				boundedReadChunkHook = func() {
+					readChunks++
+					if readArmed {
+						readArmed = false
+						cancel()
+					}
+				}
+				t.Cleanup(func() { boundedReadChunkHook = nil })
+			}
 			if phase == "parent" {
 				publicationBoundaryTestHook = func(stage string) {
 					if stage == phase {
+						targetEntered = true
 						cancel()
 					}
 				}
@@ -102,10 +149,20 @@ func TestParentWorkerArtifactCancellationUsesProductionPath(t *testing.T) {
 			} else {
 				workerArtifactReadTestHook = func(stage string) {
 					if stage == phase {
-						cancel()
+						targetEntered = true
+						readChunks = 0
+						readArmed = true
+					} else if targetEntered {
+						laterEntered = true
 					}
 				}
 				t.Cleanup(func() { workerArtifactReadTestHook = nil })
+				publicationBoundaryTestHook = func(string) {
+					if targetEntered {
+						laterEntered = true
+					}
+				}
+				t.Cleanup(func() { publicationBoundaryTestHook = nil })
 			}
 			out := t.TempDir()
 			err := runAnalyze(ctx, []string{
@@ -114,6 +171,18 @@ func TestParentWorkerArtifactCancellationUsesProductionPath(t *testing.T) {
 				"--out", out,
 			})
 			assertCanceledExitTwoWithoutArtifacts(t, err, out)
+			if !targetEntered {
+				t.Fatalf("%s production hook was not reached", phase)
+			}
+			if laterEntered {
+				t.Fatalf("production path advanced after cancellation in %s", phase)
+			}
+			if phase == "analysis-read" && readChunks != 1 {
+				t.Fatalf("analysis read processed %d chunks after cancellation", readChunks)
+			}
+			if phase == "run-read" && readChunks != 1 {
+				t.Fatalf("run read processed %d chunks after cancellation", readChunks)
+			}
 		})
 	}
 }

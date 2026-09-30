@@ -198,10 +198,13 @@ func (c *executableCapsule) verify() error {
 }
 
 func (c *executableCapsule) verifyContext(ctx context.Context) error {
-	if err := ctx.Err(); err != nil {
+	if err := checkAnalysisOperation(ctx, "capsule-verify", "start"); err != nil {
 		return err
 	}
 	entries, err := os.ReadDir(c.directory.executionPath())
+	if contextErr := checkAnalysisOperation(ctx, "capsule-verify", "directory"); contextErr != nil {
+		return contextErr
+	}
 	if err != nil {
 		return err
 	}
@@ -209,7 +212,7 @@ func (c *executableCapsule) verifyContext(ctx context.Context) error {
 		return errors.New("executable capsule contains unexpected entries")
 	}
 	for index, entry := range c.entries {
-		if err := ctx.Err(); err != nil {
+		if err := checkAnalysisOperation(ctx, "capsule-verify", "entry"); err != nil {
 			return err
 		}
 		if entries[index].Name() != entry.name {

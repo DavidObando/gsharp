@@ -44,6 +44,15 @@ var rootedWalkBeforeDescendHook func(string)
 var rootedDirectoryBeforeOpenHook func(string)
 var boundedReadChunkHook func()
 var postLoadContextTestHook func(string)
+var analysisOperationTestHook func(string, string)
+var selectedPkgConfigSnapshotTestHook func(*packageInputSnapshot)
+
+func checkAnalysisOperation(ctx context.Context, operation, point string) error {
+	if analysisOperationTestHook != nil {
+		analysisOperationTestHook(operation, point)
+	}
+	return ctx.Err()
+}
 
 func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (Analysis, bool, error) {
 	return analyzeWithSnapshotHook(ctx, sourceRoot, outRoot, profile, nil)
@@ -307,7 +316,7 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		BuildFlags: buildFlags,
 		Tests:      profile.LoadTests,
 	}
-	cgoOnlyOverlay, err := cgoOnlyPackageOverlay(mirror, semanticProfile)
+	cgoOnlyOverlay, err := cgoOnlyPackageOverlayContext(ctx, mirror, semanticProfile)
 	if err != nil {
 		return Analysis{}, false, err
 	}
@@ -353,7 +362,23 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	if err := capsule.verifyContext(ctx); err != nil {
 		return Analysis{}, false, fmt.Errorf("verify private executable capsule: %w", err)
 	}
-	if selectedPkgConfigDirective(sourceSnapshot, semanticProfile) {
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("capsule-verify-complete")
+	}
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("pkg-config-scan")
+	}
+	if selectedPkgConfigSnapshotTestHook != nil {
+		selectedPkgConfigSnapshotTestHook(&sourceSnapshot)
+	}
+	pkgConfig, err := selectedPkgConfigDirectiveContext(ctx, sourceSnapshot, semanticProfile)
+	if err != nil {
+		return Analysis{}, false, err
+	}
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("pkg-config-scan-complete")
+	}
+	if pkgConfig {
 		builder.block("pkg-config", "selected package requires #cgo pkg-config, but M0 has no approved pkg-config executable or provenance model", nil, nil)
 	}
 	if loadErr != nil {
@@ -378,6 +403,9 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		}
 		builder.block("loader", sanitizeMessage(typedSourceErr.Error(), mirror.root, profile.Limits.MaxStringBytes, builder.diagnosticRedactions...), nil, nil)
 	} else {
+		if postLoadContextTestHook != nil {
+			postLoadContextTestHook("typed-source-capture-complete")
+		}
 		if err := typeCheckPackages(ctx, all, typedSources, semanticProfile); err != nil {
 			return Analysis{}, false, err
 		}
@@ -388,6 +416,9 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 	typedSourcesMatch, err := verifyTypedSourcesContext(ctx, externalTypedSources)
 	if err != nil {
 		return Analysis{}, false, err
+	}
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("typed-source-verify-complete")
 	}
 	if !typedSourcesMatch {
 		builder.block("input-drift", "Go toolchain or dependency source changed while type checking", nil, nil)
@@ -400,11 +431,17 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		return Analysis{}, false, err
 	}
 	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("package-input-verify-complete")
+	}
+	if postLoadContextTestHook != nil {
 		postLoadContextTestHook("original-input-verify")
 	}
 	originalDrift, err := verifyOriginalPackageInputsContext(ctx, mirror, sourceSnapshot)
 	if err != nil {
 		return Analysis{}, false, err
+	}
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("original-input-verify-complete")
 	}
 	for key := range originalDrift {
 		builder.inputDrift[key] = true
@@ -419,12 +456,18 @@ func analyzeWithSnapshotHooksMode(ctx context.Context, sourceRoot, outRoot strin
 		if verifyErr != nil {
 			return Analysis{}, false, verifyErr
 		}
+		if postLoadContextTestHook != nil {
+			postLoadContextTestHook("manifest-verify-complete")
+		}
 		if !matches {
 			manifestDrift = true
 		}
 	}
 	if manifestDrift {
 		builder.block("input-drift", "module or workspace manifests changed while loading", nil, nil)
+	}
+	if postLoadContextTestHook != nil {
+		postLoadContextTestHook("inventory")
 	}
 	builder.snapshotFiles = sourceSnapshot.packageFiles
 	builder.selectedSnapshotFiles = sourceSnapshot.selectedFiles
@@ -529,7 +572,7 @@ func snapshotManifests(sourceRoot string, limit int64) (manifestSnapshot, error)
 
 func verifyManifestSnapshotContext(ctx context.Context, snapshot manifestSnapshot, sourceRoot string, limit int64) (bool, error) {
 	for _, name := range manifestNames {
-		if err := ctx.Err(); err != nil {
+		if err := checkAnalysisOperation(ctx, "manifest-verify", "manifest"); err != nil {
 			return false, err
 		}
 		path, err := safeJoin(sourceRoot, name)
@@ -879,7 +922,7 @@ func (mirror sourceMirror) originalDirectory(path string) (string, bool) {
 func verifyOriginalPackageInputsContext(ctx context.Context, mirror sourceMirror, snapshot packageInputSnapshot) (map[string]bool, error) {
 	drift := map[string]bool{}
 	for path, owners := range snapshot.selectedOwners {
-		if err := ctx.Err(); err != nil {
+		if err := checkAnalysisOperation(ctx, "original-input-verify", "file"); err != nil {
 			return nil, err
 		}
 		root, relative, captured, ok := mirror.originalPath(path)
@@ -898,6 +941,9 @@ func verifyOriginalPackageInputsContext(ctx context.Context, mirror sourceMirror
 		}
 	}
 	for key, directory := range snapshot.packageDirs {
+		if err := checkAnalysisOperation(ctx, "original-input-verify", "directory"); err != nil {
+			return nil, err
+		}
 		if len(snapshot.selectedFiles[key]) == 0 {
 			continue
 		}
@@ -1022,7 +1068,11 @@ func snapshotPackageInputs(ctx context.Context, selected, captured []*packages.P
 				directories[directory][key] = true
 			}
 		}
-		for path, role := range profileSelectedDirectoryInputs(pkg, sourceRoot, profile) {
+		selectedInputs, err := profileSelectedDirectoryInputsContext(ctx, pkg, sourceRoot, profile)
+		if err != nil {
+			return packageInputSnapshot{}, err
+		}
+		for path, role := range selectedInputs {
 			result.packageFiles[key] = append(result.packageFiles[key], path)
 			result.packageRoles[key][path] = role
 			if result.fileOwners[path] == nil {
@@ -1042,11 +1092,15 @@ func snapshotPackageInputs(ctx context.Context, selected, captured []*packages.P
 			result.packageDirs[key] = pkg.Dir
 		}
 		result.selectedFiles[key] = packageInputPaths(pkg, sourceRoot)
-		for path, role := range profileSelectedDirectoryInputs(pkg, sourceRoot, profile) {
+		selectedInputs, err := profileSelectedDirectoryInputsContext(ctx, pkg, sourceRoot, profile)
+		if err != nil {
+			return packageInputSnapshot{}, err
+		}
+		for path, role := range selectedInputs {
 			result.selectedFiles[key] = append(result.selectedFiles[key], path)
 			result.packageRoles[key][path] = role
 		}
-		if err := addProfileSelectedInputs(&result, pkg, sourceRoot, profile); err != nil {
+		if err := addProfileSelectedInputsContext(ctx, &result, pkg, sourceRoot, profile); err != nil {
 			return packageInputSnapshot{}, err
 		}
 	}
@@ -1064,6 +1118,9 @@ func snapshotPackageInputs(ctx context.Context, selected, captured []*packages.P
 			return packageInputSnapshot{}, fmt.Errorf("snapshot source directory: %w", err)
 		}
 		for _, entry := range entries {
+			if err := ctx.Err(); err != nil {
+				return packageInputSnapshot{}, err
+			}
 			if entry.IsDir() || !recognizedGoPackageInput(entry.Name()) {
 				continue
 			}
@@ -1124,6 +1181,9 @@ func snapshotPackageInputs(ctx context.Context, selected, captured []*packages.P
 			continue
 		}
 		includes, malformed := localQuotedIncludes(data)
+		if err := checkAnalysisOperation(ctx, "snapshot-native-include", "after"); err != nil {
+			return packageInputSnapshot{}, err
+		}
 		if malformed {
 			continue
 		}
@@ -1154,17 +1214,30 @@ func snapshotPackageInputs(ctx context.Context, selected, captured []*packages.P
 		selectedByKey[packageInputKey(pkg)] = pkg
 	}
 	for key, files := range result.selectedFiles {
+		if err := ctx.Err(); err != nil {
+			return packageInputSnapshot{}, err
+		}
 		pkg := selectedByKey[key]
-		activeCgo := pathsImportC(pkg.GoFiles, result.data)
+		activeCgo, err := pathsImportCContext(ctx, pkg.GoFiles, result.data)
+		if err != nil {
+			return packageInputSnapshot{}, err
+		}
 		if profile.CGOEnabled && !activeCgo {
 			context := profileBuildContext(profile)
 			context.CgoEnabled = true
 			for _, candidate := range result.packageFiles[key] {
+				if err := ctx.Err(); err != nil {
+					return packageInputSnapshot{}, err
+				}
 				if filepath.Ext(candidate) != ".go" {
 					continue
 				}
 				matched, _ := context.MatchFile(filepath.Dir(candidate), filepath.Base(candidate))
-				if matched && pathsImportC([]string{candidate}, result.data) {
+				importsC, err := pathsImportCContext(ctx, []string{candidate}, result.data)
+				if err != nil {
+					return packageInputSnapshot{}, err
+				}
+				if matched && importsC {
 					activeCgo = true
 					files = append(files, candidate)
 					result.packageRoles[key][candidate] = "active"
@@ -1173,6 +1246,9 @@ func snapshotPackageInputs(ctx context.Context, selected, captured []*packages.P
 			}
 			if activeCgo {
 				for _, candidate := range result.packageFiles[key] {
+					if err := ctx.Err(); err != nil {
+						return packageInputSnapshot{}, err
+					}
 					if nativeIncludeCarrier(candidate) && !contains(files, candidate) {
 						files = append(files, candidate)
 						result.packageRoles[key][candidate] = "native"
@@ -1180,7 +1256,11 @@ func snapshotPackageInputs(ctx context.Context, selected, captured []*packages.P
 				}
 			}
 		}
-		reachable, _ := selectedNativeIncludes(pkg, selectedNativePaths(files, result.packageRoles[key]), result.data)
+		reachable, _, err := selectedNativeIncludesContext(
+			ctx, pkg, selectedNativePaths(files, result.packageRoles[key]), result.data)
+		if err != nil {
+			return packageInputSnapshot{}, err
+		}
 		refined := make([]string, 0, len(files))
 		for _, path := range files {
 			if nativeHeader(path) && !activeCgo && !reachable[path] {
@@ -1214,10 +1294,15 @@ func cgoNativeSource(path string) bool {
 }
 
 func profileSelectedDirectoryInputs(pkg *packages.Package, sourceRoot string, profile Profile) map[string]string {
+	result, _ := profileSelectedDirectoryInputsContext(context.Background(), pkg, sourceRoot, profile)
+	return result
+}
+
+func profileSelectedDirectoryInputsContext(ctx context.Context, pkg *packages.Package, sourceRoot string, profile Profile) (map[string]string, error) {
 	result := map[string]string{}
 	if !profile.CGOEnabled || pkg.Dir == "" || pkg.Module == nil ||
 		(!pkg.Module.Main && (pkg.Module.Replace == nil || pkg.Module.Replace.Version != "")) {
-		return result
+		return result, nil
 	}
 	context := build.Default
 	context.GOOS = profile.GOOS
@@ -1226,49 +1311,93 @@ func profileSelectedDirectoryInputs(pkg *packages.Package, sourceRoot string, pr
 	context.CgoEnabled = true
 	context.BuildTags = append([]string{}, profile.BuildTags...)
 	context.ToolTags = profileToolTags(profile)
+	if err := checkAnalysisOperation(ctx, "package-input-classification", "directory-before"); err != nil {
+		return nil, err
+	}
 	entries, err := os.ReadDir(pkg.Dir)
+	if contextErr := checkAnalysisOperation(ctx, "package-input-classification", "directory-after"); contextErr != nil {
+		return nil, contextErr
+	}
 	if err != nil {
-		return result
+		return result, nil
 	}
 	activeCgo := false
 	for _, entry := range entries {
+		if err := checkAnalysisOperation(ctx, "package-input-classification", "go-file"); err != nil {
+			return nil, err
+		}
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
 			continue
 		}
 		path := filepath.Join(pkg.Dir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil || !packageVariantSelectsGoFile(pkg, entry.Name(), data) ||
-			!pathsImportC([]string{path}, map[string][]byte{path: data}) {
+		data, err := readBoundedRegularFileContext(ctx, path, profile.Limits.MaxLocalHashBytes)
+		if err != nil {
 			continue
 		}
+		selected, err := packageVariantSelectsGoFileContext(ctx, pkg, entry.Name(), data)
+		if err != nil {
+			return nil, err
+		}
+		importsC, err := pathsImportCContext(ctx, []string{path}, map[string][]byte{path: data})
+		if err != nil {
+			return nil, err
+		}
+		if !selected || !importsC {
+			continue
+		}
+		if err := checkAnalysisOperation(ctx, "package-input-classification", "match-before"); err != nil {
+			return nil, err
+		}
 		matched, _ := context.MatchFile(pkg.Dir, entry.Name())
+		if err := checkAnalysisOperation(ctx, "package-input-classification", "match-after"); err != nil {
+			return nil, err
+		}
 		if matched {
 			result[path] = selectedGoRole(entry.Name())
 			activeCgo = true
 		}
 	}
 	if !activeCgo {
-		return result
+		return result, nil
 	}
 	for _, entry := range entries {
+		if err := checkAnalysisOperation(ctx, "package-input-classification", "native-file"); err != nil {
+			return nil, err
+		}
 		if entry.IsDir() || !recognizedNativePackageInput(entry.Name()) {
 			continue
 		}
+		if err := checkAnalysisOperation(ctx, "package-input-classification", "native-match-before"); err != nil {
+			return nil, err
+		}
 		matched, _ := context.MatchFile(pkg.Dir, entry.Name())
+		if err := checkAnalysisOperation(ctx, "package-input-classification", "native-match-after"); err != nil {
+			return nil, err
+		}
 		if matched {
 			result[filepath.Join(pkg.Dir, entry.Name())] = "native"
 		}
 	}
-	return result
+	return result, nil
 }
 
 func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Package, sourceRoot string, profile Profile) error {
+	return addProfileSelectedInputsContext(context.Background(), snapshot, pkg, sourceRoot, profile)
+}
+
+func addProfileSelectedInputsContext(ctx context.Context, snapshot *packageInputSnapshot, pkg *packages.Package, sourceRoot string, profile Profile) error {
 	if pkg.Dir == "" || !packageInputPathAllowed(pkg, sourceRoot, filepath.Join(pkg.Dir, "_go2gs_probe")) {
 		return nil
 	}
 	context := profileBuildContext(profile)
 	context.CgoEnabled = profile.CGOEnabled
+	if err := checkAnalysisOperation(ctx, "package-input-import", "before"); err != nil {
+		return err
+	}
 	selected, err := context.ImportDir(pkg.Dir, build.ImportComment)
+	if contextErr := checkAnalysisOperation(ctx, "package-input-import", "after"); contextErr != nil {
+		return contextErr
+	}
 	if err != nil && selected == nil {
 		return fmt.Errorf("classify selected package inputs: %w", err)
 	}
@@ -1284,22 +1413,47 @@ func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Pack
 	names = append(names, selected.SwigCXXFiles...)
 	names = append(names, selected.SysoFiles...)
 	activeCgo := len(selected.CgoFiles) != 0
+	if err := checkAnalysisOperation(ctx, "package-input-import", "directory-before"); err != nil {
+		return err
+	}
 	entries, err := os.ReadDir(pkg.Dir)
+	if contextErr := checkAnalysisOperation(ctx, "package-input-import", "directory-after"); contextErr != nil {
+		return contextErr
+	}
 	if err != nil {
 		return err
 	}
 	for _, entry := range entries {
+		if err := checkAnalysisOperation(ctx, "package-input-import", "go-file"); err != nil {
+			return err
+		}
 		if entry.IsDir() || filepath.Ext(entry.Name()) != ".go" {
 			continue
 		}
+		if err := checkAnalysisOperation(ctx, "package-input-import", "match-before"); err != nil {
+			return err
+		}
 		matched, err := context.MatchFile(pkg.Dir, entry.Name())
+		if contextErr := checkAnalysisOperation(ctx, "package-input-import", "match-after"); contextErr != nil {
+			return contextErr
+		}
 		if err != nil || !matched {
 			continue
 		}
 		path := filepath.Join(pkg.Dir, entry.Name())
-		data, err := os.ReadFile(path)
-		if err != nil || !packageVariantSelectsGoFile(pkg, entry.Name(), data) ||
-			!pathsImportC([]string{path}, map[string][]byte{path: data}) {
+		data, err := readBoundedRegularFileContext(ctx, path, profile.Limits.MaxLocalHashBytes)
+		if err != nil {
+			continue
+		}
+		variantSelected, err := packageVariantSelectsGoFileContext(ctx, pkg, entry.Name(), data)
+		if err != nil {
+			return err
+		}
+		importsC, err := pathsImportCContext(ctx, []string{path}, map[string][]byte{path: data})
+		if err != nil {
+			return err
+		}
+		if !variantSelected || !importsC {
 			continue
 		}
 		activeCgo = true
@@ -1307,10 +1461,19 @@ func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Pack
 	}
 	if activeCgo {
 		for _, entry := range entries {
+			if err := checkAnalysisOperation(ctx, "package-input-import", "native-file"); err != nil {
+				return err
+			}
 			if entry.IsDir() || !recognizedNativePackageInput(entry.Name()) {
 				continue
 			}
+			if err := checkAnalysisOperation(ctx, "package-input-import", "native-match-before"); err != nil {
+				return err
+			}
 			matched, err := context.MatchFile(pkg.Dir, entry.Name())
+			if contextErr := checkAnalysisOperation(ctx, "package-input-import", "native-match-after"); contextErr != nil {
+				return contextErr
+			}
 			if err != nil {
 				return fmt.Errorf("classify native input %s: %w", entry.Name(), err)
 			}
@@ -1340,14 +1503,25 @@ func addProfileSelectedInputs(snapshot *packageInputSnapshot, pkg *packages.Pack
 }
 
 func packageVariantSelectsGoFile(pkg *packages.Package, name string, data []byte) bool {
+	selected, _ := packageVariantSelectsGoFileContext(context.Background(), pkg, name, data)
+	return selected
+}
+
+func packageVariantSelectsGoFileContext(ctx context.Context, pkg *packages.Package, name string, data []byte) (bool, error) {
 	if !strings.HasSuffix(name, "_test.go") {
-		return true
+		return true, nil
 	}
 	if pkg.ForTest == "" || packageVariant(pkg) == "synthetic-test-main" {
-		return false
+		return false, nil
+	}
+	if err := checkAnalysisOperation(ctx, "package-variant-parse", "before"); err != nil {
+		return false, err
 	}
 	file, err := parser.ParseFile(token.NewFileSet(), name, data, parser.PackageClauseOnly)
-	return err == nil && file.Name.Name == pkg.Name
+	if contextErr := checkAnalysisOperation(ctx, "package-variant-parse", "after"); contextErr != nil {
+		return false, contextErr
+	}
+	return err == nil && file.Name.Name == pkg.Name, nil
 }
 
 func selectedGoRole(name string) string {
@@ -1390,20 +1564,53 @@ func profileReleaseTags(version string) []string {
 }
 
 func selectedPkgConfigDirective(snapshot packageInputSnapshot, profile Profile) bool {
+	selected, _ := selectedPkgConfigDirectiveContext(context.Background(), snapshot, profile)
+	return selected
+}
+
+func selectedPkgConfigDirectiveContext(ctx context.Context, snapshot packageInputSnapshot, profile Profile) (bool, error) {
 	if snapshot.pkgConfig {
-		return true
+		return true, nil
 	}
-	for path, data := range snapshot.data {
+	paths := make([]string, 0, len(snapshot.data))
+	for path := range snapshot.data {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		if err := checkAnalysisOperation(ctx, "pkg-config-scan", "file"); err != nil {
+			return false, err
+		}
+		data := snapshot.data[path]
 		if !selectedGoSource(snapshot, path) ||
-			filepath.Ext(path) != ".go" || !pathsImportC([]string{path}, snapshot.data) {
+			filepath.Ext(path) != ".go" {
 			continue
 		}
+		importsC, err := pathsImportCContext(ctx, []string{path}, snapshot.data)
+		if err != nil {
+			return false, err
+		}
+		if !importsC {
+			continue
+		}
+		if err := checkAnalysisOperation(ctx, "pkg-config-scan", "parse-before"); err != nil {
+			return false, err
+		}
 		file, err := parser.ParseFile(token.NewFileSet(), path, data, parser.ImportsOnly|parser.ParseComments)
+		if contextErr := checkAnalysisOperation(ctx, "pkg-config-scan", "parse-after"); contextErr != nil {
+			return false, contextErr
+		}
 		if err != nil {
 			continue
 		}
 		for _, group := range importCCommentGroups(file) {
+			if err := checkAnalysisOperation(ctx, "pkg-config-scan", "comment"); err != nil {
+				return false, err
+			}
 			for _, line := range strings.Split(group.Text(), "\n") {
+				if err := checkAnalysisOperation(ctx, "pkg-config-scan", "directive"); err != nil {
+					return false, err
+				}
 				line = strings.TrimSpace(line)
 				if !strings.HasPrefix(line, "#cgo ") && !strings.HasPrefix(line, "#cgo\t") {
 					continue
@@ -1417,17 +1624,20 @@ func selectedPkgConfigDirective(snapshot packageInputSnapshot, profile Profile) 
 					continue
 				}
 				if len(fields) == 1 {
-					return true
+					return true, nil
 				}
 				for _, condition := range fields[:len(fields)-1] {
+					if err := checkAnalysisOperation(ctx, "pkg-config-scan", "condition"); err != nil {
+						return false, err
+					}
 					if matchCgoCondition(condition, profile) {
-						return true
+						return true, nil
 					}
 				}
 			}
 		}
 	}
-	return false
+	return false, nil
 }
 
 func importCCommentGroups(file *ast.File) []*ast.CommentGroup {
@@ -1536,6 +1746,10 @@ func packageInputPathAllowed(pkg *packages.Package, sourceRoot, path string) boo
 }
 
 func cgoOnlyPackageOverlay(mirror sourceMirror, profile Profile) (map[string][]byte, error) {
+	return cgoOnlyPackageOverlayContext(context.Background(), mirror, profile)
+}
+
+func cgoOnlyPackageOverlayContext(ctx context.Context, mirror sourceMirror, profile Profile) (map[string][]byte, error) {
 	overlay := map[string][]byte{}
 	if !profile.CGOEnabled {
 		return overlay, nil
@@ -1548,8 +1762,14 @@ func cgoOnlyPackageOverlay(mirror sourceMirror, profile Profile) (map[string][]b
 	context.BuildTags = append([]string{}, profile.BuildTags...)
 	context.ToolTags = profileToolTags(profile)
 	for _, tree := range mirror.trees {
+		if err := checkAnalysisOperation(ctx, "cgo-overlay", "tree"); err != nil {
+			return nil, err
+		}
 		root := tree.mirrorRoot
 		err := filepath.WalkDir(root, func(path string, entry os.DirEntry, walkErr error) error {
+			if err := checkAnalysisOperation(ctx, "cgo-overlay", "walk"); err != nil {
+				return err
+			}
 			if walkErr != nil {
 				return walkErr
 			}
@@ -1559,7 +1779,13 @@ func cgoOnlyPackageOverlay(mirror sourceMirror, profile Profile) (map[string][]b
 			if path != root && (entry.Name() == ".git" || entry.Name() == "vendor" || strings.HasPrefix(entry.Name(), ".")) {
 				return filepath.SkipDir
 			}
+			if err := checkAnalysisOperation(ctx, "cgo-overlay", "import-before"); err != nil {
+				return err
+			}
 			selected, err := context.ImportDir(path, build.ImportComment)
+			if contextErr := checkAnalysisOperation(ctx, "cgo-overlay", "import-after"); contextErr != nil {
+				return contextErr
+			}
 			if err != nil || selected == nil || len(selected.CgoFiles) == 0 || len(selected.GoFiles) != 0 {
 				return nil
 			}
@@ -1608,21 +1834,32 @@ func verifyPackageInputsContext(ctx context.Context, snapshot packageInputSnapsh
 	drift := map[string]bool{}
 	actual := map[string][]string{}
 	for _, pkg := range loaded {
-		if err := ctx.Err(); err != nil {
+		if err := checkAnalysisOperation(ctx, "package-input-verify", "package"); err != nil {
 			return nil, err
 		}
 		files := packageInputPaths(pkg, sourceRoot)
 		selectedGo := append([]string{}, pkg.GoFiles...)
-		for path := range profileSelectedDirectoryInputs(pkg, sourceRoot, profile) {
+		selectedInputs, err := profileSelectedDirectoryInputsContext(ctx, pkg, sourceRoot, profile)
+		if err != nil {
+			return nil, err
+		}
+		for path := range selectedInputs {
 			files = append(files, path)
 			if filepath.Ext(path) == ".go" {
 				selectedGo = append(selectedGo, path)
 			}
 		}
 		files = uniqueSorted(files)
-		activeCgo := pathsImportC(selectedGo, snapshot.data)
+		activeCgo, err := pathsImportCContext(ctx, selectedGo, snapshot.data)
+		if err != nil {
+			return nil, err
+		}
 		key := packageInputKey(pkg)
-		reachable, _ := selectedNativeIncludes(pkg, selectedNativePaths(snapshot.selectedFiles[key], snapshot.packageRoles[key]), snapshot.data)
+		reachable, _, err := selectedNativeIncludesContext(
+			ctx, pkg, selectedNativePaths(snapshot.selectedFiles[key], snapshot.packageRoles[key]), snapshot.data)
+		if err != nil {
+			return nil, err
+		}
 		for _, path := range files {
 			if nativeHeader(path) && !activeCgo && !reachable[path] {
 				continue
@@ -1652,7 +1889,7 @@ func verifyPackageInputsContext(ctx context.Context, snapshot packageInputSnapsh
 		}
 	}
 	for path, owners := range snapshot.selectedOwners {
-		if err := ctx.Err(); err != nil {
+		if err := checkAnalysisOperation(ctx, "package-input-verify", "file"); err != nil {
 			return nil, err
 		}
 		captured := snapshot.files[path]
@@ -1773,7 +2010,7 @@ func captureTypedSourcesContext(ctx context.Context, loaded []*packages.Package,
 	external := map[string][]byte{}
 	var externalBytes int64
 	for _, path := range sorted {
-		if err := ctx.Err(); err != nil {
+		if err := checkAnalysisOperation(ctx, "typed-source-capture", "file"); err != nil {
 			return nil, nil, err
 		}
 		if data, ok := overlay[path]; ok {
@@ -1801,7 +2038,7 @@ func captureTypedSourcesContext(ctx context.Context, loaded []*packages.Package,
 
 func verifyTypedSourcesContext(ctx context.Context, captured map[string][]byte) (bool, error) {
 	for path, expected := range captured {
-		if err := ctx.Err(); err != nil {
+		if err := checkAnalysisOperation(ctx, "typed-source-verify", "file"); err != nil {
 			return false, err
 		}
 		actual, err := readBoundedRegularFileContext(ctx, path, int64(len(expected)))
@@ -1845,7 +2082,7 @@ func typeCheckPackages(ctx context.Context, loaded []*packages.Package, sources 
 		fset := token.NewFileSet()
 		syntax := make([]*ast.File, 0, len(pkg.GoFiles))
 		for _, path := range pkg.GoFiles {
-			if err := ctx.Err(); err != nil {
+			if err := checkAnalysisOperation(ctx, "type-check-parse", "before"); err != nil {
 				contextErr = err
 				return
 			}
@@ -1859,6 +2096,10 @@ func typeCheckPackages(ctx context.Context, loaded []*packages.Package, sources 
 				continue
 			}
 			file, err := parser.ParseFile(fset, path, data, parser.ParseComments|parser.SkipObjectResolution|parser.AllErrors)
+			if parseContextErr := checkAnalysisOperation(ctx, "type-check-parse", "after"); parseContextErr != nil {
+				contextErr = parseContextErr
+				return
+			}
 			if err != nil {
 				position := path
 				if list, ok := err.(scanner.ErrorList); ok && len(list) != 0 {
@@ -1895,6 +2136,10 @@ func typeCheckPackages(ctx context.Context, loaded []*packages.Package, sources 
 				}
 				pkg.Errors = append(pkg.Errors, entry)
 			},
+		}
+		if err := checkAnalysisOperation(ctx, "type-check", "before"); err != nil {
+			contextErr = err
+			return
 		}
 		checked, _ := config.Check(pkg.PkgPath, fset, syntax, info)
 		if err := ctx.Err(); err != nil {

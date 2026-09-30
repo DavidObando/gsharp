@@ -5456,28 +5456,197 @@ func TestAnalyzeDeadlineCoversExecutableCapture(t *testing.T) {
 }
 
 func TestAnalyzeCancellationCoversPostLoadVerification(t *testing.T) {
-	for _, phase := range []string{
-		"capsule-verify",
-		"typed-source-capture",
-		"typed-source-verify",
-		"package-input-verify",
-		"original-input-verify",
-		"manifest-verify",
+	for _, test := range []struct {
+		phase, operation, point string
+	}{
+		{"capsule-verify", "capsule-verify", "entry"},
+		{"typed-source-capture", "typed-source-capture", "file"},
+		{"typed-source-verify", "typed-source-verify", "file"},
+		{"package-input-verify", "package-input-verify", "package"},
+		{"original-input-verify", "original-input-verify", "file"},
+		{"manifest-verify", "manifest-verify", "manifest"},
 	} {
-		t.Run(phase, func(t *testing.T) {
+		t.Run(test.phase, func(t *testing.T) {
 			ctx, cancel := context.WithCancel(t.Context())
 			t.Cleanup(cancel)
-			postLoadContextTestHook = func(actual string) {
-				if actual == phase {
+			hit := false
+			completed := false
+			armed := false
+			analysisOperationTestHook = func(operation, point string) {
+				if armed && operation == test.operation && point == test.point && !hit {
+					hit = true
 					cancel()
+				}
+			}
+			t.Cleanup(func() { analysisOperationTestHook = nil })
+			postLoadContextTestHook = func(phase string) {
+				if phase == test.phase {
+					armed = true
+				}
+				if phase == test.phase+"-complete" {
+					completed = true
 				}
 			}
 			t.Cleanup(func() { postLoadContextTestHook = nil })
 			_, _, err := analyze(ctx, copyFixture(t, "complete"), t.TempDir(), testProfile())
 			if !errors.Is(err, context.Canceled) {
-				t.Fatalf("cancellation at %s returned %v", phase, err)
+				t.Fatalf("cancellation in %s returned %v", test.phase, err)
+			}
+			if !hit {
+				t.Fatalf("%s operation hook was not reached", test.phase)
+			}
+			if completed {
+				t.Fatalf("%s completed after in-operation cancellation", test.phase)
 			}
 		})
+	}
+}
+
+func TestCgoDiscoveryCancellationStopsCurrentProductionScan(t *testing.T) {
+	for _, test := range []struct {
+		name, operation, point, forbiddenLoad string
+	}{
+		{"overlay-traversal", "cgo-overlay", "walk", "preflight-before"},
+		{"overlay-import", "cgo-overlay", "import-before", "preflight-before"},
+		{"directory-classification", "package-input-classification", "go-file", "typed-before"},
+		{"import-parse", "cgo-import-parse", "before", "typed-before"},
+		{"native-include", "native-include-scan", "after-parse", "typed-before"},
+		{"snapshot-native-include", "snapshot-native-include", "after", "typed-before"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			hit := false
+			localAdvanced := false
+			forbiddenEntered := false
+			analysisOperationTestHook = func(operation, point string) {
+				if operation == test.operation && point == test.point && !hit {
+					hit = true
+					cancel()
+				} else if hit && operation == test.operation {
+					localAdvanced = true
+				}
+			}
+			t.Cleanup(func() { analysisOperationTestHook = nil })
+			packageLoadTestHook = func(phase string) {
+				if phase == test.forbiddenLoad {
+					forbiddenEntered = true
+				}
+			}
+			t.Cleanup(func() { packageLoadTestHook = nil })
+			profile := testProfile()
+			profile.CGOEnabled = true
+			_, _, err := analyze(ctx, copyFixture(t, "cgo"), t.TempDir(), profile)
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation in %s returned %v", test.name, err)
+			}
+			if !hit {
+				t.Fatalf("%s operation hook was not reached", test.name)
+			}
+			if localAdvanced {
+				t.Fatalf("%s operation advanced after cancellation", test.name)
+			}
+			if forbiddenEntered {
+				t.Fatalf("%s entered later load phase %s", test.name, test.forbiddenLoad)
+			}
+		})
+	}
+}
+
+func TestTypeCheckParserCancellationStopsBeforeTypeChecking(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	hit := false
+	typeCheckEntered := false
+	analysisOperationTestHook = func(operation, point string) {
+		switch {
+		case operation == "type-check-parse" && point == "after" && !hit:
+			hit = true
+			cancel()
+		case hit && operation == "type-check":
+			typeCheckEntered = true
+		}
+	}
+	t.Cleanup(func() { analysisOperationTestHook = nil })
+	_, _, err := analyze(ctx, copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("type-check parser cancellation returned %v", err)
+	}
+	if !hit {
+		t.Fatal("type-check parser hook was not reached")
+	}
+	if typeCheckEntered {
+		t.Fatal("type checking started after parser cancellation")
+	}
+}
+
+func TestSourcePositionParserCancellationStopsBeforePositionUse(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	armed := false
+	hit := false
+	positionUsed := false
+	postLoadContextTestHook = func(phase string) {
+		if phase == "inventory" {
+			armed = true
+		}
+	}
+	t.Cleanup(func() { postLoadContextTestHook = nil })
+	analysisOperationTestHook = func(operation, point string) {
+		switch {
+		case armed && operation == "source-position-parse" && point == "after" && !hit:
+			hit = true
+			cancel()
+		case hit && operation == "source-position-parse" && point == "use":
+			positionUsed = true
+		}
+	}
+	t.Cleanup(func() { analysisOperationTestHook = nil })
+	_, _, err := analyze(ctx, copyFixture(t, "complete"), t.TempDir(), testProfile())
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("source-position parser cancellation returned %v", err)
+	}
+	if !hit {
+		t.Fatal("source-position parser hook was not reached")
+	}
+	if positionUsed {
+		t.Fatal("source positions were used after parser cancellation")
+	}
+}
+
+func TestPkgConfigFallbackCancellationStopsInsideProductionParse(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	t.Cleanup(cancel)
+	hit := false
+	completed := false
+	selectedPkgConfigSnapshotTestHook = func(snapshot *packageInputSnapshot) {
+		snapshot.pkgConfig = false
+	}
+	t.Cleanup(func() { selectedPkgConfigSnapshotTestHook = nil })
+	analysisOperationTestHook = func(operation, point string) {
+		if operation == "pkg-config-scan" && point == "parse-before" && !hit {
+			hit = true
+			cancel()
+		}
+	}
+	t.Cleanup(func() { analysisOperationTestHook = nil })
+	postLoadContextTestHook = func(phase string) {
+		if phase == "pkg-config-scan-complete" {
+			completed = true
+		}
+	}
+	t.Cleanup(func() { postLoadContextTestHook = nil })
+	profile := testProfile()
+	profile.CGOEnabled = true
+	_, _, err := analyze(ctx, copyFixture(t, "cgo"), t.TempDir(), profile)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("pkg-config parse cancellation returned %v", err)
+	}
+	if !hit {
+		t.Fatal("pkg-config fallback parser hook was not reached")
+	}
+	if completed {
+		t.Fatal("pkg-config fallback completed after parser cancellation")
 	}
 }
 
@@ -5496,12 +5665,20 @@ func TestAnalyzePreloadCancellationBeforeEncodingOrPublication(t *testing.T) {
 			}
 			switch phase {
 			case "encoding":
+				publicationEntered := false
 				artifactEncodingTestHook = func(stage string) {
 					if stage == "start" {
 						cancel()
 					}
 				}
 				t.Cleanup(func() { artifactEncodingTestHook = nil })
+				publicationBoundaryTestHook = func(string) { publicationEntered = true }
+				t.Cleanup(func() { publicationBoundaryTestHook = nil })
+				t.Cleanup(func() {
+					if publicationEntered {
+						t.Error("preload publication entered after encoding cancellation")
+					}
+				})
 			case "publication":
 				publicationBoundaryTestHook = func(stage string) {
 					if stage == "preload" {
@@ -5543,15 +5720,78 @@ func TestWorkerArtifactReadStopsOnCancellation(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(root, "run.json"), runBytes, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithCancel(t.Context())
-	workerArtifactReadTestHook = func(stage string) {
-		if stage == "analysis-read" {
-			cancel()
-		}
+	for _, phase := range []string{"analysis-read", "run-read"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			chunks := 0
+			boundedReadChunkHook = func() { chunks++ }
+			t.Cleanup(func() { boundedReadChunkHook = nil })
+			workerArtifactReadTestHook = func(stage string) {
+				if stage == phase {
+					cancel()
+				}
+			}
+			t.Cleanup(func() { workerArtifactReadTestHook = nil })
+			if _, _, _, err := readWorkerArtifactsContext(ctx, root, 1<<20); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled %s returned %v", phase, err)
+			}
+			wantChunks := 0
+			if phase == "run-read" {
+				wantChunks = 2
+			}
+			if chunks != wantChunks {
+				t.Fatalf("%s processed %d chunks, want %d", phase, chunks, wantChunks)
+			}
+		})
 	}
-	t.Cleanup(func() { workerArtifactReadTestHook = nil })
-	if _, _, _, err := readWorkerArtifactsContext(ctx, root, 1<<20); !errors.Is(err, context.Canceled) {
-		t.Fatalf("cancelled worker artifact read returned %v", err)
+}
+
+func TestWorkerArtifactReadStopsDuringEachRead(t *testing.T) {
+	root := t.TempDir()
+	analysis := validIncompleteAnalysis()
+	run := RunMetadata{SchemaVersion: schemaVersion}
+	analysisBytes, runBytes, err := encodeAnalysisArtifacts(analysis, run, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "analysis.json"), analysisBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run.json"), runBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, phase := range []string{"analysis-read", "run-read"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			armed := false
+			chunks := 0
+			workerArtifactReadTestHook = func(stage string) {
+				if stage == phase {
+					armed = true
+				}
+			}
+			t.Cleanup(func() { workerArtifactReadTestHook = nil })
+			boundedReadChunkHook = func() {
+				chunks++
+				if armed {
+					armed = false
+					cancel()
+				}
+			}
+			t.Cleanup(func() { boundedReadChunkHook = nil })
+			if _, _, _, err := readWorkerArtifactsContext(ctx, root, 1<<20); !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled %s returned %v", phase, err)
+			}
+			wantChunks := 1
+			if phase == "run-read" {
+				wantChunks = 3
+			}
+			if chunks != wantChunks {
+				t.Fatalf("%s processed %d chunks, want %d", phase, chunks, wantChunks)
+			}
+		})
 	}
 }
 
@@ -5569,16 +5809,26 @@ func TestPublicationBoundariesRejectCancellationWithoutArtifacts(t *testing.T) {
 				}
 			})
 			ctx, cancel := context.WithCancel(t.Context())
+			advanced := false
 			publicationBoundaryTestHook = func(actual string) {
 				if actual == stage {
 					cancel()
 				}
 			}
 			t.Cleanup(func() { publicationBoundaryTestHook = nil })
+			publicationAfterBoundaryTestHook = func(actual string) {
+				if actual == stage {
+					advanced = true
+				}
+			}
+			t.Cleanup(func() { publicationAfterBoundaryTestHook = nil })
 			err = publishWorkerArtifactsAtBoundary(
 				ctx, stage, output, []byte("analysis"), []byte("run"))
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("cancelled %s publication returned %v", stage, err)
+			}
+			if advanced {
+				t.Fatalf("%s publication advanced after boundary cancellation", stage)
 			}
 			for _, name := range []string{"analysis.json", "run.json"} {
 				if _, statErr := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(statErr) {
