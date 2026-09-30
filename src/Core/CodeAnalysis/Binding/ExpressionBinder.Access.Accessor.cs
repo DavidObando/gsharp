@@ -950,7 +950,12 @@ internal sealed partial class ExpressionBinder
             return false;
         }
 
-        nestedClassSymbol = CloseImportedNestedType(importedBase, nestedClassSymbol, syntax.RightPart, symbolicOuter: null);
+        nestedClassSymbol = CloseImportedNestedType(
+            importedBase,
+            nestedClassSymbol,
+            syntax.RightPart,
+            symbolicOuter: null,
+            constructedOuterSymbol: null);
         return true;
     }
 
@@ -958,7 +963,8 @@ internal sealed partial class ExpressionBinder
         Type constructedOuter,
         ImportedClassSymbol nested,
         ExpressionSyntax syntax,
-        ImportedTypeSymbol? symbolicOuter)
+        ImportedTypeSymbol? symbolicOuter,
+        ImportedTypeSymbol? constructedOuterSymbol)
     {
         var nestedType = nested.ClassType;
         if (!constructedOuter.IsConstructedGenericType
@@ -986,7 +992,19 @@ internal sealed partial class ExpressionBinder
                     symbolicOuter.TypeArguments);
             }
 
-            return new ImportedClassSymbol(closedType, syntax, symbolicNested, scope.References);
+            var constructedNested = constructedOuterSymbol != null
+                && constructedOuterSymbol.TypeArguments.Length == nestedType.GetGenericArguments().Length
+                    ? ImportedTypeSymbol.GetConstructed(
+                        closedType,
+                        nestedType,
+                        constructedOuterSymbol.TypeArguments)
+                    : symbolicNested;
+            return new ImportedClassSymbol(
+                closedType,
+                syntax,
+                symbolicNested,
+                scope.References,
+                constructedNested);
         }
         catch (ArgumentException)
         {
@@ -2586,7 +2604,12 @@ internal sealed partial class ExpressionBinder
                     var importedBaseSymbol = new ImportedClassSymbol(importedBase, nested.LeftPart, references: scope.References);
                     if (TryResolveNestedTypeFromAccessorLeft(importedBaseSymbol, nested.LeftPart, out var importedNested))
                     {
-                        importedNested = CloseImportedNestedType(importedBase, importedNested, nested.LeftPart, symbolicOuter: null);
+                        importedNested = CloseImportedNestedType(
+                            importedBase,
+                            importedNested,
+                            nested.LeftPart,
+                            symbolicOuter: null,
+                            constructedOuterSymbol: null);
                         return BindAccessorStep(receiver: null, importedNested, nested.RightPart);
                     }
                 }

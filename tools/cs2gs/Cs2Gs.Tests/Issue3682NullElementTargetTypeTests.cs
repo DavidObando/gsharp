@@ -180,6 +180,33 @@ namespace Demo
     }
 
     [Fact]
+    public void NestedGenericCallTargets_NullLiteralUsesTypedDefault()
+    {
+        string printed = TranslateUnit(@"
+#nullable enable
+using System.Collections.Generic;
+
+namespace Demo
+{
+    public static class C
+    {
+        public static void PutList<T>(List<T> value) { }
+        public static void PutArray<T>(params T[] value) { }
+
+        public static void F()
+        {
+            PutList<string>(null);
+            PutArray<string>(null);
+        }
+    }
+}");
+
+        Assert.Contains("default(List[string])", printed, StringComparison.Ordinal);
+        Assert.Contains("default([]string)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("nil!!", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void RectangularArrayWithNullElement_RendersNullableElementType()
     {
         string printed = TranslateUnit(@"

@@ -2072,7 +2072,7 @@ public sealed partial class CSharpToGSharpTranslator
                 translated = IsNullOrSuppressedNull(argument.Expression)
                     && parameter.Type.IsReferenceType
                     && (parameter.ContainingAssembly?.Name == "Gsharp.Runtime.Values"
-                        || parameter.OriginalDefinition.Type is ITypeParameterSymbol)
+                        || ContainsTypeParameter(parameter.OriginalDefinition.Type))
                         ? new DefaultValueExpression(this.typeMapper.Map(
                             parameter.Type.WithNullableAnnotation(NullableAnnotation.NotAnnotated),
                             this.context,
@@ -2113,6 +2113,15 @@ public sealed partial class CSharpToGSharpTranslator
 
             return translated;
         }
+
+        private static bool ContainsTypeParameter(ITypeSymbol type) => type switch
+        {
+            ITypeParameterSymbol => true,
+            IArrayTypeSymbol array => ContainsTypeParameter(array.ElementType),
+            INamedTypeSymbol named => named.TypeArguments.Any(ContainsTypeParameter),
+            IPointerTypeSymbol pointer => ContainsTypeParameter(pointer.PointedAtType),
+            _ => false,
+        };
 
         // Issue #3644: resolves the element contract an argument binds to when
         // it sits in the EXPANDED tail of a `params T[]` /

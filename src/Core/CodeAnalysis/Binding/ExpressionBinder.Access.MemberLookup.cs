@@ -1211,7 +1211,8 @@ internal sealed partial class ExpressionBinder
                     classSymbol.ClassType,
                     nested,
                     nameExpr,
-                    classSymbol.SymbolicReceiver);
+                    classSymbol.SymbolicReceiver,
+                    classSymbol.ConstructedReceiver);
                 return true;
             }
 
