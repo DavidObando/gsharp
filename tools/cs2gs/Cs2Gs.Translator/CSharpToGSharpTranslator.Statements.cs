@@ -3424,6 +3424,7 @@ public sealed partial class CSharpToGSharpTranslator
                     // self-migration types that result as nullable (issue #4578).
                     ExpressionSyntax source =
                         this.ResolveStableTupleAlias(assignment.Right, aliasPath)!;
+
                     // ProjectTupleElement never returns null; self-migration types
                     // the result as nullable (issue #4578).
                     value = ProjectTupleElement(source, path)!;
