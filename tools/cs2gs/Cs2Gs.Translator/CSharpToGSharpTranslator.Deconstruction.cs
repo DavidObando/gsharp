@@ -1188,18 +1188,18 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            foreach (IdentifierNameSyntax identifier in
-                body.DescendantNodes().OfType<IdentifierNameSyntax>())
+            foreach (SimpleNameSyntax name in
+                body.DescendantNodes().OfType<SimpleNameSyntax>())
             {
-                if (FindNestedFunction(identifier.Parent, body) == null)
+                if (FindNestedFunction(name.Parent, body) == null)
                 {
                     continue;
                 }
 
-                ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+                ISymbol symbol = this.context.GetSymbolInfo(name).Symbol;
                 if (symbol != null && !IsDeclaredInNestedFunction(symbol, body))
                 {
-                    occupied.Add(this.EmittedName(symbol, identifier.Identifier.ValueText));
+                    occupied.Add(this.EmittedName(symbol, name.Identifier.ValueText));
                 }
             }
 
