@@ -466,6 +466,8 @@ type boundOutputRoot struct {
 	removalRoot       *os.Root
 	removalDirectory  *os.File
 	removalInfo       os.FileInfo
+	removalUnknown    bool
+	removalOwned      map[string]os.FileInfo
 	publishedAnalysis *publishedOutput
 	publishedRun      *publishedOutput
 }
@@ -480,10 +482,11 @@ type publishedOutput struct {
 }
 
 var (
-	outputRootBoundHook           func()
-	outputPublicationBoundaryHook func(string)
-	outputLockReleasedHook        func()
-	outputBeforeDestructiveHook   func(string)
+	outputRootBoundHook            func()
+	outputPublicationBoundaryHook  func(string)
+	outputLockReleasedHook         func()
+	outputBeforeDestructiveHook    func(string)
+	outputAfterDestructiveMoveHook func(string)
 )
 
 func openBoundOutputRoot(path string) (*boundOutputRoot, error) {
@@ -530,6 +533,11 @@ func lockAndInvalidateOutput(outRoot string) (*boundOutputRoot, error) {
 	}
 	if outputRootBoundHook != nil {
 		outputRootBoundHook()
+	}
+	if err := rejectPreservedOutputEntries(output.root); err != nil {
+		_ = output.operationRoot.Close()
+		_ = output.root.Close()
+		return nil, err
 	}
 	if err := output.root.Mkdir(".go2gs-lock", 0o700); err != nil {
 		_ = output.operationRoot.Close()
@@ -593,6 +601,25 @@ func lockAndInvalidateOutput(outRoot string) (*boundOutputRoot, error) {
 		return nil, errors.Join(err, output.release())
 	}
 	return output, nil
+}
+
+func rejectPreservedOutputEntries(root *os.Root) error {
+	directory, err := root.Open(".")
+	if err != nil {
+		return err
+	}
+	defer directory.Close()
+	entries, err := directory.ReadDir(-1)
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if strings.HasPrefix(entry.Name(), ".go2gs-quarantine-") ||
+			strings.HasPrefix(entry.Name(), ".go2gs-preserved-") {
+			return fmt.Errorf("preserved output quarantine requires inspection: %s", entry.Name())
+		}
+	}
+	return nil
 }
 
 func (output *boundOutputRoot) release() error {

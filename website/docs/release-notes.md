@@ -133,7 +133,8 @@ Before moving an application to a different compiler version, pin the intended S
   renames, with final artifact identities and content hashes retained through
   lock release so ownership loss cannot leave a valid mixed pair. Identity-
   bound cleanup uses atomic no-replace Unix quarantine moves or held Windows NT
-  handles, leaving raced replacements untouched. Span
+  handles. Unix races restore the displaced occupant atomically or preserve
+  every unresolved occupant for inspection while blocking later runs. Span
   validation reparses captured bytes to verify exact raw and
   line-directive-adjusted paths, lines, and columns. Diagnostics
   are path-stable, initialization order is explicit, and schema validation

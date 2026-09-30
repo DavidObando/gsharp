@@ -15,6 +15,7 @@ import (
 )
 
 var outputAtomicRenameNoReplace = atomicRenameNoReplace
+var outputAtomicExchangeBetween = atomicExchangeBetween
 
 func initializeOutputRemoval(output *boundOutputRoot) error {
 	name, err := uniqueOutputName(".go2gs-quarantine-")
@@ -46,6 +47,7 @@ func initializeOutputRemoval(output *boundOutputRoot) error {
 	output.removalRoot = root
 	output.removalDirectory = directory
 	output.removalInfo = info
+	output.removalOwned = map[string]os.FileInfo{}
 	return nil
 }
 
@@ -54,8 +56,38 @@ func closeOutputRemoval(output *boundOutputRoot) error {
 		return nil
 	}
 	var result error
+	if !output.removalUnknown {
+		if err := removeOwnedQuarantineEntries(output); err != nil {
+			output.removalUnknown = true
+			result = errors.Join(result, err)
+		}
+	}
+	if output.removalUnknown {
+		if output.removalDirectory != nil {
+			result = errors.Join(result, output.removalDirectory.Close())
+			output.removalDirectory = nil
+		}
+		result = errors.Join(result, output.removalRoot.Close())
+		output.removalRoot = nil
+		preserved, err := uniqueOutputName(".go2gs-preserved-")
+		if err == nil {
+			err = outputAtomicRenameNoReplace(
+				int(output.operationRoot.Fd()), output.removalName,
+				int(output.operationRoot.Fd()), preserved,
+			)
+		}
+		if err != nil {
+			preserved = output.removalName
+			result = errors.Join(result, err)
+		}
+		result = errors.Join(result, errors.New("unexpected output entry preserved for inspection: "+preserved))
+		output.removalName = ""
+		output.removalInfo = nil
+		output.removalUnknown = false
+		output.removalOwned = nil
+		return result
+	}
 	if output.removalDirectory != nil {
-		result = errors.Join(result, removeDirectoryContents(output.removalDirectory))
 		result = errors.Join(result, output.removalDirectory.Close())
 		output.removalDirectory = nil
 	}
@@ -73,7 +105,73 @@ func closeOutputRemoval(output *boundOutputRoot) error {
 	}
 	output.removalName = ""
 	output.removalInfo = nil
+	output.removalOwned = nil
 	return result
+}
+
+func removeOwnedQuarantineEntries(output *boundOutputRoot) error {
+	directory, err := output.removalRoot.Open(".")
+	if err != nil {
+		return err
+	}
+	entries, err := directory.ReadDir(-1)
+	closeErr := directory.Close()
+	if err != nil {
+		return errors.Join(err, closeErr)
+	}
+	if closeErr != nil {
+		return closeErr
+	}
+	if len(entries) != len(output.removalOwned) {
+		return errors.New("output quarantine contains an unexpected entry")
+	}
+	for _, entry := range entries {
+		expected := output.removalOwned[entry.Name()]
+		if expected == nil {
+			return errors.New("output quarantine contains an unowned entry")
+		}
+		current, err := output.removalRoot.Lstat(entry.Name())
+		if err != nil || !os.SameFile(expected, current) {
+			return errors.Join(errors.New("owned output quarantine entry changed"), err)
+		}
+		if current.IsDir() {
+			child, err := output.removalRoot.OpenRoot(entry.Name())
+			if err != nil {
+				return err
+			}
+			childDirectory, err := child.Open(".")
+			if err != nil {
+				_ = child.Close()
+				return err
+			}
+			children, readErr := childDirectory.ReadDir(-1)
+			err = errors.Join(readErr, childDirectory.Close(), child.Close())
+			if err != nil {
+				return err
+			}
+			if len(children) != 0 {
+				return errors.New("owned output quarantine directory contains an unexpected entry")
+			}
+		}
+	}
+	for name := range output.removalOwned {
+		if err := output.removalRoot.Remove(name); err != nil {
+			return err
+		}
+	}
+	directory, err = output.removalRoot.Open(".")
+	if err != nil {
+		return err
+	}
+	remaining, readErr := directory.ReadDir(-1)
+	err = errors.Join(readErr, directory.Close())
+	if err != nil {
+		return err
+	}
+	if len(remaining) != 0 {
+		return errors.New("output quarantine was not empty after owned cleanup")
+	}
+	return nil
 }
 
 func removeOutputEntryIfSame(output *boundOutputRoot, name string, expected os.FileInfo) (bool, error) {
@@ -123,13 +221,36 @@ func removeOutputEntryIfSame(output *boundOutputRoot, name string, expected os.F
 		return false, err
 	}
 	if os.SameFile(expected, moved) {
+		output.removalOwned[quarantine] = moved
 		return true, nil
 	}
 
-	if err := outputAtomicRenameNoReplace(
-		int(output.removalDirectory.Fd()), quarantine, parentFD, name,
-	); err != nil {
-		return false, errors.Join(errors.New("output replacement could not be restored"), err)
+	wasUnknown := output.removalUnknown
+	output.removalUnknown = true
+	if outputAfterDestructiveMoveHook != nil {
+		outputAfterDestructiveMoveHook(name)
+	}
+	current, currentErr := output.root.Lstat(name)
+	if os.IsNotExist(currentErr) {
+		if err := outputAtomicRenameNoReplace(
+			int(output.removalDirectory.Fd()), quarantine, parentFD, name,
+		); err != nil {
+			return false, errors.Join(errors.New("output replacement could not be restored"), err)
+		}
+		output.removalUnknown = wasUnknown
+	} else if currentErr != nil {
+		return false, currentErr
+	} else {
+		if err := outputAtomicExchangeBetween(
+			parentFD, name, int(output.removalDirectory.Fd()), quarantine,
+		); err != nil {
+			return false, errors.Join(errors.New("output replacement could not be atomically restored"), err)
+		}
+		output.removalUnknown = true
+		preserved, err := output.removalRoot.Lstat(quarantine)
+		if err != nil || !os.SameFile(current, preserved) {
+			return false, errors.Join(errors.New("second output replacement was not preserved"), err)
+		}
 	}
 	restored, err := output.root.Lstat(name)
 	if err != nil {
@@ -137,6 +258,9 @@ func removeOutputEntryIfSame(output *boundOutputRoot, name string, expected os.F
 	}
 	if !os.SameFile(moved, restored) {
 		return false, errors.New("output replacement identity changed during restoration")
+	}
+	if output.removalUnknown {
+		return false, errors.New("second output replacement preserved in private quarantine")
 	}
 	return false, nil
 }

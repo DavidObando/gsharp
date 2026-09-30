@@ -58,7 +58,8 @@ ancestor cannot redirect them. Open artifact handles and content hashes remain
 bound through lock release; ownership loss invalidates only that invocation's
 outputs. Unix uses atomic no-replace moves into a private descriptor-bound
 quarantine; Windows targets held non-reparse NT handles. If either identity-
-bound operation is unavailable, publication fails without changing the name.
+If concurrent Unix occupants cannot all be restored to their prior names, they
+are preserved for inspection and later invocations fail closed.
 
 The selected native `cmd/go` is captured into a parent bootstrap capsule only
 for handoff. Linux first validates the captured bytes as a supported static ELF
