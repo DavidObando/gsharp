@@ -302,25 +302,54 @@ func decodeAnalysis(data []byte) (Analysis, error) {
 	return analysis, nil
 }
 
+var workerArtifactReadTestHook func(string)
+var publicationBoundaryTestHook func(string)
+var artifactEncodingTestHook func(string)
+
 func readWorkerArtifacts(root string, maxBytes int64) ([]byte, []byte, Analysis, error) {
-	analysisBytes, err := readBoundedRegularFile(filepath.Join(root, "analysis.json"), maxBytes)
+	return readWorkerArtifactsContext(context.Background(), root, maxBytes)
+}
+
+func readWorkerArtifactsContext(ctx context.Context, root string, maxBytes int64) ([]byte, []byte, Analysis, error) {
+	if workerArtifactReadTestHook != nil {
+		workerArtifactReadTestHook("analysis-read")
+	}
+	analysisBytes, err := readBoundedRegularFileContext(ctx, filepath.Join(root, "analysis.json"), maxBytes)
 	if err != nil {
 		return nil, nil, Analysis{}, fmt.Errorf("read analysis worker result: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, Analysis{}, err
 	}
 	analysis, err := decodeAnalysis(analysisBytes)
 	if err != nil {
 		return nil, nil, Analysis{}, fmt.Errorf("validate analysis worker result: %w", err)
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, Analysis{}, err
+	}
 	if err := validateAnalysis(analysis); err != nil {
 		return nil, nil, Analysis{}, fmt.Errorf("validate analysis worker result: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, Analysis{}, err
 	}
 	canonicalAnalysis, err := marshalCanonical(analysis)
 	if err != nil || !bytes.Equal(canonicalAnalysis, analysisBytes) {
 		return nil, nil, Analysis{}, errors.New("analysis worker result is not canonical schema v1 JSON")
 	}
-	runBytes, err := readBoundedRegularFile(filepath.Join(root, "run.json"), maxBytes)
+	if workerArtifactReadTestHook != nil {
+		workerArtifactReadTestHook("run-read")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, Analysis{}, err
+	}
+	runBytes, err := readBoundedRegularFileContext(ctx, filepath.Join(root, "run.json"), maxBytes)
 	if err != nil {
 		return nil, nil, Analysis{}, fmt.Errorf("read analysis worker metadata: %w", err)
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, Analysis{}, err
 	}
 	var run RunMetadata
 	decoder := json.NewDecoder(bytes.NewReader(runBytes))
@@ -340,11 +369,24 @@ func readWorkerArtifacts(root string, maxBytes int64) ([]byte, []byte, Analysis,
 	if err != nil || !bytes.Equal(canonicalRun, runBytes) {
 		return nil, nil, Analysis{}, errors.New("analysis worker metadata is not canonical JSON")
 	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, Analysis{}, err
+	}
 	return analysisBytes, runBytes, analysis, nil
 }
 
 func publishWorkerArtifacts(out *boundOutputRoot, analysisBytes, runBytes []byte, beforeRun func()) error {
+	return publishWorkerArtifactsContext(context.Background(), out, analysisBytes, runBytes, beforeRun)
+}
+
+func publishWorkerArtifactsContext(ctx context.Context, out *boundOutputRoot, analysisBytes, runBytes []byte, beforeRun func()) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	if err := out.verifyLock(); err != nil {
+		return err
+	}
+	if err := ctx.Err(); err != nil {
 		return err
 	}
 	if err := atomicWriteRoot(out, "analysis.json", analysisBytes, 0o644, nil, nil); err != nil {
@@ -356,6 +398,10 @@ func publishWorkerArtifacts(out *boundOutputRoot, analysisBytes, runBytes []byte
 	}
 	if beforeRun != nil {
 		beforeRun()
+	}
+	if err := ctx.Err(); err != nil {
+		_, cleanupErr := removeRootEntryIfSame(out.root, "analysis.json", analysisInfo)
+		return errors.Join(err, cleanupErr)
 	}
 	if err := out.verifyLock(); err != nil {
 		_, cleanupErr := removeRootEntryIfSame(out.root, "analysis.json", analysisInfo)
@@ -378,6 +424,11 @@ func publishWorkerArtifacts(out *boundOutputRoot, analysisBytes, runBytes []byte
 		_, runCleanupErr := removeRootEntryIfSame(out.root, "run.json", runInfo)
 		return errors.Join(err, analysisCleanupErr, runCleanupErr)
 	}
+	if err := ctx.Err(); err != nil {
+		_, analysisCleanupErr := removeRootEntryIfSame(out.root, "analysis.json", analysisInfo)
+		_, runCleanupErr := removeRootEntryIfSame(out.root, "run.json", runInfo)
+		return errors.Join(err, analysisCleanupErr, runCleanupErr)
+	}
 	for _, published := range []struct {
 		name string
 		info os.FileInfo
@@ -395,15 +446,39 @@ func publishWorkerArtifacts(out *boundOutputRoot, analysisBytes, runBytes []byte
 			)
 		}
 	}
+	if err := ctx.Err(); err != nil {
+		_, analysisCleanupErr := removeRootEntryIfSame(out.root, "analysis.json", analysisInfo)
+		_, runCleanupErr := removeRootEntryIfSame(out.root, "run.json", runInfo)
+		return errors.Join(err, analysisCleanupErr, runCleanupErr)
+	}
 	return nil
 }
 
 func encodeAnalysisArtifacts(analysis Analysis, run RunMetadata, maxBytes int64) ([]byte, []byte, error) {
+	return encodeAnalysisArtifactsContext(context.Background(), analysis, run, maxBytes)
+}
+
+func encodeAnalysisArtifactsContext(ctx context.Context, analysis Analysis, run RunMetadata, maxBytes int64) ([]byte, []byte, error) {
+	if artifactEncodingTestHook != nil {
+		artifactEncodingTestHook("start")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	if err := validateAnalysis(analysis); err != nil {
 		return nil, nil, fmt.Errorf("internal schema validation failed: %w", err)
 	}
+	if artifactEncodingTestHook != nil {
+		artifactEncodingTestHook("analysis")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, nil, err
+	}
 	analysisBytes, err := marshalCanonical(analysis)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	if int64(len(analysisBytes)) > maxBytes {
@@ -412,14 +487,39 @@ func encodeAnalysisArtifacts(analysis Analysis, run RunMetadata, maxBytes int64)
 	run.AnalysisBytes = int64(len(analysisBytes))
 	run.PackageCount = len(analysis.Packages)
 	run.RecordCount = analysis.RecordCounts.Total
+	if artifactEncodingTestHook != nil {
+		artifactEncodingTestHook("run")
+	}
 	runBytes, err := marshalCanonical(run)
 	if err != nil {
+		return nil, nil, err
+	}
+	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
 	if int64(len(runBytes)) > maxBytes {
 		return nil, nil, fmt.Errorf("output %d bytes exceeds limit %d", len(runBytes), maxBytes)
 	}
 	return analysisBytes, runBytes, nil
+}
+
+func checkPublicationContext(ctx context.Context, stage string) error {
+	if publicationBoundaryTestHook != nil {
+		publicationBoundaryTestHook(stage)
+	}
+	return ctx.Err()
+}
+
+func publishWorkerArtifactsAtBoundary(
+	ctx context.Context,
+	stage string,
+	out *boundOutputRoot,
+	analysisBytes, runBytes []byte,
+) error {
+	if err := checkPublicationContext(ctx, stage); err != nil {
+		return err
+	}
+	return publishWorkerArtifactsContext(ctx, out, analysisBytes, runBytes, nil)
 }
 
 type ownedTempDir struct {

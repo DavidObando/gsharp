@@ -851,6 +851,12 @@ func TestPkgConfigFallbackReadsOnlyImportCPreamble(t *testing.T) {
 		{"ordinary-comment", "package p\nimport \"C\"\n// #cgo pkg-config: ordinary\nvar _ = 1\n", false},
 		{"detached-comment", "package p\n// #cgo pkg-config: detached\n\nimport \"C\"\n", false},
 		{"other-import", "package p\n// #cgo pkg-config: other\nimport _ \"fmt\"\nimport \"C\"\n", false},
+		{"group-declaration-comment", "package p\n// #cgo pkg-config: unrelated\nimport (\n\"C\"\n_ \"fmt\"\n)\n", false},
+		{"group-declaration-block-comment", "package p\n/* #cgo pkg-config: unrelated */\nimport (\n\"C\"\n_ \"fmt\"\n)\n", false},
+		{"group-spec-comment", "package p\nimport (\n// #cgo pkg-config: grouped\n\"C\"\n_ \"fmt\"\n)\n", true},
+		{"group-spec-tab-comment", "package p\nimport (\n// #cgo\tpkg-config: grouped\n\"C\"\n_ \"fmt\"\n)\n", true},
+		{"group-spec-block-comment", "package p\nimport (\n/* #cgo pkg-config: grouped */\n\"C\"\n_ \"fmt\"\n)\n", true},
+		{"spec-doc-precedes-declaration-doc", "package p\n// #cgo pkg-config: declaration\nimport (\n// ordinary C preamble\n\"C\"\n)\n", false},
 		{"line-preamble", "package p\n// #cgo pkg-config: line\nimport \"C\"\n", true},
 		{"tab-preamble", "package p\n// #cgo\tpkg-config: tab\nimport \"C\"\n", true},
 		{"block-preamble", "package p\n/*\n#cgo pkg-config: block\n*/\nimport \"C\"\n", true},
@@ -5435,12 +5441,174 @@ func TestAnalyzeDeadlineCoversExecutableCapture(t *testing.T) {
 	if err == nil || !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("deadline did not stop executable capture: %v", err)
 	}
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("deadline returned public exit %#v, want 2", exitErr)
+	}
 	if time.Since(started) > 3*time.Second {
 		t.Fatal("deadline-bound capture returned too slowly")
 	}
 	for _, name := range []string{"analysis.json", "run.json"} {
 		if _, statErr := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(statErr) {
 			t.Fatalf("timed-out analysis retained %s: %v", name, statErr)
+		}
+	}
+}
+
+func TestAnalyzeCancellationCoversPostLoadVerification(t *testing.T) {
+	for _, phase := range []string{
+		"capsule-verify",
+		"typed-source-capture",
+		"typed-source-verify",
+		"package-input-verify",
+		"original-input-verify",
+		"manifest-verify",
+	} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			postLoadContextTestHook = func(actual string) {
+				if actual == phase {
+					cancel()
+				}
+			}
+			t.Cleanup(func() { postLoadContextTestHook = nil })
+			_, _, err := analyze(ctx, copyFixture(t, "complete"), t.TempDir(), testProfile())
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancellation at %s returned %v", phase, err)
+			}
+		})
+	}
+}
+
+func TestAnalyzePreloadCancellationBeforeEncodingOrPublication(t *testing.T) {
+	if publicAnalysisBindingSupported() == nil {
+		t.Skip("preload publication is used only when secure public execution binding is unavailable")
+	}
+	for _, phase := range []string{"encoding", "publication"} {
+		t.Run(phase, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(t.Context())
+			t.Cleanup(cancel)
+			profile := testProfile()
+			profile.RequestedGoVersion = "1.26.6"
+			if profile.RequestedGoVersion == strings.TrimPrefix(runtime.Version(), "go") {
+				profile.RequestedGoVersion = "1.26.7"
+			}
+			switch phase {
+			case "encoding":
+				artifactEncodingTestHook = func(stage string) {
+					if stage == "start" {
+						cancel()
+					}
+				}
+				t.Cleanup(func() { artifactEncodingTestHook = nil })
+			case "publication":
+				publicationBoundaryTestHook = func(stage string) {
+					if stage == "preload" {
+						cancel()
+					}
+				}
+				t.Cleanup(func() { publicationBoundaryTestHook = nil })
+			}
+			out := t.TempDir()
+			err := runAnalyze(ctx, []string{
+				"--source", copyFixture(t, "complete"),
+				"--profile", writeTestProfile(t, profile),
+				"--out", out,
+			})
+			var exitErr *exitError
+			if !errors.As(err, &exitErr) || exitErr.code != 2 || !errors.Is(err, context.Canceled) {
+				t.Fatalf("%s cancellation returned %v", phase, err)
+			}
+			for _, name := range []string{"analysis.json", "run.json"} {
+				if _, statErr := os.Lstat(filepath.Join(out, name)); !os.IsNotExist(statErr) {
+					t.Fatalf("%s cancellation retained %s: %v", phase, name, statErr)
+				}
+			}
+		})
+	}
+}
+
+func TestWorkerArtifactReadStopsOnCancellation(t *testing.T) {
+	root := t.TempDir()
+	analysis := validIncompleteAnalysis()
+	run := RunMetadata{SchemaVersion: schemaVersion}
+	analysisBytes, runBytes, err := encodeAnalysisArtifacts(analysis, run, 1<<20)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "analysis.json"), analysisBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "run.json"), runBytes, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	workerArtifactReadTestHook = func(stage string) {
+		if stage == "analysis-read" {
+			cancel()
+		}
+	}
+	t.Cleanup(func() { workerArtifactReadTestHook = nil })
+	if _, _, _, err := readWorkerArtifactsContext(ctx, root, 1<<20); !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled worker artifact read returned %v", err)
+	}
+}
+
+func TestPublicationBoundariesRejectCancellationWithoutArtifacts(t *testing.T) {
+	for _, stage := range []string{"preload", "worker", "parent"} {
+		t.Run(stage, func(t *testing.T) {
+			root := t.TempDir()
+			output, err := lockAndInvalidateOutput(root)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() {
+				if err := output.release(); err != nil {
+					t.Error(err)
+				}
+			})
+			ctx, cancel := context.WithCancel(t.Context())
+			publicationBoundaryTestHook = func(actual string) {
+				if actual == stage {
+					cancel()
+				}
+			}
+			t.Cleanup(func() { publicationBoundaryTestHook = nil })
+			err = publishWorkerArtifactsAtBoundary(
+				ctx, stage, output, []byte("analysis"), []byte("run"))
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("cancelled %s publication returned %v", stage, err)
+			}
+			for _, name := range []string{"analysis.json", "run.json"} {
+				if _, statErr := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(statErr) {
+					t.Fatalf("cancelled %s publication retained %s: %v", stage, name, statErr)
+				}
+			}
+		})
+	}
+}
+
+func TestPublicationCancellationCleansPartialPair(t *testing.T) {
+	root := t.TempDir()
+	output, err := lockAndInvalidateOutput(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := output.release(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx, cancel := context.WithCancel(t.Context())
+	err = publishWorkerArtifactsContext(
+		ctx, output, []byte("analysis"), []byte("run"), cancel)
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("mid-publication cancellation returned %v", err)
+	}
+	for _, name := range []string{"analysis.json", "run.json"} {
+		if _, statErr := os.Lstat(filepath.Join(root, name)); !os.IsNotExist(statErr) {
+			t.Fatalf("mid-publication cancellation retained %s: %v", name, statErr)
 		}
 	}
 }
