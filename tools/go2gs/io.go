@@ -72,6 +72,9 @@ func readProfile(path string) (Profile, error) {
 	if err := validateProfileSemanticAuthority(profile); err != nil {
 		return profile, err
 	}
+	if err := validateGoTarget(profile.GOOS, profile.GOARCH); err != nil {
+		return profile, err
+	}
 	if _, err := resolveArchitectureSettings(profile.GOARCH, profile.ArchitectureFeatures); err != nil {
 		return profile, err
 	}

@@ -25,6 +25,7 @@ import (
 )
 
 var overlayDiagnosticPath = regexp.MustCompile(`[^\s\n]*gocommand-[0-9]+[/\\][0-9]+-([^:\s\n]+)`)
+var inventorySyntaxNodeTestHook func()
 
 type inventoryBuilder struct {
 	analysis              *Analysis
@@ -56,6 +57,9 @@ type inventoryBuilder struct {
 	memberIdentity        map[types.Object]string
 	skipSemantics         map[*packages.Package]bool
 	positionMaps          map[string]*sourcePositionMap
+	maxRecords            int
+	records               int
+	err                   error
 }
 
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
@@ -72,6 +76,7 @@ func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile 
 		selectedSnapshotFiles: map[string][]string{}, snapshotPortable: map[string]string{},
 		snapshotRoles: map[string]map[string]string{}, memberIdentity: map[types.Object]string{},
 		skipSemantics: map[*packages.Package]bool{}, positionMaps: map[string]*sourcePositionMap{},
+		maxRecords: profile.Limits.MaxRecords, records: analysisRecordCount(analysis),
 	}
 }
 
@@ -82,6 +87,33 @@ type objectRef struct {
 
 func (b *inventoryBuilder) collectManifests(records []ManifestRecord) {
 	b.analysis.Manifests = append(b.analysis.Manifests, records...)
+}
+
+func appendInventoryRecord[T any](b *inventoryBuilder, records *[]T, record T) bool {
+	if !b.recordAvailable() {
+		return false
+	}
+	*records = append(*records, record)
+	b.records++
+	return true
+}
+
+func (b *inventoryBuilder) recordAvailable() bool {
+	if b.err != nil {
+		return false
+	}
+	if b.records >= b.maxRecords {
+		b.err = fmt.Errorf("record count exceeds limit %d", b.maxRecords)
+		return false
+	}
+	return true
+}
+
+func analysisRecordCount(a *Analysis) int {
+	return len(a.Modules) + len(a.Packages) + len(a.Files) + len(a.Types) + len(a.Symbols) + len(a.Nodes) +
+		len(a.Constants) + len(a.Scopes) + len(a.Selections) + len(a.Calls) + len(a.MethodSets) +
+		len(a.Instances) + len(a.Embeds) + len(a.GenerateDirectives) + len(a.Dependencies) +
+		len(a.FeatureSites) + len(a.Diagnostics) + len(a.Blockers)
 }
 
 func (b *inventoryBuilder) indexPackages(packages []*packages.Package) {
@@ -135,9 +167,11 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 			disposition = "dependency-unclassified"
 		}
 		depID := stableID("dependency", pkgID+"\x00"+path)
-		b.analysis.Dependencies = append(b.analysis.Dependencies, DependencyRecord{
+		if !appendInventoryRecord(b, &b.analysis.Dependencies, DependencyRecord{
 			ID: depID, FromPackageID: pkgID, ImportPath: path, PackageID: importedID, Disposition: disposition,
-		})
+		}) {
+			return b.err
+		}
 	}
 
 	for _, pkgErr := range pkg.Errors {
@@ -148,7 +182,9 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 			ID: id, Category: packageErrorCategory(pkgErr.Kind), Severity: "error",
 			Message: message, Position: position, PackageID: pkgID, Truncated: truncated,
 		}
-		b.analysis.Diagnostics = append(b.analysis.Diagnostics, diagnostic)
+		if !appendInventoryRecord(b, &b.analysis.Diagnostics, diagnostic) {
+			return b.err
+		}
 		record.DiagnosticIDs = append(record.DiagnosticIDs, id)
 		record.InventoryComplete = false
 	}
@@ -167,8 +203,10 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 		b.addInitialization(pkg, &record)
 	}
 	sort.Strings(record.DiagnosticIDs)
-	b.analysis.Packages = append(b.analysis.Packages, record)
-	return nil
+	if !appendInventoryRecord(b, &b.analysis.Packages, record) {
+		return b.err
+	}
+	return b.err
 }
 
 func (b *inventoryBuilder) sanitizeDiagnosticMessage(pkg *packages.Package, message string) string {
@@ -271,6 +309,9 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		b.skipSemantics[pkg] = true
 	}
 	for _, path := range all {
+		if b.err != nil {
+			return b.err
+		}
 		if _, captured := b.sourceSnapshot[path]; !captured {
 			if unmappedCgo {
 				continue
@@ -341,7 +382,13 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 	}
 
 	b.addScopes(pkg)
+	if b.err != nil {
+		return b.err
+	}
 	for index, file := range pkg.Syntax {
+		if b.err != nil {
+			return b.err
+		}
 		if index >= len(syntaxPaths) {
 			break
 		}
@@ -355,9 +402,21 @@ func (b *inventoryBuilder) addSourcePackage(pkg *packages.Package, record *Packa
 		b.addSyntax(pkg, fileID, file)
 	}
 	b.addSelections(pkg)
+	if b.err != nil {
+		return b.err
+	}
 	b.addInstances(pkg)
+	if b.err != nil {
+		return b.err
+	}
 	b.addMethodSets(pkg)
+	if b.err != nil {
+		return b.err
+	}
 	b.addEmbeds(pkg)
+	if b.err != nil {
+		return b.err
+	}
 	sort.Strings(record.FileIDs)
 	sort.Strings(record.ImportPackageIDs)
 	return nil
@@ -788,7 +847,9 @@ func (b *inventoryBuilder) addFile(pkg *packages.Package, path, role, reason str
 		ContentBase64: base64.StdEncoding.EncodeToString(data), ValidUTF8: utf8.Valid(data),
 		Native: role == "native", Embed: role == "embed", Provenance: "go/packages",
 	}
-	b.analysis.Files = append(b.analysis.Files, record)
+	if !appendInventoryRecord(b, &b.analysis.Files, record) {
+		return "", b.err
+	}
 	b.fileIDs[key] = id
 	b.seenFiles[id] = true
 	return id, nil
@@ -840,28 +901,34 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 	pkgID := b.packageIDs[pkg]
 	var parents []string
 	nodeParents := map[ast.Node]ast.Node{}
-	arrayLengths := map[ast.Expr]bool{}
 	var astParents []ast.Node
-	ast.Inspect(file, func(node ast.Node) bool {
-		if node == nil {
-			astParents = astParents[:len(astParents)-1]
-			return true
-		}
-		if len(astParents) > 0 {
-			nodeParents[node] = astParents[len(astParents)-1]
-		}
-		astParents = append(astParents, node)
-		if array, ok := node.(*ast.ArrayType); ok && array.Len != nil {
-			arrayLengths[array.Len] = true
-		}
-		return true
-	})
 	constants := declaredConstants(file)
+	stop := new(int)
+	defer func() {
+		if recovered := recover(); recovered != nil && recovered != stop {
+			panic(recovered)
+		}
+	}()
 	ast.Inspect(file, func(node ast.Node) bool {
 		if node == nil {
 			parents = parents[:len(parents)-1]
+			exited := astParents[len(astParents)-1]
+			delete(nodeParents, exited)
+			astParents = astParents[:len(astParents)-1]
 			return true
 		}
+		if b.err != nil {
+			panic(stop)
+		}
+		if inventorySyntaxNodeTestHook != nil {
+			inventorySyntaxNodeTestHook()
+		}
+		var parent ast.Node
+		if len(astParents) > 0 {
+			parent = astParents[len(astParents)-1]
+			nodeParents[node] = parent
+		}
+		astParents = append(astParents, node)
 		span := b.span(pkg, node.Pos(), node.End())
 		nodeID := syntaxNodeID(pkgID, fileID, node, span)
 		record := NodeRecord{ID: nodeID, PackageID: pkgID, FileID: fileID, Kind: fmt.Sprintf("%T", node), Span: span}
@@ -884,7 +951,11 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 				record.IsNil = tv.IsNil()
 				record.IsBuiltin = tv.IsBuiltin()
 				if tv.Value != nil {
-					b.addConstant(pkg, nodeID, expression, tv, conversion, span, arrayLengths[expression])
+					arrayLength := false
+					if array, ok := parent.(*ast.ArrayType); ok {
+						arrayLength = array.Len == expression
+					}
+					b.addConstant(pkg, nodeID, expression, tv, conversion, span, arrayLength)
 				}
 			}
 			if call, ok := expression.(*ast.CallExpr); ok {
@@ -910,8 +981,13 @@ func (b *inventoryBuilder) addSyntax(pkg *packages.Package, fileID string, file 
 				}
 			}
 		}
-		b.analysis.Nodes = append(b.analysis.Nodes, record)
+		if !appendInventoryRecord(b, &b.analysis.Nodes, record) {
+			panic(stop)
+		}
 		b.addFeatureSites(pkg, pkgID, fileID, node, nodeID, span)
+		if b.err != nil {
+			panic(stop)
+		}
 		return true
 	})
 }
@@ -1185,7 +1261,7 @@ func (b *inventoryBuilder) addConstant(pkg *packages.Package, nodeID string, exp
 		record.Iota = true
 	}
 	record.ArrayLength = arrayLength
-	b.analysis.Constants = append(b.analysis.Constants, record)
+	appendInventoryRecord(b, &b.analysis.Constants, record)
 }
 
 func (b *inventoryBuilder) addDeclaredConstant(pkg *packages.Package, nodeID, symbolID string, value *types.Const, span SourceSpan, iota bool) {
@@ -1202,7 +1278,7 @@ func (b *inventoryBuilder) addDeclaredConstant(pkg *packages.Package, nodeID, sy
 		record.RealExact = constant.Real(value.Val()).ExactString()
 		record.ImaginaryExact = constant.Imag(value.Val()).ExactString()
 	}
-	b.analysis.Constants = append(b.analysis.Constants, record)
+	appendInventoryRecord(b, &b.analysis.Constants, record)
 }
 
 func (b *inventoryBuilder) addCall(pkg *packages.Package, nodeID string, call *ast.CallExpr) {
@@ -1227,7 +1303,7 @@ func (b *inventoryBuilder) addCall(pkg *packages.Package, nodeID string, call *a
 	for _, argument := range call.Args {
 		record.ArgumentTypeIDs = append(record.ArgumentTypeIDs, b.addType(pkg, pkg.TypesInfo.TypeOf(argument)))
 	}
-	b.analysis.Calls = append(b.analysis.Calls, record)
+	appendInventoryRecord(b, &b.analysis.Calls, record)
 }
 
 func (b *inventoryBuilder) addFeatureSites(pkg *packages.Package, pkgID, fileID string, node ast.Node, nodeID string, span SourceSpan) {
@@ -1308,10 +1384,12 @@ func (b *inventoryBuilder) addFeatureSites(pkg *packages.Package, pkgID, fileID 
 			disposition = "m1-prerequisite"
 			b.migrationBlock(blocker, "M1 requires an approved lowering/runtime design for "+feature, []string{pkgID})
 		}
-		b.analysis.FeatureSites = append(b.analysis.FeatureSites, FeatureSite{
+		if !appendInventoryRecord(b, &b.analysis.FeatureSites, FeatureSite{
 			ID: stableID("feature", nodeID+"\x00"+feature), NodeID: nodeID, PackageID: pkgID, FileID: fileID,
 			Feature: feature, Disposition: disposition, Span: span,
-		})
+		}) {
+			return
+		}
 	}
 }
 
@@ -1357,7 +1435,9 @@ func (b *inventoryBuilder) addScopes(pkg *packages.Package) {
 				record.Labels = append(record.Labels, symbolID)
 			}
 		}
-		b.analysis.Scopes = append(b.analysis.Scopes, record)
+		if !appendInventoryRecord(b, &b.analysis.Scopes, record) {
+			return
+		}
 	}
 	type labelEntry struct {
 		ident  *ast.Ident
@@ -1591,12 +1671,14 @@ func (b *inventoryBuilder) addSelections(pkg *packages.Package) {
 		nodeID := stableID("node", b.packageIDs[pkg]+"\x00"+b.fileIDForPosition(pkg, item.expr.Pos())+"\x00"+fmt.Sprintf("%d:%d:%T", span.StartByte, span.EndByte, item.expr))
 		index := append([]int{}, item.selection.Index()...)
 		objectID := b.addObjectWithFallback(pkg, item.selection.Obj(), SourceSpan{}, selectionObjectIdentity(item.selection))
-		b.analysis.Selections = append(b.analysis.Selections, SelectionRecord{
+		if !appendInventoryRecord(b, &b.analysis.Selections, SelectionRecord{
 			ID: stableID("selection", nodeID), NodeID: nodeID, Kind: selectionKind(item.selection.Kind()),
 			ObjectID:       objectID,
 			ReceiverTypeID: b.addType(pkg, item.selection.Recv()), TypeID: b.addType(pkg, item.selection.Type()),
 			IndexPath: index, Indirect: item.selection.Indirect(),
-		})
+		}) {
+			return
+		}
 	}
 }
 
@@ -1617,7 +1699,9 @@ func (b *inventoryBuilder) addInstances(pkg *packages.Package) {
 		for i := 0; i < item.instance.TypeArgs.Len(); i++ {
 			record.TypeArgIDs = append(record.TypeArgIDs, b.addType(pkg, item.instance.TypeArgs.At(i)))
 		}
-		b.analysis.Instances = append(b.analysis.Instances, record)
+		if !appendInventoryRecord(b, &b.analysis.Instances, record) {
+			return
+		}
 	}
 }
 
@@ -1648,7 +1732,9 @@ func (b *inventoryBuilder) addMethodSets(pkg *packages.Package) {
 				fallback := "method-set\x00" + typeID + "\x00" + method.Name()
 				record.MethodSymbolIDs = append(record.MethodSymbolIDs, b.addObjectWithFallback(pkg, method, SourceSpan{}, fallback))
 			}
-			b.analysis.MethodSets = append(b.analysis.MethodSets, record)
+			if !appendInventoryRecord(b, &b.analysis.MethodSets, record) {
+				return
+			}
 		}
 	}
 }
@@ -1681,11 +1767,13 @@ func (b *inventoryBuilder) addEmbeds(pkg *packages.Package) {
 					break
 				}
 			}
-			b.analysis.Embeds = append(b.analysis.Embeds, EmbedRecord{
+			if !appendInventoryRecord(b, &b.analysis.Embeds, EmbedRecord{
 				ID:        stableID("embed", b.packageIDs[pkg]+"\x00"+pattern+"\x00"+logical),
 				PackageID: b.packageIDs[pkg], FileID: fileID, Pattern: pattern,
 				LogicalName: logical, ContentSHA256: hash,
-			})
+			}) {
+				return
+			}
 		}
 	}
 }
@@ -1749,10 +1837,12 @@ func (b *inventoryBuilder) addGenerateDirectives(pkg *packages.Package, fileID s
 				continue
 			}
 			span := b.span(pkg, comment.Pos(), comment.End())
-			b.analysis.GenerateDirectives = append(b.analysis.GenerateDirectives, GenerateRecord{
+			if !appendInventoryRecord(b, &b.analysis.GenerateDirectives, GenerateRecord{
 				ID:     stableID("generate", fileID+"\x00"+fmt.Sprintf("%d", span.StartByte)),
 				FileID: fileID, Directive: boundedDirective(strings.TrimPrefix(text, "go:generate "), b.profile.Limits.MaxStringBytes), Executed: false, Span: span,
-			})
+			}) {
+				return
+			}
 		}
 	}
 }
@@ -1775,6 +1865,9 @@ func (b *inventoryBuilder) addType(pkg *packages.Package, t types.Type) string {
 	b.typeIDs[t] = id
 	if b.seenTypes[id] {
 		return id
+	}
+	if !b.recordAvailable() {
+		return ""
 	}
 	b.seenTypes[id] = true
 	pkgPath, name, alias, named, args, underlying := typeDetails(t)
@@ -1802,7 +1895,7 @@ func (b *inventoryBuilder) addType(pkg *packages.Package, t types.Type) string {
 	if pkg.TypesSizes != nil {
 		record.Size, record.Align = safeSize(pkg.TypesSizes, t)
 	}
-	b.analysis.Types = append(b.analysis.Types, record)
+	appendInventoryRecord(b, &b.analysis.Types, record)
 	return id
 }
 
@@ -1897,7 +1990,7 @@ func (b *inventoryBuilder) addObjectWithFallback(pkg *packages.Package, object t
 	if declaration.Path != "" {
 		record.Declaration = &declaration
 	}
-	b.analysis.Symbols = append(b.analysis.Symbols, record)
+	appendInventoryRecord(b, &b.analysis.Symbols, record)
 	return id
 }
 
@@ -1995,8 +2088,10 @@ func (b *inventoryBuilder) addModule(module *packages.Module) (string, error) {
 	if b.profile.VendorMode {
 		record.VendorProvenance = "source://vendor/modules.txt"
 	}
-	b.analysis.Modules = append(b.analysis.Modules, record)
-	return id, nil
+	if !appendInventoryRecord(b, &b.analysis.Modules, record) {
+		return "", b.err
+	}
+	return id, b.err
 }
 
 func (b *inventoryBuilder) addLocalReplacement(logicalPath string, replacement *packages.Module) (string, error) {
@@ -2010,10 +2105,12 @@ func (b *inventoryBuilder) addLocalReplacement(logicalPath string, replacement *
 		return id, nil
 	}
 	b.seenModules[id] = true
-	b.analysis.Modules = append(b.analysis.Modules, ModuleRecord{
+	if !appendInventoryRecord(b, &b.analysis.Modules, ModuleRecord{
 		ID: id, Path: logicalPath, GoVersion: replacement.GoVersion, LocalContentSHA256: hash,
-	})
-	return id, nil
+	}) {
+		return "", b.err
+	}
+	return id, b.err
 }
 
 func hashTree(root string, maxBytes int64) (string, error) {
@@ -2154,7 +2251,7 @@ func (b *inventoryBuilder) addObjectForPackageID(pkgID string, object types.Obje
 	b.objectIDs[key] = id
 	if !b.seenSymbols[id] {
 		b.seenSymbols[id] = true
-		b.analysis.Symbols = append(b.analysis.Symbols, SymbolRecord{
+		appendInventoryRecord(b, &b.analysis.Symbols, SymbolRecord{
 			ID: id, PackageID: pkgID, Name: object.Name(), Kind: objectKind(object),
 			TypeID: b.addTypeForUnknown(object.Type()), Exported: object.Exported(),
 		})
@@ -2176,7 +2273,7 @@ func (b *inventoryBuilder) addTypeForUnknown(t types.Type) string {
 	if !b.seenTypes[id] {
 		b.seenTypes[id] = true
 		pkgPath, name, alias, named, _, underlying := typeDetails(t)
-		b.analysis.Types = append(b.analysis.Types, TypeRecord{
+		appendInventoryRecord(b, &b.analysis.Types, TypeRecord{
 			ID: id, Kind: typeKind(t), Canonical: canonical, Display: display,
 			Package: pkgPath, Name: name, Alias: alias, Named: named,
 			Underlying: underlying, Comparable: types.Comparable(t), Size: -1, Align: -1,
@@ -2208,17 +2305,13 @@ func (b *inventoryBuilder) addBlocker(blocks, category, message string, units, d
 			return
 		}
 	}
-	b.analysis.Blockers = append(b.analysis.Blockers, BlockerRecord{
+	appendInventoryRecord(b, &b.analysis.Blockers, BlockerRecord{
 		ID: id, Blocks: blocks, Category: category, Message: message, AffectedUnits: units, DiagnosticIDs: diagnostics,
 	})
 }
 
 func (b *inventoryBuilder) recordCount() int {
-	a := b.analysis
-	return len(a.Modules) + len(a.Packages) + len(a.Files) + len(a.Types) + len(a.Symbols) + len(a.Nodes) +
-		len(a.Constants) + len(a.Scopes) + len(a.Selections) + len(a.Calls) + len(a.MethodSets) +
-		len(a.Instances) + len(a.Embeds) + len(a.GenerateDirectives) + len(a.Dependencies) +
-		len(a.FeatureSites) + len(a.Diagnostics) + len(a.Blockers)
+	return analysisRecordCount(b.analysis)
 }
 
 func (b *inventoryBuilder) finish() {
