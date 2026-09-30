@@ -251,6 +251,14 @@ internal sealed partial class StatementBinder
 
     private void UpdateExternalCallableAliases(BoundStatement statement)
     {
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
         var directAssignment = (statement as BoundExpressionStatement)?.Expression
             as BoundAssignmentExpression;
         var assignsExternalCallable = directAssignment != null
@@ -733,23 +741,22 @@ internal sealed partial class StatementBinder
 
         foreach (var path in targetNarrowings.Keys)
         {
+            var targetFrameIndex = -1;
             for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
             {
                 var frame = binderCtx.NarrowedVariables[i];
-                if (!frame.ContainsKey(path))
+                if (frame.ContainsKey(path) && targetFrameIndex < 0)
                 {
-                    continue;
+                    targetFrameIndex = i;
                 }
 
-                if (joinedTypes.TryGetValue(path, out var joinedType))
-                {
-                    frame[path] = joinedType;
-                    break;
-                }
-                else
-                {
-                    frame.Remove(path);
-                }
+                frame.Remove(path);
+            }
+
+            if (targetFrameIndex >= 0
+                && joinedTypes.TryGetValue(path, out var joinedType))
+            {
+                binderCtx.NarrowedVariables[targetFrameIndex].Add(path, joinedType);
             }
         }
 

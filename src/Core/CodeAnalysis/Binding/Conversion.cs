@@ -2318,7 +2318,11 @@ public sealed class Conversion
             return true;
         }
 
-        if (!IsReferenceLikeTarget(source)
+        if (!conversion.Exists
+            || !conversion.IsImplicit
+            || conversion.IsStructuralProjection
+            || conversion.RequiresPlatformNilCheck
+            || !IsReferenceLikeTarget(source)
             || !IsReferenceLikeTarget(target))
         {
             return false;

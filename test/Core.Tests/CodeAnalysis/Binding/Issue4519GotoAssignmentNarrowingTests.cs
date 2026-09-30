@@ -4725,6 +4725,77 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void LabeledDirectExternalCallableAssignmentPreservesLocalNarrowing()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(callback (() -> void)) int32 {
+                var x string? = nil
+                x = "safe"
+                let clear = func() { x = nil }
+                var action = clear
+            Assign:
+                action = callback
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return x.Length
+            }
+
+            Console.WriteLine(Run(func() { }))
+            """, "4");
+    }
+
+    [Fact]
+    public void ForwardGoto_WeakeningInnerProofRemovesShadowedOuterProof()
+    {
+        var result = Evaluate("""
+            open class Animal {
+                func Name() string -> "animal"
+            }
+            class Dog : Animal {
+                func Bark() string -> "dog"
+            }
+            class Cat : Animal {
+            }
+
+            func Run(takeJump bool) string {
+                var x Animal = Animal{}
+                if takeJump {
+                    x = Cat{}
+                    goto Joined
+                }
+                x = Dog{}
+                if x is Dog {
+                Joined:
+                    let name = x.Name()
+                }
+                return x.Bark()
+            }
+
+            Run(true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0159");
+        Assert.Equal("Bark()", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void RepresentationPreservingJoinRejectsPlatformCheckedConversion()
+    {
+        Assert.False(GSharp.Core.CodeAnalysis.Binding.Conversion.IsRepresentationPreservingImplicit(
+            GSharp.Core.CodeAnalysis.Symbols.PlatformTypeSymbol.Get(
+                GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.String),
+            GSharp.Core.CodeAnalysis.Symbols.TypeSymbol.String));
+    }
+
+    [Fact]
     public void ImportedCallRecovery_DoesNotRebindInlineOutVariable()
     {
         var result = EmittedOracle.Evaluate(
