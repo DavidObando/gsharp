@@ -1442,6 +1442,19 @@ public sealed partial class CSharpToGSharpTranslator
             return argument.WithNullableAnnotation(annotation);
         }
 
+        private static ITypeSymbol GetEffectiveTupleElementType(
+            INamedTypeSymbol tuple,
+            int index)
+        {
+            IFieldSymbol element = tuple.TupleElements[index];
+            NullableAnnotation annotation =
+                element.NullableAnnotation == NullableAnnotation.Annotated
+                || element.Type.NullableAnnotation == NullableAnnotation.Annotated
+                    ? NullableAnnotation.Annotated
+                    : element.NullableAnnotation;
+            return element.Type.WithNullableAnnotation(annotation);
+        }
+
         private ITypeSymbol GetProjectedDelegateInvocationReturnType(
             ExpressionSyntax expression)
         {

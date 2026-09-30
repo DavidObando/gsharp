@@ -1144,7 +1144,9 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (ExpressionSyntax element in elements)
             {
-                ITypeSymbol projectedElement = element == null
+                ITypeSymbol projectedElement =
+                    literal is not ImplicitArrayCreationExpressionSyntax
+                    || element == null
                     ? null
                     : this.GetManagedReferenceArrayProjectedExpressionType(
                         element);

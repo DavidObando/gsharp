@@ -3755,6 +3755,13 @@ public sealed partial class CSharpToGSharpTranslator
 
             ITypeSymbol projectedCollection =
                 this.GetManagedReferenceArrayProjectedExpressionType(forEach.Expression);
+            if (!TypeContainsRecognizedManagedReferenceConsumer(
+                    projectedCollection,
+                    this.context.Compilation))
+            {
+                return null;
+            }
+
             if (projectedCollection is INamedTypeSymbol projectedNamed)
             {
                 if (forEachInfo.GetEnumeratorMethod is { } getEnumerator
@@ -3772,8 +3779,7 @@ public sealed partial class CSharpToGSharpTranslator
 
             return GetEnumerableElementType(
                     projectedCollection,
-                    forEach.AwaitKeyword.RawKind != 0)
-                ?? forEachInfo.ElementType;
+                    forEach.AwaitKeyword.RawKind != 0);
         }
 
         private ITypeSymbol GetProjectedBindingType(
@@ -3782,6 +3788,13 @@ public sealed partial class CSharpToGSharpTranslator
             Microsoft.CodeAnalysis.CSharp.Conversion conversion)
         {
             if (projectedSource == null || destination == null)
+            {
+                return null;
+            }
+
+            if (!TypeContainsRecognizedManagedReferenceConsumer(
+                    projectedSource,
+                    this.context.Compilation))
             {
                 return null;
             }
@@ -3810,9 +3823,9 @@ public sealed partial class CSharpToGSharpTranslator
                 for (int i = 0; i < sourceTuple.TupleElements.Length; i++)
                 {
                     ITypeSymbol sourceElement =
-                        GetEffectiveTypeArgument(sourceTuple, i);
+                        GetEffectiveTupleElementType(sourceTuple, i);
                     ITypeSymbol destinationElement =
-                        GetEffectiveTypeArgument(destinationTuple, i);
+                        GetEffectiveTupleElementType(destinationTuple, i);
                     ITypeSymbol projectedElement = this.GetProjectedBindingType(
                         sourceElement,
                         destinationElement,
@@ -3821,7 +3834,14 @@ public sealed partial class CSharpToGSharpTranslator
                             destinationElement));
                     if (projectedElement == null)
                     {
-                        return null;
+                        if (TypeContainsRecognizedManagedReferenceConsumer(
+                                sourceElement,
+                                this.context.Compilation))
+                        {
+                            return null;
+                        }
+
+                        projectedElement = destinationElement;
                     }
 
                     arguments.Add(projectedElement);

@@ -156,6 +156,22 @@ public sealed partial class CSharpToGSharpTranslator
                         }
                     }
 
+                    if (recursive.PositionalPatternClause != null
+                        && receiverType is INamedTypeSymbol
+                            { IsTupleType: true } tuple
+                        && recursive.PositionalPatternClause.Subpatterns.Count
+                            == tuple.TupleElements.Length)
+                    {
+                        for (int i = 0;
+                            i < recursive.PositionalPatternClause.Subpatterns.Count;
+                            i++)
+                        {
+                            this.RegisterProjectedNativePatternBindings(
+                                recursive.PositionalPatternClause.Subpatterns[i].Pattern,
+                                GetEffectiveTupleElementType(tuple, i));
+                        }
+                    }
+
                     break;
 
                 case ParenthesizedPatternSyntax parenthesized:

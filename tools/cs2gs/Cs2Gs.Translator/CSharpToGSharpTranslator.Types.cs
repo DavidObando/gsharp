@@ -1632,8 +1632,8 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         this.CollectProjectedForEachVariableBindings(
                             tuple.Arguments[i].Expression,
-                            GetEffectiveTypeArgument(sourceTuple, i),
-                            GetEffectiveTypeArgument(destinationTuple, i),
+                            GetEffectiveTupleElementType(sourceTuple, i),
+                            GetEffectiveTupleElementType(destinationTuple, i),
                             nullableBindings,
                             projectedBindings);
                     }
@@ -1653,6 +1653,7 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 case SingleVariableDesignationSyntax single
                     when this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol:
+                    destination = symbol.Type;
                     ITypeSymbol projectedType = this.GetProjectedBindingType(
                             projectedSource,
                             destination,
@@ -1693,8 +1694,8 @@ public sealed partial class CSharpToGSharpTranslator
                     {
                         this.CollectProjectedForEachVariableBindings(
                             tuple.Variables[i],
-                            GetEffectiveTypeArgument(sourceTuple, i),
-                            GetEffectiveTypeArgument(destinationTuple, i),
+                            GetEffectiveTupleElementType(sourceTuple, i),
+                            GetEffectiveTupleElementType(destinationTuple, i),
                             nullableBindings,
                             projectedBindings);
                     }
