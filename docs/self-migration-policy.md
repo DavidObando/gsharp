@@ -1,7 +1,8 @@
 # Self-migration policy: what to do when the PR translation guard is red
 
 Applies to the C# → G# self-migration effort ([#3501](https://github.com/DavidObando/gsharp/issues/3501)) and to
-the `cs2gs-pr-guard` check (`build/run-cs2gs-selfmig-pr-guard.sh`).
+the PR self-migration gate (`build.yml` jobs `selfmig-scope` / `selfmig`, which call
+`.github/workflows/cs2gs-selfmig.yml`; required check `self-migration gate`).
 
 ## Why the migration exists
 
@@ -108,8 +109,8 @@ assertions to satisfy an incorrectly non-null contract changes the oracle.
 
 ## Related
 
-- `build/run-cs2gs-selfmig-pr-guard.sh` — what the guard covers, and
-  deliberately does not.
+- `.github/workflows/cs2gs-selfmig.yml` — the full self-migration the PR gate and
+  the nightly both run; `build/cs2gs-pr-guard-control.sh` decides which PRs need it.
 - `tools/cs2gs/selfmig-baseline.json` — the ratchet, and the discipline for
   moving its numbers.
 - `tools/cs2gs/selfmig-test-allowlist.json` — the policy register for tests

@@ -57,15 +57,26 @@ instruction, follow the maintainer.
   - `= null!` initializers are rejected (ADR-0155).
   - Where a value really can be null, prefer restructuring over commenting
     the `!` away.
-- **hot-core translation guard** (`build/run-cs2gs-selfmig-pr-guard.sh`)
-  usually takes 30-60 minutes. It migrates a small set of net10 apps built
-  against a fully annotated BCL. So it **cannot** catch regressions that only
-  show up with unannotated or netstandard2.0 dependencies; issue #4361 is an
-  example of one that slipped through.
+- **PR self-migration gate** (`build.yml` jobs `selfmig-scope`, `selfmig`,
+  `selfmig-status`) runs the FULL self-migration on a PR. It is the reusable
+  workflow `.github/workflows/cs2gs-selfmig.yml`, the same one the nightly
+  calls, and it takes hours. It starts only after every test job in
+  `build.yml` has passed, and only when the PR touches an input that can
+  affect the migration (`build/cs2gs-pr-guard-control.sh relevant-paths`).
+  The required check to name in branch protection is `self-migration gate`.
+  - It replaced the old hot-core guard, which migrated only eight apps and so
+    could not catch a regression that depends on the rest of the corpus (issue
+    #4361 slipped through it). Being the full run, it can, but it is red
+    whenever `main`'s own self-migration is red.
+  - A newer push cancels the running gate (concurrency group per PR).
+  - Its jobs appear as `selfmig / migrate`, `selfmig / validate (<shard>)` and
+    `selfmig / gate`.
 - **Nightly self-migration** (`.github/workflows/cs2gs-selfmig-nightly.yml`)
-  is the full-corpus gate, with a floor of all apps green. To verify a fix
-  that affects migration, trigger it manually on `main` after merging:
-  `gh workflow run cs2gs-selfmig-nightly.yml --ref main`.
+  calls that same workflow on a schedule, with a floor of all apps green, and
+  also hosts the ADR-0138 strict-ledger corpus run (`corpus` job, the only job
+  with write permissions; it files issues and opens the ledger PR). To verify
+  a fix that affects migration without a PR, trigger it manually on `main`
+  after merging: `gh workflow run cs2gs-selfmig-nightly.yml --ref main`.
 - **cs2gs-oahu** migrates Oahu at the commit pinned in
   `tools/cs2gs/external/oahu.json`.
   `JobSchedulerTests.Bounded_Concurrency_Limit_Is_Enforced` is a known flaky
@@ -93,10 +104,10 @@ instruction, follow the maintainer.
 
 - **Test scope:** run targeted `--filter` test runs locally. Full suites run
   on PR CI.
-- **`/tmp` is a shared tmpfs of about 31 GB.** Self-migration and hot-core
-  runs fill it quickly, and when it fills every Bash command fails silently
+- **`/tmp` is a shared tmpfs of about 31 GB.** Self-migration runs fill it
+  quickly, and when it fills every Bash command fails silently
   for everyone on the machine. Put their work roots
-  (`SELFMIG_PR_GUARD_ROOT`, `--out`, `--artifacts`, `TMPDIR`) under
+  (`SELFMIG_GATE_ROOT`, `--out`, `--artifacts`, `TMPDIR`) under
   `~/.cache/<tag>/`, and delete them when you're done.
 - **Keep durable state off tmpfs.** `/tmp` is RAM-backed and is wiped on
   reboot, and the session scratchpad (`/tmp/claude-*`) goes with it. Anything

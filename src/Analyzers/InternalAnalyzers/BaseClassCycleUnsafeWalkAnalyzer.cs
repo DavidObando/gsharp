@@ -58,8 +58,8 @@ namespace GSharp.InternalAnalyzers;
 /// this rule does not detect — none of the sites found so far were
 /// recursive, so this is not yet a proven gap, but it is a known one.
 /// A null-conditional reassignment (<c>x = x?.BaseClass</c>) is also not
-/// detected: this file self-migrates as part of the cs2gs-pr-guard hot-core
-/// set (issue #4172), and <c>ConditionalAccessExpressionSyntax</c> /
+/// detected: this file self-migrates as part of the self-migration hot core
+/// (issue #4172), and <c>ConditionalAccessExpressionSyntax</c> /
 /// <c>MemberBindingExpressionSyntax</c> have no G# analyzer-API mapping
 /// (ADR-0169) — see issue #4173. Not a proven gap either: across every real
 /// <c>.BaseClass</c>-walk site found and fixed (#4162, #4164, #4172), the

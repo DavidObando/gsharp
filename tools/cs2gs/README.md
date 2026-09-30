@@ -162,7 +162,7 @@ See `build/run-cs2gs-selfmig-{migrate,validate,gate}.sh` and
 `.github/workflows/cs2gs-selfmig-nightly.yml`; `build/run-cs2gs-selfmig.sh`
 remains the equivalent single-job reference path for local proofs.
 
-### The PR-time translation guard (issue #3836)
+### The PR-time self-migration gate (issue #3836)
 
 CI **compiles** the repository's C# sources. The gate **translates** them and
 then compiles the result. Those are different questions, so a fully CI-green
@@ -172,34 +172,25 @@ five days: #3831 (a `Cs2Gs.Translator` file, 7 banked apps), #3896 (three
 errors in new `src/Core` files, 16 apps), #3905 (a gsc stack overflow on
 `Gsharp.Runtime.Channels`, 11 apps blinded).
 
-`build/run-cs2gs-selfmig-pr-guard.sh` (workflow
-`.github/workflows/build.yml`) migrates and compiles just the **hot
-core** — the projects whose migration failures cascade widest:
+The PR check is therefore the **full** self-migration. The `selfmig` job in
+`.github/workflows/build.yml` calls the reusable workflow
+`.github/workflows/cs2gs-selfmig.yml` (the same one the nightly runs:
+migrate, sharded validate, baseline gate) once every test job in `build.yml`
+is green. It replaced an earlier eight-app "hot core" guard, whose narrow
+scope let regressions through that only show up elsewhere in the corpus
+(issue #4361).
 
-```
-src/Analyzers/InternalAnalyzers  src/Core
-src/Formatting/GSharp.Formatting src/Sdk/Gsharp.Runtime.Channels
-tools/cs2gs/Cs2Gs.CodeModel      tools/cs2gs/Cs2Gs.Translator
-tools/cs2gs/Cs2Gs.ProjectLoading tools/cs2gs/Cs2Gs.Pipeline
-```
+It takes hours, so it is scoped: the `selfmig-scope` job runs
+`build/cs2gs-pr-guard-control.sh relevant-paths` over the PR's diff, and the
+migration is skipped when no changed path can affect it (docs-only PRs, for
+example). The scope step fails safe: a failed diff or classifier runs the
+gate. `build/test-cs2gs-selfmig-gate.sh` pins the scope rules and the gate's
+structure (its `needs` and scope condition). The always-reported
+`self-migration gate` job (`selfmig-status`) is the check to require: it
+passes when the migration passed or was legitimately skipped.
 
-That includes `Cs2Gs.Translator`'s reference closure plus Channels,
-Formatting, Pipeline, and ProjectLoading, covering #3831, #3896, #3905, and
-#3978. The workflow reports on every PR so it can remain required. An in-job
-changed-path check skips the expensive migration when a PR cannot affect these
-projects or the compiler/SDK/translation machinery.
-
-Everything else is `--exclude`d. That is safe here — and only here — because
-the set is **closed under `ProjectReference`**, so no kept app references an
-excluded one; the script verifies that closure before it builds anything and
-refuses to run otherwise. Widening the set means adding whole reference
-closures, never a single project. `SELFMIG_PR_GUARD_APPS` overrides the list
-(e.g. to add `tools/cs2gs/Cs2Gs.Tests` once #3836's known failures clear).
-
-**It is not the gate.** Eight apps, no readability ceilings, no corpus-wide
-test parity. The script prints that disclaimer on every run, pass or fail,
-because a partial check mistaken for a full one is how #3831/#3896/#3905
-reached `main` in the first place.
+The gate is as green as the self-migration on `main`: a PR is not blamed for
+a failure `main` already has, but it cannot go green over one either.
 
 ### `report` — regenerate a report from an existing run
 
@@ -435,8 +426,8 @@ gates on the ledger:
 **STALE** entries warn (fail with `--baseline-strict`, the nightly mode); an
 **unverified** app (skipped stage, no artifact) must be acknowledged in the
 ledger's `unverifiedApps`. The `cs2gs` job in `.github/workflows/build.yml`
-runs this on every PR; `.github/workflows/cs2gs-nightly.yml` runs strict mode
-and auto-files issues for new gaps, opening a ledger-update PR.
+runs this on every PR; `.github/workflows/cs2gs-selfmig-nightly.yml` (job `corpus`) runs strict
+mode and auto-files issues for new gaps, opening a ledger-update PR.
 
 ## Triage & fingerprinting (ADR-0115 §D)
 

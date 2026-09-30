@@ -539,43 +539,38 @@ jobs:
           name: visual-studio-gsharp-vsix
           path: src/vs-gsharp/src/VsGsharp/bin/Release/net472/GSharp.VisualStudio.vsix
 
-  # The hot-core translation guard ensures that changes to core projects
-  # (src/Core, src/Analyzers, src/Formatting, src/Sdk/Gsharp.Runtime.Channels,
-  # tools/cs2gs) that would break the self-migration pipeline are caught early.
-  # By making it depend on the fast test suite (build, tests, test-partition, etc.),
-  # we avoid wasting ~45 min of compute on a diff that fails unit tests.
+  # PR-time self-migration gate. A change to the core projects (or to anything
+  # else the migration consumes; see build/cs2gs-pr-guard-control.sh
+  # `relevant-paths`) can break the C# -> G# self-migration even when every
+  # test here is green, and the damage would otherwise surface a night later,
+  # attributed to whatever merged nearby. So, for PRs only, the FULL
+  # self-migration (the reusable workflow cs2gs-selfmig.yml, the same one the
+  # nightly runs) executes once the whole test suite has passed. It takes
+  # hours, hence the path scope below and the `needs` list: no point spending
+  # that compute on a diff that fails unit tests or cannot affect migration.
   #
-  # This is the new authoritative PR-time gate (replaces standalone cs2gs-pr-guard.yml
-  # for required checks). It only runs on PRs, not on main or tags.
-  hot-core-translation-guard:
-    name: hot-core translation guard
+  # Required-check names. The called workflow's jobs report as
+  # `selfmig / migrate`, `selfmig / validate (<shard>)` and `selfmig / gate`,
+  # and are simply absent when the scope job decides the PR is unaffected.
+  # Branch protection should therefore require the plain job
+  # `self-migration gate` (selfmig-status), which is always reported on PRs.
+  selfmig-scope:
+    name: self-migration scope
     runs-on: ubuntu-latest
-    # NOTE: this group must NOT collide with cs2gs-pr-guard.yml's own
-    # `cs2gs-pr-guard-<PR>` concurrency group. That workflow is kept
-    # triggering on `pull_request` for backwards compatibility (see its
-    # header) and starts immediately, while this job only starts once
-    # `needs` completes (~20+ min in); a shared group name lets this job's
-    # later start cancel the legacy one mid-run via cancel-in-progress,
-    # which reports as a CANCELLED "hot-core translation guard" check —
-    # the exact required-status-check context — even though this job (the
-    # authoritative one) goes on to succeed. Keep the group scoped to this
-    # workflow so the two never race.
-    concurrency:
-      group: hot-core-translation-guard-${{ github.event.pull_request.number || github.ref }}
-      cancel-in-progress: true
-    needs: [build, tests, test-partition, e2e, ilverify, nullable-hygiene, cs2gs-corpus]
     if: github.event_name == 'pull_request'
-    timeout-minutes: 90
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.scope.outputs.run }}
 
     steps:
       - uses: actions/checkout@v5
         with:
           fetch-depth: 0
 
-      - name: Test PR guard control and failure propagation
-        run: ./build/test-cs2gs-selfmig-pr-guard.sh
+      - name: Test gate scope and structure
+        run: ./build/test-cs2gs-selfmig-gate.sh
 
-      - name: Detect changes that can affect the guard
+      - name: Detect changes that can affect the self-migration
         id: scope
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
@@ -591,125 +586,65 @@ jobs:
               if (( helper_status == 1 )); then
                 run_guard=false
               else
-                echo "::warning title=Path classification failed::Classifier exited $helper_status; running guard."
+                echo "::warning title=Path classification failed::Classifier exited $helper_status; running self-migration."
               fi
             fi
           else
             diff_status=$?
-            echo "::warning title=PR diff failed::git diff exited $diff_status; running guard."
+            echo "::warning title=PR diff failed::git diff exited $diff_status; running self-migration."
           fi
           echo "run=$run_guard" >> "$GITHUB_OUTPUT"
-
-      - name: Report unaffected change
-        if: steps.scope.outputs.run != 'true'
-        run: |
-          {
-            echo "### cs2gs PR translation guard"
-            echo
-            echo "Skipped: this PR changes no input that can affect the hot-core translation guard."
-            echo
-            echo "The required check still reports; no translation, compile, ILVerify, or parity gate was needed."
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Setup .NET SDK
-        if: steps.scope.outputs.run == 'true'
-        uses: actions/setup-dotnet@v5
-        with:
-          global-json-file: global.json
-
-      - name: Restore
-        if: steps.scope.outputs.run == 'true'
-        run: dotnet restore GSharp.sln --locked-mode
-
-      - name: Restore .NET local tools
-        if: steps.scope.outputs.run == 'true'
-        run: dotnet tool restore
-
-      - name: Migrate and compile the hot core
-        if: steps.scope.outputs.run == 'true'
-        env:
-          SELFMIG_PR_GUARD_ROOT: /tmp/gsharp-cs2gs-pr-guard
-        run: ./build/run-cs2gs-selfmig-pr-guard.sh
-
-      - name: Upload guard artifacts
-        if: always() && steps.scope.outputs.run == 'true'
-        uses: actions/upload-artifact@v5
-        with:
-          name: hot-core-guard-artifacts
-          retention-days: 7
-          if-no-files-found: ignore
-          path: |
-            /tmp/gsharp-cs2gs-pr-guard/guard.log
-            /tmp/gsharp-cs2gs-pr-guard/runs/**/*.json
-            /tmp/gsharp-cs2gs-pr-guard/runs/**/report.html
-            /tmp/gsharp-cs2gs-pr-guard/runs/**/sdk.build.log
-            /tmp/gsharp-cs2gs-pr-guard/migrated/**/*.gs
-
-  classify-hot-core-cancellation:
-    name: hot-core cancellation cause
-    needs: hot-core-translation-guard
-    if: always() && needs.hot-core-translation-guard.result == 'cancelled'
-    runs-on: ubuntu-latest
-    timeout-minutes: 2
-    permissions:
-      actions: read
-      checks: read
-      contents: read
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Report cancellation cause
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          job_id=$(
-            gh api \
-              "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID/attempts/$GITHUB_RUN_ATTEMPT/jobs?per_page=100" \
-              --jq '.jobs[] | select(.name == "hot-core translation guard") | .id' |
-              head -1
-          )
-          if [[ -z "$job_id" ]]; then
-            echo "::error title=Hot-core cancellation unknown::Could not find the cancelled guard job."
-            exit 1
+          if [[ "$run_guard" != true ]]; then
+            {
+              echo "### cs2gs PR self-migration"
+              echo
+              echo "Skipped: this PR changes no input that can affect the self-migration."
+            } >> "$GITHUB_STEP_SUMMARY"
           fi
 
-          cause=unknown
-          for attempt in {1..5}; do
-            annotations=$(gh api \
-              "repos/$GITHUB_REPOSITORY/check-runs/$job_id/annotations?per_page=100")
-            cause=$(./build/cs2gs-pr-guard-control.sh cancellation <<< "$annotations")
-            [[ "$cause" != unknown ]] && break
-            sleep 2
-          done
-          messages=$(jq -r '.[].message // empty' <<< "$annotations")
+  selfmig:
+    # A reusable-workflow job: no runs-on/steps/timeout here (the timeouts are
+    # in cs2gs-selfmig.yml). The token cap below must cover what the called
+    # jobs request; `actions: read` is for the migrate job's duration-map
+    # download.
+    needs: [selfmig-scope, build, tests, test-partition, e2e, ilverify, nullable-hygiene, cs2gs-corpus]
+    if: github.event_name == 'pull_request' && needs.selfmig-scope.outputs.run == 'true'
+    # A newer push supersedes a run that takes hours.
+    concurrency:
+      group: selfmig-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    permissions:
+      contents: read
+      actions: read
+    uses: ./.github/workflows/cs2gs-selfmig.yml
 
-          case "$cause" in
-            superseded)
-              summary="**Superseded by a newer push.** This was not a timeout."
-              echo "::notice title=Hot-core guard superseded::Cancelled because a newer push replaced this run; this was not a timeout."
-              ;;
-            timeout)
-              summary="**Timed out.** GitHub stopped the guard after its 90-minute job limit."
-              echo "::error title=Hot-core guard timed out::GitHub stopped the guard after its 90-minute job limit."
-              ;;
-            *)
-              summary="**Unknown cancellation.** GitHub did not return a recognized timeout or concurrency annotation."
-              echo "::error title=Hot-core cancellation unknown::GitHub did not return a recognized timeout or concurrency annotation."
-              ;;
-          esac
+  # The stable, always-reported check for this gate. Passes when the
+  # self-migration succeeded, or was legitimately skipped because the scope job
+  # found no relevant change. A `selfmig` skipped because a test job failed is
+  # NOT a pass: scope says run=true there, so this job fails too.
+  selfmig-status:
+    name: self-migration gate
+    needs: [selfmig-scope, selfmig]
+    if: always() && github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
 
-          {
-            echo "### Hot-core guard cancellation"
-            echo
-            echo "$summary"
-            echo
-            echo '```text'
-            printf '%s\n' "$messages"
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-          [[ "$cause" == superseded ]]
+    steps:
+      - name: Evaluate
+        env:
+          SCOPE_RESULT: ${{ needs.selfmig-scope.result }}
+          SCOPE_RUN: ${{ needs.selfmig-scope.outputs.run }}
+          SELFMIG_RESULT: ${{ needs.selfmig.result }}
+        run: |
+          echo "scope=$SCOPE_RESULT (run=$SCOPE_RUN) selfmig=$SELFMIG_RESULT"
+          if [[ "$SCOPE_RESULT" == success && "$SCOPE_RUN" == false ]]; then
+            echo "Self-migration not needed for this change."
+          elif [[ "$SCOPE_RESULT" == success && "$SELFMIG_RESULT" == success ]]; then
+            echo "Self-migration passed."
+          else
+            echo "::error title=Self-migration gate::scope=$SCOPE_RESULT selfmig=$SELFMIG_RESULT"
+            exit 1
+          fi
 
   publish:
     runs-on: ubuntu-latest

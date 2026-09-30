@@ -25,13 +25,13 @@ name: windows-nightly
 # stricter method-scoped IlVerifier.Verify in-process, so emitted IL is
 # verified on Windows anyway.
 #
-# Mirrors cs2gs-nightly's conventions: each suite runs to completion with its
+# Mirrors cs2gs-selfmig-nightly's conventions: each suite runs to completion with its
 # exit code captured, results land in the step summary and a trx artifact,
 # and a final gate step turns any failure into a red workflow run.
 
 on:
   schedule:
-    # 09:23 UTC — clear of cs2gs-nightly's 07:17 UTC slot.
+    # 09:23 UTC — clear of cs2gs-selfmig-nightly's 13:23 UTC slot.
     - cron: '23 9 * * *'
   workflow_dispatch:
 

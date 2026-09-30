@@ -116,7 +116,7 @@ cap (default 10), a fingerprint search-before-create dedup (every body embeds
 its fingerprints), stage labels `gap:compile|gap:ilverify|gap:parity` on top
 of the artifact's suggested labels, and the DoD checklist from
 `.github/ISSUE_TEMPLATE/compiler-gap.md`. The nightly workflow
-(`cs2gs-nightly.yml`) runs it with `--file` under `GITHUB_TOKEN` and opens a
+(`cs2gs-selfmig-nightly.yml`, job `corpus`; formerly `cs2gs-nightly.yml`) runs it with `--file` under `GITHUB_TOKEN` and opens a
 ledger-update PR; the PR gate (`build.yml` job `cs2gs`) never files, only
 gates. Repro minimization remains a cheap human refinement on the auto-filed
 issue.

@@ -22,7 +22,7 @@ name: macos-nightly
 
 on:
   schedule:
-    # 11:23 UTC — clear of cs2gs-nightly (07:17) and windows-nightly (09:23).
+    # 11:23 UTC — clear of windows-nightly (09:23) and cs2gs-selfmig-nightly (13:23).
     - cron: '23 11 * * *'
   workflow_dispatch:
 

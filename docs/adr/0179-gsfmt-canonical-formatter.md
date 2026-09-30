@@ -375,6 +375,11 @@ gsfmt [flags] [path ...]        # paths default to "."; directories recurse for 
 to `build/run-cs2gs-selfmig-pr-guard.sh`'s `guard_apps` **in the PR that creates it** —
 not later.
 
+> **Note (PR self-migration gate):** that script and its `guard_apps` list were retired when the
+> PR-time guard became the full self-migration (`.github/workflows/cs2gs-selfmig.yml`, called from
+> `build.yml`). The intent stands: the project is migrated from its first PR because the whole
+> repository is, so nothing needs to be added by hand.
+
 Rejected: authoring in G# from the outset. It creates a build cycle with no payoff —
 `gsc` must compile gsfmt, gsfmt's dependency `GSharp.Core` is C#, and gsfmt's own
 sources would have to be formatted by a gsfmt that does not yet build. Go bootstrapped
