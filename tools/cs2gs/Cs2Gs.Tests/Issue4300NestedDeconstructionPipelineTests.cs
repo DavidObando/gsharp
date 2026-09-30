@@ -5,11 +5,9 @@
 using System;
 using System.IO;
 using System.Linq;
-using System.Runtime.InteropServices;
 using System.Threading.Tasks;
 using Cs2Gs.Pipeline;
 using Cs2Gs.Translator.Loading;
-using Microsoft.CodeAnalysis;
 using Xunit;
 
 namespace Cs2Gs.Tests;
@@ -40,18 +38,6 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
             sourceRoot = NewDirectory("scratch-projects");
             File.WriteAllText(Path.Combine(sourceRoot, "Directory.Build.props"), "<Project></Project>");
             string supportPath = Path.Combine(sourceRoot, "Cs2Gs.InMemory.dll");
-            var runtimeDirectory = new DirectoryInfo(RuntimeEnvironment.GetRuntimeDirectory());
-            string referenceDirectory = Path.Combine(
-                runtimeDirectory.Parent.Parent.Parent.FullName,
-                "packs",
-                "Microsoft.NETCore.App.Ref",
-                runtimeDirectory.Name,
-                "ref",
-                "net10.0");
-            MetadataReference[] supportReferences = Directory
-                .GetFiles(referenceDirectory, "*.dll")
-                .Select(path => MetadataReference.CreateFromFile(path))
-                .ToArray();
             LoadedCSharpProject support = CSharpProjectLoader.LoadInMemory(
                 new[]
                 {
@@ -71,7 +57,7 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
                         }
                         """),
                 },
-                supportReferences);
+                CSharpProjectLoader.RuntimeReferences());
             Assert.True(
                 support.BoundWithoutErrors,
                 string.Join(Environment.NewLine, support.ErrorDiagnostics));

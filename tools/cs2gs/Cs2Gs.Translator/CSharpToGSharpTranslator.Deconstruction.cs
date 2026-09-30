@@ -1148,19 +1148,7 @@ public sealed partial class CSharpToGSharpTranslator
                 body,
                 out HashSet<string> occupied))
             {
-                bool DescendIntoVisibleScope(SyntaxNode node) =>
-                    ReferenceEquals(node, body) ||
-                    node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax);
-
-                occupied = new HashSet<string>(StringComparer.Ordinal);
-                foreach (SyntaxToken token in body.DescendantTokens(DescendIntoVisibleScope))
-                {
-                    if (token.IsKind(SyntaxKind.IdentifierToken))
-                    {
-                        occupied.Add(this.nameAllocator.GetName(token.ValueText));
-                    }
-                }
-
+                occupied = this.CollectOccupiedDeconstructionNames(body);
                 this.state.DeconstructionOccupiedNamesByBody.Add(body, occupied);
             }
 
@@ -1181,6 +1169,67 @@ public sealed partial class CSharpToGSharpTranslator
             allocated.Add(candidate);
             return candidate;
         }
+
+        private HashSet<string> CollectOccupiedDeconstructionNames(SyntaxNode body)
+        {
+            bool DescendIntoCurrentBody(SyntaxNode node) =>
+                ReferenceEquals(node, body) ||
+                node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax);
+
+            var occupied = new HashSet<string>(StringComparer.Ordinal);
+            foreach (SyntaxToken token in body.DescendantTokens(DescendIntoCurrentBody))
+            {
+                if (token.IsKind(SyntaxKind.IdentifierToken))
+                {
+                    occupied.Add(this.nameAllocator.GetName(token.ValueText));
+                }
+            }
+
+            foreach (LocalFunctionStatementSyntax localFunction in
+                body.DescendantNodes().OfType<LocalFunctionStatementSyntax>())
+            {
+                if (FindNestedFunction(localFunction.Parent, body) == null)
+                {
+                    occupied.Add(this.EmittedName(localFunction, localFunction.Identifier));
+                }
+            }
+
+            foreach (IdentifierNameSyntax identifier in
+                body.DescendantNodes().OfType<IdentifierNameSyntax>())
+            {
+                SyntaxNode nestedFunction = FindNestedFunction(identifier.Parent, body);
+                if (nestedFunction == null)
+                {
+                    continue;
+                }
+
+                ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
+                if (symbol != null && !IsDeclaredWithin(symbol, nestedFunction))
+                {
+                    occupied.Add(this.EmittedName(symbol, identifier.Identifier.ValueText));
+                }
+            }
+
+            return occupied;
+        }
+
+        private static SyntaxNode FindNestedFunction(SyntaxNode node, SyntaxNode body)
+        {
+            for (SyntaxNode current = node; current != null && current != body; current = current.Parent)
+            {
+                if (current is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+                {
+                    return current;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsDeclaredWithin(ISymbol symbol, SyntaxNode scope) =>
+            symbol.DeclaringSyntaxReferences.Any(reference =>
+                reference.SyntaxTree == scope.SyntaxTree &&
+                scope.Span.Contains(reference.Span));
 
         private string DeconstructionTempStem(SyntaxNode anchor)
         {

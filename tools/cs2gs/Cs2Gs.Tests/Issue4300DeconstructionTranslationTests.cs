@@ -211,7 +211,7 @@ public sealed class Issue4300DeconstructionTranslationTests
                     ((a, b), c) = ((1, 2), 3);
 
                     int aTuple() => 4;
-                    return a + b + c + aTuple();
+                    return a + b + c;
                 }
             }
             """);
@@ -226,7 +226,41 @@ public sealed class Issue4300DeconstructionTranslationTests
                 + "(Runner().Run() * 100) + Runner().Other()");
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
-        Assert.Equal(1510, result.Value);
+        Assert.Equal(1506, result.Value);
+    }
+
+    [Fact]
+    public void NestedBodyOuterMemberReference_ReservesOuterCarrierName()
+    {
+        string printed = Translate("""
+            using System;
+
+            public sealed class Runner
+            {
+                private int aTuple = 100;
+
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    int c = 0;
+                    ((a, b), c) = ((1, 2), 3);
+
+                    Func<int> read = () => aTuple;
+                    return a + b + c + read();
+                }
+            }
+            """);
+
+        Assert.Contains("let (aTuple2, cValue) = ((1, 2), 3)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let (aTuple, cValue) = ((1, 2), 3)", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "Runner().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(106, result.Value);
     }
 
     private static int CountOccurrences(string text, string value)
