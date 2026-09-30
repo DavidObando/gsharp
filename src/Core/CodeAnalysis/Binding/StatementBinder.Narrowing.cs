@@ -253,7 +253,7 @@ internal sealed partial class StatementBinder
         var directAssignment = (statement as BoundExpressionStatement)?.Expression
             as BoundAssignmentExpression;
         var assignsExternalCallable = directAssignment != null
-            && IsMethodCallableSource(directAssignment.Expression);
+            && IsExternalCallableSource(directAssignment.Expression);
 
         var collector = new AssignedRootsCollector(null, externalCallableAliases);
         collector.Visit(statement);
@@ -857,7 +857,10 @@ internal sealed partial class StatementBinder
                     continue;
                 }
 
-                summary = GetFinallyFlowSummary(finallyClause, finallyBlock);
+                summary = CreateFinallyFlowSummary(
+                    finallyClause,
+                    finallyBlock,
+                    snapshot.ExternalCallableAliases);
             }
             else if (region.CleanupStatement is { } cleanup)
             {
@@ -866,22 +869,14 @@ internal sealed partial class StatementBinder
                     continue;
                 }
 
-                if (finallyFlowSummaries.TryGetValue(cleanup, out var cachedSummary))
-                {
-                    summary = cachedSummary;
-                }
-                else
-                {
-                    var mutations = new AssignedRootsCollector(
-                        AssignmentPreservesNarrowing,
-                        externalCallableAliases,
-                        trackSourceCallGlobalMutations: true);
-                    mutations.Visit(cleanup);
-                    summary = new FinallyFlowSummary(
-                        mutations,
-                        ComputeBranchFallthroughNonNull(cleanup, entry: null));
-                    finallyFlowSummaries.Add(cleanup, summary);
-                }
+                var mutations = new AssignedRootsCollector(
+                    AssignmentPreservesNarrowing,
+                    snapshot.ExternalCallableAliases,
+                    trackSourceCallGlobalMutations: true);
+                mutations.Visit(cleanup);
+                summary = new FinallyFlowSummary(
+                    mutations,
+                    ComputeBranchFallthroughNonNull(cleanup, entry: null));
             }
             else
             {
@@ -908,9 +903,22 @@ internal sealed partial class StatementBinder
             return summary;
         }
 
+        summary = CreateFinallyFlowSummary(
+            finallyClause,
+            finallyBlock,
+            externalCallableAliases);
+        finallyFlowSummaries.Add(finallyBlock, summary);
+        return summary;
+    }
+
+    private FinallyFlowSummary CreateFinallyFlowSummary(
+        FinallyClauseSyntax finallyClause,
+        BoundStatement finallyBlock,
+        IReadOnlyCollection<VariableSymbol> callableAliases)
+    {
         var mutations = new AssignedRootsCollector(
             AssignmentPreservesNarrowing,
-            externalCallableAliases,
+            callableAliases,
             trackSourceCallGlobalMutations: true);
         mutations.Visit(finallyBlock);
         var nonNullOnNormalExit = ContainsUserGotoOrLabel(finallyClause.Body)
@@ -918,9 +926,7 @@ internal sealed partial class StatementBinder
                 ? null
                 : new Dictionary<AccessPath, TypeSymbol>()
             : ComputeBranchFallthroughNonNull(finallyBlock, entry: null);
-        summary = new FinallyFlowSummary(mutations, nonNullOnNormalExit);
-        finallyFlowSummaries.Add(finallyBlock, summary);
-        return summary;
+        return new FinallyFlowSummary(mutations, nonNullOnNormalExit);
     }
 
     private void ApplyTryFinallyFallthroughNarrowings(

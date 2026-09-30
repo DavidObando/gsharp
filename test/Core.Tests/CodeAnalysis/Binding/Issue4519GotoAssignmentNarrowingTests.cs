@@ -2737,6 +2737,69 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_DeferUsesCallableAliasStateFromEachEdge()
+    {
+        var result = Evaluate("""
+            func Noop() {
+            }
+
+            func Run(choose bool) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = Noop
+                {
+                    defer action()
+                    if !choose { goto Safe }
+                    action = clear
+                    goto Done
+                Safe:
+                    {
+                    }
+                    action = Noop
+                    goto Done
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyPreservesAssignedExternalCallableAlias()
+    {
+        AssertRuns("""
+            import System
+
+            func Noop() {
+            }
+
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                text = "safe"
+                var action = Noop
+                action = callback
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return text.Length
+            }
+
+            Console.WriteLine(Run(Noop))
+            """, "4");
+    }
+
+    [Fact]
     public void ForwardGoto_FinallyIncludesWritableRefMutation()
     {
         var result = Evaluate("""

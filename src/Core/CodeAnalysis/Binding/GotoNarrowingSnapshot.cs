@@ -42,6 +42,7 @@ internal sealed class GotoNarrowingSnapshot
         IReadOnlyDictionary<AccessPath, int> narrowingFrameIndices,
         IReadOnlyDictionary<AccessPath, int> narrowingProofGenerations,
         IReadOnlyDictionary<VariableSymbol, int> assignmentGenerations,
+        IReadOnlyCollection<VariableSymbol> externalCallableAliases,
         ImmutableArray<FinallyClauseSyntax> activeFinallyClauses,
         ImmutableArray<BoundStatement> activeCleanupStatements,
         ImmutableArray<GotoCleanupRegion> activeCleanupRegions,
@@ -55,6 +56,7 @@ internal sealed class GotoNarrowingSnapshot
         NarrowingFrameIndices = new ReadOnlyDictionary<AccessPath, int>(this.narrowingFrameIndices);
         NarrowingProofGenerations = new ReadOnlyDictionary<AccessPath, int>(this.narrowingProofGenerations);
         AssignmentGenerations = new ReadOnlyDictionary<VariableSymbol, int>(this.assignmentGenerations);
+        ExternalCallableAliases = externalCallableAliases.ToImmutableHashSet();
         ActiveFinallyClauses = activeFinallyClauses;
         ActiveCleanupStatements = activeCleanupStatements;
         ActiveCleanupRegions = activeCleanupRegions;
@@ -68,6 +70,8 @@ internal sealed class GotoNarrowingSnapshot
     public IReadOnlyDictionary<AccessPath, int> NarrowingProofGenerations { get; }
 
     public IReadOnlyDictionary<VariableSymbol, int> AssignmentGenerations { get; }
+
+    public ImmutableHashSet<VariableSymbol> ExternalCallableAliases { get; }
 
     public ImmutableArray<FinallyClauseSyntax> ActiveFinallyClauses { get; }
 
@@ -83,6 +87,7 @@ internal sealed class GotoNarrowingSnapshot
             NarrowingFrameIndices,
             NarrowingProofGenerations,
             AssignmentGenerations,
+            ExternalCallableAliases,
             ActiveFinallyClauses,
             ActiveCleanupStatements,
             ActiveCleanupRegions,

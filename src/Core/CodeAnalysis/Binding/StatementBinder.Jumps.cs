@@ -248,6 +248,7 @@ internal sealed partial class StatementBinder
             narrowingFrameIndices,
             narrowingProofGenerations,
             binderCtx.AssignmentNarrowingGenerations,
+            externalCallableAliases,
             activeFinallyClauses.ToImmutableArray(),
             activeCleanupStatements.ToImmutableArray(),
             activeCleanupRegions.ToImmutableArray(),
