@@ -6088,6 +6088,83 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_GenericOwnerIndexerReadKeepsDeclaredSlot()
+    {
+        var result = Evaluate("""
+            open class Box[T] {
+                var Stored T
+                init(value T) { Stored = value }
+                open prop this[index int32] T { get { return Stored } set { Stored = value } }
+            }
+            class Dog : Box[string] {
+                init() : base("dog") { }
+            }
+            class Cat : Box[string] {
+                init() : base("cat") { }
+            }
+
+            func Run() string {
+                var x Box[string] = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    let value = x[0]
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("cat", result.Value);
+    }
+
+    [Fact]
+    public void BackwardGoto_RenamedTypeParameterPropertyWriteKeepsDeclaredSlot()
+    {
+        var result = Evaluate("""
+            open class Base[T] {
+                open prop Name T { get; set; }
+            }
+            open class Mid[U] : Base[U] {
+                override prop Name U { get; set; }
+            }
+            class Dog : Mid[string] {
+            }
+            class Cat : Mid[string] {
+            }
+
+            func Run() string {
+                var x Mid[string] = Dog{}
+                var count = 0
+                if x is Dog {
+                Again:
+                    x.Name = "updated"
+                    if count == 0 {
+                        count++
+                        x = Cat{}
+                        goto Again
+                    }
+                    return x.Name
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("updated", result.Value);
+    }
+
+    [Fact]
     public void BackwardGoto_SiblingInterfacePropertySlotsDoNotAlias()
     {
         var result = Evaluate("""

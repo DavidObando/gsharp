@@ -2644,7 +2644,8 @@ internal sealed partial class ExpressionBinder
                         targetPath.Root.Type,
                         readIndexer,
                         MemberOperation.Read,
-                        target.Type) is { } declaredIndexer)
+                        target.Type,
+                        readSubstitution) is { } declaredIndexer)
                 {
                     binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath.Root, targetLocation);
                     target = DeclaredReceiver(targetPath.Root, target.Syntax);
@@ -2683,7 +2684,8 @@ internal sealed partial class ExpressionBinder
         TypeSymbol declaredType,
         PropertySymbol indexer,
         MemberOperation operation,
-        TypeSymbol receiverType)
+        TypeSymbol receiverType,
+        Dictionary<TypeParameterSymbol, TypeSymbol>? selectedSubstitution)
     {
         declaredType = declaredType is NullableTypeSymbol nullable
             ? nullable.UnderlyingType
@@ -2701,7 +2703,9 @@ internal sealed partial class ExpressionBinder
                     // A covariant override has a different result type than the
                     // declared slot; keep the original binding (fail-safe).
                     return SamePropertySlot(indexer, candidate.Indexer, operation, receiverType)
-                        && Equals(SubstituteIndexerType(candidate.Indexer.Type, candidate.Substitution), indexer.Type)
+                        && Equals(
+                            SubstituteIndexerType(candidate.Indexer.Type, candidate.Substitution),
+                            SubstituteIndexerType(indexer.Type, selectedSubstitution))
                         ? candidate
                         : null;
                 }
@@ -3787,7 +3791,8 @@ internal sealed partial class ExpressionBinder
                         targetPath.Root.Type,
                         writeIndexer,
                         MemberOperation.Write,
-                        target.Type) is { } declaredIndexer)
+                        target.Type,
+                        writeSubstitution) is { } declaredIndexer)
                 {
                     binderCtx.UntrackBackwardGotoNarrowingIndex(targetPath.Root, diagnosticLocation);
                     target = DeclaredReceiver(targetPath.Root, target.Syntax);
