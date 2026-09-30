@@ -250,6 +250,11 @@ internal sealed class DocumentTranslationState
     public Dictionary<Microsoft.CodeAnalysis.ILocalSymbol, bool> EmittedLocalGSharpNullability { get; } =
         new Dictionary<Microsoft.CodeAnalysis.ILocalSymbol, bool>(Microsoft.CodeAnalysis.SymbolEqualityComparer.Default);
 
+    // Issue #4445: semantic/CFG default provenance is invariant per local and
+    // can be queried repeatedly while lowering one declaration.
+    public Dictionary<Microsoft.CodeAnalysis.ILocalSymbol, bool> InferredLocalDefaultTypedDeclarations { get; } =
+        new Dictionary<Microsoft.CodeAnalysis.ILocalSymbol, bool>(Microsoft.CodeAnalysis.SymbolEqualityComparer.Default);
+
     // Outermost short-circuit operand currently redirecting fallback pattern
     // spills. Nested lambdas/local functions must not reuse its declaration seam.
     public SyntaxNode ShortCircuitSpillScope { get; set; }

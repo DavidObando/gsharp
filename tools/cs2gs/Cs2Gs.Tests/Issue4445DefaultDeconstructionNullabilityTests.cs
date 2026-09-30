@@ -1912,12 +1912,27 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 {
                 }
 
+                private static void Fill<T>(ref T? value, T replacement) =>
+                    value = replacement;
+
                 private static void Overwrite(out System.Action callback) =>
                     callback = () => { };
 
                 private static void Observe(System.Action callback)
                 {
                 }
+
+                private static void ObserveHash(System.Action callback) =>
+                    _ = callback.GetHashCode();
+
+                private static void ObserveAliasHash(System.Action callback)
+                {
+                    var alias = callback;
+                    _ = alias.GetHashCode();
+                }
+
+                private static void InvokeFirst(System.Action callback) =>
+                    callback.GetInvocationList()[0].DynamicInvoke();
 
                 public static void M<T>(T replacement)
                 {
@@ -1939,6 +1954,32 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     };
                     Observe(observed);
                     observedPair = (default(T), replacement);
+
+                    var hashPair = (replacement, replacement);
+                    System.Action hash = () =>
+                    {
+                        var (hashLeft, _) = hashPair;
+                        Keep(ref hashLeft);
+                    };
+                    ObserveHash(hash);
+                    hashPair = (default(T), replacement);
+
+                    var aliasHashPair = (replacement, replacement);
+                    System.Action aliasHash = () =>
+                    {
+                        var (aliasHashLeft, _) = aliasHashPair;
+                        Keep(ref aliasHashLeft);
+                    };
+                    ObserveAliasHash(aliasHash);
+                    aliasHashPair = (default(T), replacement);
+
+                    var invocationListPair = (default(T), replacement);
+                    System.Action invocationList = () =>
+                    {
+                        var (invocationListLeft, _) = invocationListPair;
+                        Fill(ref invocationListLeft, replacement);
+                    };
+                    InvokeFirst(invocationList);
                 }
             }
             """;
@@ -1947,6 +1988,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
         Assert.DoesNotMatch(@"\b(let|var) deadLeft T\? =", printed);
         Assert.DoesNotMatch(@"\b(let|var) observedLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) hashLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) aliasHashLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) invocationListLeft T\? =", printed);
     }
 
     [Fact]

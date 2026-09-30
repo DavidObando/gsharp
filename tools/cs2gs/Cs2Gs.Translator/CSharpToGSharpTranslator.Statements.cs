@@ -338,6 +338,21 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool InferredLocalDefaultRequiresTypedDeclaration(ILocalSymbol local)
         {
+            if (this.state.InferredLocalDefaultTypedDeclarations.TryGetValue(
+                    local,
+                    out bool cached))
+            {
+                return cached;
+            }
+
+            bool result = this.InferredLocalDefaultRequiresTypedDeclarationCore(local);
+            this.state.InferredLocalDefaultTypedDeclarations.Add(local, result);
+            return result;
+        }
+
+        private bool InferredLocalDefaultRequiresTypedDeclarationCore(
+            ILocalSymbol local)
+        {
             if (!IsAnnotatedNullableReference(local.Type))
             {
                 return false;
@@ -1823,6 +1838,11 @@ public sealed partial class CSharpToGSharpTranslator
                         continue;
                     }
 
+                    if (DelegateParameterUseIsNonEscapingObservation(use, model))
+                    {
+                        continue;
+                    }
+
                     DelegateArgumentBehavior aliasBehavior =
                         GetSourceDelegateAliasBehavior(
                             use,
@@ -1900,6 +1920,13 @@ public sealed partial class CSharpToGSharpTranslator
                 if (DelegateParameterUseIsInvocation(aliasUse))
                 {
                     invoked = true;
+                    continue;
+                }
+
+                if (DelegateParameterUseIsNonEscapingObservation(
+                        aliasUse,
+                        model))
+                {
                     continue;
                 }
 
@@ -1990,6 +2017,43 @@ public sealed partial class CSharpToGSharpTranslator
                 && invocation.Expression
                     is MemberBindingExpressionSyntax binding
                 && binding.Name.Identifier.ValueText == "Invoke";
+        }
+
+        private static bool DelegateParameterUseIsNonEscapingObservation(
+            IdentifierNameSyntax use,
+            SemanticModel model)
+        {
+            SimpleNameSyntax memberName = use.Parent switch
+            {
+                MemberAccessExpressionSyntax member
+                    when member.Expression == use => member.Name,
+                ConditionalAccessExpressionSyntax conditional
+                    when conditional.Expression == use
+                        && conditional.WhenNotNull
+                            is MemberBindingExpressionSyntax binding =>
+                    binding.Name,
+                _ => null,
+            };
+            if (memberName == null)
+            {
+                return false;
+            }
+
+            ISymbol observedMember = model.GetSymbolInfo(memberName).Symbol;
+            INamedTypeSymbol containingType = observedMember?.ContainingType;
+            bool isObjectOrDelegate = containingType?.SpecialType
+                    == SpecialType.System_Object
+                || containingType?.ToDisplayString() is
+                    "System.Delegate" or "System.MulticastDelegate";
+            bool isTerminalObservation = observedMember switch
+            {
+                IMethodSymbol method when method.Name is
+                    "GetHashCode" or "ToString" or "GetType" or "Equals" => true,
+                IPropertySymbol property when property.Name is
+                    "Method" or "Target" => true,
+                _ => false,
+            };
+            return isObjectOrDelegate && isTerminalObservation;
         }
 
         private static bool LocalFunctionMatches(
