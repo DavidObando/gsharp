@@ -4306,7 +4306,7 @@ public sealed partial class CSharpToGSharpTranslator
             bool nullableElement = collection.Elements
                 .OfType<ExpressionElementSyntax>()
                 .Any(item =>
-                    Unparenthesize(item.Expression).IsKind(SyntaxKind.NullLiteralExpression)
+                    IsNullOrDefaultLiteral(item.Expression)
                     || this.context.GetTypeInfo(item.Expression).Type?.NullableAnnotation
                         == NullableAnnotation.Annotated);
 
