@@ -5864,7 +5864,7 @@ public sealed partial class CSharpToGSharpTranslator
                     ITypeSymbol projectedResult =
                         this.GetManagedReferenceArrayProjectedExpressionType(result);
                     if (projectedResult != null
-                        && !SymbolEqualityComparer.IncludeNullability.Equals(
+                        && !this.ProjectionTypeFitsCompositeDestination(
                             projectedResult,
                             targetResult))
                     {

@@ -5144,6 +5144,59 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ProjectedLambdaResultAllowsImplicitDerivedToBaseConversion()
+    {
+        const string source = """
+            using System;
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedLambdaDerivedResult;
+            public class Base<T> {
+                protected Base(T value) { Value = value; }
+                public T Value { get; }
+            }
+            public sealed class Derived<T> : Base<T> {
+                public Derived(T value) : base(value) { }
+            }
+            public class Probe {
+                private static Base<T> Apply<T>(
+                    T[] source,
+                    Func<T[], Base<T>> factory) =>
+                    factory(source);
+
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    var result = Apply(
+                        source,
+                        items => new Derived<ManagedRef<int>>(items[0]));
+                    return result.Value == null ? 42 : 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedLambdaDerivedResult.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "Derived[managed[int32]?](items[0])",
+            text,
+            StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void ManagedReferenceArrayProjectionFlowsThroughConstructionArgument()
     {
         const string source = """
