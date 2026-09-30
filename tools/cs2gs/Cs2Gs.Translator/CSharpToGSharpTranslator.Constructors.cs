@@ -2000,6 +2000,16 @@ public sealed partial class CSharpToGSharpTranslator
                 ?? Enumerable.Empty<string>());
             occupied.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
                 ?? Enumerable.Empty<string>());
+            foreach (SyntaxReference reference in localFunction.ContainingSymbol.DeclaringSyntaxReferences)
+            {
+                SyntaxNode declaration = reference.GetSyntax();
+                occupied.UnionWith(
+                    declaration
+                        .DescendantNodes()
+                        .Select(this.context.GetDeclaredSymbol)
+                        .Where(symbol => symbol is ILocalSymbol or IParameterSymbol or IRangeVariableSymbol)
+                        .Select(symbol => this.EmittedName(symbol, symbol.Name)));
+            }
 
             string candidate = LiftedLocalFunctionNames
                 .GetValue(
