@@ -2302,14 +2302,23 @@ internal sealed partial class StatementBinder
             tryAssignedVariables = outerTryAssignments;
             outerTryAssignments?.UnionWith(assignedInTry);
             var tryState = CaptureCallableState();
-            var finallyEntries = CloneCallableState(tryState);
+            var exceptionalState = CloneCallableState(branchStart);
+            foreach (var variable in assignedInTry)
+            {
+                exceptionalState.Literals.Remove(variable);
+                exceptionalState.External.Remove(variable);
+                exceptionalState.Unknown.Add(variable);
+            }
+
+            var finallyEntries = JoinCallableStates(
+                CloneCallableState(tryState),
+                exceptionalState);
             (Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> Literals, HashSet<VariableSymbol> Unknown, HashSet<VariableSymbol> External)? joined =
                 EndsInUnconditionalExit(node.TryBlock) ? null : tryState;
 
             foreach (var clause in node.CatchClauses)
             {
-                RestoreCallableState(branchStart);
-                unknownFunctionValues.UnionWith(assignedInTry);
+                RestoreCallableState(exceptionalState);
                 VisitExpression(clause.Filter);
                 VisitStatement(clause.Body);
                 var catchState = CaptureCallableState();

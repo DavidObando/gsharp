@@ -343,7 +343,13 @@ internal sealed partial class StatementBinder
             syntax.FinallyClause,
             () => BindBlockStatement(syntax.TryBlock));
         var callableTryExit = CaptureExternalCallableAliases();
-        var callableFinallyEntries = new HashSet<VariableSymbol>(callableTryExit);
+        var tryMutations = new AssignedRootsCollector(null, callableEntry);
+        tryMutations.Visit(tryBlock);
+        var callableExceptionalEntry = new HashSet<VariableSymbol>(callableEntry);
+        callableExceptionalEntry.ExceptWith(tryMutations.Roots);
+        var callableFinallyEntries = JoinExternalCallableAliases(
+            new HashSet<VariableSymbol>(callableTryExit),
+            callableExceptionalEntry);
         HashSet<VariableSymbol>? callableExits = CanCompleteNormally(tryBlock)
             ? new HashSet<VariableSymbol>(callableTryExit)
             : null;
@@ -368,7 +374,7 @@ internal sealed partial class StatementBinder
 
         foreach (var catchSyntax in syntax.CatchClauses)
         {
-            RestoreExternalCallableAliases(callableEntry);
+            RestoreExternalCallableAliases(callableExceptionalEntry);
             var inheritedReachability = currentStatementListFallsThrough;
             currentStatementListFallsThrough = handlersReachable;
 

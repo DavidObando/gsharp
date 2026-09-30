@@ -752,6 +752,51 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_ConstructedInterfacePropertyWriteUsesDeclaredSlot()
+    {
+        var result = Evaluate("""
+            interface IBox[T] {
+                prop Value T { get; set; }
+            }
+            open class FirstBox : IBox[string] {
+                var Stored string = ""
+                public open prop Value string {
+                    get { return Stored }
+                    set { Stored = value }
+                }
+            }
+            class SecondBox : IBox[string] {
+                var Stored string = ""
+                public prop Value string {
+                    get { return Stored }
+                    set { Stored = value }
+                }
+            }
+
+            func Run() string {
+                var box IBox[string] = FirstBox{}
+                var count = 0
+                if box is FirstBox {
+                Again:
+                    box.Value = "updated"
+                    if count == 0 {
+                        count++
+                        box = SecondBox{}
+                        goto Again
+                    }
+                    return box.Value
+                }
+                return ""
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal("updated", result.Value);
+    }
+
+    [Fact]
     public void BackwardGoto_InheritedFieldWriteDoesNotRequireNarrowedType()
     {
         var result = Evaluate("""
@@ -5172,6 +5217,37 @@ public class Issue4519GotoAssignmentNarrowingTests
 
             Console.WriteLine(Run(func() { }, false))
             """, "4");
+    }
+
+    [Fact]
+    public void TryFinallyExceptionalCallableStateInvalidatesNarrowing()
+    {
+        var result = Evaluate("""
+            import System
+
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                let mutate = func() { text = nil }
+                var action = mutate
+                try {
+                    throw Exception()
+                    action = callback
+                }
+                catch {
+                }
+                finally {
+                    text = "safe"
+                    action()
+                }
+                return text.Length
+            }
+
+            Run(func() { })
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
     }
 
     [Fact]

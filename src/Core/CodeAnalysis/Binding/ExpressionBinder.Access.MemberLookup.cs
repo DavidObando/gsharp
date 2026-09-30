@@ -370,7 +370,8 @@ internal sealed partial class ExpressionBinder
     private static bool SamePropertySlot(
         PropertySymbol selected,
         PropertySymbol declared,
-        MemberOperation operation)
+        MemberOperation operation,
+        InterfaceSymbol? declaredOwner = null)
     {
         if (!HasRequiredAccessor(selected, operation)
             || !HasRequiredAccessor(declared, operation))
@@ -409,12 +410,16 @@ internal sealed partial class ExpressionBinder
         }
 
         return selected.Name == declared.Name
-                && Equals(selected.Type, declared.Type)
+                && Equals(
+                    selected.Type,
+                    declaredOwner?.SubstituteMemberType(declared.Type) ?? declared.Type)
                 && selected.ReturnRefKind == declared.ReturnRefKind
                 && selected.Parameters.Length == declared.Parameters.Length
                 && selected.Parameters.Zip(declared.Parameters).All(pair =>
                     pair.First.RefKind == pair.Second.RefKind
-                    && Equals(pair.First.Type, pair.Second.Type));
+                    && Equals(
+                        pair.First.Type,
+                        declaredOwner?.SubstituteMemberType(pair.Second.Type) ?? pair.Second.Type));
 
         static bool HasRequiredAccessor(PropertySymbol property, MemberOperation operation)
             => operation == MemberOperation.Read ? property.HasGetter : property.HasSetter;
