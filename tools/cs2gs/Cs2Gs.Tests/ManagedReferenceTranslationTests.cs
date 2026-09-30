@@ -2978,11 +2978,59 @@ public sealed class ManagedReferenceTranslationTests
             context.Diagnostics,
             diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
                 && diagnostic.Message.Contains(
-                    "direct null params-collection argument",
+                    "direct null/default params carrier",
                     StringComparison.Ordinal));
         Assert.True(
             text.Contains("Rows[managed[int32]?]", StringComparison.Ordinal),
             text);
+    }
+
+    [Theory]
+    [InlineData("T[]", "null")]
+    [InlineData("T[]", "default")]
+    [InlineData("T[]", "default(ManagedRef<int>[])")]
+    [InlineData("IEnumerable<T>", "default")]
+    [InlineData(
+        "IEnumerable<T>",
+        "default(IEnumerable<ManagedRef<int>>)")]
+    public void ManagedReferenceArrayParamsInitializerRejectsNullOrDefaultCarrier(
+        string carrierType,
+        string carrier)
+    {
+        var source = $$"""
+            using System.Collections;
+            using System.Collections.Generic;
+            using Gsharp.Values;
+            namespace ManagedArrayParamsInitializerNullOrDefaultCarrier;
+            public sealed class Rows<T> : IEnumerable {
+                public void Add(int key, params {{carrierType}} added) { }
+                public IEnumerator GetEnumerator() => System.Array.Empty<T>().GetEnumerator();
+            }
+            public class Probe {
+                public static void Run() {
+                    var rows = new Rows<ManagedRef<int>> {
+                        { 1, {{carrier}} },
+                    };
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayParamsInitializerNullOrDefaultCarrier.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        new CSharpToGSharpTranslator().TranslateDocument(document, context);
+        Assert.Contains(
+            context.Diagnostics,
+            diagnostic => diagnostic.Severity == TranslationSeverity.Unsupported
+                && diagnostic.Message.Contains(
+                    "direct null/default params carrier",
+                    StringComparison.Ordinal));
     }
 
     [Fact]

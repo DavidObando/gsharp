@@ -4145,16 +4145,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return false;
             }
 
-            ExpressionSyntax unsupportedNullParamsCollection =
+            ExpressionSyntax unsupportedNullParamsCarrier =
                 isCollectionInitializer
                     ? initializer.Expressions.FirstOrDefault(
-                        this.IsUnsupportedDirectNullParamsCollectionElement)
+                        this.IsUnsupportedDirectNullParamsCarrierElement)
                     : null;
-            if (unsupportedNullParamsCollection != null)
+            if (unsupportedNullParamsCarrier != null)
             {
                 this.context.ReportUnsupported(
-                    unsupportedNullParamsCollection,
-                    "a direct null params-collection argument has no exact G# form: a G# variadic call always materializes the carrier.");
+                    unsupportedNullParamsCarrier,
+                    "a direct null/default params carrier has no exact G# form: a G# variadic call always materializes the carrier.");
                 result = BuildConstruction(type, arguments);
                 return true;
             }
@@ -4191,7 +4191,7 @@ public sealed partial class CSharpToGSharpTranslator
             return true;
         }
 
-        private bool IsUnsupportedDirectNullParamsCollectionElement(
+        private bool IsUnsupportedDirectNullParamsCarrierElement(
             ExpressionSyntax element)
         {
             IReadOnlyList<ExpressionSyntax> values =
@@ -4211,9 +4211,10 @@ public sealed partial class CSharpToGSharpTranslator
 
             IParameterSymbol parameter = addMethod.Parameters[^1];
             return parameter.IsParams
-                && parameter.Type is INamedTypeSymbol collection
-                && IsSupportedParamsCollectionType(collection)
-                && IsNullOrSuppressedNull(values[^1]);
+                && (parameter.Type is IArrayTypeSymbol
+                    || (parameter.Type is INamedTypeSymbol collection
+                        && IsSupportedParamsCollectionType(collection)))
+                && IsNullOrDefaultLiteral(values[^1]);
         }
 
         // Lowers a collection initializer containing an N-ary (N != 2) complex
