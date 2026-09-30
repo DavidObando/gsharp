@@ -29,6 +29,13 @@ public sealed partial class CSharpToGSharpTranslator
             (ExpressionSyntax Source, IReadOnlyList<int> Path)>
             reachingTupleProjections = new();
 
+        private enum DelegateArgumentBehavior
+        {
+            NotObserved,
+            InvokedDuringCall,
+            Escapes,
+        }
+
         private IEnumerable<GStatement> TranslateLocalDeclaration(VariableDeclarationSyntax declaration, bool isConst, bool isUsing = false, bool isAwait = false)
         {
             // Issue #1900: `ref int r = ref xs[1];` — a ref local. `declaration.Type`
@@ -1554,11 +1561,13 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ExpressionSyntax value;
                 int position;
+                bool includeLaterStates;
                 switch (escape)
                 {
                     case ReturnStatementSyntax { Expression: { } returned }:
                         value = returned;
                         position = returned.Span.End - 1;
+                        includeLaterStates = true;
                         break;
 
                     case YieldStatementSyntax
@@ -1568,6 +1577,7 @@ public sealed partial class CSharpToGSharpTranslator
                     }:
                         value = yielded;
                         position = yielded.Span.End - 1;
+                        includeLaterStates = true;
                         break;
 
                     case ArgumentSyntax argument
@@ -1578,11 +1588,20 @@ public sealed partial class CSharpToGSharpTranslator
                                 ?? this.context.GetTypeInfo(
                                     argument.Expression).Type)
                             is { TypeKind: TypeKind.Delegate }:
+                        DelegateArgumentBehavior behavior =
+                            this.GetDelegateArgumentBehavior(argument);
+                        if (behavior == DelegateArgumentBehavior.NotObserved)
+                        {
+                            continue;
+                        }
+
                         value = argument.Expression;
                         position = argument.Parent?.Parent
                             is InvocationExpressionSyntax escapedInvocation
                                 ? escapedInvocation.ArgumentList.CloseParenToken.SpanStart
                                 : argument.Span.End;
+                        includeLaterStates =
+                            behavior == DelegateArgumentBehavior.Escapes;
                         break;
 
                     default:
@@ -1607,12 +1626,16 @@ public sealed partial class CSharpToGSharpTranslator
                 if (reachesCallable)
                 {
                     yield return position;
-                    foreach (StatementSyntax later in
-                        EagerExecutionNodes(executionBody)
-                            .OfType<StatementSyntax>()
-                            .Where(statement => statement.SpanStart > escape.SpanStart))
+                    if (includeLaterStates)
                     {
-                        yield return later.Span.End - 1;
+                        foreach (StatementSyntax later in
+                            EagerExecutionNodes(executionBody)
+                                .OfType<StatementSyntax>()
+                                .Where(statement =>
+                                    statement.SpanStart > escape.SpanStart))
+                        {
+                            yield return later.Span.End - 1;
+                        }
                     }
                 }
             }
@@ -1680,6 +1703,93 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                 }
             }
+        }
+
+        private DelegateArgumentBehavior GetDelegateArgumentBehavior(
+            ArgumentSyntax argument)
+        {
+            IParameterSymbol parameter = DetermineParameter(argument, this.context);
+            if (parameter == null
+                || parameter.DeclaringSyntaxReferences.IsDefaultOrEmpty)
+            {
+                return DelegateArgumentBehavior.Escapes;
+            }
+
+            bool invoked = false;
+            foreach (SyntaxReference reference in parameter.DeclaringSyntaxReferences)
+            {
+                if (reference.GetSyntax() is not ParameterSyntax declaration)
+                {
+                    return DelegateArgumentBehavior.Escapes;
+                }
+
+                SemanticModel model = declaration.SyntaxTree
+                    == this.context.SemanticModel.SyntaxTree
+                        ? this.context.SemanticModel
+                        : this.context.Compilation.GetSemanticModel(
+                            declaration.SyntaxTree);
+                SyntaxNode executable = declaration.Ancestors().FirstOrDefault(
+                    node => node is BaseMethodDeclarationSyntax
+                        or LocalFunctionStatementSyntax
+                        or AnonymousFunctionExpressionSyntax);
+                if (executable == null)
+                {
+                    return DelegateArgumentBehavior.Escapes;
+                }
+
+                SyntaxNode body = executable switch
+                {
+                    LocalFunctionStatementSyntax { Body: { } block } => block,
+                    LocalFunctionStatementSyntax
+                    { ExpressionBody.Expression: { } expression } => expression,
+                    AnonymousFunctionExpressionSyntax anonymous => anonymous.Body,
+                    _ => executable,
+                };
+                foreach (IdentifierNameSyntax use in EagerExecutionNodes(body)
+                    .OfType<IdentifierNameSyntax>()
+                    .Where(identifier =>
+                        SymbolEqualityComparer.Default.Equals(
+                            model.GetSymbolInfo(identifier).Symbol,
+                            parameter)))
+                {
+                    if (!DelegateParameterUseIsInvocation(use))
+                    {
+                        return DelegateArgumentBehavior.Escapes;
+                    }
+
+                    invoked = true;
+                }
+            }
+
+            return invoked
+                ? DelegateArgumentBehavior.InvokedDuringCall
+                : DelegateArgumentBehavior.NotObserved;
+        }
+
+        private static bool DelegateParameterUseIsInvocation(
+            IdentifierNameSyntax use)
+        {
+            if (use.Parent is InvocationExpressionSyntax direct
+                && direct.Expression == use)
+            {
+                return true;
+            }
+
+            if (use.Parent is MemberAccessExpressionSyntax member
+                && member.Expression == use
+                && member.Name.Identifier.ValueText == "Invoke"
+                && member.Parent is InvocationExpressionSyntax)
+            {
+                return true;
+            }
+
+            return use.Parent is ConditionalAccessExpressionSyntax conditional
+                && conditional.Expression == use
+                && conditional.WhenNotNull
+                    is InvocationExpressionSyntax invocation
+                && invocation.Expression
+                    is MemberBindingExpressionSyntax binding
+                && binding.Name.Identifier.ValueText == "Invoke";
         }
 
         private static bool LocalFunctionMatches(

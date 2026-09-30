@@ -1662,6 +1662,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static void Overwrite(out System.Action callback) =>
                     callback = () => { };
 
+                private static void Observe(System.Action callback)
+                {
+                }
+
                 public static void M<T>(T replacement)
                 {
                     var pair = (replacement, replacement);
@@ -1673,6 +1677,15 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     Overwrite(out callback);
                     pair = (default(T), replacement);
                     callback();
+
+                    var observedPair = (replacement, replacement);
+                    System.Action observed = () =>
+                    {
+                        var (observedLeft, _) = observedPair;
+                        Keep(ref observedLeft);
+                    };
+                    Observe(observed);
+                    observedPair = (default(T), replacement);
                 }
             }
             """;
@@ -1680,6 +1693,7 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         string printed = Translate(source);
 
         Assert.DoesNotMatch(@"\b(let|var) deadLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) observedLeft T\? =", printed);
     }
 
     private static ILocalSymbol Local(SyntaxNode root, SemanticModel model, string name)
