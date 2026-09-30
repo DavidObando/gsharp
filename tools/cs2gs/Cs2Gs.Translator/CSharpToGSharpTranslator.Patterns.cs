@@ -4310,6 +4310,23 @@ public sealed partial class CSharpToGSharpTranslator
                     || this.context.GetTypeInfo(item.Expression).Type?.NullableAnnotation
                         == NullableAnnotation.Annotated);
 
+            // An in-scope extension Add applicable to the target may be the
+            // bound method; its nullability is not modeled here, so fail safe.
+            if (nullableElement
+                && this.context.SemanticModel.LookupSymbols(
+                        collection.SpanStart,
+                        container: (INamespaceOrTypeSymbol)target,
+                        name: "Add",
+                        includeReducedExtensionMethods: true)
+                    .OfType<IMethodSymbol>()
+                    .Any(method => method.MethodKind == MethodKind.ReducedExtension))
+            {
+                this.context.ReportUnsupported(
+                    collection,
+                    "collection expression element binds through an Add overload set whose nullability cannot be decided; no exact G# translation exists.");
+                return null;
+            }
+
             // A generic Add is only the bound method when no non-generic one
             // matches; then a nullable element cannot be judged here.
             if ((anyAnnotated && anyUnannotated)
