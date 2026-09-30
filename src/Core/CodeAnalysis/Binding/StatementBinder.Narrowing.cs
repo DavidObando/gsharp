@@ -942,7 +942,7 @@ internal sealed partial class StatementBinder
         summary = CreateFinallyFlowSummary(
             finallyClause,
             finallyBlock,
-            externalCallableAliases);
+            finallyEntryExternalCallableAliases[finallyClause]);
         finallyFlowSummaries.Add(finallyBlock, summary);
         return summary;
     }
@@ -1718,6 +1718,8 @@ internal sealed partial class StatementBinder
         private readonly HashSet<BoundFunctionLiteralExpression> visitedFunctionLiterals = new();
         private readonly HashSet<BoundLabel> pendingConditionalTargets = new();
         private readonly HashSet<BoundLabel> visitedLabels = new();
+        private readonly Dictionary<BoundLabel, int> callableInvocationCountsAtLabel = new();
+        private readonly List<VariableSymbol> callableInvocations = new();
         private readonly Stack<VariableSymbol> enclosingGlobalAssignments = new();
         private HashSet<VariableSymbol>? globalMutationProtectedRoots;
         private HashSet<VariableSymbol>? tryAssignedVariables;
@@ -1782,12 +1784,22 @@ internal sealed partial class StatementBinder
             {
                 visitedLabels.Add(label.Label);
                 pendingConditionalTargets.Remove(label.Label);
+                callableInvocationCountsAtLabel[label.Label] = callableInvocations.Count;
             }
             else if (node is BoundGotoStatement gotoStatement)
             {
                 if (!visitedLabels.Contains(gotoStatement.Label))
                 {
                     pendingConditionalTargets.Add(gotoStatement.Label);
+                }
+                else if (callableInvocationCountsAtLabel.TryGetValue(
+                             gotoStatement.Label,
+                             out var invocationStart))
+                {
+                    for (var i = invocationStart; i < callableInvocations.Count; i++)
+                    {
+                        AnalyzeCallableVariable(callableInvocations[i]);
+                    }
                 }
             }
 
@@ -2241,7 +2253,13 @@ internal sealed partial class StatementBinder
                 return;
             }
 
-            if (functionLiterals.TryGetValue(variable.Variable, out var literals))
+            callableInvocations.Add(variable.Variable);
+            AnalyzeCallableVariable(variable.Variable);
+        }
+
+        private void AnalyzeCallableVariable(VariableSymbol variable)
+        {
+            if (functionLiterals.TryGetValue(variable, out var literals))
             {
                 foreach (var literal in literals)
                 {
@@ -2251,12 +2269,12 @@ internal sealed partial class StatementBinder
 
             // A read-only callable parameter originates outside this function
             // and cannot capture this function's local slots.
-            MayMutateAnyRoot |= unknownFunctionValues.Contains(variable.Variable)
-                || (variable.Variable is not ParameterSymbol { IsReadOnly: true }
-                    && !externalFunctionValues.Contains(variable.Variable)
-                    && !functionLiterals.ContainsKey(variable.Variable));
-            if (variable.Variable is ParameterSymbol { IsReadOnly: true }
-                || externalFunctionValues.Contains(variable.Variable))
+            MayMutateAnyRoot |= unknownFunctionValues.Contains(variable)
+                || (variable is not ParameterSymbol { IsReadOnly: true }
+                    && !externalFunctionValues.Contains(variable)
+                    && !functionLiterals.ContainsKey(variable));
+            if (variable is ParameterSymbol { IsReadOnly: true }
+                || externalFunctionValues.Contains(variable))
             {
                 MarkMayMutateGlobalRoots();
             }
@@ -2455,8 +2473,24 @@ internal sealed partial class StatementBinder
                 return;
             }
 
+            if (expression is BoundConditionalAddressExpression conditional)
+            {
+                RecordWritableReference(conditional.WhenTrueOperand);
+                RecordWritableReference(conditional.WhenFalseOperand);
+                return;
+            }
+
             if (!SmartCastStability.TryGetStableMemberPath(expression, out var path, out _))
             {
+                if (expression is BoundIndexExpression or BoundClrIndexExpression)
+                {
+                    MayMutateMemberPaths = true;
+                }
+                else
+                {
+                    MayMutateAnyRoot = true;
+                }
+
                 return;
             }
 
@@ -3218,9 +3252,7 @@ internal sealed partial class StatementBinder
 
         var declaredVariable = Invariant.Required(variable, "a variable declaration produces a variable symbol");
         if (convertedInitializer is { } callableInitializer
-            && (declaredVariable.IsReadOnly
-                ? IsExternalCallableSource(callableInitializer)
-                : IsMethodCallableSource(callableInitializer)))
+            && IsExternalCallableSource(callableInitializer))
         {
             externalCallableAliases.Add(declaredVariable);
         }

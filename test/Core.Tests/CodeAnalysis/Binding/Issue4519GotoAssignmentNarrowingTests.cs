@@ -4796,6 +4796,90 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyUsesCallableStateAtEntry()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = clear
+                try {
+                    goto Done
+                }
+                finally {
+                    text = "safe"
+                    action()
+                    action = callback
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { })
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyConditionalOutInvalidatesBothPossibleRoots()
+    {
+        var result = Evaluate("""
+            func Clear(out value string?) {
+                value = nil
+            }
+
+            func Run(clearText bool) int32 {
+                var text string? = nil
+                var other string? = nil
+                text = "safe"
+                other = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    Clear(out (clearText ? text : other))
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallyPreservesMutableAliasInitializedFromReadonlyCallback()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(callback (() -> void)) int32 {
+                var text string? = nil
+                text = "safe"
+                var action = callback
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return text.Length
+            }
+
+            Console.WriteLine(Run(func() { }))
+            """, "4");
+    }
+
+    [Fact]
     public void ImportedCallRecovery_DoesNotRebindInlineOutVariable()
     {
         var result = EmittedOracle.Evaluate(

@@ -405,6 +405,8 @@ internal sealed partial class StatementBinder
         BoundStatement? finallyBlock = null;
         if (syntax.FinallyClause != null)
         {
+            finallyEntryExternalCallableAliases[syntax.FinallyClause] =
+                externalCallableAliases.ToImmutableArray();
             var inheritedReachability = currentStatementListFallsThrough;
             currentStatementListFallsThrough = handlersReachable;
             exceptionHandlerRegions.Push(syntax.FinallyClause);

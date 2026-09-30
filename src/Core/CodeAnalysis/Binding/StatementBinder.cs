@@ -114,6 +114,8 @@ internal sealed partial class StatementBinder
     private readonly Stack<BoundStatement> activeCleanupStatements = new();
     private readonly Stack<GotoCleanupRegion> activeCleanupRegions = new();
     private readonly Dictionary<FinallyClauseSyntax, BoundStatement> boundFinallyBlocks = new();
+    private readonly Dictionary<FinallyClauseSyntax, ImmutableArray<VariableSymbol>>
+        finallyEntryExternalCallableAliases = new();
     private readonly Dictionary<BoundStatement, FinallyFlowSummary> finallyFlowSummaries = new();
     private readonly Dictionary<string, ImmutableArray<SyntaxNode>> userLabelHandlerRegions =
         new(StringComparer.Ordinal);

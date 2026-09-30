@@ -163,6 +163,7 @@ internal sealed partial class StatementBinder
         binderCtx.PendingGotoNarrowingSnapshots.Clear();
         binderCtx.BackwardGotoNarrowingStates.Clear();
         boundFinallyBlocks.Clear();
+        finallyEntryExternalCallableAliases.Clear();
         finallyFlowSummaries.Clear();
         activeCleanupStatements.Clear();
         activeCleanupRegions.Clear();
@@ -486,6 +487,8 @@ internal sealed partial class StatementBinder
         var potentialReachabilityLabelSnapshot = binderCtx.PotentialReachabilityLabel;
         var userGotoHandlerSnapshot = userGotoHandlerRegions.ToArray();
         var boundFinallyBlocksSnapshot = boundFinallyBlocks.ToArray();
+        var finallyEntryExternalCallableAliasesSnapshot =
+            finallyEntryExternalCallableAliases.ToArray();
         var finallyFlowSummariesSnapshot = finallyFlowSummaries.ToArray();
         var activeFinallyClausesSnapshot = activeFinallyClauses.ToArray();
         var activeCleanupStatementsSnapshot = activeCleanupStatements.ToArray();
@@ -584,6 +587,9 @@ internal sealed partial class StatementBinder
         }
 
         RestoreDictionary(boundFinallyBlocks, boundFinallyBlocksSnapshot);
+        RestoreDictionary(
+            finallyEntryExternalCallableAliases,
+            finallyEntryExternalCallableAliasesSnapshot);
         RestoreDictionary(finallyFlowSummaries, finallyFlowSummariesSnapshot);
         activeFinallyClauses.Clear();
         for (var i = activeFinallyClausesSnapshot.Length - 1; i >= 0; i--)
