@@ -17,7 +17,7 @@ namespace Cs2Gs.Tests;
 /// <summary>
 /// Issues #3353/#3358: a C# deconstruction assignment into existing variables
 /// or storage locations renders as G#'s native multi-target assignment rather
-/// than the <c>let (__decon0, __decon1) = …</c> plus per-target-write triple.
+/// than a temporary tuple binding plus per-target-write triple.
 /// <para>
 /// ADR-0015 evaluates every right-hand expression left-to-right into temporaries
 /// BEFORE any write, then assigns left-to-right — exactly the order C# specifies,
@@ -201,7 +201,8 @@ public sealed class C
 }",
             "G# deconstruction currently supports tuples and data structs, not C# Deconstruct methods.");
 
-        Assert.Contains("__decon", printed, StringComparison.Ordinal);
+        Assert.Contains("let (aValue, bValue) = Pair()", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", printed, StringComparison.Ordinal);
     }
 
     [Fact]
@@ -226,7 +227,7 @@ public sealed class C
     /// A nested target tuple has no flat multi-target form.
     /// </summary>
     [Fact]
-    public void NestedTargets_KeepTheDeconLowering()
+    public void NestedTargets_KeepRecursiveLoweringWithReadableCarriers()
     {
         string printed = Translate(@"
 public sealed class C
@@ -239,7 +240,9 @@ public sealed class C
     }
 }");
 
-        Assert.Contains("__decon", printed, StringComparison.Ordinal);
+        Assert.Contains("let (aTuple, cValue) = ((1, 2), 3)", printed, StringComparison.Ordinal);
+        Assert.Contains("let (aValue, bValue) = aTuple", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("__decon", printed, StringComparison.Ordinal);
     }
 
     private static string Translate(string source, string roundTripOnlyReason = null)

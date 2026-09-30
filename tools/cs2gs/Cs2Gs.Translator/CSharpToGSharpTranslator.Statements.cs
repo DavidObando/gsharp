@@ -802,7 +802,8 @@ public sealed partial class CSharpToGSharpTranslator
             || this.IsGSharpNullableAnalyzerExpression(operandSyntax)
             || this.NullableReferenceValueMayBeNull(operandSyntax)
             || this.ReceiverValueIsObliviouslyReadAnnotatedResult(operandSyntax)
-            || this.ReceiverValueIsPromotedNullable(operandSyntax);
+            || this.ReceiverValueIsPromotedNullable(operandSyntax)
+            || this.ComposedReceiverMayBeNull(operandSyntax);
 
         // Issue #1960 item 2: true when `assignment` is a `+=`/`-=` whose LEFT
         // side is delegate-typed (TypeKind.Delegate covers both a named delegate
@@ -2457,6 +2458,14 @@ public sealed partial class CSharpToGSharpTranslator
                 // statement, and nothing stops chaining several of them. A
                 // storage target inside a fallback shape is captured before the
                 // RHS by `LowerTupleAssignment`, preserving issue #2234 order.
+                if (assignment.Left is DeclarationExpressionSyntax
+                    {
+                        Designation: ParenthesizedVariableDesignationSyntax nestedDeclaration,
+                    })
+                {
+                    return this.LowerTupleDeclaration(nestedDeclaration, assignment.Right);
+                }
+
                 if (assignment.Left is TupleExpressionSyntax leftTuple)
                 {
                     return this.LowerTupleAssignment(leftTuple, assignment.Right);

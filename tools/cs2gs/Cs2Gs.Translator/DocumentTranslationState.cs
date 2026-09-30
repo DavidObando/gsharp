@@ -217,9 +217,16 @@ internal sealed class DocumentTranslationState
     // immutable (let) per ADR-0115 §B.3.
     public SyntaxNode CurrentBodyScope { get; set; }
 
-    // Monotonic counter for synthesizing unique temporaries when lowering
-    // tuple-deconstruction assignments (`(a, b) = (x, y)`); ADR-0115 §B.
-    public int DeconCounter { get; set; }
+    // Source-derived local names already allocated while recursively lowering
+    // tuple deconstruction, scoped by the active body so an unrelated earlier
+    // method cannot cause suffix drift in a later one.
+    public Dictionary<SyntaxNode, HashSet<string>> DeconstructionTempNamesByBody { get; } =
+        new Dictionary<SyntaxNode, HashSet<string>>();
+
+    // Emitted spellings occupied by source identifiers in each body. Building
+    // this once avoids rescanning every token for every structural carrier.
+    public Dictionary<SyntaxNode, HashSet<string>> DeconstructionOccupiedNamesByBody { get; } =
+        new Dictionary<SyntaxNode, HashSet<string>>();
 
     // Monotonic counter for synthesizing the hoist local when a loop condition
     // carries a binder-less side-effecting `is`-pattern clause (issue #914).

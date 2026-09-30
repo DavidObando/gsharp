@@ -1731,6 +1731,8 @@ public sealed partial class CSharpToGSharpTranslator
                 this.GenericResultInfersNilableThroughDroppedByRefSuppression(recv);
             bool managedArrayGenericResultRequiresAssertion =
                 this.ManagedReferenceArrayWidenedExpressionMayBeNull(recv);
+            bool composedReceiverMayBeNull =
+                this.ComposedReceiverMayBeNull(recv);
 
             if (!iteratorForeachReceiverRequiresAssertion
                 && !nullableForEachBindingRequiresAssertion
@@ -1756,7 +1758,8 @@ public sealed partial class CSharpToGSharpTranslator
                 || (!this.IsActivePatternBinding(recv)
                 && !this.ExpressionTreeForbidsReceiverAssertion(recv)
                 && !this.IsGSharpFlowNarrowedFieldOrPropertyInSameCondition(recv)
-                && (this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
+                && (composedReceiverMayBeNull
+                    || this.ReceiverNeedsNullForgiveness(recv, isDereferenceReceiver: true)
                     || this.ReceiverIsNullableReferenceFieldOrProperty(recv)
                     || this.NullableReferenceValueMayBeNull(recv))))
             {
@@ -1781,6 +1784,34 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return ParenthesizeIfBareNumericLiteral(translated);
+        }
+
+        // Issue #4555: a conditional, switch or `??` composition is nilable when
+        // any value arm is. Composed only from the existing per-operand
+        // readers; it computes no nullability of its own. Shared by the
+        // dereference-receiver boundary and string-concat operand coercion.
+        private bool ComposedReceiverMayBeNull(ExpressionSyntax receiver)
+        {
+            receiver = Unparenthesize(receiver);
+
+            bool OperandMayBeNull(ExpressionSyntax operand) =>
+                this.ComposedReceiverMayBeNull(operand)
+                    || this.ReceiverNeedsNullForgiveness(operand, isDereferenceReceiver: true)
+                    || this.ReceiverIsNullableReferenceFieldOrProperty(operand)
+                    || this.NullableReferenceValueMayBeNull(operand);
+
+            return receiver switch
+            {
+                ConditionalExpressionSyntax conditional =>
+                    OperandMayBeNull(conditional.WhenTrue)
+                        || OperandMayBeNull(conditional.WhenFalse),
+                SwitchExpressionSyntax switchExpression =>
+                    switchExpression.Arms.Any(arm => OperandMayBeNull(arm.Expression)),
+                BinaryExpressionSyntax coalesce
+                    when coalesce.IsKind(SyntaxKind.CoalesceExpression) =>
+                        OperandMayBeNull(coalesce.Right),
+                _ => false,
+            };
         }
 
         /// <summary>

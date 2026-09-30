@@ -749,19 +749,13 @@ public sealed partial class CSharpToGSharpTranslator
                 this.IsTrueDiscard(discardCandidate)) ||
                 targetExpr is DeclarationExpressionSyntax { Designation: DiscardDesignationSyntax };
 
-        // True when EVERY leaf of a (possibly nested) tuple pattern is a
-        // discard, e.g. `(_, _)` or `(_, (_, _))` — the whole arm is then
-        // dead and can be skipped without allocating any temp or recursing
-        // into it (issue #2099, item 3).
-        private bool IsAllDiscardTuple(TupleExpressionSyntax pattern)
+        // True when every immediate element is a discard. A nested tuple must
+        // recurse because its corresponding value may use a custom Deconstruct.
+        private bool HasOnlyImmediateDiscards(TupleExpressionSyntax pattern)
         {
             foreach (ArgumentSyntax argument in pattern.Arguments)
             {
-                ExpressionSyntax element = argument.Expression;
-                bool elementIsAllDiscard = element is TupleExpressionSyntax nestedTuple
-                    ? this.IsAllDiscardTuple(nestedTuple)
-                    : this.IsDeconstructionDiscard(element);
-                if (!elementIsAllDiscard)
+                if (!this.IsDeconstructionDiscard(argument.Expression))
                 {
                     return false;
                 }
@@ -800,8 +794,8 @@ public sealed partial class CSharpToGSharpTranslator
         /// <summary>
         /// Issue #3358: renders a C# deconstruction assignment as G#'s native
         /// multi-target assignment (<c>a, b = b, a</c>, ADR-0015) when every part
-        /// of the shape is expressible, replacing the
-        /// <c>let (__decon0, __decon1) = …</c> plus per-target-write triple.
+        /// of the shape is expressible, replacing a temporary tuple binding
+        /// plus per-target-write triple.
         /// </summary>
         /// <remarks>
         /// ADR-0015 evaluates every right-hand expression left-to-right into
@@ -994,10 +988,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ExpressionSyntax targetExpr = pattern.Arguments[i].Expression;
 
-                // Issue #3501 (__decon retirement): a single-variable
+                // Issue #3501 (synthetic-name retirement): a single-variable
                 // declaration element (`(int probeExit, _) = …`) binds its
                 // REAL name directly in the native `let (…)` instead of a
-                // `__deconN` temp plus a re-declaration — provided the local
+                // structural temp plus a re-declaration — provided the local
                 // is never reassigned (the tuple binding is `let`) and its
                 // declared type matches the RHS element (a `var` designation
                 // matches by construction; an explicit type must equal the
@@ -1020,13 +1014,19 @@ public sealed partial class CSharpToGSharpTranslator
                 // A nested tuple target needs its own real temp to recurse
                 // into — UNLESS every leaf underneath it is itself a true
                 // discard, in which case the whole nested arm is dead and
-                // recursing into it would only emit a pointless inner
-                // `let (_, _) = __deconN` binding (issue #2099, item 3).
+                // the RHS element is an actual tuple. A custom Deconstruct
+                // method must still run even when every output is discarded.
+                bool sideEffectFreeAllDiscardTuple =
+                    targetExpr is TupleExpressionSyntax nestedDiscardCheck
+                    && this.HasOnlyImmediateDiscards(nestedDiscardCheck)
+                    && rhsTupleType is { IsTupleType: true }
+                    && i < rhsTupleType.TupleElements.Length
+                    && rhsTupleType.TupleElements[i].Type is INamedTypeSymbol { IsTupleType: true };
                 bool needsRealTemp = forceRealTemps ||
-                    (targetExpr is TupleExpressionSyntax nestedDiscardCheck
-                        ? !this.IsAllDiscardTuple(nestedDiscardCheck)
-                        : !this.IsDeconstructionDiscard(targetExpr));
-                temps.Add(needsRealTemp ? $"__decon{this.state.DeconCounter++}" : "_");
+                    (!sideEffectFreeAllDiscardTuple && !this.IsDeconstructionDiscard(targetExpr));
+                temps.Add(needsRealTemp
+                    ? this.AllocateDeconstructionTempName(targetExpr)
+                    : "_");
             }
 
             // Spill the WHOLE right-hand side in one native decon-binding.
@@ -1066,7 +1066,18 @@ public sealed partial class CSharpToGSharpTranslator
                     // to flatten every depth into one `let (...)` (issue
                     // #1974). The recursive rhsValue is already a bare temp
                     // read, so no further spill is needed before recursing.
-                    List<GExpression> nestedValues = this.LowerTuplePattern(nestedTuple, tempRead, forceRealTemps, statements, captured);
+                    INamedTypeSymbol nestedRhsTupleType =
+                        rhsTupleType is { IsTupleType: true }
+                            && i < rhsTupleType.TupleElements.Length
+                            ? rhsTupleType.TupleElements[i].Type as INamedTypeSymbol
+                            : null;
+                    List<GExpression> nestedValues = this.LowerTuplePattern(
+                        nestedTuple,
+                        tempRead,
+                        forceRealTemps,
+                        statements,
+                        captured,
+                        nestedRhsTupleType);
                     values.Add(forceRealTemps ? new TupleLiteralExpression(nestedValues) : null);
                     continue;
                 }
@@ -1096,7 +1107,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // `(x, _) = (1, 2)`) so its value can be reconstructed into
                 // the outer tuple, but `_` isn't a real assignable location —
                 // skip the write itself to avoid emitting a stray, dead
-                // `_ = __decon1;` statement (issue #2099).
+                // discard write-back statement (issue #2099).
                 if (!this.IsDeconstructionDiscard(targetExpr))
                 {
                     // A member/element-access target was already captured
@@ -1113,6 +1124,138 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return values;
+        }
+
+        // G# tuple bindings are deliberately flat (ADR-0168; the issue #4300
+        // driver probe rejects `let (a, (b, c)) = ...`), so recursive lowering
+        // still needs a carrier for each structural arm. Derive that carrier
+        // from the first source leaf and reserve every identifier in the body;
+        // this is the smallest collision-safe replacement for `__deconN`.
+        private string AllocateDeconstructionTempName(
+            SyntaxNode anchor,
+            string preferredName = null)
+        {
+            string stem = this.nameAllocator.GetName(
+                preferredName ?? this.DeconstructionTempStem(anchor));
+            SyntaxNode body = this.state.CurrentBodyScope ?? anchor.SyntaxTree.GetRoot();
+            if (!this.state.DeconstructionOccupiedNamesByBody.TryGetValue(
+                body,
+                out HashSet<string> occupied))
+            {
+                occupied = this.CollectOccupiedDeconstructionNames(body);
+                this.state.DeconstructionOccupiedNamesByBody.Add(body, occupied);
+            }
+
+            if (!this.state.DeconstructionTempNamesByBody.TryGetValue(
+                body,
+                out HashSet<string> allocated))
+            {
+                allocated = new HashSet<string>(StringComparer.Ordinal);
+                this.state.DeconstructionTempNamesByBody.Add(body, allocated);
+            }
+
+            string candidate = stem;
+            for (int suffix = 2; occupied.Contains(candidate) || allocated.Contains(candidate); suffix++)
+            {
+                candidate = stem + suffix.ToString(CultureInfo.InvariantCulture);
+            }
+
+            allocated.Add(candidate);
+            return candidate;
+        }
+
+        private HashSet<string> CollectOccupiedDeconstructionNames(SyntaxNode body)
+        {
+            bool DescendIntoCurrentBody(SyntaxNode node) =>
+                ReferenceEquals(node, body) ||
+                node is not (AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax);
+
+            var occupied = new HashSet<string>(StringComparer.Ordinal);
+            foreach (SyntaxToken token in body.DescendantTokens(DescendIntoCurrentBody))
+            {
+                if (token.IsKind(SyntaxKind.IdentifierToken))
+                {
+                    occupied.Add(this.nameAllocator.GetName(token.ValueText));
+                }
+            }
+
+            foreach (LocalFunctionStatementSyntax localFunction in
+                body.DescendantNodes().OfType<LocalFunctionStatementSyntax>())
+            {
+                if (FindNestedFunction(localFunction.Parent, body) == null)
+                {
+                    occupied.Add(this.EmittedName(localFunction, localFunction.Identifier));
+                }
+            }
+
+            foreach (SimpleNameSyntax name in
+                body.DescendantNodes().OfType<SimpleNameSyntax>())
+            {
+                if (FindNestedFunction(name.Parent, body) == null)
+                {
+                    continue;
+                }
+
+                ISymbol symbol = this.context.GetSymbolInfo(name).Symbol;
+                if (symbol != null && !IsDeclaredInNestedFunction(symbol, body))
+                {
+                    occupied.Add(this.EmittedName(symbol, name.Identifier.ValueText));
+                }
+            }
+
+            return occupied;
+        }
+
+        private static SyntaxNode FindNestedFunction(SyntaxNode node, SyntaxNode body)
+        {
+            for (SyntaxNode current = node; current != null && current != body; current = current.Parent)
+            {
+                if (current is AnonymousFunctionExpressionSyntax or LocalFunctionStatementSyntax)
+                {
+                    return current;
+                }
+            }
+
+            return null;
+        }
+
+        private static bool IsDeclaredInNestedFunction(ISymbol symbol, SyntaxNode body)
+        {
+            foreach (SyntaxReference reference in symbol.DeclaringSyntaxReferences)
+            {
+                if (reference.SyntaxTree != body.SyntaxTree || !body.Span.Contains(reference.Span))
+                {
+                    continue;
+                }
+
+                SyntaxNode declaration = reference.GetSyntax();
+                if (FindNestedFunction(declaration.Parent, body) != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
+
+        private string DeconstructionTempStem(SyntaxNode anchor)
+        {
+            SingleVariableDesignationSyntax declaredLeaf = anchor
+                .DescendantNodesAndSelf()
+                .OfType<SingleVariableDesignationSyntax>()
+                .FirstOrDefault();
+            SyntaxToken sourceLeaf = declaredLeaf?.Identifier ?? anchor.DescendantTokens()
+                .FirstOrDefault(token =>
+                    token.IsKind(SyntaxKind.IdentifierToken) &&
+                    token.ValueText != "_" &&
+                    token.ValueText != "var");
+            string leaf = sourceLeaf.RawKind == 0
+                ? "deconstructed"
+                : this.nameAllocator.GetName(sourceLeaf.ValueText);
+            bool structural = anchor is TupleExpressionSyntax
+                or ParenthesizedVariableDesignationSyntax
+                or DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax };
+            return leaf + (structural ? "Tuple" : "Value");
         }
 
 #nullable enable annotations
@@ -1143,11 +1286,24 @@ public sealed partial class CSharpToGSharpTranslator
 
             var parenthesized = (ParenthesizedVariableDesignationSyntax)designation;
             var temps = new List<string>(parenthesized.Variables.Count);
-            foreach (VariableDesignationSyntax child in parenthesized.Variables)
+            var directNames = new bool[parenthesized.Variables.Count];
+            for (int i = 0; i < parenthesized.Variables.Count; i++)
             {
-                temps.Add(child is DiscardDesignationSyntax && !preserveValue
-                    ? "_"
-                    : $"__decon{this.state.DeconCounter++}");
+                VariableDesignationSyntax child = parenthesized.Variables[i];
+                if (!preserveValue
+                    && child is SingleVariableDesignationSyntax childSingle
+                    && this.context.GetDeclaredSymbol(childSingle) is ILocalSymbol local
+                    && !this.IsLocalReassigned(local))
+                {
+                    temps.Add(this.EmittedName(childSingle, childSingle.Identifier));
+                    directNames[i] = true;
+                }
+                else
+                {
+                    temps.Add(!preserveValue && child is DiscardDesignationSyntax
+                        ? "_"
+                        : this.AllocateDeconstructionTempName(child));
+                }
             }
 
             statements.Add(new TupleDeconstructionStatement(BindingKind.Let, temps, value));
@@ -1157,6 +1313,12 @@ public sealed partial class CSharpToGSharpTranslator
                 if (temps[i] == "_")
                 {
                     values.Add(null);
+                    continue;
+                }
+
+                if (directNames[i])
+                {
+                    values.Add(new IdentifierExpression(temps[i]));
                     continue;
                 }
 
@@ -1178,6 +1340,25 @@ public sealed partial class CSharpToGSharpTranslator
             return preserveValue ? new TupleLiteralExpression(values) : null;
         }
 
+        private IEnumerable<GStatement> LowerTupleDeclaration(
+            ParenthesizedVariableDesignationSyntax designation,
+            ExpressionSyntax right)
+        {
+            return this.WithHoistedAssignments(
+                right,
+                includeSelf: true,
+                () =>
+                {
+                    var statements = new List<GStatement>();
+                    this.LowerDeconstructionDeclaration(
+                        designation,
+                        this.TranslateExpression(right),
+                        preserveValue: false,
+                        statements);
+                    return statements;
+                });
+        }
+
         private bool TryGetDeconstructionTargets(
             ExpressionSyntax left,
             out BindingKind binding,
@@ -1189,6 +1370,12 @@ public sealed partial class CSharpToGSharpTranslator
             // `var (a, b) = e`.
             if (left is DeclarationExpressionSyntax { Designation: ParenthesizedVariableDesignationSyntax parenthesized })
             {
+                if (parenthesized.Variables.Any(
+                    designation => designation is ParenthesizedVariableDesignationSyntax))
+                {
+                    return false;
+                }
+
                 var collected = new List<string>();
                 foreach (VariableDesignationSyntax designation in parenthesized.Variables)
                 {
@@ -1216,7 +1403,11 @@ public sealed partial class CSharpToGSharpTranslator
 
             // `(var a, var b) = e`.
             if (left is TupleExpressionSyntax tuple &&
-                tuple.Arguments.All(a => a.Expression is DeclarationExpressionSyntax))
+                tuple.Arguments.All(a =>
+                    a.Expression is DeclarationExpressionSyntax
+                    {
+                        Designation: SingleVariableDesignationSyntax or DiscardDesignationSyntax,
+                    }))
             {
                 var collected = new List<string>();
                 foreach (ArgumentSyntax argument in tuple.Arguments)
