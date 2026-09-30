@@ -401,6 +401,12 @@ internal sealed class ConversionClassifier
         ParameterSymbol? callParameter = null)
     {
         if (binderCtx.TryGetBackwardGotoNarrowingPath(expression, out var path, out var narrowedType)
+            && path.HasMembers
+            && TryRecoverDeclaredMemberPathConversion(expression, path, type, out var declaredRead))
+        {
+            expression = declaredRead;
+        }
+        else if (binderCtx.TryGetBackwardGotoNarrowingPath(expression, out path, out narrowedType)
             && (Invariant.Required(path, "a narrowed conversion has an access path").HasMembers
                 || !BinderContext.NarrowedReadChangesRuntimeType(
                     path.Root.Type,
@@ -420,6 +426,53 @@ internal sealed class ConversionClassifier
         {
             Diagnostics.ReportCannotConvert(diagnosticLocation, expression.Type, type);
             return new BoundErrorExpression(expression.Syntax);
+        }
+
+        static bool TryRecoverDeclaredMemberPathConversion(
+            BoundExpression expression,
+            AccessPath path,
+            TypeSymbol target,
+            [NotNullWhen(true)] out BoundExpression? declaredRead)
+        {
+            var declaredType = MemberLookup.GetDeclaredAccessPathType(path, expression.Type);
+            if (declaredType is NullableTypeSymbol
+                || declaredType is PlatformTypeSymbol
+                || !Conversion.IsRepresentationPreservingImplicit(declaredType, target))
+            {
+                declaredRead = null;
+                return false;
+            }
+
+            declaredRead = expression switch
+            {
+                BoundFieldAccessExpression field => new BoundFieldAccessExpression(
+                    field.Syntax,
+                    field.Receiver,
+                    field.StructType,
+                    field.Field,
+                    field.SubstitutedType,
+                    narrowedType: null),
+                BoundPropertyAccessExpression property => new BoundPropertyAccessExpression(
+                    property.Syntax,
+                    property.Receiver,
+                    property.StructType,
+                    property.Property,
+                    property.SubstitutedType,
+                    narrowedType: null,
+                    property.InterfaceType),
+                BoundClrPropertyAccessExpression property => new BoundClrPropertyAccessExpression(
+                    property.Syntax,
+                    property.Receiver,
+                    property.Member,
+                    declaredType,
+                    property.StaticContainerType,
+                    property.ConstrainedReceiverTypeParameter,
+                    property.ConstrainedInterfaceType,
+                    property.IsAddressableStaticField,
+                    property.IsReadOnlySubmissionGlobal),
+                _ => null,
+            };
+            return declaredRead != null;
         }
 
         // Issue #1238: a deferred target-typed conditional/if/switch argument

@@ -4871,6 +4871,194 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallySourcePropertyReadInvalidatesGlobalNarrowing()
+    {
+        var result = Evaluate("""
+            var text string? = nil
+
+            class Trigger {
+                prop Value int32 {
+                    get {
+                        text = nil
+                        return 0
+                    }
+                }
+            }
+
+            func Run() int32 {
+                text = "safe"
+                let trigger = Trigger()
+                try {
+                    goto Done
+                }
+                finally {
+                    let ignored = trigger.Value
+                }
+            Done:
+                return text.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallySourcePropertyWriteInvalidatesGlobalNarrowing()
+    {
+        var result = Evaluate("""
+            var text string? = nil
+
+            class Trigger {
+                prop Value int32 {
+                    get -> 0
+                    set {
+                        text = nil
+                    }
+                }
+            }
+
+            func Run() int32 {
+                text = "safe"
+                let trigger = Trigger()
+                try {
+                    goto Done
+                }
+                finally {
+                    trigger.Value = 1
+                }
+            Done:
+                return text.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallySourcePropertyReadInvalidatesMemberPathNarrowing()
+    {
+        var result = Evaluate("""
+            data class Box(Value string?) {
+            }
+
+            class Trigger {
+                let action (() -> void)
+
+                init(action (() -> void)) {
+                    this.action = action
+                }
+
+                prop Value int32 {
+                    get {
+                        action()
+                        return 0
+                    }
+                }
+            }
+
+            func Run() int32 {
+                var box = Box("safe")
+                let trigger = Trigger(func() { box = Box(nil) })
+                if box.Value != nil {
+                    try {
+                        goto Done
+                    }
+                    finally {
+                        let ignored = trigger.Value
+                    }
+                Done:
+                    return box.Value.Length
+                }
+                return 0
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_FinallySourceConstructionInvalidatesGlobalNarrowing()
+    {
+        var result = Evaluate("""
+            var text string? = nil
+
+            class Trigger {
+                init() {
+                    text = nil
+                }
+            }
+
+            func Run() int32 {
+                text = "safe"
+                try {
+                    goto Done
+                }
+                finally {
+                    Trigger()
+                }
+            Done:
+                return text.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_MemberPathDeclaredBaseConversionRemainsValid()
+    {
+        AssertRuns("""
+            import System
+
+            open class Animal {
+                open func Name() string -> "animal"
+            }
+            class Dog : Animal {
+                override func Name() string -> "dog"
+            }
+            class Cat : Animal {
+                override func Name() string -> "cat"
+            }
+            data class Holder(Pet Animal) {
+            }
+
+            func Run() string {
+                var holder = Holder(Dog{})
+                var count = 0
+                if holder.Pet is Dog {
+                Again:
+                    let animal Animal = holder.Pet
+                    if count == 0 {
+                        count++
+                        holder = Holder(Cat{})
+                        goto Again
+                    }
+                    return animal.Name()
+                }
+                return ""
+            }
+
+            Console.WriteLine(Run())
+            """, "cat");
+    }
+
+    [Fact]
     public void BackwardGoto_CapturedSiblingAssignmentPreservesDeclaredBaseConversion()
     {
         var result = Evaluate("""

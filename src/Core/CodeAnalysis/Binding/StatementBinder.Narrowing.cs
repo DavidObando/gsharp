@@ -1778,6 +1778,22 @@ internal sealed partial class StatementBinder
                 MayMutateMemberPaths = true;
             }
 
+            if (node is BoundPropertyAccessExpression { Property.IsAutoProperty: false })
+            {
+                MayMutateMemberPaths = true;
+            }
+
+            var sourceConstructionRunsUserCode = node is BoundConstructorCallExpression construction
+                && (construction.SelectedConstructor != null
+                    || !construction.StructType.InstanceFieldInitializers.IsEmpty);
+            var sourcePropertyRunsUserCode = node is BoundPropertyAccessExpression { Property.IsAutoProperty: false }
+                or BoundPropertyAssignmentExpression { Property.IsAutoProperty: false };
+            if (trackSourceCallGlobalMutations
+                && (sourcePropertyRunsUserCode || sourceConstructionRunsUserCode))
+            {
+                MarkMayMutateGlobalRoots();
+            }
+
             if (node is BoundCallOperationExpression
                 {
                     CalledFunction: FunctionSymbol function,
