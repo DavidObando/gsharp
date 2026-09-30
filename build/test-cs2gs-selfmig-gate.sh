@@ -41,6 +41,21 @@ config_path=$(printf '.editorconfig\0' | "$control" relevant-paths)
 [[ "$config_path" == .editorconfig ]]
 reusable_path=$(printf '.github/workflows/cs2gs-selfmig.yml\0' | "$control" relevant-paths)
 [[ "$reusable_path" == .github/workflows/cs2gs-selfmig.yml ]]
+# Every migrated root must select the gate, including the ones the old
+# hot-core scope missed, and an unknown new top-level path must fail safe.
+for migrated in test/Compiler.Tests/Foo.cs src/LanguageServer/Server.cs src/Repl/Repl.cs \
+  test-assets/Issue3119.CrossConstants/A.cs samples/ProjectRef/A.cs e2etests/x/a.csproj \
+  bench/concurrency/clr/a.cs newroot/a.txt .github/workflows/build.yml; do
+  printf '%s\0' "$migrated" | "$control" relevant-paths >/dev/null ||
+    { echo "'$migrated' unexpectedly skips the self-migration gate" >&2; exit 1; }
+done
+for inert in README.md docs/adr/0001-x.md website/docs/a.md design/x.png \
+  .github/workflows/cs2gs-selfmig-nightly.yml src/vscode-gsharp/src/a.ts; do
+  if printf '%s\0' "$inert" | "$control" relevant-paths >/dev/null; then
+    echo "'$inert' unexpectedly selects the self-migration gate" >&2
+    exit 1
+  fi
+done
 if printf 'x\0' | "$control" cancellation 2>/dev/null; then
   echo "the retired cancellation mode unexpectedly still exists" >&2
   exit 1
@@ -142,6 +157,35 @@ status=$(job_block selfmig-status)
 [[ -n "$status" ]] || fail "job 'selfmig-status' is missing"
 grep -Eq '^    needs: \[selfmig-scope, selfmig\]' <<< "$status" ||
   fail "'selfmig-status' must need selfmig-scope and selfmig"
+
+# The status job is the sole stable required check, so exercise its script
+# against every scope/selfmig result combination.
+status_script="$test_root/status.sh"
+awk '
+  $0 == "      - name: Evaluate" { found = 1; next }
+  found && $0 == "        run: |" { in_run = 1; next }
+  in_run && $0 ~ /^      - name:/ { exit }
+  in_run { sub(/^          /, ""); print }
+' <<< "$status" > "$status_script"
+grep -q 'SELFMIG_RESULT' "$status_script" || fail "could not extract the status script"
+
+run_status_case() {
+  local expected=$1 scope_result=$2 scope_run=$3 selfmig_result=$4 actual=0
+  SCOPE_RESULT="$scope_result" SCOPE_RUN="$scope_run" SELFMIG_RESULT="$selfmig_result" \
+    bash "$status_script" >/dev/null 2>&1 || actual=$?
+  if [[ "$expected" == pass && "$actual" != 0 ]] || [[ "$expected" == fail && "$actual" == 0 ]]; then
+    fail "status(scope=$scope_result run=$scope_run selfmig=$selfmig_result) expected $expected"
+  fi
+}
+
+run_status_case pass success false skipped
+run_status_case pass success true success
+run_status_case fail success true failure
+run_status_case fail success true skipped
+run_status_case fail success true cancelled
+run_status_case fail failure "" skipped
+run_status_case fail cancelled "" skipped
+run_status_case fail skipped "" skipped
 
 # The retired guard must not come back under its old required-check name.
 if grep -q 'hot-core-translation-guard' "$workflow"; then
