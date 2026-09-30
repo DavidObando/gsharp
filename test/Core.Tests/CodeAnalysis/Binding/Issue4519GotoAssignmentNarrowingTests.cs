@@ -4389,6 +4389,37 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_ImportedRefReturnsRecoverDeclaredBaseSlots()
+    {
+        var result = EmittedOracle.Evaluate(
+            """
+            import GSharp.Core.Tests.CodeAnalysis.Binding
+
+            func Run() int32 {
+                var x Issue4519ImportedRefBase = Issue4519ImportedRefDog()
+                var count = 0
+                if x is Issue4519ImportedRefDog {
+                Again:
+                    let value = x.Value + x.Read()
+                    if count == 0 {
+                        count++
+                        x = Issue4519ImportedRefCat()
+                        goto Again
+                    }
+                    return value
+                }
+                return 0
+            }
+
+            Run()
+            """,
+            new[] { typeof(Issue4519ImportedRefBase).Assembly.Location });
+
+        Assert.Empty(result.Diagnostics);
+        Assert.Equal(44, result.Value);
+    }
+
+    [Fact]
     public void ForwardGoto_FinallyDirectSourceCallInvalidatesGlobalNarrowing()
     {
         var result = Evaluate("""
@@ -4766,4 +4797,42 @@ public sealed class Issue4519ImportedCallCat : Issue4519ImportedCallReceiver
 
     /// <inheritdoc/>
     public string Describe() => "cat";
+}
+
+/// <summary>Imported base with ref-returning members used by declared-slot recovery tests.</summary>
+public class Issue4519ImportedRefBase
+{
+    private int value;
+
+    /// <summary>Initializes the stored value.</summary>
+    protected Issue4519ImportedRefBase(int value)
+    {
+        this.value = value;
+    }
+
+    /// <summary>Gets a mutable reference.</summary>
+    public ref int Value => ref value;
+
+    /// <summary>Returns a mutable reference.</summary>
+    public ref int Read() => ref value;
+}
+
+/// <summary>First imported ref-return implementation.</summary>
+public sealed class Issue4519ImportedRefDog : Issue4519ImportedRefBase
+{
+    /// <summary>Initializes a dog value.</summary>
+    public Issue4519ImportedRefDog()
+        : base(11)
+    {
+    }
+}
+
+/// <summary>Second imported ref-return implementation.</summary>
+public sealed class Issue4519ImportedRefCat : Issue4519ImportedRefBase
+{
+    /// <summary>Initializes a cat value.</summary>
+    public Issue4519ImportedRefCat()
+        : base(22)
+    {
+    }
 }

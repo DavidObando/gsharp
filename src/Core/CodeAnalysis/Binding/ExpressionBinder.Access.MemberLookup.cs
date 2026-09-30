@@ -164,12 +164,13 @@ internal sealed partial class ExpressionBinder
             rightPart,
             receiverSyntax,
             receiverStart);
+        var unwrappedResult = UnwrapTransparentMemberResult(result);
         if (receiver != null
             && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out var receiverPath, out _)
             && !receiverPath.HasMembers
             && receiverPath.Root.Type is not NullableTypeSymbol
             && rightPart is CallExpressionSyntax callSyntax
-            && result is BoundUserInstanceCallExpression call
+            && unwrappedResult is BoundUserInstanceCallExpression call
             && FindDeclaredMethod(
                 receiverPath.Root.Type,
                 callSyntax.Identifier.ValueText,
@@ -179,7 +180,7 @@ internal sealed partial class ExpressionBinder
                 receiverPath,
                 receiverSyntax?.Location ?? rightPart.Location);
             receiver = DeclaredReceiver(receiverPath.Root, receiver.Syntax);
-            result = new BoundUserInstanceCallExpression(
+            result = RewrapTransparentMemberResult(result, new BoundUserInstanceCallExpression(
                 call.Syntax,
                 receiver,
                 declaredMethod,
@@ -189,14 +190,14 @@ internal sealed partial class ExpressionBinder
                 call.ConstrainedInterfaceType)
             {
                 MethodTypeArguments = call.MethodTypeArguments,
-            };
+            });
         }
         else if (receiver != null
             && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out receiverPath, out _)
             && !receiverPath.HasMembers
             && receiverPath.Root.Type is not NullableTypeSymbol
             && rightPart is CallExpressionSyntax
-            && result is BoundImportedInstanceCallExpression importedCall
+            && unwrappedResult is BoundImportedInstanceCallExpression importedCall
             && FindDeclaredClrMethod(
                 receiverPath.Root.Type,
                 importedCall.Method,
@@ -207,7 +208,7 @@ internal sealed partial class ExpressionBinder
                 receiverPath,
                 receiverSyntax?.Location ?? rightPart.Location);
             receiver = declaredReceiver;
-            result = new BoundImportedInstanceCallExpression(
+            result = RewrapTransparentMemberResult(result, new BoundImportedInstanceCallExpression(
                 importedCall.Syntax,
                 declaredReceiver,
                 declaredClrMethod,
@@ -217,7 +218,7 @@ internal sealed partial class ExpressionBinder
                 importedCall.TypeArgumentSymbols,
                 importedCall.ConstrainedReceiverTypeParameter,
                 importedCall.ConstrainedInterfaceType,
-                importedCall.IsNonVirtualBaseCall);
+                importedCall.IsNonVirtualBaseCall));
         }
         else if (receiver != null
             && binderCtx.TryGetBackwardGotoNarrowingPath(receiver, out receiverPath, out _)
@@ -251,6 +252,8 @@ internal sealed partial class ExpressionBinder
 
     private static bool RefersToSameMemberSlot(BoundExpression selected, BoundExpression declared)
     {
+        selected = UnwrapTransparentMemberResult(selected);
+        declared = UnwrapTransparentMemberResult(declared);
         return (selected, declared) switch
         {
             (BoundFieldAccessExpression left, BoundFieldAccessExpression right) =>
@@ -272,6 +275,25 @@ internal sealed partial class ExpressionBinder
             _ => false,
         };
     }
+
+    private static BoundExpression UnwrapTransparentMemberResult(BoundExpression expression)
+    {
+        while (expression is BoundDereferenceExpression dereference)
+        {
+            expression = dereference.Operand;
+        }
+
+        return expression;
+    }
+
+    private static BoundExpression RewrapTransparentMemberResult(
+        BoundExpression original,
+        BoundExpression replacement)
+        => original is BoundDereferenceExpression dereference
+            ? new BoundDereferenceExpression(
+                dereference.Syntax,
+                RewrapTransparentMemberResult(dereference.Operand, replacement))
+            : replacement;
 
     private enum MemberOperation
     {
@@ -750,6 +772,7 @@ internal sealed partial class ExpressionBinder
         ExpressionSyntax rightPart,
         BoundExpression result)
     {
+        result = UnwrapTransparentMemberResult(result);
         TextLocation location;
         string? memberName;
         bool isInvocation;
