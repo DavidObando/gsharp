@@ -502,24 +502,12 @@ public sealed partial class CSharpToGSharpTranslator
                     when member.SyntaxTree == this.context.SemanticModel.SyntaxTree
                         && this.TryGetTupleElementAccess(
                             member,
-                            out ILocalSymbol receiver,
+                            out ExpressionSyntax receiver,
                             out IReadOnlyList<int> path):
-                    {
-                        if (!visited.Add(receiver))
-                        {
-                            return false;
-                        }
-
-                        return this.GetReachingLocalValues(
-                                receiver,
-                                member.SpanStart,
-                                visited)
-                            .Any(value => this.InferredInitializerOriginatesFromDefault(
-                                ProjectTupleElement(value, path),
-                                new HashSet<ISymbol>(
-                                    visited,
-                                    SymbolEqualityComparer.Default)));
-                    }
+                    return this.InferredTupleProjectionOriginatesFromDefault(
+                        receiver,
+                        path,
+                        visited);
             }
 
             if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
@@ -553,6 +541,42 @@ public sealed partial class CSharpToGSharpTranslator
             if (IsNullOrDefaultLiteral(source))
             {
                 return true;
+            }
+
+            if (source is CastExpressionSyntax cast)
+            {
+                return this.InferredTupleProjectionOriginatesFromDefault(
+                    cast.Expression,
+                    path,
+                    visited);
+            }
+
+            if (source is AssignmentExpressionSyntax assignment
+                && (assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                    || assignment.IsKind(
+                        SyntaxKind.CoalesceAssignmentExpression)))
+            {
+                return this.InferredTupleProjectionOriginatesFromDefault(
+                    assignment.Right,
+                    path,
+                    visited);
+            }
+
+            if (source is BinaryExpressionSyntax coalesce
+                && coalesce.IsKind(SyntaxKind.CoalesceExpression))
+            {
+                return this.InferredTupleProjectionOriginatesFromDefault(
+                        coalesce.Left,
+                        path,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default))
+                    || this.InferredTupleProjectionOriginatesFromDefault(
+                        coalesce.Right,
+                        path,
+                        new HashSet<ISymbol>(
+                            visited,
+                            SymbolEqualityComparer.Default));
             }
 
             int index = path[0];
@@ -616,7 +640,7 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool TryGetTupleElementAccess(
             MemberAccessExpressionSyntax member,
-            out ILocalSymbol receiver,
+            out ExpressionSyntax receiver,
             out IReadOnlyList<int> path)
         {
             var indices = new List<int>();
@@ -643,9 +667,9 @@ public sealed partial class CSharpToGSharpTranslator
                 }
             }
 
-            receiver = this.context.GetSymbolInfo(expression).Symbol as ILocalSymbol;
+            receiver = expression;
             path = indices;
-            return receiver != null && indices.Count > 0;
+            return indices.Count > 0;
         }
 
         private static bool IsNullForgiven(ExpressionSyntax expression)
@@ -1793,12 +1817,26 @@ public sealed partial class CSharpToGSharpTranslator
                     .ToList();
                 foreach (IdentifierNameSyntax use in eagerUses)
                 {
-                    if (!DelegateParameterUseIsInvocation(use))
+                    if (DelegateParameterUseIsInvocation(use))
+                    {
+                        invoked = true;
+                        continue;
+                    }
+
+                    DelegateArgumentBehavior aliasBehavior =
+                        GetSourceDelegateAliasBehavior(
+                            use,
+                            body,
+                            model,
+                            new HashSet<ISymbol>(
+                                SymbolEqualityComparer.Default));
+                    if (aliasBehavior == DelegateArgumentBehavior.Escapes)
                     {
                         return DelegateArgumentBehavior.Escapes;
                     }
 
-                    invoked = true;
+                    invoked |= aliasBehavior
+                        == DelegateArgumentBehavior.InvokedDuringCall;
                 }
 
                 var eagerUseStarts = eagerUses
@@ -1815,6 +1853,83 @@ public sealed partial class CSharpToGSharpTranslator
                 {
                     return DelegateArgumentBehavior.Escapes;
                 }
+            }
+
+            return invoked
+                ? DelegateArgumentBehavior.InvokedDuringCall
+                : DelegateArgumentBehavior.NotObserved;
+        }
+
+        private static DelegateArgumentBehavior GetSourceDelegateAliasBehavior(
+            IdentifierNameSyntax use,
+            SyntaxNode body,
+            SemanticModel model,
+            HashSet<ISymbol> visited)
+        {
+            ILocalSymbol alias = null;
+            if (use.Ancestors().OfType<VariableDeclaratorSyntax>().FirstOrDefault()
+                is { Initializer.Value: { } initializer } declarator
+                && initializer.Span.Contains(use.Span))
+            {
+                alias = model.GetDeclaredSymbol(declarator) as ILocalSymbol;
+            }
+            else if (use.Ancestors().OfType<AssignmentExpressionSyntax>()
+                    .FirstOrDefault(assignment =>
+                        assignment.Right.Span.Contains(use.Span))
+                is { Left: { } left })
+            {
+                alias = model.GetSymbolInfo(left).Symbol as ILocalSymbol;
+            }
+
+            if (alias?.Type.TypeKind != TypeKind.Delegate
+                || !visited.Add(alias))
+            {
+                return DelegateArgumentBehavior.Escapes;
+            }
+
+            bool invoked = false;
+            List<IdentifierNameSyntax> eagerUses = EagerExecutionNodes(body)
+                .OfType<IdentifierNameSyntax>()
+                .Where(identifier =>
+                    SymbolEqualityComparer.Default.Equals(
+                        model.GetSymbolInfo(identifier).Symbol,
+                        alias))
+                .ToList();
+            foreach (IdentifierNameSyntax aliasUse in eagerUses)
+            {
+                if (DelegateParameterUseIsInvocation(aliasUse))
+                {
+                    invoked = true;
+                    continue;
+                }
+
+                DelegateArgumentBehavior behavior =
+                    GetSourceDelegateAliasBehavior(
+                        aliasUse,
+                        body,
+                        model,
+                        visited);
+                if (behavior == DelegateArgumentBehavior.Escapes)
+                {
+                    return behavior;
+                }
+
+                invoked |= behavior == DelegateArgumentBehavior.InvokedDuringCall;
+            }
+
+            var eagerUseStarts = eagerUses
+                .Select(eagerUse => eagerUse.SpanStart)
+                .ToHashSet();
+            bool capturedByNestedExecutable = body.DescendantNodes()
+                .OfType<IdentifierNameSyntax>()
+                .Any(identifier =>
+                    SymbolEqualityComparer.Default.Equals(
+                        model.GetSymbolInfo(identifier).Symbol,
+                        alias)
+                        && !eagerUseStarts.Contains(identifier.SpanStart));
+            if (capturedByNestedExecutable)
+            {
+                return DelegateArgumentBehavior.Escapes;
             }
 
             return invoked
@@ -2678,17 +2793,20 @@ public sealed partial class CSharpToGSharpTranslator
 
             if (usePosition is int observationPosition
                 && symbol is IParameterSymbol or IFieldSymbol
-                && this.TryGetLastDirectAssignmentBetween(
+                && this.TryGetDefiniteAssignmentsBetween(
                     symbol,
                     expression,
                     observationPosition,
-                    out ExpressionSyntax assignedValue))
+                    out IReadOnlyList<ExpressionSyntax> assignedValues))
             {
-                return this.GetIndexedDelegateReceiverOrigins(
-                    assignedValue,
-                    new HashSet<ISymbol>(
-                        visited,
-                        SymbolEqualityComparer.Default));
+                return assignedValues
+                    .SelectMany(assignedValue =>
+                        this.GetIndexedDelegateReceiverOrigins(
+                            assignedValue,
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default)))
+                    .ToList();
             }
 
             if (symbol is IPropertySymbol or IMethodSymbol
@@ -2700,13 +2818,13 @@ public sealed partial class CSharpToGSharpTranslator
             return new[] { expression };
         }
 
-        private bool TryGetLastDirectAssignmentBetween(
+        private bool TryGetDefiniteAssignmentsBetween(
             ISymbol symbol,
             ExpressionSyntax start,
             int usePosition,
-            out ExpressionSyntax assignedValue)
+            out IReadOnlyList<ExpressionSyntax> assignedValues)
         {
-            assignedValue = null;
+            assignedValues = null;
             StatementSyntax startStatement = start.AncestorsAndSelf()
                 .OfType<StatementSyntax>()
                 .FirstOrDefault();
@@ -2739,11 +2857,89 @@ public sealed partial class CSharpToGSharpTranslator
                     && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
                     && this.BindsTo(assignment.Left, symbol))
                 {
-                    assignedValue = assignment.Right;
+                    assignedValues = new[] { assignment.Right };
+                    continue;
+                }
+
+                DataFlowAnalysis flow =
+                    this.context.SemanticModel.AnalyzeDataFlow(statement);
+                if (flow.Succeeded
+                    && flow.AlwaysAssigned.Any(assigned =>
+                        SymbolEqualityComparer.Default.Equals(assigned, symbol)))
+                {
+                    List<ExpressionSyntax> values = statement.DescendantNodes()
+                        .OfType<AssignmentExpressionSyntax>()
+                        .Where(candidate =>
+                            candidate.IsKind(
+                                SyntaxKind.SimpleAssignmentExpression)
+                                && this.BindsTo(candidate.Left, symbol))
+                        .Select(candidate => candidate.Right)
+                        .ToList();
+                    if (values.Count > 0)
+                    {
+                        assignedValues = values;
+                    }
+                }
+
+                if (symbol is IFieldSymbol
+                    && this.TryGetDefinitelyAssignedValues(
+                        statement,
+                        symbol,
+                        out IReadOnlyList<ExpressionSyntax> fieldValues))
+                {
+                    assignedValues = fieldValues;
                 }
             }
 
-            return assignedValue != null;
+            return assignedValues != null;
+        }
+
+        private bool TryGetDefinitelyAssignedValues(
+            StatementSyntax statement,
+            ISymbol symbol,
+            out IReadOnlyList<ExpressionSyntax> values)
+        {
+            if (statement is ExpressionStatementSyntax expressionStatement
+                && expressionStatement.Expression
+                    is AssignmentExpressionSyntax assignment
+                && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                && this.BindsTo(assignment.Left, symbol))
+            {
+                values = new[] { assignment.Right };
+                return true;
+            }
+
+            if (statement is BlockSyntax block)
+            {
+                foreach (StatementSyntax nested in block.Statements.Reverse())
+                {
+                    if (this.TryGetDefinitelyAssignedValues(
+                        nested,
+                        symbol,
+                        out values))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            if (statement is IfStatementSyntax conditional
+                && conditional.Else?.Statement is { } whenFalse
+                && this.TryGetDefinitelyAssignedValues(
+                    conditional.Statement,
+                    symbol,
+                    out IReadOnlyList<ExpressionSyntax> whenTrueValues)
+                && this.TryGetDefinitelyAssignedValues(
+                    whenFalse,
+                    symbol,
+                    out IReadOnlyList<ExpressionSyntax> whenFalseValues))
+            {
+                values = whenTrueValues.Concat(whenFalseValues).ToList();
+                return true;
+            }
+
+            values = null;
+            return false;
         }
 
         private bool IndexedDelegateReceiverOriginMatches(
@@ -3052,6 +3248,11 @@ public sealed partial class CSharpToGSharpTranslator
                         }
 
                         values.Add(unknownTuple);
+                        continue;
+                    }
+
+                    if (writeNode is RefExpressionSyntax)
+                    {
                         continue;
                     }
 

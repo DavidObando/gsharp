@@ -1591,6 +1591,19 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static System.Action[] GetCallbacks() =>
                     new System.Action[1];
 
+                private static void InvokeAlias(System.Action callback)
+                {
+                    var alias = callback;
+                    alias();
+                }
+
+                private static void InvokeNestedAlias(System.Action callback)
+                {
+                    var alias = callback;
+                    void Run() => alias();
+                    Run();
+                }
+
                 private static void ParameterStorage<T>(
                     T replacement,
                     System.Action[] receiver,
@@ -1609,6 +1622,31 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     receiver[index]();
                 }
 
+                private static void BranchParameterStorage<T>(
+                    T replacement,
+                    System.Action[] receiver,
+                    int index,
+                    bool flag)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action callback = () =>
+                    {
+                        var (branchParameterLeft, _) = pair;
+                        Keep(ref branchParameterLeft);
+                    };
+                    receiver[index] = callback;
+                    if (flag)
+                    {
+                        receiver = new System.Action[2];
+                    }
+                    else
+                    {
+                        receiver = new System.Action[2];
+                    }
+                    pair = (default(T), replacement);
+                    receiver[index]();
+                }
+
                 private static void FieldStorage<T>(T replacement)
                 {
                     var pair = (replacement, replacement);
@@ -1620,6 +1658,31 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     fieldReceiver[fieldIndex] = callback;
                     fieldReceiver = new System.Action[2];
                     fieldIndex = 1;
+                    pair = (default(T), replacement);
+                    fieldReceiver[fieldIndex]();
+                }
+
+                private static void BranchFieldStorage<T>(
+                    T replacement,
+                    bool flag)
+                {
+                    fieldReceiver = new System.Action[1];
+                    fieldIndex = 0;
+                    var pair = (replacement, replacement);
+                    System.Action callback = () =>
+                    {
+                        var (branchFieldLeft, _) = pair;
+                        Keep(ref branchFieldLeft);
+                    };
+                    fieldReceiver[fieldIndex] = callback;
+                    if (flag)
+                    {
+                        fieldReceiver = new System.Action[1];
+                    }
+                    else
+                    {
+                        fieldReceiver = new System.Action[1];
+                    }
                     pair = (default(T), replacement);
                     fieldReceiver[fieldIndex]();
                 }
@@ -1642,6 +1705,35 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
                 public static void M<T>(T replacement, bool flag)
                 {
+                    var directTupleMember = default((T, T)).Item1;
+                    Fill(ref directTupleMember, replacement);
+                    var castTupleMember =
+                        (((T, T))default((T, T))).Item1;
+                    Fill(ref castTupleMember, replacement);
+
+                    var refDeclarationPair = (default(T), replacement);
+                    ref var refDeclarationAlias = ref refDeclarationPair;
+                    var (refDeclarationLeft, _) = refDeclarationPair;
+                    Fill(ref refDeclarationLeft, replacement);
+
+                    var aliasInvocationPair = (replacement, replacement);
+                    System.Action aliasInvocation = () =>
+                    {
+                        var (aliasInvocationLeft, _) = aliasInvocationPair;
+                        Keep(ref aliasInvocationLeft);
+                    };
+                    InvokeAlias(aliasInvocation);
+                    aliasInvocationPair = (default(T), replacement);
+
+                    var nestedAliasPair = (replacement, replacement);
+                    System.Action nestedAliasInvocation = () =>
+                    {
+                        var (nestedAliasInvocationLeft, _) = nestedAliasPair;
+                        Fill(ref nestedAliasInvocationLeft, replacement);
+                    };
+                    nestedAliasPair = (default(T), replacement);
+                    InvokeNestedAlias(nestedAliasInvocation);
+
                     var firstRefPair = (replacement, replacement);
                     var secondRefPair = (replacement, replacement);
                     ref var refAlias = ref firstRefPair;
@@ -1773,7 +1865,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                         replacement,
                         new System.Action[2],
                         0);
+                    BranchParameterStorage(
+                        replacement,
+                        new System.Action[2],
+                        0,
+                        flag);
                     FieldStorage(replacement);
+                    BranchFieldStorage(replacement, flag);
                     CompoundFieldStorage(replacement);
                 }
             }
@@ -1781,6 +1879,11 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
         string printed = Translate(source);
 
+        Assert.Matches(@"\b(let|var) directTupleMember T\? =", printed);
+        Assert.Matches(@"\b(let|var) castTupleMember T\? =", printed);
+        Assert.Matches(@"\b(let|var) refDeclarationLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) aliasInvocationLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) nestedAliasInvocationLeft T\? =", printed);
         Assert.DoesNotMatch(@"\b(let|var) firstRefAliasLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) secondRefAliasLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) indexedLeft T\? =", printed);
@@ -1791,7 +1894,9 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.DoesNotMatch(@"\b(let|var) correlatedLeft T\? =", printed);
         Assert.DoesNotMatch(@"\b(let|var) freshLeft T\? =", printed);
         Assert.DoesNotMatch(@"\b(let|var) parameterStorageLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) branchParameterLeft T\? =", printed);
         Assert.DoesNotMatch(@"\b(let|var) fieldStorageLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) branchFieldLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) compoundFieldLeft T\? =", printed);
     }
 
