@@ -1424,6 +1424,78 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) duplicateFieldLeft T\? =", printed);
     }
 
+    [Fact]
+    public void Translation_TracksGenericAndAliasedLocalFunctionInvocations()
+    {
+        const string source = """
+            #nullable enable
+
+            public static class LocalFunctionInvocations
+            {
+                private static void Fill<T>(ref T? value, T replacement) =>
+                    value = replacement;
+
+                private static void Keep<T>(ref T value)
+                {
+                }
+
+                private sealed class Wrapper
+                {
+                    public Wrapper(System.Func<int> callback)
+                    {
+                    }
+
+                    public int Invoke() => 0;
+                }
+
+                public static int M<T>(T replacement)
+                {
+                    var genericPair = (replacement, replacement);
+                    int Generic<TIgnored>()
+                    {
+                        var (genericLeft, _) = genericPair;
+                        Fill(ref genericLeft, replacement);
+                        return 1;
+                    }
+
+                    genericPair = (default(T), replacement);
+                    var result = Generic<int>();
+
+                    var aliasedPair = (replacement, replacement);
+                    int Aliased()
+                    {
+                        var (aliasedLeft, _) = aliasedPair;
+                        Fill(ref aliasedLeft, replacement);
+                        return 1;
+                    }
+
+                    System.Func<int> first = Aliased;
+                    System.Func<int> alias = first;
+                    aliasedPair = (default(T), replacement);
+                    result += alias();
+
+                    var ignoredPair = (replacement, replacement);
+                    int Ignored()
+                    {
+                        var (ignoredLeft, _) = ignoredPair;
+                        Keep(ref ignoredLeft);
+                        return 1;
+                    }
+
+                    var wrapper = new Wrapper(Ignored);
+                    ignoredPair = (default(T), replacement);
+                    return result + wrapper.Invoke();
+                }
+            }
+            """;
+
+        string printed = Translate(source);
+
+        Assert.Matches(@"\b(let|var) genericLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) aliasedLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) ignoredLeft T\? =", printed);
+    }
+
     private static ILocalSymbol Local(SyntaxNode root, SemanticModel model, string name)
     {
         SyntaxNode declaration = root.DescendantNodes()

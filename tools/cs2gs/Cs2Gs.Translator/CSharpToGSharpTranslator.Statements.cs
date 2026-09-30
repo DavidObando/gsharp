@@ -1512,7 +1512,16 @@ public sealed partial class CSharpToGSharpTranslator
                 ISymbol targetSymbol = this.context.GetSymbolInfo(target).Symbol;
                 if (anonymousFunction == null)
                 {
-                    if (!SymbolEqualityComparer.Default.Equals(targetSymbol, callable))
+                    if (callable is not IMethodSymbol callableLocalFunction
+                        || (!LocalFunctionMatches(targetSymbol, callableLocalFunction)
+                            && (targetSymbol is not ILocalSymbol
+                                { Type.TypeKind: TypeKind.Delegate } delegateLocal
+                                || !this.DelegateLocalReachesLocalFunction(
+                                    delegateLocal,
+                                    invocation.SpanStart,
+                                    callableLocalFunction,
+                                    new HashSet<ISymbol>(
+                                        SymbolEqualityComparer.Default)))))
                     {
                         continue;
                     }
@@ -1633,6 +1642,62 @@ public sealed partial class CSharpToGSharpTranslator
                     }
                 }
             }
+        }
+
+        private static bool LocalFunctionMatches(
+            ISymbol symbol,
+            IMethodSymbol localFunction) =>
+            symbol is IMethodSymbol method
+                && SymbolEqualityComparer.Default.Equals(
+                    method.OriginalDefinition,
+                    localFunction.OriginalDefinition);
+
+        private bool DelegateLocalReachesLocalFunction(
+            ILocalSymbol local,
+            int usePosition,
+            IMethodSymbol localFunction,
+            HashSet<ISymbol> visited)
+        {
+            if (!visited.Add(local))
+            {
+                return false;
+            }
+
+            foreach (ExpressionSyntax value in this.GetReachingLocalValues(
+                local,
+                usePosition,
+                preserveDelegateCompoundAssignments: true))
+            {
+                foreach (ExpressionSyntax expression in
+                    value.DescendantNodesAndSelf().OfType<ExpressionSyntax>())
+                {
+                    if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
+                    {
+                        continue;
+                    }
+
+                    ISymbol symbol = this.context.GetSymbolInfo(expression).Symbol;
+                    if (LocalFunctionMatches(symbol, localFunction))
+                    {
+                        return true;
+                    }
+
+                    if (symbol is ILocalSymbol alias
+                        && alias.Type.TypeKind == TypeKind.Delegate
+                        && this.DelegateLocalReachesLocalFunction(
+                            alias,
+                            expression.SpanStart,
+                            localFunction,
+                            new HashSet<ISymbol>(
+                                visited,
+                                SymbolEqualityComparer.Default)))
+                    {
+                        return true;
+                    }
+                }
+            }
+
+            return false;
         }
 
         private bool DelegateExpressionReachesAnonymousFunction(
