@@ -330,6 +330,59 @@ namespace Demo
     }
 
     [Fact]
+    public void RefReturningLocalFunctionNameof_DoesNotCountAsDelegateUse()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run() {
+                        int[] data = new int[] { 10 };
+                        _ = nameof(At);
+                        return At(data);
+                        static ref int At(int[] values) => ref values[0];
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("let At = func (values []int32) ref int32", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
+    public void RefReturningLocalFunctionReferencedFromAnotherSwitchSection_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        int[] data = new int[] { 10 };
+                        switch (value) {
+                            case 0:
+                                static ref int At(int[] values) => ref values[0];
+                                return At(data);
+                            case 1:
+                                return At(data);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "switch sections cannot share a direct ref-returning function literal");
+
+        Assert.Contains(
+            "// unsupported: ref-returning local function 'At'",
+            printed,
+            StringComparison.Ordinal);
+        Assert.DoesNotContain("let At = func", printed, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void AdjacentCapturingDelegateLocal_IsNotSwallowedByNativeGroup()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""

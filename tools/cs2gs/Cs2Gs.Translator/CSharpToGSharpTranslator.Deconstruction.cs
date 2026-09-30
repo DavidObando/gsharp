@@ -1925,7 +1925,10 @@ public sealed partial class CSharpToGSharpTranslator
                             || refLocalFunction.IsGenericMethod
                             || this.IsLocalFunctionReferencedAsValue(
                                 refLocalFunction,
-                                GetLocalFunctionSiblingStatements(localFunction))))))
+                                GetLocalFunctionSiblingStatements(localFunction))
+                            || this.IsLocalFunctionReferencedFromAnotherSwitchSection(
+                                refLocalFunction,
+                                localFunction)))))
             {
                 string reason = refLocalFunction.ReturnsByRefReadonly
                     ? $"ref-readonly local function '{localFunction.Identifier.Text}' has no canonical G# function-literal form."
