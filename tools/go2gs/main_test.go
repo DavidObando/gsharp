@@ -273,6 +273,56 @@ func TestAnalyzeCompleteFixtureIsDeterministicAndTyped(t *testing.T) {
 	}
 }
 
+func TestNilFeatureRequiresPredeclaredNilObject(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod": "module example.com/nilfeatures\n\ngo 1.27.0\n",
+		"real/real.go": `package real
+var Pointer *int = nil
+func Value() any { return nil }
+`,
+		"local/local.go": `package local
+func Value() int { nil := 1; return nil }
+`,
+		"parameter/parameter.go": `package parameter
+func Value(nil int) int { return nil }
+`,
+		"packagevar/packagevar.go": `package packagevar
+var nil = 1
+var Value = nil
+`,
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("nil fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	paths := map[string]string{}
+	for _, pkg := range analysis.Packages {
+		paths[pkg.ID] = pkg.ImportPath
+	}
+	count := 0
+	for _, site := range analysis.FeatureSites {
+		if site.Feature != "nil-value" {
+			continue
+		}
+		count++
+		if paths[site.PackageID] != "example.com/nilfeatures/real" {
+			t.Fatalf("shadowed nil was classified as predeclared nil in %q", paths[site.PackageID])
+		}
+	}
+	if count != 2 {
+		t.Fatalf("predeclared nil feature count = %d, want 2", count)
+	}
+}
+
 func TestOfflineMissingDependencyIsIncomplete(t *testing.T) {
 	root := copyFixture(t, "missing")
 	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
@@ -3057,6 +3107,102 @@ func use(a dep.A[int], z dep.Z) { _, _ = a.X, z.X; a.M(); z.M(); (&a).P(); (&z).
 	}
 }
 
+func TestImportedGenericTypeIdentityUsesDeclaringPackageFileSet(t *testing.T) {
+	analyzeFixture := func(consumers []string) (string, string, string) {
+		t.Helper()
+		root := t.TempDir()
+		files := map[string]string{
+			"go.mod":     "module example.com/typeowner\n\ngo 1.27.0\n",
+			"dep/dep.go": "package dep\nfunc Identity[T any](value T) T { return value }\n",
+		}
+		for _, consumer := range consumers {
+			files[consumer+"/use.go"] = "package " + consumer + `
+import "example.com/typeowner/dep"
+func Use() int { return dep.Identity(1) }
+`
+		}
+		for name, content := range files {
+			path := filepath.Join(root, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
+		analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+		if err != nil || !complete {
+			t.Fatalf("generic owner fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+		}
+		dependencyID := ""
+		for _, pkg := range analysis.Packages {
+			if pkg.ImportPath == "example.com/typeowner/dep" && pkg.Variant == "ordinary" {
+				dependencyID = pkg.ID
+				break
+			}
+		}
+		for _, symbol := range analysis.Symbols {
+			if symbol.PackageID == dependencyID && symbol.Name == "Identity" {
+				for _, record := range analysis.Types {
+					if record.ID == symbol.TypeID {
+						declaration := ""
+						if symbol.Declaration != nil {
+							declaration = symbol.Declaration.Path
+						}
+						return symbol.TypeID, record.Canonical, declaration
+					}
+				}
+			}
+		}
+		t.Fatal("dependency generic function type was not inventoried")
+		return "", "", ""
+	}
+	firstID, firstCanonical, firstDeclaration := analyzeFixture([]string{"a", "b"})
+	secondID, secondCanonical, secondDeclaration := analyzeFixture([]string{"x", "y"})
+	if firstID != secondID || firstCanonical != secondCanonical || firstDeclaration != secondDeclaration {
+		t.Fatalf("generic identity depends on consumer layout: first=%q %q %q second=%q %q %q",
+			firstID, firstCanonical, firstDeclaration, secondID, secondCanonical, secondDeclaration)
+	}
+	if !strings.Contains(firstCanonical, "source://dep/dep.go") || firstDeclaration != "source://dep/dep.go" {
+		t.Fatalf("generic identity does not use its declaring package: type=%q declaration=%q",
+			firstCanonical, firstDeclaration)
+	}
+
+	root := t.TempDir()
+	ownerPath := filepath.Join(root, "dep.go")
+	ownerSource := "package dep\nfunc Identity[T any](value T) T { return value }\n"
+	if err := os.WriteFile(ownerPath, []byte(ownerSource), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	ownerSet := token.NewFileSet()
+	ownerSyntax, err := parser.ParseFile(ownerSet, ownerPath,
+		ownerSource, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dependency, err := (&types.Config{}).Check(
+		"example.com/typeowner/dep", ownerSet, []*ast.File{ownerSyntax}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	parameter := dependency.Scope().Lookup("Identity").Type().(*types.Signature).TypeParams().At(0)
+	consumerSet := token.NewFileSet()
+	consumerSet.AddFile(filepath.Join(root, "consumer.go"), -1, 64)
+	consumer := &packages.Package{PkgPath: "example.com/typeowner/consumer", Fset: consumerSet}
+	analysis := validIncompleteAnalysis()
+	builder := newInventoryBuilder(&analysis, root, "", testProfile())
+	if identity := builder.typeIdentity(consumer, parameter); identity != canonicalTypeIdentity(parameter) {
+		t.Fatalf("unknown declaring package did not use stable fallback: %q", identity)
+	}
+	builder.typeOwners[dependency] = &packages.Package{
+		PkgPath: dependency.Path(), Types: dependency, Fset: ownerSet,
+	}
+	identity := builder.typeIdentity(consumer, parameter)
+	if !strings.Contains(identity, "source://dep.go:26") || strings.Contains(identity, "consumer.go") {
+		t.Fatalf("declaring position was resolved through the wrong FileSet: %q", identity)
+	}
+}
+
 func TestValidateAnalysisCommandRejectsSchemaOnlyAndAcceptsIncomplete(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "analysis.json")
 	if err := os.WriteFile(path, []byte(`{"schema":{"name":"go2gs.analysis","version":1}}`), 0o644); err != nil {
@@ -3630,6 +3776,105 @@ func TestScopeParentValidationRejectsInvalidGraphs(t *testing.T) {
 			}
 			if err := validateScopeParents(test.scopes, byID); err == nil || !strings.Contains(err.Error(), test.want) {
 				t.Fatalf("invalid scope graph was accepted: %v", err)
+			}
+		})
+	}
+}
+
+func TestScopeLabelsRequireConsistentSymbolRelationship(t *testing.T) {
+	root := t.TempDir()
+	for name, content := range map[string]string{
+		"go.mod": "module example.com/labels\n\ngo 1.27.0\n",
+		"a/a.go": `package a
+func F() {
+	value := 0
+First:
+	for value < 1 { value++; break First }
+	_ = func() { Nested: for { break Nested } }
+}
+`,
+		"b/b.go": `package b
+func F() { value := 0; Second: for value < 1 { value++; break Second } }
+`,
+	} {
+		path := filepath.Join(root, filepath.FromSlash(name))
+		if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	analysis, complete, err := analyze(t.Context(), root, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("label fixture failed: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+	}
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("analyzer emitted inconsistent label relationships: %v", err)
+	}
+	symbols := map[string]SymbolRecord{}
+	for _, symbol := range analysis.Symbols {
+		symbols[symbol.ID] = symbol
+	}
+	var firstScope, secondScope int
+	firstScope, secondScope = -1, -1
+	for index, scope := range analysis.Scopes {
+		if len(scope.Labels) == 0 {
+			continue
+		}
+		if firstScope < 0 {
+			firstScope = index
+		} else if scope.PackageID != analysis.Scopes[firstScope].PackageID {
+			secondScope = index
+			break
+		}
+	}
+	if firstScope < 0 || secondScope < 0 {
+		t.Fatalf("fixture did not produce labels in two packages: scopes=%#v symbols=%#v", analysis.Scopes, analysis.Symbols)
+	}
+	labelID := analysis.Scopes[firstScope].Labels[0]
+	nonLabelID := ""
+	for _, symbolID := range analysis.Scopes[firstScope].SymbolIDs {
+		if symbols[symbolID].Kind != "label" {
+			nonLabelID = symbolID
+			break
+		}
+	}
+	if nonLabelID == "" {
+		t.Fatal("fixture label scope has no non-label symbol")
+	}
+	crossPackageLabelID := analysis.Scopes[secondScope].Labels[0]
+	tests := []struct {
+		name   string
+		mutate func(*ScopeRecord)
+	}{
+		{"dangling", func(scope *ScopeRecord) { scope.Labels[0] = "symbol:missing" }},
+		{"non-label", func(scope *ScopeRecord) { scope.Labels[0] = nonLabelID }},
+		{"unlisted", func(scope *ScopeRecord) {
+			scope.SymbolIDs = slices.DeleteFunc(scope.SymbolIDs, func(id string) bool { return id == labelID })
+		}},
+		{"duplicate-label", func(scope *ScopeRecord) { scope.Labels = append(scope.Labels, labelID) }},
+		{"duplicate-symbol", func(scope *ScopeRecord) { scope.SymbolIDs = append(scope.SymbolIDs, labelID) }},
+		{"missing-label", func(scope *ScopeRecord) { scope.Labels = []string{} }},
+		{"orphan-label", func(scope *ScopeRecord) {
+			scope.SymbolIDs = slices.DeleteFunc(scope.SymbolIDs, func(id string) bool { return id == labelID })
+			scope.Labels = []string{}
+		}},
+		{"cross-package", func(scope *ScopeRecord) {
+			scope.SymbolIDs = append(scope.SymbolIDs, crossPackageLabelID)
+			scope.Labels[0] = crossPackageLabelID
+		}},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			mutated := analysis
+			mutated.Scopes = append([]ScopeRecord{}, analysis.Scopes...)
+			scope := &mutated.Scopes[firstScope]
+			scope.SymbolIDs = append([]string{}, scope.SymbolIDs...)
+			scope.Labels = append([]string{}, scope.Labels...)
+			test.mutate(scope)
+			if err := validateAnalysis(mutated); err == nil {
+				t.Fatal("inconsistent scope label relationship was accepted")
 			}
 		})
 	}
@@ -4247,6 +4492,34 @@ func TestArchitectureFeatureValidationRejectsInvalidValues(t *testing.T) {
 		if _, err := resolveArchitectureSettings(test.goarch, test.features); err == nil {
 			t.Errorf("accepted GOARCH=%s features=%v", test.goarch, test.features)
 		}
+	}
+}
+
+func TestValidateAnalysisRechecksArchitectureFeatures(t *testing.T) {
+	for _, test := range []struct {
+		name     string
+		goarch   string
+		features []string
+		valid    bool
+	}{
+		{"valid-amd64-cumulative", "amd64", []string{"v3"}, true},
+		{"valid-arm64-cumulative", "arm64", []string{"v9.1"}, true},
+		{"invalid-amd64-level", "amd64", []string{"v5"}, false},
+		{"mismatched-feature-family", "arm64", []string{"v3"}, false},
+		{"duplicate-level", "amd64", []string{"v2", "v2"}, false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			analysis := validIncompleteAnalysis()
+			analysis.Profile.GOARCH = test.goarch
+			analysis.Profile.ArchitectureFeatures = test.features
+			err := validateAnalysis(analysis)
+			if test.valid && err != nil {
+				t.Fatalf("valid architecture profile was rejected: %v", err)
+			}
+			if !test.valid && err == nil {
+				t.Fatal("invalid architecture profile was accepted")
+			}
+		})
 	}
 }
 
