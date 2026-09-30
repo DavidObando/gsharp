@@ -970,6 +970,28 @@ func validateScopeParents(values []ScopeRecord, scopes map[string]ScopeRecord) e
 			return fmt.Errorf("scope %q parent ownership is inconsistent", scope.ID)
 		}
 	}
+	state := make(map[string]uint8, len(scopes))
+	for _, scope := range values {
+		if state[scope.ID] == 2 {
+			continue
+		}
+		path := []string{}
+		for id := scope.ID; id != ""; {
+			switch state[id] {
+			case 1:
+				return fmt.Errorf("scope %q parent cycle is inconsistent", id)
+			case 2:
+				id = ""
+				continue
+			}
+			state[id] = 1
+			path = append(path, id)
+			id = scopes[id].ParentID
+		}
+		for _, id := range path {
+			state[id] = 2
+		}
+	}
 	return nil
 }
 

@@ -327,6 +327,77 @@ func TestGoPackageInputClassifierMatchesGo127(t *testing.T) {
 			t.Errorf("non-Go 1.27 package input %s was recognized", extension)
 		}
 	}
+	for _, name := range []string{"_hidden.go", ".hidden.c"} {
+		if recognizedGoPackageInput(name) {
+			t.Errorf("Go-ignored package input %s was recognized", name)
+		}
+	}
+	if !nativeHeader("_internal.h") || !nativeIncludeCarrier("_internal.h") {
+		t.Fatal("explicit hidden header was not recognized as an include dependency")
+	}
+}
+
+func TestIgnoredPackageInputsDoNotCreateDriftOrLoadErrors(t *testing.T) {
+	for _, test := range []struct {
+		name    string
+		initial map[string]string
+		mutate  func(*testing.T, string)
+	}{
+		{
+			name: "add-underscore-go",
+			mutate: func(t *testing.T, root string) {
+				if err := os.WriteFile(filepath.Join(root, "_hidden.go"), []byte("not valid Go"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:    "remove-underscore-go",
+			initial: map[string]string{"_hidden.go": "not valid Go"},
+			mutate: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, "_hidden.go")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name: "add-dot-c",
+			mutate: func(t *testing.T, root string) {
+				if err := os.WriteFile(filepath.Join(root, ".hidden.c"), []byte("not valid C"), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+		{
+			name:    "remove-dot-c",
+			initial: map[string]string{".hidden.c": "not valid C"},
+			mutate: func(t *testing.T, root string) {
+				if err := os.Remove(filepath.Join(root, ".hidden.c")); err != nil {
+					t.Fatal(err)
+				}
+			},
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			root := copyFixture(t, "complete")
+			for name, content := range test.initial {
+				if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+					t.Fatal(err)
+				}
+			}
+			analysis, complete, err := analyzeWithSnapshotHook(t.Context(), root, t.TempDir(), testProfile(), func() {
+				test.mutate(t, root)
+			})
+			if err != nil || !complete || !analysis.InventoryComplete || hasBlockerCategory(analysis, "input-drift") {
+				t.Fatalf("Go-ignored input affected analysis: complete=%v err=%v blockers=%#v", complete, err, analysis.Blockers)
+			}
+			if slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+				return file.Path == "source://_hidden.go" || file.Path == "source://.hidden.c"
+			}) {
+				t.Fatalf("Go-ignored input was captured: %#v", analysis.Files)
+			}
+		})
+	}
 }
 
 func TestDefensiveNativeMutationDoesNotCreateDrift(t *testing.T) {
@@ -1148,6 +1219,42 @@ func TestSelectedHXXAndSXIncludesAreCaptured(t *testing.T) {
 			return file.Path == "source://"+name && file.Role == "native"
 		}) {
 			t.Fatalf("selected native include %s was not captured: %#v", name, analysis.Files)
+		}
+	}
+}
+
+func TestExplicitHiddenHeaderIncludeIsCaptured(t *testing.T) {
+	root := copyFixture(t, "cgo")
+	for name, content := range map[string]string{
+		"_internal.h": "#include \"_nested.h\"\n#define INTERNAL_VALUE 1\n",
+		"_nested.h":   "#define NESTED_VALUE 2\n",
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(content), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	path := filepath.Join(root, "native.c")
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, append(data, []byte("\n#include \"_internal.h\"\n")...), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	profile := testProfile()
+	profile.CGOEnabled = true
+	analysis, _, err := analyze(t.Context(), root, t.TempDir(), profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if hasBlockerCategory(analysis, "native-include") {
+		t.Fatalf("explicit hidden header include produced a blocker: %#v", analysis.Blockers)
+	}
+	for _, name := range []string{"_internal.h", "_nested.h"} {
+		if !slices.ContainsFunc(analysis.Files, func(file FileRecord) bool {
+			return file.Path == "source://"+name && file.Role == "native"
+		}) {
+			t.Fatalf("explicit hidden header include %s was not captured: %#v", name, analysis.Files)
 		}
 	}
 }
@@ -3469,6 +3576,62 @@ func TestScopeParentValidationCompletesLargeChainWithinLinearBudget(t *testing.T
 	}
 	if elapsed := time.Since(start); elapsed > 2*time.Second {
 		t.Fatalf("scope parent validation took %s for %d scopes; indexed validation must remain near-linear", elapsed, count)
+	}
+}
+
+func TestScopeParentValidationRejectsInvalidGraphs(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		scopes []ScopeRecord
+		want   string
+	}{
+		{
+			name:   "self-cycle",
+			scopes: []ScopeRecord{{ID: "a", ParentID: "a", PackageID: "package:one"}},
+			want:   "cycle",
+		},
+		{
+			name: "two-node-cycle",
+			scopes: []ScopeRecord{
+				{ID: "a", ParentID: "b", PackageID: "package:one"},
+				{ID: "b", ParentID: "a", PackageID: "package:one"},
+			},
+			want: "cycle",
+		},
+		{
+			name: "disconnected-longer-cycle",
+			scopes: []ScopeRecord{
+				{ID: "root", PackageID: "package:one"},
+				{ID: "child", ParentID: "root", PackageID: "package:one"},
+				{ID: "a", ParentID: "b", PackageID: "package:one"},
+				{ID: "b", ParentID: "c", PackageID: "package:one"},
+				{ID: "c", ParentID: "a", PackageID: "package:one"},
+			},
+			want: "cycle",
+		},
+		{
+			name:   "missing-parent",
+			scopes: []ScopeRecord{{ID: "a", ParentID: "missing", PackageID: "package:one"}},
+			want:   "ownership",
+		},
+		{
+			name: "cross-package-parent",
+			scopes: []ScopeRecord{
+				{ID: "a", ParentID: "b", PackageID: "package:one"},
+				{ID: "b", PackageID: "package:two"},
+			},
+			want: "ownership",
+		},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			byID := make(map[string]ScopeRecord, len(test.scopes))
+			for _, scope := range test.scopes {
+				byID[scope.ID] = scope
+			}
+			if err := validateScopeParents(test.scopes, byID); err == nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatalf("invalid scope graph was accepted: %v", err)
+			}
+		})
 	}
 }
 
