@@ -99,7 +99,10 @@ public sealed partial class CSharpToGSharpTranslator
                                 .ManagedReferenceArrayProjectedLocalType[localTarget] =
                                 projectedType;
                         }
-                        else
+                        else if (this.IsRejectableManagedReferenceProjection(
+                            initializerSyntax,
+                            projectedType,
+                            localTarget.Type))
                         {
                             this.context.ReportUnsupported(
                                 initializerSyntax,
@@ -2156,34 +2159,25 @@ public sealed partial class CSharpToGSharpTranslator
             ITypeSymbol projectedValue =
                 this.GetManagedReferenceArrayProjectedArgumentType(
                     assignment.Right);
-            INamedTypeSymbol enclosingType =
-                this.context.SemanticModel.GetEnclosingSymbol(
-                    assignment.SpanStart)
-                    ?.ContainingType;
 
-            // A projection only exists when it differs from the C# value type;
-            // ordinary nullable-annotation differences (`AsyncLocal<string?>.Value
-            // = "x"`) are not managed-reference widening.
+            // The rejectability check passes no destination: the generic
+            // member's fixed receiver type can never adopt the projection.
             if (assignmentTarget is IFieldSymbol
                     { ContainingType.IsGenericType: true }
                     or IPropertySymbol
                     { ContainingType.IsGenericType: true }
-                && (enclosingType == null
-                    || !SymbolEqualityComparer.Default.Equals(
-                        enclosingType.OriginalDefinition,
-                        assignmentTarget.ContainingType.OriginalDefinition))
                 && assignmentTargetType != null
                 && projectedValue != null
-                && !SymbolEqualityComparer.IncludeNullability.Equals(
-                    this.context.GetTypeInfo(assignment.Right).Type
-                        ?? this.context.GetTypeInfo(assignment.Right).ConvertedType,
-                    projectedValue)
                 && SymbolEqualityComparer.Default.Equals(
                     assignmentTargetType,
                     projectedValue)
                 && !SymbolEqualityComparer.IncludeNullability.Equals(
                     assignmentTargetType,
-                    projectedValue))
+                    projectedValue)
+                && this.IsRejectableManagedReferenceProjection(
+                    assignment.Right,
+                    projectedValue,
+                    null))
             {
                 this.context.ReportUnsupported(
                     assignment,

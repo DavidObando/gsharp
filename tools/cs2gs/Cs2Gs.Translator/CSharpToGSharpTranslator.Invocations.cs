@@ -5223,6 +5223,7 @@ public sealed partial class CSharpToGSharpTranslator
                 new bool[containingTypeArguments.Length];
             ITypeParameterSymbol blockedParameter = null;
             ITypeParameterSymbol conflictingParameter = null;
+            bool conflictInvolvesManagedReference = false;
             bool fixedStorageNeedsNullableArgument = false;
             bool RecordWidenedTypeParameters(
                 ImmutableArray<ITypeSymbol> typeArguments,
@@ -5249,6 +5250,13 @@ public sealed partial class CSharpToGSharpTranslator
                     if (argumentProjectionConflict)
                     {
                         conflictingParameter ??= typeParameters[i];
+                        conflictInvolvesManagedReference |=
+                            TypeContainsRecognizedManagedReferenceConsumer(
+                                typeArguments[i],
+                                this.context.Compilation)
+                            || TypeContainsRecognizedManagedReferenceConsumer(
+                                argumentType,
+                                this.context.Compilation);
                         continue;
                     }
 
@@ -5294,6 +5302,13 @@ public sealed partial class CSharpToGSharpTranslator
                                 observedArguments.GetValue(i))))
                     {
                         conflictingParameter ??= typeParameters[i];
+                        conflictInvolvesManagedReference |=
+                            TypeContainsRecognizedManagedReferenceConsumer(
+                                typeArguments[i],
+                                this.context.Compilation)
+                            || TypeContainsRecognizedManagedReferenceConsumer(
+                                argumentType,
+                                this.context.Compilation);
                         continue;
                     }
 
@@ -5746,6 +5761,12 @@ public sealed partial class CSharpToGSharpTranslator
                     this.ArrayExpressionHasNullableElement(
                         reducedMember.Expression),
                     requiresExactMatch: false);
+            }
+
+            if (conflictingParameter != null
+                && !conflictInvolvesManagedReference)
+            {
+                return Complete(false);
             }
 
             if (conflictingParameter != null)
@@ -6455,6 +6476,47 @@ public sealed partial class CSharpToGSharpTranslator
                     effectiveType)
                 ? effectiveType
                 : destinationType;
+        }
+
+        /// <summary>
+        /// Issue #4525: the single gate for every "no exact G# translation
+        /// exists" rejection caused by a managed-reference projection. A
+        /// projection is only rejectable when it really involves a recognized
+        /// managed-reference consumer, actually changed the value's type, and
+        /// the fixed destination cannot adopt it. Ordinary nullable-element
+        /// arrays fall back to the null-forgiveness path instead.
+        /// </summary>
+        /// <param name="value">The value the projection was computed for.</param>
+        /// <param name="projected">The projected type.</param>
+        /// <param name="destination">The fixed destination type, or null when there is none to adopt the projection.</param>
+        /// <returns>Whether reporting an Unsupported diagnostic is warranted.</returns>
+        private bool IsRejectableManagedReferenceProjection(
+            ExpressionSyntax value,
+            ITypeSymbol projected,
+            ITypeSymbol destination)
+        {
+            if (projected == null
+                || !TypeContainsRecognizedManagedReferenceConsumer(
+                    projected,
+                    this.context.Compilation))
+            {
+                return false;
+            }
+
+            ITypeSymbol natural = this.context.GetTypeInfo(value).Type
+                ?? this.context.GetTypeInfo(value).ConvertedType;
+            if (natural != null
+                && SymbolEqualityComparer.IncludeNullability.Equals(
+                    natural,
+                    projected))
+            {
+                return false;
+            }
+
+            return destination == null
+                || !this.ProjectionTypeFitsResultDestination(
+                    projected,
+                    destination);
         }
 
         private bool ProjectionTypeFitsResultDestination(

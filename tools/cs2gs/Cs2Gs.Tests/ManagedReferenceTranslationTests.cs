@@ -7619,4 +7619,118 @@ public sealed class ManagedReferenceTranslationTests
         Assert.Empty(result.Diagnostics);
         Assert.Null(result.UnhandledException);
     }
+
+    private static (string Text, TranslationContext Context) TranslatePlain(string source)
+    {
+        var project = CSharpProjectLoader.LoadInMemory(new[] { ("Plain.cs", source) });
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        return (text, context);
+    }
+
+    [Fact]
+    public void NullableValueDictionaryIndexerWriteOfLiteralTranslatesWithoutDiagnostic()
+    {
+        // Issue #4525: ordinary code with no managed reference must never hit
+        // the "no exact G# translation" rejections.
+        var (_, context) = TranslatePlain("""
+            #nullable enable
+            using System.Collections.Generic;
+            namespace Plain4525A;
+            public class Probe {
+                public static void Run(IDictionary<string, string?> d) {
+                    d["k"] = "v";
+                }
+            }
+            """);
+        Assert.Empty(context.Diagnostics);
+    }
+
+    [Fact]
+    public void ProcessStartInfoEnvironmentIndexerWriteTranslatesWithoutDiagnostic()
+    {
+        // The Oahu and code-exploder self-migration gaps.
+        var (_, context) = TranslatePlain("""
+            #nullable enable
+            using System.Diagnostics;
+            namespace Plain4525F;
+            public class Probe {
+                public static void Run(ProcessStartInfo psi) {
+                    psi.Environment["OAHU_NO_TUI"] = "1";
+                    psi.Environment["GIT_TERMINAL_PROMPT"] = "0";
+                }
+            }
+            """);
+        Assert.Empty(context.Diagnostics);
+    }
+
+    [Fact]
+    public void NullableAsyncLocalValueWriteOfLiteralTranslatesWithoutDiagnostic()
+    {
+        var (_, context) = TranslatePlain("""
+            #nullable enable
+            using System.Threading;
+            namespace Plain4525B;
+            public class Probe {
+                public static void Run(AsyncLocal<string?> s) {
+                    s.Value = "x";
+                }
+            }
+            """);
+        Assert.Empty(context.Diagnostics);
+    }
+
+    [Fact]
+    public void GenericStorageWriteOfNullableStringForgivesInsteadOfRejecting()
+    {
+        var (text, context) = TranslatePlain("""
+            #nullable enable
+            namespace Plain4525C;
+            public sealed class Holder<T> { public T Field = default!; }
+            public class Probe {
+                public static void Run(Holder<string> holder, string? nullableString) {
+                    holder.Field = nullableString;
+                }
+            }
+            """);
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("nullableString!!", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void GenericStorageWriteFromWidenedArrayElementForgivesInsteadOfRejecting()
+    {
+        var (text, context) = TranslatePlain("""
+            #nullable enable
+            namespace Plain4525D;
+            public sealed class Holder<T> { public T Field = default!; }
+            public class Probe {
+                public static void Run(Holder<string> holder) {
+                    var widened = new string[2];
+                    foreach (var s in widened) holder.Field = s;
+                }
+            }
+            """);
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("!!", text, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConditionalOfFreshAndWidenedStringArraysTranslatesWithoutDiagnostic()
+    {
+        var (_, context) = TranslatePlain("""
+            #nullable enable
+            namespace Plain4525E;
+            public class Probe {
+                public static int Run(bool flag) {
+                    var widened = new string[2];
+                    var x = flag ? new string[1] : widened;
+                    return x.Length;
+                }
+            }
+            """);
+        Assert.Empty(context.Diagnostics);
+    }
 }

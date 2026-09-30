@@ -171,6 +171,70 @@ namespace Corpus.Issue3096
     }
 
     [Fact]
+    public void ConstructibleTarget_NullableAddParameter_DoesNotForgiveNullableElement()
+    {
+        // Issue #4525 (M2): the bound element type keeps its nullability, so a
+        // legitimately null element added through Add(string?) is not asserted.
+        string rendered = Render(@"
+#nullable enable
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Corpus.Issue4525
+{
+    public class Bag : IEnumerable<string>
+    {
+        public void Add(string? item) { }
+        public IEnumerator<string> GetEnumerator() => throw new System.NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Holder
+    {
+        public Bag Make(string? x)
+        {
+            Bag b = [x];
+            return b;
+        }
+    }
+}
+");
+
+        Assert.DoesNotContain("!!", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void ConstructibleTarget_NonNullableAddParameter_ForgivesNullableElement()
+    {
+        string rendered = Render(@"
+#nullable enable
+using System.Collections;
+using System.Collections.Generic;
+
+namespace Corpus.Issue4525
+{
+    public class Bag : IEnumerable<string>
+    {
+        public void Add(string item) { }
+        public IEnumerator<string> GetEnumerator() => throw new System.NotImplementedException();
+        IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+    }
+
+    public class Holder
+    {
+        public Bag Make(string? x)
+        {
+            Bag b = [x];
+            return b;
+        }
+    }
+}
+");
+
+        Assert.Contains("x!!", rendered, StringComparison.Ordinal);
+    }
+
+    [Fact]
     public void ListTarget_LowersToCollectionInitializerNotArrayLiteral()
     {
         string rendered = Render(@"

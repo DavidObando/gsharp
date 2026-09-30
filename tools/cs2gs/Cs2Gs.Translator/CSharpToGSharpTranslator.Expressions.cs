@@ -1284,9 +1284,16 @@ public sealed partial class CSharpToGSharpTranslator
                             item.Type,
                             originalCompositeType))))
                 {
-                    this.context.ReportUnsupported(
-                        expression,
-                        "conditional/switch result arms have incompatible managed-reference projections.");
+                    if (effectiveTypes.Any(item =>
+                            this.IsRejectableManagedReferenceProjection(
+                                item.Arm,
+                                item.Type,
+                                originalCompositeType)))
+                    {
+                        this.context.ReportUnsupported(
+                            expression,
+                            "conditional/switch result arms have incompatible managed-reference projections.");
+                    }
                 }
             }
 
@@ -1536,9 +1543,17 @@ public sealed partial class CSharpToGSharpTranslator
                     lambda,
                     invoke)))
             {
-                this.context.ReportUnsupported(
-                    lambda,
-                    "lambda return arms have incompatible managed-reference projections.");
+                if (results.Any(result =>
+                        this.IsRejectableManagedReferenceProjection(
+                            result,
+                            projectedResult,
+                            targetResult)))
+                {
+                    this.context.ReportUnsupported(
+                        lambda,
+                        "lambda return arms have incompatible managed-reference projections.");
+                }
+
                 return null;
             }
 

@@ -4004,7 +4004,11 @@ public sealed partial class CSharpToGSharpTranslator
                                     operationElementType,
                                     originalElementType)
                                     ? operationElementType
-                                    : elementTypeSymbol ?? operationElementType;
+                                    : GetCollectionAddParameterType(
+                                        target,
+                                        elementTypeSymbol ?? operationElementType)
+                                        ?? elementTypeSymbol
+                                        ?? operationElementType;
                         GTypeReference boundElementRef = boundElementType != null
                             ? this.typeMapper.Map(boundElementType, this.context, element.GetLocation())
                             : elementType;
@@ -4224,6 +4228,45 @@ public sealed partial class CSharpToGSharpTranslator
                 ? ((INamedTypeSymbol)target).TypeArguments[0]
                 : GetEnumerableElementType(target);
 
+        /// <summary>
+        /// Issue #4525: a constructible collection's elements are bound through
+        /// its <c>Add</c> method, so a nullable <c>Add(T?)</c> parameter keeps a
+        /// legitimately null element from being asserted. The enumerable element
+        /// type (<c>IEnumerable&lt;T&gt;</c>) discards that annotation.
+        /// </summary>
+        /// <returns>The nullable Add parameter type, or null when the element type stands.</returns>
+        private static ITypeSymbol GetCollectionAddParameterType(
+            ITypeSymbol target,
+            ITypeSymbol elementType)
+        {
+            if (elementType == null)
+            {
+                return null;
+            }
+
+            var candidates = new List<ITypeSymbol>();
+            for (ITypeSymbol type = target; type != null; type = type.BaseType)
+            {
+                foreach (IMethodSymbol add in type.GetMembers("Add").OfType<IMethodSymbol>())
+                {
+                    if (!add.IsStatic
+                        && add.Parameters.Length == 1
+                        && SymbolEqualityComparer.Default.Equals(
+                            add.Parameters[0].Type,
+                            elementType))
+                    {
+                        candidates.Add(add.Parameters[0].Type);
+                    }
+                }
+            }
+
+            return candidates.Count > 0
+                && candidates.All(candidate =>
+                    candidate.NullableAnnotation == NullableAnnotation.Annotated)
+                ? candidates[0]
+                : null;
+        }
+
         private INamedTypeSymbol GetManagedReferenceArrayProjectedCollectionType(
             CollectionExpressionSyntax collection,
             INamedTypeSymbol target)
@@ -4281,9 +4324,21 @@ public sealed partial class CSharpToGSharpTranslator
                                 existing,
                                 replacement)))
                     {
-                        this.context.ReportUnsupported(
-                            collection,
-                            "collection expression elements have conflicting managed-reference projections.");
+                        if (this.IsRejectableManagedReferenceProjection(
+                                collectionElement switch
+                                {
+                                    ExpressionElementSyntax item => item.Expression,
+                                    SpreadElementSyntax spread => spread.Expression,
+                                    _ => collection,
+                                },
+                                projectedElement,
+                                null))
+                        {
+                            this.context.ReportUnsupported(
+                                collection,
+                                "collection expression elements have conflicting managed-reference projections.");
+                        }
+
                         return target;
                     }
 
@@ -4313,9 +4368,16 @@ public sealed partial class CSharpToGSharpTranslator
                 return projected;
             }
 
-            this.context.ReportUnsupported(
-                collection,
-                "collection expression managed-reference projection cannot change fixed destination storage; no exact G# translation exists.");
+            if (this.IsRejectableManagedReferenceProjection(
+                    collection,
+                    projected,
+                    target))
+            {
+                this.context.ReportUnsupported(
+                    collection,
+                    "collection expression managed-reference projection cannot change fixed destination storage; no exact G# translation exists.");
+            }
+
             return target;
         }
 
