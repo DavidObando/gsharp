@@ -131,7 +131,9 @@ Before moving an application to a different compiler version, pin the intended S
   typed `*ast.File` root for every compiled file. Output locking, invalidation,
   and publication stay relative to one held directory handle across ancestor
   renames, with final artifact identities and content hashes retained through
-  lock release so ownership loss cannot leave a valid mixed pair. Span
+  lock release so ownership loss cannot leave a valid mixed pair. Identity-
+  bound cleanup uses atomic no-replace Unix quarantine moves or held Windows NT
+  handles, leaving raced replacements untouched. Span
   validation reparses captured bytes to verify exact raw and
   line-directive-adjusted paths, lines, and columns. Diagnostics
   are path-stable, initialization order is explicit, and schema validation

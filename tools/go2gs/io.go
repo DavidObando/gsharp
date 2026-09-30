@@ -459,13 +459,19 @@ func ownedTempCleanupError(directory ownedTempDir, label string) error {
 type boundOutputRoot struct {
 	path              string
 	root              *os.Root
+	operationRoot     *os.File
 	lockRoot          *os.Root
 	lockInfo          os.FileInfo
+	removalName       string
+	removalRoot       *os.Root
+	removalDirectory  *os.File
+	removalInfo       os.FileInfo
 	publishedAnalysis *publishedOutput
 	publishedRun      *publishedOutput
 }
 
 type publishedOutput struct {
+	owner  *boundOutputRoot
 	name   string
 	file   *os.File
 	info   os.FileInfo
@@ -477,6 +483,7 @@ var (
 	outputRootBoundHook           func()
 	outputPublicationBoundaryHook func(string)
 	outputLockReleasedHook        func()
+	outputBeforeDestructiveHook   func(string)
 )
 
 func openBoundOutputRoot(path string) (*boundOutputRoot, error) {
@@ -502,7 +509,18 @@ func openBoundOutputRoot(path string) (*boundOutputRoot, error) {
 		_ = root.Close()
 		return nil, errors.New("output root changed while binding")
 	}
-	return &boundOutputRoot{path: path, root: root}, nil
+	operationRoot, err := root.Open(".")
+	if err != nil {
+		_ = root.Close()
+		return nil, err
+	}
+	operationInfo, err := operationRoot.Stat()
+	if err != nil || !os.SameFile(opened, operationInfo) {
+		_ = operationRoot.Close()
+		_ = root.Close()
+		return nil, errors.New("output operation root identity changed while binding")
+	}
+	return &boundOutputRoot{path: path, root: root, operationRoot: operationRoot}, nil
 }
 
 func lockAndInvalidateOutput(outRoot string) (*boundOutputRoot, error) {
@@ -514,12 +532,14 @@ func lockAndInvalidateOutput(outRoot string) (*boundOutputRoot, error) {
 		outputRootBoundHook()
 	}
 	if err := output.root.Mkdir(".go2gs-lock", 0o700); err != nil {
+		_ = output.operationRoot.Close()
 		_ = output.root.Close()
 		return nil, fmt.Errorf("lock output directory: %w", err)
 	}
 	output.lockRoot, err = output.root.OpenRoot(".go2gs-lock")
 	if err != nil {
 		_ = output.root.Remove(".go2gs-lock")
+		_ = output.operationRoot.Close()
 		_ = output.root.Close()
 		return nil, err
 	}
@@ -527,6 +547,14 @@ func lockAndInvalidateOutput(outRoot string) (*boundOutputRoot, error) {
 	if err != nil {
 		_ = output.lockRoot.Close()
 		_ = output.root.Remove(".go2gs-lock")
+		_ = output.operationRoot.Close()
+		_ = output.root.Close()
+		return nil, err
+	}
+	if err := initializeOutputRemoval(output); err != nil {
+		_ = output.lockRoot.Close()
+		_ = output.root.Remove(".go2gs-lock")
+		_ = output.operationRoot.Close()
 		_ = output.root.Close()
 		return nil, err
 	}
@@ -547,7 +575,7 @@ func lockAndInvalidateOutput(outRoot string) (*boundOutputRoot, error) {
 				output.release(),
 			)
 		}
-		removed, removeErr := quarantineRootEntryIfSame(output.root, name, info)
+		removed, removeErr := removeOutputEntryIfSame(output, name, info)
 		if removeErr != nil || !removed {
 			if removeErr == nil {
 				removeErr = errors.New("output identity changed during stale invalidation")
@@ -576,7 +604,7 @@ func (output *boundOutputRoot) release() error {
 		if err := output.verifyLock(); err != nil {
 			result = errors.Join(result, fmt.Errorf("verify output lock before release: %w", err))
 		} else {
-			removed, err := quarantineRootEntryIfSame(output.root, ".go2gs-lock", output.lockInfo)
+			removed, err := removeOutputEntryIfSame(output, ".go2gs-lock", output.lockInfo)
 			if err != nil {
 				result = errors.Join(result, fmt.Errorf("remove output lock: %w", err))
 			} else if !removed {
@@ -610,6 +638,11 @@ func (output *boundOutputRoot) release() error {
 			result = errors.Join(result, err)
 		}
 		output.lockRoot = nil
+	}
+	result = errors.Join(result, closeOutputRemoval(output))
+	if output.operationRoot != nil {
+		result = errors.Join(result, output.operationRoot.Close())
+		output.operationRoot = nil
 	}
 	result = errors.Join(result, output.root.Close())
 	return result
@@ -695,14 +728,9 @@ func invalidatePublishedOutput(root *os.Root, output *publishedOutput) error {
 		return nil
 	}
 	var result error
-	if err := output.file.Truncate(0); err != nil {
-		result = errors.Join(result, fmt.Errorf("invalidate %s: %w", output.name, err))
-	} else if err := output.file.Sync(); err != nil {
-		result = errors.Join(result, fmt.Errorf("sync invalidated %s: %w", output.name, err))
-	}
 	current, err := root.Lstat(output.name)
 	if err == nil && os.SameFile(output.info, current) {
-		removed, removeErr := quarantineRootEntryIfSame(root, output.name, output.info)
+		removed, removeErr := removeOutputEntryIfSame(output.owner, output.name, output.info)
 		if removeErr != nil {
 			result = errors.Join(result, removeErr)
 		} else if !removed {
@@ -1019,16 +1047,11 @@ func atomicWriteRoot(output *boundOutputRoot, name string, data []byte, mode os.
 			return
 		}
 		if file != nil {
-			if truncateErr := file.Truncate(0); truncateErr != nil {
-				err = errors.Join(err, truncateErr)
-			} else if syncErr := file.Sync(); syncErr != nil {
-				err = errors.Join(err, syncErr)
-			}
 			if linked {
-				_, removeErr := quarantineRootEntryIfSame(output.root, name, openedInfo)
+				_, removeErr := removeOutputEntryIfSame(output, name, openedInfo)
 				err = errors.Join(err, removeErr)
 			}
-			_, removeErr := quarantineRootEntryIfSame(output.root, staged, openedInfo)
+			_, removeErr := removeOutputEntryIfSame(output, staged, openedInfo)
 			err = errors.Join(err, removeErr)
 			err = errors.Join(err, file.Close())
 			file = nil
@@ -1079,7 +1102,7 @@ func atomicWriteRoot(output *boundOutputRoot, name string, data []byte, mode os.
 	if err != nil || !finalInfo.Mode().IsRegular() || !os.SameFile(openedInfo, finalInfo) {
 		return nil, errors.New("final output path does not identify the staged file")
 	}
-	removed, err := quarantineRootEntryIfSame(output.root, staged, openedInfo)
+	removed, err := removeOutputEntryIfSame(output, staged, openedInfo)
 	if err != nil {
 		return nil, err
 	}
@@ -1098,7 +1121,7 @@ func atomicWriteRoot(output *boundOutputRoot, name string, data []byte, mode os.
 		return nil, err
 	}
 	published = &publishedOutput{
-		name: name, file: file, info: openedInfo,
+		owner: output, name: name, file: file, info: openedInfo,
 		size: int64(len(data)), sha256: hashBytes(data),
 	}
 	committed = true
@@ -1121,41 +1144,6 @@ func createRootTempFile(root *os.Root, prefix string) (*os.File, string, error) 
 		}
 	}
 	return nil, "", errors.New("create unique staged output")
-}
-
-func quarantineRootEntryIfSame(root *os.Root, name string, expected os.FileInfo) (bool, error) {
-	if expected == nil {
-		return false, nil
-	}
-	current, err := root.Lstat(name)
-	if os.IsNotExist(err) {
-		return false, nil
-	}
-	if err != nil {
-		return false, err
-	}
-	if !os.SameFile(expected, current) {
-		return false, nil
-	}
-	var random [16]byte
-	if _, err := rand.Read(random[:]); err != nil {
-		return false, err
-	}
-	tombstone := ".go2gs-quarantine-" + hex.EncodeToString(random[:])
-	if err := root.Rename(name, tombstone); err != nil {
-		return false, err
-	}
-	moved, err := root.Lstat(tombstone)
-	if err != nil {
-		return false, err
-	}
-	if !os.SameFile(expected, moved) {
-		return false, errors.New("output entry changed while moving to quarantine")
-	}
-	if err := root.Remove(tombstone); err != nil {
-		return false, err
-	}
-	return true, nil
 }
 
 func atomicWriteWithHooks(path string, data []byte, mode os.FileMode, beforeRename, afterRename func(string)) (err error) {

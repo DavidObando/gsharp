@@ -82,7 +82,10 @@ Output locking, stale-artifact invalidation, and atomic publication stay
 relative to one held directory descriptor/handle, so replacing an output-root
 ancestor cannot redirect owned output operations. Publication retains open
 artifact handles and verifies the lock, file identities, and content hashes
-through release; ownership loss invalidates only the invocation's files.
+through release; ownership loss invalidates only the invocation's files. Unix
+removal atomically moves the held entry without replacement into a private
+descriptor-bound quarantine; Windows removal targets the held non-reparse NT
+handle. Unsupported identity-bound operations fail without changing the name.
 On Linux and macOS, private temporary trees are removed recursively through
 verified directory descriptors and atomic name exchanges without following
 links; an exchange failure or retained entry makes the command fail. Other
