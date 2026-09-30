@@ -102,14 +102,13 @@ Before moving an application to a different compiler version, pin the intended S
   blockers preserve typed nil/interface, byte-string, map,
   panic/defer/recover, fixed-array, and concurrency sites without choosing
   their later G# representation. Profile flags are allowlisted against tool
-  execution/path overrides, the selected Go executable supplies its own
-  verified GOROOT, and CGo compiler helpers require an explicit hashed profile
-  manifest. The selected Go executable is also captured, and child PATH never
-  exposes source executable directories. On Linux, Go, the C compiler, and
-  helpers execute from a read-only private tmpfs addressed through a held
-  directory descriptor; CGo fails closed where that binding is unavailable.
-  Helper names use a portable grammar that rejects Windows aliases and device
-  names. Hashes, sizes, and modes remain validated in the artifact. Diagnostics
+  execution/path overrides, and the selected Go executable supplies its own
+  verified GOROOT. The captured executable must identify as native `cmd/go`;
+  scripts and wrappers are rejected, and child PATH contains only its private
+  stage. M0 now forces `CGO_ENABLED=0` and never executes cgo, a C/C++ compiler,
+  linker, assembler, pkg-config, or helper. It independently records
+  profile-selected CGo/native source inputs and emits deterministic blockers;
+  legacy profile compiler fields must be empty. Diagnostics
   are path-stable, initialization order is explicit, and schema validation
   rejects missing fields and count mismatches. The pinned
   cliamp profile reports an actionable mismatch rather than substituting the

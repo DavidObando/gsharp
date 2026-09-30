@@ -39,25 +39,18 @@ bootstrap succeeds, exact-version or source-commit mismatches produce an
 incomplete artifact and exit 1.
 The selected Go executable is captured and staged under the canonical `go` or
 `go.exe` name. Child `PATH` contains only private staged directories, never the
-selected executable's original parent directory or its mutable siblings.
-Profiles enabling CGo must set `cCompiler` to an absolute, explicitly approved
-compiler executable. go2gs hashes that compiler and records its name and hash.
-Every compiler executable helper, including internal drivers such as GCC's
-`cc1` and PATH-resolved assembler/linker tools, must also be explicitly listed
-in `cCompilerHelpers` by logical name, canonical absolute path, and SHA-256.
-go2gs captures those bounded regular executables without following links,
-stages only the captured bytes in a private directory used for both `PATH` and
-GCC's `-B` executable prefix, records their
-hashes, sizes, and executable modes, and detects source or staged-copy drift.
-On Linux, Go, the compiler, and helpers execute from a read-only private tmpfs
-addressed through a held directory descriptor, so a host-visible pathname swap
-cannot replace them transiently. CGo fails closed on platforms without that
-identity-binding mechanism. Source executable directories and ambient PATH are
-never exposed. Helper names use a host-independent portable executable grammar
-and reject Windows aliases, device names, ADS syntax, and reserved tool names.
-Active `#cgo pkg-config:` directives fail closed because M0 does not model or
-approve pkg-config; directives inactive under the selected build constraints
-are ignored.
+selected executable's original parent directory or its mutable siblings. The
+captured bytes must identify as a native `cmd/go`; scripts and wrappers are
+rejected before execution.
+
+M0 forces `CGO_ENABLED=0` for every `go/packages` load and never executes cgo,
+a C/C++ compiler, linker, assembler, pkg-config, or helper. Profile-v1
+`cCompiler` and `cCompilerHelpers` fields are accepted only when empty.
+Requested CGo selection is instead classified from the immutable source mirror
+with Go build constraints and file naming rules. Selected CGo files, native
+sources, assembly, and reachable headers are recorded with deterministic
+`cgo`/`native` blockers. Active `#cgo pkg-config:` directives are parsed from
+source and block without executing pkg-config; inactive directives are ignored.
 Commit provenance is read directly from bounded repository metadata rather
 than by discovering or executing an ambient `git` command.
 Source inputs and authorized local replacements are loaded from a private,
