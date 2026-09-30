@@ -1531,11 +1531,12 @@ public sealed partial class CSharpToGSharpTranslator
                 this.GetProjectedForEachElementType(node, forEachInfo);
             var nullableBindings = new List<ISymbol>();
             var projectedBindings = new List<ILocalSymbol>();
-            if (forEachInfo.ElementConversion.IsIdentity)
+            if (projectedElement != null && forEachInfo.ElementType != null)
             {
                 this.CollectProjectedForEachVariableBindings(
                     node.Variable,
                     projectedElement,
+                    forEachInfo.ElementType,
                     nullableBindings,
                     projectedBindings);
             }
@@ -1602,7 +1603,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private void CollectProjectedForEachVariableBindings(
             ExpressionSyntax variable,
-            ITypeSymbol projectedType,
+            ITypeSymbol projectedSource,
+            ITypeSymbol destination,
             List<ISymbol> nullableBindings,
             List<ILocalSymbol> projectedBindings)
         {
@@ -1611,20 +1613,27 @@ public sealed partial class CSharpToGSharpTranslator
                 case DeclarationExpressionSyntax declaration:
                     this.CollectProjectedForEachVariableBindings(
                         declaration.Designation,
-                        projectedType,
+                        projectedSource,
+                        destination,
                         nullableBindings,
                         projectedBindings);
                     break;
 
                 case TupleExpressionSyntax tuple
-                    when projectedType is INamedTypeSymbol
-                        { IsTupleType: true } tupleType
-                    && tuple.Arguments.Count == tupleType.TupleElements.Length:
+                    when projectedSource is INamedTypeSymbol
+                        { IsTupleType: true } sourceTuple
+                    && destination is INamedTypeSymbol
+                        { IsTupleType: true } destinationTuple
+                    && tuple.Arguments.Count
+                        == sourceTuple.TupleElements.Length
+                    && tuple.Arguments.Count
+                        == destinationTuple.TupleElements.Length:
                     for (int i = 0; i < tuple.Arguments.Count; i++)
                     {
                         this.CollectProjectedForEachVariableBindings(
                             tuple.Arguments[i].Expression,
-                            tupleType.TupleElements[i].Type,
+                            GetEffectiveTypeArgument(sourceTuple, i),
+                            GetEffectiveTypeArgument(destinationTuple, i),
                             nullableBindings,
                             projectedBindings);
                     }
@@ -1635,7 +1644,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private void CollectProjectedForEachVariableBindings(
             VariableDesignationSyntax designation,
-            ITypeSymbol projectedType,
+            ITypeSymbol projectedSource,
+            ITypeSymbol destination,
             List<ISymbol> nullableBindings,
             List<ILocalSymbol> projectedBindings)
         {
@@ -1643,6 +1653,13 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 case SingleVariableDesignationSyntax single
                     when this.context.GetDeclaredSymbol(single) is ILocalSymbol symbol:
+                    ITypeSymbol projectedType = this.GetProjectedBindingType(
+                            projectedSource,
+                            destination,
+                            this.context.Compilation.ClassifyConversion(
+                                projectedSource,
+                                destination))
+                        ?? destination;
                     if (!SymbolEqualityComparer.IncludeNullability.Equals(
                             symbol.Type,
                             projectedType))
@@ -1664,14 +1681,20 @@ public sealed partial class CSharpToGSharpTranslator
                     break;
 
                 case ParenthesizedVariableDesignationSyntax tuple
-                    when projectedType is INamedTypeSymbol
-                        { IsTupleType: true } tupleType
-                    && tuple.Variables.Count == tupleType.TupleElements.Length:
+                    when projectedSource is INamedTypeSymbol
+                        { IsTupleType: true } sourceTuple
+                    && destination is INamedTypeSymbol
+                        { IsTupleType: true } destinationTuple
+                    && tuple.Variables.Count
+                        == sourceTuple.TupleElements.Length
+                    && tuple.Variables.Count
+                        == destinationTuple.TupleElements.Length:
                     for (int i = 0; i < tuple.Variables.Count; i++)
                     {
                         this.CollectProjectedForEachVariableBindings(
                             tuple.Variables[i],
-                            tupleType.TupleElements[i].Type,
+                            GetEffectiveTypeArgument(sourceTuple, i),
+                            GetEffectiveTypeArgument(destinationTuple, i),
                             nullableBindings,
                             projectedBindings);
                     }
@@ -2669,15 +2692,20 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 ITypeSymbol explicitTypeSymbol =
                     this.context.GetTypeInfo(explicitType).Type;
-                if (elementType != null
-                    && explicitTypeSymbol != null
-                    && this.context.Compilation.ClassifyConversion(
+                ITypeSymbol projectedBinding = elementType == null
+                    || explicitTypeSymbol == null
+                    ? null
+                    : this.GetProjectedBindingType(
                         elementType,
-                        explicitTypeSymbol).IsIdentity)
+                        explicitTypeSymbol,
+                        this.context.Compilation.ClassifyConversion(
+                            elementType,
+                            explicitTypeSymbol));
+                if (projectedBinding != null)
                 {
-                    effectiveType = elementType;
+                    effectiveType = projectedBinding;
                     return this.typeMapper.Map(
-                        elementType,
+                        projectedBinding,
                         this.context,
                         anchor.GetLocation());
                 }

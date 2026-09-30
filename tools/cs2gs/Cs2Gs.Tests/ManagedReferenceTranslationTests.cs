@@ -951,6 +951,151 @@ public sealed class ManagedReferenceTranslationTests
     }
 
     [Fact]
+    public void ForEachReferenceConversionPreservesProjectedNull()
+    {
+        const string source = """
+            using System.Linq;
+            using Gsharp.Values;
+            namespace ManagedArrayConvertedForEach;
+            public class Probe {
+                public static int Run() {
+                    var source = new ManagedRef<int>[1];
+                    int result = 0;
+                    foreach (object item in source) {
+                        result += item == null ? 20 : 0;
+                    }
+
+                    result += (from object item in source
+                               select item == null ? 22 : 0).Single();
+                    return result;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayConvertedForEach.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains("for item object? in source", text, StringComparison.Ordinal);
+        Assert.Contains("(item object?) ->", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.True(!result.Diagnostics.Any(), text + Environment.NewLine + string.Join(Environment.NewLine, result.Diagnostics));
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void DeconstructedForEachConversionsPreserveProjectedTupleNulls()
+    {
+        const string source = """
+            #nullable enable
+            using Gsharp.Values;
+            namespace ManagedArrayConvertedDeconstruction;
+            public class Probe {
+                public static int Run() {
+                    int result = 0;
+                    var source = new (ManagedRef<int> Reference, int Value)[1];
+                    foreach ((object reference, int value) in source) {
+                        var copy = new[] { reference };
+                        result += copy[0] == null && value == 0
+                            ? 20
+                            : 0;
+                    }
+
+                    var nested =
+                        new ((ManagedRef<int> Reference, int Value) Pair, int Tail)[1];
+                    foreach (((object Reference, int Value) Pair, int Tail)
+                        in nested) {
+                        var copy = new[] { Pair.Reference };
+                        result += copy[0] == null
+                            && Pair.Value == 0
+                            && Tail == 0
+                            ? 22
+                            : 0;
+                    }
+                    return result;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayConvertedDeconstruction.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.DoesNotContain("reference!!", text, StringComparison.Ordinal);
+        Assert.DoesNotContain("Pair.Reference!!", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
+    public void PositionalPatternBinderUsesProjectedRecordSlot()
+    {
+        const string source = """
+            using Gsharp.Values;
+            namespace ManagedArrayProjectedPositionalPattern;
+            public sealed record Holder<T>(T Item);
+            public class Probe {
+                private static Holder<T> Wrap<T>(T item) => new Holder<T>(item);
+
+                public static int Run() {
+                    int[] values = { 42 };
+                    var source = new ManagedRef<int>[1];
+                    source[0] = ManagedRef<int>.FromArray(values, 0);
+                    var holder = Wrap(source[0]);
+                    if (holder is Holder<ManagedRef<int>>(var item)) {
+                        return item.Borrow();
+                    }
+                    return 0;
+                }
+            }
+            """;
+        var references = new List<MetadataReference>(CSharpProjectLoader.RuntimeReferences())
+        {
+            MetadataReference.CreateFromFile(typeof(Gsharp.Values.ManagedRef<>).Assembly.Location),
+        };
+        var project = CSharpProjectLoader.LoadInMemory(
+            new[] { ("ManagedArrayProjectedPositionalPattern.cs", source) },
+            references);
+        Assert.True(project.BoundWithoutErrors, string.Join(Environment.NewLine, project.ErrorDiagnostics));
+        var document = Assert.Single(project.Documents);
+        var context = new TranslationContext(project.Compilation, document.SemanticModel, document.FilePath);
+        var text = GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+        Assert.Empty(context.Diagnostics);
+        Assert.Contains(
+            "var __spill0 Gsharp.Values.ManagedRef[int32]?",
+            text,
+            StringComparison.Ordinal);
+        Assert.Contains("__spill0!!.Borrow()", text, StringComparison.Ordinal);
+        var result = EmittedOracle.Evaluate(
+            text + "\nProbe.Run()",
+            new[] { typeof(Gsharp.Values.ManagedRef<>).Assembly.Location });
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(42, result.Value);
+    }
+
+    [Fact]
     public void NullableValueArrayReadsAndForEachBindingsStayNullableValues()
     {
         const string source = """

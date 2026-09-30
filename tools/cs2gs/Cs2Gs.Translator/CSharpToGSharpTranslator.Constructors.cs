@@ -3613,16 +3613,29 @@ public sealed partial class CSharpToGSharpTranslator
                     string loopIdentifier = this.EmittedName(loopSymbol, forEach.Identifier.ValueText);
                     ForEachStatementInfo forEachInfo =
                         this.context.SemanticModel.GetForEachStatementInfo(forEach);
-                    ITypeSymbol forEachElement =
+                    ITypeSymbol projectedElement =
                         this.GetProjectedForEachElementType(forEach, forEachInfo);
-                    bool bindingTypeMatchesElementType =
-                        forEachInfo.ElementConversion.IsIdentity;
-                    bool nullableElement = bindingTypeMatchesElementType
+                    ITypeSymbol declaredBindingType =
+                        this.context.GetTypeInfo(forEach.Type).Type;
+                    ITypeSymbol forEachElement =
+                        this.GetProjectedBindingType(
+                            projectedElement,
+                            declaredBindingType,
+                            forEachInfo.ElementConversion)
+                        ?? declaredBindingType;
+                    bool projectedBindingType =
+                        forEachElement != null
+                        && projectedElement != null
+                        && (forEachInfo.ElementConversion.IsIdentity
+                            || !SymbolEqualityComparer.IncludeNullability.Equals(
+                                forEachElement,
+                                declaredBindingType));
+                    bool nullableElement = projectedBindingType
                         && (this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression)
                             || (this.IsReferenceLikeOrManagedReference(forEachElement)
                                 && forEachElement.NullableAnnotation == NullableAnnotation.Annotated));
                     ILocalSymbol projectedLoopLocal =
-                        bindingTypeMatchesElementType ? loopSymbol as ILocalSymbol : null;
+                        projectedBindingType ? loopSymbol as ILocalSymbol : null;
                     bool projectedBinding = projectedLoopLocal != null
                         && forEachElement != null
                         && !SymbolEqualityComparer.IncludeNullability.Equals(
@@ -3677,7 +3690,8 @@ public sealed partial class CSharpToGSharpTranslator
                     if (!forEach.Type.IsVar
                         && !forEachInfo.ElementConversion.IsIdentity)
                     {
-                        ITypeSymbol targetSymbol = this.context.GetTypeInfo(forEach.Type).Type;
+                        ITypeSymbol targetSymbol = forEachElement
+                            ?? this.context.GetTypeInfo(forEach.Type).Type;
                         loopVariableType = targetSymbol != null
                             ? this.typeMapper.Map(targetSymbol, this.context, forEach.Type.GetLocation())
                             : new NamedTypeReference(forEach.Type.ToString());
@@ -3760,6 +3774,78 @@ public sealed partial class CSharpToGSharpTranslator
                     projectedCollection,
                     forEach.AwaitKeyword.RawKind != 0)
                 ?? forEachInfo.ElementType;
+        }
+
+        private ITypeSymbol GetProjectedBindingType(
+            ITypeSymbol projectedSource,
+            ITypeSymbol destination,
+            Microsoft.CodeAnalysis.CSharp.Conversion conversion)
+        {
+            if (projectedSource == null || destination == null)
+            {
+                return null;
+            }
+
+            if (conversion.IsIdentity)
+            {
+                return projectedSource;
+            }
+
+            if (!conversion.IsImplicit || conversion.MethodSymbol != null)
+            {
+                return null;
+            }
+
+            if (projectedSource is INamedTypeSymbol
+                    { IsTupleType: true } sourceTuple
+                && destination is INamedTypeSymbol
+                    { IsTupleType: true } destinationTuple
+                && sourceTuple.TupleElements.Length
+                    == destinationTuple.TupleElements.Length)
+            {
+                var arguments = ImmutableArray.CreateBuilder<ITypeSymbol>(
+                    sourceTuple.TupleElements.Length);
+                var annotations = ImmutableArray.CreateBuilder<NullableAnnotation>(
+                    sourceTuple.TupleElements.Length);
+                for (int i = 0; i < sourceTuple.TupleElements.Length; i++)
+                {
+                    ITypeSymbol sourceElement =
+                        GetEffectiveTypeArgument(sourceTuple, i);
+                    ITypeSymbol destinationElement =
+                        GetEffectiveTypeArgument(destinationTuple, i);
+                    ITypeSymbol projectedElement = this.GetProjectedBindingType(
+                        sourceElement,
+                        destinationElement,
+                        this.context.Compilation.ClassifyConversion(
+                            sourceElement,
+                            destinationElement));
+                    if (projectedElement == null)
+                    {
+                        return null;
+                    }
+
+                    arguments.Add(projectedElement);
+                    annotations.Add(projectedElement.NullableAnnotation);
+                }
+
+                return this.context.Compilation.CreateTupleTypeSymbol(
+                    arguments.ToImmutable(),
+                    destinationTuple.TupleElements
+                        .Select(element => element.Name)
+                        .ToImmutableArray(),
+                    default,
+                    annotations.ToImmutable());
+            }
+
+            if (!conversion.IsReference)
+            {
+                return null;
+            }
+
+            return projectedSource.NullableAnnotation == NullableAnnotation.Annotated
+                && this.IsReferenceLikeOrManagedReference(projectedSource)
+                ? destination.WithNullableAnnotation(NullableAnnotation.Annotated)
+                : destination;
         }
     }
 }

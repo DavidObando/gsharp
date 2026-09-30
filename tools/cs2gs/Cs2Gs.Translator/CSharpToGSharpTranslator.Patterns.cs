@@ -2266,9 +2266,25 @@ public sealed partial class CSharpToGSharpTranslator
                 // nested member-access test a property subpattern uses.
                 SeparatedSyntaxList<SubpatternSyntax> subs = recursive.PositionalPatternClause.Subpatterns;
                 PositionalSlots positional = this.TryGetPositionalMembers(recursive, subs.Count, out string positionalFailure);
+                ITypeSymbol projectedReceiverType = receiverSyntax == null
+                    ? null
+                    : this.GetManagedReferenceArrayProjectedExpressionType(
+                        receiverSyntax);
                 ITypeSymbol positionalLookupType = recursive.Type != null
                     ? this.context.GetTypeInfo(recursive.Type).Type
-                    : receiverType;
+                    : projectedReceiverType ?? receiverType;
+                if ((projectedReceiverType ?? receiverType)
+                        is INamedTypeSymbol projectedReceiver
+                    && positionalLookupType is INamedTypeSymbol positionalType)
+                {
+                    positionalLookupType = ReceiverTypeHierarchy(projectedReceiver)
+                        .FirstOrDefault(candidate =>
+                            SymbolEqualityComparer.Default.Equals(
+                                candidate.OriginalDefinition,
+                                positionalType.OriginalDefinition))
+                        ?? positionalLookupType;
+                }
+
                 for (int i = 0; i < subs.Count; i++)
                 {
                     SubpatternSyntax sub = subs[i];
@@ -2302,7 +2318,14 @@ public sealed partial class CSharpToGSharpTranslator
                     // NULLABLE slot guard it and read it once, as C#'s single
                     // Deconstruct call does (TranslatePatternTest), exactly as
                     // the property-subpattern loop above passes its member type.
-                    ITypeSymbol slotType = this.RegisterPatternMemberSlot(memberSymbol, memberAccess);
+                    ITypeSymbol declaredSlotType =
+                        this.RegisterPatternMemberSlot(
+                            memberSymbol,
+                            memberAccess);
+                    ITypeSymbol slotType = this.GetProjectedPatternMemberType(
+                            positionalLookupType,
+                            memberSymbol)
+                        ?? declaredSlotType;
                     GExpression memberTest = this.TranslatePatternTest(memberAccess, sub.Pattern, slotType, isNestedPatternMember: true);
                     test = test == null ? memberTest : new BinaryExpression(test, "&&", memberTest);
                 }

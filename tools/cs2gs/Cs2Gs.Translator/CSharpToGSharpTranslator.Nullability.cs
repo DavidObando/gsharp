@@ -1144,8 +1144,16 @@ public sealed partial class CSharpToGSharpTranslator
 
             foreach (ExpressionSyntax element in elements)
             {
+                ITypeSymbol projectedElement = element == null
+                    ? null
+                    : this.GetManagedReferenceArrayProjectedExpressionType(
+                        element);
                 if (element != null
-                    && (IsNullOrDefaultLiteral(element) || this.IsNullDataRowRead(element)))
+                    && (IsNullOrDefaultLiteral(element)
+                        || this.IsNullDataRowRead(element)
+                        || (projectedElement is { IsReferenceType: true }
+                            && projectedElement.NullableAnnotation
+                                == NullableAnnotation.Annotated)))
                 {
                     return MakeNullable(elementType);
                 }

@@ -156,22 +156,6 @@ public sealed partial class CSharpToGSharpTranslator
                         }
                     }
 
-                    if (recursive.PositionalPatternClause != null
-                        && receiverType is INamedTypeSymbol
-                            { IsTupleType: true } tuple)
-                    {
-                        SeparatedSyntaxList<SubpatternSyntax> subpatterns =
-                            recursive.PositionalPatternClause.Subpatterns;
-                        for (int i = 0;
-                            i < subpatterns.Count && i < tuple.TupleElements.Length;
-                            i++)
-                        {
-                            this.RegisterProjectedNativePatternBindings(
-                                subpatterns[i].Pattern,
-                                tuple.TupleElements[i].Type);
-                        }
-                    }
-
                     break;
 
                 case ParenthesizedPatternSyntax parenthesized:
@@ -280,6 +264,13 @@ public sealed partial class CSharpToGSharpTranslator
             ISymbol member = memberSyntax == null
                 ? null
                 : this.GetPatternMemberSymbol(memberSyntax);
+            return this.GetProjectedPatternMemberType(receiverType, member);
+        }
+
+        private ITypeSymbol GetProjectedPatternMemberType(
+            ITypeSymbol receiverType,
+            ISymbol member)
+        {
             if (receiverType is INamedTypeSymbol projectedReceiver
                 && member != null)
             {

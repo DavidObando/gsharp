@@ -1646,7 +1646,9 @@ public sealed class CSharpTypeMapper
             {
                 var readOnly = named.Name == "ReadOnlyManagedRef";
                 var element = this.Map(named.TypeArguments[0], context, location);
-                if (!location.IsInSource || location.SourceTree != context.SemanticModel.SyntaxTree
+                if (location == null
+                    || !location.IsInSource
+                    || location.SourceTree != context.SemanticModel.SyntaxTree
                     || context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "managed").Any()
                     || (readOnly && context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "readonly").Any()))
                 {
@@ -1659,7 +1661,9 @@ public sealed class CSharpTypeMapper
             if (IsRecognizedRuntimeConsumerType(named, context.Compilation, "Slice", "ReadOnlySlice"))
             {
                 var element = this.Map(named.TypeArguments[0], context, location);
-                if (!location.IsInSource || location.SourceTree != context.SemanticModel.SyntaxTree
+                if (location == null
+                    || !location.IsInSource
+                    || location.SourceTree != context.SemanticModel.SyntaxTree
                     || context.SemanticModel.LookupSymbols(location.SourceSpan.Start, name: "slice").Any())
                 {
                     return new NamedTypeReference("Gsharp.Values." + named.Name, new[] { element });
