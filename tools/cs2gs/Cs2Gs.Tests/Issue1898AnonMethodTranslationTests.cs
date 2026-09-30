@@ -249,19 +249,32 @@ namespace Corpus.Issue1898
             "g09-anonymous-method-e2e",
             Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(outRoot);
-        var pipeline = new MigrationPipeline(
-            new PipelineOptions { GscPath = compiler, OutputRoot = outRoot });
-        CorpusApp g09 = CorpusDiscovery.FindById(corpus, "corpus/G09-Functions-Console");
+        try
+        {
+            var pipeline = new MigrationPipeline(
+                new PipelineOptions { GscPath = compiler, OutputRoot = outRoot });
+            CorpusApp g09 = CorpusDiscovery.FindById(corpus, "corpus/G09-Functions-Console");
 
-        Assert.NotNull(g09);
-        RunResult result = await pipeline.RunAsync(new[] { g09 });
-        AppResult app = Assert.Single(result.Apps);
-        Assert.True(
-            app.Succeeded,
-            "corpus/G09-Functions-Console must migrate green end-to-end (issue #4297). Failure category: " +
-                (app.FailureCategory ?? "<none>") + "; artifacts: " + string.Join(", ", app.Artifacts));
-        Assert.Empty(app.Artifacts);
-        Assert.All(app.Stages, stage => Assert.Equal("passed", stage.Status));
+            Assert.NotNull(g09);
+            RunResult result = await pipeline.RunAsync(new[] { g09 });
+            AppResult app = Assert.Single(result.Apps);
+            Assert.True(
+                app.Succeeded,
+                "corpus/G09-Functions-Console must migrate green end-to-end (issue #4297). Failure category: " +
+                    (app.FailureCategory ?? "<none>") + "; artifacts: " + string.Join(", ", app.Artifacts));
+            Assert.Empty(app.Artifacts);
+            Assert.Collection(
+                app.Stages,
+                stage => Assert.Equal("translate", stage.Stage),
+                stage => Assert.Equal("compile", stage.Stage),
+                stage => Assert.Equal("ilverify", stage.Stage),
+                stage => Assert.Equal("test-parity", stage.Stage));
+            Assert.All(app.Stages, stage => Assert.Equal("passed", stage.Status));
+        }
+        finally
+        {
+            DeleteDirectory(outRoot);
+        }
     }
 
     [Fact]
@@ -369,5 +382,21 @@ namespace Corpus.Issue1898
         }
 
         return null;
+    }
+
+    private static void DeleteDirectory(string path)
+    {
+        try
+        {
+            Directory.Delete(path, recursive: true);
+        }
+        catch (IOException)
+        {
+            // Best effort: test-host file handles can remain open briefly on Windows.
+        }
+        catch (UnauthorizedAccessException)
+        {
+            // Best effort, as above.
+        }
     }
 }
