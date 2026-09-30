@@ -54,6 +54,12 @@ func checkAnalysisOperation(ctx context.Context, operation, point string) error 
 	return ctx.Err()
 }
 
+func observeAnalysisOperation(operation, point string) {
+	if analysisOperationTestHook != nil {
+		analysisOperationTestHook(operation, point)
+	}
+}
+
 func analyze(ctx context.Context, sourceRoot, outRoot string, profile Profile) (Analysis, bool, error) {
 	return analyzeWithSnapshotHook(ctx, sourceRoot, outRoot, profile, nil)
 }
@@ -1600,6 +1606,7 @@ func selectedPkgConfigDirectiveContext(ctx context.Context, snapshot packageInpu
 		if contextErr := checkAnalysisOperation(ctx, "pkg-config-scan", "parse-after"); contextErr != nil {
 			return false, contextErr
 		}
+		observeAnalysisOperation("pkg-config-scan", "parse-result")
 		if err != nil {
 			continue
 		}
@@ -1786,6 +1793,7 @@ func cgoOnlyPackageOverlayContext(ctx context.Context, mirror sourceMirror, prof
 			if contextErr := checkAnalysisOperation(ctx, "cgo-overlay", "import-after"); contextErr != nil {
 				return contextErr
 			}
+			observeAnalysisOperation("cgo-overlay", "import-result")
 			if err != nil || selected == nil || len(selected.CgoFiles) == 0 || len(selected.GoFiles) != 0 {
 				return nil
 			}
