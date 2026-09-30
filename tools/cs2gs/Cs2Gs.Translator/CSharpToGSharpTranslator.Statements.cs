@@ -2217,7 +2217,8 @@ public sealed partial class CSharpToGSharpTranslator
                             operation,
                             storage,
                             states,
-                            anonymousFunction);
+                            anonymousFunction,
+                            usePosition);
                     }
 
                     if (block.BranchValue is { } branchValue)
@@ -2226,7 +2227,8 @@ public sealed partial class CSharpToGSharpTranslator
                             branchValue,
                             storage,
                             states,
-                            anonymousFunction);
+                            anonymousFunction,
+                            usePosition);
                     }
 
                     if (!outputs.TryGetValue(block, out var previous)
@@ -2255,7 +2257,8 @@ public sealed partial class CSharpToGSharpTranslator
                     useBlock.Operations[i],
                     storage,
                     reaching,
-                    anonymousFunction);
+                    anonymousFunction,
+                    usePosition);
             }
 
             if (useOperationIndex < useBlock.Operations.Length)
@@ -2265,6 +2268,7 @@ public sealed partial class CSharpToGSharpTranslator
                     storage,
                     reaching,
                     anonymousFunction,
+                    usePosition,
                     usePosition);
             }
             else if (useBlock.BranchValue is { } branchValue)
@@ -2274,6 +2278,7 @@ public sealed partial class CSharpToGSharpTranslator
                     storage,
                     reaching,
                     anonymousFunction,
+                    usePosition,
                     usePosition);
             }
 
@@ -2295,6 +2300,7 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax storage,
             HashSet<int> states,
             AnonymousFunctionExpressionSyntax anonymousFunction,
+            int storageUsePosition,
             int beforePosition = int.MaxValue)
         {
             foreach (AssignmentExpressionSyntax assignment in
@@ -2302,7 +2308,10 @@ public sealed partial class CSharpToGSharpTranslator
                     .OfType<AssignmentExpressionSyntax>()
                     .Where(candidate => candidate.Span.End <= beforePosition)
                     .Where(candidate =>
-                        this.DelegateStorageMatches(candidate.Left, storage))
+                        this.DelegateStorageMatches(
+                            candidate.Left,
+                            storage,
+                            storageUsePosition))
                     .OrderBy(candidate => candidate.Span.End))
             {
                 var next = new HashSet<int>();
@@ -2313,7 +2322,8 @@ public sealed partial class CSharpToGSharpTranslator
                             assignment.Right,
                             state,
                             storage,
-                            anonymousFunction);
+                            anonymousFunction,
+                            storageUsePosition);
                     next.Add(assignment.Kind() switch
                     {
                         SyntaxKind.AddAssignmentExpression =>
@@ -2334,7 +2344,8 @@ public sealed partial class CSharpToGSharpTranslator
             ExpressionSyntax expression,
             int currentState,
             ExpressionSyntax trackedStorage,
-            AnonymousFunctionExpressionSyntax anonymousFunction)
+            AnonymousFunctionExpressionSyntax anonymousFunction,
+            int trackedStorageUsePosition)
         {
             expression = Unwrap(expression);
             if (expression.DescendantNodesAndSelf().Any(node =>
@@ -2344,7 +2355,10 @@ public sealed partial class CSharpToGSharpTranslator
                 return 1;
             }
 
-            if (this.DelegateStorageMatches(expression, trackedStorage))
+            if (this.DelegateStorageMatches(
+                expression,
+                trackedStorage,
+                trackedStorageUsePosition))
             {
                 return currentState;
             }
@@ -2369,12 +2383,14 @@ public sealed partial class CSharpToGSharpTranslator
                             conditional.WhenTrue,
                             currentState,
                             trackedStorage,
-                            anonymousFunction),
+                            anonymousFunction,
+                            trackedStorageUsePosition),
                         this.DelegateAssignmentValueAnonymousFunctionCount(
                             conditional.WhenFalse,
                             currentState,
                             trackedStorage,
-                            anonymousFunction)),
+                            anonymousFunction,
+                            trackedStorageUsePosition)),
                 BinaryExpressionSyntax binary when binary.IsKind(
                     SyntaxKind.AddExpression) =>
                     AddDelegateCounts(
@@ -2382,12 +2398,14 @@ public sealed partial class CSharpToGSharpTranslator
                             binary.Left,
                             currentState,
                             trackedStorage,
-                            anonymousFunction),
+                            anonymousFunction,
+                            trackedStorageUsePosition),
                         this.DelegateAssignmentValueAnonymousFunctionCount(
                             binary.Right,
                             currentState,
                             trackedStorage,
-                            anonymousFunction)),
+                            anonymousFunction,
+                            trackedStorageUsePosition)),
                 BinaryExpressionSyntax binary when binary.IsKind(
                     SyntaxKind.CoalesceExpression) =>
                     Math.Max(
@@ -2395,12 +2413,14 @@ public sealed partial class CSharpToGSharpTranslator
                             binary.Left,
                             currentState,
                             trackedStorage,
-                            anonymousFunction),
+                            anonymousFunction,
+                            trackedStorageUsePosition),
                         this.DelegateAssignmentValueAnonymousFunctionCount(
                             binary.Right,
                             currentState,
                             trackedStorage,
-                            anonymousFunction)),
+                            anonymousFunction,
+                            trackedStorageUsePosition)),
                 _ => 0,
             };
         }
@@ -2410,7 +2430,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool DelegateStorageMatches(
             ExpressionSyntax left,
-            ExpressionSyntax right)
+            ExpressionSyntax right,
+            int? rightUsePosition = null)
         {
             left = Unwrap(left);
             right = Unwrap(right);
@@ -2425,7 +2446,8 @@ public sealed partial class CSharpToGSharpTranslator
 
                 return this.IndexedDelegateStorageMatches(
                     leftElement,
-                    rightElement);
+                    rightElement,
+                    rightUsePosition);
             }
 
             ISymbol leftSymbol = this.context.GetSymbolInfo(left).Symbol;
@@ -2458,15 +2480,47 @@ public sealed partial class CSharpToGSharpTranslator
                     && rightReceiver is ThisExpressionSyntax;
             }
 
-            return this.DelegateReceiverMatches(leftReceiver, rightReceiver);
+            return this.DelegateReceiverMatches(
+                leftReceiver,
+                rightReceiver,
+                rightUsePosition);
         }
 
         private bool DelegateReceiverMatches(
             ExpressionSyntax left,
-            ExpressionSyntax right)
+            ExpressionSyntax right,
+            int? rightUsePosition = null)
         {
             left = Unwrap(left);
             right = Unwrap(right);
+            ISymbol leftSymbol = this.context.GetSymbolInfo(left).Symbol;
+            ISymbol rightSymbol = this.context.GetSymbolInfo(right).Symbol;
+            if (leftSymbol is ILocalSymbol or IParameterSymbol
+                || rightSymbol is ILocalSymbol or IParameterSymbol)
+            {
+                IReadOnlyList<ExpressionSyntax> leftOrigins =
+                    this.GetIndexedDelegateReceiverOrigins(
+                        left,
+                        new HashSet<ISymbol>(
+                            SymbolEqualityComparer.Default));
+                IReadOnlyList<ExpressionSyntax> rightOrigins =
+                    this.GetIndexedDelegateReceiverOrigins(
+                        right,
+                        new HashSet<ISymbol>(
+                            SymbolEqualityComparer.Default),
+                        rightUsePosition);
+                if (leftOrigins.Count == 0 || rightOrigins.Count == 0)
+                {
+                    return SymbolEqualityComparer.Default.Equals(
+                        leftSymbol,
+                        rightSymbol);
+                }
+
+                return this.DelegateOriginSetsMatch(
+                    leftOrigins,
+                    rightOrigins);
+            }
+
             if (left is ThisExpressionSyntax || right is ThisExpressionSyntax)
             {
                 return left is ThisExpressionSyntax
@@ -2481,7 +2535,8 @@ public sealed partial class CSharpToGSharpTranslator
                         this.context.GetSymbolInfo(rightMember).Symbol)
                     && this.DelegateReceiverMatches(
                         leftMember.Expression,
-                        rightMember.Expression);
+                        rightMember.Expression,
+                        rightUsePosition);
             }
 
             if (left is ElementAccessExpressionSyntax leftElement
@@ -2489,11 +2544,10 @@ public sealed partial class CSharpToGSharpTranslator
             {
                 return this.IndexedDelegateStorageMatches(
                     leftElement,
-                    rightElement);
+                    rightElement,
+                    rightUsePosition);
             }
 
-            ISymbol leftSymbol = this.context.GetSymbolInfo(left).Symbol;
-            ISymbol rightSymbol = this.context.GetSymbolInfo(right).Symbol;
             return leftSymbol != null
                 && SymbolEqualityComparer.Default.Equals(
                     leftSymbol,
@@ -2502,7 +2556,8 @@ public sealed partial class CSharpToGSharpTranslator
 
         private bool IndexedDelegateStorageMatches(
             ElementAccessExpressionSyntax left,
-            ElementAccessExpressionSyntax right)
+            ElementAccessExpressionSyntax right,
+            int? rightUsePosition = null)
         {
             if (left.ArgumentList.Arguments.Count
                     != right.ArgumentList.Arguments.Count)
@@ -2518,9 +2573,38 @@ public sealed partial class CSharpToGSharpTranslator
                 Optional<object> rightIndex = this.context.SemanticModel
                     .GetConstantValue(
                         right.ArgumentList.Arguments[i].Expression);
-                if (!leftIndex.HasValue
-                    || !rightIndex.HasValue
-                    || !Equals(leftIndex.Value, rightIndex.Value))
+                ISymbol leftIndexSymbol = this.context.GetSymbolInfo(
+                    left.ArgumentList.Arguments[i].Expression).Symbol;
+                ISymbol rightIndexSymbol = this.context.GetSymbolInfo(
+                    right.ArgumentList.Arguments[i].Expression).Symbol;
+                if (leftIndexSymbol is not (ILocalSymbol or IParameterSymbol)
+                    && rightIndexSymbol is not (ILocalSymbol or IParameterSymbol)
+                    && leftIndex.HasValue
+                    && rightIndex.HasValue)
+                {
+                    if (!Equals(leftIndex.Value, rightIndex.Value))
+                    {
+                        return false;
+                    }
+
+                    continue;
+                }
+
+                IReadOnlyList<ExpressionSyntax> leftIndexOrigins =
+                    this.GetIndexedDelegateReceiverOrigins(
+                        left.ArgumentList.Arguments[i].Expression,
+                        new HashSet<ISymbol>(
+                            SymbolEqualityComparer.Default));
+                IReadOnlyList<ExpressionSyntax> rightIndexOrigins =
+                    this.GetIndexedDelegateReceiverOrigins(
+                        right.ArgumentList.Arguments[i].Expression,
+                        new HashSet<ISymbol>(
+                            SymbolEqualityComparer.Default),
+                        rightUsePosition);
+
+                if (!this.DelegateOriginSetsMatch(
+                    leftIndexOrigins,
+                    rightIndexOrigins))
                 {
                     return false;
                 }
@@ -2533,17 +2617,28 @@ public sealed partial class CSharpToGSharpTranslator
             IReadOnlyList<ExpressionSyntax> rightOrigins =
                 this.GetIndexedDelegateReceiverOrigins(
                     right.Expression,
-                    new HashSet<ISymbol>(SymbolEqualityComparer.Default));
-            return leftOrigins.Any(leftOrigin =>
-                rightOrigins.Any(rightOrigin =>
-                    this.IndexedDelegateReceiverOriginMatches(
-                        leftOrigin,
-                        rightOrigin)));
+                    new HashSet<ISymbol>(SymbolEqualityComparer.Default),
+                    rightUsePosition);
+            return this.DelegateOriginSetsMatch(leftOrigins, rightOrigins);
+        }
+
+        private bool DelegateOriginSetsMatch(
+            IReadOnlyList<ExpressionSyntax> left,
+            IReadOnlyList<ExpressionSyntax> right)
+        {
+            return left.Count > 0
+                && right.Count > 0
+                && left.Any(leftOrigin =>
+                    right.Any(rightOrigin =>
+                        this.IndexedDelegateReceiverOriginMatches(
+                            leftOrigin,
+                            rightOrigin)));
         }
 
         private IReadOnlyList<ExpressionSyntax> GetIndexedDelegateReceiverOrigins(
             ExpressionSyntax expression,
-            HashSet<ISymbol> visited)
+            HashSet<ISymbol> visited,
+            int? usePosition = null)
         {
             expression = Unwrap(expression);
             if (expression.SyntaxTree != this.context.SemanticModel.SyntaxTree)
@@ -2562,7 +2657,7 @@ public sealed partial class CSharpToGSharpTranslator
                 IReadOnlyList<ExpressionSyntax> reaching =
                     this.GetReachingLocalValues(
                         local,
-                        expression.SpanStart,
+                        usePosition ?? expression.SpanStart,
                         new HashSet<ISymbol>(
                             visited,
                             SymbolEqualityComparer.Default));
@@ -2581,6 +2676,21 @@ public sealed partial class CSharpToGSharpTranslator
                     .ToList();
             }
 
+            if (usePosition is int observationPosition
+                && symbol is IParameterSymbol or IFieldSymbol
+                && this.TryGetLastDirectAssignmentBetween(
+                    symbol,
+                    expression,
+                    observationPosition,
+                    out ExpressionSyntax assignedValue))
+            {
+                return this.GetIndexedDelegateReceiverOrigins(
+                    assignedValue,
+                    new HashSet<ISymbol>(
+                        visited,
+                        SymbolEqualityComparer.Default));
+            }
+
             if (symbol is IPropertySymbol or IMethodSymbol
                 || expression is InvocationExpressionSyntax)
             {
@@ -2588,6 +2698,52 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             return new[] { expression };
+        }
+
+        private bool TryGetLastDirectAssignmentBetween(
+            ISymbol symbol,
+            ExpressionSyntax start,
+            int usePosition,
+            out ExpressionSyntax assignedValue)
+        {
+            assignedValue = null;
+            StatementSyntax startStatement = start.AncestorsAndSelf()
+                .OfType<StatementSyntax>()
+                .FirstOrDefault();
+            StatementSyntax useStatement = start.SyntaxTree.GetRoot()
+                .FindToken(usePosition)
+                .Parent?
+                .AncestorsAndSelf()
+                .OfType<StatementSyntax>()
+                .FirstOrDefault();
+            if (startStatement?.Parent is not BlockSyntax block
+                || useStatement?.Parent != block)
+            {
+                return false;
+            }
+
+            int startIndex = block.Statements.IndexOf(startStatement);
+            int useIndex = block.Statements.IndexOf(useStatement);
+            if (startIndex < 0 || useIndex <= startIndex)
+            {
+                return false;
+            }
+
+            foreach (StatementSyntax statement in block.Statements
+                .Skip(startIndex + 1)
+                .Take(useIndex - startIndex - 1))
+            {
+                if (statement is ExpressionStatementSyntax expressionStatement
+                    && expressionStatement.Expression
+                        is AssignmentExpressionSyntax assignment
+                    && assignment.IsKind(SyntaxKind.SimpleAssignmentExpression)
+                    && this.BindsTo(assignment.Left, symbol))
+                {
+                    assignedValue = assignment.Right;
+                }
+            }
+
+            return assignedValue != null;
         }
 
         private bool IndexedDelegateReceiverOriginMatches(
@@ -2638,11 +2794,7 @@ public sealed partial class CSharpToGSharpTranslator
                 this.GetIndexedDelegateReceiverOrigins(
                     rightReceiver,
                     new HashSet<ISymbol>(SymbolEqualityComparer.Default));
-            return leftOrigins.Any(leftOrigin =>
-                rightOrigins.Any(rightOrigin =>
-                    this.IndexedDelegateReceiverOriginMatches(
-                        leftOrigin,
-                        rightOrigin)));
+            return this.DelegateOriginSetsMatch(leftOrigins, rightOrigins);
         }
 
         private bool DelegateLocalReachesAnonymousFunction(

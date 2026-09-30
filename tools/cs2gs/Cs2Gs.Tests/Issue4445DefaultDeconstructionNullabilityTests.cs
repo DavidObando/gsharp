@@ -1577,6 +1577,10 @@ public class Issue4445DefaultDeconstructionNullabilityTests
 
             public static class ReachingStorage
             {
+                private static System.Action[] fieldReceiver =
+                    new System.Action[2];
+                private static int fieldIndex;
+
                 private static void Fill<T>(ref T? value, T replacement) =>
                     value = replacement;
 
@@ -1587,7 +1591,56 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                 private static System.Action[] GetCallbacks() =>
                     new System.Action[1];
 
-                public static void M<T>(T replacement)
+                private static void ParameterStorage<T>(
+                    T replacement,
+                    System.Action[] receiver,
+                    int index)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action callback = () =>
+                    {
+                        var (parameterStorageLeft, _) = pair;
+                        Keep(ref parameterStorageLeft);
+                    };
+                    receiver[index] = callback;
+                    receiver = new System.Action[2];
+                    index = 1;
+                    pair = (default(T), replacement);
+                    receiver[index]();
+                }
+
+                private static void FieldStorage<T>(T replacement)
+                {
+                    var pair = (replacement, replacement);
+                    System.Action callback = () =>
+                    {
+                        var (fieldStorageLeft, _) = pair;
+                        Keep(ref fieldStorageLeft);
+                    };
+                    fieldReceiver[fieldIndex] = callback;
+                    fieldReceiver = new System.Action[2];
+                    fieldIndex = 1;
+                    pair = (default(T), replacement);
+                    fieldReceiver[fieldIndex]();
+                }
+
+                private static void CompoundFieldStorage<T>(T replacement)
+                {
+                    fieldReceiver = new System.Action[1];
+                    fieldIndex = 0;
+                    var pair = (replacement, replacement);
+                    System.Action callback = () =>
+                    {
+                        var (compoundFieldLeft, _) = pair;
+                        Fill(ref compoundFieldLeft, replacement);
+                    };
+                    fieldReceiver[fieldIndex] = callback;
+                    fieldIndex += 0;
+                    pair = (default(T), replacement);
+                    fieldReceiver[fieldIndex]();
+                }
+
+                public static void M<T>(T replacement, bool flag)
                 {
                     var firstRefPair = (replacement, replacement);
                     var secondRefPair = (replacement, replacement);
@@ -1606,11 +1659,12 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                         Fill(ref indexedLeft, replacement);
                     };
                     var callbacks = new System.Action[2];
-                    callbacks[0] = indexed;
+                    var stableIndex = 0;
+                    callbacks[stableIndex] = indexed;
                     callbacks[1] = () => { };
                     var callbackAlias = callbacks;
                     indexedPair = (default(T), replacement);
-                    callbackAlias[0]();
+                    callbackAlias[stableIndex]();
 
                     var shiftedPair = (replacement, replacement);
                     System.Action shifted = () =>
@@ -1625,6 +1679,86 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     shiftedPair = (default(T), replacement);
                     shiftedCallbacks[index]();
 
+                    var movedReceiverPair = (replacement, replacement);
+                    System.Action movedReceiver = () =>
+                    {
+                        var (movedReceiverLeft, _) = movedReceiverPair;
+                        Keep(ref movedReceiverLeft);
+                    };
+                    var firstCallbacks = new System.Action[1];
+                    var secondCallbacks = new System.Action[1];
+                    var receiver = firstCallbacks;
+                    receiver[0] = movedReceiver;
+                    receiver = secondCallbacks;
+                    movedReceiverPair = (default(T), replacement);
+                    receiver[0]();
+
+                    var ambiguousPair = (replacement, replacement);
+                    System.Action ambiguous = () =>
+                    {
+                        var (ambiguousLeft, _) = ambiguousPair;
+                        Fill(ref ambiguousLeft, replacement);
+                    };
+                    System.Action[] ambiguousReceiver;
+                    if (flag)
+                    {
+                        ambiguousReceiver = new System.Action[1];
+                    }
+                    else
+                    {
+                        ambiguousReceiver = new System.Action[1];
+                    }
+                    ambiguousReceiver[0] = ambiguous;
+                    ambiguousPair = (default(T), replacement);
+                    ambiguousReceiver[0]();
+
+                    var conditionalPair = (replacement, replacement);
+                    System.Action conditional = () =>
+                    {
+                        var (conditionalLeft, _) = conditionalPair;
+                        Fill(ref conditionalLeft, replacement);
+                    };
+                    var conditionalReceiver = new System.Action[1];
+                    conditionalReceiver[0] = conditional;
+                    if (flag)
+                    {
+                        conditionalReceiver = new System.Action[1];
+                    }
+                    conditionalPair = (default(T), replacement);
+                    conditionalReceiver[0]();
+
+                    var correlatedPair = (replacement, replacement);
+                    System.Action correlated = () =>
+                    {
+                        var (correlatedLeft, _) = correlatedPair;
+                        Keep(ref correlatedLeft);
+                    };
+                    System.Action[] correlatedReceiver;
+                    int correlatedIndex;
+                    if (flag)
+                    {
+                        correlatedReceiver = new System.Action[2];
+                        correlatedIndex = 0;
+                    }
+                    else
+                    {
+                        correlatedReceiver = new System.Action[2];
+                        correlatedIndex = 1;
+                    }
+                    correlatedReceiver[correlatedIndex] = correlated;
+                    if (flag)
+                    {
+                        correlatedReceiver = new System.Action[2];
+                        correlatedIndex = 1;
+                    }
+                    else
+                    {
+                        correlatedReceiver = new System.Action[2];
+                        correlatedIndex = 0;
+                    }
+                    correlatedPair = (default(T), replacement);
+                    correlatedReceiver[correlatedIndex]();
+
                     var freshPair = (replacement, replacement);
                     System.Action fresh = () =>
                     {
@@ -1634,6 +1768,13 @@ public class Issue4445DefaultDeconstructionNullabilityTests
                     GetCallbacks()[0] = fresh;
                     freshPair = (default(T), replacement);
                     GetCallbacks()[0]();
+
+                    ParameterStorage(
+                        replacement,
+                        new System.Action[2],
+                        0);
+                    FieldStorage(replacement);
+                    CompoundFieldStorage(replacement);
                 }
             }
             """;
@@ -1644,7 +1785,14 @@ public class Issue4445DefaultDeconstructionNullabilityTests
         Assert.Matches(@"\b(let|var) secondRefAliasLeft T\? =", printed);
         Assert.Matches(@"\b(let|var) indexedLeft T\? =", printed);
         Assert.DoesNotMatch(@"\b(let|var) shiftedLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) movedReceiverLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) ambiguousLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) conditionalLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) correlatedLeft T\? =", printed);
         Assert.DoesNotMatch(@"\b(let|var) freshLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) parameterStorageLeft T\? =", printed);
+        Assert.DoesNotMatch(@"\b(let|var) fieldStorageLeft T\? =", printed);
+        Assert.Matches(@"\b(let|var) compoundFieldLeft T\? =", printed);
     }
 
     [Fact]
