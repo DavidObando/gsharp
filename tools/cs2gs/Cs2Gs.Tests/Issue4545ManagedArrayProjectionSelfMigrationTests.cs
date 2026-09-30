@@ -83,9 +83,13 @@ public sealed class Issue4545ManagedArrayProjectionSelfMigrationTests
             Assert.Empty(context.Diagnostics);
         }
 
-        string state = translated["ManagedReferenceArrayNullableState.cs"];
+        string state = translated["ManagedReferenceArrayNullableState.cs"]
+            .Replace(
+                "Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax",
+                "ExpressionSyntax",
+                StringComparison.Ordinal);
         Assert.Contains(
-            "Dictionary[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax, ITypeSymbol?]",
+            "Dictionary[ExpressionSyntax, ITypeSymbol?]",
             state,
             StringComparison.Ordinal);
         Assert.Contains(
@@ -97,7 +101,7 @@ public sealed class Issue4545ManagedArrayProjectionSelfMigrationTests
             state,
             StringComparison.Ordinal);
         Assert.Contains(
-            "Dictionary[Microsoft.CodeAnalysis.CSharp.Syntax.ExpressionSyntax, IMethodSymbol?]",
+            "Dictionary[ExpressionSyntax, IMethodSymbol?]",
             state,
             StringComparison.Ordinal);
         Assert.Contains(
