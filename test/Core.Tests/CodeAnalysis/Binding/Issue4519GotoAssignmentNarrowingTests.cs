@@ -3088,6 +3088,91 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_EnteringLoweredLoopContinuePropagatesReachability()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                var keepGoing = true
+                goto Enter
+                for keepGoing {
+                Enter:
+                    keepGoing = false
+                    continue
+                }
+                goto Done
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_EnteringSwitchBreakPropagatesReachability()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                goto Enter
+                switch 0 {
+                    case 0 {
+                    Enter:
+                        break
+                    }
+                }
+                goto Done
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_EnteringSwitchFallthroughPropagatesReachability()
+    {
+        var result = Evaluate("""
+            func Run() int32 {
+                var x string? = nil
+                goto Enter
+                switch 0 {
+                    case 0 {
+                    Enter:
+                        {
+                        }
+                        fallthrough
+                    }
+                    case 1 {
+                    }
+                }
+                goto Done
+                x = "safe"
+            Done:
+                return x.Length
+            }
+
+            Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
     public void ForwardGoto_EnteringTryPropagatesReachabilityIntoFinally()
     {
         var result = Evaluate("""

@@ -11,6 +11,7 @@
 using System;
 using System.Collections.Generic;
 using System.Collections.Immutable;
+using System.Diagnostics.CodeAnalysis;
 using System.Linq;
 using System.Reflection;
 using GSharp.Core.CodeAnalysis.Binding.OverloadResolution;
@@ -1673,6 +1674,7 @@ internal sealed partial class StatementBinder
         private readonly HashSet<AssignedField> assignedFields = new();
         private readonly HashSet<AssignedProperty> assignedProperties = new();
         private readonly Dictionary<VariableSymbol, List<BoundAssignmentExpression>> assignments = new();
+        private readonly Dictionary<VariableSymbol, BoundExpression> writableReferenceAliases = new();
         private readonly Dictionary<VariableSymbol, HashSet<BoundFunctionLiteralExpression>> functionLiterals = new();
         private readonly HashSet<VariableSymbol> unknownFunctionValues = new();
         private readonly HashSet<VariableSymbol> externalFunctionValues = new();
@@ -1706,9 +1708,25 @@ internal sealed partial class StatementBinder
 
         protected override void VisitIndirectAssignmentExpression(BoundIndirectAssignmentExpression node)
         {
-            if (node.Pointer is BoundAddressOfExpression { Operand: BoundVariableExpression variable })
+            BoundExpression pointer = node.Pointer;
+            while (pointer is BoundConversionExpression conversion)
             {
-                Roots.Add(variable.Variable);
+                pointer = conversion.Expression;
+            }
+
+            while (pointer is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+            {
+                pointer = assertion.Operand;
+            }
+
+            if (pointer is BoundAddressOfExpression address)
+            {
+                RecordWritableReference(address.Operand);
+            }
+            else if (pointer is BoundVariableExpression variable
+                && writableReferenceAliases.TryGetValue(variable.Variable, out var operand))
+            {
+                RecordWritableReference(operand);
             }
             else
             {
@@ -1889,6 +1907,12 @@ internal sealed partial class StatementBinder
 
         protected override void VisitVariableDeclaration(BoundVariableDeclaration node)
         {
+            if (node.Initializer != null
+                && TryGetWritableReferenceOperand(node.Initializer, out var operand))
+            {
+                writableReferenceAliases[node.Variable] = operand;
+            }
+
             var externalCallable = node.Initializer != null
                 && IsExternalCallable(node.Initializer);
             if (node.Initializer != null
@@ -1916,6 +1940,24 @@ internal sealed partial class StatementBinder
             }
 
             base.VisitVariableDeclaration(node);
+        }
+
+        private static bool TryGetWritableReferenceOperand(
+            BoundExpression expression,
+            [NotNullWhen(true)] out BoundExpression? operand)
+        {
+            while (expression is BoundConversionExpression conversion)
+            {
+                expression = conversion.Expression;
+            }
+
+            while (expression is BoundUnaryExpression { Op.Kind: BoundUnaryOperatorKind.NullAssertion } assertion)
+            {
+                expression = assertion.Operand;
+            }
+
+            operand = (expression as BoundAddressOfExpression)?.Operand;
+            return operand != null;
         }
 
         protected override void VisitIfStatement(BoundIfStatement node)
@@ -2240,6 +2282,7 @@ internal sealed partial class StatementBinder
         {
             if (node.Variable != null)
             {
+                writableReferenceAliases.Remove(node.Variable);
                 tryAssignedVariables?.Add(node.Variable);
                 var externalCallable = IsExternalCallable(node.Expression);
                 if (TryGetFunctionLiterals(node.Expression, out var literals))
@@ -2476,6 +2519,10 @@ internal sealed partial class StatementBinder
 
         switch (statement)
         {
+            case BoundLabelStatement label:
+                return internallyReachableLoopExits.Contains(label.Label)
+                    || internallyReachableLoopBacks.Contains(label.Label);
+
             case BoundBlockStatement block:
                 var fallsThrough = false;
                 foreach (var child in block.Statements)

@@ -701,6 +701,11 @@ internal sealed partial class StatementBinder
             return BindErrorStatement();
         }
 
+        if (currentStatementListFallsThrough)
+        {
+            internallyReachableLoopBacks.Add(target);
+        }
+
         return new BoundGotoStatement(syntax, target);
     }
 
