@@ -749,19 +749,13 @@ public sealed partial class CSharpToGSharpTranslator
                 this.IsTrueDiscard(discardCandidate)) ||
                 targetExpr is DeclarationExpressionSyntax { Designation: DiscardDesignationSyntax };
 
-        // True when EVERY leaf of a (possibly nested) tuple pattern is a
-        // discard, e.g. `(_, _)` or `(_, (_, _))` — the whole arm is then
-        // dead and can be skipped without allocating any temp or recursing
-        // into it (issue #2099, item 3).
-        private bool IsAllDiscardTuple(TupleExpressionSyntax pattern)
+        // True when every immediate element is a discard. A nested tuple must
+        // recurse because its corresponding value may use a custom Deconstruct.
+        private bool HasOnlyImmediateDiscards(TupleExpressionSyntax pattern)
         {
             foreach (ArgumentSyntax argument in pattern.Arguments)
             {
-                ExpressionSyntax element = argument.Expression;
-                bool elementIsAllDiscard = element is TupleExpressionSyntax nestedTuple
-                    ? this.IsAllDiscardTuple(nestedTuple)
-                    : this.IsDeconstructionDiscard(element);
-                if (!elementIsAllDiscard)
+                if (!this.IsDeconstructionDiscard(argument.Expression))
                 {
                     return false;
                 }
@@ -1024,7 +1018,7 @@ public sealed partial class CSharpToGSharpTranslator
                 // method must still run even when every output is discarded.
                 bool sideEffectFreeAllDiscardTuple =
                     targetExpr is TupleExpressionSyntax nestedDiscardCheck
-                    && this.IsAllDiscardTuple(nestedDiscardCheck)
+                    && this.HasOnlyImmediateDiscards(nestedDiscardCheck)
                     && rhsTupleType is { IsTupleType: true }
                     && i < rhsTupleType.TupleElements.Length
                     && rhsTupleType.TupleElements[i].Type is INamedTypeSymbol { IsTupleType: true };
@@ -1197,14 +1191,13 @@ public sealed partial class CSharpToGSharpTranslator
             foreach (IdentifierNameSyntax identifier in
                 body.DescendantNodes().OfType<IdentifierNameSyntax>())
             {
-                SyntaxNode nestedFunction = FindNestedFunction(identifier.Parent, body);
-                if (nestedFunction == null)
+                if (FindNestedFunction(identifier.Parent, body) == null)
                 {
                     continue;
                 }
 
                 ISymbol symbol = this.context.GetSymbolInfo(identifier).Symbol;
-                if (symbol != null && !IsDeclaredWithin(symbol, nestedFunction))
+                if (symbol != null && !IsDeclaredInNestedFunction(symbol, body))
                 {
                     occupied.Add(this.EmittedName(symbol, identifier.Identifier.ValueText));
                 }
@@ -1226,10 +1219,24 @@ public sealed partial class CSharpToGSharpTranslator
             return null;
         }
 
-        private static bool IsDeclaredWithin(ISymbol symbol, SyntaxNode scope) =>
-            symbol.DeclaringSyntaxReferences.Any(reference =>
-                reference.SyntaxTree == scope.SyntaxTree &&
-                scope.Span.Contains(reference.Span));
+        private static bool IsDeclaredInNestedFunction(ISymbol symbol, SyntaxNode body)
+        {
+            foreach (SyntaxReference reference in symbol.DeclaringSyntaxReferences)
+            {
+                if (reference.SyntaxTree != body.SyntaxTree || !body.Span.Contains(reference.Span))
+                {
+                    continue;
+                }
+
+                SyntaxNode declaration = reference.GetSyntax();
+                if (FindNestedFunction(declaration.Parent, body) != null)
+                {
+                    return true;
+                }
+            }
+
+            return false;
+        }
 
         private string DeconstructionTempStem(SyntaxNode anchor)
         {

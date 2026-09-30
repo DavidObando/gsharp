@@ -263,6 +263,44 @@ public sealed class Issue4300DeconstructionTranslationTests
         Assert.Equal(106, result.Value);
     }
 
+    [Fact]
+    public void NestedBodyCapturedLocal_DoesNotReserveOuterCarrierName()
+    {
+        string printed = Translate("""
+            using System;
+
+            public sealed class Runner
+            {
+                public int Run()
+                {
+                    int a = 0;
+                    int b = 0;
+                    int c = 0;
+                    ((a, b), c) = ((1, 2), 3);
+
+                    int Local()
+                    {
+                        int aTuple = 4;
+                        Func<int> read = () => aTuple;
+                        return read();
+                    }
+
+                    return a + b + c + Local();
+                }
+            }
+            """);
+
+        Assert.Contains("let (aTuple, cValue) = ((1, 2), 3)", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("let (aTuple2, cValue) = ((1, 2), 3)", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+
+        EmittedOracleResult result = EmittedOracle.Evaluate(
+            printed + Environment.NewLine + "Runner().Run()");
+        Assert.Empty(result.Diagnostics);
+        Assert.Null(result.UnhandledException);
+        Assert.Equal(10, result.Value);
+    }
+
     private static int CountOccurrences(string text, string value)
     {
         int count = 0;

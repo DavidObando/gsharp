@@ -145,6 +145,8 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
                         var (_, (_, _)) = (0, new SideEffectingPair());
                         int discardExisting = 0;
                         (discardExisting, (_, _)) = (0, new SideEffectingPair());
+                        int deepKept = 0;
+                        (((_, _), _), deepKept) = ((new SideEffectingPair(), 3), 4);
 
                         ((GetTarget().Value, State.Values[GetIndex()]), existing) = GetValues();
 
@@ -155,7 +157,7 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
                         int aValue = 98;
                         ((a, b), c) = ((19, 20), 21);
 
-                        Console.WriteLine($"deconstruct:{SideEffectingPair.Calls}");
+                        Console.WriteLine($"deconstruct:{SideEffectingPair.Calls},{deepKept}");
                         Console.WriteLine($"{declA},{declB},{declC}");
                         Console.WriteLine($"{fresh},{a},{b},{c},{d},{kept}");
                         Console.WriteLine($"{State.Target.Value},{State.Values[0]},{existing}");
@@ -167,7 +169,7 @@ public sealed class Issue4300NestedDeconstructionPipelineTests
             string goldenPath = Path.Combine(projectDirectory, "baseline.stdout.golden");
             File.WriteAllText(
                 goldenPath,
-                "target\nindex\nrhs\ndeconstruct:2\n1,2,3\n5,19,20,21,10,11\n21,22,23\n14,15,16\n17,18,99,98\n");
+                "target\nindex\nrhs\ndeconstruct:3,4\n1,2,3\n5,19,20,21,10,11\n21,22,23\n14,15,16\n17,18,99,98\n");
 
             outputRoot = NewDirectory("pipeline-tests");
             var app = new CorpusApp(
