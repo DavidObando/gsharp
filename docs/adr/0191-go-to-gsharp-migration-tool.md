@@ -753,6 +753,16 @@ translation; require redistribution review for translated dependencies and
 native assets. Deterministic source output excludes timestamps, random IDs
 and absolute developer paths. Run-time timestamps belong only in artifacts.
 
+The selected output root must be exclusively controlled by go2gs for the
+duration of locking, invalidation, and publication. M0 binds operations to an
+opened root descriptor or handle, rejects symlink/reparse traversal, excludes
+cooperating writers with a lock, and fails when identity drift is observed.
+An actively malicious same-UID peer with equal filesystem authority is outside
+this boundary: portable Unix and Windows APIs cannot make pathname removal or
+rename conditional on a previously opened identity without extra privilege.
+Artifact hashes and structural validation detect provenance drift; they do not
+authenticate or mediate such a peer.
+
 Use typed failures, not broad catch-and-default fallback. On cancellation or
 failure, close pipes, cancel owned subprocesses, release native handles and
 temporary storage, and leave a failed/incomplete manifest. Resource cleanup

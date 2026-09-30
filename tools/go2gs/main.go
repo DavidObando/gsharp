@@ -272,7 +272,7 @@ func runAnalyzeWorker(parent context.Context, args []string) (err error) {
 	if err := rejectSymlinkPath(outRoot); err != nil {
 		return fmt.Errorf("output root: %w", err)
 	}
-	output, err := lockAndInvalidateOutput(outRoot)
+	output, err := openBoundOutputRoot(outRoot)
 	if err != nil {
 		return err
 	}
