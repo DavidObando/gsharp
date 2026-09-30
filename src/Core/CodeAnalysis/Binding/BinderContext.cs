@@ -104,7 +104,8 @@ internal sealed class BinderContext
 
 #pragma warning restore SA1401
 
-    private readonly Dictionary<IReadOnlyDictionary<AccessPath, TypeSymbol>, int> narrowingProofGenerations =
+    private readonly Dictionary<IReadOnlyDictionary<AccessPath, TypeSymbol>, (int Generation, int Depth)>
+        narrowingProofGenerations =
         new(ReferenceEqualityComparer.Instance);
 
     private int narrowingProofGeneration;
@@ -764,18 +765,35 @@ internal sealed class BinderContext
     }
 
     public void BeginNarrowingProof(IReadOnlyDictionary<AccessPath, TypeSymbol> frame)
-        => narrowingProofGenerations[frame] = ++narrowingProofGeneration;
+    {
+        if (narrowingProofGenerations.TryGetValue(frame, out var state))
+        {
+            narrowingProofGenerations[frame] =
+                (++narrowingProofGeneration, state.Depth + 1);
+            return;
+        }
+
+        narrowingProofGenerations.Add(frame, (++narrowingProofGeneration, 1));
+    }
 
     public void EndNarrowingProof()
     {
         var index = NarrowedVariables.Count - 1;
         var frame = NarrowedVariables[index];
         NarrowedVariables.RemoveAt(index);
-        narrowingProofGenerations.Remove(frame);
+        var state = narrowingProofGenerations[frame];
+        if (state.Depth == 1)
+        {
+            narrowingProofGenerations.Remove(frame);
+        }
+        else
+        {
+            narrowingProofGenerations[frame] = (state.Generation, state.Depth - 1);
+        }
     }
 
     public int GetNarrowingProofGeneration(IReadOnlyDictionary<AccessPath, TypeSymbol> frame)
-        => narrowingProofGenerations.TryGetValue(frame, out var generation) ? generation : 0;
+        => narrowingProofGenerations.TryGetValue(frame, out var state) ? state.Generation : 0;
 
     public void TrackBackwardGotoNarrowingUse(
         VariableSymbol variable,

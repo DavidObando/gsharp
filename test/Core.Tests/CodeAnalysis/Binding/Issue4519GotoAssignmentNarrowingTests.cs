@@ -4910,6 +4910,64 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void ForwardGoto_FinallyBranchJoinUsesCallableStateBeforeIf()
+    {
+        var result = Evaluate("""
+            func Run(callback (() -> void), keepClear bool) int32 {
+                var text string? = nil
+                text = "safe"
+                let clear = func() { text = nil }
+                var action = clear
+                if keepClear {
+                }
+                else {
+                    action = callback
+                }
+                try {
+                    goto Done
+                }
+                finally {
+                    action()
+                }
+            Done:
+                return text.Length
+            }
+
+            Run(func() { }, true)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void ForwardGoto_NonCompletingInfiniteFinallyDoesNotActivateEdge()
+    {
+        AssertRuns("""
+            import System
+
+            func Run(takeInfinitePath bool) int32 {
+                var text string? = nil
+                if takeInfinitePath {
+                    try {
+                        goto Done
+                    }
+                    finally {
+                        for {
+                        }
+                    }
+                }
+                text = "safe"
+            Done:
+                return text.Length
+            }
+
+            Console.WriteLine(Run(false))
+            """, "4");
+    }
+
+    [Fact]
     public void ImportedCallRecovery_DoesNotRebindInlineOutVariable()
     {
         var result = EmittedOracle.Evaluate(

@@ -249,7 +249,32 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private void UpdateExternalCallableAliases(BoundStatement statement)
+    private void UpdateExternalCallableAliases(
+        BoundStatement statement,
+        IReadOnlyCollection<VariableSymbol> aliasesAtEntry)
+    {
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
+        var collector = new AssignedRootsCollector(null, aliasesAtEntry);
+        collector.Visit(statement);
+        ApplyCallableAliasExitState(
+            externalCallableAliases,
+            statement,
+            aliasesAtEntry,
+            collector);
+    }
+
+    private void ApplyCallableAliasExitState(
+        HashSet<VariableSymbol> aliases,
+        BoundStatement statement,
+        IReadOnlyCollection<VariableSymbol> aliasesAtEntry,
+        AssignedRootsCollector collector)
     {
         while (statement is BoundBlockStatement labeledBlock
             && labeledBlock.Syntax is LabeledStatementSyntax
@@ -262,28 +287,41 @@ internal sealed partial class StatementBinder
         var directAssignment = (statement as BoundExpressionStatement)?.Expression
             as BoundAssignmentExpression;
         var assignsExternalCallable = directAssignment != null
-            && IsExternalCallableSource(directAssignment.Expression);
+            && IsExternalCallableSource(directAssignment.Expression, aliasesAtEntry);
 
-        var collector = new AssignedRootsCollector(null, externalCallableAliases);
-        collector.Visit(statement);
-        if (statement is BoundBlockStatement
-            && statement.Syntax != null
-            && !ContainsUserGotoOrLabel(statement.Syntax))
+        if (UsesJoinedCallableExitState(statement))
         {
-            externalCallableAliases.Clear();
-            externalCallableAliases.UnionWith(collector.DefinitelyExternalFunctionValues);
+            aliases.Clear();
+            aliases.UnionWith(collector.DefinitelyExternalFunctionValues);
         }
         else
         {
-            externalCallableAliases.ExceptWith(collector.Roots);
+            aliases.ExceptWith(collector.Roots);
         }
 
         if (assignsExternalCallable)
         {
-            externalCallableAliases.Add(
+            aliases.Add(
                 Invariant.Required(directAssignment, "an external callable assignment has a target").Variable);
         }
+
+        if (statement is BoundVariableDeclaration declaration
+            && collector.DefinitelyExternalFunctionValues.Contains(declaration.Variable))
+        {
+            aliases.Add(declaration.Variable);
+        }
     }
+
+    private bool UsesJoinedCallableExitState(BoundStatement statement)
+        => statement switch
+        {
+            BoundBlockStatement block =>
+                block.Syntax != null && !ContainsUserGotoOrLabel(block.Syntax),
+            BoundIfStatement or BoundTryStatement or BoundPatternSwitchStatement
+                or BoundForInfiniteStatement or BoundForEllipsisStatement
+                or BoundForRangeStatement or BoundAwaitForRangeStatement => true,
+            _ => false,
+        };
 
     /// <summary>
     /// Issue #1639: returns whether any currently active narrowing frame holds
@@ -912,7 +950,9 @@ internal sealed partial class StatementBinder
                 mutations.Visit(cleanup);
                 summary = new FinallyFlowSummary(
                     mutations,
-                    ComputeBranchFallthroughNonNull(cleanup, entry: null));
+                    ComputeCleanupFallthroughNonNull(
+                        cleanup,
+                        snapshot.ExternalCallableAliases));
             }
             else
             {
@@ -957,12 +997,81 @@ internal sealed partial class StatementBinder
             callableAliases,
             trackSourceCallGlobalMutations: true);
         mutations.Visit(finallyBlock);
-        var nonNullOnNormalExit = ContainsUserGotoOrLabel(finallyClause.Body)
-            ? EndsInUnconditionalExit(finallyBlock)
-                ? null
-                : new Dictionary<AccessPath, TypeSymbol>()
-            : ComputeBranchFallthroughNonNull(finallyBlock, entry: null);
+        var nonNullOnNormalExit = !CanCompleteNormally(finallyBlock)
+            ? null
+            : ContainsUserGotoOrLabel(finallyClause.Body)
+                ? new Dictionary<AccessPath, TypeSymbol>()
+                : ComputeCleanupFallthroughNonNull(finallyBlock, callableAliases);
         return new FinallyFlowSummary(mutations, nonNullOnNormalExit);
+    }
+
+    private bool CanCompleteNormally(BoundStatement statement)
+        => statement switch
+        {
+            BoundBlockStatement block => CanStatementListCompleteNormally(block.Statements),
+            BoundTryStatement { FinallyBlock: { } finallyBlock }
+                when !CanCompleteNormally(finallyBlock) => false,
+            BoundForInfiniteStatement infiniteLoop when IsSyntacticallyInfiniteLoop(infiniteLoop) =>
+                internallyReachableLoopExits.Contains(infiniteLoop.BreakLabel),
+            _ => !EndsInUnconditionalExit(statement),
+        };
+
+    private bool CanStatementListCompleteNormally(ImmutableArray<BoundStatement> statements)
+    {
+        var fallsThrough = true;
+        foreach (var statement in statements)
+        {
+            fallsThrough =
+                (fallsThrough || HasInternallyReachableFallthrough(statement))
+                && CanCompleteNormally(statement);
+        }
+
+        return fallsThrough;
+    }
+
+    private Dictionary<AccessPath, TypeSymbol>? ComputeCleanupFallthroughNonNull(
+        BoundStatement cleanup,
+        IReadOnlyCollection<VariableSymbol> callableAliases)
+    {
+        var state = new Dictionary<AccessPath, TypeSymbol>();
+        var aliases = new HashSet<VariableSymbol>(callableAliases);
+        var statements = cleanup is BoundBlockStatement block
+            ? block.Statements
+            : ImmutableArray.Create(cleanup);
+        foreach (var statement in statements)
+        {
+            if (!ProcessBranchStatement(statement, state))
+            {
+                return null;
+            }
+
+            var aliasesAtEntry = aliases.ToArray();
+            var mutations = new AssignedRootsCollector(
+                AssignmentPreservesNarrowing,
+                aliasesAtEntry,
+                trackSourceCallGlobalMutations: true);
+            mutations.Visit(statement);
+            ApplyMutationsToState(state, mutations);
+            ApplyCallableAliasExitState(aliases, statement, aliasesAtEntry, mutations);
+        }
+
+        return state;
+    }
+
+    private static void ApplyMutationsToState(
+        Dictionary<AccessPath, TypeSymbol> state,
+        AssignedRootsCollector mutations)
+    {
+        foreach (var entry in state.ToArray())
+        {
+            if ((mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
+                || mutations.MayMutateGlobalRoot(entry.Key.Root, entry.Value)
+                || (entry.Key.HasMembers && mutations.MayMutateMemberPaths)
+                || mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
+            {
+                state.Remove(entry.Key);
+            }
+        }
     }
 
     private void ApplyTryFinallyFallthroughNarrowings(
@@ -2047,7 +2156,8 @@ internal sealed partial class StatementBinder
 
             RestoreCallableState(branchStart);
             VisitStatement(node.ElseStatement);
-            MergeCallableState(thenState);
+            var elseState = CaptureCallableState();
+            RestoreCallableState(JoinCallableStates(thenState, elseState));
         }
 
         protected override void VisitConditionalGotoStatement(BoundConditionalGotoStatement node)
@@ -2217,6 +2327,27 @@ internal sealed partial class StatementBinder
             if (left == null)
             {
                 return right;
+            }
+
+            var variables = left.Value.Literals.Keys
+                .Concat(left.Value.Unknown)
+                .Concat(left.Value.External)
+                .Concat(right.Literals.Keys)
+                .Concat(right.Unknown)
+                .Concat(right.External)
+                .ToHashSet();
+            foreach (var variable in variables)
+            {
+                var hasLeft = left.Value.Literals.ContainsKey(variable)
+                    || left.Value.Unknown.Contains(variable)
+                    || left.Value.External.Contains(variable);
+                var hasRight = right.Literals.ContainsKey(variable)
+                    || right.Unknown.Contains(variable)
+                    || right.External.Contains(variable);
+                if (!hasLeft || !hasRight)
+                {
+                    left.Value.Unknown.Add(variable);
+                }
             }
 
             foreach (var entry in right.Literals)
@@ -3309,6 +3440,11 @@ internal sealed partial class StatementBinder
     }
 
     private bool IsExternalCallableSource(BoundExpression expression)
+        => IsExternalCallableSource(expression, externalCallableAliases);
+
+    private static bool IsExternalCallableSource(
+        BoundExpression expression,
+        IReadOnlyCollection<VariableSymbol> externalAliases)
     {
         if (IsMethodCallableSource(expression))
         {
@@ -3327,7 +3463,7 @@ internal sealed partial class StatementBinder
 
         return expression is BoundVariableExpression variable
                 && (variable.Variable is ParameterSymbol { IsReadOnly: true }
-                    || externalCallableAliases.Contains(variable.Variable));
+                    || externalAliases.Contains(variable.Variable));
     }
 
     private static bool IsMethodCallableSource(BoundExpression expression)

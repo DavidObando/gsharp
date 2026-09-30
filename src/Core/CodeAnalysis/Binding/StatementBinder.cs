@@ -800,6 +800,7 @@ internal sealed partial class StatementBinder
                     continue;
                 }
 
+                var externalCallableAliasesAtEntry = externalCallableAliases.ToArray();
                 var statement = BindStatement(statementSyntax);
                 if (statement == null)
                 {
@@ -838,7 +839,7 @@ internal sealed partial class StatementBinder
                 // later mutation invalidates it again. Runs last so it wins over
                 // the invalidation pass for the same statement.
                 ApplyAssignmentNarrowing(statement, memberNotNullFrame);
-                UpdateExternalCallableAliases(statement);
+                UpdateExternalCallableAliases(statement, externalCallableAliasesAtEntry);
 
                 // Issue #2159: `if`-join narrowing. After invalidation (which
                 // drops any narrowing the `if` mutates), lift a nullable `var`
@@ -850,12 +851,7 @@ internal sealed partial class StatementBinder
                 ApplyTryFinallyFallthroughNarrowings(statement, memberNotNullFrame);
                 var hasInternallyReachableFallthrough =
                     HasInternallyReachableFallthrough(statement);
-                var canCompleteNormally = statement switch
-                {
-                    BoundForInfiniteStatement infiniteLoop when IsSyntacticallyInfiniteLoop(infiniteLoop) =>
-                        internallyReachableLoopExits.Contains(infiniteLoop.BreakLabel),
-                    _ => !EndsInUnconditionalExit(statement),
-                };
+                var canCompleteNormally = CanCompleteNormally(statement);
                 currentStatementListFallsThrough =
                     (currentStatementListFallsThrough || hasInternallyReachableFallthrough)
                     && canCompleteNormally;
