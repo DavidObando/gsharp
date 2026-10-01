@@ -168,8 +168,10 @@ Before moving an application to a different compiler version, pin the intended S
   Span validation reparses captured bytes to verify exact raw and
   line-directive-adjusted paths, lines, and columns. Diagnostics
   are path-stable, initialization order is explicit, and schema validation
-  rejects missing fields, count mismatches, and complete artifacts without a
-  loaded main-module package/source ownership graph. The pinned
+  rejects missing fields, count mismatches, stale payload-derived deterministic
+  record IDs, and complete artifacts without a loaded main-module
+  package/source ownership graph. These ID checks reuse the producer formulas
+  and establish internal consistency, not artifact authenticity. The pinned
   cliamp profile reports an actionable mismatch rather than substituting the
   installed Go toolchain.
 - **ADR-0191 now defines conservative Go interface/address lowering and staged

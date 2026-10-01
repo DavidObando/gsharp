@@ -227,9 +227,16 @@ from identifier strings:
 Use a bounded versioned JSON record stream with interned IDs and explicit
 length/count limits. Preserve raw string/constant bytes losslessly, including
 invalid UTF-8 string values, through an explicit byte encoding. Reject unknown
-required record kinds and dangling IDs; diagnostics cannot masquerade as
-missing optional type information. Deterministic output IDs come from
-canonical declarations/types, not dictionary traversal or absolute cache paths.
+required record kinds, stale payload-derived IDs, and dangling IDs; diagnostics
+cannot masquerade as missing optional type information. `validate-analysis`
+recomputes IDs for every record whose complete identity input is serialized:
+module, file, type, node, constant, scope, selection, call, method set,
+instance, embed, generate directive, dependency, feature, diagnostic, and
+blocker. Package and symbol IDs additionally depend on canonical loader/type
+ownership inputs that schema v1 does not duplicate into those records, so their
+uniqueness, references, and ownership are validated without claiming payload
+recomputation. Deterministic output IDs come from canonical declarations/types,
+not dictionary traversal or absolute cache paths.
 Blocker messages redact machine-local source, mirror, replacement, temporary,
 and output roots, normalize invalid UTF-8, and apply the profile string limit
 before stable-ID derivation, deduplication, counting, sorting, or publication.
@@ -797,7 +804,10 @@ truncation; it is not a successful comparison.
 Schema-v1 producers and `validate-analysis` share a deterministic 512 MiB
 artifact ceiling. Validation verifies regular-file identity and size before a
 bounded read, rejects initially oversized inputs before decoding, and rejects
-growth that crosses the ceiling while reading.
+growth that crosses the ceiling while reading. Producer and validator also
+share the payload-derived record-ID formulas listed above, so a payload edit
+cannot retain a stale deterministic ID and still pass structural validation.
+This is an internal consistency check, not artifact authentication.
 
 Canonicalize output paths under declared roots, reject traversal and symlink
 escapes, and distinguish display/source-map names from paths authorized for

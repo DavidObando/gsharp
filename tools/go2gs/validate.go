@@ -42,6 +42,9 @@ func validateAnalysis(a Analysis) error {
 	if err := validateRecordFields(a); err != nil {
 		return err
 	}
+	if err := validateRecordIDs(a); err != nil {
+		return err
+	}
 	if a.MigrationReady {
 		return errors.New("migrationReady must be false for schema v1 M0 inventories")
 	}
@@ -445,6 +448,97 @@ func validateCompletenessEvidence(a Analysis) error {
 	return errors.New("complete analysis requires a loaded main-module package with owned source and compiled files")
 }
 
+func validateRecordIDs(a Analysis) error {
+	check := func(kind, actual, expected string) error {
+		if actual != expected {
+			return fmt.Errorf("%s record id %q does not match payload-derived identity %q", kind, actual, expected)
+		}
+		return nil
+	}
+	for _, value := range a.Modules {
+		if err := check("module", value.ID, moduleRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Files {
+		if err := check("file", value.ID, fileRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Types {
+		if err := check("type", value.ID, typeRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Nodes {
+		if err := check("node", value.ID, nodeRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Constants {
+		if err := check("constant", value.ID, constantRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Scopes {
+		if err := check("scope", value.ID, scopeRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Selections {
+		if err := check("selection", value.ID, selectionRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Calls {
+		if err := check("call", value.ID, callRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.MethodSets {
+		if err := check("methodSet", value.ID, methodSetRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Instances {
+		if err := check("instance", value.ID, instanceRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Embeds {
+		if err := check("embed", value.ID, embedRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.GenerateDirectives {
+		if err := check("generate", value.ID, generateRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Dependencies {
+		if err := check("dependency", value.ID, dependencyRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.FeatureSites {
+		if err := check("feature", value.ID, featureRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Diagnostics {
+		if err := check("diagnostic", value.ID, diagnosticRecordID(value)); err != nil {
+			return err
+		}
+	}
+	for _, value := range a.Blockers {
+		expected := blockerRecordIDPayload(value.Blocks, value.Category, value.Message, value.AffectedUnits)
+		if err := check("blocker", value.ID, expected); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 func validateAnalysisHeader(a Analysis) error {
 	for name, value := range map[string]VersionIdentity{"tool": a.Tool, "helper": a.Helper} {
 		if value.Version == "" || !validSHA256(value.SHA256) {
@@ -729,6 +823,9 @@ func validateRecordFields(a Analysis) error {
 	for _, value := range a.Diagnostics {
 		if value.ID == "" || value.Category == "" || value.Severity == "" || value.Message == "" {
 			return fmt.Errorf("diagnostic %q has invalid required fields", value.ID)
+		}
+		if _, ok := diagnosticErrorKind(value.Category); !ok {
+			return fmt.Errorf("diagnostic %q has unsupported category %q", value.ID, value.Category)
 		}
 		if value.Span != nil {
 			if err := validateSourceSpan(*value.Span, value.ID+".span"); err != nil {
