@@ -3,6 +3,9 @@
 // </copyright>
 
 using System;
+using System.Collections.Generic;
+using System.IO;
+using System.Linq;
 using Cs2Gs.CodeModel.Ast;
 using Cs2Gs.CodeModel.Printing;
 using Cs2Gs.CodeModel.RoundTrip;
@@ -139,6 +142,98 @@ namespace Demo
         Assert.DoesNotContain("item!!", printed);
     }
 
+
+    [Fact]
+    public void ForEachOverSiblingProjectPromotedIterator_AssertsBinding()
+    {
+        // A sibling project of the same migration run is bound through
+        // metadata (no declaring syntax). Its own translation renders
+        // `Items` as `sequence[Node?]`, so the consumer's binding must still
+        // be asserted at each non-null use; the imported-oblivious collection
+        // path (ADR-0186 `T!`) is what covers this shape.
+        string printed = TranslateAgainstSiblingLibrary(@"
+using Lib;
+
+namespace App
+{
+    public class Consumer
+    {
+        private static int Use(Node node) => node.Start;
+
+        public int Run(Node root)
+        {
+            int total = 0;
+            foreach (Node item in Source.Items(root))
+            {
+                total += Use(item) + item.Start;
+            }
+
+            return total;
+        }
+    }
+}");
+
+        Assert.Contains("Use(item!!)", printed);
+        Assert.Contains("item!!.Start", printed);
+    }
+
+    private static string TranslateAgainstSiblingLibrary(string consumerSource)
+    {
+        const string librarySource = @"
+using System.Collections.Generic;
+
+namespace Lib
+{
+    public class Node
+    {
+        public int Start => 0;
+    }
+
+    public static class Source
+    {
+        public static IEnumerable<Node> Items(Node node)
+        {
+            if (node == null)
+            {
+                yield break;
+            }
+
+            yield return node;
+        }
+
+        public static IEnumerable<Node> Fresh()
+        {
+            yield return new Node();
+        }
+    }
+}";
+        LoadedCSharpProject library = CSharpProjectLoader.LoadInMemory(
+            new[] { ("Lib.cs", librarySource) }, CSharpProjectLoader.RuntimeReferences(), "Lib");
+        Assert.True(library.BoundWithoutErrors, string.Join(Environment.NewLine, library.ErrorDiagnostics));
+
+        // Repository mode binds a sibling project through its built
+        // assembly, whose symbols carry no declaring syntax.
+        using var image = new MemoryStream();
+        Assert.True(library.Compilation.Emit(image).Success);
+        MetadataReference libraryReference = MetadataReference.CreateFromImage(image.ToArray());
+
+        IReadOnlyList<MetadataReference> references =
+            CSharpProjectLoader.RuntimeReferences().Concat(new[] { libraryReference }).ToList();
+        LoadedCSharpProject consumer = CSharpProjectLoader.LoadInMemory(
+            new[] { ("App.cs", consumerSource) }, references, "App");
+        Assert.True(consumer.BoundWithoutErrors, string.Join(Environment.NewLine, consumer.ErrorDiagnostics));
+        Assert.Equal(NullableContextOptions.Disable, consumer.Compilation.Options.NullableContextOptions);
+
+        var siblings = new[] { library.Compilation, consumer.Compilation };
+        LoadedDocument document = Assert.Single(consumer.Documents);
+        var context = new TranslationContext(
+            consumer.Compilation,
+            document.SemanticModel,
+            document.FilePath,
+            siblings,
+            repositoryCompilations: siblings);
+        return GSharpPrinter.Print(new CSharpToGSharpTranslator().TranslateDocument(document, context));
+    }
 
     private static string TranslateOblivious(string source)
     {

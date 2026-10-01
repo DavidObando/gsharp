@@ -609,17 +609,22 @@ public sealed partial class CSharpToGSharpTranslator
             }
 
             IMethodSymbol method = invoked.OriginalDefinition;
-            if (method.ReturnType is not INamedTypeSymbol { IsGenericType: true, Name: "IEnumerable" } enumerable)
+            if (method.ReturnType is not INamedTypeSymbol enumerable
+                || !enumerable.IsGenericType
+                || enumerable.Name != "IEnumerable")
             {
                 return false;
             }
 
             // ADR-0192: a partial method takes the iterator fact from its
-            // implementation part's body, exactly as MapReturnType does.
+            // implementation part's body, exactly as MapReturnType does. A
+            // method another project declares has no body here; that binding is
+            // already asserted as an imported oblivious collection element
+            // (IsImportedObliviousCollectionElement, ADR-0186 `T!`).
             IMethodSymbol bodySource = method.PartialImplementationPart ?? method;
             bool isIterator = bodySource.DeclaringSyntaxReferences.Any(reference =>
-                reference.GetSyntax() is MethodDeclarationSyntax declaration
-                    && IsIteratorBody(declaration));
+                reference.GetSyntax() is MethodDeclarationSyntax methodDeclaration
+                    && IsIteratorBody(methodDeclaration));
             return isIterator
                 && this.AwaitedReturnIsTainted(enumerable.TypeArguments[0], method);
         }
