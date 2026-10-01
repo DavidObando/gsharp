@@ -73,6 +73,11 @@ SHARDED_PROJECTS = {
         "issue25": ["Cs2Gs.Tests.Issue25"],
         "issue33": ["Cs2Gs.Tests.Issue33"],
         "issue34": ["Cs2Gs.Tests.Issue34"],
+        # Issue #4604: the remainder grew to ~1240s of test time and started
+        # hitting the 30-minute job timeout after its tests passed. Issue4xxx
+        # was ~590s of it (run 36846241799's trx: Issue41 225s, Issue44 164s,
+        # Issue42 98s, Issue43 41s, Issue45 36s, Issue40 26s).
+        "issue4": ["Cs2Gs.Tests.Issue4"],
         "remainder": [],
     },
     "test/Core.Tests/Core.Tests.csproj": {
