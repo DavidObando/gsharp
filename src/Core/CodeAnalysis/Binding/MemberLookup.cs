@@ -7552,10 +7552,22 @@ internal sealed class MemberLookup
     {
         var slotArity = slot.IsGenericMethodDefinition ? slot.GetGenericArguments().Length : 0;
         var candidateArity = candidate.TypeParameters.IsDefaultOrEmpty ? 0 : candidate.TypeParameters.Length;
-        methodTypeArgs = slotArity == 0
-            ? default
-            : ImmutableArray<TypeSymbol>.CastUp(candidate.TypeParameters);
-        return slotArity == candidateArity;
+        methodTypeArgs = default;
+        if (slotArity == 0 || slotArity != candidateArity)
+        {
+            return slotArity == candidateArity;
+        }
+
+        // Built element by element rather than with `ImmutableArray.CastUp`,
+        // which does not survive the cs2gs self-migration of this file.
+        var builder = ImmutableArray.CreateBuilder<TypeSymbol>(candidateArity);
+        foreach (var typeParameter in candidate.TypeParameters)
+        {
+            builder.Add(typeParameter);
+        }
+
+        methodTypeArgs = builder.MoveToImmutable();
+        return true;
     }
 
     private static bool ReturnTypeMatchesSubstituted(TypeSymbol candidateReturn, Type openReturn, ImmutableArray<TypeSymbol> symbolicArgs)
