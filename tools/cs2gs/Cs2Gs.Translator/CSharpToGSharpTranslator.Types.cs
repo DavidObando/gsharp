@@ -1078,7 +1078,8 @@ public sealed partial class CSharpToGSharpTranslator
                     .Select(symbol => sectionByLocalFunction[symbol])
                     .Distinct()
                     .Skip(1)
-                    .Any());
+                    .Any(),
+                processOnlyForcedGroups: true);
             foreach (SwitchSectionSyntax section in node.Sections)
             {
                 IReadOnlyList<StatementSyntax> ordered =

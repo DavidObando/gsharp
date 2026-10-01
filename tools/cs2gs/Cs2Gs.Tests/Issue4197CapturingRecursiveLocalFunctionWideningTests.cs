@@ -574,6 +574,32 @@ namespace Demo
     }
 
     [Fact]
+    public void CapturingRecursiveDelegateGroupInOneSwitchSection_UsesNullableGroup()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run(int value) {
+                        switch (value) {
+                            case 0:
+                                int First(int n) => n == 0 ? value : Second(n - 1);
+                                System.Func<int, int> callback = First;
+                                int Second(int n) => n == 0 ? value : First(n - 1);
+                                return callback(value);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """);
+
+        Assert.Contains("var First", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("// lifted recursive local function First", printed, StringComparison.Ordinal);
+        TranslationTestValidation.AssertBinds(printed);
+    }
+
+    [Fact]
     public void CapturingRecursiveLocalUsedAsDelegateFromSiblingSwitchSection_RemainsALoudGap()
     {
         string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""

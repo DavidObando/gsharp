@@ -2000,6 +2000,13 @@ public sealed partial class CSharpToGSharpTranslator
                 ?? Enumerable.Empty<string>());
             occupied.UnionWith(this.state.PendingStaticSynthHelpers?.Select(helper => helper.Name)
                 ?? Enumerable.Empty<string>());
+            occupied.UnionWith(
+                localFunction.ContainingType.InstanceConstructors
+                    .SelectMany(constructor => constructor.Parameters)
+                    .Where(parameter =>
+                        parameter.DeclaringSyntaxReferences.Any(reference =>
+                            reference.GetSyntax().Parent?.Parent is TypeDeclarationSyntax))
+                    .Select(parameter => this.EmittedName(parameter, parameter.Name)));
             for (ISymbol scope = localFunction.ContainingSymbol;
                 scope is IMethodSymbol;
                 scope = scope.ContainingSymbol)
@@ -2409,11 +2416,15 @@ public sealed partial class CSharpToGSharpTranslator
         }
 
         private void RegisterRecursiveLocalFunctionLifts(IEnumerable<StatementSyntax> statements) =>
-            this.RegisterRecursiveLocalFunctionLifts(statements, static _ => false);
+            this.RegisterRecursiveLocalFunctionLifts(
+                statements,
+                static _ => false,
+                processOnlyForcedGroups: false);
 
         private void RegisterRecursiveLocalFunctionLifts(
             IEnumerable<StatementSyntax> statements,
-            Func<IReadOnlyCollection<IMethodSymbol>, bool> forceLiftGroup)
+            Func<IReadOnlyCollection<IMethodSymbol>, bool> forceLiftGroup,
+            bool processOnlyForcedGroups)
         {
             // Issue #3399 (hybrid lowering) / #4197 (widened): a registering
             // mutual-recursion SCC's members — and any non-recursive callee
@@ -2567,6 +2578,10 @@ public sealed partial class CSharpToGSharpTranslator
                 List<(LocalFunctionStatementSyntax Syntax, IMethodSymbol Symbol)> component =
                     GetRecursiveComponent(pair.Symbol);
                 bool forceLift = forceLiftGroup(component.Select(candidate => candidate.Symbol).ToList());
+                if (processOnlyForcedGroups && !forceLift)
+                {
+                    continue;
+                }
 
                 // Issue #3501: gsc `let`-bound function literals now declare
                 // and call through ref/out/in parameters (A2 + the ref-kind
