@@ -59,7 +59,9 @@ runtime API for them. Every blocker message is path-redacted, normalized to
 valid UTF-8, and bounded by `maxStringBytes` before its stable ID,
 deduplication, record count, ordering, and publication. The ID therefore
 identifies the exact published message rather than an unbounded private
-diagnostic.
+diagnostic. Redaction matches complete path components, prefers the most
+specific nested root, and recognizes case- and separator-equivalent Windows
+drive and UNC paths without rewriting unrelated message text.
 
 The profile is exact and versioned. M0 accepts offline `readonly` or `vendor`
 module modes only, forces `GOTOOLCHAIN=local`, `GOPROXY=off`,
