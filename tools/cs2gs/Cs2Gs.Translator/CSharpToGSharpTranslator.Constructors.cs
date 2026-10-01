@@ -3630,10 +3630,11 @@ public sealed partial class CSharpToGSharpTranslator
                             || !SymbolEqualityComparer.IncludeNullability.Equals(
                                 forEachElement,
                                 declaredBindingType));
-                    bool nullableElement = projectedBindingType
-                        && (this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression)
-                            || (this.IsReferenceLikeOrManagedReference(forEachElement)
-                                && forEachElement.NullableAnnotation == NullableAnnotation.Annotated));
+                    bool nullableElement = (projectedBindingType
+                            && (this.ArrayExpressionHasNullableReferenceLikeElement(forEach.Expression)
+                                || (this.IsReferenceLikeOrManagedReference(forEachElement)
+                                    && forEachElement.NullableAnnotation == NullableAnnotation.Annotated)))
+                        || this.ForEachIteratesPromotedSourceIteratorElement(forEach, forEachInfo);
                     ILocalSymbol projectedLoopLocal =
                         projectedBindingType ? loopSymbol as ILocalSymbol : null;
                     bool projectedBinding = projectedLoopLocal != null

@@ -1662,10 +1662,8 @@ public sealed partial class CSharpToGSharpTranslator
                 yield return invocation.ArgumentList.CloseParenToken.SpanStart;
             }
 
-            foreach (SyntaxNode escapeNode in EagerExecutionNodes(executionBody))
+            foreach (SyntaxNode escape in EagerExecutionNodes(executionBody))
             {
-                // Roslyn traversal elements are concrete; self-migration imports them as platform-typed.
-                var escape = escapeNode!;
                 ExpressionSyntax value;
                 int position;
                 bool includeLaterStates;
@@ -1745,14 +1743,13 @@ public sealed partial class CSharpToGSharpTranslator
                     yield return position;
                     if (includeLaterStates)
                     {
-                        foreach (SyntaxNode laterNode in
-                            EagerExecutionNodes(executionBody))
+                        foreach (StatementSyntax later in
+                            EagerExecutionNodes(executionBody)
+                                .OfType<StatementSyntax>()
+                                .Where(statement =>
+                                    statement.SpanStart > escape.SpanStart))
                         {
-                            if (laterNode is StatementSyntax later
-                                && later.SpanStart > escape.SpanStart)
-                            {
-                                yield return later.Span.End - 1;
-                            }
+                            yield return later.Span.End - 1;
                         }
                     }
                 }
@@ -2149,11 +2146,9 @@ public sealed partial class CSharpToGSharpTranslator
                     foreach (ExpressionSyntax returned in
                         this.GetSourceCallableReturnExpressions(factory))
                     {
-                        // Source return expressions are concrete; self-migration imports sequence elements as nullable.
-                        var returnedExpression = returned!;
                         if (this.DelegateExpressionReachesLocalFunction(
-                            returnedExpression,
-                            returnedExpression.SpanStart,
+                            returned,
+                            returned.SpanStart,
                             localFunction,
                             new HashSet<ISymbol>(
                                 visited,
@@ -2218,11 +2213,9 @@ public sealed partial class CSharpToGSharpTranslator
                         foreach (ExpressionSyntax returned in
                             this.GetSourceCallableReturnExpressions(factory))
                         {
-                            // Source return expressions are concrete; self-migration imports sequence elements as nullable.
-                            var returnedExpression = returned!;
                             if (this.DelegateExpressionReachesLocalFunction(
-                                returnedExpression,
-                                returnedExpression.SpanStart,
+                                returned,
+                                returned.SpanStart,
                                 localFunction,
                                 new HashSet<ISymbol>(
                                     visited,
@@ -2291,13 +2284,11 @@ public sealed partial class CSharpToGSharpTranslator
                     foreach (ExpressionSyntax returned in
                         this.GetSourceCallableReturnExpressions(factory))
                     {
-                        // Source return expressions are concrete; self-migration imports sequence elements as nullable.
-                        var returnedExpression = returned!;
                         if (this.DelegateExpressionReachesAnonymousFunction(
-                            returnedExpression,
-                            returnedExpression.SpanStart,
+                            returned,
+                            returned.SpanStart,
                             anonymousFunction,
-                            FindEnclosingExecutable(returnedExpression),
+                            FindEnclosingExecutable(returned),
                             new HashSet<ISymbol>(
                                 visited,
                                 SymbolEqualityComparer.Default)))
@@ -3185,13 +3176,11 @@ public sealed partial class CSharpToGSharpTranslator
                         foreach (ExpressionSyntax returned in
                             this.GetSourceCallableReturnExpressions(factory))
                         {
-                            // Source return expressions are concrete; self-migration imports sequence elements as nullable.
-                            var returnedExpression = returned!;
                             if (this.DelegateExpressionReachesAnonymousFunction(
-                                returnedExpression,
-                                returnedExpression.SpanStart,
+                                returned,
+                                returned.SpanStart,
                                 anonymousFunction,
-                                FindEnclosingExecutable(returnedExpression),
+                                FindEnclosingExecutable(returned),
                                 new HashSet<ISymbol>(
                                     visited,
                                     SymbolEqualityComparer.Default)))
@@ -3454,12 +3443,12 @@ public sealed partial class CSharpToGSharpTranslator
                         : new HashSet<ISymbol>(visited, SymbolEqualityComparer.Default);
 
                     // ResolveStableTupleAlias returns its input or a reaching value, never null;
-                    // self-migration types that result as nullable (issue #4578).
+                    // self-migration types that result as nullable (issue #4598).
                     ExpressionSyntax source =
                         this.ResolveStableTupleAlias(assignment.Right, aliasPath)!;
 
                     // ProjectTupleElement never returns null; self-migration types
-                    // the result as nullable (issue #4578).
+                    // the result as nullable (issue #4598).
                     value = ProjectTupleElement(source, path)!;
                     assignedValues.Add(assignment, value);
                 }
@@ -3549,7 +3538,7 @@ public sealed partial class CSharpToGSharpTranslator
                         SymbolEqualityComparer.Default);
 
                 // ResolveStableTupleAlias returns its input or a reaching value, never null;
-                // self-migration types that result as nullable (issue #4578).
+                // self-migration types that result as nullable (issue #4598).
                 ExpressionSyntax source = this.ResolveStableTupleAlias(
                     writtenValue,
                     aliasPath)!;
@@ -3581,7 +3570,7 @@ public sealed partial class CSharpToGSharpTranslator
                         out ExpressionSyntax updated))
                     {
                         // ReplaceTupleElement never returns null; self-migration types
-                        // the result as nullable (issue #4578).
+                        // the result as nullable (issue #4598).
                         updated = this.ReplaceTupleElement(
                             previous,
                             local.Type,
