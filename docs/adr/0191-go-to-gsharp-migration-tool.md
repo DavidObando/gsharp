@@ -157,6 +157,10 @@ The [module reference][go-modules] and [GODEBUG contract][go-godebug] are inputs
 to profile interpretation, not excuses to follow whatever tooling is newest.
 Capture relevant settings in a sanitized allowlist, not a dump of credential-
 bearing environment variables. Unknown profile/schema versions fail explicitly.
+Before decoding, profile-v1 bootstrap reads only a stable regular file of at
+most 256 KiB. This fixed pre-profile ceiling applies before the profile's
+configured timeout exists; oversized, growing, replaced, symlink, and
+non-regular inputs fail without an artifact.
 
 Ask the loader for the import graph, compiled files, syntax, type information,
 type sizes, modules, and embed information needed by the selected closure.
@@ -174,6 +178,12 @@ environment with a read-only source snapshot and isolated caches. A
 metadata-only/source-scan fallback is labeled untyped and incomplete.
 Neither `analyze` nor `translate` runs the target, `init` functions, tests,
 `go generate`, module-provided scripts, or arbitrary MSBuild imports.
+Source and selected local-replacement traversal reads directories in batches
+of at most 128 entries and checks cancellation between batches. It fails before
+sorting above 10,000 entries in one directory or 100,000 traversed entries
+across the captured trees. Every file, directory, symlink, and other entry
+consumes this traversal budget; the captured-file and byte limits remain
+independent.
 
 Checked-in generated files can be selected by the ordinary build rules.
 Missing generated inputs block the affected closure. Record `go:generate`

@@ -88,70 +88,77 @@ func cleanupOwnedTempDir(directory ownedTempDir, beforeRename func(), afterTombs
 }
 
 func removeDirectoryContents(directory *os.File) error {
-	entries, err := directory.ReadDir(-1)
-	if err != nil && !errors.Is(err, io.EOF) {
-		return err
-	}
 	fd := int(directory.Fd())
-	type capturedEntry struct {
-		name string
-		stat unix.Stat_t
-	}
-	captured := make([]capturedEntry, 0, len(entries))
-	for _, entry := range entries {
-		name := entry.Name()
-		if name == "." || name == ".." || filepath.Base(name) != name {
-			return errors.New("unsafe directory entry")
-		}
-		var before unix.Stat_t
-		if err := unix.Fstatat(fd, name, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-			if errors.Is(err, unix.ENOENT) {
-				continue
-			}
-			return err
-		}
-		captured = append(captured, capturedEntry{name: name, stat: before})
-	}
-	for _, entry := range captured {
-		name, before := entry.name, entry.stat
-		if before.Mode&unix.S_IFMT != unix.S_IFDIR {
-			if err := quarantineAndRemoveFile(fd, directory.Name(), name, before); err != nil {
-				return err
-			}
-			continue
-		}
-		childFD, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+	for {
+		readerFD, err := unix.Openat(fd, ".", unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
 		if err != nil {
 			return err
 		}
-		child := os.NewFile(uintptr(childFD), filepath.Join(directory.Name(), name))
-		var opened unix.Stat_t
-		if err := unix.Fstat(childFD, &opened); err != nil || !sameUnixFile(before, opened) {
-			_ = child.Close()
-			return errors.New("temporary directory entry changed while opening")
+		reader := os.NewFile(uintptr(readerFD), directory.Name())
+		entries, readErr := reader.ReadDir(metadataReadDirBatchSize)
+		closeErr := reader.Close()
+		if readErr != nil && !errors.Is(readErr, io.EOF) {
+			return readErr
 		}
-		if err := removeDirectoryContents(child); err != nil {
-			_ = child.Close()
-			return err
+		if closeErr != nil {
+			return closeErr
 		}
-		if err := child.Close(); err != nil {
-			return err
+		if len(entries) == 0 {
+			return nil
 		}
-		var current unix.Stat_t
-		if err := unix.Fstatat(fd, name, &current, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-			if errors.Is(err, unix.ENOENT) {
+		for _, entry := range entries {
+			name := entry.Name()
+			if name == "." || name == ".." || filepath.Base(name) != name {
+				return errors.New("unsafe directory entry")
+			}
+			var before unix.Stat_t
+			if err := unix.Fstatat(fd, name, &before, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				if errors.Is(err, unix.ENOENT) {
+					continue
+				}
+				return err
+			}
+			if before.Mode&unix.S_IFMT != unix.S_IFDIR {
+				if before.Mode&unix.S_IFMT != unix.S_IFREG {
+					return errors.New("owned temporary directory remains non-empty after cleanup")
+				}
+				if err := quarantineAndRemoveFile(fd, directory.Name(), name, before); err != nil {
+					return err
+				}
 				continue
 			}
-			return err
-		}
-		if !sameUnixFile(before, current) {
-			return errors.New("temporary directory entry changed during cleanup")
-		}
-		if err := unix.Unlinkat(fd, name, unix.AT_REMOVEDIR); err != nil && !errors.Is(err, unix.ENOENT) {
-			return err
+			childFD, err := unix.Openat(fd, name, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+			if err != nil {
+				return err
+			}
+			child := os.NewFile(uintptr(childFD), filepath.Join(directory.Name(), name))
+			var opened unix.Stat_t
+			if err := unix.Fstat(childFD, &opened); err != nil || !sameUnixFile(before, opened) {
+				_ = child.Close()
+				return errors.New("temporary directory entry changed while opening")
+			}
+			if err := removeDirectoryContents(child); err != nil {
+				_ = child.Close()
+				return err
+			}
+			if err := child.Close(); err != nil {
+				return err
+			}
+			var current unix.Stat_t
+			if err := unix.Fstatat(fd, name, &current, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+				if errors.Is(err, unix.ENOENT) {
+					continue
+				}
+				return err
+			}
+			if !sameUnixFile(before, current) {
+				return errors.New("temporary directory entry changed during cleanup")
+			}
+			if err := unix.Unlinkat(fd, name, unix.AT_REMOVEDIR); err != nil && !errors.Is(err, unix.ENOENT) {
+				return err
+			}
 		}
 	}
-	return nil
 }
 
 func quarantineAndRemoveFile(parentFD int, directoryPath, name string, before unix.Stat_t) error {

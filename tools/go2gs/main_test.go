@@ -235,6 +235,273 @@ func invalidEntryPatterns() []string {
 	}
 }
 
+func TestSourceTraversalEntryBudgetCountsEveryEntryType(t *testing.T) {
+	sourceTraversalEntryLimitTestHook = func() int { return 3 }
+	t.Cleanup(func() { sourceTraversalEntryLimitTestHook = nil })
+
+	t.Run("empty-directories", func(t *testing.T) {
+		root, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := 0; index < 4; index++ {
+			if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("empty-%d", index)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		sorted := false
+		metadataDirectorySortTestHook = func(string) { sorted = true }
+		t.Cleanup(func() { metadataDirectorySortTestHook = nil })
+		_, err = captureTreeContext(
+			t.Context(), root, filepath.Join(t.TempDir(), "mirror"), nil,
+			testProfile().Limits, &mirrorBudget{})
+		if err == nil || !strings.Contains(err.Error(), "entry limit 3") {
+			t.Fatalf("empty-directory flood returned %v", err)
+		}
+		if sorted {
+			t.Fatal("over-budget directory was sorted")
+		}
+	})
+
+	t.Run("symlinks", func(t *testing.T) {
+		root, err := secureRoot(t.TempDir())
+		if err != nil {
+			t.Fatal(err)
+		}
+		target := filepath.Join(t.TempDir(), "target")
+		if err := os.WriteFile(target, []byte("target"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for index := 0; index < 4; index++ {
+			if err := os.Symlink(target, filepath.Join(root, fmt.Sprintf("link-%d", index))); err != nil {
+				t.Skipf("symlink creation unavailable: %v", err)
+			}
+		}
+		if _, err := captureTreeContext(
+			t.Context(), root, filepath.Join(t.TempDir(), "mirror"), nil,
+			testProfile().Limits, &mirrorBudget{}); err == nil ||
+			!strings.Contains(err.Error(), "entry limit 3") {
+			t.Fatalf("symlink flood returned %v", err)
+		}
+	})
+}
+
+func TestSourceTraversalReadsBoundedBatchesInLexicalOrder(t *testing.T) {
+	root, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := metadataReadDirBatchSize; index >= 0; index-- {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("entry-%03d", index)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	batches := 0
+	metadataReadDirBatchTestHook = func(string) { batches++ }
+	t.Cleanup(func() { metadataReadDirBatchTestHook = nil })
+	var visited []string
+	budget := newMetadataTraversalBudget()
+	if err := walkRootedMetadataTreeContext(
+		t.Context(), root, &budget, func(relative string, _ os.DirEntry) (bool, error) {
+			visited = append(visited, relative)
+			return false, nil
+		}); err != nil {
+		t.Fatal(err)
+	}
+	if batches < 2 {
+		t.Fatalf("directory was read in %d batch(es), want at least 2", batches)
+	}
+	if !sort.StringsAreSorted(visited) {
+		t.Fatalf("traversal order is not lexical: %v", visited)
+	}
+}
+
+func TestSourceTraversalCancellationStopsBetweenBatches(t *testing.T) {
+	root, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index <= metadataReadDirBatchSize; index++ {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("entry-%03d", index)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	batches := 0
+	metadataReadDirBatchTestHook = func(string) {
+		batches++
+		cancel()
+	}
+	sorted := false
+	metadataDirectorySortTestHook = func(string) { sorted = true }
+	t.Cleanup(func() {
+		metadataReadDirBatchTestHook = nil
+		metadataDirectorySortTestHook = nil
+	})
+	budget := newMetadataTraversalBudget()
+	err = walkRootedMetadataTreeContext(ctx, root, &budget, func(string, os.DirEntry) (bool, error) {
+		return false, nil
+	})
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancelled traversal returned %v", err)
+	}
+	if batches != 1 {
+		t.Fatalf("cancelled traversal read %d batches, want 1", batches)
+	}
+	if sorted {
+		t.Fatal("cancelled directory was sorted")
+	}
+}
+
+func TestMetadataDirectoryEntryLimitStopsBeforeSort(t *testing.T) {
+	root, err := secureRoot(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	for index := 0; index < 4; index++ {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("entry-%d", index)), 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	metadataDirectoryEntryLimitTestHook = func() int { return 3 }
+	sorted := false
+	metadataDirectorySortTestHook = func(string) { sorted = true }
+	t.Cleanup(func() {
+		metadataDirectoryEntryLimitTestHook = nil
+		metadataDirectorySortTestHook = nil
+	})
+	budget := newMetadataTraversalBudget()
+	err = walkRootedMetadataTreeContext(t.Context(), root, &budget, func(string, os.DirEntry) (bool, error) {
+		return false, nil
+	})
+	if err == nil || !strings.Contains(err.Error(), "directory exceeds entry limit 3") {
+		t.Fatalf("directory entry limit returned %v", err)
+	}
+	if sorted {
+		t.Fatal("over-budget directory was sorted")
+	}
+}
+
+func TestProfileBootstrapReadIsBoundedAndIdentitySafe(t *testing.T) {
+	t.Run("exact-bound", func(t *testing.T) {
+		path := writeSizedTestProfile(t, maxProfileBytes)
+		if _, err := readProfile(path); err != nil {
+			t.Fatalf("exact-bound profile rejected: %v", err)
+		}
+	})
+
+	t.Run("one-byte-over", func(t *testing.T) {
+		path := writeSizedTestProfile(t, maxProfileBytes+1)
+		chunks := 0
+		boundedReadChunkHook = func() { chunks++ }
+		t.Cleanup(func() { boundedReadChunkHook = nil })
+		if _, err := readProfile(path); err == nil {
+			t.Fatal("oversized profile accepted")
+		}
+		if chunks != 0 {
+			t.Fatalf("oversized profile entered bounded read loop %d times", chunks)
+		}
+	})
+
+	t.Run("growth-after-open", func(t *testing.T) {
+		path := writeTestProfile(t, testProfile())
+		hookCalled := false
+		boundedRegularFileBeforeFinalStatTestHook = func() {
+			hookCalled = true
+			file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := file.Write([]byte(" ")); err != nil {
+				_ = file.Close()
+				t.Fatal(err)
+			}
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() { boundedRegularFileBeforeFinalStatTestHook = nil })
+		if _, err := readProfile(path); err == nil {
+			t.Fatal("growing profile accepted")
+		}
+		if !hookCalled {
+			t.Fatal("profile growth hook was not reached")
+		}
+	})
+
+	t.Run("identity-drift", func(t *testing.T) {
+		path := writeTestProfile(t, testProfile())
+		displaced := path + ".displaced"
+		hookCalled := false
+		boundedRegularFileBeforeFinalStatTestHook = func() {
+			hookCalled = true
+			if err := os.Rename(path, displaced); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(path, []byte("{}"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		t.Cleanup(func() { boundedRegularFileBeforeFinalStatTestHook = nil })
+		if _, err := readProfile(path); err == nil {
+			t.Fatal("profile path replacement accepted")
+		}
+		if !hookCalled {
+			t.Fatal("profile identity hook was not reached")
+		}
+	})
+
+	t.Run("symlink", func(t *testing.T) {
+		target := writeTestProfile(t, testProfile())
+		link := filepath.Join(t.TempDir(), "profile.json")
+		if err := os.Symlink(target, link); err != nil {
+			t.Skipf("symlink creation unavailable: %v", err)
+		}
+		if _, err := readProfile(link); err == nil {
+			t.Fatal("symlink profile accepted")
+		}
+	})
+
+	t.Run("non-regular", func(t *testing.T) {
+		if _, err := readProfile(t.TempDir()); err == nil {
+			t.Fatal("directory profile accepted")
+		}
+	})
+}
+
+func TestOversizedProfileFailsBeforeOutputBootstrap(t *testing.T) {
+	out := filepath.Join(t.TempDir(), "out")
+	err := runAnalyze(t.Context(), []string{
+		"--source", copyFixture(t, "complete"),
+		"--profile", writeSizedTestProfile(t, maxProfileBytes+1),
+		"--out", out,
+	})
+	var exitErr *exitError
+	if !errors.As(err, &exitErr) || exitErr.code != 2 {
+		t.Fatalf("oversized profile exit = %v", err)
+	}
+	if _, statErr := os.Lstat(out); !os.IsNotExist(statErr) {
+		t.Fatalf("oversized profile created output: %v", statErr)
+	}
+}
+
+func writeSizedTestProfile(t *testing.T, size int64) string {
+	t.Helper()
+	data, err := json.Marshal(testProfile())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if int64(len(data)) > size {
+		t.Fatalf("profile JSON size %d exceeds requested test size %d", len(data), size)
+	}
+	data = append(data, bytes.Repeat([]byte{' '}, int(size)-len(data))...)
+	path := filepath.Join(t.TempDir(), "profile.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return path
+}
+
 func refreshSourceIdentity(analysis *Analysis) {
 	analysis.Profile.SourceRootIdentity = sourceIdentity(analysis.Profile.ActualSourceCommit, analysis.Manifests)
 }
@@ -2479,6 +2746,32 @@ func TestOwnedTemporaryDirectoryCleanupIsIdentitySafe(t *testing.T) {
 			}
 		})
 	}
+
+	t.Run("source traversal limits do not constrain cleanup", func(t *testing.T) {
+		sourceTraversalEntryLimitTestHook = func() int { return 1 }
+		metadataDirectoryEntryLimitTestHook = func() int { return 1 }
+		t.Cleanup(func() {
+			sourceTraversalEntryLimitTestHook = nil
+			metadataDirectoryEntryLimitTestHook = nil
+		})
+		directory, err := createOwnedTempDir(t.TempDir(), ".go2gs-work-*")
+		if err != nil {
+			t.Fatal(err)
+		}
+		for index := 0; index < metadataReadDirBatchSize+1; index++ {
+			if err := os.WriteFile(
+				filepath.Join(directory.path, fmt.Sprintf("artifact-%03d", index)),
+				[]byte("owned"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := directory.cleanup(); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(directory.path); !os.IsNotExist(err) {
+			t.Fatalf("owned directory remains: %v", err)
+		}
+	})
 
 	t.Run("symlink child retained", func(t *testing.T) {
 		if !secureTempCleanupSupported() {

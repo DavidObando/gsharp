@@ -20,15 +20,18 @@ import (
 	"unicode/utf8"
 )
 
-const maxValidatedAnalysisBytes int64 = 512 << 20
+const (
+	maxProfileBytes           int64 = 256 << 10
+	maxValidatedAnalysisBytes int64 = 512 << 20
+)
 
 var analysisValidationLimitTestHook func() int64
 
 func readProfile(path string) (Profile, error) {
 	var profile Profile
-	data, err := os.ReadFile(path)
+	data, err := readBoundedRegularFile(path, maxProfileBytes)
 	if err != nil {
-		return profile, err
+		return profile, fmt.Errorf("read profile: %w", err)
 	}
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
