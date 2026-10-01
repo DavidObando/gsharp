@@ -2169,10 +2169,6 @@ internal sealed partial class DeclarationBinder
                             isOpen: isVirtual || isOverride,
                             isOverride: isOverride);
 
-                        // ADR-0118: indexer accessors are emitted as SpecialName
-                        // CLR default-member accessors (get_Item).
-                        getterSymbol.IsSpecialName = isIndexer;
-
                         // Issue #3879: the by-ref return lives on the ACCESSOR
                         // symbol as well as the property. The getter's body is
                         // bound with this symbol as its enclosing function, so
@@ -2205,7 +2201,6 @@ internal sealed partial class DeclarationBinder
                             receiverType: structSymbol,
                             isOpen: isVirtual || isOverride,
                             isOverride: isOverride);
-                        setterSymbol.IsSpecialName = isIndexer;
                         setterSymbol.IsInitOnlySetter = isInitOnly;
                         setterSymbol.ExternalOverriddenMethod = propertySymbol.ExternalOverriddenSetter;
                         propertySymbol.SetterSymbol = setterSymbol;

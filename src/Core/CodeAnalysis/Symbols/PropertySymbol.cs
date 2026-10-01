@@ -314,9 +314,22 @@ public sealed class PropertySymbol : Symbol
     // generic property reuses its definition's accessors, and repointing them
     // at the substitution would lose the definition's attributes, which is
     // what an analyzer reads through AssociatedSymbol.
+    //
+    // Issue #4589: this is also the single place that marks an accessor
+    // SpecialName. Every property accessor is a SpecialName method in CLR
+    // metadata (as C# emits it, and as gsc's metadata-only path already did),
+    // and FunctionEmitter stamps the flag only from FunctionSymbol.IsSpecialName.
+    // Setting it per creation site let computed, explicit-interface and shared
+    // accessors drift out of it.
     private void AssociateAccessor(FunctionSymbol? accessor)
     {
-        if (accessor != null && accessor.AssociatedSymbol == null)
+        if (accessor == null)
+        {
+            return;
+        }
+
+        accessor.IsSpecialName = true;
+        if (accessor.AssociatedSymbol == null)
         {
             accessor.AssociatedSymbol = this;
         }
