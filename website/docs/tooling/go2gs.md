@@ -142,12 +142,17 @@ ownership; blocker-free preload artifacts are rejected. Validation reparses
 captured bytes to verify raw and `//line`/`/*line*/` display coordinates,
 including columns and CRLF handling. It checks
 artifact structure and relationships. It recomputes deterministic IDs for the
-module, file, type, node, constant, scope, selection, call, method-set,
+module, package, file, type, node, constant, scope, selection, call, method-set,
 instance, embed, generate-directive, dependency, feature, diagnostic, and
-blocker records whose identity inputs are fully serialized. Package and symbol
-identities also depend on canonical loader/type ownership inputs not duplicated
-into their records, so validation instead enforces their uniqueness, references,
-and ownership. Schema-v1 file roles are limited to `compiled`, `active`, `test`,
+blocker records whose identity inputs are fully serialized. Package identity
+combines the semantic profile, including the authoritative GOROOT/toolchain
+identity, with the serialized module/replacement identity, import path, and
+test variant. Type identity combines that profile discriminator
+with the canonical Go identity, preserving within-profile cross-package
+deduplication without cross-profile aliasing. Symbol identities still depend on
+canonical type-ownership inputs not duplicated into their records, so validation
+instead enforces their uniqueness, references, and ownership. Schema-v1 file
+roles are limited to `compiled`, `active`, `test`,
 `ignored`, `native`, and `embed`, with exact native/embed flag agreement.
 Serialized syntax nodes must belong to compiled files, and each node-bearing
 file must be one parent-linked `*ast.File` tree without detached nodes or

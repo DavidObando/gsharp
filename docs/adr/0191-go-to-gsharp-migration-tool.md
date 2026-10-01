@@ -230,13 +230,19 @@ invalid UTF-8 string values, through an explicit byte encoding. Reject unknown
 required record kinds, stale payload-derived IDs, and dangling IDs; diagnostics
 cannot masquerade as missing optional type information. `validate-analysis`
 recomputes IDs for every record whose complete identity input is serialized:
-module, file, type, node, constant, scope, selection, call, method set,
+module, package, file, type, node, constant, scope, selection, call, method set,
 instance, embed, generate directive, dependency, feature, diagnostic, and
-blocker. Package and symbol IDs additionally depend on canonical loader/type
-ownership inputs that schema v1 does not duplicate into those records, so their
-uniqueness, references, and ownership are validated without claiming payload
-recomputation. Deterministic output IDs come from canonical declarations/types,
-not dictionary traversal or absolute cache paths.
+blocker. Package identity combines the stable semantic profile, including the
+authoritative GOROOT/toolchain identity, with the actual serialized
+module/replacement record identity, import path, and test variant.
+Type identity combines the same semantic-profile discriminator with its
+canonical Go identity, preserving cross-package canonicalization within one
+profile while separating target-dependent facts across profiles. Symbol IDs
+additionally depend on canonical type ownership inputs that schema v1 does not
+duplicate into those records, so their uniqueness, references, and ownership
+are validated without claiming payload recomputation. Deterministic output IDs
+come from canonical declarations/types, not dictionary traversal or absolute
+cache paths.
 Schema-v1 file roles are closed to `compiled`, `active`, `test`, `ignored`,
 `native`, and `embed`; the serialized native/embed flags must agree with the
 role. Every serialized syntax node belongs to a compiled file, and each

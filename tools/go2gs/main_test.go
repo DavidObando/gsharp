@@ -1974,11 +1974,13 @@ func TestSchemaValidationRejectsUnknownRequiredKindAndDanglingID(t *testing.T) {
 		t.Fatalf("expected unknown required kind rejection, got %v", err)
 	}
 	analysis = validIncompleteAnalysis()
-	analysis.Packages = []PackageRecord{{
-		ID: "package:1", ImportPath: "example.com/test", Name: "test", Variant: "ordinary",
+	record := PackageRecord{
+		ImportPath: "example.com/test", Name: "test", Variant: "ordinary",
 		FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{"package:missing"},
 		InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
-	}}
+	}
+	record.ID = packageRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+	analysis.Packages = []PackageRecord{record}
 	analysis.RecordCounts.Packages = 1
 	analysis.RecordCounts.Total++
 	if err := validateAnalysis(analysis); err == nil || !strings.Contains(err.Error(), "dangling") {
@@ -3725,7 +3727,9 @@ func use(left Left, right Right, b dep.B) { _, _, _ = left.X, right.X, b.X; left
 	traversalIDs := func(declarationFirst bool) []string {
 		analysis := validIncompleteAnalysis()
 		builder := newInventoryBuilder(&analysis, "", "", testProfile())
-		builder.indexPackages([]*packages.Package{consumer, dependencyPackage})
+		if err := builder.indexPackages([]*packages.Package{consumer, dependencyPackage}); err != nil {
+			t.Fatal(err)
+		}
 		add := func(object types.Object) string {
 			if declarationFirst {
 				builder.addObject(dependencyPackage, object, SourceSpan{Path: "module://example.com/dependency@local/dep.go", StartByte: 10})
@@ -4313,6 +4317,9 @@ func TestValidateAnalysisRejectsStalePayloadDerivedRecordIDs(t *testing.T) {
 		{"module", "module", complete, func(value *Analysis) {
 			value.Modules[0].Path += "/stale"
 		}},
+		{"package", "package", complete, func(value *Analysis) {
+			value.Packages[0].ImportPath += "/stale"
+		}},
 		{"file-content-and-hash", "file", complete, func(value *Analysis) {
 			data, decodeErr := base64.StdEncoding.DecodeString(value.Files[0].ContentBase64)
 			if decodeErr != nil {
@@ -4391,6 +4398,173 @@ func TestValidateAnalysisRejectsStalePayloadDerivedRecordIDs(t *testing.T) {
 				t.Fatalf("stale %s identity was accepted: %v", test.kind, err)
 			}
 		})
+	}
+}
+
+func TestSemanticProfileAndReplacementIdentitySeparatePackagesAndTypes(t *testing.T) {
+	analyzeTarget := func(goarch string) Analysis {
+		t.Helper()
+		profile := testProfile()
+		profile.GOOS = "linux"
+		profile.GOARCH = goarch
+		profile.ArchitectureFeatures = []string{}
+		analysis, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), profile)
+		if err != nil || !complete {
+			t.Fatalf("analyze linux/%s: complete=%v err=%v blockers=%#v", goarch, complete, err, analysis.Blockers)
+		}
+		return analysis
+	}
+	findPackage := func(analysis Analysis, importPath string) PackageRecord {
+		t.Helper()
+		for _, pkg := range analysis.Packages {
+			if pkg.ImportPath == importPath && pkg.Variant == "ordinary" {
+				return pkg
+			}
+		}
+		t.Fatalf("package %q not found", importPath)
+		return PackageRecord{}
+	}
+	findType := func(analysis Analysis, canonical string) TypeRecord {
+		t.Helper()
+		var matches []TypeRecord
+		for _, record := range analysis.Types {
+			if record.Canonical == canonical {
+				matches = append(matches, record)
+			}
+		}
+		if len(matches) != 1 {
+			t.Fatalf("canonical type %q has %d records, want one cross-package record", canonical, len(matches))
+		}
+		return matches[0]
+	}
+
+	linux386 := analyzeTarget("386")
+	linuxAMD64 := analyzeTarget("amd64")
+	taggedProfile := testProfile()
+	taggedProfile.GOOS = "linux"
+	taggedProfile.GOARCH = "amd64"
+	taggedProfile.ArchitectureFeatures = []string{}
+	taggedProfile.BuildTags = append(taggedProfile.BuildTags, "identity_tag")
+	tagged, complete, err := analyze(t.Context(), copyFixture(t, "complete"), t.TempDir(), taggedProfile)
+	if err != nil || !complete {
+		t.Fatalf("analyze tagged profile: complete=%v err=%v blockers=%#v", complete, err, tagged.Blockers)
+	}
+	package386 := findPackage(linux386, "example.com/go2gsfixture")
+	packageAMD64 := findPackage(linuxAMD64, "example.com/go2gsfixture")
+	taggedPackage := findPackage(tagged, "example.com/go2gsfixture")
+	int386 := findType(linux386, "int")
+	intAMD64 := findType(linuxAMD64, "int")
+	taggedInt := findType(tagged, "int")
+	types386 := make(map[string]TypeRecord, len(linux386.Types))
+	for _, record := range linux386.Types {
+		types386[record.Canonical] = record
+	}
+	t.Run("semantic-profile-package", func(t *testing.T) {
+		if package386.ID == packageAMD64.ID {
+			t.Fatalf("package identity ignored semantic profile: %q", package386.ID)
+		}
+	})
+	t.Run("semantic-profile-type", func(t *testing.T) {
+		if int386.ID == intAMD64.ID {
+			t.Fatalf("type identity ignored target-dependent payload: %q", int386.ID)
+		}
+		var targetDependentCanonical string
+		for _, record := range linuxAMD64.Types {
+			other, ok := types386[record.Canonical]
+			if ok && (other.Size != record.Size || other.Align != record.Align) {
+				targetDependentCanonical = record.Canonical
+				if other.ID == record.ID {
+					t.Fatalf("target-dependent type %q reused id %q: 386=%d/%d amd64=%d/%d",
+						record.Canonical, record.ID, other.Size, other.Align, record.Size, record.Align)
+				}
+				break
+			}
+		}
+		if targetDependentCanonical == "" {
+			t.Fatal("fixture has no target-dependent type size/alignment witness")
+		}
+	})
+	t.Run("semantic-tag-profile", func(t *testing.T) {
+		if packageAMD64.ID == taggedPackage.ID {
+			t.Fatalf("package identity ignored build-tag profile: %q", packageAMD64.ID)
+		}
+		if intAMD64.ID == taggedInt.ID {
+			t.Fatalf("type identity ignored build-tag profile: %q", intAMD64.ID)
+		}
+	})
+
+	firstRoot := copyFixture(t, "replacement")
+	secondRoot := copyFixture(t, "replacement")
+	replacementPath := filepath.Join(secondRoot, "dep", "value.go")
+	if err := os.WriteFile(replacementPath, []byte("package replacement\n\nconst Value = 43\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	first, complete, err := analyze(t.Context(), firstRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("first replacement analysis: complete=%v err=%v blockers=%#v", complete, err, first.Blockers)
+	}
+	second, complete, err := analyze(t.Context(), secondRoot, t.TempDir(), testProfile())
+	if err != nil || !complete {
+		t.Fatalf("second replacement analysis: complete=%v err=%v blockers=%#v", complete, err, second.Blockers)
+	}
+	firstPackage := findPackage(first, "example.com/replacement")
+	secondPackage := findPackage(second, "example.com/replacement")
+	t.Run("local-replacement-package", func(t *testing.T) {
+		if firstPackage.ModuleID == secondPackage.ModuleID {
+			t.Fatalf("local replacement module identity ignored content: %q", firstPackage.ModuleID)
+		}
+		if firstPackage.ID == secondPackage.ID {
+			t.Fatalf("package identity ignored local replacement content: %q", firstPackage.ID)
+		}
+	})
+}
+
+func TestValidateAnalysisRejectsTypeIDFromAnotherSemanticProfile(t *testing.T) {
+	analysis := validIncompleteAnalysis()
+	analysis.Profile.GOOS = "linux"
+	analysis.Profile.GOARCH = "amd64"
+	record := TypeRecord{
+		Kind: "basic", Canonical: "int", Display: "int", TypeArgs: []string{}, Fields: []StructFieldRecord{},
+		Comparable: true, Size: 8, Align: 8,
+	}
+	record.ID = typeRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+	analysis.Types = []TypeRecord{record}
+	analysis.RecordCounts.Types = 1
+	analysis.RecordCounts.Total++
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("baseline semantic-profile type artifact is invalid: %v", err)
+	}
+	analysis.Profile.GOARCH = "386"
+	if err := validateAnalysis(analysis); err == nil ||
+		!strings.Contains(err.Error(), "type record id") ||
+		!strings.Contains(err.Error(), "payload-derived identity") {
+		t.Fatalf("type identity from another semantic profile was accepted: %v", err)
+	}
+}
+
+func TestValidateAnalysisRejectsTypeIDFromAnotherToolchainIdentity(t *testing.T) {
+	analysis := validIncompleteAnalysis()
+	record := TypeRecord{
+		Kind: "basic", Canonical: "int", Display: "int", TypeArgs: []string{}, Fields: []StructFieldRecord{},
+		Comparable: true, Size: 8, Align: 8,
+	}
+	record.ID = typeRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+	analysis.Types = []TypeRecord{record}
+	analysis.RecordCounts.Types = 1
+	analysis.RecordCounts.Total++
+	if err := validateAnalysis(analysis); err != nil {
+		t.Fatalf("baseline toolchain-profile type artifact is invalid: %v", err)
+	}
+
+	analysis.Toolchain.ExecutableSHA256 = strings.Repeat("b", 64)
+	analysis.Toolchain.GOROOTIdentity = stableID("goroot",
+		analysis.Toolchain.ActualVersion+"\x00"+analysis.Toolchain.GOROOTVersion+"\x00"+
+			analysis.Toolchain.HelperSemanticVersion+"\x00"+analysis.Toolchain.ExecutableSHA256+"\x00"+
+			analysis.Toolchain.GOROOTVersionSHA256)
+	if err := validateAnalysis(analysis); err == nil ||
+		!strings.Contains(err.Error(), "type record id") ||
+		!strings.Contains(err.Error(), "payload-derived identity") {
+		t.Fatalf("type identity from another authoritative toolchain was accepted: %v", err)
 	}
 }
 
@@ -4785,32 +4959,38 @@ func F() { value := 0; Second: for value < 1 { value++; break Second } }
 	for _, symbol := range analysis.Symbols {
 		symbols[symbol.ID] = symbol
 	}
-	var firstScope, secondScope int
-	firstScope, secondScope = -1, -1
+	firstScope, secondScope := -1, -1
+	nonLabelID := ""
 	for index, scope := range analysis.Scopes {
 		if len(scope.Labels) == 0 {
 			continue
 		}
-		if firstScope < 0 {
-			firstScope = index
-		} else if scope.PackageID != analysis.Scopes[firstScope].PackageID {
-			secondScope = index
+		for _, symbolID := range scope.SymbolIDs {
+			if symbols[symbolID].Kind != "label" {
+				firstScope = index
+				nonLabelID = symbolID
+				break
+			}
+		}
+		if firstScope >= 0 {
 			break
+		}
+	}
+	if firstScope >= 0 {
+		for index, scope := range analysis.Scopes {
+			if len(scope.Labels) > 0 && scope.PackageID != analysis.Scopes[firstScope].PackageID {
+				secondScope = index
+				break
+			}
 		}
 	}
 	if firstScope < 0 || secondScope < 0 {
-		t.Fatalf("fixture did not produce labels in two packages: scopes=%#v symbols=%#v", analysis.Scopes, analysis.Symbols)
+		t.Fatalf("fixture did not produce a mixed-symbol label scope and another package: scopes=%#v symbols=%#v",
+			analysis.Scopes, analysis.Symbols)
 	}
 	labelID := analysis.Scopes[firstScope].Labels[0]
-	nonLabelID := ""
-	for _, symbolID := range analysis.Scopes[firstScope].SymbolIDs {
-		if symbols[symbolID].Kind != "label" {
-			nonLabelID = symbolID
-			break
-		}
-	}
 	if nonLabelID == "" {
-		t.Fatal("fixture label scope has no non-label symbol")
+		t.Fatal("fixture mixed-symbol label scope has no non-label symbol")
 	}
 	crossPackageLabelID := analysis.Scopes[secondScope].Labels[0]
 	tests := []struct {
@@ -4862,18 +5042,13 @@ func TestModuleRecordCountsRejectAddedAndRemovedRecords(t *testing.T) {
 		t.Fatalf("adding a module without updating counts was accepted: %v", err)
 	}
 	removed := analysis
-	removedID := analysis.Modules[0].ID
-	removed.Modules = append([]ModuleRecord{}, analysis.Modules[1:]...)
-	for i := range removed.Packages {
-		if removed.Packages[i].ModuleID == removedID {
-			removed.Packages[i].ModuleID = ""
-		}
+	removed.Modules = append(append([]ModuleRecord{}, analysis.Modules...), addedModule)
+	removed.RecordCounts.Modules++
+	removed.RecordCounts.Total++
+	if err := validateAnalysis(removed); err != nil {
+		t.Fatalf("baseline with unreferenced module is invalid: %v", err)
 	}
-	for i := range removed.Modules {
-		if removed.Modules[i].ReplacementID == removedID {
-			removed.Modules[i].ReplacementID = ""
-		}
-	}
+	removed.Modules = removed.Modules[:len(removed.Modules)-1]
 	if err := validateAnalysis(removed); err == nil || !strings.Contains(err.Error(), "recordCounts") {
 		t.Fatalf("removing a module without updating counts was accepted: %v", err)
 	}
@@ -5745,11 +5920,13 @@ func TestGoTargetValidationIsClosed(t *testing.T) {
 func TestPackageVariantsAreClosed(t *testing.T) {
 	for _, variant := range []string{"ordinary", "in-package-test", "external-test", "synthetic-test-main"} {
 		analysis := validIncompleteAnalysis()
-		analysis.Packages = []PackageRecord{{
-			ID: "package:" + variant, ImportPath: "example.com/test", Name: "test", Variant: variant,
+		record := PackageRecord{
+			ImportPath: "example.com/test", Name: "test", Variant: variant,
 			FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{},
 			InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
-		}}
+		}
+		record.ID = packageRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+		analysis.Packages = []PackageRecord{record}
 		analysis.RecordCounts.Packages = 1
 		analysis.RecordCounts.Total++
 		if err := validateAnalysis(analysis); err != nil {
@@ -5758,11 +5935,13 @@ func TestPackageVariantsAreClosed(t *testing.T) {
 	}
 	for _, variant := range []string{"", "benchmark", "ordinary-test"} {
 		analysis := validIncompleteAnalysis()
-		analysis.Packages = []PackageRecord{{
-			ID: "package:invalid", ImportPath: "example.com/test", Name: "test", Variant: variant,
+		record := PackageRecord{
+			ImportPath: "example.com/test", Name: "test", Variant: variant,
 			FileIDs: []string{}, CompiledFileIDs: []string{}, ImportPackageIDs: []string{},
 			InitializationOrder: []InitializationRecord{}, DiagnosticIDs: []string{},
-		}}
+		}
+		record.ID = packageRecordID(semanticProfileIdentity(analysis.Profile, analysis.Toolchain), record)
+		analysis.Packages = []PackageRecord{record}
 		analysis.RecordCounts.Packages = 1
 		analysis.RecordCounts.Total++
 		if err := validateAnalysis(analysis); err == nil {

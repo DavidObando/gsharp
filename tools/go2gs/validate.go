@@ -449,6 +449,7 @@ func validateCompletenessEvidence(a Analysis) error {
 }
 
 func validateRecordIDs(a Analysis) error {
+	semanticProfileID := semanticProfileIdentity(a.Profile, a.Toolchain)
 	check := func(kind, actual, expected string) error {
 		if actual != expected {
 			return fmt.Errorf("%s record id %q does not match payload-derived identity %q", kind, actual, expected)
@@ -460,13 +461,18 @@ func validateRecordIDs(a Analysis) error {
 			return err
 		}
 	}
+	for _, value := range a.Packages {
+		if err := check("package", value.ID, packageRecordID(semanticProfileID, value)); err != nil {
+			return err
+		}
+	}
 	for _, value := range a.Files {
 		if err := check("file", value.ID, fileRecordID(value)); err != nil {
 			return err
 		}
 	}
 	for _, value := range a.Types {
-		if err := check("type", value.ID, typeRecordID(value)); err != nil {
+		if err := check("type", value.ID, typeRecordID(semanticProfileID, value)); err != nil {
 			return err
 		}
 	}

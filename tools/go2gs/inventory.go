@@ -34,7 +34,9 @@ type inventoryBuilder struct {
 	sourceRoot            string
 	goroot                string
 	profile               Profile
+	semanticProfileID     string
 	packageIDs            map[*packages.Package]string
+	packageModuleIDs      map[*packages.Package]string
 	packagePathIDs        map[string]string
 	typeOwners            map[*types.Package]*packages.Package
 	typeIDs               map[types.Type]string
@@ -68,7 +70,9 @@ type inventoryBuilder struct {
 func newInventoryBuilder(analysis *Analysis, sourceRoot, goroot string, profile Profile) *inventoryBuilder {
 	return &inventoryBuilder{
 		analysis: analysis, sourceRoot: sourceRoot, goroot: goroot, profile: profile,
-		packageIDs: map[*packages.Package]string{}, packagePathIDs: map[string]string{}, typeIDs: map[types.Type]string{},
+		semanticProfileID: semanticProfileIdentity(analysis.Profile, analysis.Toolchain),
+		packageIDs:        map[*packages.Package]string{}, packageModuleIDs: map[*packages.Package]string{},
+		packagePathIDs: map[string]string{}, typeIDs: map[types.Type]string{},
 		typeOwners: map[*types.Package]*packages.Package{},
 		objectIDs:  map[objectRef]string{}, fileIDs: map[string]string{},
 		moduleIDs: map[string]string{}, seenModules: map[string]bool{},
@@ -120,29 +124,36 @@ func analysisRecordCount(a *Analysis) int {
 		len(a.FeatureSites) + len(a.Diagnostics) + len(a.Blockers)
 }
 
-func (b *inventoryBuilder) indexPackages(packages []*packages.Package) {
+func (b *inventoryBuilder) indexPackages(packages []*packages.Package) error {
 	for _, pkg := range packages {
-		id := stableID("package", packageCanonical(pkg))
+		moduleID, err := b.addModule(pkg.Module)
+		if err != nil {
+			return err
+		}
+		b.packageModuleIDs[pkg] = moduleID
+	}
+	for _, pkg := range packages {
+		id := packageRecordID(b.semanticProfileID, PackageRecord{
+			ImportPath: pkg.PkgPath, Variant: packageVariant(pkg), ModuleID: b.packageModuleIDs[pkg],
+		})
 		b.packageIDs[pkg] = id
 		if packageVariant(pkg) == "ordinary" || b.packagePathIDs[pkg.PkgPath] == "" {
 			b.packagePathIDs[pkg.PkgPath] = id
 		}
 		if pkg.Types != nil {
 			owner := b.typeOwners[pkg.Types]
-			if owner == nil || packageCanonical(pkg) < packageCanonical(owner) {
+			if owner == nil || id < b.packageIDs[owner] {
 				b.typeOwners[pkg.Types] = pkg
 			}
 		}
 	}
 	b.indexDeclaredMembers(packages)
+	return b.err
 }
 
 func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 	pkgID := b.packageIDs[pkg]
-	moduleID, err := b.addModule(pkg.Module)
-	if err != nil {
-		return err
-	}
+	moduleID := b.packageModuleIDs[pkg]
 	record := PackageRecord{
 		ID: pkgID, ImportPath: pkg.PkgPath, Name: pkg.Name, Variant: packageVariant(pkg),
 		ModuleID: moduleID, LanguageVersion: moduleGoVersion(pkg.Module),
@@ -2577,7 +2588,7 @@ func (b *inventoryBuilder) addType(pkg *packages.Package, t types.Type) string {
 	}
 	display := canonicalType(t)
 	canonical := b.typeIdentity(pkg, t)
-	id := typeRecordID(TypeRecord{Canonical: canonical})
+	id := typeRecordID(b.semanticProfileID, TypeRecord{Canonical: canonical})
 	b.typeIDs[t] = id
 	if b.seenTypes[id] {
 		return id
@@ -2999,7 +3010,7 @@ func (b *inventoryBuilder) addTypeForUnknown(t types.Type) string {
 	}
 	display := canonicalType(t)
 	canonical := canonicalTypeIdentity(t)
-	id := typeRecordID(TypeRecord{Canonical: canonical})
+	id := typeRecordID(b.semanticProfileID, TypeRecord{Canonical: canonical})
 	b.typeIDs[t] = id
 	if !b.seenTypes[id] {
 		b.seenTypes[id] = true
