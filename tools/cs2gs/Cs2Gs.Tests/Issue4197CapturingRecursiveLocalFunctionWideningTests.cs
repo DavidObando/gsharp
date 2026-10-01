@@ -673,10 +673,10 @@ namespace Demo
                     }
                 }
             }
-            """, "capturing generic recursive local function");
+            """, "cannot preserve an enclosing type parameter");
 
         Assert.Contains(
-            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
             printed,
             StringComparison.Ordinal);
     }
@@ -694,10 +694,10 @@ namespace Demo
                     }
                 }
             }
-            """, "capturing generic recursive local function");
+            """, "cannot preserve an enclosing type parameter");
 
         Assert.Contains(
-            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
             printed,
             StringComparison.Ordinal);
     }
@@ -719,10 +719,10 @@ namespace Demo
                     }
                 }
             }
-            """, "capturing generic recursive local function");
+            """, "cannot preserve an enclosing type parameter");
 
         Assert.Contains(
-            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
             printed,
             StringComparison.Ordinal);
     }
@@ -746,7 +746,7 @@ namespace Demo
             }
             """);
 
-        Assert.DoesNotContain("capturing generic recursive local function", printed, StringComparison.Ordinal);
+        Assert.DoesNotContain("cannot preserve an enclosing type parameter", printed, StringComparison.Ordinal);
         TranslationTestValidation.AssertBinds(printed);
     }
 
@@ -767,10 +767,10 @@ namespace Demo
                     }
                 }
             }
-            """, "capturing generic recursive local function");
+            """, "cannot preserve an enclosing type parameter");
 
         Assert.Contains(
-            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
             printed,
             StringComparison.Ordinal);
     }
@@ -793,10 +793,10 @@ namespace Demo
                     }
                 }
             }
-            """, "capturing generic recursive local function");
+            """, "cannot preserve an enclosing type parameter");
 
         Assert.Contains(
-            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
             printed,
             StringComparison.Ordinal);
     }
@@ -817,10 +817,10 @@ namespace Demo
                     }
                 }
             }
-            """, "capturing generic recursive local function");
+            """, "cannot preserve an enclosing type parameter");
 
         Assert.Contains(
-            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
             printed,
             StringComparison.Ordinal);
     }
@@ -849,10 +849,93 @@ namespace Demo
                     }
                 }
             }
-            """, "capturing generic recursive local function");
+            """, "cannot preserve an enclosing type parameter");
 
         Assert.Contains(
-            "// unsupported: capturing generic recursive local function 'First' references an enclosing type parameter",
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CaptureFreeMixedGroupReferencingEnclosingMethodTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth) {
+                        static int First(T item, int n) =>
+                            n == 0 ? 0 : Second<T>(item, n - 1);
+                        static int Second<U>(T item, int n) =>
+                            n == 0 ? 0 : First(item, n - 1);
+                        return First(value, depth);
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CaptureFreeGenericGroupForcedAcrossSwitchSectionsWithMethodTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth, int mode) {
+                        switch (mode) {
+                            case 0:
+                                return First<T>(value, depth);
+                            case 1:
+                                static int First<U>(T item, int n) =>
+                                    n == 0 ? 0 : Second<U>(item, n - 1);
+                                static int Second<V>(T item, int n) =>
+                                    n == 0 ? 0 : First<V>(item, n - 1);
+                                return First<T>(value, depth);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
+            printed,
+            StringComparison.Ordinal);
+    }
+
+    [Fact]
+    public void CaptureFreeNonGenericGroupForcedAcrossSwitchSectionsWithMethodTypeParameter_RemainsALoudGap()
+    {
+        string printed = LocalFunctionHoistTranslationTests.TranslateUnit("""
+            namespace Demo {
+                public class C {
+                    public int Run<T>(T value, int depth, int mode) {
+                        switch (mode) {
+                            case 0:
+                                return First(value, depth);
+                            case 1:
+                                static int First(T item, int n) =>
+                                    n == 0 ? 0 : Second(item, n - 1);
+                                static int Second(T item, int n) =>
+                                    n == 0 ? 0 : First(item, n - 1);
+                                return First(value, depth);
+                            default:
+                                return 0;
+                        }
+                    }
+                }
+            }
+            """, "cannot preserve an enclosing type parameter");
+
+        Assert.Contains(
+            "// unsupported: recursive local function 'First' cannot preserve an enclosing type parameter",
             printed,
             StringComparison.Ordinal);
     }

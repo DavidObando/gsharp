@@ -373,7 +373,7 @@ internal sealed class DocumentTranslationState
     public HashSet<IMethodSymbol> UnsupportedTopLevelRecursiveLocalFunctions { get; } =
         new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
 
-    public HashSet<IMethodSymbol> UnsupportedCapturingGenericEnclosingTypeParameterLocalFunctions { get; } =
+    public HashSet<IMethodSymbol> UnsupportedRecursiveEnclosingTypeParameterLocalFunctions { get; } =
         new HashSet<IMethodSymbol>(SymbolEqualityComparer.Default);
 
     // Issue #3399: local functions participating (directly or transitively) in
