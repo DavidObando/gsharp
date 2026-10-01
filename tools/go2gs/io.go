@@ -20,6 +20,10 @@ import (
 	"unicode/utf8"
 )
 
+const maxValidatedAnalysisBytes int64 = 512 << 20
+
+var analysisValidationLimitTestHook func() int64
+
 func readProfile(path string) (Profile, error) {
 	var profile Profile
 	data, err := os.ReadFile(path)
@@ -279,11 +283,22 @@ func validateLimits(l Limits) error {
 		l.MaxOutputBytes <= 0 || l.MaxLocalHashBytes <= 0 {
 		return errors.New("all resource limits must be positive and maxDurationSeconds must be <= 3600")
 	}
+	if l.MaxOutputBytes > maxValidatedAnalysisBytes {
+		return fmt.Errorf("maxOutputBytes must be <= %d", maxValidatedAnalysisBytes)
+	}
 	return nil
 }
 
 func readAnalysis(path string) (Analysis, error) {
-	data, err := os.ReadFile(path)
+	limit := maxValidatedAnalysisBytes
+	if analysisValidationLimitTestHook != nil {
+		limit = analysisValidationLimitTestHook()
+	}
+	return readAnalysisBounded(path, limit)
+}
+
+func readAnalysisBounded(path string, limit int64) (Analysis, error) {
+	data, err := readBoundedRegularFileContext(context.Background(), path, limit)
 	if err != nil {
 		return Analysis{}, err
 	}
