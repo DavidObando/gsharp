@@ -2145,6 +2145,9 @@ func TestArtifactPairRejectsObservedAnalysisReplacement(t *testing.T) {
 	if data, err := os.ReadFile(filepath.Join(out, "analysis.json")); err != nil || string(data) != "replacement" {
 		t.Fatalf("mismatched analysis replacement changed: %q, %v", data, err)
 	}
+	if data, err := os.ReadFile(filepath.Join(out, "analysis.json.owned")); err != nil || string(data) != "owned analysis" {
+		t.Fatalf("displaced owned analysis changed: %q, %v", data, err)
+	}
 	if _, err := os.Lstat(filepath.Join(out, "run.json")); !os.IsNotExist(err) {
 		t.Fatalf("run.json was published after analysis drift: %v", err)
 	}
