@@ -3372,6 +3372,315 @@ public class Issue4519GotoAssignmentNarrowingTests
     }
 
     [Fact]
+    public void BackwardGoto_InvalidatesNarrowedImplicitFieldCallee()
+    {
+        var result = Evaluate("""
+            func One() int32 { return 1 }
+
+            class Holder {
+                var Callback (() -> int32)? = One
+
+                func Run() int32 {
+                    var count = 0
+                    if Callback != nil {
+                    Again:
+                        let value = Callback()
+                        if count == 0 {
+                            count++
+                            Callback = nil
+                            goto Again
+                        }
+                    }
+                    return 0
+                }
+            }
+
+            Holder{}.Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0503");
+        Assert.Equal("Callback", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_InvalidatesNarrowedImplicitFieldCalleeInParentheses()
+    {
+        var result = Evaluate("""
+            func One() int32 { return 1 }
+
+            class Holder {
+                var Callback (() -> int32)? = One
+
+                func Run() int32 {
+                    var count = 0
+                    if Callback != nil {
+                    Again:
+                        let value = (Callback)()
+                        if count == 0 {
+                            count++
+                            Callback = nil
+                            goto Again
+                        }
+                    }
+                    return 0
+                }
+            }
+
+            Holder{}.Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0503");
+        Assert.Equal("(Callback)", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_InvalidatesNarrowedImplicitFieldCalleeClearedByCall()
+    {
+        var result = Evaluate("""
+            func One() int32 { return 1 }
+
+            class Holder {
+                var Callback (() -> int32)? = One
+
+                func Reset() {
+                    Callback = nil
+                }
+
+                func Run() int32 {
+                    var count = 0
+                    if Callback != nil {
+                    Again:
+                        let value = Callback()
+                        if count == 0 {
+                            count++
+                            Reset()
+                            goto Again
+                        }
+                    }
+                    return 0
+                }
+            }
+
+            Holder{}.Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0503");
+        Assert.Equal("Callback", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void BackwardGoto_InvalidatesNarrowedImplicitPropertyCallee()
+    {
+        var result = Evaluate("""
+            func One() int32 { return 1 }
+
+            class Holder {
+                prop Callback (() -> int32)? { get; set; } = One
+
+                func Reset() {
+                    Callback = nil
+                }
+
+                func Run() int32 {
+                    var count = 0
+                    if Callback != nil {
+                    Again:
+                        let value = Callback()
+                        if count == 0 {
+                            count++
+                            Callback = nil
+                            goto Again
+                        }
+                    }
+                    return 0
+                }
+            }
+
+            Holder{}.Run()
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0503");
+        Assert.Equal("Callback", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void LocalLambdaCall_DoesNotDropUnrelatedLocalNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(a string?, b string?) int32 {
+                var left = a
+                var right = b
+                if left == nil || right == nil {
+                    return 0
+                }
+                let same = func(x string, y string) bool { return x == y }
+                if same(left, right) { return 1 }
+
+                return left.Length + right.Length
+            }
+
+            Run("a,b", "c")
+            """);
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void LocalLambdaCall_InPatternGuard_DoesNotDropUnrelatedLocalNarrowing()
+    {
+        var result = Evaluate("""
+            func Run(a string?, b string?) int32 {
+                var left = a
+                var right = b
+                if left == nil || right == nil {
+                    return 0
+                }
+                let same = func(x string, y string) bool { return x == y }
+                if left is string ls && right is string rs && same(ls, rs) { return 1 }
+
+                return left.Length + right.Length
+            }
+
+            Run("a,b", "c")
+            """);
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void LocalLambdaCall_StillDropsNarrowingOfLocalTheLambdaAssigns()
+    {
+        var result = Evaluate("""
+            func Run(a string?) int32 {
+                var text = a
+                let clear = func() { text = nil }
+                if text != nil {
+                    clear()
+                    return text.Length
+                }
+                return 0
+            }
+
+            Run("a")
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void UnknownCallableCall_StillDropsNarrowingOfByReferenceParameter()
+    {
+        var result = Evaluate("""
+            class Box {
+                var Action (() -> void)? = nil
+            }
+
+            func Run(ref text string?, box Box) int32 {
+                if text != nil {
+                    box.Action!!()
+                    return text.Length
+                }
+                return 0
+            }
+
+            var value string? = "a"
+            let box = Box{}
+            box.Action = func() { value = nil }
+            Run(ref value, box)
+            """);
+
+        var diagnostic = Assert.Single(result.Diagnostics, d => d.Id == "GS0158");
+        Assert.Equal("Length", diagnostic.Location.Text.ToString(diagnostic.Location.Span));
+        Assert.DoesNotContain(result.Diagnostics, d => d.Id == "GS9999");
+    }
+
+    [Fact]
+    public void OutVariableInOrGuard_EarlyExitKeepsNarrowing()
+    {
+        var result = Evaluate("""
+            func TryGet(out value string?) bool {
+                value = "abc"
+                return true
+            }
+
+            func Run() int32 {
+                if !TryGet(out var v) || v == nil {
+                    return 0
+                }
+                return v.Length
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void OutArgumentInOrGuard_EarlyExitKeepsNarrowing()
+    {
+        var result = Evaluate("""
+            func TryGet(out value string?) bool {
+                value = "abc"
+                return true
+            }
+
+            func Run() int32 {
+                var v string? = nil
+                if !TryGet(out v) || v == nil {
+                    return 0
+                }
+                return v.Length
+            }
+
+            Run()
+            """);
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
+    public void AddressOfRefArgument_WithUnknownCallableArgument_KeepsOtherLocalNarrowing()
+    {
+        var result = Evaluate("""
+            func Wrap(project (string) -> string?, ref value string) bool {
+                value = value + "x"
+                return true
+            }
+
+            func Id(f (string) -> string?) (string) -> string? {
+                return f
+            }
+
+            func Run(source (string) -> string?, a string, b string, flagA bool, flagB bool) string? {
+                let project = Id(source)
+                var pa string? = project(a)
+                var pb string? = project(b)
+                if pa == nil || pb == nil {
+                    return nil
+                }
+                if flagA && !Wrap(project, &pa) {
+                    return nil
+                }
+                if flagB && !Wrap(project, &pb) {
+                    return nil
+                }
+                return pa + pb
+            }
+
+            Run(func(s string) string? { return s }, "a", "b", true, true)
+            """);
+
+        Assert.Empty(result.Diagnostics);
+    }
+
+    [Fact]
     public void BackwardGoto_MemberNotNullAfterLabelReestablishesNarrowing()
     {
         AssertRuns("""

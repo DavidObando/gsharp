@@ -26,6 +26,8 @@ internal sealed partial class StatementBinder
 {
     private readonly HashSet<VariableSymbol> externalCallableAliases = new();
 
+    private readonly List<(AccessPath Path, TypeSymbol Type)> lastEarlyExitLifts = new();
+
     internal HashSet<VariableSymbol> IsolateExternalCallableAliases()
     {
         var saved = new HashSet<VariableSymbol>(externalCallableAliases);
@@ -190,10 +192,85 @@ internal sealed partial class StatementBinder
         }
     }
 
+    // `if !TryGet(out var v) || v == nil { return }` tests `v` AFTER the
+    // condition wrote it through the out argument, so the narrowing it lifts is
+    // about the new value. The post-statement invalidation drops every root the
+    // statement writes, which discarded that lift; put back the lifted
+    // narrowing of a bare variable that only the condition wrote through a
+    // writable reference and that no branch or plain assignment touches.
+    private void RestoreEarlyExitLiftsWrittenOnlyByCondition(
+        BoundStatement? statement,
+        Dictionary<AccessPath, TypeSymbol> persistentFrame)
+    {
+        if (lastEarlyExitLifts.Count == 0)
+        {
+            return;
+        }
+
+        while (statement is BoundBlockStatement labeledBlock
+            && labeledBlock.Syntax is LabeledStatementSyntax
+            && labeledBlock.Statements.Length == 2
+            && labeledBlock.Statements[0] is BoundLabelStatement)
+        {
+            statement = labeledBlock.Statements[1];
+        }
+
+        if (statement is not BoundIfStatement ifStatement)
+        {
+            return;
+        }
+
+        var condition = new AssignedRootsCollector(null, externalCallableAliases);
+        condition.VisitExpression(ifStatement.Condition);
+        if (condition.WritableReferenceRoots.Count == 0
+            || condition.MayMutateAnyRoot
+            || condition.MayMutateWritableReferenceRoots)
+        {
+            return;
+        }
+
+        var branches = new AssignedRootsCollector(null, externalCallableAliases);
+        branches.VisitStatement(ifStatement.ThenStatement);
+        if (ifStatement.ElseStatement != null)
+        {
+            branches.VisitStatement(ifStatement.ElseStatement);
+        }
+
+        var plainTargets = new PlainAssignmentTargetCollector();
+        plainTargets.VisitExpression(ifStatement.Condition);
+        foreach (var (path, narrowedType) in lastEarlyExitLifts)
+        {
+            if (!path.HasMembers
+                && condition.WritableReferenceRoots.Contains(path.Root)
+                && !plainTargets.Targets.Contains(path.Root)
+                && !branches.Roots.Contains(path.Root))
+            {
+                SetPersistentNarrowing(persistentFrame, path, narrowedType);
+            }
+        }
+    }
+
+    private sealed class PlainAssignmentTargetCollector : BoundTreeWalker
+    {
+        public HashSet<VariableSymbol> Targets { get; } = new HashSet<VariableSymbol>();
+
+        protected override void VisitAssignmentExpression(BoundAssignmentExpression node)
+        {
+            if (node.Variable != null)
+            {
+                Targets.Add(node.Variable);
+            }
+
+            base.VisitAssignmentExpression(node);
+        }
+    }
+
     private void InvalidateNarrowingsForAssignedVariables(
         SyntaxNode statementSyntax,
         BoundStatement? boundStatement = null)
     {
+        EnsureClosureAssignedNames(statementSyntax);
+
         // Issue #1639: `NarrowedVariables.Count == 0` never fires in practice —
         // `BindBlockStatements` pushes a (usually empty) memberNotNullFrame for
         // every block, so the list always has at least one entry once binding
@@ -230,10 +307,12 @@ internal sealed partial class StatementBinder
         HashSet<VariableSymbol> assignedRoots;
         var dropAllRoots = false;
         var dropGlobalRoots = false;
+        AssignedRootsCollector? statementCollector = null;
         if (boundStatement != null)
         {
             var collector = new AssignedRootsCollector(null, externalCallableAliases);
             collector.Visit(boundStatement);
+            statementCollector = collector;
             assignedRoots = collector.Roots;
             dropAllRoots = collector.MayMutateAnyRoot;
             dropGlobalRoots = collector.MayMutateGlobalRoots;
@@ -279,7 +358,7 @@ internal sealed partial class StatementBinder
             List<AccessPath>? toRemove = null;
             foreach (var key in frame.Keys)
             {
-                var drop = (dropAllRoots && MayBeMutatedByUnknownCallable(key))
+                var drop = (statementCollector != null && MayBeMutatedByUnknownWrite(statementCollector, key))
                     || (dropGlobalRoots && key.Root is GlobalVariableSymbol)
                     || assignedRoots.Contains(key.Root)
                     || (key.HasMembers && dropAllMemberPaths);
@@ -401,7 +480,7 @@ internal sealed partial class StatementBinder
         return false;
     }
 
-    private static List<(int FrameIndex, AccessPath Path)> CollectInheritedNarrowingInvalidations(
+    private List<(int FrameIndex, AccessPath Path)> CollectInheritedNarrowingInvalidations(
         AssignedRootsCollector mutations,
         bool mayMutateMemberPaths,
         int frameCount,
@@ -412,7 +491,7 @@ internal sealed partial class StatementBinder
         {
             foreach (var path in frames[i].Keys)
             {
-                if ((mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path))
+                if (MayBeMutatedByUnknownWrite(mutations, path)
                     || mutations.MayMutateGlobalRoot(path.Root, frames[i][path])
                     || mutations.InvalidatesNarrowing(path.Root, frames[i][path])
                     || (path.HasMembers && mayMutateMemberPaths))
@@ -585,6 +664,7 @@ internal sealed partial class StatementBinder
     /// </summary>
     private void ApplyEarlyExitNarrowings(BoundStatement? statement, Dictionary<AccessPath, TypeSymbol> persistentFrame)
     {
+        lastEarlyExitLifts.Clear();
         var isLabeledStatement = false;
         while (statement is BoundBlockStatement labeledBlock
             && labeledBlock.Syntax is LabeledStatementSyntax
@@ -634,6 +714,7 @@ internal sealed partial class StatementBinder
                 }
 
                 SetPersistentNarrowing(persistentFrame, kv.Key, kv.Value);
+                lastEarlyExitLifts.Add((kv.Key, kv.Value));
             }
 
             return;
@@ -1117,13 +1198,13 @@ internal sealed partial class StatementBinder
         return state;
     }
 
-    private static void ApplyMutationsToState(
+    private void ApplyMutationsToState(
         Dictionary<AccessPath, TypeSymbol> state,
         AssignedRootsCollector mutations)
     {
         foreach (var entry in state.ToArray())
         {
-            if ((mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
+            if (MayBeMutatedByUnknownWrite(mutations, entry.Key)
                 || mutations.MayMutateGlobalRoot(entry.Key.Root, entry.Value)
                 || (entry.Key.HasMembers && mutations.MayMutateMemberPaths)
                 || mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
@@ -1161,7 +1242,7 @@ internal sealed partial class StatementBinder
         {
             foreach (var entry in frame.ToArray())
             {
-                if ((summary.Mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
+                if (MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key)
                     || summary.Mutations.MayMutateGlobalRoot(entry.Key.Root, entry.Value)
                     || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
                     || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
@@ -1180,13 +1261,13 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private static void ApplyFlowSummary(
+    private void ApplyFlowSummary(
         GotoNarrowingSnapshot snapshot,
         FinallyFlowSummary summary)
     {
         foreach (var entry in snapshot.NarrowedVariables.ToArray())
         {
-            if ((summary.Mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(entry.Key))
+            if (MayBeMutatedByUnknownWrite(summary.Mutations, entry.Key)
                 || summary.Mutations.MayMutateGlobalRoot(entry.Key.Root, entry.Value)
                 || (entry.Key.HasMembers && summary.Mutations.MayMutateMemberPaths)
                 || summary.Mutations.InvalidatesNarrowing(entry.Key.Root, entry.Value))
@@ -1846,8 +1927,141 @@ internal sealed partial class StatementBinder
         }
     }
 
-    private static bool MayBeMutatedByUnknownCallable(AccessPath path)
-        => path.HasMembers || !path.Root.IsReadOnly;
+    // An unknown callable can reach a member path, a global or an implicit
+    // member, a by-reference parameter or local, and a plain local or
+    // parameter only when some closure of the enclosing function assigns it.
+    // Treating every mutable local as mutable dropped the narrowing of
+    // unrelated locals after any call to a local lambda.
+    private bool MayBeMutatedByUnknownCallable(AccessPath path)
+        => path.HasMembers
+            || (!path.Root.IsReadOnly
+                && (path.Root is not (LocalVariableSymbol or ParameterSymbol)
+                    || IsByReferenceRoot(path.Root)
+                    || binderCtx.MayBeAssignedByClosure(path.Root)));
+
+    private static bool IsByReferenceRoot(VariableSymbol root)
+        => root is LocalVariableSymbol local
+            && (local.RefKind != RefKind.None || local.ManagedReferenceOrigin != null);
+
+    private bool MayBeMutatedByUnknownWrite(AssignedRootsCollector mutations, AccessPath path)
+        => (mutations.MayMutateAnyRootViaPointer
+                && (path.HasMembers || !path.Root.IsReadOnly))
+            || (mutations.MayMutateAnyRoot && MayBeMutatedByUnknownCallable(path));
+
+    private void EnsureClosureAssignedNames(SyntaxNode anchor)
+        => binderCtx.EnsureClosureAssignedNames(() => ComputeClosureAssignedNames(anchor));
+
+    // Returns null (any name may be assigned) when the anchor is not inside a
+    // function: a binder that spans several syntax trees (top-level code,
+    // merged static initializers) cannot be scanned from one anchor.
+    private static HashSet<string>? ComputeClosureAssignedNames(SyntaxNode anchor)
+    {
+        SyntaxNode? root = null;
+        for (var current = (SyntaxNode?)anchor; current != null; current = current.Parent)
+        {
+            if (current is FunctionDeclarationSyntax
+                or ConstructorDeclarationSyntax
+                or PropertyAccessorSyntax
+                or EventAccessorSyntax
+                or DeinitDeclarationSyntax)
+            {
+                root = current;
+            }
+        }
+
+        if (root == null)
+        {
+            return null;
+        }
+
+        var names = new HashSet<string>();
+        CollectClosureAssignedNames(root, root, names);
+        CollectAddressTakenNames(root, names);
+        return names;
+    }
+
+    private static void CollectClosureAssignedNames(SyntaxNode node, SyntaxNode root, HashSet<string> names)
+    {
+        if (node is FunctionLiteralExpressionSyntax
+            || (node is FunctionDeclarationSyntax && !ReferenceEquals(node, root)))
+        {
+            CollectAssignedNamesAndMemberMutation(node, names);
+            CollectNullCoalescingTargetNames(node, names);
+            CollectRefArgumentNames(node, names);
+            return;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectClosureAssignedNames(child, root, names);
+        }
+    }
+
+    // `x ??= v` is a write the shared assigned-name walker does not model.
+    private static void CollectNullCoalescingTargetNames(SyntaxNode node, HashSet<string> names)
+    {
+        if (node is NullCoalescingAssignmentStatementSyntax coalescing)
+        {
+            CollectAllNames(coalescing.Target, names);
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectNullCoalescingTargetNames(child, names);
+        }
+    }
+
+    // `out x` / `ref x` inside a closure lets the callee write the local.
+    private static void CollectRefArgumentNames(SyntaxNode node, HashSet<string> names)
+    {
+        if (node is RefArgumentExpressionSyntax)
+        {
+            CollectAllNames(node, names);
+            return;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectRefArgumentNames(child, names);
+        }
+    }
+
+    // An address that is stored (`let p = &x`, `ref y = x`) outlives the
+    // statement and lets an unknown callable write the local, wherever in the
+    // function it appears. An `&x` passed directly as a call argument is a
+    // by-reference argument that cannot outlive the call, so it is not
+    // collected: the call itself is analyzed for the write.
+    private static void CollectAddressTakenNames(SyntaxNode node, HashSet<string> names)
+    {
+        switch (node)
+        {
+            case UnaryExpressionSyntax { OperatorToken.Kind: SyntaxKind.AmpersandToken } addressOf
+                when addressOf.Parent is not CallExpressionSyntax:
+                CollectAllNames(addressOf.Operand, names);
+                break;
+            case VariableDeclarationSyntax { HasRefKindModifier: true, Initializer: { } initializer }:
+                CollectAllNames(initializer, names);
+                break;
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectAddressTakenNames(child, names);
+        }
+    }
+
+    private static void CollectAllNames(SyntaxNode node, HashSet<string> names)
+    {
+        if (node is NameExpressionSyntax name)
+        {
+            names.Add(name.IdentifierToken.ValueText);
+        }
+
+        foreach (var child in node.GetChildren())
+        {
+            CollectAllNames(child, names);
+        }
+    }
 
     /// <summary>
     /// Issue #2159: conservatively drops every narrowing on a local that
@@ -1869,7 +2083,7 @@ internal sealed partial class StatementBinder
         collector.Visit(node);
         if (collector.MayMutateAnyRoot)
         {
-            foreach (var path in state.Keys.Where(MayBeMutatedByUnknownCallable).ToArray())
+            foreach (var path in state.Keys.Where(path => MayBeMutatedByUnknownWrite(collector, path)).ToArray())
             {
                 state.Remove(path);
             }
@@ -1929,9 +2143,18 @@ internal sealed partial class StatementBinder
 
         public HashSet<VariableSymbol> Roots { get; } = new HashSet<VariableSymbol>();
 
+        // Roots written through an out/ref argument or an address-of operand;
+        // always also present in Roots.
+        public HashSet<VariableSymbol> WritableReferenceRoots { get; } = new HashSet<VariableSymbol>();
+
         public bool MayMutateMemberPaths { get; private set; }
 
         public bool MayMutateAnyRoot { get; private set; }
+
+        // Subset of MayMutateAnyRoot: a write through a pointer or reference of
+        // unknown origin can reach ANY address-taken local, not just locals a
+        // closure assigns.
+        public bool MayMutateAnyRootViaPointer { get; private set; }
 
         public bool MayMutateGlobalRoots { get; private set; }
 
@@ -1970,6 +2193,7 @@ internal sealed partial class StatementBinder
             else
             {
                 MayMutateAnyRoot = true;
+                MayMutateAnyRootViaPointer = true;
             }
 
             base.VisitIndirectAssignmentExpression(node);
@@ -2757,6 +2981,7 @@ internal sealed partial class StatementBinder
             if (expression is BoundVariableExpression variable)
             {
                 Roots.Add(variable.Variable);
+                WritableReferenceRoots.Add(variable.Variable);
                 return;
             }
 
@@ -2776,6 +3001,7 @@ internal sealed partial class StatementBinder
                 else
                 {
                     MayMutateAnyRoot = true;
+                    MayMutateAnyRootViaPointer = true;
                 }
 
                 return;

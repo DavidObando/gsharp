@@ -917,7 +917,26 @@ internal sealed partial class OverloadResolver
     /// wins, mirroring the name-expression lookup.
     /// </summary>
     private TypeSymbol? TryGetNarrowedVariableType(VariableSymbol variable)
+        => TryGetNarrowedVariableAccess(variable, out _);
+
+    private AccessPath GetNarrowedVariablePath(VariableSymbol variable)
     {
+        TryGetNarrowedVariableAccess(variable, out var path);
+        return path;
+    }
+
+    /// <summary>
+    /// Looks up the active narrowing for a callee variable and reports the
+    /// access path it is recorded under: the bare variable for a local, or the
+    /// stable member path (<c>this.hn</c>) for a bare implicit field/property.
+    /// This is the single place that chooses the narrowing key, so tracking a
+    /// backward-edge use must reuse <paramref name="path"/> rather than assume
+    /// the variable path. When nothing narrows the callee, the path is the
+    /// variable path and the result is <see langword="null"/> (un-narrowed).
+    /// </summary>
+    private TypeSymbol? TryGetNarrowedVariableAccess(VariableSymbol variable, out AccessPath path)
+    {
+        path = AccessPath.ForVariable(variable);
         for (var i = binderCtx.NarrowedVariables.Count - 1; i >= 0; i--)
         {
             if (binderCtx.NarrowedVariables[i].TryGetValue(variable, out var narrowed))
@@ -948,6 +967,7 @@ internal sealed partial class OverloadResolver
             {
                 if (binderCtx.NarrowedVariables[i].TryGetValue(memberPath, out var narrowedMember))
                 {
+                    path = memberPath;
                     return narrowedMember;
                 }
             }
@@ -1045,7 +1065,7 @@ internal sealed partial class OverloadResolver
         if (nullSafeInvocation != null && callee is BoundVariableExpression variableCallee)
         {
             binderCtx.TrackBackwardGotoNarrowingUse(
-                variableCallee.Variable,
+                GetNarrowedVariablePath(variableCallee.Variable),
                 calleeLocation,
                 calleeName,
                 BackwardGotoNarrowingUseKind.Function);

@@ -560,14 +560,16 @@ internal sealed partial class ExpressionBinder
         declaredType = declaredType is NullableTypeSymbol nullable
             ? nullable.UnderlyingType
             : declaredType;
-        IEnumerable<FunctionSymbol> candidates = declaredType switch
+        var candidateArray = Array.Empty<FunctionSymbol>();
+        if (declaredType is StructSymbol structType)
         {
-            StructSymbol type => type.GetMethodsIncludingInherited(name),
-            InterfaceSymbol type => type.SelfAndAllBaseInterfaces().SelectMany(current => current.GetMethods(name)),
-            _ => Enumerable.Empty<FunctionSymbol>(),
-        };
+            candidateArray = structType.GetMethodsIncludingInherited(name).ToArray();
+        }
+        else if (declaredType is InterfaceSymbol interfaceType)
+        {
+            candidateArray = interfaceType.SelfAndAllBaseInterfaces().SelectMany(current => current.GetMethods(name)).ToArray();
+        }
 
-        var candidateArray = candidates.ToArray();
         var overridden = selected;
         while (overridden != null)
         {

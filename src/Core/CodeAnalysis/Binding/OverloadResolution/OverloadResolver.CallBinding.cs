@@ -1169,7 +1169,7 @@ internal sealed partial class OverloadResolver
             && narrowedCallTargetType != null)
         {
             binderCtx.TrackBackwardGotoNarrowingUse(
-                narrowedCallTarget,
+                GetNarrowedVariablePath(narrowedCallTarget),
                 syntax.Identifier.Location,
                 syntax.Identifier.ValueText,
                 BackwardGotoNarrowingUseKind.Function);

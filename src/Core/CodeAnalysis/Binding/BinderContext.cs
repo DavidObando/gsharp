@@ -127,6 +127,10 @@ internal sealed class BinderContext
 
     private ChannelRuntimeBinder? channelRuntime;
 
+    private HashSet<string>? closureAssignedNames;
+
+    private bool closureAssignedNamesComputed;
+
     /// <summary>
     /// Initializes a new instance of the <see cref="BinderContext"/> class.
     /// </summary>
@@ -794,6 +798,38 @@ internal sealed class BinderContext
 
     public int GetNarrowingProofGeneration(IReadOnlyDictionary<AccessPath, TypeSymbol> frame)
         => narrowingProofGenerations.TryGetValue(frame, out var state) ? state.Generation : 0;
+
+    /// <summary>
+    /// Gets a value indicating whether a local or parameter named
+    /// <paramref name="variable"/> may be assigned by a closure of the
+    /// enclosing function. The set is name based (a superset under shadowing)
+    /// and computed once from the whole function syntax, so a closure bound
+    /// later (reached through a backward edge) is still counted. Until it is
+    /// computed the answer is <see langword="true"/> (fail-safe).
+    /// </summary>
+    /// <param name="variable">The root variable.</param>
+    /// <returns><see langword="true"/> when a closure may assign it.</returns>
+    public bool MayBeAssignedByClosure(VariableSymbol variable)
+        => !closureAssignedNamesComputed
+            || closureAssignedNames == null
+            || closureAssignedNames.Contains(variable.Name);
+
+    /// <summary>
+    /// Records the names assigned inside any function literal or local function
+    /// of the enclosing function, once, from <paramref name="computeNames"/>.
+    /// </summary>
+    /// <param name="computeNames">Computes the assigned-name set.</param>
+    public void EnsureClosureAssignedNames(Func<HashSet<string>?> computeNames)
+    {
+        if (closureAssignedNamesComputed)
+        {
+            return;
+        }
+
+        // A null set means any name may be assigned (fail-safe).
+        closureAssignedNames = computeNames();
+        closureAssignedNamesComputed = true;
+    }
 
     public void TrackBackwardGotoNarrowingUse(
         VariableSymbol variable,
