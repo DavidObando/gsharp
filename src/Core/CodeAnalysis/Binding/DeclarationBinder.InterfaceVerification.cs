@@ -1823,9 +1823,12 @@ internal sealed partial class DeclarationBinder
             {
                 bool requiresGetter = clrProp.GetMethod?.IsAbstract == true;
                 bool requiresSetter = clrProp.SetMethod?.IsAbstract == true;
-                var isRequired = (requiresGetter || requiresSetter) && !satisfiedByImportedBase;
+                var isRequired = requiresGetter || requiresSetter;
+
+                // A field-backed re-mapping (#573/#606) still applies when the
+                // imported base satisfies the slot; only the GS0187 is waived.
                 VerifyClrInterfaceMember(
-                    isRequired,
+                    isRequired && !satisfiedByImportedBase,
                     findImplementation: () => FindClrInterfacePropertyImplementationOrField(
                         structSymbol,
                         ifaceSym,
@@ -1969,10 +1972,9 @@ internal sealed partial class DeclarationBinder
                     + "::" + (property.SetMethod == null ? string.Empty : MemberLookup.FormatClrSlotSignature(property.SetMethod));
                 bool requiresGetter = property.GetMethod?.IsAbstract == true;
                 bool requiresSetter = property.SetMethod?.IsAbstract == true;
-                var isRequired = (requiresGetter || requiresSetter)
-                    && !ImportedBaseImplementsClrInterface(structSymbol, slot.SlotOwner);
+                var isRequired = requiresGetter || requiresSetter;
                 VerifyClrInterfaceMember(
-                    isRequired,
+                    isRequired && !ImportedBaseImplementsClrInterface(structSymbol, slot.SlotOwner),
                     findImplementation: () => FindClrInterfacePropertyImplementationOrField(
                         structSymbol,
                         slot.SlotOwner,

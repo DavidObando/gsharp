@@ -46,6 +46,21 @@ public sealed class Issue4593ImportedBaseInterfaceReimplementationTests
         }
         """;
 
+    private const string FieldRemapSource = """
+        package Issue4593Field
+        import System.Collections.Generic
+        import System.Collections.ObjectModel
+
+        public class FieldBag4593 : Collection[int32], ICollection[int32] {
+            public var IsReadOnly bool = true
+        }
+
+        public func ReadOnlyViaInterface4593() bool {
+            var collection ICollection[int32] = FieldBag4593()
+            return collection.IsReadOnly
+        }
+        """;
+
     private const string RejectedSource = """
         package Issue4593Control
         import System
@@ -76,6 +91,32 @@ public sealed class Issue4593ImportedBaseInterfaceReimplementationTests
             // Count (inherited ICollection[int32] property slot) = 2,
             // list[1] = 4, IndexOf(4) = 1: every slot binds to Collection<int>.
             Assert.Equal(241, probe.Invoke(null, null));
+        }
+        finally
+        {
+            DeleteDirectory(assemblyPath);
+        }
+    }
+
+    [Fact]
+    public void ReListedInterface_ImplementedByImportedBase_StillRemapsFieldBackedProperty()
+    {
+        // #573/#606: a public field satisfies a CLR property contract through a
+        // synthesized property. The imported base satisfying the slot only
+        // waives GS0187; the declared field must still re-map the slot.
+        var (exitCode, output, assemblyPath) = CompileLibrary(FieldRemapSource, "Issue4593Field");
+        try
+        {
+            Assert.True(exitCode == 0, $"gsc failed (exit {exitCode}):\n{output}");
+            IlVerifier.Verify(assemblyPath);
+
+            var assembly = EmittedFixture.Load(assemblyPath);
+            var probe = assembly.GetTypes()
+                .SelectMany(type => type.GetMethods(BindingFlags.Public | BindingFlags.NonPublic | BindingFlags.Static))
+                .Single(method => method.Name == "ReadOnlyViaInterface4593");
+
+            // Collection<int>'s own IsReadOnly is false; the field says true.
+            Assert.Equal(true, probe.Invoke(null, null));
         }
         finally
         {
