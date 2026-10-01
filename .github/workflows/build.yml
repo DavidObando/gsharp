@@ -67,7 +67,24 @@ jobs:
           GOTOOLCHAIN: local
         run: |
           go mod verify
-          go test -count=1 -run '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$' .
+          $filter = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe|TestOutputInvalidation.*|TestStaleInvalidation.*|TestBoundOutputRoot.*|TestArtifactPair.*|TestOutputReleaseFailure.*|TestSourcePositionMap.*|TestArchitectureFeature.*|TestPublicAnalyzeMatchingProfileInvalidatesBeforeUnsupportedBinding|TestPublicAnalyzeVersionMismatchPublishesDeterministicPreloadArtifacts|TestPublicAnalyzeSourceMismatchPublishesConsistentBlocker|TestCliampProfileMismatchDoesNotExecuteNativeToolsOrLoadPackages)$'
+          $securityTests = '^(TestWindowsRootedMetadata.*|TestWindowsEnsureOutputRoot.*|TestWindowsOwnedTempCleanup.*|TestOwnedTemporaryDirectoryCleanupIsIdentitySafe)$'
+          $topLevelTests = @(go test -list '^Test' .)
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $relevantTests = @($topLevelTests | Where-Object { $_ -match $securityTests })
+          $selectedTests = @($relevantTests | Where-Object { $_ -match $filter })
+          if ($relevantTests.Count -ne 10 -or $selectedTests.Count -ne 10) {
+            throw "Windows security filter selected $($selectedTests.Count)/$($relevantTests.Count) relevant tests"
+          }
+          $events = @(go test -json -count=1 -run $filter .)
+          $testExitCode = $LASTEXITCODE
+          $events | ForEach-Object { Write-Output $_ }
+          if ($testExitCode -ne 0) { exit $testExitCode }
+          $ranTests = @($events | ConvertFrom-Json | Where-Object { $_.Action -eq 'run' } | ForEach-Object { $_.Test } | Sort-Object -Unique)
+          $missingTests = @($selectedTests | Where-Object { $_ -notin $ranTests })
+          if ($missingTests.Count -ne 0) {
+            throw "Windows security tests were selected but did not execute: $($missingTests -join ', ')"
+          }
           go vet ./...
 
   go2gs-macos:
