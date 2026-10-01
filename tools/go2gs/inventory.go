@@ -20,6 +20,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"golang.org/x/tools/go/packages"
@@ -213,30 +214,256 @@ func (b *inventoryBuilder) addPackage(pkg *packages.Package) error {
 }
 
 func (b *inventoryBuilder) sanitizeDiagnosticMessage(pkg *packages.Package, message string) string {
-	message = b.sanitizeRecordedMessage(message)
+	extra := []messagePathRedaction{}
 	if pkg.Module != nil && pkg.Module.Dir != "" {
-		message = strings.ReplaceAll(message, pkg.Module.Dir, "<module>")
+		extra = append(extra, messagePathRedaction{pkg.Module.Dir, "<module>"})
 		if pkg.Module.Replace != nil && pkg.Module.Replace.Dir != "" {
-			message = strings.ReplaceAll(message, pkg.Module.Replace.Dir, "<replacement>")
+			extra = append(extra, messagePathRedaction{pkg.Module.Replace.Dir, "<replacement>"})
 		}
 	}
-	return message
+	return b.sanitizeMessage(message, extra...)
 }
 
 func (b *inventoryBuilder) sanitizeRecordedMessage(message string) string {
+	return b.sanitizeMessage(message)
+}
+
+type messagePathRedaction struct {
+	root        string
+	placeholder string
+}
+
+type compiledMessagePathRedaction struct {
+	match       string
+	normalized  string
+	placeholder string
+	windows     bool
+	filesystem  bool
+}
+
+func (b *inventoryBuilder) sanitizeMessage(message string, extra ...messagePathRedaction) string {
 	message = overlayDiagnosticPath.ReplaceAllString(message, "<overlay>/$1")
-	if b.sourceRoot != "" {
-		message = strings.ReplaceAll(message, b.sourceRoot, "<source>")
-	}
-	if b.goroot != "" {
-		message = strings.ReplaceAll(message, b.goroot, "<goroot>")
-	}
+	redactions := append([]messagePathRedaction{
+		{b.sourceRoot, "<source>"},
+		{b.goroot, "<goroot>"},
+	}, extra...)
 	for _, redaction := range b.diagnosticRedactions {
-		if redaction != "" {
-			message = strings.ReplaceAll(message, redaction, "<private-path>")
+		redactions = append(redactions, messagePathRedaction{redaction, "<private-path>"})
+	}
+	return redactMessagePaths(message, redactions)
+}
+
+func redactMessagePaths(message string, redactions []messagePathRedaction) string {
+	compiled := make([]compiledMessagePathRedaction, 0, len(redactions))
+	for _, redaction := range redactions {
+		if candidate, ok := compileMessagePathRedaction(redaction); ok {
+			compiled = append(compiled, candidate)
 		}
 	}
-	return message
+	sort.Slice(compiled, func(i, j int) bool {
+		if len(compiled[i].match) != len(compiled[j].match) {
+			return len(compiled[i].match) > len(compiled[j].match)
+		}
+		if redactionPriority(compiled[i].placeholder) != redactionPriority(compiled[j].placeholder) {
+			return redactionPriority(compiled[i].placeholder) < redactionPriority(compiled[j].placeholder)
+		}
+		if compiled[i].normalized != compiled[j].normalized {
+			return compiled[i].normalized < compiled[j].normalized
+		}
+		return compiled[i].placeholder < compiled[j].placeholder
+	})
+
+	var result strings.Builder
+	for offset := 0; offset < len(message); {
+		matched := false
+		for _, redaction := range compiled {
+			end, replacement, ok := matchMessagePath(message, offset, redaction)
+			if !ok {
+				continue
+			}
+			result.WriteString(replacement)
+			offset = end
+			matched = true
+			break
+		}
+		if matched {
+			continue
+		}
+		_, size := utf8.DecodeRuneInString(message[offset:])
+		result.WriteString(message[offset : offset+size])
+		offset += size
+	}
+	return result.String()
+}
+
+func compileMessagePathRedaction(redaction messagePathRedaction) (compiledMessagePathRedaction, bool) {
+	root := redaction.root
+	if root == "" || redaction.placeholder == "" {
+		return compiledMessagePathRedaction{}, false
+	}
+	windows := isWindowsAbsolutePath(root)
+	if !windows && !strings.HasPrefix(root, "/") {
+		return compiledMessagePathRedaction{}, false
+	}
+	normalized := root
+	if windows {
+		normalized = normalizeWindowsMessagePath(root)
+	} else {
+		normalized = pathpkg.Clean(root)
+	}
+	filesystem := normalized == "/"
+	if normalized == "." || normalized == "" {
+		return compiledMessagePathRedaction{}, false
+	}
+	return compiledMessagePathRedaction{
+		match:       normalized,
+		normalized:  normalized,
+		placeholder: redaction.placeholder,
+		windows:     windows,
+		filesystem:  filesystem,
+	}, true
+}
+
+func isWindowsAbsolutePath(value string) bool {
+	if len(value) >= 3 && isASCIIAlpha(value[0]) && value[1] == ':' && isPathSeparator(rune(value[2])) {
+		return true
+	}
+	return len(value) >= 2 && isPathSeparator(rune(value[0])) && isPathSeparator(rune(value[1]))
+}
+
+func normalizeWindowsMessagePath(value string) string {
+	value = strings.ReplaceAll(value, `\`, "/")
+	if strings.HasPrefix(value, "//") {
+		value = "//" + strings.TrimPrefix(pathpkg.Clean("/"+strings.TrimLeft(value[2:], "/")), "/")
+	} else {
+		value = pathpkg.Clean(value)
+	}
+	if len(value) == 3 && value[1:] == ":/" {
+		value = value[:2]
+	} else if len(value) > 1 {
+		value = strings.TrimRight(value, "/")
+	}
+	return foldWindowsMessagePath(value)
+}
+
+func foldWindowsMessagePath(value string) string {
+	var result strings.Builder
+	for offset := 0; offset < len(value); {
+		current, size := utf8.DecodeRuneInString(value[offset:])
+		if current == utf8.RuneError && size == 1 {
+			result.WriteByte(value[offset])
+		} else {
+			result.WriteRune(unicode.ToLower(current))
+		}
+		offset += size
+	}
+	return result.String()
+}
+
+func matchMessagePath(message string, offset int, redaction compiledMessagePathRedaction) (int, string, bool) {
+	if !messagePathBoundaryBefore(message, offset) {
+		return 0, "", false
+	}
+	end := offset
+	for expectedOffset := 0; expectedOffset < len(redaction.match); {
+		if end >= len(message) {
+			return 0, "", false
+		}
+		expected, expectedSize := utf8.DecodeRuneInString(redaction.match[expectedOffset:])
+		actual, actualSize := utf8.DecodeRuneInString(message[end:])
+		if expected == utf8.RuneError && expectedSize == 1 {
+			if message[end] != redaction.match[expectedOffset] {
+				return 0, "", false
+			}
+			expectedOffset++
+			end++
+			continue
+		}
+		if actual == utf8.RuneError && actualSize == 1 {
+			return 0, "", false
+		}
+		if expected == '/' {
+			if !isPathSeparator(actual) {
+				return 0, "", false
+			}
+		} else if actual != expected && (!redaction.windows || !equalFoldRune(actual, expected)) {
+			return 0, "", false
+		}
+		expectedOffset += expectedSize
+		end += actualSize
+	}
+	if redaction.filesystem {
+		if end < len(message) && !messagePathBoundaryAt(message, end) {
+			return end, redaction.placeholder + "/", true
+		}
+		return end, redaction.placeholder, true
+	}
+	if end < len(message) {
+		next, size := utf8.DecodeRuneInString(message[end:])
+		if isPathSeparator(next) {
+			if messagePathBoundaryAt(message, end+size) {
+				end += size
+			}
+		} else if !isMessagePathDelimiter(next) {
+			return 0, "", false
+		}
+	}
+	return end, redaction.placeholder, true
+}
+
+func equalFoldRune(left, right rune) bool {
+	if left == right {
+		return true
+	}
+	for current := unicode.SimpleFold(left); current != left; current = unicode.SimpleFold(current) {
+		if current == right {
+			return true
+		}
+	}
+	return false
+}
+
+func messagePathBoundaryBefore(message string, offset int) bool {
+	if offset == 0 {
+		return true
+	}
+	previous, _ := utf8.DecodeLastRuneInString(message[:offset])
+	return isMessagePathDelimiter(previous)
+}
+
+func messagePathBoundaryAt(message string, offset int) bool {
+	if offset >= len(message) {
+		return true
+	}
+	next, _ := utf8.DecodeRuneInString(message[offset:])
+	return isMessagePathDelimiter(next)
+}
+
+func isMessagePathDelimiter(value rune) bool {
+	return unicode.IsSpace(value) || strings.ContainsRune("\"'`()[]{}<>,;:=!?", value)
+}
+
+func isPathSeparator(value rune) bool {
+	return value == '/' || value == '\\'
+}
+
+func isASCIIAlpha(value byte) bool {
+	return value >= 'a' && value <= 'z' || value >= 'A' && value <= 'Z'
+}
+
+func redactionPriority(placeholder string) int {
+	switch placeholder {
+	case "<source>":
+		return 0
+	case "<goroot>":
+		return 1
+	case "<replacement>":
+		return 2
+	case "<module>":
+		return 3
+	default:
+		return 4
+	}
 }
 
 func (b *inventoryBuilder) portableDiagnosticPosition(pkg *packages.Package, position string) string {

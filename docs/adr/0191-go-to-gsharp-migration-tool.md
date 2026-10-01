@@ -228,6 +228,8 @@ canonical declarations/types, not dictionary traversal or absolute cache paths.
 Blocker messages redact machine-local source, mirror, replacement, temporary,
 and output roots, normalize invalid UTF-8, and apply the profile string limit
 before stable-ID derivation, deduplication, counting, sorting, or publication.
+Redaction is component-boundary-aware, orders nested roots most-specific first,
+and treats Windows drive/UNC case and slash variants as aliases.
 The blocker ID uses the exact bounded message present in the artifact.
 The final record bound applies equally to preload-only failure inventories.
 Validation recomputes source-manifest identity and byte-validity claims, and
